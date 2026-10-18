@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
+import { Writable } from "node:stream";
 
 export type ExecResult = { code: number; stdout: string; stderr: string };
 export type Exec = (
@@ -16,7 +17,8 @@ export type Fs = {
 export type Deps = {
   exec: Exec;
   fetch: typeof fetch;
-  prompt: (question: string) => Promise<string>;
+  /** `secret: true` must not echo what is typed. */
+  prompt: (question: string, opts?: { secret?: boolean }) => Promise<string>;
   out: (line: string) => void;
   env: Record<string, string | undefined>;
   fs?: Fs;
@@ -41,15 +43,26 @@ export function realDeps(): Deps {
     env: process.env,
     fetch: globalThis.fetch,
     out: (l) => console.log(l),
-    prompt: async (q) => {
+    prompt: async (q, opts) => {
+      let muted = false;
+      const output = new Writable({
+        write: (chunk, _enc, cb) => {
+          if (!muted) process.stderr.write(chunk);
+          cb();
+        },
+      });
       const rl = createInterface({
         input: process.stdin,
-        output: process.stderr,
+        output,
+        terminal: true,
       });
       try {
-        return (await rl.question(`${q} `)).trim();
+        const answer = rl.question(`${q} `);
+        muted = Boolean(opts?.secret);
+        return (await answer).trim();
       } finally {
         rl.close();
+        if (opts?.secret) process.stderr.write("\n");
       }
     },
     exec: (cmd, args, opts) =>
@@ -151,6 +164,10 @@ export function makeApi(deps: Deps, wrangler: Wrangler) {
     }
     return out;
   };
-  return Object.assign(api, { all });
+  /** Swap in a user-supplied token; held in memory only. */
+  const setToken = (t: string) => {
+    token = t;
+  };
+  return Object.assign(api, { all, setToken });
 }
 export type Api = ReturnType<typeof makeApi>;

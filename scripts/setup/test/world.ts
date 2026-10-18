@@ -40,6 +40,41 @@ type World = {
   r2?: { name: string }[];
   kv?: { id: string; title: string }[];
   answers?: string[];
+  /** Access organization: 403s for the wrangler token, or none at all. */
+  org?: "forbidden" | "none";
+  policies?: Obj[];
+  apps?: Obj[];
+  /** Worker secret names; undefined means the Worker does not exist yet. */
+  secrets?: string[];
+  putFails?: string;
+  deleteFails?: boolean;
+};
+// biome-ignore lint/suspicious/noExplicitAny: loose API fixtures
+type Obj = any;
+
+export const POLICY = {
+  id: "pol1",
+  name: "Open Artifacts \u2013 everyone",
+  decision: "allow",
+  include: [{ everyone: {} }],
+  exclude: [],
+  require: [],
+};
+export const app = (name: string, policies = [{ id: "pol1" }]) => ({
+  id: `app-${name}`,
+  name,
+  policies,
+  saas_app: { client_id: `cid-${name}` },
+});
+const paged = (items: Obj[], q: (k: string) => string | null) => {
+  const per = Math.min(100, Number(q("per_page") ?? 20)); // API max
+  const page = Number(q("page") ?? 1);
+  const total_pages = Math.max(1, Math.ceil(items.length / per));
+  const result = items.slice((page - 1) * per, page * per);
+  const info = { page, per_page: per, total_pages };
+  return new Response(
+    JSON.stringify({ success: true, errors: [], result, result_info: info }),
+  );
 };
 
 /** A stateful fake account: wrangler creates mutate it, the API reads it. */
@@ -52,6 +87,12 @@ export function world(w: World = {}) {
     kv: [],
     ...w,
   };
+  const policies: Obj[] = [...(w.policies ?? [])];
+  const apps: Obj[] = [...(w.apps ?? [])];
+  let secrets = w.secrets && [...w.secrets];
+  /** Every mutation, in order. `values` holds every secret value seen. */
+  const ops: string[] = [];
+  const values: string[] = [];
   const creates: string[] = [];
   const zoneQueries: string[] = [];
   const c = core({
@@ -59,7 +100,7 @@ export function world(w: World = {}) {
     files: {
       [join(ROOT, TEMPLATE)]: readFileSync(join(realRoot, TEMPLATE), "utf8"),
     },
-    exec: async (cmd, args) => {
+    exec: async (cmd, args, opts) => {
       if (cmd === "pnpm" && args[0] === "--version")
         return { code: 0, stdout: "10.11.1\n", stderr: "" };
       const a = args.slice(args.indexOf("wrangler") + 1).join(" ");
@@ -67,7 +108,18 @@ export function world(w: World = {}) {
       const [, kind, rest] =
         a.match(/^(d1 create|r2 bucket create|kv namespace create) (.+)$/) ??
         [];
-      if (a === "whoami --json") stdout = WHOAMI(acct.accounts);
+      const put = a.match(/^secret put (\w+) --name [\w-]+$/);
+      if (a.startsWith("secret list ")) {
+        if (!secrets)
+          return { code: 1, stdout: "", stderr: 'Worker "x" not found.' };
+        stdout = JSON.stringify(secrets.map((name) => ({ name })));
+      } else if (put) {
+        values.push(opts?.input ?? "");
+        if (put[1] === w.putFails)
+          return { code: 1, stdout: "", stderr: "put failed" };
+        ops.push(`put ${put[1]}`);
+        secrets = [...(secrets ?? []), put[1]];
+      } else if (a === "whoami --json") stdout = WHOAMI(acct.accounts);
       else if (a === "auth token --json")
         stdout = '{"type":"oauth","token":"t"}';
       else if (kind === "d1 create")
@@ -79,11 +131,61 @@ export function world(w: World = {}) {
       if (kind) creates.push(a);
       return { code: 0, stdout, stderr: "" };
     },
-    fetch: async (input) => {
+    fetch: async (input, init) => {
       const u = new URL(String(input));
+      const m = init?.method ?? "GET";
+      const auth = new Headers(init?.headers).get("authorization");
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
       const q = (k: string) => u.searchParams.get(k);
       const p = u.pathname.replace("/client/v4", "");
       const r2 = p.match(/\/r2\/buckets\/([^/]+)$/);
+      const acc = p.match(/\/access\/(organizations|policies|apps)\/?(.*)$/);
+      if (acc?.[1] === "organizations") {
+        if (w.org === "forbidden" && auth === "Bearer t")
+          return envelope(null, 403, [
+            { code: 10000, message: "Authentication error" },
+          ]);
+        return envelope(
+          w.org === "none"
+            ? null
+            : { auth_domain: "team.cloudflareaccess.com" },
+        );
+      }
+      if (acc && m === "GET")
+        return paged(acc[1] === "apps" ? apps : policies, q);
+      if (acc) ops.push(`${m} ${acc[1]}${acc[2] ? `/${acc[2]}` : ""}`);
+      if (acc?.[1] === "policies" && m === "POST") {
+        policies.push({ ...body, id: "pol1" });
+        return envelope({ ...body, id: "pol1" });
+      }
+      if (acc?.[1] === "policies" && m === "PUT") {
+        policies[policies.findIndex((x) => x.id === acc[2])] = {
+          ...body,
+          id: acc[2],
+        };
+        return envelope({ ...body, id: acc[2] });
+      }
+      if (acc?.[1] === "apps" && m === "POST") {
+        const made = {
+          ...app(body.name, body.policies),
+          saas_app: {
+            ...body.saas_app,
+            client_id: "cid-new",
+            client_secret: "CLIENT-SECRET-xyz",
+          },
+        };
+        values.push("CLIENT-SECRET-xyz");
+        apps.push(made);
+        return envelope({ ...made, created_body: body });
+      }
+      if (acc?.[1] === "apps" && m === "DELETE") {
+        if (w.deleteFails) return envelope(null, 500, [{ message: "boom" }]);
+        apps.splice(
+          apps.findIndex((x) => x.id === acc[2]),
+          1,
+        );
+        return envelope({ id: acc[2] });
+      }
       if (p === "/zones") {
         zoneQueries.push(u.search);
         const ok =
@@ -100,22 +202,11 @@ export function world(w: World = {}) {
               { code: 10006, message: "The specified bucket does not exist." },
             ]);
       }
-      if (p.endsWith("/storage/kv/namespaces")) {
-        const per = Math.min(100, Number(q("per_page") ?? 20)); // API max
-        const page = Number(q("page") ?? 1);
-        const total_pages = Math.max(1, Math.ceil(acct.kv.length / per));
-        const body = {
-          success: true,
-          errors: [],
-          result: acct.kv.slice((page - 1) * per, page * per),
-          result_info: { page, per_page: per, total_pages },
-        };
-        return new Response(JSON.stringify(body));
-      }
+      if (p.endsWith("/storage/kv/namespaces")) return paged(acct.kv, q);
       return envelope(null, 404, [{ message: "no route" }]);
     },
   });
-  return { ...c, creates, zoneQueries, acct };
+  return { ...c, creates, zoneQueries, acct, ops, values, policies, apps };
 }
 
 export const HOSTS = [

@@ -40,8 +40,8 @@ export function core(o: Core = {}) {
       write: (p, d) => void files.set(p, d),
     },
     out: (l) => void lines.push(l),
-    prompt: async (q) => {
-      prompts.push(q);
+    prompt: async (q, opts) => {
+      prompts.push(opts?.secret ? `[secret] ${q}` : q);
       return answers.shift() ?? "";
     },
     exec:

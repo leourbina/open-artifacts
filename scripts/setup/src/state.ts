@@ -14,6 +14,8 @@ export type State = {
   accessClientId?: string;
   teamDomain?: string;
   deployedVersion?: string;
+  /** The user declined the optional ANALYTICS_TOKEN; don't ask again. */
+  analyticsSkipped?: boolean;
 };
 
 /** `.openartifacts/state.json` under the repo root (gitignored). */
