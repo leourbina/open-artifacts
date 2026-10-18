@@ -156,3 +156,10 @@ describe("release-please", () => {
     });
   });
 });
+
+describe(".nvmrc", () => {
+  it("pins Node >= 22 because wrangler 4 requires it", () => {
+    const major = Number.parseInt(read(".nvmrc").trim().replace(/^v/, ""), 10);
+    expect(major).toBeGreaterThanOrEqual(22);
+  });
+});
