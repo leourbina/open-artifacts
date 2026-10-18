@@ -92,7 +92,7 @@ Input, Textarea, Select<T>({ options: {value:T; label:string}[]; value; onChange
 Dialog({ open; onOpenChange; title: string; description?: string; children; footer?: ReactNode })
 Menu({ trigger: ReactNode; items: Array<{ label; onSelect; danger?: boolean; icon? } | "separator"> })
 Tabs({ tabs: {id; label; content}[]; value?; onValueChange? })
-Tooltip({ content; children }), Toast API: toast({ title; description?; tone?: "info"|"success"|"danger" })
+Tooltip({ content; children }), Toast API: toast({ title; description?; tone?: "info"|"success"|"danger"; action?: { label: string; onClick(): void; altText?: string } }) // action: Radix Toast.Action, dismisses on click, 8s default duration
 Badge({ tone?: "neutral"|"accent"|"success"|"warning"|"danger"; children })
 Avatar({ name?: string|null; email?: string|null; size?: 24|32 }) // initials (name → email → "?"); hue from email, else name; neutral "Unknown" when both are missing
 displayName(u: { name?: string|null; email?: string|null }) // name, else email, else "Unknown"
