@@ -155,4 +155,8 @@ describe("release-please", () => {
       ".": "0.0.0",
     });
   });
+  it("first release is 0.1.0 via initial-version", () => {
+    const c = JSON.parse(read("release-please-config.json"));
+    expect(c.packages["."]["initial-version"]).toBe("0.1.0");
+  });
 });
