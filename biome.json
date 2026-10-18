@@ -15,7 +15,9 @@
       "!**/.wrangler",
       "!**/.astro",
       "!**/dist-assets",
-      "!pnpm-lock.yaml"
+      "!pnpm-lock.yaml",
+      "!.release-please-manifest.json",
+      "!CHANGELOG.md"
     ]
   },
   "overrides": [

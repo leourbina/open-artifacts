@@ -272,13 +272,13 @@ describe("release-please", () => {
     expect(d.if).toContain("workflow_dispatch");
     expect(JSON.stringify(d.steps)).toContain("inputs.tag");
   });
-  it("config is release-type node, manifest starts at 0.0.0", () => {
+  it("config is release-type node, manifest has a single semver at '.'", () => {
     const c = JSON.parse(read("release-please-config.json"));
     expect(c.packages["."]["release-type"]).toBe("node");
     expect(c.packages["."]["bump-minor-pre-major"]).toBe(true);
-    expect(JSON.parse(read(".release-please-manifest.json"))).toEqual({
-      ".": "0.0.0",
-    });
+    const m = JSON.parse(read(".release-please-manifest.json"));
+    expect(Object.keys(m)).toEqual(["."]);
+    expect(m["."]).toMatch(/^\d+\.\d+\.\d+$/);
   });
   it("first release is 0.1.0 via initial-version", () => {
     const c = JSON.parse(read("release-please-config.json"));
