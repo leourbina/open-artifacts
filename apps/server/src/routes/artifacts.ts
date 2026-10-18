@@ -9,8 +9,9 @@ import {
   R,
 } from "@oa/shared";
 import type { Context } from "hono";
-import { caller, requireUser } from "../auth/authz.js";
-import { ApiError } from "../http/errors.js";
+import { caller, requireAccess, requireUser } from "../auth/authz.js";
+import { publicPrefix, signContent } from "../content/signing.js";
+import { ApiError, contentOrigin } from "../http/errors.js";
 import type { AppEnv } from "../http/middleware.js";
 import {
   getSummary,
@@ -182,6 +183,32 @@ export function mountArtifacts(app: AppType): void {
   app.post(`${ARTIFACT}/undelete`, async (c) => {
     const user = requireUser(c);
     return c.json(await undelete(c.env, user, idParam(c), execCtx(c)));
+  });
+
+  // Viewer+. Defaults to the current version; ?v= must exist (else 404).
+  app.get(`${ARTIFACT}/content-url`, async (c) => {
+    const id = idParam(c);
+    const a = await requireAccess(c.env, caller(c), id, "viewer");
+    const q = c.req.query("v");
+    if (q !== undefined && !VERSION_NUM.test(q)) throw notFound();
+    const v = q === undefined ? a.currentVersion : Number(q);
+    const exists = await c.env.DB.prepare(
+      "select 1 as ok from versions where artifact_id = ? and version = ?",
+    )
+      .bind(id, v)
+      .first();
+    if (!exists) throw notFound();
+    const origin = contentOrigin(c.env);
+    if (a.visibility === "public")
+      return c.json({
+        url: `${origin}${publicPrefix(id, v)}__view`,
+        expiresAt: null,
+      });
+    const { prefix, exp } = await signContent(c.env, id, v);
+    return c.json({
+      url: `${origin}${prefix}__view`,
+      expiresAt: new Date(exp * 1000).toISOString(),
+    });
   });
 
   app.get(VERSIONS, async (c) => {

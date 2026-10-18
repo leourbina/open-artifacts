@@ -1,0 +1,8 @@
+---
+// Emits an HTML comment that Platform's release gate looks for in dist/.
+interface Props {
+  text: string;
+}
+---
+
+<Fragment set:html={`<!-- ${Astro.props.text} -->`} />

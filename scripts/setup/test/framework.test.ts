@@ -104,13 +104,13 @@ describe("runner", () => {
     const c = core({
       answers: ["app.example.com", "c.example.com", "o@example.com"],
     });
-    expect(await go(c, ["--json"], [marker])).toBe(0);
+    expect(await go(c, [], [marker])).toBe(0);
     expect(c.prompts).toHaveLength(3);
     for (const flag of ["--app-host", "--content-host", "--owner-email"]) {
       const c2 = core();
-      expect(await go(c2, without(flag), [marker])).toBe(1);
-      expect(parsed(c2)[0]).toMatchObject({ step: "args", status: "error" });
-      expect(parsed(c2)[0].message).toContain(flag);
+      const yesOnly = without(flag).filter((a) => a !== "--json");
+      expect(await go(c2, yesOnly, [marker])).toBe(1);
+      expect(c2.lines[0]).toMatch(new RegExp(`^✗ args: missing ${flag}`));
     }
   });
 
@@ -130,16 +130,20 @@ describe("runner", () => {
   it("a --name that conflicts with saved state needs confirmation", async () => {
     const files = { [STATE]: JSON.stringify({ name: "open-artifacts" }) };
     const c = core({ files });
-    expect(await go(c, [...FLAGS, "--name", "other"], [marker])).toBe(1);
-    expect(parsed(c)[0].message).toContain("--name");
+    const yesOnly = without("--json");
+    expect(await go(c, [...yesOnly, "--name", "other"], [marker])).toBe(1);
+    expect(c.lines[0]).toContain("--name");
+    const j = core({ files });
+    expect(await go(j, [...FLAGS, "--name", "other"], [marker])).toBe(2);
+    expect(parsed(j)[0]).toMatchObject({
+      step: "args",
+      status: "action_required",
+    });
+    const tty = without("--yes").filter((a) => a !== "--json");
     const no = core({ files, answers: ["n"] });
-    expect(
-      await go(no, [...without("--yes"), "--name", "other"], [marker]),
-    ).toBe(1);
+    expect(await go(no, [...tty, "--name", "other"], [marker])).toBe(1);
     const yes = core({ files, answers: ["y"] });
-    expect(
-      await go(yes, [...without("--yes"), "--name", "other"], [marker]),
-    ).toBe(0);
+    expect(await go(yes, [...tty, "--name", "other"], [marker])).toBe(0);
     expect(yes.state().name).toBe("other");
   });
 
