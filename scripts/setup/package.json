@@ -5,5 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "echo \"@oa/setup: not implemented yet\""
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

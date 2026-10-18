@@ -5,5 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "echo \"@oa/dashboard dev: placeholder\""
+  },
+  "engines": {
+    "node": ">=22"
   }
 }
