@@ -68,6 +68,19 @@ describe("ci.yml", () => {
       expect.arrayContaining(["build", "e2e", "lint", "test", "typecheck"]),
     );
   });
+  it("lint job runs actionlint at a pinned version with checksum", () => {
+    // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
+    const step = w.jobs.lint.steps.find((s: any) =>
+      (s.run ?? "").includes("actionlint"),
+    );
+    expect(step).toBeDefined();
+    expect(step.env.ACTIONLINT_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(step.env.ACTIONLINT_SHA256).toMatch(/^[0-9a-f]{64}$/);
+    expect(step.run).not.toMatch(/latest/);
+    expect(step.run).toContain("sha256sum -c");
+    expect(step.run).toContain("command -v shellcheck");
+    expect(step.run).toContain(".github/workflows/*.yml");
+  });
   it("uses node from .nvmrc with pnpm cache", () => {
     const raw = read(".github/workflows/ci.yml");
     expect(raw).toContain("node-version-file: .nvmrc");
