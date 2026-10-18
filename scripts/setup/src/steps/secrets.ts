@@ -66,6 +66,12 @@ export const secrets: Step = {
   },
   async apply(state, ctx) {
     const have = await listSecrets(ctx);
+    const missing = GENERATED.filter((n) => !have.has(n));
+    if (ctx.opts.upgrade && missing.length)
+      return {
+        status: "action_required",
+        message: `Worker secrets missing: ${missing.join(", ")}; --upgrade never generates them, run a full setup first (without --upgrade)`,
+      };
     for (const n of GENERATED)
       if (!have.has(n)) await putSecret(ctx, n, random());
     if (

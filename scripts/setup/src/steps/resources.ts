@@ -15,8 +15,8 @@ export const names = (name: string) => ({
 async function find(ctx: Ctx, accountId: string) {
   const n = names(ctx.opts.name);
   const a = `/accounts/${accountId}`;
-  const d1 = await ctx.api<{ uuid: string; name: string }[]>(
-    "GET",
+  // ?name= is a fuzzy filter: page through every match for the exact name.
+  const d1 = await ctx.api.all<{ uuid: string; name: string }>(
     `${a}/d1/database?name=${encodeURIComponent(n.d1)}`,
   );
   const r2 = await ctx
@@ -33,6 +33,18 @@ async function find(ctx: Ctx, accountId: string) {
     r2Bucket: r2?.name === n.r2 ? n.r2 : undefined,
     kvId: kv.find((k) => k.title === n.kv)?.id,
   };
+}
+
+/** What `find` did not find, by kind and name; empty when nothing is missing. */
+function missingOf(ctx: Ctx, found: Awaited<ReturnType<typeof find>>) {
+  const n = names(ctx.opts.name);
+  return [
+    !found.d1Id && `D1 ${n.d1}`,
+    !found.r2Bucket && `R2 ${n.r2}`,
+    !found.kvId && `KV ${n.kv}`,
+  ]
+    .filter(Boolean)
+    .join(", ");
 }
 
 /** Strips JSONC comments outside strings. */
@@ -93,13 +105,22 @@ export const resources: Step = {
   name: "resources",
   async check(state, ctx) {
     const found = await find(ctx, state.accountId ?? "");
-    if (!found.d1Id || !found.r2Bucket || !found.kvId) return "todo";
+    const missing = missingOf(ctx, found);
+    if (missing) {
+      ctx.notes.push(`missing: ${missing}`);
+      return "todo";
+    }
     sync(state, ctx, found);
     return "done";
   },
   async apply(state, ctx) {
     const n = names(ctx.opts.name);
     let found = await find(ctx, state.accountId ?? "");
+    ctx.notes.length = 0;
+    if (ctx.opts.upgrade) {
+      const message = `missing ${missingOf(ctx, found)} on account ${state.accountId}; --upgrade never creates resources, run a full setup first (without --upgrade)`;
+      return { status: "action_required", message };
+    }
     if (!found.d1Id) await ctx.wrangler(["d1", "create", n.d1]);
     if (!found.r2Bucket) await ctx.wrangler(["r2", "bucket", "create", n.r2]);
     if (!found.kvId) await ctx.wrangler(["kv", "namespace", "create", n.kv]);

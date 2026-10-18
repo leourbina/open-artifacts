@@ -146,6 +146,7 @@ function viewUrl(ctx: Ctx, raw?: string): string | undefined {
 
 export const selftest: Step = {
   name: "selftest",
+  always: true,
   check: async () => "todo",
   async apply(state, ctx) {
     const app = `https://${ctx.opts.appHost}`;

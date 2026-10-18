@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { stripComments } from "../src/steps/resources.ts";
 import { core, envelope, ROOT, STATE } from "./fakes.ts";
 
 const TEMPLATE = "apps/server/wrangler.template.jsonc";
@@ -71,6 +72,14 @@ type World = {
   publishError?: string;
   /** The publish result's view url, overriding the default. */
   viewUrl?: string;
+  /** The live Worker's plain-text vars (before any deploy in this world). */
+  worker?: Record<string, string>;
+  /** OIDC discovery answers with this issuer instead of the real one. */
+  issuer?: string;
+  /** OIDC discovery answers 503 this many times first. */
+  discoveryFails?: number;
+  /** POST /access/apps answers 403 (a token without Access: Apps Edit). */
+  appsPostForbidden?: boolean;
 };
 // biome-ignore lint/suspicious/noExplicitAny: loose API fixtures
 type Obj = any;
@@ -147,6 +156,7 @@ export function world(w: World = {}) {
     tokens: [] as Obj[],
   };
   let healthFails = w.healthFails ?? 0;
+  let discoveryFails = w.discoveryFails ?? 0;
   const sha = (s: string) => createHash("sha256").update(s).digest("hex");
   const d1 = (sql: string) => {
     sqls.push(sql);
@@ -342,9 +352,17 @@ export function world(w: World = {}) {
           { status: w.contentStatus ?? 200 },
         );
       }
-      if (u.host === "team.cloudflareaccess.com") {
+      if (u.host.endsWith(".cloudflareaccess.com")) {
         hits.push(`GET ${u.pathname}`);
-        return Response.json({ issuer: "https://team.cloudflareaccess.com" });
+        if (discoveryFails-- > 0)
+          return new Response("unavailable", { status: 503 });
+        const base = u.pathname.replace(
+          /\/\.well-known\/openid-configuration$/,
+          "",
+        );
+        return Response.json({
+          issuer: w.issuer ?? `https://${u.host}${base}`,
+        });
       }
       const p = u.pathname.replace("/client/v4", "");
       auths.push(`${p} ${auth}`);
@@ -377,6 +395,10 @@ export function world(w: World = {}) {
         };
         return envelope({ ...body, id: acc[2] });
       }
+      if (acc?.[1] === "apps" && m === "POST" && w.appsPostForbidden)
+        return envelope(null, 403, [
+          { code: 10000, message: "Authentication error" },
+        ]);
       if (acc?.[1] === "apps" && m === "POST") {
         const made = {
           ...app(body.name, body.policies),
@@ -404,8 +426,34 @@ export function world(w: World = {}) {
           q("status") === "active" && acct.zones.includes(q("name") ?? "");
         return envelope(ok ? [{ id: "z", name: q("name") }] : []);
       }
+      // The real ?name= filter is a fuzzy match, so exact names may sit past page 1.
       if (p.endsWith("/d1/database"))
-        return envelope(acct.d1.filter((d) => d.name === q("name")));
+        return paged(
+          acct.d1.filter((d) => d.name.includes(q("name") ?? "")),
+          q,
+        );
+      const settings = p.match(/\/workers\/scripts\/([^/]+)\/settings$/);
+      if (settings && m === "GET") {
+        const cfg = deployedConfig
+          ? JSON.parse(stripComments(deployedConfig)).vars
+          : w.worker;
+        if (!cfg && !secrets)
+          return envelope(null, 404, [
+            {
+              code: 10007,
+              message: "This Worker does not exist on your account.",
+            },
+          ]);
+        const bindings = [
+          ...Object.entries(cfg ?? {}).map(([name, text]) => ({
+            type: "plain_text",
+            name,
+            text,
+          })),
+          ...(secrets ?? []).map((name) => ({ type: "secret_text", name })),
+        ];
+        return envelope({ bindings });
+      }
       if (r2) {
         const b = acct.r2.find((x) => x.name === r2[1]);
         return b
@@ -439,6 +487,7 @@ export function world(w: World = {}) {
 }
 
 export const HOSTS = [
+  ...["--name", "open-artifacts"],
   ...[
     "--app-host",
     "app.example.com",

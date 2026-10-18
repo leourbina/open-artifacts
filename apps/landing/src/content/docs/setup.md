@@ -68,6 +68,8 @@ Setup takes each value from its flag first, then from `.openartifacts/state.json
 | `--yes` | Never prompt. Missing values are errors, and the optional `ANALYTICS_TOKEN` is skipped. Optional with `--json`. |
 | `--upgrade` | Upgrade an existing install: only `deploy` and `selftest` do work. See [Upgrade](/docs/upgrade/). |
 | `--new-owner-token` | Mint a new owner token, and revoke the one setup minted before. |
+| `--check` | Read-only: run every step's check, rebuild state from Cloudflare by `--name`, and report each step as done or todo. Writes nothing (no state file, no Cloudflare changes). |
+| `--strict` | With `--check`, exit 2 when any step is still todo, so CI can use it as a preflight gate. |
 | `--json` | Print one JSON object per line instead of text, and never prompt: a missing value is an `action_required` line naming the flag to pass. The optional `ANALYTICS_TOKEN` is skipped. |
 
 | Environment variable | Meaning |
