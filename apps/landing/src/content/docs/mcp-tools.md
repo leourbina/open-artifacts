@@ -29,7 +29,32 @@ Only the artifact's creator can change `visibility`, `capabilities`, or `allowAn
 
 It returns the artifact's `id`, the new `version`, and its view URL.
 
-Inline `content` and `files` are capped at 2 MB in total. For anything larger, call `create_upload` to get a signed upload URL, upload the bytes there, and publish with the result. Files can be up to 25 MB each and 100 MB per publish.
+## Large files
+
+Inline `content` and `files` are capped at {LIMIT_INLINE} in total. Send anything larger as an upload, one file at a time. A file can be up to {LIMIT_FILE}, and one publish up to {LIMIT_PUBLISH}.
+
+1. **Reserve the upload:** call `create_upload` with the file's `path` in the artifact, its exact `size` in bytes, and optionally its `contentType` (by default, it's taken from the extension). Pass `artifactId` to add to an existing artifact you can edit; leave it out to reserve a new artifact id. It returns `uploadId`, `artifactId`, a signed `url`, and `expiresAt`, {LIMIT_UPLOAD_URL_TTL} from now.
+2. **Send the bytes:** a raw `PUT` of the file to `url`, with no auth header (the URL is signed) and a `Content-Length` equal to the declared `size`. Each upload takes one PUT; it answers `204` when it's done.
+
+   ```sh
+   curl -fsS -T report.pdf "$UPLOAD_URL"
+   ```
+
+3. **Publish:** call `publish_artifact` with `id` set to the returned `artifactId`, and the file in `files` under the same path as `{ "uploadId": "…" }`. A new artifact also needs a `title`. Uploaded and inline files can be mixed in one publish.
+
+   ```json
+   {
+     "id": "<artifactId>",
+     "title": "Q3 report",
+     "files": { "report.pdf": { "uploadId": "<uploadId>" } }
+   }
+   ```
+
+An upload is used once. One that's never published is deleted by the daily cleanup once it's older than {LIMIT_UPLOAD_TTL}.
+
+## Search freshness
+
+Search indexes each publish in the background, so `search_artifacts` can miss a new artifact or version for a few seconds. To find something you just published, use `get_artifact` or `list_artifacts`.
 
 ## Reading
 
@@ -52,7 +77,7 @@ Only an artifact's creator can share it, change its visibility, or delete it.
 
 ## Deleting
 
-`delete_artifact` moves an artifact to the trash. It can be recovered for 30 days, then it's purged.
+`delete_artifact` moves an artifact to the trash. It can be recovered for {LIMIT_SOFT_DELETE}, then it's purged.
 
 ## Live-page data
 

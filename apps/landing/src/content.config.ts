@@ -2,10 +2,12 @@ import { defineCollection } from "astro:content";
 import { REPO_URL } from "@oa/shared";
 import { glob, type Loader } from "astro/loaders";
 import { z } from "astro/zod";
+import { LIMIT_PLACEHOLDERS } from "./lib/limits";
 
 // Docs write {REPO_URL} (and {LATEST_RELEASE_API}, derived from it) so the
-// repo URL is defined only in @oa/shared.
+// repo URL is defined only in @oa/shared, and {LIMIT_*} for LIMITS.
 const PLACEHOLDERS: Record<string, string> = {
+  ...LIMIT_PLACEHOLDERS,
   "{REPO_URL}": REPO_URL,
   "{LATEST_RELEASE_API}": `${REPO_URL.replace("https://github.com/", "https://api.github.com/repos/")}/releases/latest`,
 };
@@ -18,6 +20,9 @@ function docsLoader(): Loader {
     name: "docs",
     async load(ctx) {
       const pending: Promise<unknown>[] = [];
+      // Start empty: glob skips unchanged files, but a placeholder's value
+      // (a limit, the repo URL) can change while the file doesn't.
+      ctx.store.clear();
       const store = new Proxy(ctx.store, {
         get(target, key, receiver) {
           if (key !== "set") return Reflect.get(target, key, receiver);

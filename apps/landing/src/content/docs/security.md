@@ -19,7 +19,7 @@ The viewer shell loads each artifact from the content host in an iframe with `sa
 
 Every content-host response also sends `Content-Security-Policy: sandbox` with the same flags, so opening a content URL directly is just as isolated.
 
-Private content URLs carry a signed token that expires after 10 minutes, because the content host has no session. Public artifacts need no token. Revoking a share, unsharing, or deleting an artifact refuses new content URLs immediately, but a URL that was already issued keeps working until it expires, up to 10 minutes later.
+Private content URLs carry a signed token that expires after {LIMIT_SIGNED_URL_TTL}, because the content host has no session. Public artifacts need no token. Revoking a share, unsharing, or deleting an artifact refuses new content URLs immediately, but a URL that was already issued keeps working until it expires, up to {LIMIT_SIGNED_URL_TTL} later.
 
 ## Live pages without credentials
 
