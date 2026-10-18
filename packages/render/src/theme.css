@@ -1,0 +1,993 @@
+/*
+ * Reading themes for the content host (spec 6.8): Markdown (.oa-doc), the code
+ * view (.oa-code) and pdf.js chrome (.oa-pdf).
+ *
+ * Self-contained: the content host can't load dashboard CSS, so the Studio
+ * tokens (packages/ui/src/tokens/tokens.css) are inlined below as local custom
+ * properties. Light is the default. Dark follows prefers-color-scheme unless the
+ * shell sets data-theme on :root, an ancestor or the container; the nearest
+ * data-theme wins. Dark rules are screen-only, so print always uses light.
+ *
+ * Code is highlighted with shiki's dual themes (src/shiki-themes.ts):
+ *   codeToHtml(src, { lang, themes: shikiThemes })
+ * Light colors are inline; dark mode swaps in each span's --shiki-dark.
+ */
+/* biome-ignore-all lint/complexity/noImportantStyles: shiki writes inline colors and backgrounds that the theme must override */
+/* biome-ignore-all lint/style/noDescendingSpecificity: dark-mode rules repeat across @media and data-theme on purpose */
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap");
+
+/* ---------- Tokens ---------- */
+
+:root:has(.oa-doc, .oa-code, .oa-pdf),
+.oa-doc,
+.oa-code,
+.oa-pdf {
+  color-scheme: light;
+
+  --oa-bg: #eef0f3;
+  --oa-chrome: #f5f6f8;
+  --oa-surface: #ffffff;
+  --oa-surface-2: #f6f7f9;
+  --oa-divider: #e0e3e8;
+  --oa-border: #bec4cd;
+  --oa-border-strong: #848b95;
+  --oa-text: #15181c;
+  --oa-text-2: #454c56;
+  --oa-text-muted: #5f6670;
+  --oa-accent: #2350d0;
+  --oa-accent-fg: #1d45b8;
+  --oa-accent-soft: #e7edfc;
+  --oa-focus: #2350d0;
+
+  --oa-code-bg: #f6f7f9;
+  --oa-selection: #e7edfc;
+  --oa-page-shadow:
+    0 0 0 1px rgb(20 24 30 / 0.06), 0 1px 2px rgb(20 24 30 / 0.06),
+    0 8px 24px rgb(20 24 30 / 0.08);
+
+  --oa-font-sans:
+    "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --oa-font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --oa-radius-sm: 4px;
+  --oa-radius-md: 6px;
+  --oa-radius-lg: 8px;
+  --oa-duration-fast: 120ms;
+  --oa-ease: cubic-bezier(0.2, 0, 0, 1);
+}
+
+@media screen and (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):has(.oa-doc, .oa-code, .oa-pdf),
+  :root:not([data-theme="light"])
+    :is(.oa-doc, .oa-code, .oa-pdf):not(
+      [data-theme="light"],
+      [data-theme="light"] *
+    ) {
+    color-scheme: dark;
+
+    --oa-bg: #131518;
+    --oa-chrome: #17191d;
+    --oa-surface: #1c1f23;
+    --oa-surface-2: #212429;
+    --oa-divider: #2c3037;
+    --oa-border: #3b414a;
+    --oa-border-strong: #676e78;
+    --oa-text: #e9ebee;
+    --oa-text-2: #b7bdc6;
+    --oa-text-muted: #9097a1;
+    --oa-accent: #7f9cff;
+    --oa-accent-fg: #a3b8ff;
+    --oa-accent-soft: #1f2a4a;
+    --oa-focus: #7f9cff;
+
+    --oa-code-bg: #212429;
+    --oa-selection: #1f2a4a;
+    --oa-page-shadow:
+      0 0 0 1px rgb(0 0 0 / 0.5), 0 2px 4px rgb(0 0 0 / 0.3),
+      0 12px 32px rgb(0 0 0 / 0.45);
+  }
+}
+
+@media screen {
+  :root[data-theme="dark"]:has(.oa-doc, .oa-code, .oa-pdf),
+  [data-theme="dark"]
+    :is(.oa-doc, .oa-code, .oa-pdf):not(
+      [data-theme="light"],
+      [data-theme="light"] *
+    ),
+  [data-theme="light"]
+    [data-theme="dark"]
+    :is(.oa-doc, .oa-code, .oa-pdf):not([data-theme="light"]),
+  :is(.oa-doc, .oa-code, .oa-pdf)[data-theme="dark"] {
+    color-scheme: dark;
+
+    --oa-bg: #131518;
+    --oa-chrome: #17191d;
+    --oa-surface: #1c1f23;
+    --oa-surface-2: #212429;
+    --oa-divider: #2c3037;
+    --oa-border: #3b414a;
+    --oa-border-strong: #676e78;
+    --oa-text: #e9ebee;
+    --oa-text-2: #b7bdc6;
+    --oa-text-muted: #9097a1;
+    --oa-accent: #7f9cff;
+    --oa-accent-fg: #a3b8ff;
+    --oa-accent-soft: #1f2a4a;
+    --oa-focus: #7f9cff;
+
+    --oa-code-bg: #212429;
+    --oa-selection: #1f2a4a;
+    --oa-page-shadow:
+      0 0 0 1px rgb(0 0 0 / 0.5), 0 2px 4px rgb(0 0 0 / 0.3),
+      0 12px 32px rgb(0 0 0 / 0.45);
+  }
+}
+
+/* Shiki dark colors, under the same dark conditions as the tokens. */
+@media screen and (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"])
+    :is(.oa-doc, .oa-code):not([data-theme="light"], [data-theme="light"] *)
+    .shiki
+    span {
+    color: var(--shiki-dark) !important;
+    font-style: var(--shiki-dark-font-style) !important;
+    font-weight: var(--shiki-dark-font-weight) !important;
+  }
+}
+
+@media screen {
+  [data-theme="dark"]
+    :is(.oa-doc, .oa-code):not([data-theme="light"], [data-theme="light"] *)
+    .shiki
+    span,
+  [data-theme="light"]
+    [data-theme="dark"]
+    :is(.oa-doc, .oa-code):not([data-theme="light"])
+    .shiki
+    span,
+  :is(.oa-doc, .oa-code)[data-theme="dark"] .shiki span {
+    color: var(--shiki-dark) !important;
+    font-style: var(--shiki-dark-font-style) !important;
+    font-weight: var(--shiki-dark-font-weight) !important;
+  }
+}
+
+/* ---------- Shared ---------- */
+
+:root:has(.oa-doc, .oa-code) {
+  background: var(--oa-surface);
+}
+
+:root:has(.oa-pdf) {
+  background: var(--oa-bg);
+}
+
+:is(.oa-doc, .oa-code, .oa-pdf) {
+  color: var(--oa-text);
+  font-family: var(--oa-font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+:is(.oa-doc, .oa-code, .oa-pdf) *,
+:is(.oa-doc, .oa-code, .oa-pdf) *::before,
+:is(.oa-doc, .oa-code, .oa-pdf) *::after {
+  box-sizing: border-box;
+}
+
+:is(.oa-doc, .oa-code, .oa-pdf) ::selection {
+  background: var(--oa-selection);
+}
+
+:is(.oa-doc, .oa-code, .oa-pdf) :focus-visible {
+  outline: 2px solid var(--oa-focus);
+  outline-offset: 2px;
+}
+
+:is(.oa-doc, .oa-code, .oa-pdf) button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--oa-border);
+  border-radius: var(--oa-radius-md);
+  background: var(--oa-surface);
+  color: var(--oa-text);
+  font: 500 12px / 1 var(--oa-font-sans);
+  cursor: pointer;
+  transition:
+    border-color var(--oa-duration-fast) var(--oa-ease),
+    background var(--oa-duration-fast) var(--oa-ease),
+    opacity var(--oa-duration-fast) var(--oa-ease);
+}
+
+:is(.oa-doc, .oa-code, .oa-pdf) button:hover {
+  border-color: var(--oa-border-strong);
+}
+
+:is(.oa-doc, .oa-code, .oa-pdf) button[aria-pressed="true"] {
+  border-color: var(--oa-accent);
+  background: var(--oa-accent-soft);
+  color: var(--oa-accent-fg);
+}
+
+:is(.oa-doc, .oa-code, .oa-pdf) button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* ---------- Markdown ---------- */
+
+.oa-doc {
+  max-width: 70ch;
+  margin: 0 auto;
+  padding: 48px 24px 96px;
+  box-sizing: content-box;
+  background: var(--oa-surface);
+  font-size: 16px;
+  line-height: 1.65;
+  overflow-wrap: break-word;
+}
+
+.oa-doc > :first-child {
+  margin-top: 0;
+}
+
+.oa-doc :is(h1, h2, h3, h4, h5, h6) {
+  color: var(--oa-text);
+  font-weight: 600;
+  text-wrap: balance;
+  scroll-margin-top: 24px;
+}
+
+.oa-doc h1 {
+  margin: 48px 0 14px;
+  font-size: 32px;
+  line-height: 1.2;
+  letter-spacing: -0.025em;
+}
+
+.oa-doc h2 {
+  margin: 44px 0 10px;
+  font-size: 21px;
+  line-height: 1.3;
+  letter-spacing: -0.015em;
+}
+
+.oa-doc h3 {
+  margin: 30px 0 6px;
+  font-size: 17px;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+}
+
+.oa-doc h4 {
+  margin: 24px 0 4px;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.oa-doc :is(h5, h6) {
+  margin: 20px 0 4px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--oa-text-2);
+}
+
+.oa-doc p {
+  margin: 0 0 16px;
+}
+
+.oa-doc strong {
+  font-weight: 600;
+}
+
+.oa-doc a {
+  color: var(--oa-accent-fg);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+}
+
+.oa-doc a:hover {
+  text-decoration-color: currentColor;
+}
+
+/* Lists */
+
+.oa-doc :is(ul, ol) {
+  margin: 0 0 16px;
+  padding-left: 1.5em;
+}
+
+.oa-doc li {
+  margin: 4px 0;
+  padding-left: 2px;
+}
+
+.oa-doc li > :is(ul, ol) {
+  margin: 4px 0 0;
+}
+
+.oa-doc li > p {
+  margin: 0 0 8px;
+}
+
+.oa-doc li::marker {
+  color: var(--oa-text-muted);
+}
+
+.oa-doc ol > li::marker {
+  font-variant-numeric: tabular-nums;
+}
+
+.oa-doc ul ul {
+  list-style-type: circle;
+}
+
+.oa-doc ul ul ul {
+  list-style-type: square;
+}
+
+/* Task lists (markdown-it-task-lists and GFM) */
+
+.oa-doc
+:is(ul, ol):has(
+  > li > input[type="checkbox"],
+  > li > p > input[type="checkbox"]
+) {
+  list-style: none;
+  padding-left: 0;
+}
+
+.oa-doc li:has(> input[type="checkbox"], > p > input[type="checkbox"]) {
+  padding-left: 26px;
+  position: relative;
+}
+
+.oa-doc
+  li:has(> input[type="checkbox"], > p > input[type="checkbox"])
+  > :is(ul, ol):not(:has(> li > input, > li > p > input)) {
+  padding-left: 1.5em;
+}
+
+.oa-doc li > input[type="checkbox"],
+.oa-doc li > p > input[type="checkbox"] {
+  appearance: none;
+  position: absolute;
+  left: 0;
+  top: 0.32em;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  border: 1.5px solid var(--oa-border-strong);
+  border-radius: var(--oa-radius-sm);
+  background: var(--oa-surface);
+  display: grid;
+  place-items: center;
+}
+
+.oa-doc li > input[type="checkbox"]:checked,
+.oa-doc li > p > input[type="checkbox"]:checked {
+  border-color: var(--oa-text);
+  background: var(--oa-text);
+}
+
+.oa-doc li > input[type="checkbox"]:checked::after,
+.oa-doc li > p > input[type="checkbox"]:checked::after {
+  content: "";
+  width: 4px;
+  height: 8px;
+  margin-top: -2px;
+  border: solid var(--oa-surface);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.oa-doc
+  li:has(
+    > input[type="checkbox"]:checked,
+    > p > input[type="checkbox"]:checked
+  ) {
+  color: var(--oa-text-muted);
+}
+
+/* Blockquote, rule, images */
+
+.oa-doc blockquote {
+  margin: 20px 0 24px;
+  padding: 2px 0 2px 16px;
+  border-left: 3px solid var(--oa-border);
+  color: var(--oa-text-2);
+}
+
+.oa-doc blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.oa-doc hr {
+  height: 1px;
+  margin: 40px 0;
+  border: 0;
+  background: var(--oa-divider);
+}
+
+.oa-doc img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 8px 0;
+  border-radius: var(--oa-radius-md);
+}
+
+.oa-doc p > img:only-child {
+  margin: 24px auto;
+}
+
+/* Tables */
+
+.oa-doc table {
+  display: block;
+  width: max-content;
+  min-width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 8px 0 24px;
+  border-collapse: collapse;
+  font-size: 14.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.oa-doc th {
+  padding: 8px 16px 8px 0;
+  border-bottom: 1px solid var(--oa-border);
+  color: var(--oa-text-muted);
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.oa-doc td {
+  padding: 9px 16px 9px 0;
+  border-bottom: 1px solid var(--oa-divider);
+  vertical-align: top;
+}
+
+.oa-doc :is(th, td):last-child {
+  padding-right: 0;
+}
+
+.oa-doc :is(th, td)[align="right"],
+.oa-doc :is(th, td)[style*="right"] {
+  text-align: right;
+}
+
+.oa-doc :is(th, td)[align="center"],
+.oa-doc :is(th, td)[style*="center"] {
+  text-align: center;
+}
+
+/* Code */
+
+.oa-doc :is(code, samp) {
+  font-family: var(--oa-font-mono);
+  font-size: 0.875em;
+}
+
+.oa-doc :not(pre) > code {
+  padding: 0.1em 0.35em;
+  border: 1px solid var(--oa-divider);
+  border-radius: var(--oa-radius-sm);
+  background: var(--oa-code-bg);
+  overflow-wrap: anywhere;
+}
+
+.oa-doc pre {
+  margin: 8px 0 24px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  border: 1px solid var(--oa-divider);
+  border-radius: var(--oa-radius-md);
+  background: var(--oa-code-bg);
+  color: var(--oa-text);
+  font: 400 14px / 1.6 var(--oa-font-mono);
+  tab-size: 2;
+}
+
+.oa-doc pre.shiki {
+  background-color: var(--oa-code-bg) !important;
+}
+
+.oa-doc pre code {
+  font-size: inherit;
+}
+
+/*
+ * Optional wrapper so the language label and copy button stay put while the
+ * pre scrolls sideways: <div class="oa-codeblock" data-lang="ts"><pre>…</pre>
+ * <button class="oa-copy">Copy</button></div>
+ */
+.oa-doc .oa-codeblock {
+  position: relative;
+  margin: 8px 0 24px;
+}
+
+.oa-doc .oa-codeblock > pre {
+  margin: 0;
+}
+
+.oa-doc .oa-codeblock[data-lang] > pre {
+  padding-right: 64px;
+}
+
+.oa-doc .oa-codeblock[data-lang]::after {
+  content: attr(data-lang);
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  padding: 2px 4px;
+  border-radius: var(--oa-radius-sm);
+  background: var(--oa-code-bg);
+  color: var(--oa-text-muted);
+  font: 500 11.5px / 1 var(--oa-font-sans);
+  pointer-events: none;
+  transition: opacity var(--oa-duration-fast) var(--oa-ease);
+}
+
+.oa-doc .oa-codeblock > .oa-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  opacity: 0;
+}
+
+.oa-doc .oa-codeblock:is(:hover, :focus-within) > .oa-copy {
+  opacity: 1;
+}
+
+.oa-doc .oa-codeblock:has(> .oa-copy):is(:hover, :focus-within)::after {
+  opacity: 0;
+}
+
+@media (hover: none) {
+  .oa-doc .oa-codeblock > .oa-copy {
+    opacity: 1;
+  }
+
+  .oa-doc .oa-codeblock:has(> .oa-copy)::after {
+    opacity: 0;
+  }
+}
+
+/* Mermaid */
+
+.oa-doc :is(.oa-mermaid, pre.mermaid) {
+  margin: 8px 0 24px;
+  padding: 24px 16px;
+  overflow-x: auto;
+  border: 1px solid var(--oa-divider);
+  border-radius: var(--oa-radius-lg);
+  background: var(--oa-surface);
+  color: var(--oa-text);
+  font: 400 14px / 1.5 var(--oa-font-sans);
+  text-align: center;
+}
+
+.oa-doc :is(.oa-mermaid, pre.mermaid) svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.oa-doc .oa-mermaid figcaption {
+  margin-top: 12px;
+  color: var(--oa-text-muted);
+  font-size: 13px;
+}
+
+/* Footnotes (markdown-it-footnote and GFM) */
+
+.oa-doc :is(sup.footnote-ref, sup:has(> a[data-footnote-ref])) {
+  font-size: 0.72em;
+  line-height: 0;
+}
+
+.oa-doc :is(sup.footnote-ref, sup:has(> a[data-footnote-ref])) a {
+  padding: 0 2px;
+  text-decoration: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.oa-doc hr.footnotes-sep {
+  display: none;
+}
+
+.oa-doc :is(section.footnotes, section[data-footnotes]) {
+  margin-top: 56px;
+  padding-top: 20px;
+  border-top: 1px solid var(--oa-divider);
+  color: var(--oa-text-2);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.oa-doc :is(section.footnotes, section[data-footnotes]) ol {
+  padding-left: 1.25em;
+}
+
+.oa-doc :is(section.footnotes, section[data-footnotes]) li p {
+  margin: 0;
+}
+
+.oa-doc :is(.footnote-backref, [data-footnote-backref]) {
+  margin-left: 4px;
+  text-decoration: none;
+}
+
+.oa-doc .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (max-width: 600px) {
+  .oa-doc {
+    padding: 28px 16px 64px;
+  }
+
+  .oa-doc h1 {
+    font-size: 26px;
+  }
+
+  .oa-doc h2 {
+    font-size: 19px;
+  }
+}
+
+/* ---------- Code view ---------- */
+
+.oa-code {
+  --oa-gutter: 4ch;
+
+  min-height: 100%;
+  background: var(--oa-code-bg);
+}
+
+.oa-code .oa-code-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 6px 12px 6px 16px;
+  border-bottom: 1px solid var(--oa-divider);
+  background: var(--oa-surface);
+  font-size: 13px;
+}
+
+.oa-code .oa-code-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--oa-text);
+  font: 500 13px / 1.3 var(--oa-font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.oa-code .oa-code-lang {
+  flex: none;
+  color: var(--oa-text-muted);
+  font-size: 12px;
+}
+
+.oa-code .oa-code-actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.oa-code pre {
+  margin: 0;
+  padding: 14px 0 20px;
+  overflow-x: auto;
+  background: var(--oa-code-bg) !important;
+  color: var(--oa-text);
+  font: 400 14px / 1.65 var(--oa-font-mono);
+  tab-size: 2;
+}
+
+.oa-code pre code {
+  display: block;
+  min-width: max-content;
+  counter-reset: oa-line;
+}
+
+.oa-code .line {
+  position: relative;
+  display: inline-block;
+  min-width: 100%;
+  padding: 0 24px 0 calc(var(--oa-gutter) + 28px);
+}
+
+.oa-code .line::before {
+  counter-increment: oa-line;
+  content: counter(oa-line);
+  position: absolute;
+  left: 0;
+  width: calc(var(--oa-gutter) + 8px);
+  color: var(--oa-text-muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  user-select: none;
+}
+
+.oa-code .line:empty::after {
+  content: "\200b";
+}
+
+.oa-code .line:hover {
+  background: color-mix(in srgb, var(--oa-text) 4%, transparent);
+}
+
+.oa-code[data-wrap="true"] pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.oa-code[data-wrap="true"] pre code {
+  min-width: 0;
+}
+
+.oa-code[data-wrap="true"] .line {
+  width: 100%;
+}
+
+/* ---------- PDF (pdf.js) ---------- */
+
+.oa-pdf {
+  min-height: 100%;
+  background: var(--oa-bg);
+  font-size: 13px;
+}
+
+.oa-pdf .oa-pdf-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  min-height: 44px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--oa-divider);
+  background: var(--oa-chrome);
+}
+
+.oa-pdf .oa-pdf-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--oa-text-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.oa-pdf .oa-pdf-toolbar input {
+  width: 4ch;
+  height: 26px;
+  padding: 0 4px;
+  border: 1px solid var(--oa-border);
+  border-radius: var(--oa-radius-md);
+  background: var(--oa-surface);
+  color: var(--oa-text);
+  font: 500 12.5px / 1 var(--oa-font-sans);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.oa-pdf .oa-pdf-toolbar button {
+  min-width: 26px;
+  padding: 0 6px;
+}
+
+.oa-pdf .oa-pdf-zoom {
+  min-width: 5ch;
+  color: var(--oa-text);
+  text-align: center;
+}
+
+.oa-pdf .oa-pdf-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--oa-divider);
+}
+
+.oa-pdf :is(.pdfViewer, .oa-pdf-pages) {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+  padding: 32px 16px 64px;
+}
+
+.oa-pdf .page {
+  position: relative;
+  max-width: 100%;
+  margin: 0 auto;
+  overflow: hidden;
+  border-radius: 2px;
+  background: #ffffff;
+  box-shadow: var(--oa-page-shadow);
+}
+
+.oa-pdf .page :is(canvas, img) {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.oa-pdf .page .canvasWrapper {
+  position: absolute;
+  inset: 0;
+}
+
+/*
+ * pdf.js >= 4 text layer, mirroring the textLayer block of its pdf_viewer.css.
+ * pdf.js sets --scale-factor (v4) or --total-scale-factor (v5) on the page and
+ * --font-height, --scale-x and --rotate on each span. Glyphs are transparent
+ * over the canvas but selectable.
+ */
+.oa-pdf .textLayer {
+  --min-font-size: 1;
+  --text-scale-factor: calc(
+    var(--total-scale-factor, var(--scale-factor, 1)) *
+    var(--min-font-size)
+  );
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  text-align: initial;
+  -webkit-text-size-adjust: none;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  caret-color: CanvasText;
+}
+
+.oa-pdf .textLayer.highlighting {
+  touch-action: none;
+}
+
+.oa-pdf .textLayer :is(span, br) {
+  position: absolute;
+  color: transparent;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+
+.oa-pdf .textLayer > :not(.markedContent),
+.oa-pdf .textLayer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  --scale-x: 1;
+  --rotate: 0deg;
+
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x))
+    scale(var(--min-font-size-inv));
+}
+
+.oa-pdf .textLayer span.markedContent {
+  top: 0;
+  height: 0;
+}
+
+.oa-pdf .textLayer span[role="img"] {
+  cursor: default;
+  user-select: none;
+}
+
+.oa-pdf .textLayer ::selection {
+  background: color-mix(in srgb, var(--oa-accent) 28%, transparent);
+  color: transparent;
+}
+
+.oa-pdf .textLayer br::selection {
+  background: transparent;
+}
+
+.oa-pdf .textLayer .endOfContent {
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: 0;
+  display: block;
+  cursor: default;
+  user-select: none;
+}
+
+.oa-pdf .textLayer.selecting .endOfContent {
+  top: 0;
+}
+
+/* ---------- Print ---------- */
+
+@media print {
+  .oa-doc {
+    max-width: none;
+    padding: 0;
+  }
+
+  :is(.oa-doc, .oa-code) pre {
+    overflow: visible;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .oa-doc table {
+    display: table;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    overflow: visible;
+    table-layout: auto;
+    font-size: 12.5px;
+  }
+
+  .oa-doc :is(th, td) {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .oa-code pre code {
+    min-width: 0;
+  }
+
+  .oa-code .line {
+    width: 100%;
+  }
+
+  :is(.oa-doc, .oa-code, .oa-pdf) *,
+  .oa-pdf .page {
+    box-shadow: none !important;
+  }
+
+  .oa-doc a[href^="http"]::after {
+    content: " (" attr(href) ")";
+    color: var(--oa-text-muted);
+    font-size: 0.85em;
+    overflow-wrap: anywhere;
+  }
+
+  :is(.oa-doc, .oa-code) .oa-copy,
+  .oa-code .oa-code-actions,
+  .oa-pdf .oa-pdf-toolbar {
+    display: none;
+  }
+
+  .oa-code .oa-code-header {
+    position: static;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is(.oa-doc, .oa-code, .oa-pdf) * {
+    transition: none !important;
+  }
+}
