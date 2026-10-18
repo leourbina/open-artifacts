@@ -1,5 +1,6 @@
 import { EmptyState, Skeleton } from "@oa/ui";
 import { useSearch as useRouteSearch } from "@tanstack/react-router";
+import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { ArtifactRow } from "./ArtifactRow";
 import { SearchIcon } from "./icons";
 import "./library.css";
@@ -7,6 +8,7 @@ import { uniqueItems, useSentinel } from "./useInfinite";
 import { useSearchQuery } from "./useSearchQuery";
 
 export function SearchPage() {
+  useDocumentTitle("Search");
   const raw = useRouteSearch({ strict: false }) as { q?: string };
   const q = (raw.q ?? "").trim();
   const r = useSearchQuery(q);

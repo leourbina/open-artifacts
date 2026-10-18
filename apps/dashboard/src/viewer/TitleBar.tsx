@@ -13,10 +13,12 @@ import {
   toast,
   VisibilityBadge,
 } from "@oa/ui";
+import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { useRef, useState } from "react";
+import { type MouseEvent, useEffect, useRef, useState } from "react";
 import { ApiClientError } from "../api/client";
 import {
+  qk,
   useDeleteArtifact,
   usePatchArtifact,
   useVersionInfo,
@@ -32,10 +34,20 @@ function EditableTitle({ artifact }: { artifact: ArtifactSummary }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const done = useRef(false);
+  const button = useRef<HTMLButtonElement>(null);
+  // Enter/Escape return focus to the title; a blur elsewhere keeps it there.
+  const refocus = useRef(false);
+  useEffect(() => {
+    if (!editing && refocus.current) {
+      refocus.current = false;
+      button.current?.focus();
+    }
+  }, [editing]);
 
-  const finish = (save: boolean) => {
+  const finish = (save: boolean, keyboard = false) => {
     if (done.current) return;
     done.current = true;
+    refocus.current = keyboard;
     setEditing(false);
     const title = draft.trim().slice(0, TITLE_MAX);
     if (!save || !title || title === artifact.title) return;
@@ -55,6 +67,7 @@ function EditableTitle({ artifact }: { artifact: ArtifactSummary }) {
     return (
       <h1 className="oa-vt-title">
         <button
+          ref={button}
           type="button"
           className="oa-vt-edit"
           title="Rename"
@@ -80,8 +93,8 @@ function EditableTitle({ artifact }: { artifact: ArtifactSummary }) {
         onChange={(e) => setDraft(e.target.value)}
         onBlur={() => finish(true)}
         onKeyDown={(e) => {
-          if (e.key === "Enter") finish(true);
-          else if (e.key === "Escape") finish(false);
+          if (e.key === "Enter") finish(true, true);
+          else if (e.key === "Escape") finish(false, true);
         }}
       />
     </h1>
@@ -93,6 +106,8 @@ export function TitleBar({
   version,
   explicitVersion,
   rawUrl,
+  rawBusy = false,
+  onOpenRaw,
   authed,
   onShare,
   panelOpen,
@@ -102,12 +117,16 @@ export function TitleBar({
   version: number;
   explicitVersion: boolean;
   rawUrl: string | null;
+  /** The signed URL is being refreshed; "Open raw" is disabled meanwhile. */
+  rawBusy?: boolean;
+  onOpenRaw?: (e: MouseEvent) => void;
   authed: boolean;
   onShare: () => void;
   panelOpen: boolean;
   onPanel: () => void;
 }) {
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const versions = useVersions(artifact.id, { enabled: authed });
   const del = useDeleteArtifact(artifact.id);
   const [confirm, setConfirm] = useState(false);
@@ -117,6 +136,15 @@ export function TitleBar({
 
   const entry = useVersionInfo(artifact.id, version, authed).data?.entry;
   const deleting = useRef(false);
+  const deleted = useRef(false);
+  // Dropped only once the viewer has unmounted, so nothing refetches the 404.
+  useEffect(
+    () => () => {
+      if (deleted.current)
+        qc.removeQueries({ queryKey: qk.artifact(artifact.id) });
+    },
+    [qc, artifact.id],
+  );
   const next = viewerPath(artifact.id, explicitVersion ? version : undefined);
   const label = `v${version}${version === artifact.currentVersion ? " · Current" : ""}`;
   const items = [
@@ -178,10 +206,12 @@ export function TitleBar({
         )}
         {rawUrl && (
           <a
-            className="oa-btn"
+            className="oa-btn oa-sm"
             href={rawUrl}
             target="_blank"
             rel="noopener noreferrer"
+            aria-disabled={rawBusy || undefined}
+            onClick={onOpenRaw}
           >
             Open raw
           </a>
@@ -220,23 +250,31 @@ export function TitleBar({
         title="Delete artifact?"
         description={`"${artifact.title}" will be recoverable for 30 days.`}
         footer={
-          <Button
-            variant="danger"
-            loading={del.isPending}
-            onClick={() => {
-              if (deleting.current) return;
-              deleting.current = true;
-              del.mutate(undefined, {
-                onSuccess: () => go("/"),
-                onError: () => {
-                  deleting.current = false;
-                  toast({ title: "Couldn't delete", tone: "danger" });
-                },
-              });
-            }}
-          >
-            Delete
-          </Button>
+          <>
+            <Button variant="ghost" onClick={() => setConfirm(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              loading={del.isPending}
+              onClick={() => {
+                if (deleting.current) return;
+                deleting.current = true;
+                del.mutate(undefined, {
+                  onSuccess: () => {
+                    deleted.current = true;
+                    go("/");
+                  },
+                  onError: () => {
+                    deleting.current = false;
+                    toast({ title: "Couldn't delete", tone: "danger" });
+                  },
+                });
+              }}
+            >
+              Delete
+            </Button>
+          </>
         }
       />
     </div>

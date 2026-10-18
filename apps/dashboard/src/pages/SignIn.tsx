@@ -1,8 +1,10 @@
 import { AUTH } from "@oa/shared";
 import { Banner } from "@oa/ui";
+import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { EdgePanel } from "./Edge";
 
 export function SignIn({ failed = false }: { failed?: boolean }) {
+  useDocumentTitle("Sign in");
   return (
     <EdgePanel>
       <h1>Sign in to Open Artifacts</h1>

@@ -169,16 +169,12 @@ export const usePatchArtifact = (id: string) =>
       api.send("PATCH", R.artifact(id), patch, ArtifactSummarySchema),
     artifactKeys(id),
   );
-export const useDeleteArtifact = (id: string) => {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () => api.send("DELETE", R.artifact(id), undefined),
-    onSuccess: async () => {
-      qc.removeQueries({ queryKey: qk.artifact(id) });
-      await qc.invalidateQueries({ queryKey: ["artifacts"] });
-    },
-  });
-};
+/** The caller navigates away, then drops `qk.artifact(id)` once its observers unmount. */
+export const useDeleteArtifact = (id: string) =>
+  useInvalidating(
+    () => api.send("DELETE", R.artifact(id), undefined),
+    () => [["artifacts"]],
+  );
 export const usePutShare = (id: string) =>
   useInvalidating(
     (input: ShareInput) => api.send("PUT", R.shares(id), input, ShareSchema),

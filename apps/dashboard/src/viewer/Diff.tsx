@@ -1,4 +1,5 @@
 import {
+  diffPath,
   type FileEntry,
   isTextContentType,
   R,
@@ -10,6 +11,9 @@ import { diffLines } from "diff";
 import { useMemo, useState } from "react";
 import { ApiClientError, api } from "../api/client";
 import { useArtifact, useVersionInfo } from "../api/queries";
+import { useLoginRedirect } from "../auth/redirect";
+import { useMe } from "../auth/useMe";
+import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { NotFound } from "../pages/NotFound";
 import { Crumbs } from "./Crumbs";
 import { SANDBOX, safeContentUrl } from "./frame";
@@ -327,9 +331,23 @@ export function Diff({
   const art = useArtifact(id);
   const a = useVersionInfo(id, from);
   const b = useVersionInfo(id, to);
+  const me = useMe();
   const err = [art, a, b].find((q) => q.error)?.error;
-  if (err instanceof ApiClientError && err.status === 404) return <NotFound />;
-  if (err) return <p role="alert">Couldn't load this comparison.</p>;
+  const status = err instanceof ApiClientError ? err.status : null;
+  // Same sign-in rule as the viewer: /a/* is public, so 401s are handled here.
+  const toLogin =
+    status === 401 ||
+    (status === 404 && (me.status === "anonymous" || me.status === "error"));
+  useLoginRedirect(toLogin, diffPath(id, from, to));
+  useDocumentTitle(
+    art.data && (me.status === "authed" || art.data.visibility !== "private")
+      ? `${art.data.title} v${from} → v${to}`
+      : null,
+  );
+  if (toLogin) return null;
+  if (status === 404 && me.status === "authed") return <NotFound />;
+  if (err && status !== 404)
+    return <p role="alert">Couldn't load this comparison.</p>;
   if (!art.data || a.isPending || b.isPending)
     return <div className="oa-diff" aria-busy="true" />;
   if (!a.data || !b.data) return <NotFound />;

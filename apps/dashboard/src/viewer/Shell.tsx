@@ -1,11 +1,12 @@
-import { type ArtifactSummary, AUTH, viewerPath } from "@oa/shared";
+import { type ArtifactSummary, viewerPath } from "@oa/shared";
 import { Button } from "@oa/ui";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { type MouseEvent, useEffect, useRef, useState } from "react";
 import { ApiClientError } from "../api/client";
 import { useArtifact } from "../api/queries";
-import { useRedirect } from "../auth/redirect";
+import { useLoginRedirect } from "../auth/redirect";
 import { useMe } from "../auth/useMe";
+import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { NotFound } from "../pages/NotFound";
 import { createBridge } from "./bridge";
 import { Crumbs } from "./Crumbs";
@@ -46,6 +47,22 @@ function Viewer({
   const content = useContentUrl(artifact.id, version);
   const url = safeContentUrl(content.url);
   const rawUrl = safeContentUrl(content.current);
+  const signedOut =
+    content.error instanceof ApiClientError && content.error.status === 401;
+  useLoginRedirect(
+    signedOut,
+    viewerPath(artifact.id, explicitVersion ? version : undefined),
+  );
+  // A stale signed URL is refreshed first; the tab opens with the new one.
+  const openRaw = (e: MouseEvent) => {
+    if (content.fresh() && !content.refreshing) return;
+    e.preventDefault();
+    if (content.refreshing) return;
+    void content.refresh().then((u) => {
+      const safe = safeContentUrl(u);
+      if (safe) window.open(safe, "_blank", "noopener,noreferrer");
+    });
+  };
   const theme = useTheme();
   const [el, setEl] = useState<HTMLIFrameElement | null>(null);
   const navigate = useNavigate();
@@ -90,6 +107,7 @@ function Viewer({
   useEffect(() => bridge.current?.setTheme(theme), [theme]);
 
   if (content.notFound) return <NotFound />;
+  if (signedOut) return null;
   return (
     <div className="oa-viewer">
       <Crumbs title={artifact.title} />
@@ -98,13 +116,17 @@ function Viewer({
         version={version}
         explicitVersion={explicitVersion}
         rawUrl={rawUrl}
+        rawBusy={content.refreshing}
+        onOpenRaw={openRaw}
         authed={authed}
         onShare={() => setPanel(true, "share")}
         panelOpen={panelOpen}
         onPanel={() => setPanel(!panelOpen)}
       />
       <div className="oa-vbody">
-        {content.current && !url && <ErrorPanel />}
+        {!url && (content.current || content.error) ? (
+          <ErrorPanel onRetry={() => void content.refresh()} />
+        ) : null}
         {url && (
           <iframe
             ref={setEl}
@@ -133,7 +155,6 @@ function Viewer({
 export function Shell({ id, v }: { id: string; v?: number }) {
   const q = useArtifact(id);
   const me = useMe();
-  const redirect = useRedirect();
   // Without an explicit version, pin the one seen first so a background bump never reloads.
   const pinned = useRef<{ id: string; v: number } | null>(null);
   if (v === undefined && q.data && pinned.current?.id !== id)
@@ -144,10 +165,11 @@ export function Shell({ id, v }: { id: string; v?: number }) {
   const toLogin =
     status === 401 ||
     (status === 404 && (me.status === "anonymous" || me.status === "error"));
-  useEffect(() => {
-    if (toLogin)
-      redirect(`${AUTH.login}?next=${encodeURIComponent(viewerPath(id, v))}`);
-  }, [toLogin, redirect, id, v]);
+  useLoginRedirect(toLogin, viewerPath(id, v));
+  // A private artifact's title is shown only to a signed-in viewer.
+  useDocumentTitle(
+    q.data && (authed || q.data.visibility !== "private") ? q.data.title : null,
+  );
 
   if (toLogin) return null;
   if (status === 404 && authed) return <NotFound />;
