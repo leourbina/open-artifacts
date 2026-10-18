@@ -448,3 +448,6 @@ contentApp.get("*", (c) => {
   if (q) return serve(c, q[1] ?? "", q[2] ?? "", q[3] ?? "", null);
   throw notFound();
 });
+
+// Build the route matchers at module scope, not on the first request (see app.ts).
+contentApp.router.match("GET", "/");

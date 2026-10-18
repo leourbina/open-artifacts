@@ -4,6 +4,9 @@ import { ApiError } from "../http/errors.js";
 import { search } from "../services/search.js";
 import type { AppType } from "./index.js";
 
+// Module-scope warm-up: zod builds the parser on first parse (see artifacts.ts).
+SearchQuerySchema.safeParse({ q: "a" });
+
 export function mountSearch(app: AppType): void {
   app.get(R.search, async (c) => {
     const q = SearchQuerySchema.safeParse(c.req.query());
