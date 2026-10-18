@@ -10,6 +10,18 @@ const doc = readFileSync(
 );
 
 describe("mcp-tools docs", () => {
+  it("describes the upload flow and search lag", () => {
+    const large = doc.split("## Large files")[1]?.split("\n## ")[0] ?? "";
+    for (const word of [
+      "`create_upload`",
+      "`uploadId`",
+      "`PUT`",
+      "`publish_artifact`",
+    ])
+      expect(large).toContain(word);
+    expect(doc).toMatch(/search_artifacts[^.]*few seconds/);
+  });
+
   it("documents every PublishInputSchema field, and no others", () => {
     const table = doc.split("## Publishing")[1]?.split("\n## ")[0] ?? "";
     const rows = [...table.matchAll(/^\| `([A-Za-z]+)` \|/gm)].map(

@@ -65,6 +65,8 @@ export async function llmsTxt(): Promise<string> {
     section(byId("connect-agents"), "Steps"),
     "## Tools",
     tools.map((t) => `- \`${t.name}\`: ${t.description}`).join("\n"),
+    section(byId("mcp-tools"), "Large files"),
+    section(byId("mcp-tools"), "Search freshness"),
     "## Docs",
     [
       ...all.map(

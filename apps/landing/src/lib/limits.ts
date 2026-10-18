@@ -32,4 +32,6 @@ export const LIMIT_PLACEHOLDERS: Record<string, string> = {
   "{LIMIT_ANON_WRITES}": `${LIMITS.anonWritesPerMinPerIp} per minute`,
   "{LIMIT_SIGNED_URL_TTL}": formatSeconds(LIMITS.signedUrlTtlSec),
   "{LIMIT_SOFT_DELETE}": plural(LIMITS.softDeleteDays, "day"),
+  "{LIMIT_UPLOAD_URL_TTL}": formatSeconds(LIMITS.uploadUrlTtlSec),
+  "{LIMIT_UPLOAD_TTL}": plural(LIMITS.uploadTtlHours, "hour"),
 };

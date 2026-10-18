@@ -42,7 +42,7 @@ describe("limits in the docs", () => {
       `capped at ${formatBytes(LIMITS.inlineBytes)} in total`,
     );
     expect(page("mcp-tools.md")).toContain(
-      `up to ${formatBytes(LIMITS.fileBytes)} each and ${formatBytes(LIMITS.publishBytes)} per publish`,
+      `A file can be up to ${formatBytes(LIMITS.fileBytes)}, and one publish up to ${formatBytes(LIMITS.publishBytes)}.`,
     );
     expect(page("runtime-api.md")).toContain(
       `| Document size | ${formatBytes(LIMITS.docBytes)} |`,
@@ -57,5 +57,17 @@ describe("limits in the docs", () => {
       expect(read(`${dist}docs/`, f), f).not.toContain("{LIMIT_");
     for (const f of ["mcp-tools/index.html", "runtime-api/index.html"])
       expect(read(`${dist}docs/`, f), f).not.toContain("{LIMIT_");
+  });
+});
+
+describe("upload flow in llms.txt", () => {
+  it("carries the large-file steps with the current limits", () => {
+    const llms = read(dist, "llms.txt");
+    expect(llms).toContain(
+      `capped at ${formatBytes(LIMITS.inlineBytes)} in total`,
+    );
+    expect(llms).toContain("`create_upload`");
+    expect(llms).toContain('{ "uploadId": "<uploadId>" }');
+    expect(llms).toMatch(/search_artifacts[^.]*few seconds/);
   });
 });
