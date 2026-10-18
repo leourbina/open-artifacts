@@ -80,3 +80,23 @@ The OIDC client secret is only returned when the app is created, and there's no 
 | OIDC client id (`ACCESS_CLIENT_ID`) | e332570b66c35883120a21ccfe376f6394aa4089c08cb73c6224b96fab1da7e2 |
 
 The client id is public and is committed in `wrangler.staging.jsonc`. The client secret is a Worker secret and is not recorded here.
+
+## Production token
+
+Production (`artifacts.leourbina.com`, zone `leourbina.com`) uses its own repo secret, **`PROD_CLOUDFLARE_API_TOKEN`**. Staging keeps `CLOUDFLARE_API_TOKEN`. They must never cross: only workflows with `prod` in the filename may reference the PROD secret, and they must not reference `CLOUDFLARE_API_TOKEN` (enforced in `scripts/check-ci.test.ts`). The account id still comes from `CLOUDFLARE_ACCOUNT_ID`.
+
+Scopes (account-scoped, zone `leourbina.com` only):
+
+- Workers Scripts, KV, R2 and D1: Edit
+- Access Apps: Edit
+- Access Organizations: Read
+- Account Analytics: Read
+- Workers Routes and DNS on the zone: Edit
+
+Check the token (read-only API calls, prints pass/fail per check and names any missing permission):
+
+```
+gh workflow run ops-prod-token-check.yml
+```
+
+It runs only on `main`, in the `prod` concurrency group, via `scripts/ops/check-prod-token.sh`.
