@@ -186,7 +186,7 @@ These are designer's calls, because the user approved the spec before the dashbo
 
 **open-artifacts.com/llms.txt** gives agent-facing instructions:
 
-1. Check the prerequisites: Node 20+, git, a Cloudflare account, and a domain on Cloudflare. Explain each one to the user if it's missing.
+1. Check the prerequisites: Node 22+ (required by wrangler), git, a Cloudflare account, and a domain on Cloudflare. Explain each one to the user if it's missing.
 2. Clone the repo, then run `pnpm install`.
 3. Run `npx wrangler login`. **This is the one human step.**
 4. Run `pnpm oa:setup`. It's interactive, and it also accepts flags so agents can run it without prompts. It is **idempotent and re-runnable**. It:

@@ -38,7 +38,7 @@ This track creates the repo and the **contract** (`packages/shared`) that all th
   - `biome.json`: recommended rules, 2-space indent, double quotes.
   - `LICENSE`: MIT, © 2026 Open Artifacts contributors.
   - `README.md`: one paragraph, plus a link to the docs. Link the repo at `https://github.com/leourbina/open-artifacts`.
-  - `.nvmrc`: `20`.
+  - `.nvmrc`: `22`.
 - [ ] **Step 4: Run it and confirm it passes.**
   - Run: `pnpm install && pnpm vitest run scripts/check-workspace.test.ts`
   - Expected: PASS.
@@ -268,7 +268,7 @@ export const METHOD_CAPABILITY: Record<RuntimeMethod, keyof Capabilities> = { "d
   - Expected: FAIL, because the modules are missing.
 - [ ] **Step 3: Implement the modules with the signatures above.**
   - Build with `tsc -b` to `dist/`. Exports map: `"."` → `dist/index.js`.
-  - Keep the package free of Node-only APIs. It runs in Workers, browsers, and Node 20.
+  - Keep the package free of Node-only APIs. It runs in Workers, browsers, and Node 22.
 - [ ] **Step 4: Run them and confirm they pass.**
   - Run: `pnpm --filter @oa/shared vitest run && pnpm --filter @oa/shared build`
   - Expected: PASS and a clean build.
@@ -330,7 +330,7 @@ export const METHOD_CAPABILITY: Record<RuntimeMethod, keyof Capabilities> = { "d
 - **`ci.yml`:**
   - Triggers: `pull_request`, plus `push` to `main`.
   - Jobs: `lint` (biome), `typecheck`, `test` (`pnpm -r test`), `build`, and `e2e`. `e2e` is a no-op until FE12, when it becomes Playwright.
-  - Node 20 and pnpm, with the pnpm store cached.
+  - Node 22 and pnpm, with the pnpm store cached.
   - These are the **required status checks** on `main`.
 - **`deploy-staging.yml`:**
   - Trigger: `push` to `main`, with concurrency group `staging` and `cancel-in-progress: false`.

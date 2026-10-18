@@ -21,7 +21,7 @@
 | Dashboard | React 19, Vite, TanStack Router and TanStack Query, Radix primitives |
 | Rendering | markdown-it, Shiki, Mermaid, pdf.js, jsdiff |
 | Landing | Astro |
-| Setup CLI | Node 20+ with tsx, execa, prompts |
+| Setup CLI | Node 22+ with tsx, execa, prompts |
 
 **Spec:** `docs/superpowers/specs/2026-10-18-open-artifacts-design.md` (revision 2). Executors read the spec and this plan together. Section references like "spec §6.4" point into the spec.
 
@@ -145,7 +145,7 @@ Every task's requirements include this section implicitly.
 - MCP tool names and descriptions are vendor-neutral. The words "Claude", "Anthropic", and "OpenAI" never appear in tool names or descriptions.
 - Deployed instances send no telemetry.
 - The repo URL is defined in exactly one place: `packages/shared/src/meta.ts` exports `REPO_URL = "https://github.com/leourbina/open-artifacts"`.
-- Node 20+. All packages are ESM. TypeScript runs with `"strict": true`.
+- **Node 22+** (wrangler requires it). `engines.node` is `">=22"` in every package, and `.nvmrc` and CI use 22, so CI tests exactly what users run. All packages are ESM. TypeScript runs with `"strict": true`.
 
 **Process rules:**
 - Commits within a branch are free-form. The squash-merge title is what counts (see *Delivery*). End each commit message with the attribution lines from the session's system reminder.
