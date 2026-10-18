@@ -22,19 +22,28 @@ export class ApiClientError extends Error {
 const internal = (message: string, status: number) =>
   new ApiClientError("internal", message, status);
 
+function toError(text: string, status: number): ApiClientError {
+  let json: unknown = null;
+  try {
+    json = JSON.parse(text);
+  } catch {}
+  const parsed = ApiErrorSchema.safeParse(json);
+  if (!parsed.success)
+    return internal(`Unexpected response (HTTP ${status})`, status);
+  const { code, message, details } = parsed.data.error;
+  return new ApiClientError(code, message, status, details);
+}
+
 async function request(path: string, init: RequestInit): Promise<Response> {
   let res: Response;
   try {
     res = await fetch(path, { credentials: "same-origin", ...init });
   } catch (e) {
+    if (e instanceof Error && e.name === "AbortError") throw e;
     throw internal(e instanceof Error ? e.message : "Network error", 0);
   }
   if (res.ok) return res;
-  const parsed = ApiErrorSchema.safeParse(await res.json().catch(() => null));
-  if (!parsed.success)
-    throw internal(`Unexpected response (HTTP ${res.status})`, res.status);
-  const { code, message, details } = parsed.data.error;
-  throw new ApiClientError(code, message, res.status, details);
+  throw toError(await res.text().catch(() => ""), res.status);
 }
 
 async function parse<T>(
@@ -51,8 +60,12 @@ async function parse<T>(
 }
 
 export const api = {
-  async get<T>(path: string, schema: z.ZodType<T>): Promise<T> {
-    return parse(await request(path, { method: "GET" }), schema);
+  async get<T>(
+    path: string,
+    schema: z.ZodType<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    return parse(await request(path, { method: "GET", signal }), schema);
   },
   async send<T = void>(
     method: "POST" | "PUT" | "PATCH" | "DELETE",
@@ -86,7 +99,7 @@ export const api = {
       xhr.onload = () =>
         xhr.status >= 200 && xhr.status < 300
           ? resolve()
-          : reject(internal(`Upload failed (HTTP ${xhr.status})`, xhr.status));
+          : reject(toError(xhr.responseText, xhr.status));
       xhr.onerror = () => reject(internal("Upload failed", 0));
       xhr.send(body);
     });

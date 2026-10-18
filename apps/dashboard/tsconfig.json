@@ -4,7 +4,10 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
     "types": ["vite/client"],
-    "paths": { "@oa/shared": ["../../packages/shared/src/index.ts"] }
+    "paths": {
+      "@oa/shared": ["../../packages/shared/src/index.ts"],
+      "@oa/shared/*": ["../../packages/shared/src/*"]
+    }
   },
   "include": ["src", "test", "vite.config.ts"]
 }

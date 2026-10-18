@@ -8,11 +8,18 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     // Resolve the workspace contract from source so no prior shared build is needed.
-    alias: {
-      "@oa/shared": fileURLToPath(
-        new URL("../../packages/shared/src/index.ts", import.meta.url),
-      ),
-    },
+    alias: [
+      {
+        find: /^@oa\/shared$/,
+        replacement: fileURLToPath(
+          new URL("../../packages/shared/src/index.ts", import.meta.url),
+        ),
+      },
+      {
+        find: /^@oa\/shared\/(.*)$/,
+        replacement: `${fileURLToPath(new URL("../../packages/shared/src", import.meta.url))}/$1`,
+      },
+    ],
   },
   server: {
     port: 5173,
@@ -22,14 +29,24 @@ export default defineConfig({
       "/mcp": target,
       "/oauth": target,
       "/healthz": target,
-      // Artifact HTML only; SPA routes under /a/ stay with Vite.
-      "/a": {
-        target,
-        bypass: (req) =>
-          req.headers.accept?.includes("text/html") ? undefined : req.url,
-      },
     },
   },
   build: { outDir: "dist", emptyOutDir: true },
-  test: { include: ["test/**/*.test.ts"] },
+  test: {
+    projects: [
+      {
+        extends: true,
+        test: { name: "node", include: ["test/**/*.test.ts"] },
+      },
+      {
+        extends: true,
+        test: {
+          name: "jsdom",
+          environment: "jsdom",
+          include: ["test/**/*.test.tsx"],
+          setupFiles: ["test/setup.ts"],
+        },
+      },
+    ],
+  },
 });

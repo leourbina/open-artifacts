@@ -1,10 +1,9 @@
 import {
   type ArtifactPatch,
-  ArtifactPatchSchema,
   ArtifactSummarySchema,
   type ListQueryInput,
+  ListQuerySchema,
   MemberSchema,
-  MeSchema,
   OAuthClientSchema,
   PageSchema,
   type PublishInput,
@@ -26,7 +25,8 @@ export type SearchQuery = { q: string; cursor?: string; limit?: number };
 
 export const qk = {
   me: ["me"] as const,
-  artifacts: (q: ListQueryInput) => ["artifacts", q] as const,
+  artifacts: (q: ListQueryInput) =>
+    ["artifacts", ListQuerySchema.parse(q)] as const,
   artifact: (id: string) => ["artifact", id] as const,
   versions: (id: string) => ["artifact", id, "versions"] as const,
   shares: (id: string) => ["artifact", id, "shares"] as const,
@@ -49,62 +49,62 @@ const withQuery = (path: string, q: object) => {
 const ArtifactPage = PageSchema(ArtifactSummarySchema);
 const SearchPage = PageSchema(SearchHitSchema);
 
-export const useMe = () =>
-  useQuery({
-    queryKey: qk.me,
-    queryFn: () => api.get(R.me, MeSchema),
-    retry: false,
-  });
 export const useArtifacts = (q: ListQueryInput) =>
   useQuery({
     queryKey: qk.artifacts(q),
-    queryFn: () => api.get(withQuery(R.artifacts, q), ArtifactPage),
+    queryFn: ({ signal }) =>
+      api.get(withQuery(R.artifacts, q), ArtifactPage, signal),
   });
 export const useArtifact = (id: string) =>
   useQuery({
     queryKey: qk.artifact(id),
-    queryFn: () => api.get(R.artifact(id), ArtifactSummarySchema),
+    queryFn: ({ signal }) =>
+      api.get(R.artifact(id), ArtifactSummarySchema, signal),
   });
 export const useVersions = (id: string) =>
   useQuery({
     queryKey: qk.versions(id),
-    queryFn: () => api.get(R.versions(id), z.array(VersionInfoSchema)),
+    queryFn: ({ signal }) =>
+      api.get(R.versions(id), z.array(VersionInfoSchema), signal),
   });
 export const useShares = (id: string) =>
   useQuery({
     queryKey: qk.shares(id),
-    queryFn: () => api.get(R.shares(id), z.array(ShareSchema)),
+    queryFn: ({ signal }) =>
+      api.get(R.shares(id), z.array(ShareSchema), signal),
   });
 export const useSearch = (q: SearchQuery) =>
   useQuery({
     queryKey: qk.search(q),
-    queryFn: () => api.get(withQuery(R.search, q), SearchPage),
+    queryFn: ({ signal }) =>
+      api.get(withQuery(R.search, q), SearchPage, signal),
     enabled: q.q.length > 0,
   });
 export const useMembers = () =>
   useQuery({
     queryKey: qk.members,
-    queryFn: () => api.get(R.members, z.array(MemberSchema)),
+    queryFn: ({ signal }) => api.get(R.members, z.array(MemberSchema), signal),
   });
 export const useTokens = () =>
   useQuery({
     queryKey: qk.tokens,
-    queryFn: () => api.get(R.tokens, z.array(TokenSchema)),
+    queryFn: ({ signal }) => api.get(R.tokens, z.array(TokenSchema), signal),
   });
 export const useOAuthClients = () =>
   useQuery({
     queryKey: qk.oauthClients,
-    queryFn: () => api.get(R.oauthClients, z.array(OAuthClientSchema)),
+    queryFn: ({ signal }) =>
+      api.get(R.oauthClients, z.array(OAuthClientSchema), signal),
   });
 export const useSettings = () =>
   useQuery({
     queryKey: qk.settings,
-    queryFn: () => api.get(R.settings, SettingsSchema),
+    queryFn: ({ signal }) => api.get(R.settings, SettingsSchema, signal),
   });
 export const useUsage = () =>
   useQuery({
     queryKey: qk.usage,
-    queryFn: () => api.get(R.usage, UsageSchema),
+    queryFn: ({ signal }) => api.get(R.usage, UsageSchema, signal),
   });
 
 /** Run `fn` then invalidate every key `keys()` returns. */
@@ -131,19 +131,19 @@ export const usePublishVersion = (id: string) =>
 export const usePatchArtifact = (id: string) =>
   useInvalidating(
     (patch: ArtifactPatch) =>
-      api.send(
-        "PATCH",
-        R.artifact(id),
-        ArtifactPatchSchema.parse(patch),
-        ArtifactSummarySchema,
-      ),
+      api.send("PATCH", R.artifact(id), patch, ArtifactSummarySchema),
     artifactKeys(id),
   );
-export const useDeleteArtifact = (id: string) =>
-  useInvalidating(
-    () => api.send("DELETE", R.artifact(id), undefined),
-    artifactKeys(id),
-  );
+export const useDeleteArtifact = (id: string) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.send("DELETE", R.artifact(id), undefined),
+    onSuccess: async () => {
+      qc.removeQueries({ queryKey: qk.artifact(id) });
+      await qc.invalidateQueries({ queryKey: ["artifacts"] });
+    },
+  });
+};
 export const usePutShare = (id: string) =>
   useInvalidating(
     (input: ShareInput) => api.send("PUT", R.shares(id), input, ShareSchema),

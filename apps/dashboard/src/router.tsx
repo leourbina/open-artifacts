@@ -23,7 +23,7 @@ const search = createRoute({
   getParentRoute: () => root,
   path: "/search",
   validateSearch: (s: Record<string, unknown>) => ({
-    q: typeof s.q === "string" ? s.q : "",
+    q: s.q == null ? "" : String(s.q),
   }),
   component: page("Search"),
 });
