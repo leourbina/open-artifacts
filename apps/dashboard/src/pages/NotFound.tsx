@@ -1,8 +1,10 @@
 import { AUTH } from "@oa/shared";
+import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { EdgePanel, SignedInAs } from "./Edge";
 
 /** Also what an inaccessible artifact shows, so the copy never says whether it exists. */
 export function NotFound() {
+  useDocumentTitle("Not found");
   return (
     <EdgePanel>
       <p className="oa-eyebrow">404</p>

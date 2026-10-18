@@ -15,7 +15,6 @@ import {
   ShareSchema,
   TokenSchema,
   UsageSchema,
-  VERSIONS_PAGE_SIZE,
   VersionInfoSchema,
 } from "@oa/shared";
 import {
@@ -74,17 +73,17 @@ export const useVersions = (id: string, opts?: { enabled?: boolean }) =>
     queryFn: ({ signal }) =>
       api.get(R.versions(id), z.array(VersionInfoSchema), signal),
   });
-/** Timeline pages, newest first; each next page is `before` the last version seen. */
+/**
+ * Timeline pages, newest first; each next page is `before` the last version seen.
+ * Pages may be short (contract C2), so only an empty page ends the timeline.
+ */
 export const useVersionPages = (id: string) =>
   useInfiniteQuery({
     queryKey: [...qk.versions(id), "pages"] as const,
     initialPageParam: undefined as number | undefined,
     queryFn: ({ pageParam, signal }) =>
       api.get(R.versions(id, pageParam), z.array(VersionInfoSchema), signal),
-    getNextPageParam: (last) =>
-      last.length < VERSIONS_PAGE_SIZE
-        ? undefined
-        : last[last.length - 1]?.version,
+    getNextPageParam: (last) => last[last.length - 1]?.version,
   });
 /** Info for one version, however old: the first item of the page just below `v + 1`. */
 export const useVersionInfo = (id: string, v: number, enabled = true) =>
@@ -169,16 +168,12 @@ export const usePatchArtifact = (id: string) =>
       api.send("PATCH", R.artifact(id), patch, ArtifactSummarySchema),
     artifactKeys(id),
   );
-export const useDeleteArtifact = (id: string) => {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () => api.send("DELETE", R.artifact(id), undefined),
-    onSuccess: async () => {
-      qc.removeQueries({ queryKey: qk.artifact(id) });
-      await qc.invalidateQueries({ queryKey: ["artifacts"] });
-    },
-  });
-};
+/** The caller navigates away, then drops `qk.artifact(id)` once its observers unmount. */
+export const useDeleteArtifact = (id: string) =>
+  useInvalidating(
+    () => api.send("DELETE", R.artifact(id), undefined),
+    () => [["artifacts"]],
+  );
 export const usePutShare = (id: string) =>
   useInvalidating(
     (input: ShareInput) => api.send("PUT", R.shares(id), input, ShareSchema),

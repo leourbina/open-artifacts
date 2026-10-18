@@ -1,8 +1,9 @@
 import { AUTH, type Me } from "@oa/shared";
-import { AppShell, Avatar, Menu, NavItem, Toaster } from "@oa/ui";
+import { AppShell, Avatar, Button, Menu, NavItem, Toaster } from "@oa/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { type ReactNode, useEffect } from "react";
+import { ApiClientError } from "../api/client";
 import { qk } from "../api/queries";
 import { useRedirect } from "../auth/redirect";
 import { useSignOut } from "../auth/signOut";
@@ -50,7 +51,11 @@ export function AppLayout() {
   const state = useMe();
   const redirect = useRedirect();
   const loc = useRouterState({ select: (s) => s.location });
-  const path = loc.pathname;
+  // The rendered leaf match: mid-navigation `location` is already the target while
+  // the old match still renders, which would remount it under the other layout.
+  const path =
+    useRouterState({ select: (s) => s.matches.at(-1)?.pathname }) ??
+    loc.pathname;
   const anonymous = state.status === "anonymous" && !publicRoute(path);
 
   useEffect(() => {
@@ -82,7 +87,12 @@ export function AppLayout() {
     return (
       <main id="oa-main">
         <QuotaBanner />
-        <LoadError />
+        <LoadError
+          quota={
+            state.error instanceof ApiClientError &&
+            state.error.code === "quota_exceeded"
+          }
+        />
         <Toaster />
       </main>
     );
@@ -96,12 +106,25 @@ export function AppLayout() {
   );
 }
 
-function LoadError() {
+/** The daily quota is an expected state, so it gets its own copy. */
+function LoadError({ quota }: { quota: boolean }) {
   const client = useQueryClient();
   return (
     <EdgePanel>
-      <h1>Couldn't load your account</h1>
-      <p>Something went wrong reaching the server.</p>
+      {quota ? (
+        <>
+          <h1>Daily limit reached</h1>
+          <p>
+            This instance has used today's free-plan requests. Your artifacts
+            are safe; try again after the reset.
+          </p>
+        </>
+      ) : (
+        <>
+          <h1>Couldn't load your account</h1>
+          <p>Something went wrong reaching the server.</p>
+        </>
+      )}
       <div className="oa-actions">
         <button
           type="button"
@@ -207,13 +230,20 @@ function TopBar({ me }: { me: Me | null }) {
         <span>{me.user.email}</span>
         <Menu
           trigger={
-            <button
-              type="button"
-              aria-label="Account menu"
-              style={{ all: "unset", cursor: "pointer" }}
+            <Button
+              variant="ghost"
+              title="Account menu"
+              style={{ padding: "0 2px" }}
             >
-              <Avatar name={me.user.name ?? undefined} email={me.user.email} />
-            </button>
+              {/* Named by hidden text, not aria-label, so the visible initials never contradict it. */}
+              <span className="oa-sr">Account menu</span>
+              <span aria-hidden="true" style={{ display: "contents" }}>
+                <Avatar
+                  name={me.user.name ?? undefined}
+                  email={me.user.email}
+                />
+              </span>
+            </Button>
           }
           items={[{ label: "Sign out", onSelect: signOut }]}
         />

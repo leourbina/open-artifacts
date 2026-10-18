@@ -59,6 +59,7 @@ body {
   margin-top: 24px;
 }
 .oa-btn {
+  box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   height: 28px;
@@ -71,8 +72,30 @@ body {
   text-decoration: none;
   cursor: pointer;
 }
+.oa-btn:focus-visible {
+  outline: 2px solid var(--oa-focus);
+  outline-offset: 2px;
+}
+.oa-btn.oa-sm {
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--oa-radius-sm);
+  font-size: var(--oa-text-xs);
+}
+.oa-btn[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: default;
+}
 .oa-btn.oa-primary {
   background: var(--oa-text);
   border-color: var(--oa-text);
   color: var(--oa-surface);
+}
+.oa-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }

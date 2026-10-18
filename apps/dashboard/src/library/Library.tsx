@@ -3,6 +3,7 @@ import { Button, EmptyState, Skeleton, Tabs } from "@oa/ui";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useRef } from "react";
 import { useMe } from "../auth/useMe";
+import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { AppLink } from "./AppLink";
 import { ArtifactCard } from "./ArtifactCard";
 import { ArtifactRow } from "./ArtifactRow";
@@ -68,6 +69,11 @@ const EMPTY: Record<Scope, [string, React.ReactNode]> = {
 
 export function Library({ scope }: { scope: Scope }) {
   const me = useMe();
+  useDocumentTitle(
+    scope === "all"
+      ? "Library"
+      : (TABS.find((t) => t.id === scope)?.label ?? null),
+  );
   const navigate = useNavigate();
   const s = useSearch({ strict: false }) as {
     format?: Format;

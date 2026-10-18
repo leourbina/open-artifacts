@@ -1,11 +1,12 @@
-import { type ArtifactSummary, AUTH, viewerPath } from "@oa/shared";
-import { Button } from "@oa/ui";
+import { type ArtifactSummary, viewerPath } from "@oa/shared";
+import { Button, toast } from "@oa/ui";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { ApiClientError } from "../api/client";
-import { useArtifact } from "../api/queries";
-import { useRedirect } from "../auth/redirect";
+import { useArtifact, useVersionInfo } from "../api/queries";
+import { useLoginRedirect } from "../auth/redirect";
 import { useMe } from "../auth/useMe";
+import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { NotFound } from "../pages/NotFound";
 import { createBridge } from "./bridge";
 import { Crumbs } from "./Crumbs";
@@ -46,6 +47,30 @@ function Viewer({
   const content = useContentUrl(artifact.id, version);
   const url = safeContentUrl(content.url);
   const rawUrl = safeContentUrl(content.current);
+  const signedOut =
+    content.error instanceof ApiClientError && content.error.status === 401;
+  useLoginRedirect(
+    signedOut,
+    viewerPath(artifact.id, explicitVersion ? version : undefined),
+  );
+  // The tab opens synchronously (no popup blocking) and is pointed at a URL known
+  // to be fresh, refreshing a stale one first.
+  const openRaw = () => {
+    const w = window.open("about:blank", "_blank");
+    if (!w) return;
+    w.opener = null;
+    const ready = content.fresh()
+      ? Promise.resolve(content.current)
+      : content.refresh();
+    void ready.then((u) => {
+      const safe = safeContentUrl(u);
+      if (safe) w.location.href = safe;
+      else {
+        w.close();
+        toast({ title: "Couldn't open the raw view", tone: "danger" });
+      }
+    });
+  };
   const theme = useTheme();
   const [el, setEl] = useState<HTMLIFrameElement | null>(null);
   const navigate = useNavigate();
@@ -67,6 +92,9 @@ function Viewer({
     });
   const bridge = useRef<Bridge | null>(null);
   // Latest values for the effect: the parent's key remounts this on id/version change.
+  const vformat = useVersionInfo(artifact.id, version).data?.format;
+  const formatRef = useRef(vformat);
+  formatRef.current = vformat;
   const latest = useRef({ artifact, viewer, theme });
   latest.current = { artifact, viewer, theme };
 
@@ -76,6 +104,7 @@ function Viewer({
       iframe: el,
       ...latest.current,
       version,
+      formatOf: () => formatRef.current,
       // TODO(FE11): wire thumbnail upload and PDF text extraction.
       onPdfText: () => {},
       onThumb: () => {},
@@ -90,6 +119,7 @@ function Viewer({
   useEffect(() => bridge.current?.setTheme(theme), [theme]);
 
   if (content.notFound) return <NotFound />;
+  if (signedOut) return null;
   return (
     <div className="oa-viewer">
       <Crumbs title={artifact.title} />
@@ -98,13 +128,17 @@ function Viewer({
         version={version}
         explicitVersion={explicitVersion}
         rawUrl={rawUrl}
+        rawBusy={content.refreshing}
+        onOpenRaw={openRaw}
         authed={authed}
         onShare={() => setPanel(true, "share")}
         panelOpen={panelOpen}
         onPanel={() => setPanel(!panelOpen)}
       />
       <div className="oa-vbody">
-        {content.current && !url && <ErrorPanel />}
+        {!url && (content.current || content.error) ? (
+          <ErrorPanel onRetry={() => void content.refresh()} />
+        ) : null}
         {url && (
           <iframe
             ref={setEl}
@@ -133,7 +167,6 @@ function Viewer({
 export function Shell({ id, v }: { id: string; v?: number }) {
   const q = useArtifact(id);
   const me = useMe();
-  const redirect = useRedirect();
   // Without an explicit version, pin the one seen first so a background bump never reloads.
   const pinned = useRef<{ id: string; v: number } | null>(null);
   if (v === undefined && q.data && pinned.current?.id !== id)
@@ -141,13 +174,22 @@ export function Shell({ id, v }: { id: string; v?: number }) {
 
   const status = q.error instanceof ApiClientError ? q.error.status : null;
   const authed = me.status === "authed";
+  // Signed out mid-visit (a 401 anywhere): only a public artifact stays viewable.
+  const wasAuthed = useRef(false);
+  if (authed) wasAuthed.current = true;
+  const expired =
+    wasAuthed.current &&
+    me.status === "anonymous" &&
+    q.data?.visibility !== "public";
   const toLogin =
+    expired ||
     status === 401 ||
     (status === 404 && (me.status === "anonymous" || me.status === "error"));
-  useEffect(() => {
-    if (toLogin)
-      redirect(`${AUTH.login}?next=${encodeURIComponent(viewerPath(id, v))}`);
-  }, [toLogin, redirect, id, v]);
+  useLoginRedirect(toLogin, viewerPath(id, v));
+  // A private artifact's title is shown only to a signed-in viewer.
+  useDocumentTitle(
+    q.data && (authed || q.data.visibility !== "private") ? q.data.title : null,
+  );
 
   if (toLogin) return null;
   if (status === 404 && authed) return <NotFound />;

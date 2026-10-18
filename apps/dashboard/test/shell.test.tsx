@@ -91,10 +91,8 @@ describe("viewer shell", () => {
     expect(screen.getByRole("link", { name: "Sign in" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "More actions" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Share" })).toBeNull();
-    expect(screen.getByRole("link", { name: "Open raw" })).toHaveAttribute(
-      "rel",
-      "noopener noreferrer",
-    );
+    // A button opening a blank tab with opener nulled (see m1-fixes), not a link.
+    expect(screen.getByRole("button", { name: "Open raw" })).toBeEnabled();
   });
 
   it("changing version remounts the iframe and disposes the old bridge", async () => {

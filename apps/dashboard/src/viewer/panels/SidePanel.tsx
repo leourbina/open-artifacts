@@ -25,6 +25,8 @@ export function SidePanel({
   // Focus moves in on open and back to whatever opened it on close.
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null;
+    // Marks this focus as programmatic so the ring shows even after a pointer open.
+    if (ref.current) ref.current.dataset.focus = "programmatic";
     ref.current?.focus();
     return () => {
       if (opener?.isConnected) opener.focus();
@@ -36,6 +38,9 @@ export function SidePanel({
       tabIndex={-1}
       className="oa-vpanel"
       aria-label="Side panel"
+      onBlur={(e) => {
+        if (e.target === e.currentTarget) delete e.currentTarget.dataset.focus;
+      }}
       onKeyDown={(e) => {
         if (e.key === "Escape" && !e.defaultPrevented) onClose();
       }}

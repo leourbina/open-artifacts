@@ -1,8 +1,10 @@
 import { AUTH } from "@oa/shared";
 import { useSignOut } from "../auth/signOut";
+import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { EdgePanel, SignedInAs } from "./Edge";
 
 export function NoAccess() {
+  useDocumentTitle("No access");
   const signOut = useSignOut();
   return (
     <EdgePanel>

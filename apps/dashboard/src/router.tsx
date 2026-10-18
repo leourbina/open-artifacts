@@ -7,6 +7,7 @@ import {
   useParams,
 } from "@tanstack/react-router";
 import { AppLayout } from "./layout/AppLayout";
+import { useDocumentTitle } from "./layout/useDocumentTitle";
 import { Library } from "./library/Library";
 import { SearchPage } from "./library/Search";
 import type { Scope } from "./library/useLibraryQuery";
@@ -17,7 +18,11 @@ import { Diff } from "./viewer/Diff";
 import { Shell } from "./viewer/Shell";
 
 // Placeholders; later tasks replace each with the real page.
-const page = (title: string) => () => <h1>{title}</h1>;
+function Placeholder({ title }: { title: string }) {
+  useDocumentTitle(title);
+  return <h1>{title}</h1>;
+}
+const page = (title: string) => () => <Placeholder title={title} />;
 
 // Query values stay strings: `?q=007` must not become the number 7.
 const parseSearch = (qs: string) =>

@@ -175,12 +175,11 @@ describe("viewer shell review", () => {
       vi.advanceTimersByTime(541_000);
     });
     await waitFor(() => expect(n).toBe(2));
-    await waitFor(() =>
-      expect(screen.getByRole("link", { name: "Open raw" })).toHaveAttribute(
-        "href",
-        expect.stringContaining("sig=2"),
-      ),
-    );
+    const w = { opener: {}, location: { href: "" }, close: vi.fn() };
+    const open = vi.spyOn(window, "open").mockReturnValue(w as never);
+    fireEvent.click(screen.getByRole("button", { name: "Open raw" }));
+    await waitFor(() => expect(w.location.href).toContain("sig=2"));
+    open.mockRestore();
   });
 
   it("Download entry exists for a version beyond the first versions page", async () => {

@@ -71,32 +71,37 @@ export function Versions({ artifact }: { artifact: ArtifactSummary }) {
         title={`Restore v${target ?? ""}?`}
         description="This publishes a new version with the contents of the selected one."
         footer={
-          <Button
-            variant="primary"
-            loading={restore.isPending}
-            onClick={() =>
-              target !== null &&
-              restore.mutate(target, {
-                onSuccess: (r) => {
-                  setTarget(null);
-                  void navigate({
-                    to: viewerPath(id, r.version) as string,
-                    search: search as never,
-                  });
-                },
-                onError: (e) =>
-                  toast({
-                    title:
-                      e instanceof ApiClientError
-                        ? e.message
-                        : "Couldn't restore",
-                    tone: "danger",
-                  }),
-              })
-            }
-          >
-            Restore version
-          </Button>
+          <>
+            <Button variant="ghost" onClick={() => setTarget(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              loading={restore.isPending}
+              onClick={() =>
+                target !== null &&
+                restore.mutate(target, {
+                  onSuccess: (r) => {
+                    setTarget(null);
+                    void navigate({
+                      to: viewerPath(id, r.version) as string,
+                      search: search as never,
+                    });
+                  },
+                  onError: (e) =>
+                    toast({
+                      title:
+                        e instanceof ApiClientError
+                          ? e.message
+                          : "Couldn't restore",
+                      tone: "danger",
+                    }),
+                })
+              }
+            >
+              Restore version
+            </Button>
+          </>
         }
       />
     </div>
