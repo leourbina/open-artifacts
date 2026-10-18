@@ -16,10 +16,7 @@ interface Props {
 
 const { doc, all } = Astro.props;
 const { Content } = await render(doc);
-const fallbacks: FallbackId[] = [
-  ...(doc.data.fallback ? [doc.data.fallback] : []),
-  ...(doc.id === "mcp-tools" ? toolListFallbacks : []),
-];
+const fallbacks: FallbackId[] = doc.id === "mcp-tools" ? toolListFallbacks : [];
 ---
 
 <Base fallbacks={fallbacks} title={`${doc.data.title} | Open Artifacts docs`} description={doc.data.description}>
