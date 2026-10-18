@@ -8,6 +8,7 @@ import { useLoginRedirect } from "../auth/redirect";
 import { useMe } from "../auth/useMe";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { NotFound } from "../pages/NotFound";
+import { DropZone } from "../upload/DropZone";
 import { createBridge } from "./bridge";
 import { Crumbs } from "./Crumbs";
 import { SANDBOX, safeContentUrl } from "./frame";
@@ -122,6 +123,7 @@ function Viewer({
   if (signedOut) return null;
   return (
     <div className="oa-viewer">
+      <DropZone artifact={artifact} allowed={authed} />
       <Crumbs title={artifact.title} />
       <TitleBar
         artifact={artifact}
