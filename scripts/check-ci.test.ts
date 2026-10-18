@@ -227,7 +227,7 @@ describe("landing-preview.yml", () => {
 describe("release-please", () => {
   it("workflow triggers on push to main with write permissions", () => {
     const w = wf("release-please.yml");
-    expect(triggers(w)).toEqual(["push"]);
+    expect(triggers(w).sort()).toEqual(["push", "workflow_dispatch"]);
     expect(w.on.push.branches).toEqual(["main"]);
     expect(w.permissions).toEqual({
       actions: "write",
@@ -244,9 +244,33 @@ describe("release-please", () => {
     expect(raw).toContain("prs_created");
     expect(raw).toContain("headBranchName");
     // biome-ignore lint/suspicious/noTemplateCurlyInString: literal workflow expression
-    expect(raw).toContain("ref: ${{ needs.release-please.outputs.tag_name }}");
+    expect(raw).toContain("needs.release-please.outputs.tag_name");
     const gate = wf("release-please.yml").jobs["deploy-landing"].steps;
     expect(JSON.stringify(gate)).toContain("steps.gate.outputs.present");
+  });
+  it("gates landing deploy on a release-ready dist, between build and deploy", () => {
+    const steps = wf("release-please.yml").jobs["deploy-landing"].steps;
+    // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
+    const runs: string[] = steps.map((s: any) => s.run ?? "");
+    const at = (n: string) => runs.findIndex((r) => r.includes(n));
+    const b = at("pnpm --filter @oa/landing build");
+    const g = at("scripts/ops/check-landing-dist.ts");
+    const d = at("wrangler deploy");
+    expect(b).toBeGreaterThanOrEqual(0);
+    expect(g).toBeGreaterThan(b);
+    expect(d).toBeGreaterThan(g);
+    expect(runs[b]).not.toContain("wrangler deploy");
+    expect(read(".github/workflows/release-please.yml")).toContain(
+      "failing here does not undo the release",
+    );
+  });
+  it("workflow_dispatch takes a tag and runs only deploy-landing", () => {
+    const w = wf("release-please.yml");
+    expect(w.on.workflow_dispatch.inputs.tag.required).toBe(true);
+    expect(w.jobs["release-please"].if).toContain("push");
+    const d = w.jobs["deploy-landing"];
+    expect(d.if).toContain("workflow_dispatch");
+    expect(JSON.stringify(d.steps)).toContain("inputs.tag");
   });
   it("config is release-type node, manifest starts at 0.0.0", () => {
     const c = JSON.parse(read("release-please-config.json"));

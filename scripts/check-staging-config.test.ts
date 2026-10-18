@@ -26,6 +26,10 @@ describe("wrangler.staging.jsonc env.staging", () => {
       "staging-content.open-artifacts.com",
     ]);
   });
+  it("keeps workers.dev and preview URLs off", () => {
+    expect(env.workers_dev).toBe(false);
+    expect(env.preview_urls).toBe(false);
+  });
   it("enables nodejs_compat", () => {
     expect(env.compatibility_flags ?? cfg.compatibility_flags).toContain(
       "nodejs_compat",
@@ -56,7 +60,7 @@ describe("wrangler.staging.jsonc env.staging", () => {
   it("binds ASSETS with run_worker_first true", () => {
     expect(env.assets).toEqual({
       binding: "ASSETS",
-      directory: "../dashboard/dist",
+      directory: "./dist-assets",
       not_found_handling: "single-page-application",
       run_worker_first: true,
     });

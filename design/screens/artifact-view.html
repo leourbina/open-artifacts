@@ -256,7 +256,12 @@ textarea.control{height:auto;min-height:72px;padding:6px var(--oa-space-2);resiz
 @media (max-width:1100px){.split{grid-template-columns:minmax(0,1fr) 300px}}
 @media (max-width:959.98px){
   .split,.split.closed{grid-template-columns:minmax(0,1fr)}
-  .panel{border-left:0;border-top:1px solid var(--oa-divider);position:static;max-height:none}
+  /* Narrow screens: the panel is a full-width overlay sheet over the artifact, never stacked below it. */
+  .panel{position:fixed;left:0;right:0;bottom:0;top:auto;z-index:41;max-height:calc(100vh - 56px);border-left:0;border-radius:var(--oa-radius-lg) var(--oa-radius-lg) 0 0;box-shadow:var(--oa-shadow-2)}
+  .panel .pbody{flex:1;min-height:0}
+  .ptabs{padding:10px 12px}
+  #panel-close{width:32px;height:32px}
+  :root.sheet-open{overflow:hidden}
   .docpane{padding:32px 24px 48px}
   .top{padding:0 var(--oa-space-3)}
 }
@@ -466,6 +471,7 @@ textarea.control{height:auto;min-height:72px;padding:6px var(--oa-space-2);resiz
       </div>
     </main>
 
+    <div class="scrim" id="sheet-scrim" hidden></div>
     <aside class="panel" id="panel" aria-label="Artifact panel">
       <div class="ptabs" role="tablist" data-group>
         <button role="tab" data-tab="versions" aria-selected="true">Versions</button>
@@ -665,6 +671,25 @@ const OA = (() => {
 </script>
 <script>
 const split = document.getElementById('split'), pt = document.getElementById('panel-toggle');
+const panel = document.getElementById('panel'), scrim = document.getElementById('sheet-scrim');
+const narrow = matchMedia('(max-width: 959.98px)');
+/* On narrow screens the sheet starts closed unless ?panel= asks for it. */
+if (narrow.matches && !new URLSearchParams(location.search).has('panel')) OA.S.panel = 'closed';
+let wasOpen = null;
+const syncSheet = () => {
+  const open = OA.S.panel === 'open', sheet = narrow.matches && open;
+  scrim.hidden = !sheet;
+  document.documentElement.classList.toggle('sheet-open', sheet);
+  if (narrow.matches) { panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-modal', 'true'); }
+  else { panel.removeAttribute('role'); panel.removeAttribute('aria-modal'); }
+  /* Focus moves into the sheet on open and back to the toggle on close. */
+  if (narrow.matches && wasOpen !== null && open !== wasOpen) (open ? panel.querySelector('[role=tab][aria-selected=true]') : pt).focus();
+  wasOpen = open;
+};
+const closePanel = () => { OA.S.panel = 'closed'; OA.apply(); };
+scrim.onclick = closePanel;
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && narrow.matches && OA.S.panel === 'open' && !document.querySelector('.menu:not([hidden])')) closePanel(); });
+narrow.addEventListener('change', syncSheet);
 const setTab = t => {
   document.querySelectorAll('.ptabs [role=tab]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === t)));
   document.querySelectorAll('[data-panel]').forEach(p => { p.hidden = p.dataset.panel !== t; });
@@ -681,6 +706,7 @@ OA.on(S => {
   setTab(S.tab);
   split.classList.toggle('closed', S.panel === 'closed');
   pt.setAttribute('aria-pressed', String(S.panel === 'open'));
+  syncSheet();
   document.querySelectorAll('.menu').forEach(m => { m.hidden = true; });
   if (S.menu === 'version' && S.state !== 'loading' && S.state !== 'empty') OA.open('m-version');
   if (S.menu === 'more') OA.open('m-more');
