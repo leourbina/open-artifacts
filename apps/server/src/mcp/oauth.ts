@@ -113,6 +113,18 @@ export function oauthProvider(
   return p;
 }
 
+// Module-scope warm-up (startup limit, not a request's CPU): the first
+// OAuthProvider construction compiles its validation code, ~1 ms of a cold
+// isolate's first request. The real provider needs env, so it stays lazy;
+// this one uses a placeholder host and is discarded.
+new OAuthProvider<Env>(
+  providerOptions(
+    { APP_HOST: "warmup.invalid", ENVIRONMENT: "production" } as Env,
+    apiHandler,
+    apiHandler,
+  ),
+);
+
 /**
  * Dynamic client registration is unauthenticated and each one is a KV write
  * (Free plan: 1000/day): RL_ANON per client IP (`reg:ip:<ipKey>`, IPv6 per /64),
