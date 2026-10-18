@@ -15,39 +15,56 @@ export const tokenHash = (s: string) =>
 /** SQLite string literal. */
 const lit = (s: string) => `'${s.replaceAll("'", "''")}'`;
 
+/** Same cap as the server (apps/server/src/routes/tokens.ts MAX_ACTIVE). */
+const MAX_ACTIVE = 50;
+
 /**
- * Revokes the previous setup token (if any), upserts the owner (role forced to
- * owner) and inserts the new token row. Carries the hash only, never the token.
+ * Command 1 (D1 `execute` has no transaction, so a failure keeps earlier
+ * effects; the order makes every partial state re-mintable):
+ *  0 upsert the owner, 1 capped insert (changes 0 = cap hit), 2 revoke the
+ *  other live 'setup' tokens, 3 verify the new row.
+ * The revoke deliberately runs AFTER the insert (and is guarded on the new row
+ * existing): a capped or failed insert then never leaves the owner without a
+ * working token. Cost: a leftover setup token counts toward the cap.
+ * Carries the hash only, never the token.
  */
-export function ownerSql(
+export function ownerStatements(
   email: string,
   tokenId: string,
   hash: string,
   now: number,
-  revoke?: string,
 ) {
   const name = email.split("@")[0] || email;
+  const e = lit(email);
   return [
-    ...(revoke
-      ? [
-          `UPDATE tokens SET revoked_at = ${now} WHERE id = ${lit(revoke)} AND revoked_at IS NULL;`,
-        ]
-      : []),
-    `INSERT INTO users (id, email, name, role, created_at) VALUES (${lit(base58(16))}, ${lit(email)}, ${lit(name)}, 'owner', ${now}) ON CONFLICT(email) DO UPDATE SET role = 'owner';`,
-    `INSERT INTO tokens (id, user_id, label, token_hash, created_at) SELECT ${lit(tokenId)}, id, 'setup', ${lit(hash)}, ${now} FROM users WHERE email = ${lit(email)};`,
-  ].join(" ");
+    `INSERT INTO users (id, email, name, role, created_at) VALUES (${lit(base58(16))}, ${e}, ${lit(name)}, 'owner', ${now}) ON CONFLICT(email) DO UPDATE SET role = 'owner'`,
+    `INSERT INTO tokens (id, user_id, label, token_hash, created_at) SELECT ${lit(tokenId)}, id, 'setup', ${lit(hash)}, ${now} FROM users WHERE email = ${e} AND (SELECT count(*) FROM tokens WHERE user_id = users.id AND revoked_at IS NULL) < ${MAX_ACTIVE}`,
+    `UPDATE tokens SET revoked_at = ${now} WHERE user_id = (SELECT id FROM users WHERE email = ${e}) AND label = 'setup' AND revoked_at IS NULL AND id <> ${lit(tokenId)} AND EXISTS (SELECT 1 FROM tokens WHERE id = ${lit(tokenId)})`,
+    `SELECT id FROM tokens WHERE id = ${lit(tokenId)} AND revoked_at IS NULL`,
+  ];
+}
+export const ownerSql = (...a: Parameters<typeof ownerStatements>) =>
+  `${ownerStatements(...a).join("; ")};`;
+
+/** Command 2, only after the insert succeeded: select, demote, verify. */
+export function demoteStatements(email: string) {
+  const e = lit(email);
+  return [
+    `SELECT email FROM users WHERE role = 'owner' AND email <> ${e}`,
+    `UPDATE users SET role = 'admin' WHERE role = 'owner' AND email <> ${e}`,
+    `SELECT email FROM users WHERE role = 'owner' AND email = ${e}`,
+  ];
 }
 
-/** Runs SQL on the remote D1; returns the result rows. */
-async function d1(ctx: Ctx, sql: string): Promise<unknown[]> {
+type D1Result = { results?: unknown[]; meta?: { changes?: number } };
+/** Runs SQL on the remote D1; returns one result per statement. */
+async function d1Raw(ctx: Ctx, sql: string): Promise<D1Result[]> {
   const db = names(ctx.opts.name).d1;
   const args = ["d1", "execute", db, "--remote", "--json", "--command", sql];
-  const res = jsonArray<{ results?: unknown[] }>(
-    await ctx.wrangler(args),
-    "wrangler d1 execute",
-  );
-  return res.flatMap((r) => r.results ?? []);
+  return jsonArray<D1Result>(await ctx.wrangler(args), "wrangler d1 execute");
 }
+const d1 = async (ctx: Ctx, sql: string): Promise<unknown[]> =>
+  (await d1Raw(ctx, sql)).flatMap((r) => r.results ?? []);
 
 const live = (ctx: Ctx, id: string) =>
   d1(
@@ -77,22 +94,48 @@ export const ownerToken: Step = {
     // Recorded first, so a crash after the insert still leaves the row tracked.
     state.ownerTokenId = id;
     writeState(ctx.fs, ctx.root, state);
-    const sql = ownerSql(
-      ctx.opts.ownerEmail,
-      id,
-      tokenHash(token),
-      Date.now(),
-      prev,
-    );
-    await d1(ctx, sql);
-    if (!(await live(ctx, id)))
+    const uncertain = () => {
+      state.ownerTokenId = prev;
+      writeState(ctx.fs, ctx.root, state);
+      return {
+        status: "action_required" as const,
+        message: "owner token state uncertain; rerun with --new-owner-token",
+      };
+    };
+    const email = ctx.opts.ownerEmail;
+    let res: D1Result[];
+    try {
+      res = await d1Raw(ctx, ownerSql(email, id, tokenHash(token), Date.now()));
+    } catch {
+      return uncertain();
+    }
+    if (res.length < 4) return uncertain();
+    const [, insert, revoke, verify] = res;
+    if (!insert?.meta?.changes) {
+      state.ownerTokenId = prev;
+      writeState(ctx.fs, ctx.root, state);
+      return {
+        status: "action_required",
+        message: `owner has ${MAX_ACTIVE} active tokens; revoke some in Settings, then rerun setup (an old setup token still counts toward the cap; revoke it in Settings)`,
+      };
+    }
+    if (!verify?.results?.length)
       throw new Error(
-        `token row ${id} missing after the insert; is ${ctx.opts.ownerEmail} in users? rerun setup`,
+        `token row ${id} missing after the insert; is ${email} in users? rerun setup`,
       );
+    const revoked = revoke?.meta?.changes ?? 0;
     ctx.pat = token;
-    ctx.notes.push(
-      `minted owner token ${id}${prev ? ` (revoked ${prev})` : ""}; shown once, store it now`,
-    );
+    ctx.notes.push(`minted owner token ${id}; shown once, store it now`);
+    if (revoked > 0) ctx.notes.push(`revoked ${revoked} prior setup tokens`);
+    try {
+      const dem = await d1Raw(ctx, demoteStatements(email).join("; ") + ";");
+      for (const o of (dem[0]?.results ?? []) as { email?: string }[])
+        ctx.notes.push(`previous owner ${o.email} demoted to admin`);
+    } catch {
+      ctx.notes.push(
+        "could not demote the previous owner; rerun with --new-owner-token",
+      );
+    }
     ctx.data = { tokenId: id, token };
     ctx.human = `  token: ${token}`;
     return undefined;
