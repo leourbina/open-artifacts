@@ -1,13 +1,21 @@
 #!/usr/bin/env bash
-# First production install via `@oa/setup --ci`. Never prints the owner token.
+# Production setup via @oa/setup. Never prints the owner token.
+# Usage: prod-setup.sh <install|preflight|upgrade|cleanup>
 set -uo pipefail
 
 : "${PROD_NAME:?}" "${PROD_APP_HOST:?}" "${PROD_CONTENT_HOST:?}" "${PROD_OWNER_EMAIL:?}"
 summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
-[[ " $* " == *" --ci "* ]] || { echo "--ci required" >&2; exit 2; }
+mode="${1:-}"
+case "$mode" in
+  install) mode_args=(--ci) ;;
+  preflight) mode_args=(--check --strict --upgrade) ;; # read-only; fails if absent or drifted
+  upgrade) mode_args=(--ci --upgrade) ;;
+  cleanup) mode_args=(--ci --revoke-ci-tokens) ;;
+  *) echo "usage: $0 <install|preflight|upgrade|cleanup>" >&2; exit 2 ;;
+esac
 
 run_setup() {
-  if pnpm -s oa:setup "$@" --name "$PROD_NAME" --app-host "$PROD_APP_HOST" \
+  if pnpm -s oa:setup "${mode_args[@]}" --name "$PROD_NAME" --app-host "$PROD_APP_HOST" \
     --content-host "$PROD_CONTENT_HOST" --owner-email "$PROD_OWNER_EMAIL" 2>&1; then
     echo '{"step":"setup-exit","status":"ok"}'
   else
@@ -33,6 +41,6 @@ while IFS= read -r line; do
   [[ -z "$status" ]] && continue
   echo "| $step | $status |" >>"$summary"
   case "$status" in error | action_required) bad=1 ;; esac
-done < <(run_setup "$@")
+done < <(run_setup)
 
 exit "$bad"

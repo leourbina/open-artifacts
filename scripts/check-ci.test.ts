@@ -509,8 +509,20 @@ describe("prod and staging tokens never cross", () => {
     for (const f of readdirSync(base).filter((n) => /\.ya?ml$/.test(n))) {
       const r = refs(f, base);
       const isProd = f.includes("prod");
-      if (!isProd && r.has("PROD_CLOUDFLARE_API_TOKEN"))
-        bad.push(`${f}: non-prod workflow uses PROD_CLOUDFLARE_API_TOKEN`);
+      if (!isProd && r.has("PROD_CLOUDFLARE_API_TOKEN")) {
+        // Exception: a job named deploy-prod, in a file whose other jobs never touch the PROD secret.
+        const jobs = (parse(readFileSync(join(base, f), "utf8")).jobs ??
+          {}) as Record<string, unknown>;
+        for (const [name, job] of Object.entries(jobs)) {
+          const s = JSON.stringify(job);
+          if (s.includes("secrets.PROD_CLOUDFLARE_API_TOKEN")) {
+            if (name !== "deploy-prod")
+              bad.push(`${f}: job ${name} uses PROD_CLOUDFLARE_API_TOKEN`);
+            else if (/secrets\.CLOUDFLARE_API_TOKEN/.test(s))
+              bad.push(`${f}: job ${name} mixes PROD and staging tokens`);
+          }
+        }
+      }
       if (isProd && r.has("CLOUDFLARE_API_TOKEN"))
         bad.push(`${f}: prod workflow uses CLOUDFLARE_API_TOKEN`);
     }
@@ -524,7 +536,6 @@ describe("prod and staging tokens never cross", () => {
       "deploy-staging.yml",
       "ops-staging-access.yml",
       "landing-preview.yml",
-      "release-please.yml",
     ])
       expect(refs(f), f).not.toContain("PROD_CLOUDFLARE_API_TOKEN");
   });
@@ -576,6 +587,75 @@ describe("prod and staging tokens never cross", () => {
         "CLOUDFLARE_ACCOUNT_ID",
         "PROD_CLOUDFLARE_API_TOKEN",
       ]);
+    });
+  });
+  describe("release-please.yml deploy-prod", () => {
+    const f = "release-please.yml";
+    const w = wf(f);
+    const job = w.jobs["deploy-prod"];
+    const steps = job.steps as {
+      id?: string;
+      if?: string;
+      env?: Record<string, string>;
+      run?: string;
+    }[];
+    const tok = "${{ secrets.PROD_CLOUDFLARE_API_TOKEN }}";
+    it("only the deploy-prod job references the PROD secret", () => {
+      for (const [n, j] of Object.entries(w.jobs))
+        expect(JSON.stringify(j).includes("PROD_CLOUDFLARE_API_TOKEN"), n).toBe(
+          n === "deploy-prod",
+        );
+      expect(job.env ?? {}).not.toHaveProperty("OA_ACCESS_TOKEN");
+      expect(JSON.stringify(job.env ?? {})).not.toContain("secrets.");
+    });
+    it("runs only on a release event or main-ref dispatch, never a bare push", () => {
+      expect(job.if).toContain("release_created == 'true'");
+      expect(job.if).toContain("github.event_name == 'workflow_dispatch'");
+      expect(job.if).toContain("github.ref == 'refs/heads/main'");
+      expect(job.needs).toEqual(["release-please"]);
+      expect(job.if).not.toMatch(/event_name == 'push'/);
+      expect(job.concurrency).toEqual({
+        group: "prod",
+        "cancel-in-progress": false,
+      });
+    });
+    it("guards stable-only (prerelease and latest)", () => {
+      const g = steps.find((s) => s.id === "guard");
+      expect(g?.run).toContain("isPrerelease");
+      expect(g?.run).toContain("releases/latest");
+      expect(g?.env).not.toHaveProperty("CLOUDFLARE_API_TOKEN");
+    });
+    it("preflight, then --ci upgrade, then always() cleanup; step-scoped token", () => {
+      const at = (m: string) => steps.findIndex((s) => s.run?.includes(m));
+      const [pre, up, cl] = [
+        at("prod-setup.sh preflight"),
+        at("prod-setup.sh upgrade"),
+        at("prod-setup.sh cleanup"),
+      ];
+      expect(pre).toBeGreaterThan(0);
+      expect(up).toBeGreaterThan(pre);
+      expect(cl).toBeGreaterThan(up);
+      expect(steps[cl]?.if).toContain("always()");
+      expect(steps[pre]?.if ?? "").not.toContain("always()");
+      expect(steps[up]?.if ?? "").not.toContain("always()");
+      const withTok = steps.filter((s) =>
+        JSON.stringify(s.env ?? {}).includes("secrets."),
+      );
+      expect(withTok).toHaveLength(3);
+      for (const s of withTok) {
+        expect(s.env?.CLOUDFLARE_API_TOKEN).toBe(tok);
+        expect(s.env?.OA_ACCESS_TOKEN).toBe(tok);
+      }
+      const sh = readFileSync(join(root, "scripts/ci/prod-setup.sh"), "utf8");
+      expect(sh).toContain("upgrade) mode_args=(--ci --upgrade)");
+      expect(sh).toContain("--check --strict --upgrade");
+      expect(sh).toContain("--ci --revoke-ci-tokens");
+    });
+    it("deploy-landing stays independent of deploy-prod", () => {
+      expect(w.jobs["deploy-landing"].needs).toEqual(["release-please"]);
+      expect(JSON.stringify(w.jobs["deploy-landing"])).not.toContain(
+        "deploy-prod",
+      );
     });
   });
   it("detects a crossing fixture", () => {
