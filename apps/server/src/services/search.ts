@@ -3,7 +3,6 @@ import {
   LIMITS,
   type Page,
   type SearchHit,
-  SearchHitSchema,
   SNIPPET_MARK,
 } from "@oa/shared";
 import { and, eq, type SQL, sql } from "drizzle-orm";
@@ -532,8 +531,10 @@ export async function search(
   const page = rows.slice(0, limit);
   const next = offset + limit;
   return {
-    items: page.map((r) =>
-      SearchHitSchema.parse({
+    // Built in SearchHitSchema's key order (summary fields, then snippet);
+    // validated by the tests, not per hit in production.
+    items: page.map(
+      (r): SearchHit => ({
         ...toSummary(
           env,
           r.a,

@@ -4,7 +4,13 @@
 // every other byte are compared as-is. Bodies repeat the tag a different
 // number of times so bm25 never ties (ties order by random ids).
 import { env } from "cloudflare:workers";
-import { newId, R } from "@oa/shared";
+import {
+  ArtifactSummarySchema,
+  newId,
+  PageSchema,
+  R,
+  SearchHitSchema,
+} from "@oa/shared";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { createPat } from "../src/auth/pat.js";
@@ -129,6 +135,22 @@ describe("JSON shapes (byte snapshots)", () => {
   it("me: cookie and PAT", async () => {
     expect(norm(await get(R.me, a.cookie))).toMatchSnapshot("me a");
     expect(norm(await get(R.me, pat))).toMatchSnapshot("me b pat");
+  });
+
+  it("responses equal their schema's parse, byte for byte", async () => {
+    // Response schemas are not applied in production: pin that the built
+    // JSON is exactly what parsing it would produce (keys, order, values).
+    const hits = await get(`${R.search}?q=${tag}`, b.cookie);
+    expect(
+      JSON.stringify(PageSchema(SearchHitSchema).parse(JSON.parse(hits))),
+    ).toBe(hits);
+    const list = await get(
+      `${R.artifacts}?agent=${agent}&includeDeleted=true`,
+      b.cookie,
+    );
+    expect(
+      JSON.stringify(PageSchema(ArtifactSummarySchema).parse(JSON.parse(list))),
+    ).toBe(list);
   });
 
   it("search: hits with snippets, pages", async () => {
