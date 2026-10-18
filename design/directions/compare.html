@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pick a direction</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f6f6f4; --surface: #ffffff; --text: #18181a; --muted: #5d5d63; --line: #e3e3df;
+    --pick: #1f6feb; --pick-soft: #e7f0fe;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111113; --surface: #1a1a1d; --text: #ececee; --muted: #a0a0a8; --line: #2c2c31; --pick: #6aa5ff; --pick-soft: #16263f; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 Inter, system-ui, sans-serif; }
+  .wrap { max-width: 1680px; margin: 0 auto; padding: 32px 28px 64px; }
+  header { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
+  h1 { font-size: 26px; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0; max-width: 62ch; }
+  .controls { display: flex; gap: 12px; flex-wrap: wrap; }
+  .seg { display: inline-flex; background: var(--surface); border: 1px solid var(--line); border-radius: 9px; padding: 3px; }
+  .seg button { border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 13px; font-weight: 500; padding: 6px 12px; border-radius: 6px; cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--text); color: var(--bg); }
+  .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+  @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
+  .opt { background: var(--surface); border: 2px solid var(--line); border-radius: 14px; overflow: hidden; cursor: pointer; transition: border-color .15s, box-shadow .15s; display: flex; flex-direction: column; }
+  .opt:hover { border-color: color-mix(in srgb, var(--pick) 45%, var(--line)); }
+  .opt.selected { border-color: var(--pick); box-shadow: 0 0 0 4px var(--pick-soft); }
+  .shot { aspect-ratio: 1280 / 860; background: var(--line); border-bottom: 1px solid var(--line); overflow: hidden; }
+  .shot img { width: 100%; height: 100%; object-fit: cover; object-position: top left; display: block; }
+  .body { padding: 16px 18px 18px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+  .name { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .name h3 { margin: 0; font-size: 18px; font-weight: 600; }
+  .tag { font-size: 12px; color: var(--muted); }
+  .body p { margin: 0; color: var(--muted); font-size: 14px; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+  .chip { font-size: 12px; border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; display: inline-flex; align-items: center; gap: 6px; }
+  .sw { width: 10px; height: 10px; border-radius: 50%; border: 1px solid rgba(0,0,0,.15); }
+  .row { display: flex; justify-content: space-between; align-items: center; margin-top: auto; padding-top: 10px; }
+  .row a { color: var(--pick); font-size: 13px; font-weight: 500; text-decoration: none; }
+  .row a:hover { text-decoration: underline; }
+  .pickbtn { font-size: 13px; font-weight: 600; color: var(--muted); }
+  .opt.selected .pickbtn { color: var(--pick); }
+  .opt.selected .pickbtn::before { content: "✓ "; }
+  footer { margin-top: 28px; color: var(--muted); font-size: 14px; }
+  footer b { color: var(--text); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Open Artifacts — pick a visual direction</h1>
+      <p class="sub">Same two screens in each direction: the library and an artifact view (a Markdown plan). Switch screen and theme to compare, open any one full size, then click the one you want. Mixing is fine — say what to take from each.</p>
+    </div>
+    <div class="controls">
+      <div class="seg" id="view"><button data-v="library" aria-pressed="true">Library</button><button data-v="artifact" aria-pressed="false">Artifact view</button></div>
+      <div class="seg" id="theme"><button data-v="light" aria-pressed="true">Light</button><button data-v="dark" aria-pressed="false">Dark</button></div>
+    </div>
+  </header>
+
+  <div class="grid">
+    <div class="opt" data-choice="paper">
+  <div class="shot"><img alt="Paper direction preview"></div>
+  <div class="body">
+    <div class="name"><h3>A · Paper</h3><span class="tag">Editorial · warm</span></div>
+    <p>Warm off-white paper, a serif for headings and reading, quiet sans for chrome. Thumbnails are tiny typeset pages. Reads like a well-made notebook.</p>
+    <div class="meta"><span class="chip"><span class="sw" style="background:#F5F1E8"></span>Paper #F5F1E8</span><span class="chip"><span class="sw" style="background:#2F4B7C"></span>Iron-gall blue #2F4B7C</span><span class="chip">Newsreader + Hanken Grotesk</span></div>
+    <div class="row"><a class="open" target="_blank">Open full size ↗</a><span class="pickbtn">Pick Paper</span></div>
+  </div>
+</div>
+<div class="opt" data-choice="studio">
+  <div class="shot"><img alt="Studio direction preview"></div>
+  <div class="body">
+    <div class="name"><h3>B · Studio</h3><span class="tag">Tool · dense</span></div>
+    <p>Neutral cool gray, one sans throughout, compact cards and rows. Ink-black primary; blue only marks state. Feels like pro software.</p>
+    <div class="meta"><span class="chip"><span class="sw" style="background:#F4F5F7"></span>Gray #F4F5F7</span><span class="chip"><span class="sw" style="background:#2350D0"></span>Blue #2350D0</span><span class="chip">Geist + Geist Mono</span></div>
+    <div class="row"><a class="open" target="_blank">Open full size ↗</a><span class="pickbtn">Pick Studio</span></div>
+  </div>
+</div>
+<div class="opt" data-choice="ink">
+  <div class="shot"><img alt="Ink direction preview"></div>
+  <div class="body">
+    <div class="name"><h3>C · Ink</h3><span class="tag">Graphic · high contrast</span></div>
+    <p>Pure black and white, heavy grotesk display, outlined format tags. A single electric blue for the active tab and current version. Swiss print energy.</p>
+    <div class="meta"><span class="chip"><span class="sw" style="background:#FFFFFF"></span>White #FFFFFF</span><span class="chip"><span class="sw" style="background:#0033FF"></span>Electric blue #0033FF</span><span class="chip">Schibsted Grotesk + Plex Mono</span></div>
+    <div class="row"><a class="open" target="_blank">Open full size ↗</a><span class="pickbtn">Pick Ink</span></div>
+  </div>
+</div>
+
+  </div>
+
+  <footer>Reply in the terminal with your pick — or <b>a mix</b>, e.g. “Paper’s type with Studio’s density”.</footer>
+</div>
+<script>
+  const state = { view: 'library', theme: 'light' };
+  function refresh() {
+    document.querySelectorAll('.opt').forEach(o => {
+      const n = o.dataset.choice;
+      o.querySelector('img').src = `/files/${n}-${state.view}-${state.theme}.png`;
+      o.querySelector('.open').href = `/files/${n}.html?view=${state.view}&theme=${state.theme}`;
+    });
+  }
+  for (const id of ['view', 'theme']) {
+    document.getElementById(id).addEventListener('click', e => {
+      const b = e.target.closest('button'); if (!b) return;
+      state[id] = b.dataset.v;
+      document.querySelectorAll(`#${id} button`).forEach(x => x.setAttribute('aria-pressed', x === b));
+      refresh();
+    });
+  }
+  document.querySelectorAll('.open').forEach(a => a.addEventListener('click', e => e.stopPropagation()));
+  document.querySelectorAll('.opt').forEach(o => o.addEventListener('click', () => {
+    document.querySelectorAll('.opt').forEach(x => x.classList.toggle('selected', x === o));
+  }));
+  refresh();
+</script>
+</body>
+</html>

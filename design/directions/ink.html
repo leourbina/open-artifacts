@@ -1,0 +1,727 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Open Artifacts · Ink</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:ital,wght@0,400;0,500;0,600;0,700;0,800;0,900;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#ffffff;
+  --ink:#000000;
+  --ink-2:#2a2a2a;
+  --muted:#5f5f5f;      /* 6.4:1 on white */
+  --faint:#8a8a8a;      /* non-text only */
+  --rule:#e3e3e3;
+  --rule-strong:#000000;
+  --wash:#f4f4f4;
+  --wash-2:#ebebeb;
+  --accent:#0033ff;     /* 7.2:1 on white */
+  --accent-wash:#e8edff;
+  --on-ink:#ffffff;
+  --thumb:#ffffff;
+  --shadow:0 1px 0 rgba(0,0,0,.04);
+  --sans:"Schibsted Grotesk", ui-sans-serif, system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --mono:"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+[data-theme=dark]{
+  --paper:#000000;
+  --ink:#ffffff;
+  --ink-2:#e6e6e6;
+  --muted:#a6a6a6;      /* 8.6:1 on black */
+  --faint:#6b6b6b;
+  --rule:#262626;
+  --rule-strong:#ffffff;
+  --wash:#121212;
+  --wash-2:#1c1c1c;
+  --accent:#7088ff;     /* 6.6:1 on black */
+  --accent-wash:#0b1440;
+  --on-ink:#000000;
+  --thumb:#0d0d0d;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+a{color:inherit}
+svg.i{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+
+/* ---------- views ---------- */
+.view{display:none}
+body[data-view=library] #library{display:grid}
+body[data-view=artifact] #artifact{display:flex}
+
+/* ---------- library shell ---------- */
+#library{grid-template-columns:232px 1fr;min-height:100vh}
+.side{border-right:1px solid var(--rule);padding:22px 16px 18px;display:flex;flex-direction:column;gap:26px;position:sticky;top:0;height:100vh}
+.wordmark{font-weight:900;font-size:19px;letter-spacing:-.035em;line-height:1;padding:0 8px}
+.nav{display:flex;flex-direction:column;gap:1px}
+.nav a{display:flex;align-items:center;gap:10px;padding:7px 8px;text-decoration:none;color:var(--ink-2);border-radius:4px;font-weight:500}
+.nav a:hover{background:var(--wash)}
+.nav a[aria-current]{background:var(--ink);color:var(--on-ink)}
+.nav a .n{margin-left:auto;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.nav a[aria-current] .n{color:inherit;opacity:.7}
+.side h3{margin:0 0 6px;padding:0 8px;font-size:12px;font-weight:600;color:var(--muted)}
+.agent-dot{width:8px;height:8px;border:1.5px solid currentColor;border-radius:50%;flex:none}
+.side-foot{margin-top:auto;display:flex;align-items:center;gap:10px;padding:10px 8px 0;border-top:1px solid var(--rule)}
+.side-foot .who{line-height:1.2}
+.side-foot .who b{display:block;font-weight:600}
+.side-foot .who span{font-size:12px;color:var(--muted)}
+.iconbtn{width:32px;height:32px;display:inline-grid;place-items:center;border-radius:4px;color:var(--ink-2)}
+.iconbtn:hover{background:var(--wash)}
+.side-foot .iconbtn{margin-left:auto}
+
+.av{width:22px;height:22px;border-radius:50%;display:inline-grid;place-items:center;font-size:9.5px;font-weight:700;letter-spacing:.02em;flex:none;background:var(--ink);color:var(--on-ink)}
+.av.o{background:transparent;color:var(--ink);box-shadow:inset 0 0 0 1.5px var(--ink)}
+.av.lg{width:30px;height:30px;font-size:11px}
+
+.main{min-width:0;padding:0 40px 64px}
+.topbar{display:flex;align-items:center;gap:12px;height:64px;border-bottom:1px solid var(--rule)}
+.search{flex:1;max-width:520px;display:flex;align-items:center;gap:10px;height:36px;padding:0 12px;border:1px solid var(--rule);border-radius:4px;color:var(--muted);background:var(--paper)}
+.search input{flex:1;border:0;outline:0;background:none;font:inherit;color:var(--ink);min-width:0}
+.search input::placeholder{color:var(--muted)}
+.search:focus-within{border-color:var(--ink)}
+kbd{font-family:var(--sans);font-size:11px;font-weight:600;padding:1px 6px;border:1px solid var(--rule);border-radius:3px;color:var(--muted)}
+.topbar .right{margin-left:auto;display:flex;align-items:center;gap:6px}
+.connect{display:flex;align-items:center;gap:8px;height:36px;padding:0 14px;border:1px solid var(--ink);border-radius:4px;font-weight:600}
+.connect:hover{background:var(--ink);color:var(--on-ink)}
+
+.head{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;padding:36px 0 0}
+.head h1{margin:0;font-size:56px;line-height:.92;font-weight:900;letter-spacing:-.045em}
+.head .tally{font-size:14px;color:var(--muted);padding-bottom:6px;text-align:right}
+.head .tally b{color:var(--ink);font-weight:700;font-variant-numeric:tabular-nums}
+
+.scopes{display:flex;gap:28px;margin-top:28px;border-bottom:2px solid var(--rule-strong);overflow-x:auto;scrollbar-width:none}
+.scopes button{position:relative;padding:0 0 12px;font-size:15px;font-weight:600;color:var(--muted);white-space:nowrap}
+.scopes button:hover{color:var(--ink)}
+.scopes button .c{font-weight:500;margin-left:6px;font-variant-numeric:tabular-nums}
+.scopes button[aria-selected=true]{color:var(--ink)}
+.scopes button[aria-selected=true]::after{content:"";position:absolute;left:0;right:0;bottom:-2px;height:4px;background:var(--accent)}
+
+.filters{display:flex;align-items:center;gap:8px;padding:16px 0 24px;flex-wrap:wrap}
+.chip{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 10px;border:1px solid var(--rule);border-radius:4px;font-weight:500;color:var(--ink-2)}
+.chip:hover{border-color:var(--ink)}
+.chip svg.i{width:13px;height:13px}
+.chip.on{border-color:var(--ink);background:var(--ink);color:var(--on-ink)}
+.chip .x{opacity:.7;margin-left:2px}
+.filters .sp{flex:1}
+.sort{color:var(--muted);font-weight:500;display:inline-flex;align-items:center;gap:4px;margin-right:8px}
+.sort b{color:var(--ink);font-weight:600}
+.seg{display:inline-flex;border:1px solid var(--rule);border-radius:4px;padding:2px}
+.seg button{width:28px;height:24px;display:grid;place-items:center;border-radius:2px;color:var(--muted)}
+.seg button[aria-pressed=true]{background:var(--ink);color:var(--on-ink)}
+
+/* ---------- cards ---------- */
+.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:36px 24px}
+.card{display:flex;flex-direction:column;gap:12px;text-decoration:none;cursor:pointer;min-width:0}
+.thumb{aspect-ratio:4/3;border:1px solid var(--rule);background:var(--thumb);border-radius:3px;overflow:hidden;position:relative;transition:border-color .12s}
+.card:hover .thumb{border-color:var(--ink)}
+.card:hover .t-title{text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1.5px}
+.t-row{display:flex;align-items:flex-start;gap:8px}
+.fmt{flex:none;display:inline-grid;place-items:center;min-width:30px;height:18px;padding:0 4px;border:1.5px solid var(--ink);border-radius:2px;font-size:9.5px;font-weight:800;letter-spacing:.04em;margin-top:1px}
+.fmt.solid{background:var(--ink);color:var(--on-ink)}
+.t-title{font-size:15px;font-weight:650;font-weight:600;letter-spacing:-.01em;line-height:1.3;overflow-wrap:anywhere}
+.meta{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);min-width:0}
+.meta .agent{color:var(--ink-2);font-weight:500;white-space:nowrap}
+.meta .vis{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.meta .vis svg.i{width:13px;height:13px}
+.grid:not(.list) .meta .vis span{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+.meta time{margin-left:auto;white-space:nowrap;font-variant-numeric:tabular-nums}
+
+/* thumbnail interiors: actual miniature type, set like print proofs */
+.tp{position:absolute;inset:0;padding:14px 16px;color:var(--ink);font-size:6.6px;line-height:1.5;overflow:hidden}
+.tp h4{margin:0 0 5px;font-size:13px;line-height:1.02;font-weight:900;letter-spacing:-.04em}
+.tp h5{margin:7px 0 2px;font-size:7.5px;font-weight:800}
+.tp p{margin:0 0 3px;color:var(--ink-2)}
+.tp .ln{height:3px;background:var(--wash-2);margin:3px 0;border-radius:1px}
+.tp table{border-collapse:collapse;width:100%;margin-top:4px}
+.tp td{border-top:.5px solid var(--ink);padding:1.5px 2px 1.5px 0}
+.tp.poll{display:flex;flex-direction:column;justify-content:center;padding:16px 18px}
+.poll .q{font-size:12px;font-weight:800;letter-spacing:-.03em;line-height:1.1;margin-bottom:9px}
+.poll .opt{display:grid;grid-template-columns:1fr auto;gap:2px 6px;font-size:7.5px;font-weight:600;margin-bottom:5px}
+.poll .bar{grid-column:1/-1;height:7px;background:var(--wash-2)}
+.poll .bar i{display:block;height:100%;background:var(--ink)}
+.poll .bar.lo i{background:var(--faint)}
+.tp.pdf{background:var(--wash);padding:12px 26px 0}
+.pdf .pg{background:var(--thumb);height:100%;padding:12px 12px;box-shadow:0 0 0 1px var(--rule)}
+.pdf .pg b{display:block;font-size:7.5px;font-weight:800;margin-bottom:5px;letter-spacing:.01em}
+.pdf s{color:var(--muted)}
+.pdf u{text-decoration-thickness:.8px}
+.pdf .num{font-weight:700}
+.tp.code{background:var(--ink);color:var(--on-ink);font-family:var(--mono);font-size:7px;line-height:1.6;padding:12px 14px;white-space:pre}
+.code .k{font-weight:500;opacity:1}
+.code .d{opacity:.55}
+.tp.chart{display:flex;flex-direction:column;padding:14px 16px}
+.chart .big{font-size:24px;font-weight:900;letter-spacing:-.05em;line-height:1}
+.chart .sub{font-size:7px;color:var(--muted);margin:2px 0 8px}
+.chart .bars{flex:1;display:flex;align-items:flex-end;gap:5px}
+.chart .bars span{flex:1;background:var(--ink);position:relative}
+.chart .bars span:nth-child(n+2){background:var(--faint)}
+.chart .lbls{display:flex;gap:5px;font-size:5.5px;color:var(--muted);margin-top:3px}
+.chart .lbls span{flex:1}
+.tp.tiers{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;padding:24px 14px 14px;align-items:stretch}
+.tiers .hd{position:absolute;top:9px;left:14px;font-size:7px;font-weight:800}
+.tiers div.t{border:.8px solid var(--ink);padding:6px 5px;display:flex;flex-direction:column;gap:2px}
+.tiers div.t.mid{background:var(--ink);color:var(--on-ink)}
+.tiers .p{font-size:12px;font-weight:900;letter-spacing:-.04em}
+.tiers .b{margin-top:auto;height:8px;border:.8px solid currentColor}
+.tiers .mid .b{background:var(--on-ink)}
+
+/* list mode */
+.grid.list{grid-template-columns:1fr;gap:0;border-top:1px solid var(--rule)}
+.grid.list .card{flex-direction:row;align-items:center;gap:16px;padding:12px 0;border-bottom:1px solid var(--rule)}
+.grid.list .thumb{width:72px;flex:none}
+.grid.list .tp{transform:scale(.32);transform-origin:0 0;width:312%;height:312%}
+.grid.list .t-row{flex:1}
+.grid.list .meta{flex:0 0 440px}
+
+/* ---------- artifact view ---------- */
+#artifact{flex-direction:column;min-height:100vh}
+.abar{display:flex;align-items:center;gap:14px;height:60px;padding:0 20px 0 24px;border-bottom:1px solid var(--rule);position:sticky;top:0;background:var(--paper);z-index:5}
+.crumb{display:flex;align-items:center;gap:10px;min-width:0}
+.crumb .wm{font-weight:900;letter-spacing:-.035em;font-size:16px;text-decoration:none;white-space:nowrap}
+.crumb .sl{color:var(--faint);font-size:18px;font-weight:300}
+.crumb .back{color:var(--muted);font-weight:500;text-decoration:none;white-space:nowrap}
+.crumb .back:hover{color:var(--ink)}
+.crumb .ttl{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.badge{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 8px;border:1px solid var(--rule);border-radius:3px;font-size:12.5px;font-weight:500;color:var(--ink-2);white-space:nowrap}
+.badge svg.i{width:13px;height:13px}
+.abar .right{margin-left:auto;display:flex;align-items:center;gap:6px}
+.ver{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 10px;border:1px solid var(--rule);border-radius:4px;font-weight:600;white-space:nowrap}
+.ver span{color:var(--muted);font-weight:500}
+.ver:hover{border-color:var(--ink)}
+.ghost{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 10px;border-radius:4px;font-weight:500;white-space:nowrap;color:var(--ink-2)}
+.ghost:hover{background:var(--wash)}
+.primary{display:inline-flex;align-items:center;gap:7px;height:32px;padding:0 14px;border-radius:4px;background:var(--ink);color:var(--on-ink);font-weight:600;white-space:nowrap}
+.primary:hover{opacity:.86}
+.vsep{width:1px;height:20px;background:var(--rule);margin:0 4px}
+.iconbtn[aria-pressed=true]{background:var(--ink);color:var(--on-ink)}
+
+.abody{flex:1;display:grid;grid-template-columns:1fr 360px;min-height:0}
+.abody.collapsed{grid-template-columns:1fr 0}
+.abody.collapsed .panel{display:none}
+
+.doc-wrap{padding:56px 40px 96px;min-width:0}
+.doc{max-width:680px;margin:0 auto;font-size:16.5px;line-height:1.62;color:var(--ink-2)}
+.doc .byline{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:13.5px;margin-bottom:22px}
+.doc .byline b{color:var(--ink);font-weight:600}
+.doc h1{font-size:52px;line-height:.96;letter-spacing:-.045em;font-weight:900;color:var(--ink);margin:0 0 22px}
+.doc .lede{font-size:20px;line-height:1.45;color:var(--ink);letter-spacing:-.01em;margin:0 0 36px;padding-bottom:32px;border-bottom:2px solid var(--rule-strong)}
+.doc h2{font-size:24px;line-height:1.15;letter-spacing:-.025em;font-weight:800;color:var(--ink);margin:44px 0 12px}
+.doc h3{font-size:17px;font-weight:700;color:var(--ink);margin:28px 0 8px;letter-spacing:-.01em}
+.doc p{margin:0 0 16px}
+.doc ul,.doc ol{margin:0 0 18px;padding-left:22px}
+.doc li{margin:4px 0}
+.doc li::marker{color:var(--ink)}
+.doc strong{color:var(--ink);font-weight:650;font-weight:600}
+.doc code{font-family:var(--mono);font-size:.84em;background:var(--wash);padding:1px 5px;border-radius:3px;color:var(--ink)}
+.doc pre{margin:8px 0 22px;padding:18px 20px;background:var(--ink);color:var(--on-ink);border-radius:4px;overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.65}
+.doc pre code{background:none;padding:0;color:inherit;font-size:inherit}
+.doc pre .c{opacity:.55}
+.doc blockquote{margin:24px 0;padding:2px 0 2px 22px;border-left:4px solid var(--ink);font-size:19px;line-height:1.45;letter-spacing:-.012em;color:var(--ink)}
+.doc blockquote p{margin:0 0 8px}
+.doc blockquote cite{display:block;font-style:normal;font-size:13.5px;color:var(--muted)}
+.doc table{width:100%;border-collapse:collapse;margin:8px 0 24px;font-size:14.5px;line-height:1.4}
+.doc th{text-align:left;font-weight:700;color:var(--ink);padding:0 12px 8px 0;border-bottom:2px solid var(--rule-strong)}
+.doc td{padding:9px 12px 9px 0;border-bottom:1px solid var(--rule);vertical-align:top}
+.doc td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+.tasks{list-style:none;padding-left:0 !important}
+.tasks li{display:flex;gap:10px;align-items:flex-start}
+.box{flex:none;width:16px;height:16px;border:1.5px solid var(--ink);border-radius:2px;margin-top:4px;display:grid;place-items:center}
+.box.on{background:var(--ink);color:var(--on-ink)}
+.box svg{width:11px;height:11px;stroke:currentColor;stroke-width:2.6;fill:none}
+.tasks li.done span{color:var(--muted);text-decoration:line-through;text-decoration-thickness:1px}
+
+/* side panel */
+.panel{border-left:1px solid var(--rule);display:flex;flex-direction:column;min-width:0;position:sticky;top:60px;height:calc(100vh - 60px)}
+.ptabs{display:flex;gap:22px;padding:0 20px;border-bottom:1px solid var(--rule);height:48px;align-items:flex-end}
+.ptabs button{position:relative;padding-bottom:13px;font-weight:600;color:var(--muted)}
+.ptabs button:hover{color:var(--ink)}
+.ptabs button[aria-selected=true]{color:var(--ink)}
+.ptabs button[aria-selected=true]::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:3px;background:var(--accent)}
+.ptabs .iconbtn{margin-left:auto;align-self:center}
+.pbody{overflow:auto;padding:18px 20px 24px;flex:1}
+.pane{display:none}
+.pane.on{display:block}
+.compare{display:flex;align-items:center;justify-content:space-between;font-size:13px;color:var(--muted);margin-bottom:14px}
+.compare button{font-weight:600;color:var(--ink);text-decoration:underline;text-underline-offset:3px}
+
+.tl{list-style:none;margin:0;padding:0;position:relative}
+.tl::before{content:"";position:absolute;left:5px;top:10px;bottom:18px;width:1.5px;background:var(--rule)}
+.tl li{position:relative;padding:0 0 20px 26px}
+.tl .dot{position:absolute;left:0;top:5px;width:12px;height:12px;border-radius:50%;background:var(--paper);box-shadow:inset 0 0 0 2px var(--ink)}
+.tl li.cur .dot{background:var(--accent);box-shadow:0 0 0 3px var(--accent-wash)}
+.tl .vh{display:flex;align-items:baseline;gap:8px}
+.tl .vn{font-weight:800;font-size:15px;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.tl .tag{font-size:11.5px;font-weight:700;color:var(--accent)}
+.tl time{margin-left:auto;font-size:12.5px;color:var(--muted);white-space:nowrap}
+.tl .note{margin:3px 0 5px;color:var(--ink-2);line-height:1.42}
+.tl .by{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted)}
+.tl .by .av{width:18px;height:18px;font-size:8px}
+.tl .by .diff{margin-left:auto;font-variant-numeric:tabular-nums}
+.tl .diff .add{color:var(--ink);font-weight:600}
+.tl li.sel{background:var(--wash);margin:0 -12px;padding:10px 12px 12px 38px;border-radius:4px;margin-bottom:12px}
+.tl li.sel .dot{left:12px;top:15px}
+.restore{display:flex;gap:8px;margin-top:10px}
+.restore button{height:28px;padding:0 10px;border-radius:4px;font-size:12.5px;font-weight:600}
+.restore .r1{background:var(--ink);color:var(--on-ink)}
+.restore .r2{border:1px solid var(--rule);background:var(--paper)}
+.dl{display:grid;grid-template-columns:96px 1fr;gap:10px 12px;margin:0;font-size:13.5px}
+.dl dt{color:var(--muted)}
+.dl dd{margin:0}
+.share-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--rule)}
+.share-row .who{flex:1;line-height:1.25}
+.share-row .who span{display:block;font-size:12.5px;color:var(--muted)}
+.linkbox{display:flex;gap:6px;margin:4px 0 16px}
+.linkbox input{flex:1;min-width:0;height:32px;border:1px solid var(--rule);border-radius:4px;padding:0 10px;font:inherit;font-size:12.5px;background:var(--wash);color:var(--ink)}
+
+/* demo switcher */
+.demo{position:fixed;right:14px;bottom:14px;z-index:20;display:flex;gap:2px;padding:3px;background:var(--paper);border:1px solid var(--ink);border-radius:5px;font-size:12px;font-weight:600}
+.demo button{padding:4px 9px;border-radius:3px;color:var(--muted)}
+.demo button[aria-pressed=true]{background:var(--ink);color:var(--on-ink)}
+.demo i{width:1px;background:var(--rule);margin:3px 3px}
+
+/* ---------- responsive ---------- */
+@media (max-width:1180px){ .grid{grid-template-columns:repeat(3,minmax(0,1fr))} .abody{grid-template-columns:1fr 320px} }
+@media (max-width:900px){
+  #library{grid-template-columns:minmax(0,1fr)}
+  .mwm{display:block !important;font-weight:900;letter-spacing:-.035em;font-size:17px;white-space:nowrap}
+  .topbar{gap:10px}
+  .scopes{gap:20px}
+  .side{display:none}
+  .main{padding:0 16px 80px}
+  .grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:28px 16px}
+  .head h1{font-size:44px}
+  .abody,.abody.collapsed{grid-template-columns:1fr}
+  .panel{position:static;height:auto;border-left:0;border-top:1px solid var(--rule)}
+  .abody.collapsed .panel{display:none}
+  .grid.list .meta{flex-basis:auto}
+}
+@media (max-width:600px){
+  .topbar .connect span,.topbar kbd{display:none}
+  .topbar .connect{padding:0 10px}
+  .search{padding:0 10px;min-width:0}
+  .demo{left:14px;right:auto}
+  .head{flex-direction:column;align-items:flex-start;gap:8px}
+  .head .tally{text-align:left}
+  .filters .sort{display:none}
+  .grid{grid-template-columns:1fr 1fr;gap:24px 12px}
+  .t-title{font-size:14px}
+  .meta .vis span,.meta .agent{display:none}
+  .grid.list .meta{display:none}
+  .abar{padding:0 12px;gap:8px}
+  .crumb .back,.crumb .sl,.crumb .wm,.abar .badge,.abar .ghost.raw span,.abar .vsep{display:none}
+  .ver span{display:none}
+  .primary span{display:none}
+  .primary{padding:0 10px}
+  .doc-wrap{padding:32px 16px 80px}
+  .doc h1{font-size:38px}
+  .doc .lede{font-size:18px}
+  .doc table{display:block;overflow-x:auto}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none !important}}
+</style>
+</head>
+<body data-view="library">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="6.5" height="6.5"/><rect x="13.5" y="4" width="6.5" height="6.5"/><rect x="4" y="13.5" width="6.5" height="6.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="1.5"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/></symbol>
+  <symbol id="i-team" viewBox="0 0 24 24"><circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19.5c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5"/><circle cx="16.5" cy="9.5" r="2.6"/><path d="M16 14.6c2.4.1 4 1.7 4.5 4.4"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.4 2.4 3.5 5.3 3.5 8.5s-1.1 6.1-3.5 8.5c-2.4-2.4-3.5-5.3-3.5-8.5S9.6 5.9 12 3.5z"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5.5" cy="12" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="18.5" cy="12" r="1.2" fill="currentColor"/></symbol>
+  <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="1.5"/><path d="M14.5 4.5v15"/></symbol>
+  <symbol id="i-raw" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-8.5 8.5M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M19.5 14.5A8 8 0 0 1 9.5 4.5a8 8 0 1 0 10 10z"/></symbol>
+  <symbol id="i-lib" viewBox="0 0 24 24"><path d="M4 4.5h4v15H4zM10 4.5h4v15h-4zM16.2 5.2l3.8-.9 3 14.6"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="m12 4 2.4 5 5.4.6-4 3.7 1.1 5.4L12 16l-4.9 2.7 1.1-5.4-4-3.7 5.4-.6z"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13"/></symbol>
+  <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 3.5V8M15 3.5V8M6.5 8h11v3a5.5 5.5 0 0 1-11 0zM12 16.5v4"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="1.5"/><path d="M15.5 8.5V5.5a1 1 0 0 0-1-1h-9a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h3"/></symbol>
+</svg>
+
+<!-- ================= LIBRARY ================= -->
+<div id="library" class="view">
+  <aside class="side">
+    <div class="wordmark">Open Artifacts</div>
+    <nav class="nav" aria-label="Main">
+      <a href="#" aria-current="page"><svg class="i"><use href="#i-lib"/></svg>Library<span class="n">128</span></a>
+      <a href="#"><svg class="i"><use href="#i-clock"/></svg>Recent</a>
+      <a href="#"><svg class="i"><use href="#i-star"/></svg>Starred<span class="n">9</span></a>
+      <a href="#"><svg class="i"><use href="#i-trash"/></svg>Trash</a>
+    </nav>
+    <div>
+      <h3>Agents</h3>
+      <nav class="nav" aria-label="Agents">
+        <a href="#"><span class="agent-dot"></span>Claude Code<span class="n">54</span></a>
+        <a href="#"><span class="agent-dot"></span>Codex CLI<span class="n">31</span></a>
+        <a href="#"><span class="agent-dot"></span>Cursor<span class="n">22</span></a>
+        <a href="#"><span class="agent-dot"></span>OpenCode<span class="n">12</span></a>
+        <a href="#"><span class="agent-dot"></span>ChatGPT<span class="n">9</span></a>
+      </nav>
+    </div>
+    <div class="side-foot">
+      <span class="av lg">LU</span>
+      <div class="who"><b>Leo Urbina</b><span>Data platform</span></div>
+      <button class="iconbtn" data-act="theme" aria-label="Toggle dark mode"><svg class="i"><use href="#i-moon"/></svg></button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <span class="mwm" style="display:none">Open Artifacts</span>
+      <label class="search"><svg class="i"><use href="#i-search"/></svg><span class="sr">Search artifacts</span><input type="search" placeholder="Search titles, content and change notes"><kbd>⌘K</kbd></label>
+      <div class="right">
+        <button class="connect"><svg class="i"><use href="#i-plug"/></svg><span>Connect an agent</span></button>
+      </div>
+    </div>
+
+    <div class="head">
+      <h1>Library</h1>
+      <div class="tally"><b>128</b> artifacts, <b>14</b> updated today</div>
+    </div>
+
+    <div class="scopes" role="tablist" aria-label="Scope">
+      <button role="tab" aria-selected="true">All<span class="c">128</span></button>
+      <button role="tab" aria-selected="false">Mine<span class="c">71</span></button>
+      <button role="tab" aria-selected="false">Shared with me<span class="c">23</span></button>
+      <button role="tab" aria-selected="false">Team<span class="c">34</span></button>
+    </div>
+
+    <div class="filters">
+      <button class="chip">Format<svg class="i"><use href="#i-down"/></svg></button>
+      <button class="chip on">Agent: any except ChatGPT<svg class="i x"><use href="#i-x"/></svg></button>
+      <button class="chip">Owner<svg class="i"><use href="#i-down"/></svg></button>
+      <span class="sp"></span>
+      <span class="sort">Sort by <b>Last updated</b><svg class="i" style="width:13px;height:13px"><use href="#i-down"/></svg></span>
+      <div class="seg" role="group" aria-label="Layout">
+        <button aria-pressed="true" data-layout="grid" aria-label="Grid"><svg class="i"><use href="#i-grid"/></svg></button>
+        <button aria-pressed="false" data-layout="list" aria-label="List"><svg class="i"><use href="#i-list"/></svg></button>
+      </div>
+    </div>
+
+    <div class="grid" id="grid">
+
+      <a class="card" data-open>
+        <div class="thumb"><div class="tp">
+          <h4>Q4 data migration plan</h4>
+          <p>Move <b>billing_events</b> off the shared cluster before the December freeze.</p>
+          <h5>Phases</h5>
+          <div class="ln" style="width:92%"></div><div class="ln" style="width:78%"></div><div class="ln" style="width:85%"></div>
+          <table><tr><td>Backfill</td><td>Nov 3</td><td>Priya</td></tr><tr><td>Dual-write</td><td>Nov 17</td><td>Marcus</td></tr><tr><td>Cutover</td><td>Dec 1</td><td>Leo</td></tr></table>
+        </div></div>
+        <div class="t-row"><span class="fmt">MD</span><span class="t-title">Q4 data migration plan</span></div>
+        <div class="meta"><span class="av">LU</span><span class="agent">Claude Code</span><span class="vis"><svg class="i"><use href="#i-team"/></svg><span>Team</span></span><time>2h ago</time></div>
+      </a>
+
+      <a class="card">
+        <div class="thumb"><div class="tp poll">
+          <div class="q">Where should we hold the March offsite?</div>
+          <div class="opt">Lisbon<span>46%</span><div class="bar"><i style="width:46%"></i></div></div>
+          <div class="opt">Mexico City<span>31%</span><div class="bar lo"><i style="width:31%"></i></div></div>
+          <div class="opt">Montréal<span>23%</span><div class="bar lo"><i style="width:23%"></i></div></div>
+        </div></div>
+        <div class="t-row"><span class="fmt">HTML</span><span class="t-title">Offsite location poll</span></div>
+        <div class="meta"><span class="av o">AS</span><span class="agent">ChatGPT</span><span class="vis"><svg class="i"><use href="#i-team"/></svg><span>Team</span></span><time>5h ago</time></div>
+      </a>
+
+      <a class="card">
+        <div class="thumb"><div class="tp pdf"><div class="pg">
+          <b>MASTER SERVICES AGREEMENT</b>
+          <p><span class="num">7.2</span> Fees are payable within <s>thirty (30)</s> <u>forty-five (45)</u> days of invoice.</p>
+          <p><span class="num">7.3</span> Late amounts accrue interest at <s>1.5%</s> <u>1.0%</u> per month.</p>
+          <p><span class="num">9.1</span> Liability is capped at <u>twelve (12) months of</u> fees paid.</p>
+          <div class="ln" style="width:90%"></div><div class="ln" style="width:70%"></div>
+        </div></div></div>
+        <div class="t-row"><span class="fmt">PDF</span><span class="t-title">Vendor MSA — redlined.pdf</span></div>
+        <div class="meta"><span class="av o">MB</span><span class="agent">Claude Code</span><span class="vis"><svg class="i"><use href="#i-lock"/></svg><span>Private</span></span><time>Yesterday</time></div>
+      </a>
+
+      <a class="card">
+        <div class="thumb"><div class="tp code"><span class="k">export class</span> TokenBucket {
+  <span class="d">// refill is lazy: computed on take()</span>
+  <span class="k">constructor</span>(
+    <span class="k">private</span> capacity: number,
+    <span class="k">private</span> refillPerSec: number,
+  ) {}
+
+  take(key: string, n = 1): boolean {
+    <span class="k">const</span> b = <span class="k">this</span>.refill(key);
+    <span class="k">if</span> (b.tokens &lt; n) <span class="k">return</span> false;
+    b.tokens -= n;
+    <span class="k">return</span> true;
+  }</div></div>
+        <div class="t-row"><span class="fmt solid">TS</span><span class="t-title">rate_limiter.ts</span></div>
+        <div class="meta"><span class="av">LU</span><span class="agent">Codex CLI</span><span class="vis"><svg class="i"><use href="#i-lock"/></svg><span>Private</span></span><time>Yesterday</time></div>
+      </a>
+
+      <a class="card">
+        <div class="thumb"><div class="tp chart">
+          <div class="big">3.8%</div>
+          <div class="sub">Visit to paid, September, down 0.4 pts</div>
+          <div class="bars"><span style="height:100%"></span><span style="height:58%"></span><span style="height:34%"></span><span style="height:17%"></span><span style="height:9%"></span></div>
+          <div class="lbls"><span>Visit</span><span>Pricing</span><span>Cart</span><span>Checkout</span><span>Paid</span></div>
+        </div></div>
+        <div class="t-row"><span class="fmt">HTML</span><span class="t-title">Checkout funnel, September</span></div>
+        <div class="meta"><span class="av o">PR</span><span class="agent">Cursor</span><span class="vis"><svg class="i"><use href="#i-globe"/></svg><span>Public</span></span><time>Oct 15</time></div>
+      </a>
+
+      <a class="card">
+        <div class="thumb"><div class="tp">
+          <h4>Postmortem: INC-2291 queue backlog</h4>
+          <p><b>Impact.</b> Webhook deliveries delayed up to 41 min for 6% of workspaces.</p>
+          <h5>Timeline (UTC)</h5>
+          <p>14:02 consumer lag alert fires</p>
+          <p>14:19 autoscaler pinned at max</p>
+          <p>14:43 partition rebalance completes</p>
+          <div class="ln" style="width:88%"></div><div class="ln" style="width:64%"></div>
+        </div></div>
+        <div class="t-row"><span class="fmt">MD</span><span class="t-title">Postmortem: INC-2291 queue backlog</span></div>
+        <div class="meta"><span class="av o">MB</span><span class="agent">OpenCode</span><span class="vis"><svg class="i"><use href="#i-team"/></svg><span>Team</span></span><time>Oct 14</time></div>
+      </a>
+
+      <a class="card">
+        <div class="thumb"><div class="tp tiers">
+          <span class="hd">Pricing, option B</span>
+          <div class="t">Starter<span class="p">$0</span>3 seats<div class="b"></div></div>
+          <div class="t mid">Team<span class="p">$12</span>per seat<div class="b"></div></div>
+          <div class="t">Org<span class="p">$29</span>SSO, audit<div class="b"></div></div>
+        </div></div>
+        <div class="t-row"><span class="fmt">HTML</span><span class="t-title">Pricing page, option B prototype</span></div>
+        <div class="meta"><span class="av o">AS</span><span class="agent">Claude Code</span><span class="vis"><svg class="i"><use href="#i-team"/></svg><span>Team</span></span><time>Oct 12</time></div>
+      </a>
+
+      <a class="card">
+        <div class="thumb"><div class="tp code"><span class="d">-- 0042: partition billing_events</span>
+<span class="k">CREATE TABLE</span> billing_events_new (
+  id          bigint <span class="k">NOT NULL</span>,
+  account_id  bigint <span class="k">NOT NULL</span>,
+  kind        text   <span class="k">NOT NULL</span>,
+  amount_cents bigint,
+  created_at  timestamptz <span class="k">NOT NULL</span>
+) <span class="k">PARTITION BY RANGE</span> (created_at);
+
+<span class="k">CREATE INDEX</span> ON billing_events_new
+  (account_id, created_at <span class="k">DESC</span>);</div></div>
+        <div class="t-row"><span class="fmt solid">SQL</span><span class="t-title">0042_partition_<wbr>billing_events.sql</span></div>
+        <div class="meta"><span class="av">LU</span><span class="agent">Codex CLI</span><span class="vis"><svg class="i"><use href="#i-team"/></svg><span>Team</span></span><time>Oct 10</time></div>
+      </a>
+
+    </div>
+  </main>
+</div>
+
+<!-- ================= ARTIFACT ================= -->
+<div id="artifact" class="view">
+  <header class="abar">
+    <div class="crumb">
+      <a class="wm" href="#" data-go="library">Open Artifacts</a>
+      <span class="sl">/</span>
+      <a class="back" href="#" data-go="library">Library</a>
+      <span class="sl">/</span>
+      <span class="ttl">Q4 data migration plan</span>
+      <span class="badge">Markdown</span>
+      <span class="badge"><svg class="i"><use href="#i-team"/></svg>Team</span>
+    </div>
+    <div class="right">
+      <button class="ver">v7<span>· 2h ago</span><svg class="i" style="width:14px;height:14px"><use href="#i-down"/></svg></button>
+      <button class="ghost raw"><svg class="i"><use href="#i-raw"/></svg><span>Open raw</span></button>
+      <button class="primary"><svg class="i"><use href="#i-link"/></svg><span>Share</span></button>
+      <span class="vsep"></span>
+      <button class="iconbtn" aria-label="More actions"><svg class="i"><use href="#i-more"/></svg></button>
+      <button class="iconbtn" id="panelBtn" aria-pressed="true" aria-label="Toggle side panel"><svg class="i"><use href="#i-panel"/></svg></button>
+      <button class="iconbtn" data-act="theme" aria-label="Toggle dark mode"><svg class="i"><use href="#i-moon"/></svg></button>
+    </div>
+  </header>
+
+  <div class="abody" id="abody">
+    <div class="doc-wrap">
+      <article class="doc">
+        <div class="byline"><span class="av">LU</span><span><b>Leo Urbina</b> with Claude Code, updated 2h ago</span></div>
+        <h1>Q4 data migration plan</h1>
+        <p class="lede">Move <code>billing_events</code> off the shared Postgres cluster onto its own partitioned cluster before the December 8 change freeze, with no gap in invoicing and a rollback path at every step.</p>
+
+        <h2>Why now</h2>
+        <p>The table is 1.9&nbsp;TB and grows about 140&nbsp;GB a month. It accounts for 61% of write IOPS on <code>pg-shared-02</code>, and nightly invoice runs now push p99 latency for unrelated services past 800&nbsp;ms. Splitting it out also unblocks the retention policy Finance asked for in Q3.</p>
+        <ul>
+          <li>Partition by month on <code>created_at</code>; detach partitions older than 25 months to cold storage.</li>
+          <li>Keep the existing primary key so downstream consumers need no changes.</li>
+          <li>Run the backfill from a replica, never the primary.</li>
+        </ul>
+
+        <h2>Cutover schedule</h2>
+        <table>
+          <thead><tr><th>Phase</th><th>Starts</th><th>Owner</th><th>Exit criteria</th></tr></thead>
+          <tbody>
+            <tr><td>Backfill</td><td class="num">Nov 3</td><td>Priya Raman</td><td>Row counts match per partition, checksums on 1% sample</td></tr>
+            <tr><td>Dual-write</td><td class="num">Nov 17</td><td>Marcus Bell</td><td>7 days with zero divergence in the reconciler</td></tr>
+            <tr><td>Read switch</td><td class="num">Nov 26</td><td>Leo Urbina</td><td>Invoice dry run matches production to the cent</td></tr>
+            <tr><td>Cutover</td><td class="num">Dec 1</td><td>Leo Urbina</td><td>Old table renamed, writes off for 48h</td></tr>
+          </tbody>
+        </table>
+
+        <h3>Dual-write toggle</h3>
+        <p>Writes go through the existing <code>BillingEventsRepo</code>. The flag is read per request so we can turn it off without a deploy.</p>
+<pre><code><span class="c"># config/flags/billing.yaml</span>
+billing_events_dual_write:
+  enabled: true
+  target: pg-billing-01
+  shadow_reads: 0.05      <span class="c"># compare 5% of reads, log mismatches</span>
+  fail_open: true         <span class="c"># a failed shadow write never blocks the primary</span></code></pre>
+
+        <blockquote>
+          <p>If the reconciler reports any divergence during dual-write, we restart the 7-day clock. No exceptions for “small” mismatches; those are exactly the ones that end up on an invoice.</p>
+          <cite>Priya Raman, review comment on v5</cite>
+        </blockquote>
+
+        <h2>Before cutover</h2>
+        <ul class="tasks">
+          <li class="done"><span class="box on"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span><span>Provision <code>pg-billing-01</code> with 4 TB gp3 and PITR enabled</span></li>
+          <li class="done"><span class="box on"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span><span>Land migration <code>0042_partition_billing_events.sql</code></span></li>
+          <li><span class="box"></span><span>Load-test invoice run against the new cluster at 2× October volume</span></li>
+          <li><span class="box"></span><span>Write the rollback runbook and rehearse it once in staging</span></li>
+          <li><span class="box"></span><span>Get Finance sign-off on the December 1 cutover window</span></li>
+        </ul>
+
+        <h2>Rollback</h2>
+        <p>Until the old table is dropped (no earlier than January 15), rollback is a flag flip: set <code>target</code> back to <code>pg-shared-02</code> and replay the write-ahead queue from the cutover timestamp. Expected recovery time is under 20 minutes.</p>
+      </article>
+    </div>
+
+    <aside class="panel" aria-label="Artifact panel">
+      <div class="ptabs" role="tablist">
+        <button role="tab" aria-selected="true" data-pane="versions">Versions</button>
+        <button role="tab" aria-selected="false" data-pane="share">Share</button>
+        <button role="tab" aria-selected="false" data-pane="details">Details</button>
+        <button class="iconbtn" data-act="collapse" aria-label="Close panel"><svg class="i"><use href="#i-x"/></svg></button>
+      </div>
+      <div class="pbody">
+        <div class="pane on" id="pane-versions">
+          <div class="compare"><span>7 versions</span><button>Compare two versions</button></div>
+          <ol class="tl">
+            <li class="cur">
+              <span class="dot"></span>
+              <div class="vh"><span class="vn">v7</span><span class="tag">Current</span><time>2h ago</time></div>
+              <p class="note">Added rollback section and exit criteria to the cutover table.</p>
+              <div class="by"><span class="av">LU</span>Claude Code<span class="diff"><span class="add">+18</span> −4</span></div>
+            </li>
+            <li class="sel">
+              <span class="dot"></span>
+              <div class="vh"><span class="vn">v6</span><time>Yesterday, 16:40</time></div>
+              <p class="note">Extended dual-write window from 5 to 7 days after review.</p>
+              <div class="by"><span class="av">LU</span>Claude Code<span class="diff"><span class="add">+3</span> −3</span></div>
+              <div class="restore"><button class="r1">Restore v6</button><button class="r2">View</button></div>
+            </li>
+            <li>
+              <span class="dot"></span>
+              <div class="vh"><span class="vn">v5</span><time>Oct 16</time></div>
+              <p class="note">Added backfill throughput estimates from the replica test.</p>
+              <div class="by"><span class="av o">PR</span>Codex CLI<span class="diff"><span class="add">+26</span> −2</span></div>
+            </li>
+            <li>
+              <span class="dot"></span>
+              <div class="vh"><span class="vn">v4</span><time>Oct 15</time></div>
+              <p class="note">Edited by hand: moved cutover from Nov 24 to Dec 1.</p>
+              <div class="by"><span class="av">LU</span>Leo Urbina<span class="diff"><span class="add">+2</span> −2</span></div>
+            </li>
+            <li>
+              <span class="dot"></span>
+              <div class="vh"><span class="vn">v3</span><time>Oct 14</time></div>
+              <p class="note">Split the plan into phases with named owners.</p>
+              <div class="by"><span class="av">LU</span>Claude Code<span class="diff"><span class="add">+41</span> −19</span></div>
+            </li>
+            <li>
+              <span class="dot"></span>
+              <div class="vh"><span class="vn">v2</span><time>Oct 13</time></div>
+              <p class="note">Added risks and the freeze-date constraint.</p>
+              <div class="by"><span class="av">LU</span>Claude Code<span class="diff"><span class="add">+12</span></span></div>
+            </li>
+            <li>
+              <span class="dot"></span>
+              <div class="vh"><span class="vn">v1</span><time>Oct 13</time></div>
+              <p class="note">First draft from the #data-platform thread.</p>
+              <div class="by"><span class="av">LU</span>Claude Code<span class="diff"><span class="add">+88</span></span></div>
+            </li>
+          </ol>
+        </div>
+        <div class="pane" id="pane-share">
+          <div class="linkbox"><input readonly value="artifacts.acme.dev/a/q4-data-migration"><button class="ghost" aria-label="Copy link"><svg class="i"><use href="#i-copy"/></svg></button></div>
+          <div class="share-row"><span class="av">LU</span><div class="who">Leo Urbina<span>Owner</span></div></div>
+          <div class="share-row"><span class="av o">PR</span><div class="who">Priya Raman<span>Can edit</span></div></div>
+          <div class="share-row"><svg class="i"><use href="#i-team"/></svg><div class="who">Data platform team<span>Can view</span></div></div>
+        </div>
+        <div class="pane" id="pane-details">
+          <dl class="dl">
+            <dt>Format</dt><dd>Markdown, 9.4 KB</dd>
+            <dt>Owner</dt><dd>Leo Urbina</dd>
+            <dt>Published by</dt><dd>Claude Code</dd>
+            <dt>Created</dt><dd>Oct 13, 2026</dd>
+            <dt>Visibility</dt><dd>Team</dd>
+            <dt>Path</dt><dd>plans/q4-data-migration.md</dd>
+          </dl>
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<div class="demo" role="group" aria-label="Mockup controls">
+  <button data-view-btn="library">Library</button>
+  <button data-view-btn="artifact">Artifact</button>
+  <i></i>
+  <button data-theme-btn="light">Light</button>
+  <button data-theme-btn="dark">Dark</button>
+</div>
+
+<script>
+(function(){
+  const root=document.documentElement, body=document.body;
+  const q=new URLSearchParams(location.search);
+  function setView(v){
+    body.dataset.view = v==='artifact'?'artifact':'library';
+    document.querySelectorAll('[data-view-btn]').forEach(b=>b.setAttribute('aria-pressed', b.dataset.viewBtn===body.dataset.view));
+    window.scrollTo(0,0);
+  }
+  function setTheme(t){
+    root.dataset.theme = t==='dark'?'dark':'light';
+    document.querySelectorAll('[data-theme-btn]').forEach(b=>b.setAttribute('aria-pressed', b.dataset.themeBtn===root.dataset.theme));
+    document.querySelectorAll('[data-act=theme] use').forEach(u=>u.setAttribute('href', root.dataset.theme==='dark'?'#i-sun':'#i-moon'));
+  }
+  setView(q.get('view')); setTheme(q.get('theme'));
+
+  document.addEventListener('click',e=>{
+    const t=e.target.closest('button,a'); if(!t) return;
+    if(t.dataset.viewBtn) setView(t.dataset.viewBtn);
+    if(t.dataset.themeBtn) setTheme(t.dataset.themeBtn);
+    if(t.dataset.act==='theme') setTheme(root.dataset.theme==='dark'?'light':'dark');
+    if(t.hasAttribute('data-open')) {e.preventDefault(); setView('artifact');}
+    if(t.dataset.go){e.preventDefault(); setView(t.dataset.go);}
+    if(t.dataset.layout){
+      document.getElementById('grid').classList.toggle('list', t.dataset.layout==='list');
+      document.querySelectorAll('[data-layout]').forEach(b=>b.setAttribute('aria-pressed', b===t));
+    }
+    if(t.closest('.scopes')){t.parentNode.querySelectorAll('button').forEach(b=>b.setAttribute('aria-selected', b===t));}
+    if(t.dataset.pane){
+      t.parentNode.querySelectorAll('[data-pane]').forEach(b=>b.setAttribute('aria-selected', b===t));
+      document.querySelectorAll('.pane').forEach(p=>p.classList.toggle('on', p.id==='pane-'+t.dataset.pane));
+    }
+    if(t.id==='panelBtn' || t.dataset.act==='collapse'){
+      const ab=document.getElementById('abody'); const c=ab.classList.toggle('collapsed');
+      document.getElementById('panelBtn').setAttribute('aria-pressed', !c);
+    }
+  });
+})();
+</script>
+</body>
+</html>
