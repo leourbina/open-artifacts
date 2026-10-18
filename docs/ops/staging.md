@@ -53,3 +53,14 @@ It reads the team domain from the Access organization (falls back to `<team_name
 The OIDC client secret is only returned when the app is created, and there's no API to rotate it. If the app exists but `ACCESS_CLIENT_SECRET` is missing on the Worker, the run fails. To recover, delete the Access app and re-run. If the app exists but isn't linked to `open-artifacts-staging-owner`, the run also fails: attach the policy in the dashboard, or delete the app and re-run. Everything is preflighted (secret list, policy, generated values) before the app is created. If any Worker secret write fails after creation, the new app is deleted so a re-run starts clean.
 
 **Afterwards:** copy `ACCESS_CLIENT_ID` from the job summary into `env.staging.vars.ACCESS_CLIENT_ID` in `apps/server/wrangler.staging.jsonc` and commit it. Deploys overwrite vars, so it has to live in the config.
+
+### Access app (created 2026-10-18)
+
+| Item | Value |
+|---|---|
+| Access app name | open-artifacts-staging |
+| Access app id | bbdd007c-886a-46db-8c9a-15b0d2f5cc3c |
+| Policy | open-artifacts-staging-owner (`fc52c743-e814-448e-97c8-43a6037e5486`) |
+| OIDC client id (`ACCESS_CLIENT_ID`) | e332570b66c35883120a21ccfe376f6394aa4089c08cb73c6224b96fab1da7e2 |
+
+The client id is public and is committed in `wrangler.staging.jsonc`. The client secret is a Worker secret and is not recorded here.

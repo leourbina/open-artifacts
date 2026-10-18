@@ -74,13 +74,14 @@ describe("wrangler.staging.jsonc env.staging", () => {
     expect(env.triggers.crons).toEqual(["17 3 * * *"]);
   });
   it("has the expected vars and no secrets", () => {
-    expect(env.vars).toEqual({
+    const { ACCESS_CLIENT_ID, ...vars } = env.vars;
+    expect(vars).toEqual({
       ENVIRONMENT: "production",
       APP_HOST: "staging.open-artifacts.com",
       CONTENT_HOST: "staging-content.open-artifacts.com",
       OWNER_EMAIL: "me@leourbina.com",
       ACCESS_TEAM_DOMAIN: "leourbina.cloudflareaccess.com",
-      ACCESS_CLIENT_ID: "",
     });
+    expect(ACCESS_CLIENT_ID).toMatch(/^[0-9a-f]{64}$/);
   });
 });

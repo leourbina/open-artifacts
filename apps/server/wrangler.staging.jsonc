@@ -49,15 +49,16 @@
         }
       ],
       "triggers": { "crons": ["17 3 * * *"] },
-      // Secrets are NOT configured here. Deploys overwrite vars, so commit
-      // ACCESS_CLIENT_ID here once the Access app exists.
+      // Secrets are NOT configured here. Deploys overwrite vars, so
+      // ACCESS_CLIENT_ID lives here. It is a public OIDC client id (not a
+      // secret), set by the ops-staging-access workflow on 2026-10-18.
       "vars": {
         "ENVIRONMENT": "production",
         "APP_HOST": "staging.open-artifacts.com",
         "CONTENT_HOST": "staging-content.open-artifacts.com",
         "OWNER_EMAIL": "me@leourbina.com",
         "ACCESS_TEAM_DOMAIN": "leourbina.cloudflareaccess.com",
-        "ACCESS_CLIENT_ID": ""
+        "ACCESS_CLIENT_ID": "e332570b66c35883120a21ccfe376f6394aa4089c08cb73c6224b96fab1da7e2"
       }
     }
   }
