@@ -119,7 +119,10 @@ describe("B13 breaks", () => {
   it("one anonymous IP can take all 200 sockets of a public artifact (DoS)", async () => {
     const id = await pub({ visibility: "public" });
     const open: WebSocket[] = [];
-    for (let i = 0; i < 200; i++) {
+    // Stops at the first refusal (the per-actor cap) instead of making all 200
+    // upgrades: 200 sequential upgrades could pass the 5 s default on slow runs.
+    let refused = false;
+    for (let i = 0; i < 200 && !refused; i++) {
       const r = await anon(
         R.dataSubscribe(id, "c"),
         "203.0.113.50",
@@ -129,14 +132,16 @@ describe("B13 breaks", () => {
       if (r.webSocket) {
         r.webSocket.accept();
         open.push(r.webSocket);
-      }
+      } else refused = r.status === 429;
     }
+    expect(refused).toBe(true);
+    expect(open.length).toBeLessThan(200);
     const v = await api(app, R.dataSubscribe(id, "c"), viewer.cookie, {
       headers: { upgrade: "websocket" },
     });
     for (const w of open) w.close();
     expect(v.status).toBe(101);
-  });
+  }, 30_000);
 });
 
 describe("B13 CPU", () => {
