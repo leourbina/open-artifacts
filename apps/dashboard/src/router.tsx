@@ -1,3 +1,4 @@
+import { FormatSchema } from "@oa/shared";
 import {
   createRootRoute,
   createRoute,
@@ -5,7 +6,9 @@ import {
   type RouterHistory,
 } from "@tanstack/react-router";
 import { AppLayout } from "./layout/AppLayout";
+import { Library } from "./library/Library";
 import { SearchPage } from "./library/Search";
+import type { Scope } from "./library/useLibraryQuery";
 import { NoAccess } from "./pages/NoAccess";
 import { NotFound } from "./pages/NotFound";
 import { SignIn } from "./pages/SignIn";
@@ -31,8 +34,22 @@ const root = createRootRoute({
 const route = (path: string, component: () => React.ReactNode) =>
   createRoute({ getParentRoute: () => root, path, component });
 
-const library = (path: string, scope: string) =>
-  route(path, page(`Library: ${scope}`));
+const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
+const library = (path: string, scope: Scope) =>
+  createRoute({
+    getParentRoute: () => root,
+    path,
+    validateSearch: (s: Record<string, unknown>) => {
+      const format = FormatSchema.safeParse(s.format);
+      const view = s.view === "grid" || s.view === "list" ? s.view : undefined;
+      return {
+        ...(format.success && { format: format.data }),
+        ...(str(s.agent) && { agent: str(s.agent) }),
+        ...(view && { view }),
+      };
+    },
+    component: () => <Library scope={scope} />,
+  });
 
 const search = createRoute({
   getParentRoute: () => root,
