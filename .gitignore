@@ -5,7 +5,10 @@ dist/
 .superpowers/
 logs/
 apps/server/wrangler.jsonc
-.dev.vars
-.env
 *.log
 .DS_Store
+.env*
+!.env.example
+.dev.vars*
+coverage/
+.claude/
