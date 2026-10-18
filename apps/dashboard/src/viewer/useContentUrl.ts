@@ -1,23 +1,26 @@
 import { type ContentUrl, ContentUrlSchema, LIMITS, R } from "@oa/shared";
 import { useCallback, useEffect, useState } from "react";
-import { api } from "../api/client";
+import { ApiClientError, api } from "../api/client";
 
 const RETRY_MS = 15_000;
 
 /**
  * Signed content URL, refetched 60 s before it expires (null expiry: never).
  * `url` follows refreshes only until the iframe fires `onLoad`; after that it is
- * frozen so a refresh never reloads the loaded document.
+ * frozen so a refresh never reloads the loaded document. `current` always follows
+ * refreshes (for links opened outside the iframe). `notFound` stops retrying.
  */
 export function useContentUrl(id: string, v: number) {
   const [fresh, setFresh] = useState<ContentUrl | null>(null);
   const [loaded, setLoaded] = useState<string | null>(null);
+  const [notFound, setNotFound] = useState(false);
 
   useEffect(() => {
     let dead = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     setFresh(null);
     setLoaded(null);
+    setNotFound(false);
     const load = () => {
       api.get(R.contentUrl(id, v), ContentUrlSchema).then(
         (c) => {
@@ -32,8 +35,13 @@ export function useContentUrl(id: string, v: number) {
               : RETRY_MS,
           );
         },
-        () => {
-          if (!dead) timer = setTimeout(load, RETRY_MS);
+        (e) => {
+          if (dead) return;
+          if (e instanceof ApiClientError && e.status === 404) {
+            setNotFound(true);
+            return;
+          }
+          timer = setTimeout(load, RETRY_MS);
         },
       );
     };
@@ -49,5 +57,5 @@ export function useContentUrl(id: string, v: number) {
     () => setLoaded((l) => l ?? fresh?.url ?? null),
     [fresh],
   );
-  return { url, onLoad };
+  return { url, current: fresh?.url ?? null, onLoad, notFound };
 }

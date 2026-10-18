@@ -56,7 +56,7 @@ const library = (path: string, scope: Scope) =>
 function ViewerRoute() {
   const { id, v } = useParams({ strict: false }) as { id: string; v?: string };
   const n = v === undefined ? undefined : Number(v);
-  if (n !== undefined && !Number.isInteger(n)) return <NotFound />;
+  if (n !== undefined && !(Number.isInteger(n) && n >= 1)) return <NotFound />;
   return <Shell id={id} v={n} />;
 }
 

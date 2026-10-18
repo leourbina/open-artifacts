@@ -19,6 +19,7 @@ import { ApiClientError } from "../api/client";
 import {
   useDeleteArtifact,
   usePatchArtifact,
+  useVersionInfo,
   useVersions,
 } from "../api/queries";
 import "./viewer.css";
@@ -90,12 +91,14 @@ function EditableTitle({ artifact }: { artifact: ArtifactSummary }) {
 export function TitleBar({
   artifact,
   version,
+  explicitVersion,
   rawUrl,
   authed,
   onShare,
 }: {
   artifact: ArtifactSummary;
   version: number;
+  explicitVersion: boolean;
   rawUrl: string | null;
   authed: boolean;
   onShare: () => void;
@@ -108,7 +111,10 @@ export function TitleBar({
   const canEdit = authed && artifact.access !== "viewer";
   const go = (to: string) => void navigate({ to: to as string });
 
-  const entry = versions.data?.find((x) => x.version === version)?.entry;
+  const entry = useVersionInfo(artifact.id, version, authed).data?.entry;
+  const deleting = useRef(false);
+  const next = viewerPath(artifact.id, explicitVersion ? version : undefined);
+  const label = `v${version}${version === artifact.currentVersion ? " · Current" : ""}`;
   const items = [
     {
       label: "Copy link",
@@ -156,9 +162,8 @@ export function TitleBar({
         {authed && (
           <Menu
             trigger={
-              <Button size="sm" aria-label="Version">
-                v{version}
-                {version === artifact.currentVersion ? " · Current" : ""}
+              <Button size="sm" aria-label={`Version: ${label}`}>
+                {label}
               </Button>
             }
             items={(versions.data ?? []).map((x) => ({
@@ -194,7 +199,7 @@ export function TitleBar({
         ) : (
           <a
             className="oa-btn oa-primary"
-            href={`${AUTH.login}?next=${encodeURIComponent(viewerPath(artifact.id))}`}
+            href={`${AUTH.login}?next=${encodeURIComponent(next)}`}
           >
             Sign in
           </a>
@@ -209,13 +214,17 @@ export function TitleBar({
           <Button
             variant="danger"
             loading={del.isPending}
-            onClick={() =>
+            onClick={() => {
+              if (deleting.current) return;
+              deleting.current = true;
               del.mutate(undefined, {
                 onSuccess: () => go("/"),
-                onError: () =>
-                  toast({ title: "Couldn't delete", tone: "danger" }),
-              })
-            }
+                onError: () => {
+                  deleting.current = false;
+                  toast({ title: "Couldn't delete", tone: "danger" });
+                },
+              });
+            }}
           >
             Delete
           </Button>

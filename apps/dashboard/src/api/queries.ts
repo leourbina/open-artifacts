@@ -68,6 +68,16 @@ export const useVersions = (id: string, opts?: { enabled?: boolean }) =>
     queryFn: ({ signal }) =>
       api.get(R.versions(id), z.array(VersionInfoSchema), signal),
   });
+/** Info for one version, however old: the first item of the page just below `v + 1`. */
+export const useVersionInfo = (id: string, v: number, enabled = true) =>
+  useQuery({
+    enabled,
+    queryKey: [...qk.versions(id), v] as const,
+    queryFn: async ({ signal }) =>
+      (
+        await api.get(R.versions(id, v + 1), z.array(VersionInfoSchema), signal)
+      ).find((x) => x.version === v) ?? null,
+  });
 export const useShares = (id: string) =>
   useQuery({
     queryKey: qk.shares(id),
