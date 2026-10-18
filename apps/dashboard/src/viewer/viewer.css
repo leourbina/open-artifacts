@@ -33,7 +33,13 @@
   font-weight: 600;
 }
 .oa-vt-edit,
-.oa-vt-edit:hover {
+.oa-vt-input {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+}
+.oa-vt-edit:hover,
+.oa-vt-edit:focus-visible {
   text-decoration: underline dotted;
   text-underline-offset: 3px;
 }
@@ -41,11 +47,6 @@
   outline: 2px solid var(--oa-focus, currentColor);
   outline-offset: 2px;
   border-radius: var(--oa-radius-sm, 4px);
-}
-.oa-vt-input {
-  font: inherit;
-  color: inherit;
-  letter-spacing: inherit;
 }
 .oa-vt-edit {
   border: 0;
