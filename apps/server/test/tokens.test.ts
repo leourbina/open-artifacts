@@ -11,6 +11,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { publish } from "../src/services/artifacts.js";
 import { getUser } from "../src/services/users.js";
+import { sha256Hex } from "../src/util/crypto.js";
 import { api, errOf, login } from "./helpers.js";
 
 const app = createApp();
@@ -42,10 +43,13 @@ describe("tokens", () => {
     const list = await api(app, R.tokens, member.cookie);
     const text = await list.text();
     expect(text).not.toContain(t.token);
-    expect(text).not.toMatch(/hash/i);
-    const toks = (JSON.parse(text) as unknown[]).map((x) =>
-      TokenSchema.parse(x),
-    );
+    expect(text).not.toContain(await sha256Hex(t.token));
+    const rows = JSON.parse(text) as Record<string, unknown>[];
+    for (const row of rows) {
+      expect(Object.keys(row)).not.toContain("tokenHash");
+      expect(Object.keys(row)).not.toContain("token_hash");
+    }
+    const toks = rows.map((x) => TokenSchema.parse(x));
     expect(toks.map((x) => x.id)).toContain(t.id);
     expect(
       (await api(app, R.token(t.id), member.cookie, { method: "DELETE" }))
