@@ -4,6 +4,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "echo \"@oa/server dev: placeholder\""
+    "dev": "echo \"@oa/server dev: placeholder\"",
+    "test": "vitest run --exclude \"test/smoke/**\" --passWithNoTests",
+    "smoke": "vitest run test/smoke --passWithNoTests",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261018.1",
+    "@types/node": "^20.19.43",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.12",
+    "wrangler": "^4.151.1"
   }
 }

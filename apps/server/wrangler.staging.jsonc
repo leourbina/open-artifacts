@@ -1,0 +1,36 @@
+{
+  // Committed staging config. The gitignored wrangler.jsonc is setup-generated.
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "env": {
+    "staging": {
+      "name": "open-artifacts-staging",
+      "routes": [
+        { "pattern": "staging.open-artifacts.com", "custom_domain": true },
+        {
+          "pattern": "staging-content.open-artifacts.com",
+          "custom_domain": true
+        }
+      ],
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "open-artifacts-staging",
+          "database_id": "5155e2d4-d9bf-4900-b4ab-1febd480377a",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [
+        { "binding": "BUCKET", "bucket_name": "open-artifacts-staging" }
+      ],
+      "kv_namespaces": [
+        { "binding": "OAUTH_KV", "id": "886a49c875024e8ab5262928d75f85b7" }
+      ],
+      "vars": {
+        "ENVIRONMENT": "production",
+        "APP_HOST": "staging.open-artifacts.com",
+        "CONTENT_HOST": "staging-content.open-artifacts.com"
+      }
+    }
+  }
+}
