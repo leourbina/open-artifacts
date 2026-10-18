@@ -58,3 +58,10 @@ export async function tool(
 
 export const textOf = (r: ToolResult) =>
   r.content.map((c) => c.text ?? "").join("\n");
+
+/** A fresh client IP per registration, so tests never share one RL_ANON key. */
+let ipSeq = 0;
+export const nextIp = () => {
+  ipSeq++;
+  return `10.${Math.floor(Math.random() * 250)}.${(ipSeq >> 8) & 255}.${ipSeq & 255}`;
+};

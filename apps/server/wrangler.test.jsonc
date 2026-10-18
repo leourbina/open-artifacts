@@ -19,6 +19,13 @@
     ]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ArtifactRuntime"] }],
+  "ratelimits": [
+    {
+      "name": "RL_ANON",
+      "namespace_id": "1001",
+      "simple": { "limit": 30, "period": 60 }
+    }
+  ],
   "vars": {
     "APP_HOST": "app.localhost",
     "CONTENT_HOST": "content.localhost",

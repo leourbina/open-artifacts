@@ -99,10 +99,8 @@ describe("app host SPA fallback", () => {
     assetCalls = [];
     for (const p of [
       "/api/v1/unknown",
-      "/mcp",
       "/auth/x",
       "/oauth/x",
-      "/mcp/x",
       "/.well-known/x",
     ]) {
       const res = await call(`${APP}${p}`);
@@ -223,10 +221,12 @@ describe("route composition and SPA paths", () => {
     }
     expect(assetCalls.length).toBe(8);
   });
-  it("/mcp and /mcp/* stay JSON 404", async () => {
+  it("/mcp and /mcp/* without a token → 401 challenge, never the SPA", async () => {
     assetCalls = [];
     for (const p of ["/mcp", "/mcp/x"]) {
-      expect((await call(`${APP}${p}`)).status).toBe(404);
+      const r = await call(`${APP}${p}`);
+      expect(r.status).toBe(401);
+      expect(r.headers.get("www-authenticate")).toMatch(/^Bearer /);
     }
     expect(assetCalls).toEqual([]);
   });
