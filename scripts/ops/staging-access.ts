@@ -8,8 +8,21 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const APP_NAME = "open-artifacts-staging";
-export const POLICY_NAME = "open-artifacts-staging-owner";
-export const OWNER_EMAIL = "me@leourbina.com";
+// Spec 6.5: Access lets everyone authenticate; the app does authorization.
+export const POLICY_NAME = "Open Artifacts \u2013 everyone";
+export const LEGACY_POLICY_NAME = "open-artifacts-staging-owner";
+const POLICY_BODY = {
+  name: POLICY_NAME,
+  decision: "allow",
+  include: [{ everyone: {} }],
+  exclude: [],
+  require: [],
+  approval_required: false,
+  isolation_required: false,
+  purpose_justification_required: false,
+};
+// Non-spec optional fields kept from an existing policy on reconcile.
+const CARRY_OVER = ["session_duration"] as const;
 export const REDIRECT_URI = "https://staging.open-artifacts.com/auth/callback";
 
 export type Api = (
@@ -69,20 +82,55 @@ async function teamDomain(o: Options): Promise<string> {
   return `${o.teamName}.cloudflareaccess.com`;
 }
 
+const empty = (x: unknown) =>
+  x === undefined || x === null || (Array.isArray(x) && x.length === 0);
+
+export function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== "object" || typeof b !== "object" || !a || !b) return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  const ka = Object.keys(a);
+  const kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  return ka.every(
+    (k) => Object.hasOwn(b, k) && deepEqual((a as Obj)[k], (b as Obj)[k]),
+  );
+}
+
+function policyMatches(p: Obj): boolean {
+  return (
+    p.name === POLICY_NAME &&
+    p.decision === POLICY_BODY.decision &&
+    deepEqual(p.include ?? [], POLICY_BODY.include) &&
+    empty(p.exclude) &&
+    empty(p.require) &&
+    !p.approval_required &&
+    !p.isolation_required &&
+    !p.purpose_justification_required
+  );
+}
+
+// Reusable policies are small, so PUT (full replace) is safe here; the app is
+// never PUT. Renaming the legacy policy keeps its id, so app links stay valid.
 async function ensurePolicy(o: Options): Promise<string> {
   const base = `/accounts/${o.accountId}/access/policies`;
-  const found = (await listAll(o.api, base)).find(
-    (p) => p.name === POLICY_NAME,
-  );
+  const all = await listAll(o.api, base);
+  const found =
+    all.find((p) => p.name === POLICY_NAME) ??
+    all.find((p) => p.name === LEGACY_POLICY_NAME);
   if (found) {
-    o.out.log(`policy ${POLICY_NAME}: exists (${found.id})`);
+    if (policyMatches(found)) {
+      o.out.log(`policy ${POLICY_NAME}: unchanged (${found.id})`);
+    } else {
+      const kept: Obj = {};
+      for (const k of CARRY_OVER)
+        if (found[k] !== undefined) kept[k] = found[k];
+      await o.api("PUT", `${base}/${found.id}`, { ...kept, ...POLICY_BODY });
+      o.out.log(`policy ${POLICY_NAME}: reconciled (${found.id})`);
+    }
     return found.id;
   }
-  const p = await o.api("POST", base, {
-    name: POLICY_NAME,
-    decision: "allow",
-    include: [{ email: { email: OWNER_EMAIL } }],
-  });
+  const p = await o.api("POST", base, POLICY_BODY);
   o.out.log(`policy ${POLICY_NAME}: created (${p.id})`);
   return p.id;
 }
