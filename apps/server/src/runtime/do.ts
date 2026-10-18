@@ -47,6 +47,12 @@ export async function runtimeCall<T>(fn: () => Promise<T>): Promise<T> {
 const enc = new TextEncoder();
 /** "u:{userId}" | "ip:{ip}" | "agent:{userId}", printable ASCII only (no NUL/surrogate collisions). */
 const ACTOR_RE = /^(u|ip|agent):[\x21-\x7e]{1,250}$/;
+/**
+ * The updatedBy stored and returned for a write: anonymous writers are "anon"
+ * (their "ip:" actor is only the internal rate-limit key, never shown to viewers).
+ */
+export const publicActor = (actor: string): string =>
+  actor.startsWith("ip:") ? "anon" : actor;
 /** Fixed per-row overhead counted toward LIMITS.artifactDataBytes. */
 const ROW_OVERHEAD = 64;
 /** Broadcasts inline the doc only up to this many bytes; larger docs go out as data:null. */
@@ -329,8 +335,9 @@ export class ArtifactRuntime extends DurableObject<Env> {
     bytes: number,
     actor: string,
   ): string {
+    const by = publicActor(actor);
     const size =
-      bytes + collection.length + id.length + actor.length + ROW_OVERHEAD;
+      bytes + collection.length + id.length + by.length + ROW_OVERHEAD;
     const updatedAt = this.iso();
     this.ctx.storage.transactionSync(() => {
       this.countWrite(actor);
@@ -349,11 +356,11 @@ export class ArtifactRuntime extends DurableObject<Env> {
         json,
         size,
         updatedAt,
-        actor,
+        by,
       );
     });
     this.broadcastDoc(
-      { id, data: null, updatedAt, updatedBy: actor },
+      { id, data: null, updatedAt, updatedBy: by },
       json,
       collection,
     );
@@ -369,7 +376,10 @@ export class ArtifactRuntime extends DurableObject<Env> {
     const { json, bytes } = serialize(data);
     const updatedAt = this.writeJson(collection, id, json, bytes, actor);
     // The caller's value (already a structured-clone copy) is returned as-is: no re-parse.
-    return { doc: { id, data, updatedAt, updatedBy: actor }, json };
+    return {
+      doc: { id, data, updatedAt, updatedBy: publicActor(actor) },
+      json,
+    };
   }
 
   /**
