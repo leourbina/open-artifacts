@@ -310,6 +310,22 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     expect(line(bad, "args").message).toContain("--owner-email");
   });
 
+  it("a deleted welcome artifact is republished fresh; other publish errors fail", async () => {
+    const w = await installed();
+    expect(w.state().welcomeArtifactId).toBe("art1");
+    w.deleted.push("art1");
+    expect(await run([...HOSTS, "--new-owner-token"], w.deps, ROOT)).toBe(0);
+    expect(w.mcpCalls.map((c) => c.arguments.id)).toEqual(["art1", undefined]);
+    expect(w.state().welcomeArtifactId).toBe("art2");
+    expect(line(w, "selftest").data).toMatchObject({
+      mcp: "ok",
+      artifactId: "art2",
+    });
+    const bad = world({ publishError: "forbidden: nope" });
+    expect(await run(HOSTS, bad.deps, ROOT)).toBe(1);
+    expect(line(bad, "selftest").message).toContain("forbidden: nope");
+  });
+
   it("selftest retries propagation with bounded backoff", async () => {
     const w = world({ healthFails: 3 });
     expect(await run(HOSTS, w.deps, ROOT)).toBe(0);

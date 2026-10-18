@@ -86,20 +86,27 @@ async function mcp(ctx: Ctx, token: string, prev?: string): Promise<string> {
     throw new Error("MCP tools/list has no publish_artifact");
   const content = ctx.fs.read(join(ctx.root, WELCOME));
   if (content === null) throw new Error(`missing ${WELCOME}`);
-  const r = await post("tools/call", {
-    name: "publish_artifact",
-    arguments: {
-      ...(prev ? { id: prev } : {}),
-      title: TITLE,
-      format: "markdown",
-      content,
-    },
-  });
+  const publish = (id?: string) =>
+    post("tools/call", {
+      name: "publish_artifact",
+      arguments: {
+        ...(id ? { id } : {}),
+        title: TITLE,
+        format: "markdown",
+        content,
+      },
+    });
+  const text = (r: { content?: { text?: string }[] }) =>
+    r?.content?.[0]?.text ?? "no id";
+  let r = await publish(prev);
+  // The saved welcome artifact was deleted: publish a fresh one instead.
+  if (prev && r?.isError && /^not_found\b/.test(text(r))) {
+    ctx.notes.push(`welcome artifact ${prev} was deleted; published a new one`);
+    r = await publish();
+  }
   const out = r?.structuredContent?.id;
   if (r?.isError || typeof out !== "string")
-    throw new Error(
-      `MCP publish_artifact: ${r?.content?.[0]?.text ?? "no id"}`,
-    );
+    throw new Error(`MCP publish_artifact: ${text(r)}`);
   return out;
 }
 

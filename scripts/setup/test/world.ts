@@ -63,6 +63,10 @@ type World = {
   dropTokenInsert?: boolean;
   /** The signed content URL serves this body instead of the published content. */
   contentBody?: string;
+  /** Artifact ids that no longer exist (publish with that id → not_found). */
+  deletedArtifacts?: string[];
+  /** Every publish fails with this tool error text. */
+  publishError?: string;
 };
 // biome-ignore lint/suspicious/noExplicitAny: loose API fixtures
 type Obj = any;
@@ -120,6 +124,8 @@ export function world(w: World = {}) {
   const apps: Obj[] = [...(w.apps ?? [])];
   let secrets = w.secrets && [...w.secrets];
   let deployedConfig: string | undefined;
+  let published = 0;
+  const deleted = [...(w.deletedArtifacts ?? [])];
   /** Every mutation, in order. `values` holds every secret value seen. */
   const ops: string[] = [];
   const values: string[] = [];
@@ -285,20 +291,30 @@ export function world(w: World = {}) {
             });
           if (body.method === "tools/call") {
             mcpCalls.push(body.params);
+            const prev = body.params.arguments.id;
+            const err = (text: string) =>
+              reply({ isError: true, content: [{ type: "text", text }] }, true);
+            if (w.publishError) return err(w.publishError);
+            if (prev && deleted.includes(prev))
+              return err("not_found: Artifact not found");
+            const id = prev ?? `art${++published}`;
             return reply(
               {
                 content: [{ type: "text", text: "Published" }],
                 structuredContent: {
-                  id: "art1",
+                  id,
                   version: 1,
-                  url: "https://app.example.com/a/art1",
+                  url: `https://app.example.com/a/${id}`,
                 },
               },
               true,
             );
           }
         }
-        if (u.pathname === "/api/v1/artifacts/art1/content-url") {
+        const cu = u.pathname.match(
+          /^\/api\/v1\/artifacts\/(\w+)\/content-url$/,
+        );
+        if (cu) {
           hits.push("GET content-url");
           const tok = auth?.replace(/^Bearer /, "") ?? "";
           if (
@@ -306,7 +322,7 @@ export function world(w: World = {}) {
           )
             return Response.json({ error: "unauthorized" }, { status: 401 });
           return Response.json({
-            url: "https://a.b.usercontent.example.com/s/sig/art1/1/__view",
+            url: `https://a.b.usercontent.example.com/s/sig/${cu[1]}/1/__view`,
             expiresAt: "2026-10-18T00:00:00.000Z",
           });
         }
@@ -400,6 +416,7 @@ export function world(w: World = {}) {
     argv,
     hits,
     mcpCalls,
+    deleted,
     sqls,
     db,
     deployed: () => deployedConfig,
