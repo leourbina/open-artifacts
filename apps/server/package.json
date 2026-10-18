@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "echo \"@oa/server dev: placeholder\"",
     "test": "vitest run --exclude \"test/smoke/**\" --passWithNoTests",
-    "smoke": "vitest run test/smoke --passWithNoTests",
+    "smoke": "vitest run -c vitest.smoke.config.ts --passWithNoTests",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
@@ -14,7 +14,11 @@
     "@types/node": "^20.19.43",
     "typescript": "^5.9.3",
     "vitest": "^4.1.12",
-    "wrangler": "^4.151.1"
+    "wrangler": "^4.151.1",
+    "@cloudflare/vitest-plugin": "^1.4.4"
+  },
+  "dependencies": {
+    "@oa/shared": "workspace:*"
   },
   "engines": {
     "node": ">=22"
