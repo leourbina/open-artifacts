@@ -325,6 +325,52 @@ describe("subscribe", () => {
   });
 });
 
+describe("C4: db.resync", () => {
+  it("calls each callback of the collection with { docs: [], deleted: [], resync: true }", async () => {
+    const oa = start();
+    const a = vi.fn();
+    const b = vi.fn();
+    const other = vi.fn();
+    oa.db.collection("votes").subscribe(a);
+    oa.db.collection("votes").subscribe(b);
+    oa.db.collection("other").subscribe(other);
+    await flush();
+    fromShell({
+      oa: 1,
+      type: "event",
+      event: "db.resync",
+      collection: "votes",
+    });
+    await flush();
+    const resync = { docs: [], deleted: [], resync: true };
+    expect(a).toHaveBeenCalledWith(resync);
+    expect(b).toHaveBeenCalledWith(resync);
+    expect(other).not.toHaveBeenCalled();
+    // Ordinary changes carry no resync flag.
+    fromShell({
+      oa: 1,
+      type: "event",
+      event: "db.change",
+      collection: "votes",
+      docs: [doc("a", 1)],
+      deleted: [],
+    });
+    await flush();
+    expect(a).toHaveBeenLastCalledWith({ docs: [doc("a", 1)], deleted: [] });
+  });
+
+  it("ignores db.resync for collections without subscribers", async () => {
+    const oa = start();
+    const cb = vi.fn();
+    const off = oa.db.collection("c").subscribe(cb);
+    off();
+    await flush();
+    fromShell({ oa: 1, type: "event", event: "db.resync", collection: "c" });
+    await flush();
+    expect(cb).not.toHaveBeenCalled();
+  });
+});
+
 describe("storage.list", () => {
   const page = (from: number, n: number, next: string | null) => ({
     items: Array.from({ length: n }, (_, i) => ({

@@ -43,6 +43,8 @@ window.openArtifacts (available inside published html)
 - openArtifacts.viewer.get() → { email, name } or null
 - openArtifacts.db.collection(name): get(id), list({ cursor, limit }), query({ where, orderBy, order, limit }),
   set(id, data), update(id, patch), delete(id), subscribe(cb) → unsubscribe
+  subscribe(cb) gets { docs, deleted, resync? }: after a reconnect it gets { docs: [], deleted: [], resync: true };
+  refetch your data when resync is true.
 - openArtifacts.storage: get(key), set(key, value), delete(key), list()
 - openArtifacts.theme ("light" | "dark") and onTheme(cb)
 

@@ -16,6 +16,8 @@ describe("MCP surface is vendor-neutral", () => {
       expect(t.description).not.toMatch(VENDOR);
     }
     expect(INSTRUCTIONS).not.toMatch(VENDOR);
+    // C4: subscribers are told to refetch after a reconnect.
+    expect(INSTRUCTIONS).toContain("refetch your data when resync is true");
   });
 
   it("everything the server sends: tools, schemas, instructions, resources", async () => {
