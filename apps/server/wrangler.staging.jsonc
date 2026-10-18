@@ -5,6 +5,10 @@
   "env": {
     "staging": {
       "name": "open-artifacts-staging",
+      // The Worker routes any host that is not CONTENT_HOST to the app, so a
+      // workers.dev URL must never be live. Keep both off.
+      "workers_dev": false,
+      "preview_urls": false,
       "compatibility_flags": ["nodejs_compat"],
       "routes": [
         { "pattern": "staging.open-artifacts.com", "custom_domain": true },
