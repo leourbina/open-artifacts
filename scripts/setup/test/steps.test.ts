@@ -70,7 +70,8 @@ describe("prereqs + resources", () => {
 
   it("several accounts need --account-id under --yes", async () => {
     const w = world({ accounts: ["acc1", "acc2"] });
-    expect(await run(HOSTS, w.deps, ROOT)).toBe(1);
+    const yesOnly = HOSTS.filter((a) => a !== "--json");
+    expect(await run(yesOnly, w.deps, ROOT)).toBe(1);
     expect(w.lines.join("\n")).toContain("--account-id");
     const w2 = world({ accounts: ["acc1", "acc2"] });
     expect(await run([...HOSTS, "--account-id", "acc2"], w2.deps, ROOT)).toBe(

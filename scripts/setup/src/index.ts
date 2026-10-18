@@ -3,14 +3,26 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { type Deps, makeApi, makeWrangler, realDeps, realFs } from "./cf.ts";
 import { readState, type State, writeState } from "./state.ts";
-import type { Ctx, Opts, Step } from "./step.ts";
+import { type Ctx, NeedInput, type Opts, type Step } from "./step.ts";
 import { access } from "./steps/access.ts";
+import { agentConfig } from "./steps/agent-config.ts";
+import { deploy } from "./steps/deploy.ts";
+import { ownerToken } from "./steps/owner-token.ts";
 import { prereqs } from "./steps/prereqs.ts";
 import { resources } from "./steps/resources.ts";
 import { secrets } from "./steps/secrets.ts";
+import { selftest } from "./steps/selftest.ts";
 
-// deploy, owner-token, selftest, agent-config: B16-3.
-export const STEPS: Step[] = [prereqs, resources, access, secrets];
+export const STEPS: Step[] = [
+  prereqs,
+  resources,
+  access,
+  secrets,
+  deploy,
+  ownerToken,
+  selftest,
+  agentConfig,
+];
 
 type Line = {
   step: string;
@@ -29,6 +41,15 @@ function valid(flag: string, val: string, re: RegExp) {
   return val;
 }
 
+// apps/server/src/db/email.ts: printable ASCII, checked before and after lowercasing.
+const ASCII_EMAIL = /^[!-?A-~]+@[!-?A-~]+$/;
+function normEmail(raw: string) {
+  const e = raw.trim().toLowerCase();
+  if (![raw.trim(), e].every((x) => x.length <= 320 && ASCII_EMAIL.test(x)))
+    throw new Error(`invalid --owner-email: ${JSON.stringify(raw)}`);
+  return e;
+}
+
 async function resolve(argv: string[], deps: Deps, state: State) {
   const { values: v } = parseArgs({
     args: argv,
@@ -41,22 +62,29 @@ async function resolve(argv: string[], deps: Deps, state: State) {
       "account-id": { type: "string" },
       yes: { type: "boolean", default: false },
       upgrade: { type: "boolean", default: false },
+      "new-owner-token": { type: "boolean", default: false },
       json: { type: "boolean", default: false },
     },
   });
+  const interactive = !v.yes && !v.json;
   // Precedence: flag, then saved state, then an interactive prompt.
   const need = async (flag: string, re: RegExp, saved?: string) => {
     const q = `${flag.slice(2).replace("-", " ")}:`;
     const val =
       (v[flag.slice(2) as keyof typeof v] as string | undefined) ??
       saved ??
-      (v.yes ? undefined : await deps.prompt(q));
-    if (!val) throw new Error(`missing ${flag} (required with --yes)`);
-    return valid(flag, val, re);
+      (interactive ? await deps.prompt(q) : undefined);
+    if (val) return valid(flag, val, re);
+    if (v.json) throw new NeedInput(`pass ${flag} (--json never prompts)`);
+    throw new Error(`missing ${flag} (required with --yes)`);
   };
   const name = valid("--name", v.name ?? state.name ?? "open-artifacts", NAME);
   if (state.name && name !== state.name) {
     const q = `State is for --name ${state.name}; switch to ${name}? [y/N]`;
+    if (v.json)
+      throw new NeedInput(
+        `--name ${name} conflicts with saved --name ${state.name}; pass --name ${state.name}, or rerun interactively to switch`,
+      );
     if (v.yes || !/^y(es)?$/i.test(await deps.prompt(q)))
       throw new Error(
         `--name ${name} conflicts with saved --name ${state.name}; confirm interactively to switch`,
@@ -66,11 +94,18 @@ async function resolve(argv: string[], deps: Deps, state: State) {
     name,
     appHost: await need("--app-host", HOST, state.appHost),
     contentHost: await need("--content-host", HOST, state.contentHost),
-    ownerEmail: await need("--owner-email", EMAIL, state.ownerEmail),
+    ownerEmail: valid(
+      "--owner-email",
+      normEmail(await need("--owner-email", /./, state.ownerEmail)),
+      EMAIL,
+    ),
     accountId:
       v["account-id"] ?? state.accountId ?? deps.env.CLOUDFLARE_ACCOUNT_ID,
     yes: v.yes,
     upgrade: v.upgrade,
+    newOwnerToken: v["new-owner-token"],
+    interactive,
+    json: v.json,
   };
   return opts;
 }
@@ -83,12 +118,19 @@ export async function run(
   steps: Step[] = STEPS,
 ): Promise<number> {
   const json = argv.includes("--json");
-  const report = (l: Line) =>
+  let human: string | undefined;
+  const report = (l: Line) => {
+    const extra = human
+      ? `\n${human}`
+      : l.data
+        ? ` ${JSON.stringify(l.data)}`
+        : "";
     deps.out(
       json
         ? JSON.stringify(l)
-        : `${ICON[l.status]} ${l.step}: ${l.message}${l.data ? ` ${JSON.stringify(l.data)}` : ""}`,
+        : `${ICON[l.status]} ${l.step}: ${l.message}${extra}`,
     );
+  };
   const fs = deps.fs ?? realFs;
   let opts: Opts;
   let state: State;
@@ -96,10 +138,17 @@ export async function run(
     state = readState(fs, root);
     opts = await resolve(argv, deps, state);
   } catch (e) {
-    report({ step: "args", status: "error", message: (e as Error).message });
-    return 1;
+    const ar = e instanceof NeedInput;
+    const status = ar ? "action_required" : "error";
+    report({ step: "args", status, message: (e as Error).message });
+    return ar ? 2 : 1;
   }
   const { name, appHost, contentHost, ownerEmail } = opts;
+  const prev = {
+    name: state.name,
+    appHost: state.appHost,
+    accountId: state.accountId,
+  };
   Object.assign(state, { name, appHost, contentHost, ownerEmail });
   const wrangler = makeWrangler(deps, root, () => state.accountId);
   const api = makeApi(deps, wrangler);
@@ -113,16 +162,22 @@ export async function run(
     api,
     accessApi,
     notes: [],
+    prev,
   };
   const msg = (fallback: string) => ctx.notes.splice(0).join("; ") || fallback;
+  /** Moves the step's data (and human text) out of ctx onto its line. */
+  const take = (status: "ok" | "skipped", fallback: string): Line => {
+    const { data } = ctx;
+    human = ctx.human;
+    ctx.data = ctx.human = undefined;
+    const l: Line = { step: "", status, message: msg(fallback) };
+    return data === undefined ? l : { ...l, data };
+  };
   for (const step of steps) {
+    human = ctx.data = ctx.human = undefined;
     try {
       if ((await step.check(state, ctx)) === "done") {
-        report({
-          step: step.name,
-          status: "skipped",
-          message: msg("already done"),
-        });
+        report({ ...take("skipped", "already done"), step: step.name });
         continue;
       }
       const r = await step.apply(state, ctx);
@@ -131,10 +186,14 @@ export async function run(
         report({ step: step.name, ...r });
         return 2;
       }
-      report({ step: step.name, status: "ok", message: msg("done") });
+      report({ ...take("ok", "done"), step: step.name });
     } catch (e) {
       ctx.notes.length = 0;
       const message = (e as Error).message;
+      if (e instanceof NeedInput) {
+        report({ step: step.name, status: "action_required", message });
+        return 2;
+      }
       report({ step: step.name, status: "error", message });
       return (e as { exitCode?: number }).exitCode ?? 1;
     } finally {

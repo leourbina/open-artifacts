@@ -1,4 +1,4 @@
-import type { Ctx, Step } from "../step.ts";
+import { type Ctx, NeedInput, type Step } from "../step.ts";
 
 /** Hosts lacking a zone, found by check and reported by apply. */
 const missingFor = new WeakMap<Ctx, string[]>();
@@ -48,6 +48,8 @@ export const prereqs: Step = {
       (accounts.length === 1 ? accounts[0].id : undefined);
     if (!id) {
       const list = accounts.map((a) => `${a.id} (${a.name})`).join(", ");
+      if (ctx.opts.json)
+        throw new NeedInput(`several accounts (${list}); pass --account-id`);
       if (ctx.opts.yes)
         throw new Error(`several accounts (${list}); pass --account-id`);
       id = await ctx.deps.prompt(`Cloudflare account id [${list}]:`);

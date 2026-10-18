@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "pnpm --filter @oa/dashboard run --if-present build && pnpm --filter @oa/render build --if-present && node scripts/assemble-assets.mjs && node scripts/check-worker-size.mjs",
     "dev": "echo \"@oa/server dev: placeholder\"",
     "test": "vitest run --exclude \"test/smoke/**\" --passWithNoTests",
     "smoke": "pnpm --filter @oa/shared build && vitest run -c vitest.smoke.config.ts --passWithNoTests",
