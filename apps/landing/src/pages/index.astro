@@ -2,6 +2,7 @@
 import { REPO_URL } from "@oa/shared";
 import Shot from "../components/Shot.astro";
 import Base from "../layouts/Base.astro";
+import { toolListFallbacks } from "../lib/release";
 
 const prompt = "Set up open-artifacts.com/llms.txt";
 
@@ -34,6 +35,7 @@ const features = [
 ---
 
 <Base
+  fallbacks={toolListFallbacks}
   title="Open Artifacts: a home for what your agents make"
   description="Open Artifacts is an open-source place to keep, version, and share the HTML pages, docs, code, and PDFs your AI agents make, deployed to your own Cloudflare account."
 >

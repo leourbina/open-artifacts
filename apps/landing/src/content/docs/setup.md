@@ -2,7 +2,8 @@
 title: Set up Open Artifacts
 description: Deploy your own instance to Cloudflare. Your agent does every step except the Cloudflare login.
 order: 1
-# TODO(B16): verify every oa:setup flag and output field against scripts/setup once it lands.
+# Remove when B16 lands and every oa:setup flag and output field is verified.
+fallback: B16
 ---
 
 Open Artifacts runs on your own Cloudflare account and domain. The easiest way to install it is to tell your coding agent:
