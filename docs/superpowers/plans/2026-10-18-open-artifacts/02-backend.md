@@ -74,7 +74,7 @@ export function appOrigin(env: Env): string;             // "https://" + APP_HOS
 - `index.ts` default export is `{ fetch, scheduled }`. `fetch` dispatches on `new URL(req.url).host`:
   - `CONTENT_HOST` goes to `contentApp`, a stub that returns 404 until B10.
   - Anything else goes to the app handler.
-- `wrangler.template.jsonc` contains the bindings above, with `"compatibility_flags": ["nodejs_compat"]`, assets `{ directory: "../dashboard/dist", binding: "ASSETS", not_found_handling: "single-page-application", run_worker_first: ["/api/*","/mcp","/auth/*","/oauth/*","/a/*","/.well-known/*","/healthz","/robots.txt"] }`, `ratelimits: [{ name: "RL_ANON", namespace_id: "1001", simple: { limit: 30, period: 60 } }]`, `triggers.crons: ["17 3 * * *"]`, and `durable_objects` plus `migrations: [{ tag: "v1", new_sqlite_classes: ["ArtifactRuntime"] }]`. Placeholders look like `{{D1_ID}}` and are filled in by setup in B16.
+- `wrangler.template.jsonc` contains the bindings above, with `"compatibility_flags": ["nodejs_compat"]`, assets `{ directory: "../dashboard/dist", binding: "ASSETS", not_found_handling: "single-page-application", run_worker_first: true }`, `ratelimits: [{ name: "RL_ANON", namespace_id: "1001", simple: { limit: 30, period: 60 } }]`, `triggers.crons: ["17 3 * * *"]`, and `durable_objects` plus `migrations: [{ tag: "v1", new_sqlite_classes: ["ArtifactRuntime"] }]`. Placeholders look like `{{D1_ID}}` and are filled in by setup in B16.
 
 **Steps:**
 

@@ -1,0 +1,26 @@
+name: Blocker
+description: A lead session needs the repo owner to unblock it.
+title: "[<session>] "
+labels: ["blocker"]
+assignees: ["leourbina"]
+projects: ["leourbina/1"]
+body:
+  - type: input
+    id: raised_by
+    attributes:
+      label: Raised by
+      description: The session that filed this, e.g. "OpenArtifacts Platform".
+    validations:
+      required: true
+  - type: textarea
+    id: need
+    attributes:
+      label: What's needed
+      description: The exact action or decision, and how to do it (commands, links).
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: What it blocks
+      description: Tasks or PRs waiting on this.

@@ -105,6 +105,20 @@ All three leads work in the same repository, so each one needs its own git workt
 
 ## Human gates
 
+**When a lead needs the user,** for any gate below or anything else only the user can do, it files a blocker issue instead of waiting in chat:
+
+```bash
+scripts/oa-blocker.sh "<your session name>" "<short title>" "<exact action needed, how to do it, and what it blocks>"
+```
+
+- The script creates an issue in `leourbina/open-artifacts` titled `[<session>] <title>`, with the label `blocker`, assigned to `leourbina`.
+- It adds the issue to the project **Open Artifacts** (https://github.com/users/leourbina/projects/1) and sets the **Raised by** field to the session name.
+- The lead then keeps working on anything that isn't blocked. It watches the issue (`gh issue view <n> --comments`) and closes it once it's resolved.
+- One issue per blocker. Never put secrets in an issue: ask the user to run `! gh secret set …` instead.
+- It also messages the coordinator a one-line pointer to the issue.
+
+The gates themselves:
+
 Stop and ask the user, through the lead session, at these points only:
 - **F4:** the one-time Cloudflare API token and account id go into GitHub secrets. The user runs the `gh secret set` command, so the token never enters a transcript.
 - **D1 and D6:** picking the design direction and the logo.
