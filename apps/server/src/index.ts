@@ -1,5 +1,6 @@
 import { app } from "./app.js";
 import { contentApp } from "./content/app.js";
+import { scheduled } from "./cron.js";
 import type { Env } from "./env.js";
 
 export type { Env } from "./env.js";
@@ -16,7 +17,5 @@ export default {
     const target = isContent ? contentApp : app;
     return target.fetch(req, env, ctx);
   },
-  async scheduled() {
-    // cron.ts lands in B7
-  },
+  scheduled,
 } satisfies ExportedHandler<Env>;

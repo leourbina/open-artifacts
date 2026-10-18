@@ -1,29 +1,48 @@
 import {
   type AgentRef,
+  ArtifactPatchSchema,
   isId,
   LIMITS,
+  ListQuerySchema,
   type PublishInput,
   PublishInputSchema,
   R,
 } from "@oa/shared";
 import type { Context } from "hono";
-import { requireUser } from "../auth/authz.js";
+import { caller, requireUser } from "../auth/authz.js";
 import { ApiError } from "../http/errors.js";
 import type { AppEnv } from "../http/middleware.js";
-import { publish } from "../services/artifacts.js";
+import {
+  getSummary,
+  list,
+  listVersions,
+  patch,
+  publish,
+  readThumbnail,
+  readVersionFile,
+  restoreVersion,
+  softDelete,
+  undelete,
+} from "../services/artifacts.js";
 import { planFiles, RESERVED_KEYS } from "../services/manifest.js";
 import type { AppType } from "./index.js";
 
 // Base64 inflates inline bytes by 4/3; allow some JSON overhead on top.
 const MAX_BODY = Math.ceil((LIMITS.inlineBytes * 4) / 3) + 256 * 1024;
-const VERSIONS = "/api/v1/artifacts/:id/versions";
+const ARTIFACT = "/api/v1/artifacts/:id";
+const VERSIONS = `${ARTIFACT}/versions`;
+const VERSION_FILE = `${VERSIONS}/:v/files/*`;
+const MAX_PATCH = 64 * 1024;
+const VERSION_NUM = /^[1-9]\d{0,8}$/;
 
-const tooLarge = () =>
-  new ApiError("too_large", `Request body exceeds ${MAX_BODY} bytes`);
-
-/** Reads the body with a running cap: 413 as soon as MAX_BODY is exceeded. */
-async function readCapped(c: Context<AppEnv>): Promise<Uint8Array> {
-  if (Number(c.req.header("content-length") ?? 0) > MAX_BODY) throw tooLarge();
+/** Reads the body with a running cap: 413 as soon as `max` is exceeded. */
+async function readCapped(
+  c: Context<AppEnv>,
+  max = MAX_BODY,
+): Promise<Uint8Array> {
+  const tooLarge = () =>
+    new ApiError("too_large", `Request body exceeds ${max} bytes`);
+  if (Number(c.req.header("content-length") ?? 0) > max) throw tooLarge();
   const body = c.req.raw.body;
   if (!body) return new Uint8Array(0);
   const reader = body.getReader();
@@ -33,7 +52,7 @@ async function readCapped(c: Context<AppEnv>): Promise<Uint8Array> {
     const { done, value } = await reader.read();
     if (done) break;
     size += value.byteLength;
-    if (size > MAX_BODY) {
+    if (size > max) {
       await reader.cancel().catch(() => {});
       throw tooLarge();
     }
@@ -94,7 +113,139 @@ const execCtx = (c: Context<AppEnv>) => {
   }
 };
 
+const notFound = () => new ApiError("not_found", "Not found");
+
+/** The :id param, or 404 for anything that isn't an id. */
+const idParam = (c: Context<AppEnv>): string => {
+  const id = c.req.param("id");
+  if (!id || !isId(id)) throw notFound();
+  return id;
+};
+const versionParam = (c: Context<AppEnv>): number => {
+  const v = c.req.param("v") ?? "";
+  if (!VERSION_NUM.test(v)) throw notFound();
+  return Number(v);
+};
+
+/** The decoded file path after `/files/`, from the raw URL; malformed → 404. */
+function filePath(c: Context<AppEnv>): string {
+  const raw = new URL(c.req.url).pathname;
+  const i = raw.indexOf("/files/");
+  if (i < 0) throw notFound();
+  try {
+    return raw
+      .slice(i + "/files/".length)
+      .split("/")
+      .map(decodeURIComponent)
+      .join("/");
+  } catch {
+    throw notFound();
+  }
+}
+
 export function mountArtifacts(app: AppType): void {
+  app.get(R.artifacts, async (c) => {
+    const user = requireUser(c);
+    const q = ListQuerySchema.safeParse(c.req.query());
+    if (!q.success)
+      throw new ApiError("bad_request", "Invalid query", q.error.issues);
+    return c.json(await list(c.env, { kind: "user", user }, q.data));
+  });
+
+  app.get(ARTIFACT, async (c) =>
+    c.json(await getSummary(c.env, caller(c), idParam(c))),
+  );
+
+  app.patch(ARTIFACT, async (c) => {
+    const user = requireUser(c);
+    const id = idParam(c);
+    const buf = await readCapped(c, MAX_PATCH);
+    let raw: unknown;
+    try {
+      raw = JSON.parse(new TextDecoder().decode(buf));
+    } catch {
+      throw new ApiError("bad_request", "Invalid JSON body");
+    }
+    const p = ArtifactPatchSchema.safeParse(raw);
+    if (!p.success)
+      throw new ApiError("bad_request", "Invalid request body", p.error.issues);
+    return c.json(await patch(c.env, user, id, p.data));
+  });
+
+  app.delete(ARTIFACT, async (c) => {
+    const user = requireUser(c);
+    await softDelete(c.env, user, idParam(c));
+    return c.body(null, 204);
+  });
+
+  app.post(`${ARTIFACT}/undelete`, async (c) => {
+    const user = requireUser(c);
+    return c.json(await undelete(c.env, user, idParam(c), execCtx(c)));
+  });
+
+  app.get(VERSIONS, async (c) => {
+    const id = idParam(c);
+    const b = c.req.query("before");
+    if (b !== undefined && !VERSION_NUM.test(b))
+      throw new ApiError("bad_request", "before must be a positive integer", {
+        path: "before",
+        reason: "invalid",
+      });
+    return c.json(
+      await listVersions(
+        c.env,
+        caller(c),
+        id,
+        b === undefined ? undefined : Number(b),
+      ),
+    );
+  });
+
+  app.get(VERSION_FILE, async (c) => {
+    const id = idParam(c);
+    const v = versionParam(c);
+    const path = filePath(c);
+    const { body, contentType } = await readVersionFile(
+      c.env,
+      caller(c),
+      id,
+      v,
+      path,
+    );
+    const name = path.slice(path.lastIndexOf("/") + 1);
+    return new Response(body.body, {
+      headers: {
+        "Content-Type": contentType,
+        "Content-Length": String(body.size),
+        "X-Content-Type-Options": "nosniff",
+        "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(name)}`,
+        "Cache-Control": "private, no-store",
+      },
+    });
+  });
+
+  app.post(`${VERSIONS}/:v/restore`, async (c) => {
+    const user = requireUser(c);
+    const id = idParam(c);
+    const v = versionParam(c);
+    return c.json(
+      await restoreVersion(c.env, user, id, v, agentOf(c), execCtx(c)),
+      201,
+    );
+  });
+
+  app.get(`${ARTIFACT}/thumbnail`, async (c) => {
+    const body = await readThumbnail(c.env, caller(c), idParam(c));
+    return new Response(body.body, {
+      headers: {
+        "Content-Type": "image/webp",
+        "Content-Length": String(body.size),
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, no-store",
+      },
+    });
+  });
+
   app.post(R.artifacts, async (c) => {
     const user = requireUser(c);
     const input = await publishInput(c);
