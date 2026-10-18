@@ -101,8 +101,10 @@ function Viewer({
   const latest = useRef({ artifact, viewer, theme });
   latest.current = { artifact, viewer, theme };
   const qc = useQueryClient();
-  const fx = useArtifactSideEffects(artifact, version, () =>
-    bridge.current?.requestThumbnail(),
+  const fx = useArtifactSideEffects(
+    artifact,
+    version,
+    () => bridge.current?.requestThumbnail() ?? false,
   );
   const fxRef = useRef(fx);
   fxRef.current = fx;

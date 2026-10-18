@@ -180,4 +180,25 @@ describe("viewer shell", () => {
       expect(patched).toBe(false);
     });
   });
+
+  it("refetches the artifact when the bridge reports lost access (4403)", async () => {
+    let gets = 0;
+    server.use(
+      http.get("*/api/v1/artifacts/:id", () => {
+        gets++;
+        return HttpResponse.json(
+          fixtures.artifacts.find((a) => a.id === OWNED),
+        );
+      }),
+    );
+    mount(viewerPath(OWNED));
+    await frame();
+    await waitFor(() => expect(createBridge).toHaveBeenCalled());
+    const before = gets;
+    const opts = createBridge.mock.calls[0] as unknown as [
+      { onAccessLost: () => void },
+    ];
+    act(() => opts[0].onAccessLost());
+    await waitFor(() => expect(gets).toBeGreaterThan(before));
+  });
 });

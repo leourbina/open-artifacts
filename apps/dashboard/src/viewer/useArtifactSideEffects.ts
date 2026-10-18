@@ -21,7 +21,7 @@ export interface SideEffectDeps {
   artifact: ArtifactSummary;
   version: number;
   getInfo: () => { format: string; textIndexed: boolean } | undefined;
-  requestThumbnail: () => void;
+  requestThumbnail: () => boolean;
   put: (
     path: string,
     body: Blob | string,
@@ -33,13 +33,13 @@ export interface SideEffectDeps {
 export function createSideEffects(d: SideEffectDeps) {
   const { artifact, version } = d;
   const id = artifact.id;
-  const canEdit = artifact.access !== "viewer";
+  const canEdit = artifact.access === "editor" || artifact.access === "owner";
+  let pending: string | undefined;
   return {
     onHello() {
       if (!canEdit || artifact.thumbnailUrl !== null || thumbAsked.has(id))
         return;
-      thumbAsked.add(id);
-      d.requestThumbnail();
+      if (d.requestThumbnail()) thumbAsked.add(id);
     },
     onThumb(blob: Blob) {
       if (!canEdit || blob.size > LIMITS.thumbnailBytes) return;
@@ -49,16 +49,24 @@ export function createSideEffects(d: SideEffectDeps) {
       );
     },
     onPdfText(text: string) {
+      pending = text;
+      this.flushPending();
+    },
+    /** Sends the latest pending text once the version info needed to judge it is known. */
+    flushPending() {
+      const text = pending;
       const info = d.getInfo();
+      if (text === undefined || !info) return;
       const key = `${id}:${version}`;
       if (
         !canEdit ||
         version !== artifact.currentVersion ||
-        info?.format !== "pdf" ||
+        info.format !== "pdf" ||
         info.textIndexed ||
         textSent.has(key)
       )
         return;
+      pending = undefined;
       textSent.add(key);
       d.put(
         R.versionText(id, version),
@@ -76,7 +84,7 @@ export function createSideEffects(d: SideEffectDeps) {
 export function useArtifactSideEffects(
   artifact: ArtifactSummary,
   version: number,
-  requestThumbnail: () => void,
+  requestThumbnail: () => boolean,
 ) {
   const qc = useQueryClient();
   const info = useVersionInfo(artifact.id, version).data ?? undefined;
@@ -86,7 +94,7 @@ export function useArtifactSideEffects(
   // Rebuilt only when the artifact's identity, version or rights change.
   const key = `${id}:${version}:${artifact.currentVersion}:${artifact.access}:${artifact.thumbnailUrl}`;
   // biome-ignore lint/correctness/useExhaustiveDependencies: keyed by `key`
-  return useMemo(
+  const fx = useMemo(
     () =>
       createSideEffects({
         artifact,
@@ -103,4 +111,8 @@ export function useArtifactSideEffects(
       }),
     [key, qc],
   );
+  // Text may arrive before the version info does.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-run when info lands
+  useEffect(() => fx.flushPending(), [fx, info]);
+  return fx;
 }

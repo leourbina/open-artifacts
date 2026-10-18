@@ -25,7 +25,7 @@ const setup = (
     info?: { format: string; textIndexed: boolean } | undefined;
   } = {},
 ) => {
-  const requestThumbnail = vi.fn();
+  const requestThumbnail = vi.fn(() => true);
   const put = vi.fn(async () => {});
   const invalidate = vi.fn();
   const fx = createSideEffects({
@@ -103,6 +103,37 @@ describe("pdf text", () => {
     expect(t.put).not.toHaveBeenCalled();
     expect(s.invalidate).toHaveBeenCalledTimes(1);
   });
+  it("keeps text that arrives before version info and sends it once info lands", async () => {
+    const a = pdf();
+    let info: { format: string; textIndexed: boolean } | undefined;
+    const s = setup(a);
+    const fx = createSideEffects({
+      artifact: a,
+      version: 3,
+      getInfo: () => info,
+      requestThumbnail: s.requestThumbnail,
+      put: s.put,
+      invalidate: s.invalidate,
+    });
+    fx.onPdfText("old");
+    fx.onPdfText("latest");
+    await flush();
+    expect(s.put).not.toHaveBeenCalled();
+    info = { format: "pdf", textIndexed: false };
+    fx.flushPending();
+    fx.flushPending();
+    await flush();
+    expect(s.put).toHaveBeenCalledTimes(1);
+    expect((s.put.mock.calls[0] as unknown[])[1]).toBe("latest");
+  });
+  it("does not mark the thumbnail asked when no request was issued", () => {
+    const a = art();
+    const s = setup(a);
+    s.requestThumbnail.mockReturnValueOnce(false);
+    s.fx.onHello();
+    s.fx.onHello();
+    expect(s.requestThumbnail).toHaveBeenCalledTimes(2);
+  });
   it("skips a non-current version", async () => {
     const a = pdf();
     const { fx, put } = setup(a, { version: 2 });
@@ -114,7 +145,6 @@ describe("pdf text", () => {
     for (const [a, o] of [
       [pdf(), { info: { format: "pdf", textIndexed: true } }],
       [pdf(), { info: { format: "html", textIndexed: false } }],
-      [pdf(), { info: undefined }],
       [art({ format: "pdf", access: "viewer" }), {}],
     ] as const) {
       const { fx, put } = setup(a, o);
@@ -206,15 +236,33 @@ describe("bridge follow-ups", () => {
     send({ oa: 1, type: "hello", protocol: 1, kind: "html" });
     expect(onHello).toHaveBeenCalledTimes(1);
   });
-  it("close 4403 notifies onAccessLost and does not reconnect", async () => {
+  it("close 4403 notifies onAccessLost and still reconnects", async () => {
     const onAccessLost = vi.fn();
     mk({ onAccessLost });
     const ws = await sub();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     ws.onclose?.({ code: 4403 });
-    vi.advanceTimersByTime(60_000);
+    vi.advanceTimersByTime(1_000);
     expect(onAccessLost).toHaveBeenCalledTimes(1);
-    expect(FakeWS.all).toHaveLength(1);
+    expect(FakeWS.all).toHaveLength(2);
+  });
+  it("one 4403 burst across subscriptions fires onAccessLost once", async () => {
+    const onAccessLost = vi.fn();
+    mk({ onAccessLost });
+    const sockets = [];
+    for (const c of ["a", "b", "c"]) {
+      send({
+        oa: 1,
+        type: "call",
+        id: c,
+        method: "db.subscribe",
+        params: { collection: c },
+      });
+      await flush();
+      sockets.push(FakeWS.all[FakeWS.all.length - 1]);
+    }
+    for (const ws of sockets) ws.onclose?.({ code: 4403 });
+    expect(onAccessLost).toHaveBeenCalledTimes(1);
   });
   it("other close codes still reconnect", async () => {
     const onAccessLost = vi.fn();
