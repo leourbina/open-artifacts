@@ -2,6 +2,7 @@ import type { ComponentProps, ReactNode } from "react";
 import s from "./Button.module.css";
 import { cx } from "./cx";
 import { Spinner } from "./Display";
+import { isDev } from "./dev";
 import { Tooltip } from "./Tooltip";
 
 export type ButtonProps = {
@@ -48,7 +49,7 @@ export function IconButton({
   className,
   ...rest
 }: IconButtonProps) {
-  if (!label?.trim())
+  if (isDev() && !label?.trim())
     throw new Error("IconButton requires a non-empty `label`");
   return (
     <Tooltip content={label}>

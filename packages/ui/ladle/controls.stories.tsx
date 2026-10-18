@@ -1,4 +1,15 @@
-import { Button, IconButton, Tooltip } from "../src/index";
+import { useState } from "react";
+import {
+  Button,
+  Checkbox,
+  IconButton,
+  Input,
+  SegmentedControl,
+  Select,
+  Switch,
+  Textarea,
+  Tooltip,
+} from "../src/index";
 import { Themes } from "./Themes";
 
 const plus = (
@@ -30,3 +41,34 @@ export const Buttons = () => (
     </Tooltip>
   </Themes>
 );
+
+export const Fields = () => {
+  const [role, setRole] = useState<"viewer" | "editor">("viewer");
+  const [view, setView] = useState<"grid" | "list">("grid");
+  return (
+    <Themes>
+      <Input aria-label="Title" placeholder="Search artifacts" />
+      <Textarea aria-label="Notes" placeholder="Notes" />
+      <Select
+        aria-label="Role"
+        value={role}
+        onChange={setRole}
+        options={[
+          { value: "viewer", label: "Viewer" },
+          { value: "editor", label: "Editor" },
+        ]}
+      />
+      <SegmentedControl
+        aria-label="View"
+        value={view}
+        onChange={setView}
+        options={[
+          { value: "grid", label: "Grid" },
+          { value: "list", label: "List" },
+        ]}
+      />
+      <Switch label="Notify" defaultChecked />
+      <Checkbox label="Agree" defaultChecked />
+    </Themes>
+  );
+};
