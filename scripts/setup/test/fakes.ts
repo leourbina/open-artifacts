@@ -33,6 +33,7 @@ export function core(o: Core = {}) {
   const lines: string[] = [];
   const prompts: string[] = [];
   const answers = [...(o.answers ?? [])];
+  const sleeps: number[] = [];
   const deps: Deps = {
     env: o.env ?? {},
     fs: {
@@ -47,7 +48,8 @@ export function core(o: Core = {}) {
     exec:
       o.exec ?? (async () => ({ code: 0, stdout: o.stdout ?? "", stderr: "" })),
     fetch: o.fetch ?? (async () => envelope(null, 500)),
+    sleep: async (ms) => void sleeps.push(ms),
   };
   const state = () => JSON.parse(files.get(STATE) ?? "{}");
-  return { deps, files, lines, prompts, state };
+  return { deps, files, lines, prompts, state, sleeps };
 }

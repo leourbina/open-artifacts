@@ -22,11 +22,15 @@ export async function listSecrets(ctx: Ctx): Promise<Set<string>> {
       return new Set();
     throw e;
   }
-  const i = out.indexOf("[");
-  if (i < 0) throw new Error("`wrangler secret list` returned no JSON array");
-  return new Set(
-    (JSON.parse(out.slice(i)) as { name: string }[]).map((s) => s.name),
-  );
+  const list = jsonArray<{ name: string }>(out, "wrangler secret list");
+  return new Set(list.map((s) => s.name));
+}
+
+/** Parses wrangler JSON output from the first line starting with `[` (banners may hold brackets). */
+export function jsonArray<T>(out: string, what: string): T[] {
+  const i = out.search(/^\s*\[/m);
+  if (i < 0) throw new Error(`\`${what}\` returned no JSON array`);
+  return JSON.parse(out.slice(i)) as T[];
 }
 
 /**
@@ -54,7 +58,8 @@ export const secrets: Step = {
   name: "secrets",
   async check(state, ctx) {
     const have = await listSecrets(ctx);
-    const quiet = ctx.opts.yes || ctx.opts.upgrade || state.analyticsSkipped;
+    const quiet =
+      !ctx.opts.interactive || ctx.opts.upgrade || state.analyticsSkipped;
     const done =
       GENERATED.every((n) => have.has(n)) && (quiet || have.has(OPTIONAL));
     return done ? "done" : "todo";
@@ -65,7 +70,7 @@ export const secrets: Step = {
       if (!have.has(n)) await putSecret(ctx, n, random());
     if (
       have.has(OPTIONAL) ||
-      ctx.opts.yes ||
+      !ctx.opts.interactive ||
       ctx.opts.upgrade ||
       state.analyticsSkipped
     )

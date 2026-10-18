@@ -8,7 +8,9 @@
   },
   "exports": {
     ".": "./src/index.ts",
-    "./tokens.css": "./src/tokens/tokens.css"
+    "./tokens.css": "./src/tokens/tokens.css",
+    "./brand": "./src/brand/index.ts",
+    "./brand/*": "./src/brand/*"
   },
   "scripts": {
     "test": "vitest run",

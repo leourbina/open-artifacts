@@ -44,3 +44,22 @@
   font-size: var(--oa-text-lg);
   cursor: pointer;
 }
+.action {
+  margin-top: var(--oa-space-2);
+  height: 24px;
+  padding: 0 var(--oa-space-2);
+  border: 1px solid var(--oa-border);
+  border-radius: var(--oa-radius-sm);
+  background: var(--oa-surface);
+  color: var(--oa-text);
+  font: 500 var(--oa-text-xs) var(--oa-font-sans);
+  cursor: pointer;
+}
+.action:hover {
+  border-color: var(--oa-border-strong);
+}
+.action:focus-visible,
+.close:focus-visible {
+  outline: 2px solid var(--oa-focus);
+  outline-offset: 2px;
+}

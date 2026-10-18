@@ -4,7 +4,7 @@ import { scheduled } from "./cron.js";
 import type { Env } from "./env.js";
 
 export type { Env } from "./env.js";
-export { ArtifactRuntime } from "./runtime/artifact-runtime.js";
+export { ArtifactRuntime } from "./runtime/do.js";
 
 const normHost = (h: string) =>
   h.toLowerCase().replace(/:\d+$/, "").replace(/\.$/, "");

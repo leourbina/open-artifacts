@@ -113,10 +113,14 @@ export const versions = sqliteTable(
       .references(() => users.id),
     createdAt: integer("created_at").notNull(),
     textIndexed: integer("text_indexed").notNull().default(0),
+    // NULL only on rows written before 0002 (or by pre-0002 code): readers fall
+    // back to artifacts.format.
+    format: text("format"),
   },
   (t) => [
     primaryKey({ columns: [t.artifactId, t.version] }),
     check("versions_manifest_json_check", sql`json_valid(${t.manifest})`),
+    check("versions_format_check", inList("format", FORMATS)),
   ],
 );
 

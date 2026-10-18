@@ -17,7 +17,7 @@ import {
   sanitizeQuery,
 } from "../src/services/search.js";
 import { getUser } from "../src/services/users.js";
-import { api, login } from "./helpers.js";
+import { api, fetchAndWait, login } from "./helpers.js";
 
 const app = createApp();
 const tag = newId().slice(0, 6).toLowerCase().replace(/\d/g, "q");
@@ -45,7 +45,8 @@ const hits = async (u: U, q: string, extra = "") => {
 };
 
 const putText = (u: U | null, id: string, v: number, text: string) =>
-  app.fetch(
+  fetchAndWait(
+    app,
     new Request(`http://app.localhost${R.versionText(id, v)}`, {
       method: "PUT",
       headers: {
@@ -55,8 +56,6 @@ const putText = (u: U | null, id: string, v: number, text: string) =>
       },
       body: text,
     }),
-    env,
-    { waitUntil() {}, passThroughOnException() {} } as never,
   );
 
 beforeAll(async () => {
@@ -143,7 +142,7 @@ describe("search", () => {
     const a = await pub(o, {
       title: "Plan",
       format: "html",
-      content: `<script>secret${tag}()</script><p>quarterly${tag} plan</p>`,
+      content: `<script>secret${tag}()</script><p>quarterly${tag} plan ${tag}quarterlyplan</p>`,
     });
     const h = await hits(o, `quarterly${tag}`);
     expect(h.items.map((x) => x.id)).toEqual([a.id]);
@@ -151,8 +150,10 @@ describe("search", () => {
       `${SNIPPET_MARK.open}quarterly${tag}${SNIPPET_MARK.close}`,
     );
     expect((await hits(o, `secret${tag}`)).items).toEqual([]);
-    // Prefix on the last token.
-    expect((await hits(o, `quarterly${tag.slice(0, 3)}`)).items.length).toBe(1);
+    // Prefix on the last token. The query prefix ends in the fixed "quart"
+    // so porter stemming can't rewrite it (a random tag ending in e.g. "y"
+    // stems to "…i" and is then no prefix of the indexed word).
+    expect((await hits(o, `${tag}quart`)).items.length).toBe(1);
     expect((await hits(o, `plan quarterly${tag}`)).items).toHaveLength(1);
   });
 

@@ -315,3 +315,27 @@ describe("UserRefSchema email", () => {
     expect(VersionInfoSchema.shape.createdBy).toBe(UserRefSchema);
   });
 });
+
+describe("VersionInfoSchema format (C2)", () => {
+  it("requires a known format", async () => {
+    const { VersionInfoSchema } = await import("../src/index.js");
+    const v = {
+      version: 1,
+      message: null,
+      agent: null,
+      createdBy: { id: "a", email: null, name: null },
+      createdAt: "t",
+      entry: "README.md",
+      files: [],
+      language: null,
+      textIndexed: true,
+    };
+    expect(VersionInfoSchema.safeParse(v).success).toBe(false);
+    expect(
+      VersionInfoSchema.safeParse({ ...v, format: "markdown" }).success,
+    ).toBe(true);
+    expect(VersionInfoSchema.safeParse({ ...v, format: "doc" }).success).toBe(
+      false,
+    );
+  });
+});
