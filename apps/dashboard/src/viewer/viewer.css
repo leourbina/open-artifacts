@@ -22,6 +22,17 @@
 }
 .oa-vt-actions {
   margin-left: auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+@media (max-width: 600px) {
+  .oa-vt {
+    padding: 10px 16px;
+  }
+  .oa-vt-group,
+  .oa-vt-actions {
+    flex: 1 1 100%;
+  }
 }
 .oa-vt-title {
   margin: 0;
