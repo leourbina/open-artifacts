@@ -49,6 +49,8 @@ svg{display:block}
 .avatar{--size:20px;display:inline-grid;place-items:center;flex:none;width:var(--size);height:var(--size);border-radius:50%;background:hsl(var(--hue) 45% 30%);color:white;font:600 calc(var(--size) * 0.42)/1 var(--oa-font-sans);user-select:none}
 .avatar.lg{--size:26px}
 .avatar.xs{--size:16px}
+.avatar.unknown{background:var(--oa-sunken);color:var(--oa-text-2)}
+.more{display:flex;align-items:center;gap:8px;padding:8px 8px 2px 34px}
 kbd,.kbd{font:500 11px var(--oa-font-mono);color:var(--oa-text-muted);background:var(--oa-surface-2);border:1px solid var(--oa-border);border-bottom-width:2px;border-radius:var(--oa-radius-sm);padding:0 var(--oa-space-1)}
 .spinner{display:inline-block;flex:none;width:14px;height:14px;border:1.5px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -500,8 +502,9 @@ textarea.control{height:auto;min-height:72px;padding:6px var(--oa-space-2);resiz
             </div></div>
             <div class="ver"><span class="node"></span><div>
               <div class="row1"><span class="vn">v3</span><span class="when">Oct 10</span></div>
-              <p class="note">Split billing out of the orders phase.</p>
-              <div class="row3"><span class="agentmark"><i></i>Cursor</span><span class="diff"><span class="a">+22</span><span class="d">−15</span></span><span class="act"><button class="btn sm">View</button><button class="btn sm" data-only="creator editor">Restore</button></span></div>
+              <p class="note">Uploaded by hand: billing split out of the orders phase.</p>
+              <!-- Uploader's account was removed (email is null): displayName() gives "Unknown". -->
+              <div class="row3"><span class="agentmark"><span class="avatar xs unknown" role="img" aria-label="Unknown">?</span>Unknown</span><span class="diff"><span class="a">+22</span><span class="d">−15</span></span><span class="act"><button class="btn sm">View</button><button class="btn sm" data-only="creator editor">Restore</button></span></div>
             </div></div>
             <div class="ver"><span class="node"></span><div>
               <div class="row1"><span class="vn">v2</span><span class="when">Oct 8</span></div>
@@ -514,6 +517,8 @@ textarea.control{height:auto;min-height:72px;padding:6px var(--oa-space-2);resiz
               <div class="row3"><span class="agentmark"><i></i>Claude Code</span><span class="diff"><span class="a">+96</span></span><span class="act"><button class="btn sm">View</button><button class="btn sm" data-only="creator editor">Restore</button></span></div>
             </div></div>
           </div>
+          <!-- Versions are paged 20 at a time; this appears while older ones remain. -->
+          <div class="more"><button class="btn sm" id="load-older"><svg class="ic sm"><use href="#i-down"/></svg>Load older versions</button><span class="hint" style="margin:0">20 per page</span></div>
         </div>
         <div data-when="loading" aria-busy="true">
           <div class="ptitle"><span class="sk" style="width:64px;height:10px"></span></div>
@@ -669,6 +674,7 @@ document.querySelectorAll('[data-tab-go]').forEach(b => b.addEventListener('clic
 document.getElementById('share-btn').onclick = () => { OA.S.tab = 'share'; OA.S.panel = 'open'; OA.apply(); };
 pt.onclick = document.getElementById('panel-close').onclick = () => { OA.S.panel = OA.S.panel === 'open' ? 'closed' : 'open'; OA.apply(); };
 document.getElementById('retry').onclick = e => { const b = e.currentTarget; b.innerHTML = '<span class="spinner"></span>Retrying'; setTimeout(() => { OA.S.state = 'default'; OA.apply(); b.innerHTML = '<svg class="ic sm"><use href="#i-retry"/></svg>Retry'; }, 900); };
+document.getElementById('load-older').onclick = e => { const b = e.currentTarget; b.disabled = true; b.setAttribute('aria-busy', 'true'); b.innerHTML = '<span class="spinner" style="width:12px;height:12px"></span>Loading older versions'; setTimeout(() => { b.disabled = false; b.removeAttribute('aria-busy'); b.innerHTML = '<svg class="ic sm"><use href="#i-down"/></svg>Load older versions'; }, 1200); };
 OA.on(S => {
   if (S.role === 'guest' && S.as === 'creator') { S.as = 'viewer'; return OA.apply(); }
   document.querySelectorAll('[data-lock]').forEach(el => { el.disabled = !el.dataset.lock.split(' ').includes(S.as); });

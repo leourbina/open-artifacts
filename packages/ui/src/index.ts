@@ -5,6 +5,7 @@ export {
   avatarHue,
   Badge,
   Card,
+  displayName,
   FormatIcon,
   Kbd,
   Skeleton,

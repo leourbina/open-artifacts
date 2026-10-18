@@ -13,7 +13,15 @@ export function Badge({
   return <span className={cx(s.badge, s[tone])}>{children}</span>;
 }
 
-/** FNV-1a over the normalized email, folded onto the color wheel. */
+/** The label for a user: name, else email, else "Unknown". */
+export function displayName(u: {
+  name?: string | null;
+  email?: string | null;
+}) {
+  return u.name?.trim() || u.email?.trim() || "Unknown";
+}
+
+/** FNV-1a over the normalized key (email, else name), on the color wheel. */
 export function avatarHue(email: string): number {
   let h = 0x811c9dc5;
   for (const ch of email.normalize("NFC").trim().toLowerCase()) {
@@ -31,7 +39,7 @@ const two = (s: string) =>
     .slice(0, 2)
     .join("");
 
-function initials(name: string | undefined, email: string) {
+function initials(name: string | null | undefined, email: string) {
   const words = name?.trim().split(/\s+/).filter(Boolean) ?? [];
   if (words.length > 0) {
     return two(
@@ -49,22 +57,24 @@ export function Avatar({
   email,
   size = 24,
 }: {
-  name?: string;
-  email: string;
+  name?: string | null;
+  email?: string | null;
   size?: 24 | 32;
 }) {
+  // Email keeps existing hues stable; anonymous users fall back to the name.
+  const key = email?.trim() || name?.trim().replace(/\s+/g, " ");
   const style = {
-    "--hue": avatarHue(email),
+    ...(key ? { "--hue": avatarHue(key) } : {}),
     "--size": `${size}px`,
   } as CSSProperties;
   return (
     <span
       role="img"
-      aria-label={name?.trim() || email.trim() || "User"}
-      className={s.avatar}
+      aria-label={displayName({ name, email })}
+      className={cx(s.avatar, !key && s.unknown)}
       style={style}
     >
-      {initials(name, email)}
+      {initials(name, email ?? "")}
     </span>
   );
 }

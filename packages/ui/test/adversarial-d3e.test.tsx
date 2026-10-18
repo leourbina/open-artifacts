@@ -3,6 +3,7 @@ import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppShell, Tabs, Toaster, toast } from "../src/index";
+import { flushAnnouncement, useToastClock } from "./toast-clock";
 
 afterEach(() => {
   cleanup();
@@ -10,10 +11,11 @@ afterEach(() => {
 });
 
 describe("toast cap", () => {
-  it("is announced assertively for danger (sanity)", async () => {
+  it("is announced assertively for danger (sanity)", () => {
+    useToastClock();
     render(<Toaster />);
     act(() => toast({ title: "Disk full", tone: "danger" }));
-    await act(() => new Promise((r) => setTimeout(r, 50)));
+    flushAnnouncement();
     expect(
       [...document.querySelectorAll('[aria-live="assertive"]')].some((e) =>
         e.textContent?.includes("Disk full"),
