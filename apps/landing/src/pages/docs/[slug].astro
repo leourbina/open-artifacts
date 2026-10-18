@@ -1,0 +1,42 @@
+---
+import { render } from "astro:content";
+import Base from "../../layouts/Base.astro";
+import { type Doc, docs } from "../../lib/llms";
+
+export async function getStaticPaths() {
+  const all = await docs();
+  return all.map((doc) => ({ params: { slug: doc.id }, props: { doc, all } }));
+}
+
+interface Props {
+  doc: Doc;
+  all: Doc[];
+}
+
+const { doc, all } = Astro.props;
+const { Content } = await render(doc);
+---
+
+<Base title={`${doc.data.title} | Open Artifacts docs`} description={doc.data.description}>
+  <div class="wrap docs">
+    <nav class="docs-nav" aria-label="Docs">
+      <ul>
+        {
+          all.map((d) => (
+            <li>
+              <a href={`/docs/${d.id}/`} aria-current={d.id === doc.id ? "page" : undefined}>
+                {d.data.title}
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+    </nav>
+    <article class="prose">
+      <h1>{doc.data.title}</h1>
+      <p class="lede">{doc.data.description}</p>
+      <Content />
+      <p class="md-link"><a href={`/docs/${doc.id}.md`}>View as Markdown</a></p>
+    </article>
+  </div>
+</Base>
