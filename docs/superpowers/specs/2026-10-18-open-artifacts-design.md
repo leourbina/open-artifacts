@@ -266,3 +266,11 @@ One master plan covers the whole system: `docs/superpowers/plans/2026-10-18-open
   - Staging has no Access gate. It's public from the start (user decision).
 - **Releases** are managed by **release-please**: manifest mode, a single root component, starting at 0.1.0. The Platform lead merges the release PR at each milestone once staging is green. No human approval is needed (user decision). Publishing a release tags it, creates a GitHub release, and deploys the landing site to **open-artifacts.com**, which is on the user's Cloudflare account. Landing changes get preview URLs on their PRs.
 - **Migrations** must stay compatible with the previous code, because staging deploys continuously.
+
+## 11. Environments (user decision, revision 4)
+
+| Environment | Hosts | How it's deployed |
+|---|---|---|
+| **Staging** (the test instance) | `staging.open-artifacts.com`, `staging-content.open-artifacts.com` | On every merge to `main` (§10). |
+| **Production** (the user's personal instance) | `artifacts.leourbina.com`, `artifacts-content.leourbina.com` (the content host is a designer's call) | First install at the **first stable release**, by following `open-artifacts.com/llms.txt` / `pnpm oa:setup --name open-artifacts-prod` from that tag exactly as a stranger would. That doubles as the dogfood check. After that, `release-please.yml` upgrades it on every **stable** (non-pre-release) release with `oa:setup --upgrade`. It never deploys from `main`. |
+| **Landing** | `open-artifacts.com` | On stable releases, behind the release gate. The user picks the design from **3 options** that Design presents. |
