@@ -6,6 +6,7 @@ import {
   NeedInput,
   type Step,
 } from "../step.ts";
+import { deployedVars, PINNED } from "../worker.ts";
 import { writeConfig } from "./resources.ts";
 import { ACCESS_SECRET, listSecrets, putSecret } from "./secrets.ts";
 
@@ -58,6 +59,8 @@ const linked = (app: Obj, policyId?: string) =>
   Boolean(policyId) && app.policies?.some((p: Obj) => p.id === policyId);
 
 const TEAM = /(?:^|\/\/)([a-z0-9-]+\.cloudflareaccess\.com)(?=$|[/:?#])/i;
+/** Seconds between OIDC discovery attempts: ~15s in all. */
+const DISCOVERY_DELAYS = [1, 2, 4, 8];
 const TEAM_HOST = /^[a-z0-9-]+\.cloudflareaccess\.com$/i;
 
 /**
@@ -93,17 +96,34 @@ function envTeamDomain(ctx: Ctx): string | undefined {
 /** OA_TEAM_DOMAIN counts only when its OIDC discovery for this client names that exact issuer. */
 async function verifyIssuer(ctx: Ctx, domain: string, clientId: string) {
   const base = `https://${domain}/cdn-cgi/access/sso/oidc/${clientId}`;
-  let issuer: unknown;
-  try {
-    const res = await ctx.deps.fetch(
-      `${base}/.well-known/openid-configuration`,
-    );
-    if (res.ok) issuer = ((await res.json()) as { issuer?: unknown }).issuer;
-  } catch {}
-  if (issuer !== base)
-    throw new NeedInput(
-      `OA_TEAM_DOMAIN ${domain} not verified: OIDC discovery for client ${clientId} did not return issuer ${base}. Fix OA_TEAM_DOMAIN, or use an OA_ACCESS_TOKEN with Access: Organizations Read.`,
-    );
+  const url = `${base}/.well-known/openid-configuration`;
+  const sleep =
+    ctx.deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const fix =
+    "Fix OA_TEAM_DOMAIN, or use an OA_ACCESS_TOKEN with Access: Organizations Read.";
+  let last = "";
+  // Transient failures (fresh app, propagation) retry ~15s; a wrong issuer fails at once.
+  for (const delay of [...DISCOVERY_DELAYS, undefined]) {
+    let issuer: unknown;
+    try {
+      const res = await ctx.deps.fetch(url);
+      if (res.ok) issuer = ((await res.json()) as { issuer?: unknown }).issuer;
+      else last = `HTTP ${res.status}`;
+      if (res.ok && typeof issuer !== "string") last = "no issuer in response";
+    } catch (e) {
+      last = (e as Error).message;
+    }
+    if (issuer === base) return;
+    if (typeof issuer === "string")
+      throw new NeedInput(
+        `OA_TEAM_DOMAIN ${domain} not verified: OIDC issuer mismatch for client ${clientId} (got ${issuer}, expected ${base}). ${fix}`,
+      );
+    if (delay === undefined) break;
+    await sleep(delay * 1000);
+  }
+  throw new NeedInput(
+    `OA_TEAM_DOMAIN ${domain} not verified: OIDC discovery failed for client ${clientId} after ~15s (last: ${last}). ${fix}`,
+  );
 }
 
 /** Thrown when only the organization (team domain) is unreadable. */
@@ -169,15 +189,6 @@ async function lookup(ctx: Ctx, accountId: string) {
   };
 }
 
-/** Deployed vars compared when state is rebuilt (names only in messages). */
-const PINNED = [
-  "APP_HOST",
-  "CONTENT_HOST",
-  "OWNER_EMAIL",
-  "ACCESS_TEAM_DOMAIN",
-  "ACCESS_CLIENT_ID",
-] as const;
-
 /**
  * Without saved state, the live Worker's plain-text vars must equal the flags
  * and the rebuilt values. Skipped when the Worker doesn't exist yet, or is a
@@ -188,22 +199,8 @@ async function verifyWorker(
   accountId: string,
   want: Record<(typeof PINNED)[number], string>,
 ) {
-  const path = `/accounts/${accountId}/workers/scripts/${encodeURIComponent(ctx.opts.name)}/settings`;
-  const settings = await ctx
-    .api<{ bindings?: { type: string; name: string; text?: string }[] }>(
-      "GET",
-      path,
-    )
-    .catch((e) => {
-      if (status(e) === 404) return undefined;
-      throw e;
-    });
-  const vars = new Map(
-    (settings?.bindings ?? [])
-      .filter((b) => b.type === "plain_text")
-      .map((b) => [b.name, b.text]),
-  );
-  if (!PINNED.some((k) => vars.has(k))) return;
+  const vars = await deployedVars(ctx, accountId);
+  if (!vars) return;
   const off = PINNED.filter((k) => vars.get(k) !== want[k]);
   if (off.length)
     throw new NeedInput(

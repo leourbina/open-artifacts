@@ -155,9 +155,10 @@ async function checkOnly(
   let todo = false;
   for (const step of steps) {
     ctx.data = ctx.human = undefined;
+    ctx.mustRun = false;
     try {
       const r = await step.check(state, ctx);
-      if (r === "todo" && !step.always) todo = true;
+      if (r === "todo" && (!step.always || ctx.mustRun)) todo = true;
       const notes = ctx.notes.splice(0).join("; ");
       report({
         step: step.name,

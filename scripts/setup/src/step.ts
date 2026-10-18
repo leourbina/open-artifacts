@@ -36,6 +36,8 @@ export type Ctx = {
   pat?: string;
   /** The welcome artifact's view URL, when selftest published it this run. */
   welcomeUrl?: string;
+  /** Set by an `always` step's check: its todo counts for --strict this run. */
+  mustRun?: boolean;
   /** No saved state: it is being rebuilt from Cloudflare by name. */
   noState?: boolean;
   /** Saved state as loaded, before this run's flags were applied. */

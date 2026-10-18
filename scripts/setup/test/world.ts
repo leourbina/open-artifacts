@@ -76,6 +76,8 @@ type World = {
   worker?: Record<string, string>;
   /** OIDC discovery answers with this issuer instead of the real one. */
   issuer?: string;
+  /** OIDC discovery answers 503 this many times first. */
+  discoveryFails?: number;
   /** POST /access/apps answers 403 (a token without Access: Apps Edit). */
   appsPostForbidden?: boolean;
 };
@@ -154,6 +156,7 @@ export function world(w: World = {}) {
     tokens: [] as Obj[],
   };
   let healthFails = w.healthFails ?? 0;
+  let discoveryFails = w.discoveryFails ?? 0;
   const sha = (s: string) => createHash("sha256").update(s).digest("hex");
   const d1 = (sql: string) => {
     sqls.push(sql);
@@ -351,6 +354,8 @@ export function world(w: World = {}) {
       }
       if (u.host.endsWith(".cloudflareaccess.com")) {
         hits.push(`GET ${u.pathname}`);
+        if (discoveryFails-- > 0)
+          return new Response("unavailable", { status: 503 });
         const base = u.pathname.replace(
           /\/\.well-known\/openid-configuration$/,
           "",

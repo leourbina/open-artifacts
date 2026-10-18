@@ -593,4 +593,56 @@ describe("B16-5 review fixes", () => {
     );
     expect(line(w, "deploy").status).toBe("todo");
   });
+
+  it("round 2: a transient discovery failure after the POST is retried, the app kept", async () => {
+    const w = world({ org: "forbidden", discoveryFails: 2 });
+    w.deps.env.OA_TEAM_DOMAIN = "team.cloudflareaccess.com";
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    expect(w.ops).not.toContain("DELETE apps/app-open-artifacts");
+    expect(w.state().accessClientId).toBe("cid-new");
+    expect(w.sleeps.slice(0, 2)).toEqual([1000, 2000]);
+  });
+
+  it("round 2: a persistent discovery failure rolls back and says so", async () => {
+    const w = world({ org: "forbidden", discoveryFails: 99 });
+    w.deps.env.OA_TEAM_DOMAIN = "team.cloudflareaccess.com";
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(2);
+    expect(w.ops).toContain("DELETE apps/app-open-artifacts");
+    expect(w.sleeps).toEqual([1000, 2000, 4000, 8000]);
+    const msg = line(w, "access").message;
+    expect(msg).toContain("discovery failed");
+    expect(msg).toContain("HTTP 503");
+    expect(msg).not.toContain("mismatch");
+  });
+
+  it("round 2: an issuer mismatch rolls back at once and says mismatch", async () => {
+    const w = world({
+      org: "forbidden",
+      issuer: "https://evil.cloudflareaccess.com/x",
+    });
+    w.deps.env.OA_TEAM_DOMAIN = "team.cloudflareaccess.com";
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(2);
+    expect(w.ops).toContain("DELETE apps/app-open-artifacts");
+    expect(w.sleeps).toEqual([]);
+    expect(line(w, "access").message).toContain("issuer mismatch");
+  });
+
+  it("round 2: --check --strict exits 2 when the Worker was never deployed", async () => {
+    const STRICT = [...CHECK, "--upgrade", "--strict"];
+    for (const o of [
+      { secrets: undefined, worker: undefined },
+      { worker: undefined },
+    ]) {
+      const w = cloud(o);
+      w.deps.env.OA_ACCESS_TOKEN = "oa";
+      const violations = strict(w);
+      expect(await run(STRICT, w.deps, ROOT)).toBe(2);
+      expect(violations).toEqual([]);
+      expect(line(w, "deploy").status).toBe("todo");
+      expect(line(w, "deploy").message).toContain("never deployed");
+    }
+    const ok = cloud();
+    ok.deps.env.OA_ACCESS_TOKEN = "oa";
+    expect(await run(STRICT, ok.deps, ROOT)).toBe(0);
+  });
 });

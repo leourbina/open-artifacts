@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import type { Ctx, Step } from "../step.ts";
+import { deployedVars } from "../worker.ts";
 import { names, stripComments } from "./resources.ts";
 import { ACCESS_SECRET, listSecrets } from "./secrets.ts";
 
@@ -39,7 +40,14 @@ function repoVersion(ctx: Ctx): string {
 export const deploy: Step = {
   name: "deploy",
   always: true,
-  check: async () => "todo",
+  async check(state, ctx) {
+    // Under --check, a never-deployed Worker is real drift, not the every-run deploy.
+    if (ctx.opts.check && !(await deployedVars(ctx, state.accountId ?? ""))) {
+      ctx.mustRun = true;
+      ctx.notes.push(`Worker ${ctx.opts.name} never deployed`);
+    }
+    return "todo";
+  },
   async apply(state, ctx) {
     const vars = renderedVars(ctx);
     const have = await listSecrets(ctx);
