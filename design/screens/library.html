@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Library — Open Artifacts</title>
-<!-- D4 screen mockup. Params: ?theme=light|dark &state=default|empty|loading|error &layout=grid|list &overlay=none|drop|filter|drawer -->
+<!-- D4 screen mockup. Params: ?theme=light|dark &state=default|empty|loading|error &layout=grid|list &overlay=none|drop|filter|drawer &role=owner|admin|member|guest -->
 <link rel="stylesheet" href="../../packages/ui/src/tokens/tokens.css">
 <style>
 /* ---------- Base (shared by every D4 screen; mirrors packages/ui components) ---------- */
@@ -342,10 +342,11 @@ textarea.control{height:auto;min-height:72px;padding:6px var(--oa-space-2);resiz
     <div class="drawer-head"><a class="wordmark" href="#"><span class="logo"><svg viewBox="0 0 16 16"><use href="#i-logo"/></svg></span>Open Artifacts</a><button class="btn ghost icon" id="drawer-close" aria-label="Close menu"><svg class="ic"><use href="#i-x"/></svg></button></div>
     <button class="ws"><span class="sq">N</span><span class="wsn">Northwind Eng</span><svg class="ic sm"><use href="#i-down"/></svg></button>
     <nav class="nav">
-      <a href="#" aria-current="page"><svg class="ic"><use href="#i-lib"/></svg>Library<span class="ct" data-when="default">214</span></a>
-      <a href="#"><svg class="ic"><use href="#i-gauge"/></svg>Usage</a>
-      <a href="#"><svg class="ic"><use href="#i-gear"/></svg>Settings</a>
+      <a href="#" aria-current="page"><svg class="ic"><use href="#i-lib"/></svg><span data-role="owner admin member">Library</span><span data-role="guest">Shared with me</span><span class="ct" data-when="default" data-role="owner admin member">214</span><span class="ct" data-when="default" data-role="guest">8</span></a>
+      <a href="#" data-role="owner admin"><svg class="ic"><use href="#i-gauge"/></svg>Usage</a>
+      <a href="#" data-role="owner admin member"><svg class="ic"><use href="#i-gear"/></svg>Settings</a>
     </nav>
+    <div class="nav-agents" data-role="owner admin member" style="display:contents">
     <nav class="nav" data-when="default loading error">
       <h4>Connected agents</h4>
       <a href="#"><span class="dot"></span>Claude Code<span class="ct" data-when="default">92</span></a>
@@ -358,7 +359,9 @@ textarea.control{height:auto;min-height:72px;padding:6px var(--oa-space-2);resiz
       <h4>Connected agents</h4>
       <a href="#"><svg class="ic sm"><use href="#i-plus"/></svg>Connect an agent</a>
     </nav>
-    <div class="foot"><span class="avatar lg" style="--hue:215">MC</span><div><b>Maya Chen</b><small>maya@northwind.dev</small></div></div>
+    </div>
+    <div class="foot" data-role="owner admin member"><span class="avatar lg" style="--hue:215">MC</span><div><b>Maya Chen</b><small>maya@northwind.dev</small></div></div>
+    <div class="foot" data-role="guest"><span class="avatar lg" style="--hue:20">JL</span><div><b>Jordan Lee</b><small>jordan@lumenpay.com · Guest</small></div></div>
   </aside>
   <div class="scrim" id="drawer-scrim" hidden></div>
 
@@ -367,18 +370,20 @@ textarea.control{height:auto;min-height:72px;padding:6px var(--oa-space-2);resiz
       <button class="btn ghost icon menu-btn" id="drawer-open" aria-label="Open menu"><svg class="ic"><use href="#i-menu"/></svg></button>
       <label class="search"><svg class="ic"><use href="#i-search"/></svg><input placeholder="Search titles, content, and agents" aria-label="Search artifacts"><kbd class="hide-s">⌘K</kbd></label>
       <div class="spacer hide-s"></div>
-      <button class="btn" id="upload"><svg class="ic sm"><use href="#i-upload"/></svg><span class="hide-s">Upload</span></button>
+      <button class="btn" id="upload" data-role="owner admin member"><svg class="ic sm"><use href="#i-upload"/></svg><span class="hide-s">Upload</span></button>
     </header>
 
     <section class="lib">
       <div class="lib-head">
-        <h1>Library</h1>
-        <span class="count num" data-when="default">214 artifacts</span>
+        <h1 data-role="owner admin member">Library</h1>
+        <h1 data-role="guest">Shared with me</h1>
+        <span class="count num" data-when="default" data-role="owner admin member">214 artifacts</span>
+        <span class="count num" data-when="default" data-role="guest">8 artifacts from Northwind Eng</span>
         <span class="count" data-when="empty">No artifacts yet</span>
         <span class="sk" data-when="loading" style="width:80px;height:12px"></span>
       </div>
 
-      <div class="tabs" role="tablist" aria-label="Scope" data-group>
+      <div class="tabs" role="tablist" aria-label="Scope" data-group data-role="owner admin member">
         <button class="tab" role="tab" aria-selected="true">All <span class="n num" data-when="default">214</span><span class="n" data-when="empty">0</span><span class="sk" data-when="loading" style="width:22px;height:14px;border-radius:9px"></span></button>
         <button class="tab" role="tab" aria-selected="false">Mine <span class="n num" data-when="default">63</span><span class="n" data-when="empty">0</span><span class="sk" data-when="loading" style="width:22px;height:14px;border-radius:9px"></span></button>
         <button class="tab" role="tab" aria-selected="false">Shared with me <span class="n num" data-when="default">88</span><span class="n" data-when="empty">0</span><span class="sk" data-when="loading" style="width:22px;height:14px;border-radius:9px"></span></button>
@@ -419,7 +424,7 @@ textarea.control{height:auto;min-height:72px;padding:6px var(--oa-space-2);resiz
             <button class="item" role="menuitemcheckbox"><span class="chk"></span><span class="avatar xs" style="--hue:210">SR</span>Sam Ruiz</button>
           </div>
         </div>
-        <span class="meta num" data-when="default">Showing 8 of 130 · <button class="clear">Clear filters</button></span>
+        <span class="meta num" data-when="default"><span data-role="owner admin member">Showing 8 of 130</span><span data-role="guest">Showing 8 of 8</span> · <button class="clear">Clear filters</button></span>
         <div class="spacer"></div>
         <div class="pop hide-s">
           <button class="btn ghost" data-menu="m-sort" aria-haspopup="menu" aria-expanded="false">Last updated<svg class="ic sm"><use href="#i-down"/></svg></button>
@@ -445,7 +450,12 @@ textarea.control{height:auto;min-height:72px;padding:6px var(--oa-space-2);resiz
       <div id="grid-sk" class="grid" data-when="loading" aria-busy="true" aria-label="Loading artifacts"></div>
 
       <div class="empty-card" data-when="empty">
-        <div class="empty">
+        <div class="empty" data-role="guest">
+          <div class="eicon"><svg class="ic"><use href="#i-team"/></svg></div>
+          <h2>Nothing shared with you yet</h2>
+          <p>When someone at Northwind Eng shares an artifact with jordan@lumenpay.com, it shows up here. You'll also get the link by email.</p>
+        </div>
+        <div class="empty" data-role="owner admin member">
           <div class="eicon"><svg class="ic"><use href="#i-lib"/></svg></div>
           <h2>No artifacts yet</h2>
           <p>Artifacts appear here when a connected agent publishes one, or when you drop files onto this page. Connect an agent with this MCP URL:</p>
@@ -468,7 +478,7 @@ textarea.control{height:auto;min-height:72px;padding:6px var(--oa-space-2);resiz
   </div>
 </div>
 
-<script>window.OA_PARAMS = { layout: ['grid', 'list'], overlay: ['none', 'drop', 'filter', 'drawer'] };</script>
+<script>window.OA_PARAMS = { layout: ['grid', 'list'], overlay: ['none', 'drop', 'filter', 'drawer'], role: ['owner', 'admin', 'member', 'guest'] };</script>
 <script>
 /* Mockup plumbing: ?theme=light|dark, ?state=default|empty|loading|error, plus per-page params. */
 const OA = (() => {
@@ -493,7 +503,11 @@ const OA = (() => {
     if (S.theme) root.dataset.theme = S.theme; else root.removeAttribute('data-theme');
     const eff = { ...S, theme: S.theme || (mq.matches ? 'dark' : 'light') };
     root.dataset.state = S.state;
-    document.querySelectorAll('[data-when]').forEach(el => { el.toggleAttribute('hidden', !el.dataset.when.split(' ').includes(S.state)); });
+    /* data-when = state, data-role = workspace role, data-only = per-artifact access (as=); all must match. */
+    const has = (list, v) => !list || list.split(' ').includes(v);
+    document.querySelectorAll('[data-when],[data-role],[data-only]').forEach(el => {
+      el.toggleAttribute('hidden', !(has(el.dataset.when, S.state) && has(el.dataset.role, S.role) && has(el.dataset.only, S.as)));
+    });
     dev.querySelectorAll('button').forEach(b => b.setAttribute('aria-checked', String(eff[b.dataset.k] === b.dataset.v)));
     const u = new URL(location);
     for (const k of Object.keys(opts)) if (S[k]) u.searchParams.set(k, S[k]);
@@ -586,7 +600,9 @@ const setLayout = m => {
 ['grid','list'].forEach(m => document.getElementById('lay-'+m).onclick = () => { OA.S.layout = m; OA.apply(); });
 /* Real drag-and-drop shows the same overlay. */
 let depth = 0;
-addEventListener('dragenter', e => { e.preventDefault(); depth++; drop.hidden = false; });
+/* Guests don't publish, so they get no drop target. */
+const canDrop = () => OA.S.role !== 'guest';
+addEventListener('dragenter', e => { e.preventDefault(); if (!canDrop()) return; depth++; drop.hidden = false; });
 addEventListener('dragleave', () => { if (--depth <= 0) { depth = 0; drop.hidden = OA.S.overlay !== 'drop'; } });
 addEventListener('dragover', e => e.preventDefault());
 addEventListener('drop', e => { e.preventDefault(); depth = 0; drop.hidden = true; });
@@ -594,7 +610,7 @@ drop.onclick = () => { OA.S.overlay = 'none'; OA.apply(); };
 document.getElementById('retry').onclick = e => { const b = e.currentTarget; b.innerHTML = '<span class="spinner"></span>Retrying'; setTimeout(() => { OA.S.state = 'default'; OA.apply(); b.innerHTML = '<svg class="ic sm"><use href="#i-retry"/></svg>Retry'; }, 900); };
 OA.on(S => {
   setLayout(S.layout);
-  drop.hidden = S.overlay !== 'drop';
+  drop.hidden = S.overlay !== 'drop' || !canDrop();
   setDrawer(S.overlay === 'drawer');
   document.querySelectorAll('.menu').forEach(m => { m.hidden = true; });
   if (S.overlay === 'filter' && S.state !== 'empty') OA.open('m-agent');
