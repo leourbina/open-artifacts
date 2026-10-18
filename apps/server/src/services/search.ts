@@ -1,8 +1,479 @@
+import {
+  type Format,
+  LIMITS,
+  type Page,
+  type SearchHit,
+  SearchHitSchema,
+  SNIPPET_MARK,
+} from "@oa/shared";
+import { and, eq, type SQL, sql } from "drizzle-orm";
+import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { type Caller, listFilterSql, requireAccess } from "../auth/authz.js";
+import { getDb } from "../db/client.js";
+import { normEmail } from "../db/email.js";
+import { artifacts, shares, users } from "../db/schema.js";
 import type { Env } from "../env.js";
+import { ApiError } from "../http/errors.js";
+import { redact, toSummary } from "./artifacts.js";
+import type { ManifestEntry } from "./manifest.js";
 
-/** Indexes a version's text for search. No-op until B8. */
+/**
+ * The FTS5 table (migration 0000; kept out of schema.ts so drizzle-kit leaves
+ * it alone). Rows use rowid = artifacts.rowid.
+ */
+export const artifactSearch = sqliteTable("artifact_search", {
+  rowid: integer("rowid").notNull(),
+  artifactId: text("artifact_id").notNull(),
+  title: text("title"),
+  description: text("description"),
+  body: text("body"),
+});
+
+const bad = (message: string, path: string) =>
+  new ApiError("bad_request", message, { path, reason: "invalid" });
+
+// ------------------------------------------------------------- query syntax
+
+const MAX_TOKENS = 16;
+export const MAX_QUERY = 500;
+/** C0 controls (NUL, and the SNIPPET_MARK \u0002/\u0003) and DEL. */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: stripping them is the point
+const CONTROLS = /[\u0000-\u001f\u007f]/g;
+/** The snippet markers, stripped from everything indexed. */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: the SNIPPET_MARK characters
+const MARKS = /[\u0002\u0003]/g;
+export const stripMarks = (s: string) => s.replace(MARKS, "");
+/** SQL twin of stripMarks over a column expression. */
+const unmarkSql = (col: string) =>
+  `replace(replace(${col}, char(2), ''), char(3), '')`;
+/** The FTS title/description columns, as selected from artifacts. */
+const UNMARKED = `${unmarkSql("title")}, ${unmarkSql("description")}`;
+/** unicode61 token characters; a word without any can't match anything. */
+const WORDY = /[\p{L}\p{N}]/u;
+
+/**
+ * User text → FTS5 MATCH expression, or null if nothing searchable remains.
+ * Each whitespace-separated word becomes a quoted phrase (inner `"` doubled),
+ * so operators, column filters and `*` are inert; the last gets `*` (prefix).
+ * Words are ANDed; at most MAX_TOKENS.
+ */
+export function sanitizeQuery(q: string): string | null {
+  const toks = q
+    .split(/\s+/)
+    .map((t) => t.replace(CONTROLS, ""))
+    .filter((t) => t && WORDY.test(t))
+    .slice(0, MAX_TOKENS)
+    .map((t) => `"${t.replace(/"/g, '""')}"`);
+  if (!toks.length) return null;
+  toks[toks.length - 1] += "*";
+  return toks.join(" AND ");
+}
+
+/** The list `q` filter: artifacts whose FTS row matches. 400 if empty/too long. */
+export function ftsFilter(q: string): SQL {
+  const text = q.trim();
+  if (text.length > MAX_QUERY)
+    throw bad(`q exceeds ${MAX_QUERY} characters`, "q");
+  const m = sanitizeQuery(text);
+  if (!m) throw bad("q has no searchable words", "q");
+  return sql`${artifacts}.rowid in (select rowid from ${artifactSearch} where ${artifactSearch} match ${m})`;
+}
+
+// --------------------------------------------------------------- extraction
+
+/** Elements whose content is never indexed, and how each skip ends. */
+const SKIP_OPEN = /<!--|<(script|style|noscript|template)\b/gi;
+/** Tags (complete only: a partial tag at a chunk end is carried). */
+/**
+ * Runs of tags (and the whitespace between) collapse in one match. `[^<>]`
+ * keeps it linear on `<a<a<a…` with no `>`.
+ */
+const TAG = /(?:<[a-zA-Z/!?][^<>]*>\s*)+/g;
+/** A partial tag longer than this at a chunk end is treated as text. */
+const MAX_CARRY = 8 * 1024;
+
+const ENTITIES: Record<string, string> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+};
+function decodeEntities(s: string): string {
+  return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e: string) => {
+    if (e[0] === "#") {
+      const n =
+        e[1] === "x" || e[1] === "X"
+          ? Number.parseInt(e.slice(2), 16)
+          : Number(e.slice(1));
+      return n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : m;
+    }
+    return ENTITIES[e.toLowerCase()] ?? m;
+  });
+}
+
+/**
+ * Tags out of a text run: each run of tags → " ". One callback-free pass,
+ * so inline tags also break words (`qu<b>ar</b>t` → 2 words).
+ */
+const stripTags = (s: string) => (s.indexOf("<") < 0 ? s : s.replace(TAG, " "));
+
+/**
+ * Streaming HTML → text. State survives chunk boundaries: inside a comment or
+ * a skipped element, input is discarded until its close (only a short tail is
+ * kept, to catch a close split across chunks), so no length of skipped content
+ * ever reverts to text. Script-data-escaped states are not modelled.
+ */
+class HtmlText {
+  /** The terminator being skipped to (`-->` or `</script`…), or null. */
+  private close: RegExp | null = null;
+  private carry = "";
+
+  /** Feeds a chunk; returns the text it yields. */
+  push(chunk: string, final: boolean): string {
+    let buf = this.carry + chunk;
+    this.carry = "";
+    let out = "";
+    for (;;) {
+      if (this.close) {
+        this.close.lastIndex = 0;
+        const m = this.close.exec(buf);
+        if (!m) {
+          // Keep a tail that could start a split terminator.
+          if (!final) this.carry = buf.slice(-16);
+          return out;
+        }
+        buf = buf.slice(m.index + m[0].length);
+        this.close = null;
+        out += " ";
+      }
+      SKIP_OPEN.lastIndex = 0;
+      const o = SKIP_OPEN.exec(buf);
+      if (!o) {
+        let end = buf.length;
+        if (!final) {
+          // A partial tag (or partial `<!--`/`<script`) at the end waits.
+          const lt = buf.lastIndexOf("<");
+          if (
+            lt >= 0 &&
+            buf.indexOf(">", lt) < 0 &&
+            buf.length - lt <= MAX_CARRY
+          )
+            end = lt;
+        }
+        this.carry = buf.slice(end);
+        return out + stripTags(buf.slice(0, end));
+      }
+      out += stripTags(buf.slice(0, o.index));
+      const name = o[1];
+      if (name) {
+        this.close = new RegExp(`</${name}\\s*>`, "i");
+        buf = buf.slice(o.index + o[0].length);
+      } else {
+        this.close = /-->/;
+        buf = buf.slice(o.index + 4);
+      }
+    }
+  }
+}
+
+/** Input bytes read per entry, at most (the inline-parse budget). */
+const INPUT_BUDGET = LIMITS.inlineBytes;
+
+/**
+ * Indexable text of an entry, at most LIMITS.searchBodyChars, with SNIPPET_MARK
+ * characters stripped. html: markup stripped, script/style/noscript/template
+ * and comment content dropped, entities decoded, whitespace collapsed;
+ * markdown/code: raw; pdf: "" (the viewer extracts and PUTs it).
+ * A stream is read until the output reaches the cap or INPUT_BUDGET bytes
+ * have been read (it stops before a read likely to cross it), then cancelled.
+ *
+ * html is regex/indexOf based, not HTMLRewriter: a text handler costs one
+ * JS↔native crossing per text chunk, measured at ~500 ms for a 200k-char
+ * page (vs ~4 ms here), far over the 10 ms CPU budget.
+ */
+export async function extractText(
+  format: Format,
+  body: ReadableStream | string,
+): Promise<string> {
+  const cap = LIMITS.searchBodyChars;
+  if (format === "pdf") {
+    if (typeof body !== "string") await body.cancel().catch(() => {});
+    return "";
+  }
+  const html = format === "html";
+  const finish = (s: string) =>
+    stripMarks(html ? decodeEntities(s).replace(/\s+/g, " ").trim() : s).slice(
+      0,
+      cap,
+    );
+  if (typeof body === "string")
+    return finish(html ? new HtmlText().push(body, true) : body);
+  const h = new HtmlText();
+  let out = "";
+  let bytes = 0;
+  let last = 0;
+  const dec = new TextDecoder();
+  const reader = body.getReader();
+  for (;;) {
+    const stop =
+      bytes + last >= INPUT_BUDGET ||
+      // Entities only shrink text, so the cap on undecoded text is safe.
+      out.length >= (html ? cap * 1.25 : cap);
+    const r = stop ? { done: true as const } : await reader.read();
+    if (stop) await reader.cancel().catch(() => {});
+    let chunk: string;
+    if (r.done) chunk = dec.decode();
+    else {
+      const room = INPUT_BUDGET - bytes;
+      const v = r.value.byteLength > room ? r.value.subarray(0, room) : r.value;
+      bytes += v.byteLength;
+      last = v.byteLength;
+      chunk = dec.decode(v, { stream: true });
+    }
+    out += html ? h.push(chunk, r.done).replace(/\s+/g, " ") : chunk;
+    if (r.done) break;
+  }
+  return finish(out);
+}
+
+// ----------------------------------------------------------------- indexing
+
+type IndexRow = {
+  rid: number;
+  format: Format;
+  cv: number;
+  entry: string;
+  manifest: string;
+  text_indexed: number;
+};
+
+/** Binds (id, version): `version` is still the live current version of `id`. */
+const CURRENT =
+  "exists (select 1 from artifacts where id = ? and current_version = ? and deleted_at is null)";
+
+/**
+ * Replaces the artifact's FTS row (by rowid) with version `version`'s text, if
+ * it is still current; non-pdf versions are marked text_indexed. A pdf keeps
+ * body text a viewer already contributed for this version. Never throws: it
+ * runs in waitUntil after publish/restore/undelete.
+ */
 export async function indexVersion(
-  _env: Env,
-  _artifactId: string,
-  _version: number,
-): Promise<void> {}
+  env: Env,
+  artifactId: string,
+  version: number,
+): Promise<void> {
+  try {
+    const row = await env.DB.prepare(
+      `select a.rowid as rid, a.format, a.current_version as cv,
+              v.entry, v.manifest, v.text_indexed
+       from artifacts a join versions v on v.artifact_id = a.id and v.version = ?
+       where a.id = ? and a.deleted_at is null`,
+    )
+      .bind(version, artifactId)
+      .first<IndexRow>();
+    if (!row || row.cv !== version) return;
+    let body = "";
+    const pdf = row.format === "pdf";
+    if (pdf) {
+      if (row.text_indexed === 1) {
+        const old = await env.DB.prepare(
+          "select body from artifact_search where rowid = ?",
+        )
+          .bind(row.rid)
+          .first<{ body: string | null }>();
+        body = old?.body ?? "";
+      }
+    } else {
+      const entry = (JSON.parse(row.manifest) as ManifestEntry[]).find(
+        (e) => e.path === row.entry,
+      );
+      const obj = entry ? await env.FILES.get(entry.key) : null;
+      if (obj) body = await extractText(row.format, obj.body);
+    }
+    const guard = [artifactId, version] as const;
+    await env.DB.batch([
+      env.DB.prepare(
+        `delete from artifact_search where rowid = ? and ${CURRENT}`,
+      ).bind(row.rid, ...guard),
+      env.DB.prepare(
+        `insert into artifact_search (rowid, artifact_id, title, description, body)
+         select rowid, id, ${UNMARKED}, ? from artifacts
+         where id = ? and current_version = ? and deleted_at is null`,
+      ).bind(body, ...guard),
+      // pdf: text_indexed stays 1 only if its contributed text survived.
+      env.DB.prepare(
+        `update versions set text_indexed = ? where artifact_id = ? and version = ? and ${CURRENT}`,
+      ).bind(pdf ? (body ? 1 : 0) : 1, ...guard, ...guard),
+    ]);
+  } catch (e) {
+    console.error("indexVersion failed", artifactId, version, e);
+  }
+}
+
+/** Keeps the FTS title/description in step with a PATCH (body unchanged). */
+export const syncTitleStmt = (env: Env, id: string) =>
+  env.DB.prepare(
+    `update artifact_search set
+       title = (select ${unmarkSql("title")} from artifacts where id = ?1),
+       description = (select ${unmarkSql("description")} from artifacts where id = ?1)
+     where rowid = (select rowid from artifacts where id = ?1 and deleted_at is null)`,
+  ).bind(id);
+
+/**
+ * Viewer+ (else 404; a version that doesn't exist → 404). Applies only if the
+ * artifact is pdf, `v` is current and not yet text_indexed; otherwise a no-op.
+ * One D1 batch, every statement guarded, the flag flipped last: only the
+ * first contribution wins.
+ */
+export async function putExtractedText(
+  env: Env,
+  caller: Caller,
+  id: string,
+  v: number,
+  text: string,
+): Promise<void> {
+  const a = await requireAccess(env, caller, id, "viewer");
+  if (v > a.currentVersion) throw new ApiError("not_found", "Not found");
+  if (a.format !== "pdf" || v !== a.currentVersion) return;
+  const body = stripMarks(text)
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, LIMITS.searchBodyChars);
+  const ok = `exists (select 1 from versions where artifact_id = ? and version = ? and text_indexed = 0)
+    and exists (select 1 from artifacts where id = ? and current_version = ? and format = 'pdf' and deleted_at is null)`;
+  const args = [id, v, id, v] as const;
+  await env.DB.batch([
+    env.DB.prepare(
+      `delete from artifact_search where rowid = (select rowid from artifacts where id = ?) and ${ok}`,
+    ).bind(id, ...args),
+    env.DB.prepare(
+      `insert into artifact_search (rowid, artifact_id, title, description, body)
+       select rowid, id, ${UNMARKED}, ? from artifacts where id = ? and ${ok}`,
+    ).bind(body, id, ...args),
+    env.DB.prepare(
+      `update versions set text_indexed = 1 where artifact_id = ? and version = ? and ${ok}`,
+    ).bind(id, v, ...args),
+  ]);
+}
+
+// ------------------------------------------------------------------- search
+
+/** Deepest offset a search cursor may reach (bm25 order isn't keyset-stable). */
+export const MAX_OFFSET = 1000;
+const B64URL = /^[A-Za-z0-9_-]+$/;
+
+const encodeOffset = (o: number) =>
+  btoa(JSON.stringify({ o }))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+
+/** Strict: anything but b64url JSON `{o: 0..MAX_OFFSET}` → 400. */
+function decodeOffset(s: string): number {
+  const invalid = () => bad("Invalid cursor", "cursor");
+  if (!B64URL.test(s) || s.length > 64) throw invalid();
+  let v: unknown;
+  try {
+    v = JSON.parse(atob(s.replace(/-/g, "+").replace(/_/g, "/")));
+  } catch {
+    throw invalid();
+  }
+  if (!v || typeof v !== "object" || Object.keys(v).length !== 1)
+    throw invalid();
+  const o = (v as { o?: unknown }).o;
+  if (
+    typeof o !== "number" ||
+    !Number.isSafeInteger(o) ||
+    o < 0 ||
+    o > MAX_OFFSET
+  )
+    throw invalid();
+  return o;
+}
+
+const snip = (col: 1 | 2 | 3) =>
+  sql<string>`snippet(${artifactSearch}, ${sql.raw(String(col))}, char(2), char(3), '…', 12)`;
+
+/**
+ * The body snippet when it holds a real hit (open, text, close), else the
+ * description's, else the title's. Indexed text never contains the markers.
+ */
+const HIT = new RegExp(
+  `${SNIPPET_MARK.open}[^${SNIPPET_MARK.open}${SNIPPET_MARK.close}]+${SNIPPET_MARK.close}`,
+);
+function pickSnippet(body: string, desc: string, title: string): string {
+  for (const s of [body, desc, title]) if (HIT.test(s)) return s;
+  // No real hit: never pass through stray markers.
+  return stripMarks(body || desc || title);
+}
+
+/**
+ * Signed-in only (401). FTS MATCH of the sanitized query, joined to artifacts
+ * through listFilterSql(caller, "all") (live, visible rows only), ordered by
+ * bm25 then id, with an offset cursor capped at MAX_OFFSET.
+ */
+export async function search(
+  env: Env,
+  caller: Caller,
+  q: string,
+  cursor?: string,
+  limit = 25,
+): Promise<Page<SearchHit>> {
+  if (caller.kind !== "user")
+    throw new ApiError("unauthorized", "Sign in required");
+  const m = sanitizeQuery(q);
+  if (!m) throw bad("q has no searchable words", "q");
+  const offset = cursor === undefined ? 0 : decodeOffset(cursor);
+  const me = caller.user.id;
+  const email = normEmail(caller.user.email);
+  const rows = await getDb(env)
+    .select({
+      a: artifacts,
+      ownerEmail: users.email,
+      ownerName: users.name,
+      shareRole: shares.role,
+      sb: snip(3),
+      sd: snip(2),
+      st: snip(1),
+    })
+    .from(artifactSearch)
+    .innerJoin(artifacts, sql`${artifacts}.rowid = ${artifactSearch.rowid}`)
+    .innerJoin(users, eq(users.id, artifacts.ownerId))
+    .leftJoin(
+      shares,
+      and(
+        eq(shares.artifactId, artifacts.id),
+        email ? eq(shares.email, email) : sql`0`,
+      ),
+    )
+    .where(and(sql`${artifactSearch} match ${m}`, listFilterSql(caller, "all")))
+    .orderBy(sql`bm25(${artifactSearch})`, artifacts.id)
+    .limit(limit + 1)
+    .offset(offset);
+  const page = rows.slice(0, limit);
+  const next = offset + limit;
+  return {
+    items: page.map((r) =>
+      SearchHitSchema.parse({
+        ...toSummary(
+          env,
+          r.a,
+          redact(
+            { id: r.a.ownerId, email: r.ownerEmail, name: r.ownerName },
+            caller,
+          ),
+          r.a.ownerId === me
+            ? "owner"
+            : r.shareRole === "editor" || r.shareRole === "viewer"
+              ? r.shareRole
+              : "viewer",
+        ),
+        snippet: pickSnippet(r.sb ?? "", r.sd ?? "", r.st ?? ""),
+      }),
+    ),
+    nextCursor:
+      rows.length > limit && next <= MAX_OFFSET ? encodeOffset(next) : null,
+  };
+}

@@ -214,7 +214,7 @@ describe("B7 fix round 1", () => {
     expect(signed.owner.email).toBe(`brk-${tag}@x.com`);
   });
 
-  it("q is trimmed and capped at 40 chars", async () => {
+  it("q is trimmed and capped at 500 chars (B8: FTS)", async () => {
     await publish(
       env,
       o.member,
@@ -228,10 +228,10 @@ describe("B7 fix round 1", () => {
     );
     expect(((await r.json()) as { items: unknown[] }).items).toHaveLength(1);
     expect(
-      (await api(app, `${R.artifacts}?q=${"a".repeat(40)}`, o.cookie)).status,
+      (await api(app, `${R.artifacts}?q=${"a".repeat(500)}`, o.cookie)).status,
     ).toBe(200);
     expect(
-      (await api(app, `${R.artifacts}?q=${"a".repeat(41)}`, o.cookie)).status,
+      (await api(app, `${R.artifacts}?q=${"a".repeat(501)}`, o.cookie)).status,
     ).toBe(400);
   });
 
