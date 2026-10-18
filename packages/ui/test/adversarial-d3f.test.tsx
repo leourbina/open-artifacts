@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Tabs, Toaster, toast } from "../src/index";
+import { AppShell, NavItem, Tabs, Toaster, toast } from "../src/index";
 
 afterEach(cleanup);
 
@@ -30,5 +31,36 @@ describe("Tabs by id", () => {
     );
     expect(warn.mock.calls.flat().join(" ")).toMatch(/unique/);
     warn.mockRestore();
+  });
+});
+
+describe("AppShell drawer", () => {
+  it("closes on SPA link clicks that preventDefault (router <Link>)", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell
+        nav={
+          <a href="/lib" onClick={(e) => e.preventDefault()}>
+            Library
+          </a>
+        }
+      >
+        <p>Content</p>
+      </AppShell>,
+    );
+    await user.click(screen.getByRole("button", { name: "Open navigation" }));
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("link", { name: "Library" }),
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+describe("NavItem", () => {
+  it("count is separated from the label in the accessible name", () => {
+    render(<NavItem href="/lib" label="Library" count={12} active />);
+    const link = screen.getByRole("link");
+    expect(link.getAttribute("aria-current")).toBe("page");
+    expect(screen.queryByRole("link", { name: "Library12" })).toBeNull();
   });
 });
