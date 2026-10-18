@@ -24,12 +24,12 @@ const ID = {
   draft: "JkBnPqRsTu5vWxYz",
 } as const;
 
-const ada: UserRef = {
+const ada: UserRef & { email: string } = {
   id: ID.ada,
   email: "ada@example.com",
   name: "Ada Lovelace",
 };
-const bob: UserRef = {
+const bob: UserRef & { email: string } = {
   id: ID.bob,
   email: "bob@example.com",
   name: "Bob Builder",
@@ -73,7 +73,7 @@ const ver = (
   message: version === 1 ? "Initial version" : `Update ${version}`,
   agent: agent,
   createdBy,
-  createdAt: `2026-01-0${version + 1}T10:00:00.000Z`,
+  createdAt: new Date(Date.UTC(2026, 0, 1 + version, 10)).toISOString(),
   entry,
   files: [entry, ...extra].map((path) => ({
     path,
@@ -118,7 +118,7 @@ export const fixtures: {
       thumbnailUrl: `/api/v1/artifacts/${ID.landing}/thumbnail`,
     }),
     art(ID.notes, "Meeting notes", "markdown", { visibility: "team" }),
-    art(ID.script, "Parser script", "code"),
+    art(ID.script, "Parser script", "code", { currentVersion: 25 }),
     art(ID.report, "Q4 report", "pdf", { visibility: "public" }),
     art(ID.poll, "Team poll", "html", {
       visibility: "public",
@@ -142,7 +142,10 @@ export const fixtures: {
       ver(1, "index.html", "text/html"),
     ],
     [ID.notes]: [ver(1, "notes.md", "text/markdown")],
-    [ID.script]: [ver(1, "parse.ts", "text/plain", "typescript")],
+    // 25 versions (newest first) so clients exercise `before` paging.
+    [ID.script]: Array.from({ length: 25 }, (_, i) =>
+      ver(25 - i, "parse.ts", "text/plain", "typescript"),
+    ),
     [ID.report]: [ver(1, "report.pdf", "application/pdf")],
     [ID.poll]: [ver(1, "index.html", "text/html")],
     [ID.draft]: [ver(1, "draft.md", "text/markdown", null, bob)],
