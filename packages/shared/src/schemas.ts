@@ -1,0 +1,527 @@
+import { z } from "zod";
+import { FORMATS } from "./formats.js";
+import { isId } from "./ids.js";
+import { LIMITS } from "./limits.js";
+import { findCaseCollision, normalizePath } from "./paths.js";
+
+export const VisibilitySchema = z.enum(["private", "team", "public"]);
+export type Visibility = z.infer<typeof VisibilitySchema>;
+export const RoleSchema = z.enum(["owner", "admin", "member", "guest"]);
+export type Role = z.infer<typeof RoleSchema>;
+export const ShareRoleSchema = z.enum(["viewer", "editor"]);
+export type ShareRole = z.infer<typeof ShareRoleSchema>;
+export const AccessLevelSchema = z.enum(["owner", "editor", "viewer"]);
+export type AccessLevel = z.infer<typeof AccessLevelSchema>;
+export const IdSchema = z.string().refine(isId, "invalid id");
+
+export const FormatSchema = z.enum(FORMATS);
+
+export const CapabilitiesSchema = z.object({
+  db: z.boolean().default(false),
+  viewer: z.boolean().default(false),
+  storage: z.boolean().default(false),
+});
+export type Capabilities = z.infer<typeof CapabilitiesSchema>;
+
+export const CapabilitiesPatchSchema = z.strictObject({
+  db: z.boolean().optional(),
+  viewer: z.boolean().optional(),
+  storage: z.boolean().optional(),
+});
+export type CapabilitiesPatch = z.infer<typeof CapabilitiesPatchSchema>;
+
+export const UserRefSchema = z.object({
+  id: z.string(),
+  email: z.string().email(),
+  name: z.string().nullable(),
+});
+export type UserRef = z.infer<typeof UserRefSchema>;
+
+export const AgentRefSchema = z.object({
+  name: z.string(),
+  version: z.string().nullable(),
+});
+export type AgentRef = z.infer<typeof AgentRefSchema>;
+
+export const FileEntrySchema = z.object({
+  path: z.string(),
+  size: z.number().int(),
+  contentType: z.string(),
+});
+export type FileEntry = z.infer<typeof FileEntrySchema>;
+
+export const InlineFileSchema = z.union([
+  z.string(),
+  z.object({ base64: z.string() }),
+  z.object({ uploadId: z.string() }),
+]);
+export type InlineFile = z.infer<typeof InlineFileSchema>;
+
+const utf8Bytes = (s: string) => new TextEncoder().encode(s).length;
+
+export const PublishInputSchema = z
+  .strictObject({
+    id: z.string().optional(),
+    title: z.string().trim().min(1).max(200).optional(),
+    description: z.string().max(2000).optional(),
+    format: FormatSchema.optional(),
+    content: z.string().optional(),
+    files: z.record(z.string(), InlineFileSchema).optional(),
+    entry: z.string().optional(),
+    language: z.string().optional(),
+    message: z.string().max(500).optional(),
+    visibility: VisibilitySchema.optional(),
+    capabilities: CapabilitiesPatchSchema.optional(),
+    allowAnonymousWrites: z.boolean().optional(),
+  })
+  .superRefine((v, ctx) => {
+    const issue = (message: string, path: (string | number)[]) =>
+      ctx.addIssue({ code: "custom", message, path });
+    const hasContent = v.content !== undefined;
+    const hasFiles = v.files !== undefined;
+    if (hasContent === hasFiles) {
+      issue("Provide exactly one of content or files", [
+        hasContent ? "files" : "content",
+      ]);
+    }
+    if (v.id === undefined && v.title === undefined) {
+      issue("title is required when id is absent", ["title"]);
+    }
+    if (v.id !== undefined && !isId(v.id))
+      issue("id is not a valid artifact id", ["id"]);
+    if (hasContent && v.format === undefined && v.entry === undefined) {
+      issue("content requires format or entry", ["format"]);
+    }
+    if (v.content !== undefined && utf8Bytes(v.content) > LIMITS.inlineBytes) {
+      issue(`content exceeds ${LIMITS.inlineBytes} bytes`, ["content"]);
+    }
+    const normalized = new Map<string, string>();
+    if (v.files !== undefined) {
+      const keys = Object.keys(v.files);
+      if (keys.length === 0) issue("files must not be empty", ["files"]);
+      if (keys.length > LIMITS.filesPerVersion) {
+        issue(`files exceeds ${LIMITS.filesPerVersion} entries`, ["files"]);
+      }
+      for (const key of keys) {
+        const r = normalizePath(key);
+        if (!r.ok)
+          issue(`Invalid file path "${key}": ${r.error}`, ["files", key]);
+        else {
+          const prev = normalized.get(r.path);
+          if (prev !== undefined) {
+            issue(
+              `Duplicate file path: "${prev}" and "${key}" both normalize to "${r.path}"`,
+              ["files", key],
+            );
+          } else normalized.set(r.path, key);
+        }
+      }
+      const pair = findCaseCollision([...normalized.keys()]);
+      if (pair)
+        issue(`Case-colliding file paths: "${pair[0]}" and "${pair[1]}"`, [
+          "files",
+        ]);
+    }
+    if (v.entry !== undefined) {
+      const r = normalizePath(v.entry);
+      if (!r.ok) issue(`Invalid entry "${v.entry}": ${r.error}`, ["entry"]);
+      else if (v.files !== undefined && !normalized.has(r.path)) {
+        issue(`entry "${v.entry}" is not a key of files`, ["entry"]);
+      }
+    }
+  });
+export type PublishInput = z.infer<typeof PublishInputSchema>;
+
+export const PublishResultSchema = z.object({
+  id: z.string(),
+  version: z.number().int(),
+  url: z.string().url(),
+});
+export type PublishResult = z.infer<typeof PublishResultSchema>;
+
+export const ArtifactSummarySchema = z.object({
+  id: z.string(),
+  title: z.string().min(1).max(200),
+  description: z.string().nullable(),
+  format: FormatSchema,
+  visibility: VisibilitySchema,
+  owner: UserRefSchema,
+  currentVersion: z.number().int(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  deletedAt: z.string().nullable(),
+  lastAgent: AgentRefSchema.nullable(),
+  thumbnailUrl: z.string().nullable(),
+  access: AccessLevelSchema,
+  capabilities: CapabilitiesSchema,
+  allowAnonymousWrites: z.boolean(),
+});
+export type ArtifactSummary = z.infer<typeof ArtifactSummarySchema>;
+
+export const VersionInfoSchema = z.object({
+  version: z.number().int(),
+  message: z.string().nullable(),
+  agent: AgentRefSchema.nullable(),
+  createdBy: UserRefSchema,
+  createdAt: z.string(),
+  entry: z.string(),
+  files: z.array(FileEntrySchema),
+  language: z.string().nullable(),
+  textIndexed: z.boolean(),
+});
+export type VersionInfo = z.infer<typeof VersionInfoSchema>;
+
+export const ListQuerySchema = z.object({
+  scope: z.enum(["mine", "shared", "team", "all"]).default("all"),
+  format: FormatSchema.optional(),
+  visibility: VisibilitySchema.optional(),
+  owner: z.string().optional(),
+  agent: z.string().optional(),
+  q: z.string().optional(),
+  updatedSince: z.string().optional(),
+  cursor: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  includeDeleted: z.union([z.boolean(), z.stringbool()]).default(false),
+});
+export type ListQuery = z.infer<typeof ListQuerySchema>;
+export type ListQueryInput = z.input<typeof ListQuerySchema>;
+
+export type Page<T> = { items: T[]; nextCursor: string | null };
+export const PageSchema = <T extends z.ZodType>(item: T) =>
+  z.object({ items: z.array(item), nextCursor: z.string().nullable() });
+
+export const SearchHitSchema = ArtifactSummarySchema.extend({
+  snippet: z.string(),
+});
+export type SearchHit = z.infer<typeof SearchHitSchema>;
+
+export const ShareSchema = z.object({
+  email: z.string().email(),
+  role: ShareRoleSchema,
+  createdAt: z.string(),
+});
+export type Share = z.infer<typeof ShareSchema>;
+
+export const ArtifactPatchSchema = z
+  .strictObject({
+    title: z.string().trim().min(1).max(200),
+    description: z.string().max(2000),
+    visibility: VisibilitySchema,
+    capabilities: CapabilitiesPatchSchema,
+    allowAnonymousWrites: z.boolean(),
+  })
+  .partial();
+export type ArtifactPatch = z.infer<typeof ArtifactPatchSchema>;
+
+export const MemberSchema = z.object({
+  id: z.string(),
+  email: z.string().email(),
+  name: z.string().nullable(),
+  role: RoleSchema,
+  lastSeenAt: z.string().nullable(),
+});
+export type Member = z.infer<typeof MemberSchema>;
+
+export const MemberRoleInputSchema = RoleSchema.exclude(["owner", "guest"]);
+
+export const MemberInviteSchema = z.strictObject({
+  email: z.string().email(),
+  role: MemberRoleInputSchema,
+});
+export type MemberInvite = z.infer<typeof MemberInviteSchema>;
+
+export const MemberPatchSchema = z.strictObject({
+  role: MemberRoleInputSchema,
+});
+export type MemberPatch = z.infer<typeof MemberPatchSchema>;
+
+export const ShareInputSchema = z.strictObject({
+  email: z.string().email(),
+  role: ShareRoleSchema,
+});
+export type ShareInput = z.infer<typeof ShareInputSchema>;
+
+export const TokenCreateInputSchema = z.strictObject({
+  label: z.string().trim().min(1).max(80),
+});
+export type TokenCreateInput = z.infer<typeof TokenCreateInputSchema>;
+
+export const StorageEntrySchema = z.object({
+  key: z.string(),
+  value: z.unknown(),
+  updatedAt: z.string(),
+});
+export type StorageEntry = z.infer<typeof StorageEntrySchema>;
+
+export const StorageKeySchema = z.object({
+  key: z.string(),
+  updatedAt: z.string(),
+});
+export type StorageKey = z.infer<typeof StorageKeySchema>;
+
+const NAME_RE = /^[A-Za-z0-9_-]{1,128}$/;
+/** Collection name or document id. The regex excludes "." so "." and ".." cannot occur. */
+export const DataNameSchema = z.string().regex(NAME_RE);
+export type DataName = z.infer<typeof DataNameSchema>;
+/** Storage key name (same rules as DataNameSchema). */
+export const StorageKeyNameSchema = z.string().regex(NAME_RE);
+
+/** Markers around matched terms in SearchHit.snippet. */
+export const SNIPPET_MARK = { open: "\u0002", close: "\u0003" } as const;
+
+export const ThemeSchema = z.enum(["light", "dark"]);
+export type Theme = z.infer<typeof ThemeSchema>;
+
+export const MeSchema = z.object({
+  user: MemberSchema,
+  instance: z.object({
+    name: z.string(),
+    defaultVisibility: z.enum(["private", "team"]),
+    appUrl: z.string(),
+    mcpUrl: z.string(),
+  }),
+});
+export type Me = z.infer<typeof MeSchema>;
+
+export const TokenSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  createdAt: z.string(),
+  lastUsedAt: z.string().nullable(),
+});
+export type Token = z.infer<typeof TokenSchema>;
+
+export const TokenCreatedSchema = TokenSchema.extend({ token: z.string() });
+export type TokenCreated = z.infer<typeof TokenCreatedSchema>;
+
+export const OAuthClientSchema = z.object({
+  grantId: z.string(),
+  clientName: z.string(),
+  createdAt: z.string(),
+});
+export type OAuthClient = z.infer<typeof OAuthClientSchema>;
+
+export const SettingsSchema = z.object({
+  name: z.string().min(1).max(80),
+  defaultVisibility: z.enum(["private", "team"]),
+});
+export type Settings = z.infer<typeof SettingsSchema>;
+
+export const SettingsPatchSchema = SettingsSchema.partial().strict();
+export type SettingsPatch = z.infer<typeof SettingsPatchSchema>;
+
+export const UploadCreateInputSchema = z.strictObject({
+  artifactId: IdSchema.optional(),
+  path: z.string(),
+  size: z.number().int().positive(),
+  contentType: z.string().optional(),
+});
+export type UploadCreateInput = z.infer<typeof UploadCreateInputSchema>;
+
+export const UploadCreatedSchema = z.object({
+  uploadId: z.string(),
+  artifactId: z.string(),
+  url: z.string().url(),
+  expiresAt: z.string(),
+});
+export type UploadCreated = z.infer<typeof UploadCreatedSchema>;
+
+export const ContentUrlSchema = z.object({
+  url: z.string().url(),
+  expiresAt: z.string().nullable(),
+});
+export type ContentUrl = z.infer<typeof ContentUrlSchema>;
+
+export const DataDocSchema = z.object({
+  id: z.string(),
+  data: z.unknown(),
+  updatedAt: z.string(),
+  updatedBy: z.string().nullable(),
+});
+export type DataDoc = z.infer<typeof DataDocSchema>;
+
+const DATA_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+const isDataKey = (k: string) => DATA_KEY_RE.test(k) && !FORBIDDEN_KEYS.has(k);
+const DataKeySchema = z.string().refine(isDataKey, "invalid key");
+const WhereValue = z.union([
+  z.string().max(1024),
+  z.number(),
+  z.boolean(),
+  z.null(),
+]);
+
+// Validates own keys on the raw object so a JSON.parse'd "__proto__" is rejected, not dropped.
+const WhereSchema = z
+  .unknown()
+  .superRefine((raw, ctx) => {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      ctx.addIssue({ code: "custom", message: "where must be an object" });
+      return;
+    }
+    const keys = Reflect.ownKeys(raw);
+    if (keys.length > 32)
+      ctx.addIssue({ code: "custom", message: "where has more than 32 keys" });
+    for (const k of keys) {
+      if (typeof k !== "string" || !isDataKey(k)) {
+        ctx.addIssue({
+          code: "custom",
+          message: `invalid where key ${String(k)}`,
+          path: [String(k)],
+        });
+      }
+    }
+  })
+  .pipe(z.record(DataKeySchema, WhereValue));
+
+export const DataSetBodySchema = z.unknown();
+export type DataSetBody = z.infer<typeof DataSetBodySchema>;
+
+export const DataPatchBodySchema = z
+  .unknown()
+  .superRefine((raw, ctx) => {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      ctx.addIssue({ code: "custom", message: "patch must be an object" });
+      return;
+    }
+    for (const k of Reflect.ownKeys(raw)) {
+      if (typeof k !== "string" || !isDataKey(k)) {
+        ctx.addIssue({
+          code: "custom",
+          message: `invalid patch key ${String(k)}`,
+          path: [String(k)],
+        });
+      }
+    }
+  })
+  .pipe(z.record(DataKeySchema, z.unknown()));
+export type DataPatchBody = z.infer<typeof DataPatchBodySchema>;
+
+export const DataChangeSchema = z.object({
+  type: z.literal("db.change"),
+  collection: z.string(),
+  docs: z.array(DataDocSchema),
+  deleted: z.array(z.string()),
+});
+export type DataChange = z.infer<typeof DataChangeSchema>;
+
+export const DataQuerySchema = z.strictObject({
+  where: WhereSchema.optional(),
+  orderBy: DataKeySchema.optional(),
+  order: z.enum(["asc", "desc"]).default("asc"),
+  limit: z.number().int().min(1).max(500).default(100),
+  cursor: z.string().optional(),
+});
+export type DataQuery = z.infer<typeof DataQuerySchema>;
+export type DataQueryInput = z.input<typeof DataQuerySchema>;
+
+export const UsageSchema = z.object({
+  available: z.boolean(),
+  date: z.string(),
+  metrics: z.array(
+    z.object({
+      key: z.enum(["requests", "d1_reads", "d1_writes", "do_requests"]),
+      used: z.number(),
+      limit: z.number(),
+    }),
+  ),
+});
+export type Usage = z.infer<typeof UsageSchema>;
+
+// ---- MCP tool inputs/results ----
+
+export const GetArtifactInputSchema = z.strictObject({
+  id: IdSchema,
+  version: z.number().int().min(1).optional(),
+  path: z.string().optional(),
+  includeContent: z.boolean().default(true),
+});
+export type GetArtifactInput = z.infer<typeof GetArtifactInputSchema>;
+export type GetArtifactInputInput = z.input<typeof GetArtifactInputSchema>;
+
+export const SearchQuerySchema = z.strictObject({
+  q: z.string().trim().min(1).max(500),
+  cursor: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+});
+export type SearchQuery = z.infer<typeof SearchQuerySchema>;
+export type SearchQueryInput = z.input<typeof SearchQuerySchema>;
+
+export const IdInputSchema = z.strictObject({ id: IdSchema });
+export type IdInput = z.infer<typeof IdInputSchema>;
+
+export const RestoreVersionInputSchema = z.strictObject({
+  id: IdSchema,
+  version: z.number().int().min(1),
+});
+export type RestoreVersionInput = z.infer<typeof RestoreVersionInputSchema>;
+
+export const ShareArtifactInputSchema = ShareInputSchema.extend({
+  id: IdSchema,
+});
+export type ShareArtifactInput = z.infer<typeof ShareArtifactInputSchema>;
+
+export const UnshareInputSchema = z.strictObject({
+  id: IdSchema,
+  email: z.string().email(),
+});
+export type UnshareInput = z.infer<typeof UnshareInputSchema>;
+
+export const SetVisibilityInputSchema = z.strictObject({
+  id: IdSchema,
+  visibility: VisibilitySchema,
+});
+export type SetVisibilityInput = z.infer<typeof SetVisibilityInputSchema>;
+
+const dataTarget = { id: IdSchema, collection: DataNameSchema };
+
+export const ArtifactDataGetInputSchema = z.strictObject({
+  ...dataTarget,
+  docId: DataNameSchema,
+});
+export type ArtifactDataGetInput = z.infer<typeof ArtifactDataGetInputSchema>;
+export const ArtifactDataListInputSchema = z.strictObject({
+  ...dataTarget,
+  cursor: z.string().optional(),
+  limit: z.number().int().min(1).max(500).optional(),
+});
+export type ArtifactDataListInput = z.infer<typeof ArtifactDataListInputSchema>;
+export const ArtifactDataQueryInputSchema = z.strictObject({
+  ...dataTarget,
+  query: DataQuerySchema,
+});
+export type ArtifactDataQueryInput = z.infer<
+  typeof ArtifactDataQueryInputSchema
+>;
+export const ArtifactDataSetInputSchema = z.strictObject({
+  ...dataTarget,
+  docId: DataNameSchema,
+  data: DataSetBodySchema,
+});
+export type ArtifactDataSetInput = z.infer<typeof ArtifactDataSetInputSchema>;
+export const ArtifactDataUpdateInputSchema = z.strictObject({
+  ...dataTarget,
+  docId: DataNameSchema,
+  patch: DataPatchBodySchema,
+});
+export type ArtifactDataUpdateInput = z.infer<
+  typeof ArtifactDataUpdateInputSchema
+>;
+export const ArtifactDataDeleteInputSchema = z.strictObject({
+  ...dataTarget,
+  docId: DataNameSchema,
+});
+export type ArtifactDataDeleteInput = z.infer<
+  typeof ArtifactDataDeleteInputSchema
+>;
+
+export const GetArtifactResultSchema = z.object({
+  artifact: ArtifactSummarySchema,
+  version: VersionInfoSchema,
+  content: z.string().optional(),
+  downloadUrl: z.string().optional(),
+});
+export type GetArtifactResult = z.infer<typeof GetArtifactResultSchema>;
+
+export const CreateUploadInputSchema = UploadCreateInputSchema;
+export type CreateUploadInput = UploadCreateInput;
