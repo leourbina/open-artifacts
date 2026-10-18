@@ -17,6 +17,8 @@ export type Opts = {
   /** False under --yes or --json: never prompt. */
   interactive: boolean;
   json: boolean;
+  /** CI mode: implies --json; the owner token lives in memory only and is revoked at the end. */
+  ci: boolean;
 };
 export type Ctx = {
   deps: Deps;
@@ -34,6 +36,8 @@ export type Ctx = {
   human?: string;
   /** The PAT minted this run, in memory only. */
   pat?: string;
+  /** Under --ci: the minted token's row id, revoked at the end of the run. */
+  ciTokenId?: string;
   /** The welcome artifact's view URL, when selftest published it this run. */
   welcomeUrl?: string;
   /** Set by an `always` step's check: its todo counts for --strict this run. */

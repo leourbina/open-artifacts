@@ -71,6 +71,7 @@ Setup takes each value from its flag first, then from `.openartifacts/state.json
 | `--check` | Read-only. Runs each step's check without doing the work, and reports it as `done` or `todo`. Without saved state, it rebuilds the state from Cloudflare by `--name` and reports it on a last `state` line. It changes nothing on Cloudflare and writes no files. |
 | `--strict` | Only with `--check`: exit `2` when any step is `todo`, for example to gate CI. |
 | `--json` | Print one JSON object per line instead of text, and never prompt: a missing value is an `action_required` line naming the flag to pass. The optional `ANALYTICS_TOKEN` is skipped. |
+| `--ci` | CI mode: implies `--json`; the owner token is used only for selftest, never printed, and revoked at the end of the run. Requires `--name`; not with `--new-owner-token`. |
 
 | Environment variable | Meaning |
 |---|---|

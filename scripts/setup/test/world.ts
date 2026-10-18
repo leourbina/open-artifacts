@@ -159,6 +159,8 @@ export function world(w: World = {}) {
   /** App-host and Access requests, e.g. "GET /healthz", "mcp tools/list". */
   const hits: string[] = [];
   const mcpCalls: Obj[] = [];
+  /** Every bearer token the app host saw (how tests learn a never-printed PAT). */
+  const bearers = new Set<string>();
   const sqls: string[] = [];
   const db = {
     users: [...(w.seed?.users ?? [])] as {
@@ -238,16 +240,26 @@ export function world(w: World = {}) {
         user.role = "owner";
       } else if (
         is(
-          /^UPDATE tokens SET revoked_at = (\d+) WHERE user_id = \(SELECT id FROM users WHERE email = '((?:[^']|'')*)'\) AND label = 'setup' AND revoked_at IS NULL AND id <> '(\w+)' AND EXISTS \(SELECT 1 FROM tokens WHERE id = '\w+'\)$/,
+          /^UPDATE tokens SET revoked_at = (\d+) WHERE id = '(\w+)' AND revoked_at IS NULL$/,
         )
       ) {
-        const [, at, em, keep] = m;
+        for (const x of db.tokens)
+          if (x.id === m[2] && !x.revoked_at) {
+            x.revoked_at = Number(m[1]);
+            changes++;
+          }
+      } else if (
+        is(
+          /^UPDATE tokens SET revoked_at = (\d+) WHERE user_id = \(SELECT id FROM users WHERE email = '((?:[^']|'')*)'\) AND label = '(setup(?:-ci)?)' AND revoked_at IS NULL AND id <> '(\w+)' AND EXISTS \(SELECT 1 FROM tokens WHERE id = '\w+'\)$/,
+        )
+      ) {
+        const [, at, em, lbl, keep] = m;
         const uid = db.users.find((x) => x.email === unq(em).toLowerCase())?.id;
         for (const x of db.tokens)
           if (
             db.tokens.some((t) => t.id === keep) &&
             x.user_id === uid &&
-            x.label === "setup" &&
+            x.label === lbl &&
             !x.revoked_at &&
             x.id !== keep
           ) {
@@ -256,10 +268,10 @@ export function world(w: World = {}) {
           }
       } else if (
         is(
-          /^INSERT INTO tokens \(id, user_id, label, token_hash, created_at\) SELECT '(\w+)', id, 'setup', '([0-9a-f]{64})', \d+ FROM users WHERE email = '((?:[^']|'')*)' AND \(SELECT count\(\*\) FROM tokens WHERE user_id = users\.id AND revoked_at IS NULL\) < (\d+)$/,
+          /^INSERT INTO tokens \(id, user_id, label, token_hash, created_at\) SELECT '(\w+)', id, '(setup(?:-ci)?)', '([0-9a-f]{64})', \d+ FROM users WHERE email = '((?:[^']|'')*)' AND \(SELECT count\(\*\) FROM tokens WHERE user_id = users\.id AND revoked_at IS NULL\) < (\d+)$/,
         )
       ) {
-        const [, id, hash, em, cap] = m;
+        const [, id, label, hash, em, cap] = m;
         const user = db.users.find((x) => x.email === unq(em).toLowerCase());
         const active = db.tokens.filter(
           (x) => x.user_id === user?.id && !x.revoked_at,
@@ -270,7 +282,7 @@ export function world(w: World = {}) {
             db.tokens.push({
               id,
               user_id: user.id,
-              label: "setup",
+              label,
               token_hash: hash,
             });
         }
@@ -367,6 +379,7 @@ export function world(w: World = {}) {
         }
         if (u.pathname === "/mcp") {
           const tok = auth?.replace(/^Bearer /, "") ?? "";
+          if (tok) bearers.add(tok);
           if (
             !db.tokens.some((t) => t.token_hash === sha(tok) && !t.revoked_at)
           )
@@ -564,6 +577,7 @@ export function world(w: World = {}) {
     argv,
     hits,
     mcpCalls,
+    bearers,
     deleted,
     sqls,
     db,
