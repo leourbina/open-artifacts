@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
 import { type ReactElement, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Button, Dialog, Menu, Tabs, Toaster, toast } from "../src/index";
+import { flushAnnouncement, useToastClock } from "./toast-clock";
 
 afterEach(cleanup);
 
@@ -124,16 +125,17 @@ describe("Tabs", () => {
 
 describe("toast", () => {
   it("announces in a polite live region", async () => {
+    useToastClock();
     render(<Toaster />);
     act(() => toast({ title: "Copied link", tone: "success" }));
-    expect(await screen.findAllByText("Copied link")).not.toHaveLength(0);
-    // Radix announces on the next frame, through a separate polite region.
-    await waitFor(() => {
-      const live = [...document.querySelectorAll('[aria-live="polite"]')];
-      expect(live.some((el) => el.textContent?.includes("Copied link"))).toBe(
-        true,
-      );
-    });
+    expect(screen.getAllByText("Copied link")).not.toHaveLength(0);
+    // Radix announces through a separate polite region, two frames later.
+    flushAnnouncement();
+    const live = [...document.querySelectorAll('[aria-live="polite"]')];
+    expect(live.some((el) => el.textContent?.includes("Copied link"))).toBe(
+      true,
+    );
+    vi.useRealTimers(); // axe schedules its own timers
     expect(await audit()).toEqual([]);
   });
 });
