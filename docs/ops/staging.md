@@ -100,3 +100,15 @@ gh workflow run ops-prod-token-check.yml
 ```
 
 It runs only on `main`, in the `prod` concurrency group, via `scripts/ops/check-prod-token.sh`.
+
+## First production install
+
+One-time install of the production instance with `@oa/setup --ci`. Runs only on `main`, in the `prod` concurrency group and `production` environment, and only for the latest stable (non-pre-release) tag:
+
+```
+gh workflow run ops-prod-install.yml -f tag=vX.Y.Z
+```
+
+The workflow checks out the tag and runs `scripts/ci/prod-install.sh --ci`, which logs each JSON line from setup and writes a step/status table to the job summary. It fails on any `error` or `action_required` line.
+
+The owner PAT is never printed: `--ci` uses it only for the selftest and revokes it at the end, and the script aborts if any output line matches the token pattern. After the install, create your own tokens in the dashboard.

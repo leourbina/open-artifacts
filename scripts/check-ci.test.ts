@@ -533,6 +533,51 @@ describe("prod and staging tokens never cross", () => {
       "PROD_CLOUDFLARE_API_TOKEN",
     );
   });
+  describe("ops-prod-install.yml", () => {
+    const f = "ops-prod-install.yml";
+    const w = wf(f);
+    const text = readFileSync(join(dir, f), "utf8");
+    const steps = w.jobs.install.steps as {
+      name?: string;
+      env?: Record<string, string>;
+      run?: string;
+    }[];
+    it("is dispatch-only and main-only", () => {
+      expect(Object.keys(w.on)).toEqual(["workflow_dispatch"]);
+      expect(w.jobs.install.if).toBe("github.ref == 'refs/heads/main'");
+    });
+    it("has a stable-tag guard step", () => {
+      const g = steps.find((s) => /stable/i.test(s.name ?? ""));
+      expect(g?.run).toContain("releases/latest");
+    });
+    it("has an always() revoke step using only the PROD token", () => {
+      const r = steps.find((s) => s.run?.includes("--revoke-ci-tokens")) as any;
+      expect(r).toBeDefined();
+      expect(r.if).toBe("always()");
+      expect(r["continue-on-error"]).toBe(false);
+      expect(r["timeout-minutes"]).toBe(3);
+      expect(r.env.CLOUDFLARE_API_TOKEN).toBe(
+        "${{ secrets.PROD_CLOUDFLARE_API_TOKEN }}",
+      );
+      expect(JSON.stringify(r.env)).not.toMatch(
+        /secrets\.CLOUDFLARE_API_TOKEN/,
+      );
+    });
+    it("scopes tokens to the setup step and uses --ci", () => {
+      const withTok = steps.filter((s) =>
+        JSON.stringify(s.env ?? {}).includes("secrets."),
+      );
+      expect(withTok).toHaveLength(2);
+      expect(withTok[0]?.env).toHaveProperty("OA_ACCESS_TOKEN");
+      expect(w.env ?? {}).not.toHaveProperty("OA_ACCESS_TOKEN");
+      expect(text).not.toMatch(/secrets\.CLOUDFLARE_API_TOKEN/);
+      expect(text).toContain("--ci");
+      expect([...refs(f)].sort()).toEqual([
+        "CLOUDFLARE_ACCOUNT_ID",
+        "PROD_CLOUDFLARE_API_TOKEN",
+      ]);
+    });
+  });
   it("detects a crossing fixture", () => {
     const tmp = mkdtempSync(join(tmpdir(), "wf-"));
     writeFileSync(
