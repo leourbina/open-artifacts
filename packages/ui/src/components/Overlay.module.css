@@ -1,0 +1,113 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--oa-scrim);
+  z-index: 40;
+}
+.dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(440px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  overflow: auto;
+  padding: var(--oa-space-5);
+  background: var(--oa-surface);
+  color: var(--oa-text);
+  border-radius: var(--oa-radius-lg);
+  box-shadow: var(--oa-shadow-2);
+  font: 400 var(--oa-text-sm) / 1.45 var(--oa-font-sans);
+  z-index: 41;
+}
+.title {
+  margin: 0 0 var(--oa-space-1);
+  font-size: var(--oa-text-lg);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+.description {
+  margin: 0 0 var(--oa-space-4);
+  color: var(--oa-text-2);
+}
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--oa-space-2);
+  margin-top: var(--oa-space-5);
+}
+.menu {
+  min-width: 160px;
+  padding: var(--oa-space-1);
+  background: var(--oa-surface);
+  border-radius: var(--oa-radius-md);
+  box-shadow: var(--oa-shadow-2);
+  z-index: 50;
+}
+.item {
+  display: flex;
+  align-items: center;
+  gap: var(--oa-space-2);
+  height: 28px;
+  padding: 0 var(--oa-space-2);
+  border-radius: var(--oa-radius-sm);
+  color: var(--oa-text);
+  font: 400 var(--oa-text-sm) var(--oa-font-sans);
+  outline: none;
+  cursor: pointer;
+}
+.item[data-highlighted] {
+  background: var(--oa-sunken);
+}
+.danger {
+  color: var(--oa-danger);
+}
+.danger[data-highlighted] {
+  background: var(--oa-danger-soft);
+}
+.separator {
+  height: 1px;
+  margin: var(--oa-space-1) 0;
+  background: var(--oa-divider);
+}
+.tabs {
+  display: flex;
+  gap: 18px;
+  /* Scrolls when too wide. Hairline and underline are inset shadows, so
+     the overflow container doesn't clip them. */
+  overflow-x: auto;
+  scrollbar-width: none;
+  box-shadow: inset 0 -1px 0 var(--oa-divider);
+}
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+.tab {
+  flex: none;
+  white-space: nowrap;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--oa-text-muted);
+  font: 500 var(--oa-text-sm) var(--oa-font-sans);
+  cursor: pointer;
+}
+.tab[data-state="active"] {
+  color: var(--oa-text);
+  box-shadow: inset 0 -2px 0 var(--oa-text);
+}
+.item:focus-visible {
+  outline: 2px solid var(--oa-focus);
+  outline-offset: 2px;
+}
+/* Inset, so the scrolling list doesn't clip it. */
+.tab:focus-visible {
+  outline: 2px solid var(--oa-focus);
+  outline-offset: -2px;
+  border-radius: var(--oa-radius-sm);
+}
+.panel {
+  padding-top: var(--oa-space-4);
+  outline: none;
+}

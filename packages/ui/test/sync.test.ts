@@ -75,7 +75,8 @@ for (const rule of parse(css)) {
   }
 }
 
-const isColor = (v: string) => /^#[0-9a-f]{6}$/.test(v);
+const isColor = (v: string) =>
+  /^#[0-9a-f]{6}$/.test(v) || /^rgb\([\d ./]+\)$/.test(v);
 const colorsOf = (props: Map<string, string>) =>
   Object.fromEntries([...props].filter(([, v]) => isColor(v)));
 const expected = (theme: "light" | "dark") =>
