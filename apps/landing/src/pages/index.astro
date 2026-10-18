@@ -4,46 +4,46 @@ import Shot from "../components/Shot.astro";
 import Base from "../layouts/Base.astro";
 import { gatesFor } from "../lib/release";
 
-const prompt = "Set up open-artifacts.com/llms.txt";
+const prompt = "set up open-artifacts.com/llms.txt";
 
 const features = [
   {
-    title: "Any agent",
-    body: "One MCP server for every MCP client: Claude Code, Codex CLI, Cursor, OpenCode, and others. Each version records which agent made it.",
+    title: "HTML, Markdown, code and PDF",
+    body: "Interactive pages, rendered docs, highlighted code and PDFs, viewed in a web dashboard with search.",
   },
   {
-    title: "Your Cloudflare",
-    body: "Runs as a Worker on your own account and domain. Your artifacts never pass through a third party, and instances send no telemetry.",
+    title: "Every version kept",
+    body: "Each publish is a new version that records which agent made it. View or restore any of them.",
   },
   {
-    title: "Versions",
-    body: "Every publish is an immutable version with an optional change note. View, diff, or restore any of them.",
-  },
-  {
-    title: "Sharing",
-    body: "Private by default. Invite viewers or editors by email, open an artifact to your team, or make a public link that is never indexed.",
+    title: "Private until you share",
+    body: "Share with people by email as viewer or editor, or make a public link that search engines don't index.",
   },
   {
     title: "Live pages",
-    body: "HTML artifacts can save and read shared data through a small runtime API, so polls, trackers, and checklists just work.",
+    body: "An HTML artifact can save and read shared data, so polls, trackers and checklists just work.",
   },
   {
-    title: "Free-plan friendly",
-    body: "Every feature works on the Workers Free plan. Rendering happens in the browser, and the dashboard shows today's usage.",
+    title: "Any MCP agent",
+    body: "Claude Code, Codex CLI, Cursor, OpenCode, ChatGPT, or anything else that speaks MCP.",
+  },
+  {
+    title: "Yours to run",
+    body: "MIT-licensed, on your own domain, and works on the Workers Free plan. Nothing passes through us.",
   },
 ];
 ---
 
 <Base
   fallbacks={gatesFor("index")}
-  title="Open Artifacts: a home for what your agents make"
-  description="Open Artifacts is an open-source place to keep, version, and share the HTML pages, docs, code, and PDFs your AI agents make, deployed to your own Cloudflare account."
+  title="Open Artifacts: bring any agent, keep every artifact"
+  description="Open Artifacts keeps the pages, docs, code and PDFs from any AI agent (Claude Code, Codex, Cursor, OpenCode) on your own Cloudflare account."
 >
   <section class="hero wrap">
-    <h1>Keep, version, and share what your AI agents make, on your own Cloudflare account.</h1>
+    <h1>Bring any agent. <br />Keep every artifact.</h1>
     <p class="lede">
-      Open Artifacts is an open-source home for the HTML pages, Markdown docs, code, and PDFs that
-      agents publish. You deploy it once; every MCP agent can use it.
+      Open Artifacts keeps the pages, docs, code and PDFs from any AI agent (Claude Code, Codex,
+      Cursor, OpenCode) on your own Cloudflare account.
     </p>
 
     <div class="cta" role="group" aria-labelledby="cta-label">
@@ -77,7 +77,10 @@ const features = [
             <span class="term"><span class="caret">&gt;</span> {prompt}</span>
           </div>
           <h3>Tell your agent</h3>
-          <p>Paste one line. Your agent reads llms.txt, clones the latest release, and runs setup.</p>
+          <p>
+            Your agent reads llms.txt, checks the prerequisites, clones the latest release, and runs
+            pnpm install.
+          </p>
         </li>
         <li>
           <div class="step-visual" aria-hidden="true">
@@ -86,10 +89,10 @@ const features = [
               <span class="mini-btn">Allow</span>
             </span>
           </div>
-          <h3>Log in to Cloudflare</h3>
+          <h3>Sign in to Cloudflare</h3>
           <p>
-            The one step only you can do. Setup then creates the database, storage, and sign-in, and
-            deploys to your domain.
+            One step needs you: <code>npx wrangler login</code>. Setup then creates D1, R2 and KV and the
+            Access sign-in app, deploys to both domains, and adds the MCP server to your agent.
           </p>
         </li>
         <li>
@@ -99,8 +102,11 @@ const features = [
               <span class="badge team">Team</span>
             </span>
           </div>
-          <h3>Share artifacts</h3>
-          <p>Your agent publishes to your instance. Share by email, with your team, or as a public link.</p>
+          <h3>Publish and share</h3>
+          <p>
+            Your agent publishes a Welcome artifact and gives you the link. Later, ask it to write up the
+            Q4 data migration plan and share it with a teammate.
+          </p>
         </li>
       </ol>
     </div>
@@ -142,18 +148,18 @@ const features = [
   <section class="band" aria-labelledby="security-h">
     <div class="wrap security">
       <div>
-        <h2 id="security-h">Built for untrusted output</h2>
+        <h2 id="security-h">Safe to open</h2>
         <p class="lede">
-          Agents write the code in your artifacts, so Open Artifacts treats every artifact as
-          untrusted.
+          Agent-written HTML runs in a sandboxed frame on a separate, cookieless origin. It can't read
+          your session, call the API as you, or reach the dashboard.
         </p>
       </div>
       <dl>
         <div>
           <dt>Sandboxed</dt>
           <dd>
-            Artifacts load in a sandboxed iframe from a separate content host. They can't read your
-            session, the dashboard, or other artifacts.
+            Each artifact runs in its own opaque origin, so it can't see the dashboard or other
+            artifacts.
           </dd>
         </div>
         <div>
