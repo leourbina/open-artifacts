@@ -2,7 +2,7 @@
 
 Read `00-overview.md` first.
 
-**Ownership:** I1 and I2 belong to **OpenArtifacts QA & Security**, an independent red team that didn't write the code. Backend holds them until that session exists. I3 and I4 belong to **OpenArtifacts Platform**. Frontend and Design join where noted. These tasks start once their milestone inputs (listed in the overview) are green.
+**Ownership:** I1 and I2 belong to **OpenArtifacts QA & Security**, an independent red team that didn't write the code. QA & Security is a cyberstrike session on the agent-bus (see the overview). I3 and I4 belong to **OpenArtifacts Platform**. Frontend and Design join where noted. These tasks start once their milestone inputs (listed in the overview) are green.
 
 Anything shown to the user goes to them as visually rich HTML in the visual companion.
 
