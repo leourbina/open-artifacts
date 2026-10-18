@@ -14,6 +14,7 @@ import {
   StorageKeySchema,
   ThemeSchema,
 } from "./schemas.js";
+import { utf8Exceeds } from "./utf8.js";
 
 export const PROTOCOL_VERSION = 1;
 
@@ -38,7 +39,6 @@ const THUMB_PREFIX = "data:image/webp;base64,";
 const THUMB_MAX_LEN =
   THUMB_PREFIX.length + 4 * Math.ceil(LIMITS.thumbnailBytes / 3);
 const THUMB_RE = /^data:image\/webp;base64,[A-Za-z0-9+/]*={0,2}$/;
-const utf8Bytes = (s: string) => new TextEncoder().encode(s).length;
 
 const Theme = ThemeSchema;
 
@@ -64,7 +64,7 @@ export const ArtifactToShellSchema = z.union([
       .string()
       .max(LIMITS.extractedTextBytes)
       .refine(
-        (s) => utf8Bytes(s) <= LIMITS.extractedTextBytes,
+        (s) => !utf8Exceeds(s, LIMITS.extractedTextBytes),
         "text too large",
       ),
   }),
