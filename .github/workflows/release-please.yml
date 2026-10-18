@@ -25,12 +25,19 @@ jobs:
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-      # GITHUB_TOKEN-created PRs do not trigger CI; dispatch it on the release branch.
-      - if: steps.rp.outputs.prs_created == 'true'
+      # Pushes made with GITHUB_TOKEN (release-please creating AND updating its PR on
+      # every push to main) do not trigger workflows, so the required checks would never
+      # run and the release PR would sit blocked. Dispatch ci.yml on the release branch
+      # whenever that PR is open. Skipped on release_created: the PR was just merged.
+      - if: ${{ steps.rp.outputs.release_created != 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-          PR: ${{ steps.rp.outputs.pr }}
-        run: gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$(jq -r .headBranchName <<< "$PR")"
+          BRANCH: release-please--branches--main--components--open-artifacts
+        run: |
+          open=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state open --json headRefName --jq length)
+          if [ "$open" -gt 0 ]; then
+            gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
+          fi
   deploy-landing:
     needs: [release-please]
     # always(): on workflow_dispatch the release-please job is skipped.

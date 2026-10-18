@@ -39,6 +39,15 @@ Put the new ids into `wrangler.staging.jsonc`, then deploy once.
 
 Enable Settings > Actions > General > "Allow GitHub Actions to create and approve pull requests" (needed by release-please). Release PRs made with `GITHUB_TOKEN` don't trigger CI, so `release-please.yml` dispatches `ci.yml` on the release branch via `workflow_dispatch`.
 
+## Releases
+
+`release-please.yml` keeps a release PR open and dispatches `ci.yml` on its branch after every push to main (GITHUB_TOKEN pushes don't trigger CI on their own).
+
+1. Merge the release PR when it is green and up to date.
+2. If it is behind, run `gh pr update-branch <n>`; a user push triggers CI normally.
+3. The landing deploy runs after the release and is gated by `check-landing-dist`.
+4. To redeploy the landing site: `gh workflow run release-please.yml -f tag=vX.Y.Z`.
+
 ## B4 Access setup
 
 `ops-staging-access.yml` (manual only, main only) shares the `staging` concurrency group with `deploy-staging.yml`, so the two never race on Worker secrets. It runs `scripts/ops/staging-access.ts`. It is idempotent: a re-run creates and changes nothing that already exists.
