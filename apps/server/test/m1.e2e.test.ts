@@ -3,7 +3,7 @@ import { newId } from "@oa/shared";
 import { describe, expect, it } from "vitest";
 import worker from "../src/index.js";
 import { fakeAssets } from "./assets-stub.js";
-import { fetchAndWait } from "./helpers.js";
+import { fetchAndWait, runIndex } from "./helpers.js";
 
 const assets = fakeAssets().fetcher;
 const E = (over: Record<string, unknown> = {}) =>
@@ -66,6 +66,7 @@ describe("M1 journey", () => {
     checkHeaders(pub, "app");
     expect(pub.status).toBe(201);
     const { id } = (await pub.json()) as { id: string };
+    await runIndex(id);
     for (const p of [
       `/api/v1/artifacts/${id}`,
       `/api/v1/artifacts?scope=mine`,

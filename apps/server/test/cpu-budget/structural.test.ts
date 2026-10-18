@@ -120,8 +120,8 @@ beforeAll(async () => {
 });
 
 describe("publish", () => {
-  it("1.9 MB inline base64: one R2 put per file, bounded D1 calls, no DO", async () => {
-    const bytes = new Uint8Array(Math.floor(1.9 * 1024 * 1024)).fill(7);
+  it("250 KB inline base64: one R2 put per file, bounded D1 calls, one DO enqueue, no R2 read", async () => {
+    const bytes = new Uint8Array(250 * 1024).fill(7);
     const { env: e, n } = counted();
     await publish(e, {
       title: "inline",
@@ -143,8 +143,10 @@ describe("publish", () => {
       },
     });
     expect(n.r2Put).toBe(2);
-    expect(n.do).toBe(0);
-    // Size never changes the call count; ~10 D1 calls incl. auth + indexing.
+    // C3: indexing is one scheduleIndex RPC; extraction runs in the DO alarm.
+    expect(n.do).toBe(1);
+    expect(n.r2).toBe(n.r2Put);
+    // Size never changes the call count; ~10 D1 calls incl. auth.
     expect(n).toEqual(small);
     expect(n.d1 + n.r2).toBeLessThanOrEqual(16);
   });

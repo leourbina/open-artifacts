@@ -34,6 +34,7 @@ import {
   installGlobals,
   KVShim,
   meter,
+  meterDo,
   R2Shim,
 } from "./bench-env.js";
 
@@ -238,9 +239,38 @@ export async function setup(): Promise<Ctx> {
       format: "markdown",
       content: prose(4096, i),
     });
+  // Over the inline limit: create_upload, PUT, publish by uploadId.
+  const page = htmlDoc(500 * 1024);
+  const up = (await (
+    await ok(
+      await call(
+        env,
+        apiReq(
+          token,
+          "/api/v1/uploads",
+          "POST",
+          JSON.stringify({ path: "index.html", size: page.length }),
+        ),
+      ),
+      "upload",
+    )
+  ).json()) as { uploadId: string; artifactId: string; url: string };
+  const u = new URL(up.url);
+  await ok(
+    await call(
+      env,
+      new Request(`${APP}${u.pathname}${u.search}`, {
+        method: "PUT",
+        body: page,
+        headers: { "content-length": String(page.length) },
+      }),
+    ),
+    "upload PUT",
+  );
   const html500 = await publishVia(env, token, {
+    id: up.artifactId,
     title: "Big page",
-    files: { "index.html": htmlDoc(500 * 1024) },
+    files: { "index.html": { uploadId: up.uploadId } },
   });
   const withDb = (title: string) =>
     publishVia(env, token, {
@@ -275,7 +305,8 @@ export function scenarios(c: Ctx): Scenario[] {
     format: "markdown",
     content: prose(50 * 1024),
   });
-  const inline = Math.floor(1.9 * 1024 * 1024);
+  // Just under LIMITS.inlineBytes (256 KB), the largest inline publish.
+  const inline = 250 * 1024;
   const bin19 = JSON.stringify({
     title: "Inline base64",
     files: {
@@ -353,7 +384,7 @@ export function scenarios(c: Ctx): Scenario[] {
   return [
     // First, so nothing has run extractText on this shape yet.
     {
-      name: "publish 1.9 MB inline html, script-dense, COLD (first requests, no gc)",
+      name: "publish 250 KB inline html, script-dense, COLD (first requests, no gc)",
       budgetMs: 9,
       bucket: "worker",
       cold: true,
@@ -372,7 +403,7 @@ export function scenarios(c: Ctx): Scenario[] {
       },
     },
     {
-      name: "publish 1.9 MB inline base64 (binary file)",
+      name: "publish 250 KB inline base64 (binary file)",
       budgetMs: 9,
       bucket: "worker",
       prepare: async () => {
@@ -381,7 +412,7 @@ export function scenarios(c: Ctx): Scenario[] {
       },
     },
     {
-      name: "publish 1.9 MB inline base64 (html entry, + search indexing)",
+      name: "publish 250 KB inline base64 (html entry, indexing enqueued)",
       budgetMs: 9,
       bucket: "worker",
       prepare: async () => {
@@ -396,12 +427,40 @@ export function scenarios(c: Ctx): Scenario[] {
       ] as const
     ).map(
       ([shape, body]): Scenario => ({
-        name: `publish 1.9 MB inline html, ${shape} (+ search indexing)`,
+        name: `publish 250 KB inline html, ${shape} (indexing enqueued)`,
         budgetMs: 9,
         bucket: "worker",
         prepare: async () => {
           const req = apiReq(token, "/api/v1/artifacts", "POST", body);
           return () => call(env, req).then((r) => ok(r, `publish ${shape}`));
+        },
+      }),
+    ),
+    // C3: the same 250 KB html bodies, indexed by the DO alarm (its own invocation).
+    ...(
+      [
+        ["plain", html19b],
+        ["script-dense", scriptDense],
+        ["entity-dense", entityDense],
+      ] as const
+    ).map(
+      ([shape, body]): Scenario => ({
+        name: `DO alarm: index 250 KB html, ${shape}`,
+        budgetMs: 10,
+        bucket: "do",
+        info: true,
+        prepare: async () => {
+          const r = await ok(
+            await call(env, apiReq(token, "/api/v1/artifacts", "POST", body)),
+            `publish ${shape}`,
+          );
+          const { id } = (await r.json()) as { id: string };
+          const obj = env.ARTIFACT_RUNTIME.instance(id)
+            .obj as unknown as ArtifactRuntime;
+          return async () => {
+            await meterDo(() => obj.alarm());
+            if (obj.pendingIndex()) throw new Error("alarm did not index");
+          };
         },
       }),
     ),
@@ -517,6 +576,38 @@ export function scenarios(c: Ctx): Scenario[] {
           "publish_artifact",
           JSON.parse(md50) as Record<string, unknown>,
         ),
+    },
+    {
+      // C3: the largest body MCP reads (under MAX_MCP_BODY), refused by planFiles.
+      name: "MCP publish_artifact 1.2 MB inline (oversize → too_large)",
+      budgetMs: 10,
+      bucket: "worker",
+      info: true,
+      prepare: async () => {
+        const req = mcpReq(
+          enc.encode(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: 1,
+              method: "tools/call",
+              params: {
+                name: "publish_artifact",
+                arguments: {
+                  title: "big",
+                  format: "html",
+                  // ~1.2 MB, no characters JSON escapes.
+                  content: `<p>${"word ".repeat(240_000)}</p>`,
+                },
+              },
+            }),
+          ),
+        );
+        return async () => {
+          const t = await (await ok(await call(env, req), "mcp big")).text();
+          if (!t.includes("too_large: Inline content is limited"))
+            throw new Error(`mcp oversize: ${t.slice(0, 200)}`);
+        };
+      },
     },
     // ---- ledger-deferred scenarios (budget: the 10 ms request limit)
     {

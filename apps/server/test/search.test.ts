@@ -13,11 +13,11 @@ import { createApp } from "../src/app.js";
 import { patch, publish } from "../src/services/artifacts.js";
 import {
   extractText,
-  indexVersion,
+  indexVersionOrThrow,
   sanitizeQuery,
 } from "../src/services/search.js";
 import { getUser } from "../src/services/users.js";
-import { api, fetchAndWait, login } from "./helpers.js";
+import { api, fetchAndWait, login, runIndex } from "./helpers.js";
 
 const app = createApp();
 const tag = newId().slice(0, 6).toLowerCase().replace(/\d/g, "q");
@@ -32,8 +32,12 @@ async function mk(prefix: string, role: Member["role"] = "member"): Promise<U> {
   return { ...l, member: m };
 }
 
-const pub = (u: U, input: Record<string, unknown>) =>
-  publish(env, u.member, input as never, null);
+/** Publishes, then fires the DO alarm that indexes it (C3). */
+const pub = async (u: U, input: Record<string, unknown>) => {
+  const r = await publish(env, u.member, input as never, null);
+  await runIndex(r.id);
+  return r;
+};
 
 const search = (u: U | null, q: string, extra = "") =>
   api(app, `${R.search}?q=${encodeURIComponent(q)}${extra}`, u?.cookie ?? null);
@@ -248,10 +252,10 @@ describe("search", () => {
       format: "markdown",
       content: `second${tag}`,
     });
-    await indexVersion(env, a.id, 1); // stale: ignored
+    await indexVersionOrThrow(env, a.id, 1); // stale: a no-op
     expect((await hits(o, `first${tag}`)).items).toEqual([]);
     expect((await hits(o, `second${tag}`)).items).toHaveLength(1);
-    await indexVersion(env, "nonexistent00000", 1); // never throws
+    await indexVersionOrThrow(env, "nonexistent00000", 1); // gone: a no-op
   });
 });
 

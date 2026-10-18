@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { LIMITS, newId, R } from "@oa/shared";
+import { INLINE_TOO_LARGE_MESSAGE, LIMITS, newId, R } from "@oa/shared";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { ApiError } from "../src/http/errors.js";
@@ -96,27 +96,44 @@ describe("publish path validation (Review Focus #2)", () => {
     expect(r.status).toBe(400);
   });
 
-  it("2 MB + 1 byte inline content → 413", async () => {
+  it("256 KB + 1 byte inline content → 413 with the upload hint", async () => {
+    expect(LIMITS.inlineBytes).toBe(256 * 1024);
     const r = await post({
       title: "t",
       format: "markdown",
       content: "x".repeat(LIMITS.inlineBytes + 1),
     });
     expect(r.status).toBe(413);
-    expect((await errOf(r)).code).toBe("too_large");
+    const e = await errOf(r);
+    expect(e.code).toBe("too_large");
+    expect(e.message).toBe(
+      "Inline content is limited to 256 KB. Use create_upload for larger files, then publish with {uploadId}.",
+    );
   });
 
-  it("inline files summing past 2 MB → 413", async () => {
+  it("a body past the inline-derived cap → 413 with the upload hint", async () => {
+    const r = await post({
+      title: "t",
+      format: "markdown",
+      content: "x".repeat(LIMITS.inlineBytes * 3),
+    });
+    expect(r.status).toBe(413);
+    expect((await errOf(r)).message).toBe(INLINE_TOO_LARGE_MESSAGE);
+  });
+
+  it("inline files summing past 256 KB → 413", async () => {
     const half = "x".repeat(LIMITS.inlineBytes / 2);
     const r = await post({
       title: "t",
       files: { "a.txt": half, "b.txt": half, "c.txt": "y" },
     });
     expect(r.status).toBe(413);
-    expect((await errOf(r)).details).toMatchObject({ path: "c.txt" });
+    const e = await errOf(r);
+    expect(e.details).toMatchObject({ path: "c.txt" });
+    expect(e.message).toBe(INLINE_TOO_LARGE_MESSAGE);
   });
 
-  it("base64 decoding to 2 MB + 1 → 413", async () => {
+  it("base64 decoding to 256 KB + 1 → 413", async () => {
     const bytes = new Uint8Array(LIMITS.inlineBytes + 1);
     let s = "";
     for (let i = 0; i < bytes.length; i += 0x8000)

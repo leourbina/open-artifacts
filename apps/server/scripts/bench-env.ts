@@ -64,6 +64,20 @@ function metered<T>(bucket: "external" | "durableObject", fn: () => T): T {
   }
 }
 
+/**
+ * Meters `fn` as a DO invocation of its own (e.g. an alarm): its CPU minus
+ * D1/R2 shim time goes to the DO bucket.
+ */
+export async function meterDo<T>(fn: () => Promise<T>): Promise<T> {
+  const t = cpuMicros();
+  const e = meter.external;
+  try {
+    return await fn();
+  } finally {
+    meter.durableObject += cpuMicros() - t - (meter.external - e);
+  }
+}
+
 // ----------------------------------------------------------------------- D1
 
 type Param = string | number | bigint | null | Uint8Array;
@@ -185,10 +199,13 @@ export class R2Shim {
   >();
   async put(
     key: string,
-    value: Uint8Array | ArrayBuffer | string,
+    value: Uint8Array | ArrayBuffer | string | ReadableStream,
     opts?: { httpMetadata?: { contentType?: string } },
   ) {
     meter.r2Ops++;
+    // Upload PUTs stream (bench setup only).
+    if (value instanceof ReadableStream)
+      value = new Uint8Array(await new Response(value).arrayBuffer());
     const bytes =
       typeof value === "string"
         ? new TextEncoder().encode(value)
@@ -316,8 +333,16 @@ function cursor(rows: Record<string, unknown>[]) {
 export class DOState {
   readonly db = new DatabaseSync(":memory:");
   readonly sockets: FakeSocket[] = [];
+  alarm: number | null = null;
   readonly storage = {
     sql: new SqlStorageShim(this.db),
+    getAlarm: async () => this.alarm,
+    setAlarm: async (t: number) => {
+      this.alarm = t;
+    },
+    deleteAlarm: async () => {
+      this.alarm = null;
+    },
     transactionSync: <T>(fn: () => T): T => {
       this.db.exec("savepoint t");
       try {

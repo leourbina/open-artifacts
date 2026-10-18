@@ -114,9 +114,15 @@ export function createServer(ctx: McpContext): McpServer {
   return server;
 }
 
-/** Base64 inflates inline bytes by 4/3; allow JSON-RPC overhead on top (as REST). */
+/**
+ * The largest tool argument (base64 inline publish at 4/3, or an
+ * artifact_data_set document) plus JSON-RPC overhead. Oversize inline content
+ * under it reaches publish_artifact, which answers too_large with the
+ * create_upload hint.
+ */
 export const MAX_MCP_BODY =
-  Math.ceil((LIMITS.inlineBytes * 4) / 3) + 256 * 1024;
+  Math.max(Math.ceil((LIMITS.inlineBytes * 4) / 3), LIMITS.docBytes) +
+  256 * 1024;
 
 const tooLarge = () =>
   errorJson(413, "too_large", `Request body exceeds ${MAX_MCP_BODY} bytes`);

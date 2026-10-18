@@ -1,10 +1,11 @@
 import type { Env } from "./env.js";
 import { sweepUngrantedClients } from "./mcp/registrations.js";
-import { purgeDeleted } from "./services/artifacts.js";
+import { purgeDeleted, reindexStale } from "./services/artifacts.js";
 import { sweepUploads } from "./services/uploads.js";
 
 /** Daily cron: purge soft-deleted artifacts past 30 days, sweep stale uploads,
- * delete OAuth clients that never completed a grant. */
+ * delete OAuth clients that never completed a grant, re-enqueue search
+ * indexing that never completed (C3). */
 export async function scheduled(
   _event: ScheduledController,
   env: Env,
@@ -16,6 +17,7 @@ export async function scheduled(
       purgeDeleted(env, now),
       sweepUploads(env, now),
       sweepUngrantedClients(env, now),
+      reindexStale(env, now),
     ]).then((rs) => {
       for (const r of rs)
         if (r.status === "rejected") console.error("cron", r.reason);

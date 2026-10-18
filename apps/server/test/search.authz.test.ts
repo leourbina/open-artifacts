@@ -8,7 +8,7 @@ import { normEmail } from "../src/db/email.js";
 import { shares } from "../src/db/schema.js";
 import { publish, softDelete, undelete } from "../src/services/artifacts.js";
 import { getUser } from "../src/services/users.js";
-import { api, login } from "./helpers.js";
+import { api, login, runIndex } from "./helpers.js";
 
 // Review Focus #3: search never leaks what the caller can't see.
 const app = createApp();
@@ -28,13 +28,17 @@ async function mk(prefix: string, role: Member["role"] = "member"): Promise<U> {
   return { ...l, member: m, email };
 }
 
-const pub = (title: string, visibility: string) =>
-  publish(
+/** Publishes, then fires the DO alarm that indexes it (C3). */
+const pub = async (title: string, visibility: string) => {
+  const r = await publish(
     env,
     owner.member,
     { title, visibility, format: "markdown", content: word } as never,
     null,
   );
+  await runIndex(r.id);
+  return r;
+};
 
 const ids = async (u: U) => {
   const r = await api(app, `${R.search}?q=${word}&limit=100`, u.cookie);
@@ -97,6 +101,7 @@ describe("search authz", () => {
       .run();
 
     await undelete(env, owner.member, team.id);
+    await runIndex(team.id);
     expect(await ids(member)).toEqual([team.id, pubA.id].sort());
   });
 });

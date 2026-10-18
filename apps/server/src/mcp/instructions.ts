@@ -20,10 +20,10 @@ Publishing
 - Add a short message describing the change. Visibility defaults to private.
 
 Large files
-- Inline content is limited to 2 MB per call. For anything larger (up to 25 MB per file):
-  1. create_upload { path, size, contentType, artifactId? } returns { uploadId, artifactId, url }.
-  2. PUT the raw bytes to url.
-  3. publish_artifact { id: artifactId, files: { "<path>": { "uploadId": "<uploadId>" }, ... } }.
+- Inline content (content, text files and base64 together) is limited to 256 KB per call; over it, publish_artifact fails with too_large. For anything larger (up to 25 MB per file), upload each large file:
+  1. create_upload { path, size, contentType, artifactId? } returns { uploadId, artifactId, url }. Omit artifactId for a new artifact and reuse the returned artifactId for every other file.
+  2. PUT the raw bytes to url (valid 1 hour).
+  3. publish_artifact { id: artifactId, title, entry, files: { "<path>": { "uploadId": "<uploadId>" }, ... } }; small files can stay inline next to uploaded ones.
 
 Reading
 - get_artifact returns metadata and, for text files up to 1 MB, the content; otherwise a downloadUrl valid for 10 minutes.

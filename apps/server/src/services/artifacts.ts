@@ -36,7 +36,7 @@ import { runtimeStub } from "../runtime/do.js";
 import { closeRuntimeSockets } from "../runtime/revoke.js";
 import { type ManifestEntry, materialize, planFiles } from "./manifest.js";
 import { getSettings } from "./members.js";
-import { ftsFilter, indexVersion, syncTitleStmt } from "./search.js";
+import { ftsFilter, seedSearchStmt, syncTitleStmt } from "./search.js";
 
 type Ctx = Pick<ExecutionContext, "waitUntil">;
 const CAPS = { db: false, viewer: false, storage: false };
@@ -46,6 +46,30 @@ const later = async (ctx: Ctx | undefined, p: Promise<unknown>) => {
   if (ctx) ctx.waitUntil(safe);
   else await safe;
 };
+
+/**
+ * Queues search indexing of `version` on the artifact's DO (C3): one cheap
+ * RPC, so extraction never runs on the request's CPU. Never throws: a lost
+ * enqueue leaves the artifact searchable by title/description.
+ */
+export async function enqueueIndex(
+  env: Env,
+  id: string,
+  version: number,
+): Promise<void> {
+  try {
+    await runtimeStub(env, id).scheduleIndex(id, version);
+  } catch (e) {
+    console.error(
+      JSON.stringify({
+        evt: "index_enqueue_failed",
+        artifactId: id,
+        version,
+        error: String((e as Error)?.message ?? e).slice(0, 300),
+      }),
+    );
+  }
+}
 
 /**
  * - `create` (POST R.artifacts): no id, or a reserved id of this user's; any other id → 400.
@@ -227,6 +251,11 @@ export async function publish(
       guardArgs,
     }),
   );
+  // Title/description searchable now (a new row, or the existing row synced
+  // on rename); the body is indexed asynchronously.
+  stmts.push(seedSearchStmt(db, id));
+  if (!create && (input.title !== undefined || input.description !== undefined))
+    stmts.push(syncTitleStmt(env, id));
   // Last: the guard above still sees every listed upload unconsumed.
   if (n)
     stmts.push(
@@ -265,7 +294,7 @@ export async function publish(
       throw new ApiError("conflict", "An upload was already used");
     throw notFound();
   }
-  await later(ctx, indexVersion(env, id, version));
+  await enqueueIndex(env, id, version);
   if (accessChanged)
     await closeRuntimeSockets(env, [id], "access changed", ctx);
   return { id, version, url: appOrigin(env) + viewerPath(id) };
@@ -731,7 +760,7 @@ export async function restoreVersion(
   id: string,
   v: number,
   agent: AgentRef | null,
-  ctx?: Ctx,
+  _ctx?: Ctx,
 ): Promise<PublishResult> {
   await requireAccess(env, asUser(user), id, "editor");
   const src = await env.DB.prepare(
@@ -747,8 +776,8 @@ export async function restoreVersion(
       format: Format;
     }>();
   if (!src) throw notFound();
-  const res = await env.DB.batch<{ current_version: number }>(
-    allocateVersion(env.DB, {
+  const res = await env.DB.batch<{ current_version: number }>([
+    ...allocateVersion(env.DB, {
       id,
       now: Date.now(),
       agent,
@@ -759,10 +788,11 @@ export async function restoreVersion(
       language: src.language,
       message: `Restored v${v}`,
     }),
-  );
+    seedSearchStmt(env.DB, id),
+  ]);
   const version = res[0]?.results[0]?.current_version;
   if (version === undefined) throw notFound();
-  await later(ctx, indexVersion(env, id, version));
+  await enqueueIndex(env, id, version);
   return { id, version, url: appOrigin(env) + viewerPath(id) };
 }
 
@@ -840,22 +870,49 @@ export async function undelete(
   env: Env,
   user: Member,
   id: string,
-  ctx?: Ctx,
+  _ctx?: Ctx,
 ): Promise<ArtifactSummary> {
   const a = await requireAccess(env, asUser(user), id, "owner", {
     allowDeleted: true,
   });
   if (a.deletedAt != null) {
     const cutoff = Date.now() - LIMITS.softDeleteDays * DAY;
-    const r = await env.DB.prepare(
-      "update artifacts set deleted_at = null where id = ? and deleted_at >= ?",
-    )
-      .bind(id, cutoff)
-      .run();
-    if (!r.meta.changes) throw notFound();
-    await later(ctx, indexVersion(env, id, a.currentVersion));
+    const [r] = await env.DB.batch([
+      env.DB.prepare(
+        "update artifacts set deleted_at = null where id = ? and deleted_at >= ?",
+      ).bind(id, cutoff),
+      seedSearchStmt(env.DB, id),
+    ]);
+    if (!r?.meta.changes) throw notFound();
+    await enqueueIndex(env, id, a.currentVersion);
   }
   return getSummary(env, asUser(user), id);
+}
+
+// ------------------------------------------------------------ re-indexing
+
+/** Current versions re-enqueued per cron run. */
+export const REINDEX_BATCH = 20;
+/** Leaves fresh publishes to their own pending job. */
+const REINDEX_MIN_AGE_MS = 10 * 60_000;
+
+/**
+ * Cron safety net for lost enqueues (C3): re-enqueues up to REINDEX_BATCH
+ * live artifacts whose current non-pdf version is still text_indexed = 0
+ * (oldest first) and returns how many. A pdf's text comes from its viewer.
+ */
+export async function reindexStale(env: Env, now: number): Promise<number> {
+  const { results } = await env.DB.prepare(
+    `select a.id, a.current_version as v from artifacts a
+     join versions v on v.artifact_id = a.id and v.version = a.current_version
+     where a.deleted_at is null and v.text_indexed = 0
+       and coalesce(v.format, a.format) <> 'pdf' and a.updated_at < ?
+     order by a.updated_at limit ?`,
+  )
+    .bind(now - REINDEX_MIN_AGE_MS, REINDEX_BATCH)
+    .all<{ id: string; v: number }>();
+  await Promise.all(results.map((r) => enqueueIndex(env, r.id, r.v)));
+  return results.length;
 }
 
 // -------------------------------------------------------------------- purge

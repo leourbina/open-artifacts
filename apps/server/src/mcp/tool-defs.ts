@@ -6,12 +6,12 @@ export const TOOL_DEFS = [
   {
     name: "publish_artifact",
     description:
-      "Publish an artifact, or a new version when `id` is given. Pass `content` (one file, with `format`) or `files` (path → text, or { base64 } for binary, or { uploadId } from create_upload) plus `entry`. Inline payloads are limited to 2 MB. Returns id, version and view URL.",
+      "Publish an artifact, or a new version when `id` is given. Pass `content` (one file, with `format`) or `files` (path → text, or { base64 } for binary, or { uploadId } from create_upload) plus `entry`. Inline payloads (content, text and base64 together) are limited to 256 KB; for larger files call create_upload first, then pass { uploadId } in `files`. Returns id, version and view URL.",
   },
   {
     name: "create_upload",
     description:
-      "Get a signed URL to PUT one large file (over 2 MB, up to 25 MB), then pass its uploadId in publish_artifact `files`. Omit artifactId to reserve a new artifact id.",
+      'Get a signed URL to PUT one large file (over the 256 KB inline limit, up to 25 MB), then publish_artifact with `id` = the returned artifactId and `files: { "<path>": { uploadId } }`. Omit artifactId to reserve a new artifact id; reuse it for the artifact\'s other uploads.',
   },
   {
     name: "get_artifact",

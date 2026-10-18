@@ -6,6 +6,8 @@ import {
   ArtifactSummarySchema,
   ContentUrlSchema,
   DataDocSchema,
+  INLINE_TOO_LARGE_MESSAGE,
+  LIMITS,
   MemberSchema,
   MeSchema,
   OAuthClientSchema,
@@ -601,6 +603,19 @@ describe("round 2", () => {
     ).toBe(
       await text(await call("GET", R.versionFile(art.id, 1, "index.html"))),
     );
+  });
+  it("C3: inline content over 256 KB → 413 too_large with the upload hint", async () => {
+    fresh();
+    const r = await call("POST", R.artifacts, {
+      title: "big",
+      format: "html",
+      content: "x".repeat(LIMITS.inlineBytes + 1),
+    });
+    expect(r.status).toBe(413);
+    expect((await json(r)).error).toEqual({
+      code: "too_large",
+      message: INLINE_TOO_LARGE_MESSAGE,
+    });
   });
   it("publish builds VersionInfo from files/entry", async () => {
     fresh();

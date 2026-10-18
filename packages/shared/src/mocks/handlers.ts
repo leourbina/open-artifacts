@@ -19,7 +19,11 @@ import type { z } from "zod";
 import { type ErrorCode, QUOTA_MESSAGE, STATUS_FOR } from "../errors.js";
 import type { Format } from "../formats.js";
 import { newId, newPat } from "../ids.js";
-import { LIMITS, VERSIONS_PAGE_SIZE } from "../limits.js";
+import {
+  INLINE_TOO_LARGE_MESSAGE,
+  LIMITS,
+  VERSIONS_PAGE_SIZE,
+} from "../limits.js";
 import { viewerPath } from "../routes.js";
 import {
   ArtifactPatchSchema,
@@ -106,6 +110,12 @@ async function body<T extends z.ZodType>(req: Request, schema: T) {
     return { error: badRequest("Body must be valid JSON") };
   }
   const r = schema.safeParse(raw);
+  // Oversize inline content is 413, as on the server.
+  if (
+    !r.success &&
+    r.error.issues.some((i) => i.message === INLINE_TOO_LARGE_MESSAGE)
+  )
+    return { error: err("too_large", INLINE_TOO_LARGE_MESSAGE) };
   if (!r.success)
     return {
       error: err("bad_request", "Invalid request body", r.error.issues),

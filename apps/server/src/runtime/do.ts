@@ -18,6 +18,7 @@ import {
 } from "@oa/shared";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
+import { indexVersionOrThrow } from "../services/search.js";
 
 // Errors cross the RPC boundary as plain Error (subclass + fields are lost), so the
 // code rides in the message: "oa:<code>:<message>". B13 maps it back with toRuntimeApiError.
@@ -65,6 +66,15 @@ const MAX_SOCKETS_PER_ACTOR = 20;
 const SOCKET_TTL_MS = LIMITS.signedUrlTtlSec * 1000;
 /** The alarm also closes sockets this close to their TTL, batching alarms (≤1/min). */
 const SOCKET_TTL_SLACK_MS = 60_000;
+/**
+ * Search indexing (C3) runs this long after scheduleIndex, from the alarm:
+ * a burst of publishes indexes only the newest version.
+ */
+export const INDEX_DELAY_MS = 2_000;
+/** Index attempts per version before {evt:"index_failed"}. */
+export const INDEX_MAX_ATTEMPTS = 5;
+/** Retry delay after the n-th failure (1-based): 10 s, 20 s, 40 s, 80 s. */
+export const indexBackoffMs = (n: number) => 10_000 * 2 ** (n - 1);
 /** Header carrying the subscriber's actor from the route to fetch. */
 export const ACTOR_HEADER = "X-OA-Actor";
 /**
@@ -221,6 +231,11 @@ create table if not exists totals (
   id integer primary key check (id = 1), bytes integer not null,
   day integer not null, writes integer not null, cols text not null
 );
+create table if not exists index_job (
+  id integer primary key check (id = 1), artifact_id text not null,
+  version integer not null, attempts integer not null, due integer not null,
+  seq integer not null
+);
 `;
 
 type SqlParam = string | number | null;
@@ -237,6 +252,13 @@ export class ArtifactRuntime extends DurableObject<Env> {
 
   /** Clock; overridable in tests. */
   now: () => number = () => Date.now();
+
+  /** The search indexer the alarm runs; overridable in tests. */
+  indexer: (
+    env: Pick<Env, "DB" | "FILES">,
+    artifactId: string,
+    version: number,
+  ) => Promise<void> = indexVersionOrThrow;
 
   /**
    * Creates the schema (and migrates pre-M2 tables) outside any transaction:
@@ -837,20 +859,94 @@ export class ArtifactRuntime extends DurableObject<Env> {
     this.ctx.acceptWebSocket(pair[1], tags);
     const t = this.now();
     pair[1].serializeAttachment({ t } satisfies SocketMeta);
-    if ((await this.ctx.storage.getAlarm()) === null)
-      await this.ctx.storage.setAlarm(t + SOCKET_TTL_MS);
+    await this.armAt(t + SOCKET_TTL_MS);
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
+  /** Moves the one alarm earlier to `t` (never later): it serves every kind of work. */
+  private async armAt(t: number): Promise<void> {
+    const cur = await this.ctx.storage.getAlarm();
+    if (cur === null || cur > t) await this.ctx.storage.setAlarm(t);
+  }
+
   /**
-   * Socket lifetime: closes sockets older than LIMITS.signedUrlTtlSec (minus a
-   * 60 s batching slack) with 4408 "reconnect"; the client reconnects through
-   * the shell, which re-checks access. Re-arms for the oldest remaining socket.
+   * Queues search indexing of `version` (C3): one pending job per artifact.
+   * A newer version replaces the job (attempts reset, due INDEX_DELAY_MS from
+   * now); the same version only bumps `seq` (keeping any retry backoff), so a
+   * re-enqueue while the alarm runs it is never dropped; an older one is
+   * ignored.
+   */
+  async scheduleIndex(artifactId: string, version: number): Promise<void> {
+    if (typeof artifactId !== "string" || artifactId.length > 64)
+      fail("bad_request", "invalid artifact id");
+    if (!Number.isSafeInteger(version) || version < 1)
+      fail("bad_request", "invalid version");
+    const due = this.now() + INDEX_DELAY_MS;
+    this.sql.exec(
+      `insert into index_job (id, artifact_id, version, attempts, due, seq) values (1, ?, ?, 0, ?, 1)
+       on conflict (id) do update set
+         seq = index_job.seq + 1,
+         attempts = case when excluded.version > index_job.version then 0 else index_job.attempts end,
+         due = case when excluded.version > index_job.version then excluded.due else index_job.due end,
+         artifact_id = excluded.artifact_id, version = excluded.version
+       where excluded.version >= index_job.version`,
+      artifactId,
+      version,
+      due,
+    );
+    await this.armAt(due);
+  }
+
+  /** The pending index job, if any (tests and the alarm). */
+  pendingIndex(): {
+    artifactId: string;
+    version: number;
+    attempts: number;
+    due: number;
+    seq: number;
+  } | null {
+    const r = this.sql
+      .exec<{
+        artifact_id: string;
+        version: number;
+        attempts: number;
+        due: number;
+        seq: number;
+      }>(
+        "select artifact_id, version, attempts, due, seq from index_job where id = 1",
+      )
+      .toArray()[0];
+    return r
+      ? {
+          artifactId: r.artifact_id,
+          version: r.version,
+          attempts: r.attempts,
+          due: r.due,
+          seq: r.seq,
+        }
+      : null;
+  }
+
+  /**
+   * One alarm, multiplexed by the next due time of both kinds of work:
+   * - Socket lifetime: closes sockets older than LIMITS.signedUrlTtlSec (minus
+   *   a 60 s batching slack) with 4408 "reconnect"; the client reconnects
+   *   through the shell, which re-checks access.
+   * - Search indexing: runs the pending job (one version per alarm): a first
+   *   attempt whenever the alarm fires (INDEX_DELAY_MS is a best-effort
+   *   debounce), a retry only once its backoff is due.
+   *   A failure retries with indexBackoffMs, up to INDEX_MAX_ATTEMPTS, then
+   *   logs {evt:"index_failed"} and drops the job. A job re-enqueued while
+   *   it ran (seq changed) stays pending.
+   * Re-arms for the oldest remaining socket or the pending job.
    */
   override async alarm(): Promise<void> {
+    const sockets = this.ctx.getWebSockets();
+    const job = this.pendingIndex();
+    if (!job && sockets.length === 0) return;
     const now = this.now();
     let next = Number.POSITIVE_INFINITY;
-    for (const ws of this.ctx.getWebSockets()) {
+    for (const ws of sockets) {
       const t = (ws.deserializeAttachment() as SocketMeta | null)?.t ?? 0;
       if (now - t >= SOCKET_TTL_MS - SOCKET_TTL_SLACK_MS) {
         try {
@@ -860,6 +956,36 @@ export class ArtifactRuntime extends DurableObject<Env> {
         }
       } else next = Math.min(next, t + SOCKET_TTL_MS);
     }
+    if (job && (job.attempts === 0 || job.due <= now)) {
+      const same = "where id = 1 and seq = ?";
+      const key = [job.seq] as const;
+      try {
+        await this.indexer(this.env, job.artifactId, job.version);
+        this.sql.exec(`delete from index_job ${same}`, ...key);
+      } catch (e) {
+        const attempts = job.attempts + 1;
+        if (attempts >= INDEX_MAX_ATTEMPTS) {
+          console.error(
+            JSON.stringify({
+              evt: "index_failed",
+              artifactId: job.artifactId,
+              version: job.version,
+              attempts,
+              error: String((e as Error)?.message ?? e).slice(0, 300),
+            }),
+          );
+          this.sql.exec(`delete from index_job ${same}`, ...key);
+        } else
+          this.sql.exec(
+            `update index_job set attempts = ?, due = ? ${same}`,
+            attempts,
+            this.now() + indexBackoffMs(attempts),
+            ...key,
+          );
+      }
+    }
+    const pending = this.pendingIndex();
+    if (pending) next = Math.min(next, pending.due);
     if (next !== Number.POSITIVE_INFINITY)
       await this.ctx.storage.setAlarm(next);
   }
@@ -908,6 +1034,7 @@ export class ArtifactRuntime extends DurableObject<Env> {
       }
     }
     this.ready = false;
+    await this.ctx.storage.deleteAlarm();
     await this.ctx.storage.deleteAll();
     this.ready = false;
   }
@@ -927,6 +1054,8 @@ type RpcMethods =
   | "updateRaw"
   | "storageSetRaw"
   | "closeSockets"
+  | "scheduleIndex"
+  | "pendingIndex"
   | "storageDelete"
   | "storageList"
   | "destroy";

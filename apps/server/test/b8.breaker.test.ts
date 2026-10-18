@@ -12,7 +12,7 @@ import { createApp } from "../src/app.js";
 import { publish } from "../src/services/artifacts.js";
 import { extractText } from "../src/services/search.js";
 import { getUser } from "../src/services/users.js";
-import { api, fetchAndWait, login } from "./helpers.js";
+import { api, fetchAndWait, login, runIndex } from "./helpers.js";
 
 const app = createApp();
 const tag = newId().slice(0, 6).toLowerCase().replace(/\d/g, "q");
@@ -55,7 +55,7 @@ describe("B8 breaker", () => {
   });
 
   it("author-supplied \\u0002/\\u0003 never reach the snippet", async () => {
-    await publish(
+    const a = await publish(
       env,
       o.member,
       {
@@ -65,6 +65,7 @@ describe("B8 breaker", () => {
       } as never,
       null,
     );
+    await runIndex(a.id);
     const r = await search(`forgebody${tag}`);
     const h = PageSchema(SearchHitSchema).parse(await r.json());
     const s = h.items[0]?.snippet ?? "";

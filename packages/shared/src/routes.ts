@@ -49,7 +49,15 @@ export const R = {
   uploads: "/api/v1/uploads",
   /** PUT raw body (signed: ?sig=...&exp=...) -> 204 */
   upload: (uploadId: string) => `/api/v1/uploads/${seg(uploadId)}`,
-  /** GET ?q=&cursor=&limit= -> Page<SearchHit> */
+  /**
+   * GET ?q=&cursor=&limit= -> Page<SearchHit>
+   *
+   * Body text is indexed asynchronously after publish, restore and undelete
+   * (C3), usually within a few seconds (longer while retrying). Until then a
+   * new or undeleted artifact matches on title/description only, and a new
+   * version still matches the previous version's body. Title/description
+   * changes (PATCH) apply immediately.
+   */
   search: "/api/v1/search",
   /** GET -> Member[]; POST MemberInvite -> Member */
   members: "/api/v1/members",

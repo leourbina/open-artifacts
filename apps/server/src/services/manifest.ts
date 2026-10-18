@@ -2,6 +2,7 @@ import {
   contentTypeFor,
   type Format,
   findCaseCollision,
+  INLINE_TOO_LARGE_MESSAGE,
   inferFormat,
   inferLanguage,
   LIMITS,
@@ -35,6 +36,12 @@ const bad = (path: string, reason: string, message?: string) =>
   });
 const tooLarge = (path: string, limit: number) =>
   new ApiError("too_large", `"${path}" exceeds the ${limit}-byte limit`, {
+    path,
+    reason: "too_large",
+  });
+/** Inline bytes over LIMITS.inlineBytes: 413 with the create_upload hint (C3). */
+const inlineTooLarge = (path: string) =>
+  new ApiError("too_large", INLINE_TOO_LARGE_MESSAGE, {
     path,
     reason: "too_large",
   });
@@ -135,7 +142,7 @@ export function planFiles(input: PublishInput): Plan {
   const enc = new TextEncoder();
   let budget: number = LIMITS.inlineBytes;
   const take = (path: string, bytes: Uint8Array) => {
-    if (bytes.length > budget) throw tooLarge(path, LIMITS.inlineBytes);
+    if (bytes.length > budget) throw inlineTooLarge(path);
     budget -= bytes.length;
   };
   const { content, files } = input as { content?: unknown; files?: unknown };
@@ -153,7 +160,7 @@ export function planFiles(input: PublishInput): Plan {
       (format === "code" ? (entryIn ? inferLanguage(entryIn) : "text") : null);
     const entry = entryIn ?? defaultEntry(format, language);
     // UTF-8 is ≥ 1 byte per UTF-16 unit: reject before encoding when obviously too big.
-    if (content.length > budget) throw tooLarge(entry, LIMITS.inlineBytes);
+    if (content.length > budget) throw inlineTooLarge(entry);
     const bytes = enc.encode(content);
     take(entry, bytes);
     return {
@@ -217,7 +224,7 @@ export function planFiles(input: PublishInput): Plan {
   for (const [path, key] of byPath) {
     const v = record[key];
     if (typeof v === "string") {
-      if (v.length > budget) throw tooLarge(key, LIMITS.inlineBytes);
+      if (v.length > budget) throw inlineTooLarge(key);
       const bytes = enc.encode(v);
       take(key, bytes);
       out.push({ path, source: { bytes } });
@@ -225,7 +232,7 @@ export function planFiles(input: PublishInput): Plan {
       const b64 = (v as { base64: unknown }).base64;
       if (typeof b64 !== "string") throw bad(key, "invalid_base64");
       if (b64.length > Math.ceil((budget * 4) / 3) + 3)
-        throw tooLarge(key, LIMITS.inlineBytes);
+        throw inlineTooLarge(key);
       const bytes = decodeBase64(b64);
       if (!bytes) throw bad(key, "invalid_base64");
       take(key, bytes);
