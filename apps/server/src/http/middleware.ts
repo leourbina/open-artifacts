@@ -5,6 +5,7 @@ import { verifyPat } from "../auth/pat.js";
 import { readSession } from "../auth/session.js";
 import type { Env } from "../env.js";
 import { getUser } from "../services/users.js";
+import { ApiError, appOrigin, toErrorResponse } from "./errors.js";
 
 /** Hono Variables set by `session()`; use as `Hono<{ Bindings: Env; Variables: AppVariables }>`. */
 export type AppVariables = {
@@ -64,5 +65,43 @@ export const session = (): MiddlewareHandler<AppEnv> => async (c, next) => {
     const s = await readSession(c.env, getCookie(c, "oa_session"));
     if (s) c.set("user", await getUser(c.env, s.uid));
   }
+  await next();
+};
+
+export const SESSION_COOKIE = "oa_session";
+export const CSRF_HEADER = "X-OA-Request";
+
+/**
+ * Mutating requests (anything but GET/HEAD) that authenticate by session cookie
+ * (no `Authorization: Bearer`, and an oa_session cookie present) must send
+ * `X-OA-Request: 1`, else 403 csrf. Bearer/PAT requests are exempt. Mount on
+ * `/api/v1/*` and `/auth/logout`.
+ */
+export const csrf = (): MiddlewareHandler<AppEnv> => async (c, next) => {
+  const m = c.req.method;
+  if (m !== "GET" && m !== "HEAD") {
+    const bearer = BEARER.test(c.req.header("authorization") ?? "");
+    const cookie = getCookie(c, SESSION_COOKIE) !== undefined;
+    if (!bearer && cookie && c.req.header(CSRF_HEADER) !== "1")
+      return toErrorResponse(
+        new ApiError("csrf", `Missing ${CSRF_HEADER}: 1 header`),
+      );
+  }
+  await next();
+};
+
+/**
+ * Rejects cross-site requests (403 csrf): `Sec-Fetch-Site: cross-site`, or an
+ * `Origin` header that differs from the app origin. Used for POST /auth/logout,
+ * which must not be triggerable by another site.
+ */
+export const sameOrigin = (): MiddlewareHandler<AppEnv> => async (c, next) => {
+  const site = c.req.header("sec-fetch-site");
+  const origin = c.req.header("origin");
+  if (
+    site === "cross-site" ||
+    (origin !== undefined && origin !== appOrigin(c.env))
+  )
+    return toErrorResponse(new ApiError("csrf", "Cross-site request"));
   await next();
 };

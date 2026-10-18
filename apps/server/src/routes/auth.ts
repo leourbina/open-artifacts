@@ -49,7 +49,7 @@ export function mountAuth(app: AppType): void {
     }
   });
 
-  // CSRF protection for this lands with B5.
+  // CSRF-guarded by csrf() in createApp.
   app.post(AUTH.logout, (c) => {
     const h = new Headers({ "cache-control": "no-store" });
     h.append("set-cookie", clearSessionCookie(c.env));
