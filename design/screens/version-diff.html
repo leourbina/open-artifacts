@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Compare versions — Q4 data migration plan — Open Artifacts</title>
+<!-- D4 screen mockup. Params: ?theme=light|dark &state=default|empty|loading|error &menu=none|a|b -->
+<link rel="stylesheet" href="../../packages/ui/src/tokens/tokens.css">
+<style>
+/* ---------- Base (shared by every D4 screen; mirrors packages/ui components) ---------- */
+*{box-sizing:border-box}
+html,body{margin:0}
+html{overflow-x:hidden}
+[hidden]{display:none !important}
+body{min-height:100vh;background:var(--oa-bg);color:var(--oa-text);font:400 var(--oa-text-sm)/1.45 var(--oa-font-sans);-webkit-font-smoothing:antialiased;overflow-x:hidden}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;padding:0}
+a{color:inherit}
+:focus-visible{outline:2px solid var(--oa-focus);outline-offset:2px}
+svg{display:block}
+.ic{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.ic.sm{width:14px;height:14px}
+.num{font-variant-numeric:tabular-nums}
+.mono{font-family:var(--oa-font-mono)}
+.muted{color:var(--oa-text-muted)}
+.spacer{flex:1}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+
+/* Button (Button.module.css) */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:28px;padding:0 10px;border:1px solid var(--oa-border);border-radius:var(--oa-radius-md);background:var(--oa-surface);color:var(--oa-text);font:500 var(--oa-text-sm)/1 var(--oa-font-sans);white-space:nowrap;text-decoration:none;transition:border-color var(--oa-duration-fast) var(--oa-ease),background var(--oa-duration-fast) var(--oa-ease)}
+.btn:hover{border-color:var(--oa-border-strong)}
+.btn.sm{height:24px;padding:0 8px;border-radius:var(--oa-radius-sm);font-size:var(--oa-text-xs)}
+.btn.primary{background:var(--oa-text);border-color:var(--oa-text);color:var(--oa-surface)}
+.btn.ghost{background:none;border-color:transparent;color:var(--oa-text-2)}
+.btn.ghost:hover{background:var(--oa-sunken);color:var(--oa-text)}
+.btn.danger{background:var(--oa-danger-soft);border-color:transparent;color:var(--oa-danger)}
+.btn.danger:hover{border-color:var(--oa-danger)}
+.btn.icon{padding:0;aspect-ratio:1}
+.btn[aria-expanded="true"]{border-color:var(--oa-border-strong)}
+.btn.ghost[aria-expanded="true"]{background:var(--oa-sunken);color:var(--oa-text)}
+
+/* Display.module.css */
+.badge{display:inline-flex;align-items:center;gap:var(--oa-space-1);height:18px;padding:0 6px;border-radius:var(--oa-radius-sm);font:500 var(--oa-text-xs)/1 var(--oa-font-sans);white-space:nowrap}
+.badge .ic{width:11px;height:11px;stroke-width:1.8}
+.badge.neutral,.badge.private{background:var(--oa-sunken);color:var(--oa-text-2)}
+.badge.accent,.badge.team{background:var(--oa-accent-soft);color:var(--oa-accent-fg)}
+.badge.success,.badge.public{background:var(--oa-success-soft);color:var(--oa-success-fg)}
+.badge.warning{background:var(--oa-warning-soft);color:var(--oa-warning)}
+.badge.danger{background:var(--oa-danger-soft);color:var(--oa-danger)}
+.avatar{--size:20px;display:inline-grid;place-items:center;flex:none;width:var(--size);height:var(--size);border-radius:50%;background:hsl(var(--hue) 45% 30%);color:white;font:600 calc(var(--size) * 0.42)/1 var(--oa-font-sans);user-select:none}
+.avatar.lg{--size:26px}
+.avatar.xs{--size:16px}
+kbd,.kbd{font:500 11px var(--oa-font-mono);color:var(--oa-text-muted);background:var(--oa-surface-2);border:1px solid var(--oa-border);border-bottom-width:2px;border-radius:var(--oa-radius-sm);padding:0 var(--oa-space-1)}
+.spinner{display:inline-block;flex:none;width:14px;height:14px;border:1.5px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulse{to{opacity:.5}}
+.sk{display:block;border-radius:var(--oa-radius-sm);background:var(--oa-sunken);animation:pulse 1.4s var(--oa-ease) infinite alternate}
+.top .sk{background:var(--oa-divider)}
+.card{min-width:0;background:var(--oa-surface);border-radius:var(--oa-radius-lg);box-shadow:var(--oa-shadow-1);overflow:hidden}
+@media (prefers-reduced-motion:reduce){.spinner,.sk{animation-duration:2.4s}}
+
+/* Field.module.css */
+.control{height:30px;width:100%;padding:0 var(--oa-space-2);background:var(--oa-surface);color:var(--oa-text);border:1px solid var(--oa-border);border-radius:var(--oa-radius-md);font:400 var(--oa-text-sm)/1.45 var(--oa-font-sans)}
+.control::placeholder{color:var(--oa-text-muted)}
+.control:hover{border-color:var(--oa-border-strong)}
+textarea.control{height:auto;min-height:72px;padding:6px var(--oa-space-2);resize:vertical}
+.select{display:inline-flex;align-items:center;justify-content:space-between;gap:var(--oa-space-2);cursor:pointer;text-align:left}
+.select .ic{color:var(--oa-text-muted)}
+.label{display:block;margin:0 0 6px;font-weight:500;color:var(--oa-text)}
+.hint{margin:6px 0 0;color:var(--oa-text-muted);font-size:var(--oa-text-xs)}
+.seg{margin:0;min-width:0;display:inline-flex;gap:2px;padding:2px;background:var(--oa-surface-2);border:1px solid var(--oa-border);border-radius:var(--oa-radius-md)}
+.seg button{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 var(--oa-space-2);border-radius:var(--oa-radius-sm);color:var(--oa-text-muted);font:500 var(--oa-text-xs) var(--oa-font-sans);white-space:nowrap}
+.seg button[aria-checked="true"]{background:var(--oa-surface);color:var(--oa-text);box-shadow:var(--oa-shadow-1)}
+
+/* Layout.module.css: banner, empty */
+.banner{display:flex;align-items:center;gap:var(--oa-space-3);padding:var(--oa-space-2) var(--oa-space-4);border-radius:var(--oa-radius-md);font:400 var(--oa-text-sm)/1.45 var(--oa-font-sans);color:var(--oa-text)}
+.banner > .ic{color:var(--oa-danger)}
+.banner .text{flex:1;min-width:0}
+.banner .text strong{font-weight:500}
+.banner.info{background:var(--oa-accent-soft)}
+.banner.success{background:var(--oa-success-soft)}
+.banner.warning{background:var(--oa-warning-soft)}
+.banner.danger{background:var(--oa-danger-soft)}
+.empty{display:flex;flex-direction:column;align-items:center;gap:var(--oa-space-2);padding:var(--oa-space-8) var(--oa-space-4);text-align:center;font:400 var(--oa-text-sm)/1.45 var(--oa-font-sans);color:var(--oa-text)}
+.empty .eicon{display:grid;place-items:center;width:40px;height:40px;border-radius:var(--oa-radius-lg);background:var(--oa-sunken);color:var(--oa-text-muted)}
+.empty .eicon .ic{width:20px;height:20px}
+.empty h2{margin:var(--oa-space-2) 0 0;font-size:var(--oa-text-lg);font-weight:600;letter-spacing:-.01em}
+.empty p{max-width:380px;margin:0 0 var(--oa-space-2);color:var(--oa-text-2)}
+.empty .acts{display:flex;gap:var(--oa-space-2);flex-wrap:wrap;justify-content:center}
+
+/* Overlay.module.css: menu, tabs, dialog */
+.pop{position:relative}
+.menu{position:absolute;top:calc(100% + 4px);right:0;min-width:180px;padding:var(--oa-space-1);background:var(--oa-surface);border-radius:var(--oa-radius-md);box-shadow:var(--oa-shadow-2);z-index:50;text-align:left}
+.menu.left{right:auto;left:0}
+.menu .item{display:flex;align-items:center;gap:var(--oa-space-2);width:100%;height:28px;padding:0 var(--oa-space-2);border-radius:var(--oa-radius-sm);color:var(--oa-text);font:400 var(--oa-text-sm) var(--oa-font-sans);white-space:nowrap;text-decoration:none}
+.menu .item .ic{color:var(--oa-text-muted)}
+.menu .item:hover,.menu .item[data-highlighted]{background:var(--oa-sunken)}
+.menu .item .meta{margin-left:auto;padding-left:var(--oa-space-4);color:var(--oa-text-muted);font-size:var(--oa-text-xs)}
+.menu .item.danger,.menu .item.danger .ic{color:var(--oa-danger)}
+.menu .item.danger:hover{background:var(--oa-danger-soft)}
+.menu .sep{height:1px;margin:var(--oa-space-1) 0;background:var(--oa-divider)}
+.menu .mlabel{padding:6px var(--oa-space-2) 4px;color:var(--oa-text-muted);font-size:var(--oa-text-xs);font-weight:500}
+.tabs{display:flex;gap:18px;overflow-x:auto;scrollbar-width:none;box-shadow:inset 0 -1px 0 var(--oa-divider)}
+.tabs::-webkit-scrollbar{display:none}
+.tabs .tab{flex:none;display:inline-flex;align-items:center;gap:6px;height:34px;white-space:nowrap;color:var(--oa-text-muted);font:500 var(--oa-text-sm) var(--oa-font-sans)}
+.tabs .tab[aria-selected="true"]{color:var(--oa-text);box-shadow:inset 0 -2px 0 var(--oa-text)}
+.tabs .tab:focus-visible{outline-offset:-2px;border-radius:var(--oa-radius-sm)}
+.tabs .n{font-size:11.5px;color:var(--oa-text-muted);background:var(--oa-sunken);border-radius:9px;padding:0 6px;line-height:17px;min-width:20px;text-align:center}
+.scrim{position:fixed;inset:0;z-index:40;background:var(--oa-scrim)}
+
+/* Shell bits shared with studio.html */
+.top{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:10px;height:48px;padding:0 var(--oa-space-5);background:var(--oa-chrome);border-bottom:1px solid var(--oa-divider)}
+.search{flex:1;max-width:520px;display:flex;align-items:center;gap:8px;height:30px;padding:0 8px 0 10px;background:var(--oa-surface);border:1px solid var(--oa-border);border-radius:var(--oa-radius-md);color:var(--oa-text-muted);min-width:0}
+.search:hover{border-color:var(--oa-border-strong)}
+.search:focus-within{outline:2px solid var(--oa-focus);outline-offset:2px}
+.search input{flex:1;min-width:0;border:0;outline:0;background:none;font:inherit;color:var(--oa-text)}
+.search input::placeholder{color:var(--oa-text-muted)}
+.wordmark{display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:var(--oa-text-md);letter-spacing:-.01em;color:var(--oa-text);text-decoration:none;white-space:nowrap}
+.wordmark .logo{width:18px;height:18px;border-radius:5px;background:var(--oa-text);color:var(--oa-surface);display:grid;place-items:center}
+.wordmark .logo svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.crumbs{display:flex;align-items:center;gap:6px;color:var(--oa-text-muted);white-space:nowrap;min-width:0}
+.crumbs a{color:var(--oa-text-muted);text-decoration:none}
+.crumbs a:hover{color:var(--oa-text)}
+.crumbs .sepc{opacity:.6}
+.crumbs .cur{color:var(--oa-text);font-weight:500;overflow:hidden;text-overflow:ellipsis}
+.agentmark{display:inline-flex;align-items:center;gap:5px;color:var(--oa-text-2);white-space:nowrap}
+.agentmark i{width:6px;height:6px;border-radius:1.5px;background:var(--oa-text-muted)}
+.fmt{display:inline-flex;align-items:center;gap:5px;color:var(--oa-text-muted);font-size:var(--oa-text-xs)}
+
+/* Mockup switcher (not part of the product) */
+.dev{position:fixed;right:12px;bottom:12px;z-index:90;display:flex;align-items:center;gap:6px;padding:5px;background:var(--oa-surface);border-radius:var(--oa-radius-lg);box-shadow:var(--oa-shadow-2);max-width:calc(100vw - 24px);flex-wrap:wrap;justify-content:flex-end}
+.dev .seg button{height:22px}
+@media (max-width:560px){.top{padding:0 12px;gap:6px}.hide-s{display:none !important}}
+@media (prefers-reduced-motion:no-preference){.card,.btn{transition:box-shadow var(--oa-duration-fast),border-color var(--oa-duration-fast),background var(--oa-duration-fast)}}
+.control:disabled,.seg button:disabled,.btn:disabled{opacity:.55;cursor:default}
+.control:disabled:hover{border-color:var(--oa-border)}
+
+
+.wrap{display:flex;flex-direction:column;min-height:100vh}
+.titlebar{display:flex;align-items:center;gap:10px 14px;padding:10px 20px;border-bottom:1px solid var(--oa-divider);background:var(--oa-surface);flex-wrap:wrap}
+.titlebar h1{margin:0;font-size:var(--oa-text-lg);font-weight:600;letter-spacing:-.015em;white-space:nowrap}
+.titlebar .of{color:var(--oa-text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.pickers{display:flex;align-items:center;gap:8px;margin-left:auto;min-width:0}
+.vsel{width:auto;min-width:168px;height:30px}
+.vsel .side{display:inline-grid;place-items:center;width:18px;height:18px;border-radius:var(--oa-radius-sm);background:var(--oa-sunken);color:var(--oa-text-2);font:600 11px var(--oa-font-mono)}
+.vsel .v{font:500 var(--oa-text-xs) var(--oa-font-mono)}
+.vsel .t{color:var(--oa-text-muted);flex:1;white-space:nowrap}
+.vsel.a .side{background:var(--oa-danger-soft);color:var(--oa-danger)}
+.vsel.b .side{background:var(--oa-success-soft);color:var(--oa-success-fg)}
+.pickers .arrow{color:var(--oa-text-muted)}
+.menu.vmenu{min-width:250px}
+.menu .item .vn{font:500 var(--oa-text-xs) var(--oa-font-mono);width:22px}
+.menu .item[aria-disabled="true"]{opacity:.45;cursor:default}
+.menu .item .tag{font-size:11px;font-weight:500;color:var(--oa-accent-fg);background:var(--oa-accent-soft);border-radius:4px;padding:0 5px;line-height:17px}
+
+.content{padding:20px 24px 80px;display:flex;flex-direction:column;gap:20px;max-width:1360px;width:100%;margin:0 auto}
+.sec-head{display:flex;align-items:center;gap:10px;margin:0 0 10px;flex-wrap:wrap}
+.sec-head h2{margin:0;font-size:var(--oa-text-md);font-weight:600}
+.sec-head .stats{font:500 var(--oa-text-xs) var(--oa-font-mono);display:inline-flex;gap:8px}
+.stats .a{color:var(--oa-success)} .stats .d{color:var(--oa-danger)}
+.sec-head .meta{color:var(--oa-text-muted);font-size:var(--oa-text-xs)}
+
+/* Unified source diff */
+.diff{font:400 var(--oa-text-xs)/20px var(--oa-font-mono);color:var(--oa-text)}
+.file{display:flex;align-items:center;gap:8px;height:36px;padding:0 12px;background:var(--oa-surface-2);border-bottom:1px solid var(--oa-divider);font:500 var(--oa-text-xs) var(--oa-font-mono);color:var(--oa-text-2)}
+.file .ic{color:var(--oa-text-muted)}
+.rows{display:grid;grid-template-columns:44px 44px 20px minmax(0,1fr)}
+.rows > div{display:contents}
+.rows span{padding:0 8px}
+.rows .ln{text-align:right;color:var(--oa-text-muted);user-select:none;border-right:1px solid var(--oa-divider);font-variant-numeric:tabular-nums}
+.rows .sg{text-align:center;padding:0;user-select:none;color:var(--oa-text-muted)}
+.rows .tx{white-space:pre-wrap;overflow-wrap:anywhere;padding-right:16px}
+.rows .add > span{background:var(--oa-success-soft)}
+.rows .add .ln{background:color-mix(in srgb,var(--oa-success) 16%,var(--oa-success-soft));color:var(--oa-success-fg);border-right-color:transparent}
+.rows .add .sg{color:var(--oa-success-fg);font-weight:600}
+.rows .del > span{background:var(--oa-danger-soft)}
+.rows .del .ln{background:color-mix(in srgb,var(--oa-danger) 16%,var(--oa-danger-soft));color:var(--oa-danger);border-right-color:transparent}
+.rows .del .sg{color:var(--oa-danger);font-weight:600}
+.rows .add ins{text-decoration:none;border-radius:2px;background:color-mix(in srgb,var(--oa-success) 26%,transparent)}
+.rows .del del{text-decoration:none;border-radius:2px;background:color-mix(in srgb,var(--oa-danger) 26%,transparent)}
+.rows .hunk > span{background:var(--oa-accent-soft);color:var(--oa-accent-fg);line-height:28px}
+.rows .hunk .ln{border-right-color:transparent}
+.rows .hunk .tx{grid-column:3 / 5}
+.rows .fold > span{background:var(--oa-surface-2);color:var(--oa-text-muted);line-height:26px}
+.rows .fold .tx{grid-column:3 / 5;font-family:var(--oa-font-sans)}
+.rows .fold button{color:var(--oa-text-2);font-weight:500;display:inline-flex;align-items:center;gap:6px}
+
+/* Rendered previews */
+.previews{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.pv-head{display:flex;align-items:center;gap:8px;height:40px;padding:0 12px;border-bottom:1px solid var(--oa-divider);background:var(--oa-surface-2)}
+.pv-head .side{display:inline-grid;place-items:center;width:18px;height:18px;border-radius:var(--oa-radius-sm);font:600 11px var(--oa-font-mono)}
+.pv-head.a .side{background:var(--oa-danger-soft);color:var(--oa-danger)}
+.pv-head.b .side{background:var(--oa-success-soft);color:var(--oa-success-fg)}
+.pv-head .v{font:500 var(--oa-text-xs) var(--oa-font-mono)}
+.pv-head .when{color:var(--oa-text-muted);font-size:var(--oa-text-xs);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pv-head .btn{margin-left:auto}
+.doc{padding:20px 24px 24px;font-size:14px;line-height:1.6;color:var(--oa-text)}
+.doc h2{font-size:16px;letter-spacing:-.01em;font-weight:600;margin:0 0 8px}
+.doc h2:not(:first-child){margin-top:22px}
+.doc p{margin:0 0 10px}
+.doc code{font:400 12px var(--oa-font-mono);background:var(--oa-surface-2);border:1px solid var(--oa-divider);border-radius:var(--oa-radius-sm);padding:0 4px}
+.doc pre{font:400 12px/1.6 var(--oa-font-mono);background:var(--oa-surface-2);border:1px solid var(--oa-divider);border-radius:var(--oa-radius-md);padding:10px 12px;margin:6px 0 12px;overflow:auto;white-space:pre}
+.doc pre .k{color:var(--oa-accent-fg)} .doc pre .s{color:var(--oa-success)} .doc pre .c{color:var(--oa-text-muted)} .doc pre .n{color:var(--oa-warning)}
+.doc blockquote{margin:12px 0;padding:2px 0 2px 12px;border-left:3px solid var(--oa-border);color:var(--oa-text-2)}
+.doc table{width:100%;border-collapse:collapse;font-size:12.5px}
+.doc th{text-align:left;font-weight:500;color:var(--oa-text-muted);border-bottom:1px solid var(--oa-border);padding:5px 8px 5px 0}
+.doc td{border-bottom:1px solid var(--oa-divider);padding:6px 8px 6px 0}
+.tblwrap{overflow-x:auto;margin:6px 0 12px}
+.st{display:inline-flex;align-items:center;gap:5px;font-size:var(--oa-text-xs);font-weight:500;white-space:nowrap}
+.st::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.st.ok{color:var(--oa-success)} .st.run{color:var(--oa-accent-fg)} .st.wait{color:var(--oa-text-muted)} .st.risk{color:var(--oa-warning)}
+.tasks{list-style:none;padding:0;margin:0}
+.tasks li{display:flex;gap:8px;align-items:flex-start;margin:3px 0}
+.cb{width:14px;height:14px;border:1.5px solid var(--oa-border-strong);border-radius:4px;flex:none;margin-top:4px;display:grid;place-items:center}
+.cb.on{background:var(--oa-text);border-color:var(--oa-text)}
+.cb.on svg{stroke:var(--oa-surface);width:10px;height:10px;stroke-width:2.2;fill:none}
+/* Change marks in rendered previews */
+.hl .chg-del{background:var(--oa-danger-soft);box-shadow:-8px 0 0 var(--oa-danger-soft),8px 0 0 var(--oa-danger-soft),-11px 0 0 var(--oa-danger);border-radius:1px}
+.hl .chg-add{background:var(--oa-success-soft);box-shadow:-8px 0 0 var(--oa-success-soft),8px 0 0 var(--oa-success-soft),-11px 0 0 var(--oa-success);border-radius:1px}
+.hl td.chg-del,.hl td.chg-add{box-shadow:none}
+.switch-l{display:inline-flex;align-items:center;gap:8px;color:var(--oa-text);font-size:var(--oa-text-sm)}
+.switch{position:relative;width:28px;height:16px;padding:0;border:1px solid var(--oa-border-strong);border-radius:999px;background:var(--oa-sunken)}
+.switch .thumb{display:block;width:10px;height:10px;margin-left:2px;border-radius:50%;background:var(--oa-border-strong);transition:transform var(--oa-duration-fast) var(--oa-ease)}
+.switch[aria-checked="true"]{background:var(--oa-text);border-color:var(--oa-text)}
+.switch[aria-checked="true"] .thumb{background:var(--oa-surface);transform:translateX(12px)}
+
+.sk-rows{padding:12px;display:flex;flex-direction:column;gap:9px}
+.sk-rows .sk{height:10px}
+.state-card{padding:8px 0}
+
+@media (max-width:959.98px){
+  .top{padding:0 var(--oa-space-3)}
+  .pickers{margin-left:0;flex:1 0 100%}
+  .previews{grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width:560px){
+  .titlebar{padding:10px 16px}
+  .content{padding:16px 16px 96px}
+  .pickers{flex-wrap:wrap}
+  .vsel{flex:1;min-width:0}
+  .pickers .arrow,.pickers .swap{display:none}
+  .rows{grid-template-columns:34px 34px 16px minmax(0,1fr)}
+  .rows span{padding:0 4px}
+  .rows .tx{padding-right:8px}
+  .doc{padding:16px}
+}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+    <symbol id="i-md" viewBox="0 0 16 16"><rect x="1.5" y="3" width="13" height="10" rx="1.5"/><path d="M4 10.5v-5l2 2.5 2-2.5v5M11 5.5v5M9.5 9l1.5 1.5L12.5 9"/></symbol>
+    <symbol id="i-html" viewBox="0 0 16 16"><path d="M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5"/></symbol>
+    <symbol id="i-pdf" viewBox="0 0 16 16"><path d="M4 1.5h5.5L13 5v9.5H4z"/><path d="M9.5 1.5V5H13M6 9h5M6 11.5h3.5"/></symbol>
+    <symbol id="i-code" viewBox="0 0 16 16"><path d="M4 1.5h5.5L13 5v9.5H4z"/><path d="M9.5 1.5V5H13M7.3 8.3 6 9.7l1.3 1.3M9.7 8.3 11 9.7 9.7 11"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 16 16"><path d="M2 14h12M4.5 11V8M8 11V4.5M11.5 11V6.5"/></symbol>
+    <symbol id="i-deck" viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="8.5" rx="1"/><path d="M8 11v3M5.5 14h5"/></symbol>
+    <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/></symbol>
+    <symbol id="i-lib" viewBox="0 0 16 16"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></symbol>
+    <symbol id="i-star" viewBox="0 0 16 16"><path d="m8 2 1.8 3.8 4.2.5-3.1 2.9.8 4.1L8 11.3l-3.7 2 .8-4.1L2 6.3l4.2-.5z"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 16 16"><path d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 16 16"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></symbol>
+    <symbol id="i-list" viewBox="0 0 16 16"><path d="M2 4h12M2 8h12M2 12h12"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 16 16"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></symbol>
+    <symbol id="i-team" viewBox="0 0 16 16"><circle cx="6" cy="6" r="2.5"/><path d="M1.5 13.5c.5-2.5 2.3-3.8 4.5-3.8s4 1.3 4.5 3.8M11 3.8a2.3 2.3 0 0 1 0 4.4M12.5 10c1.2.6 1.8 1.8 2 3.5"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c1.8 2 2.6 4 2.6 6S9.8 12 8 14M8 2C6.2 4 5.4 6 5.4 8S6.2 12 8 14"/></symbol>
+    <symbol id="i-down" viewBox="0 0 16 16"><path d="m4.5 6.5 3.5 3.5 3.5-3.5"/></symbol>
+    <symbol id="i-more" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r=".6"/><circle cx="8" cy="8" r=".6"/><circle cx="12.5" cy="8" r=".6"/></symbol>
+    <symbol id="i-ext" viewBox="0 0 16 16"><path d="M9 2.5h4.5V7M13.5 2.5 7.5 8.5M11.5 9.5v4h-9v-9h4"/></symbol>
+    <symbol id="i-panel" viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M10 2.5v11"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 16 16"><circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1 1M11.6 11.6l1 1M3.4 12.6l1-1M11.6 4.4l1-1"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 16 16"><path d="M13.5 9.5A5.5 5.5 0 0 1 6.5 2.5a5.5 5.5 0 1 0 7 7z"/></symbol>
+    <symbol id="i-back" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5"/></symbol>
+    <symbol id="i-check" viewBox="0 0 16 16"><path d="m3.5 8.5 3 3 6-7"/></symbol>
+    <symbol id="i-filter" viewBox="0 0 16 16"><path d="M2.5 4h11M4.5 8h7M6.5 12h3"/></symbol>
+    <symbol id="i-share" viewBox="0 0 16 16"><path d="M8 10V2M5 5l3-3 3 3M3 9v4.5h10V9"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 16 16"><path d="M2 4h12M2 8h12M2 12h12"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 16 16"><path d="M8 10.5V2.5M5 5.5l3-3 3 3M2.5 10v3.5h11V10"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.8v3.7M8 11v.2"/></symbol>
+    <symbol id="i-retry" viewBox="0 0 16 16"><path d="M13 3.5v3h-3M13 6.5A5 5 0 1 0 13.4 10"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></symbol>
+    <symbol id="i-link" viewBox="0 0 16 16"><path d="M7 9a3 3 0 0 0 4.2 0l2-2a3 3 0 0 0-4.2-4.2l-.8.8M9 7a3 3 0 0 0-4.2 0l-2 2a3 3 0 0 0 4.2 4.2l.8-.8"/></symbol>
+    <symbol id="i-swap" viewBox="0 0 16 16"><path d="M3 5.5h10M10.5 3 13 5.5 10.5 8M13 10.5H3M5.5 8 3 10.5 5.5 13"/></symbol>
+    <symbol id="i-x" viewBox="0 0 16 16"><path d="m4 4 8 8M12 4l-8 8"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 16 16"><path d="M10.5 2.5 13.5 5.5 6 13H3v-3z"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 16 16"><path d="M3 8h10M9.5 4.5 13 8l-3.5 3.5"/></symbol>
+    <symbol id="i-download" viewBox="0 0 16 16"><path d="M8 2.5v8M5 7.5l3 3 3-3M2.5 10v3.5h11V10"/></symbol>
+    <symbol id="i-diff" viewBox="0 0 16 16"><rect x="2.5" y="1.5" width="11" height="13" rx="1.5"/><path d="M8 4v5M5.5 6.5h5M5.5 11.5h5"/></symbol>
+    <symbol id="i-plug" viewBox="0 0 16 16"><path d="M6 1.5v3M10 1.5v3M4 4.5h8v3a4 4 0 0 1-8 0zM8 11.5v3"/></symbol>
+    <symbol id="i-file" viewBox="0 0 16 16"><path d="M4 1.5h5.5L13 5v9.5H4z"/><path d="M9.5 1.5V5H13"/></symbol>
+    <symbol id="i-gauge" viewBox="0 0 16 16"><path d="M2.5 11.5a5.5 5.5 0 1 1 11 0M8 11.5l2.5-3.5"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></symbol>
+    <symbol id="i-logo" viewBox="0 0 16 16"><path d="M3 3.5h6.5L13 7v5.5H3z"/><path d="M6 9.5h4"/></symbol>
+  </defs>
+</svg>
+
+
+<div class="wrap">
+  <header class="top">
+    <a class="btn ghost icon" href="artifact-view.html" aria-label="Back to artifact"><svg class="ic"><use href="#i-back"/></svg></a>
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a class="wordmark hide-s" href="library.html" style="margin-right:6px"><span class="logo"><svg viewBox="0 0 16 16"><use href="#i-logo"/></svg></span>Open Artifacts</a>
+      <a href="library.html" class="hide-s">Library</a><span class="sepc hide-s">/</span>
+      <a href="artifact-view.html" class="cur" style="font-weight:400;color:var(--oa-text-muted)">Q4 data migration plan</a><span class="sepc">/</span>
+      <span class="cur">Compare</span>
+    </nav>
+    <div class="spacer"></div>
+    <label class="search hide-s" style="max-width:260px"><svg class="ic"><use href="#i-search"/></svg><input placeholder="Search" aria-label="Search artifacts"><kbd>⌘K</kbd></label>
+    <span class="avatar" style="--hue:215" title="Maya Chen">MC</span>
+  </header>
+
+  <div class="titlebar">
+    <svg class="ic" style="color:var(--oa-text-muted)"><use href="#i-diff"/></svg>
+    <h1>Compare versions</h1>
+    <span class="of hide-s">Q4 data migration plan · Markdown</span>
+    <div class="pickers">
+      <div class="pop" style="flex:1 1 auto;min-width:0;display:flex">
+        <button class="control select vsel a" data-menu="m-a" aria-haspopup="menu" aria-expanded="false" aria-label="Version A">
+          <span class="side">A</span><span class="v" data-when="default loading error">v5</span><span class="v" data-when="empty">v7</span><span class="t" data-when="default loading error">Oct 16 · Codex CLI</span><span class="t" data-when="empty">Current</span><svg class="ic sm"><use href="#i-down"/></svg>
+        </button>
+        <div class="menu vmenu left" id="m-a" role="menu" hidden>
+          <div class="mlabel">Compare from</div>
+          <button class="item" role="menuitemradio" aria-disabled="true"><span class="vn">v7</span><span class="tag">Current</span><span class="meta">B side</span></button>
+          <button class="item" role="menuitemradio"><span class="vn">v6</span>Claude Code<span class="meta">Yesterday</span></button>
+          <button class="item" role="menuitemradio" aria-checked="true" data-highlighted><span class="vn">v5</span>Codex CLI<span class="meta">Oct 16</span></button>
+          <button class="item" role="menuitemradio"><span class="vn">v4</span>Claude Code<span class="meta">Oct 14</span></button>
+          <button class="item" role="menuitemradio"><span class="vn">v3</span>Cursor<span class="meta">Oct 10</span></button>
+          <button class="item" role="menuitemradio"><span class="vn">v2</span>Maya Chen<span class="meta">Oct 8</span></button>
+          <button class="item" role="menuitemradio"><span class="vn">v1</span>Claude Code<span class="meta">Oct 6</span></button>
+        </div>
+      </div>
+      <svg class="ic sm arrow"><use href="#i-arrow"/></svg>
+      <div class="pop" style="flex:1 1 auto;min-width:0;display:flex">
+        <button class="control select vsel b" data-menu="m-b" aria-haspopup="menu" aria-expanded="false" aria-label="Version B">
+          <span class="side">B</span><span class="v">v7</span><span class="t">Current</span><svg class="ic sm"><use href="#i-down"/></svg>
+        </button>
+        <div class="menu vmenu" id="m-b" role="menu" hidden>
+          <div class="mlabel">Compare to</div>
+          <button class="item" role="menuitemradio" aria-checked="true" data-highlighted><span class="vn">v7</span><span class="tag">Current</span><span class="meta">2h ago</span></button>
+          <button class="item" role="menuitemradio"><span class="vn">v6</span>Claude Code<span class="meta">Yesterday</span></button>
+          <button class="item" role="menuitemradio" aria-disabled="true"><span class="vn">v5</span>Codex CLI<span class="meta">A side</span></button>
+          <button class="item" role="menuitemradio"><span class="vn">v4</span>Claude Code<span class="meta">Oct 14</span></button>
+          <button class="item" role="menuitemradio"><span class="vn">v3</span>Cursor<span class="meta">Oct 10</span></button>
+          <button class="item" role="menuitemradio"><span class="vn">v2</span>Maya Chen<span class="meta">Oct 8</span></button>
+          <button class="item" role="menuitemradio"><span class="vn">v1</span>Claude Code<span class="meta">Oct 6</span></button>
+        </div>
+      </div>
+      <button class="btn icon swap" aria-label="Swap A and B" title="Swap A and B"><svg class="ic"><use href="#i-swap"/></svg></button>
+      <button class="btn hide-s" data-when="default">Restore v5</button>
+    </div>
+  </div>
+
+  <main class="content">
+    <div class="banner danger" role="alert" data-when="error">
+      <svg class="ic"><use href="#i-alert"/></svg>
+      <div class="text"><strong>Couldn't load v5 for comparison.</strong> The request timed out. v7 loaded fine, so this is likely temporary.</div>
+      <button class="btn sm" id="retry"><svg class="ic sm"><use href="#i-retry"/></svg>Retry</button>
+    </div>
+
+    <div class="card state-card" data-when="empty">
+      <div class="empty">
+        <div class="eicon"><svg class="ic"><use href="#i-diff"/></svg></div>
+        <h2>Nothing to compare</h2>
+        <p>A and B are both <span class="mono">v7</span>. Pick an earlier version for A to see what changed.</p>
+        <div class="acts"><button class="btn primary">Compare with v6</button><button class="btn" data-menu="m-a">Choose version…</button></div>
+      </div>
+    </div>
+
+    <section data-when="default loading" aria-label="Source diff">
+      <div class="sec-head">
+        <h2>Source</h2>
+        <span class="stats" data-when="default"><span class="a">+14</span><span class="d">−6</span></span>
+        <span class="meta" data-when="default">3 changes · 2 versions apart</span>
+        <span class="sk" data-when="loading" style="width:90px;height:10px"></span>
+      </div>
+      <div class="card diff">
+        <div class="file"><svg class="ic sm"><use href="#i-md"/></svg>plan.md<span class="spacer"></span><span class="num" data-when="default" style="color:var(--oa-text-muted);font-weight:400">8.1 KB → 8.4 KB</span></div>
+        <div class="rows" id="rows" data-when="default"></div>
+        <div class="sk-rows" data-when="loading" aria-busy="true" aria-label="Loading diff" id="sk-rows"></div>
+      </div>
+    </section>
+
+    <section data-when="default loading" aria-label="Rendered previews">
+      <div class="sec-head">
+        <h2>Rendered</h2>
+        <span class="spacer"></span>
+        <label class="switch-l" data-when="default"><button class="switch" role="switch" aria-checked="true" id="hl-toggle"><span class="thumb"></span></button>Highlight changes</label>
+      </div>
+      <div class="previews hl" id="previews">
+        <article class="card">
+          <div class="pv-head a"><span class="side">A</span><span class="v">v5</span><span class="when">Oct 16 · Codex CLI</span><a class="btn ghost sm hide-s" href="artifact-view.html"><svg class="ic sm"><use href="#i-ext"/></svg>Open</a></div>
+          <div class="doc" data-when="default">
+            <h2>Phases</h2>
+            <div class="tblwrap"><table>
+              <thead><tr><th>Phase</th><th>Owner</th><th>Status</th></tr></thead>
+              <tbody>
+                <tr><td>1. Catalog dry run</td><td>Maya Chen</td><td><span class="st ok">Done</span></td></tr>
+                <tr><td>2. Logical replication</td><td>Sam Ruiz</td><td class="chg-del"><span class="st wait">Not started</span></td></tr>
+                <tr><td>3. Billing cutover</td><td>Dana Okafor</td><td class="chg-del"><span class="st wait">Not started</span></td></tr>
+                <tr><td>4. Decommission</td><td>Theo Park</td><td><span class="st wait">Not started</span></td></tr>
+              </tbody>
+            </table></div>
+            <h2>Cutover procedure</h2>
+            <p class="chg-del">Run from the bastion host. Stop the order writers by scaling <code>orders-api</code> to zero, wait for replication lag to reach zero, then update the connection string.</p>
+<pre class="chg-del"><span class="k">kubectl</span> scale deploy/orders-api --replicas=<span class="n">0</span>
+<span class="k">psql</span> <span class="s">"$OLD_PRIMARY"</span> -c <span class="s">"select pg_current_wal_lsn()"</span>
+<span class="c"># wait for lag to drain, then edit config/db.yaml</span></pre>
+            <h2>Before Nov 4</h2>
+            <ul class="tasks">
+              <li><span class="cb on"><svg viewBox="0 0 16 16"><use href="#i-check"/></svg></span><span>Provision Aurora cluster and parameter groups</span></li>
+              <li><span class="cb on"><svg viewBox="0 0 16 16"><use href="#i-check"/></svg></span><span>Catalog dry run with row-count and checksum diff</span></li>
+              <li><span class="cb"></span><span>Load test checkout at 2× peak against Aurora</span></li>
+              <li><span class="cb"></span><span>Post cutover window in #eng-announce 48 hours ahead</span></li>
+            </ul>
+          </div>
+          <div class="sk-rows" data-when="loading"><span class="sk" style="width:30%;height:14px"></span><span class="sk" style="width:95%"></span><span class="sk" style="width:88%"></span><span class="sk" style="width:92%"></span><span class="sk" style="width:40%;height:14px;margin-top:8px"></span><span class="sk" style="width:97%"></span><span class="sk" style="width:76%"></span><span class="sk" style="width:100%;height:64px"></span></div>
+        </article>
+        <article class="card">
+          <div class="pv-head b"><span class="side">B</span><span class="v">v7</span><span class="when">2h ago · Claude Code</span><a class="btn ghost sm hide-s" href="artifact-view.html"><svg class="ic sm"><use href="#i-ext"/></svg>Open</a></div>
+          <div class="doc" data-when="default">
+            <h2>Phases</h2>
+            <div class="tblwrap"><table>
+              <thead><tr><th>Phase</th><th>Owner</th><th>Status</th></tr></thead>
+              <tbody>
+                <tr><td>1. Catalog dry run</td><td>Maya Chen</td><td><span class="st ok">Done</span></td></tr>
+                <tr><td>2. Logical replication</td><td>Sam Ruiz</td><td class="chg-add"><span class="st run">In progress</span></td></tr>
+                <tr><td>3. Billing cutover</td><td>Dana Okafor</td><td class="chg-add"><span class="st risk">At risk</span></td></tr>
+                <tr><td>4. Decommission</td><td>Theo Park</td><td><span class="st wait">Not started</span></td></tr>
+              </tbody>
+            </table></div>
+            <blockquote class="chg-add">Billing cutover is at risk until we confirm the ledger's sequence gaps are safe to replay. Don't schedule the window until the replay test passes twice in staging.</blockquote>
+            <h2>Cutover procedure</h2>
+            <p class="chg-add">Run from the bastion host. The script pauses writers, waits for replication lag to reach zero, then flips the connection string in the config service.</p>
+<pre class="chg-add"><span class="c"># 1. Freeze writers and wait for lag to drain</span>
+<span class="k">./bin/cutover</span> --schema orders --pause-writers
+<span class="k">./bin/lag</span> --until <span class="n">0</span> --timeout <span class="n">240s</span>
+
+<span class="c"># 2. Flip the DSN and resume</span>
+<span class="k">cfg</span> set db.orders.dsn <span class="s">"$AURORA_ORDERS_DSN"</span>
+<span class="k">./bin/cutover</span> --schema orders --resume</pre>
+            <h2>Before Nov 4</h2>
+            <ul class="tasks">
+              <li><span class="cb on"><svg viewBox="0 0 16 16"><use href="#i-check"/></svg></span><span>Provision Aurora cluster and parameter groups</span></li>
+              <li><span class="cb on"><svg viewBox="0 0 16 16"><use href="#i-check"/></svg></span><span>Catalog dry run with row-count and checksum diff</span></li>
+              <li class="chg-add"><span class="cb"></span><span>Ledger replay test passes twice in staging</span></li>
+              <li><span class="cb"></span><span>Load test checkout at 2× peak against Aurora</span></li>
+              <li><span class="cb"></span><span>Post cutover window in #eng-announce 48 hours ahead</span></li>
+            </ul>
+          </div>
+          <div class="sk-rows" data-when="loading"><span class="sk" style="width:30%;height:14px"></span><span class="sk" style="width:95%"></span><span class="sk" style="width:88%"></span><span class="sk" style="width:92%"></span><span class="sk" style="width:40%;height:14px;margin-top:8px"></span><span class="sk" style="width:97%"></span><span class="sk" style="width:76%"></span><span class="sk" style="width:100%;height:64px"></span></div>
+        </article>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>window.OA_PARAMS = { menu: ['none', 'a', 'b'] };</script>
+<script>
+/* Mockup plumbing: ?theme=light|dark, ?state=default|empty|loading|error, plus per-page params. */
+const OA = (() => {
+  const root = document.documentElement;
+  const q = new URLSearchParams(location.search);
+  const opts = Object.assign({ state: ['default', 'empty', 'loading', 'error'], theme: ['light', 'dark'] }, window.OA_PARAMS || {});
+  const S = {};
+  for (const [k, list] of Object.entries(opts)) S[k] = list.includes(q.get(k)) ? q.get(k) : list[0];
+  /* No ?theme= means follow prefers-color-scheme (tokens.css handles it without data-theme). */
+  if (!opts.theme.includes(q.get('theme'))) S.theme = null;
+  const mq = matchMedia('(prefers-color-scheme: dark)');
+  const listeners = [];
+  const dev = document.createElement('div');
+  dev.className = 'dev';
+  dev.setAttribute('role', 'group');
+  dev.setAttribute('aria-label', 'Mockup controls');
+  dev.innerHTML = Object.entries(opts).map(([k, list]) =>
+    `<div class="seg" role="radiogroup" aria-label="${k}">${list.map(v =>
+      `<button role="radio" data-k="${k}" data-v="${v}">${v[0].toUpperCase() + v.slice(1)}</button>`).join('')}</div>`).join('');
+  document.body.appendChild(dev);
+  function apply() {
+    if (S.theme) root.dataset.theme = S.theme; else root.removeAttribute('data-theme');
+    const eff = { ...S, theme: S.theme || (mq.matches ? 'dark' : 'light') };
+    root.dataset.state = S.state;
+    document.querySelectorAll('[data-when]').forEach(el => { el.toggleAttribute('hidden', !el.dataset.when.split(' ').includes(S.state)); });
+    dev.querySelectorAll('button').forEach(b => b.setAttribute('aria-checked', String(eff[b.dataset.k] === b.dataset.v)));
+    const u = new URL(location);
+    for (const k of Object.keys(opts)) if (S[k]) u.searchParams.set(k, S[k]);
+    history.replaceState(null, '', u);
+    listeners.forEach(f => f(S));
+  }
+  dev.addEventListener('click', e => { const b = e.target.closest('button'); if (b) { S[b.dataset.k] = b.dataset.v; apply(); } });
+  /* Menus: <button data-menu="id" aria-expanded> + <div id="id" class="menu" hidden> */
+  document.addEventListener('click', e => {
+    if (e.target.closest('.dev')) return;
+    const t = e.target.closest('[data-menu]');
+    document.querySelectorAll('.menu').forEach(m => {
+      const own = t && m.id === t.dataset.menu;
+      if (own) { m.hidden = !m.hidden; t.setAttribute('aria-expanded', String(!m.hidden)); }
+      else if (!m.contains(e.target)) { m.hidden = true; document.querySelectorAll(`[data-menu="${m.id}"]`).forEach(b => b.setAttribute('aria-expanded', 'false')); }
+    });
+    /* Generic radio groups (segmented controls, tab lists) inside the page */
+    const r = e.target.closest('[data-group] > [role=radio], [data-group] > [role=tab]');
+    if (r) r.parentNode.querySelectorAll(':scope > [role]').forEach(x => x.setAttribute(x.getAttribute('role') === 'tab' ? 'aria-selected' : 'aria-checked', String(x === r)));
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') document.querySelectorAll('.menu').forEach(m => { m.hidden = true; }); });
+  mq.addEventListener('change', () => { if (!S.theme) apply(); });
+  return { S, apply, on: f => listeners.push(f), open: id => { const m = document.getElementById(id); if (m) { m.hidden = false; document.querySelectorAll(`[data-menu="${id}"]`).forEach(b => b.setAttribute('aria-expanded', 'true')); } } };
+})();
+
+</script>
+<script>
+/* Unified diff of plan.md, v5 → v7. "@ old new header" starts a hunk; [-…-] and {+…+} mark changed words. */
+const DIFF = `@ 18 18 ## Phases
+ | Phase | Window | Owner | Status |
+ |---|---|---|---|
+ | 1. Catalog dry run | Oct 7 – Oct 11 | Maya Chen | Done |
+-| 2. Logical replication for orders | Oct 14 – Oct 25 | Sam Ruiz | [-Not started-] |
+-| 3. Billing cutover | Nov 4 – Nov 8 | Dana Okafor | [-Not started-] |
++| 2. Logical replication for orders | Oct 14 – Oct 25 | Sam Ruiz | {+In progress+} |
++| 3. Billing cutover | Nov 4 – Nov 8 | Dana Okafor | {+At risk+} |
+ | 4. Decommission old cluster | Dec 2 – Dec 6 | Theo Park | Not started |
++
++> Billing cutover is at risk until we confirm the ledger's sequence gaps are safe to replay. Don't schedule the window until the replay test passes twice in staging.
++> — Dana Okafor, review on v6
+
+= 4 unchanged lines
+@ 29 32 ## Cutover procedure
+-Run from the bastion host. [-Stop the order writers by scaling \`orders-api\` to zero, wait-] for replication lag to reach zero, then [-update-] the connection string.
++Run from the bastion host. {+The script pauses writers, waits+} for replication lag to reach zero, then {+flips+} the connection string{+ in the config service+}.
+
+ \`\`\`bash
+-kubectl scale deploy/orders-api --replicas=0
+-psql "$OLD_PRIMARY" -c "select pg_current_wal_lsn()"
+-# wait for lag to drain, then edit config/db.yaml
++# 1. Freeze writers and wait for lag to drain
++./bin/cutover --schema orders --pause-writers
++./bin/lag --until 0 --timeout 240s
++
++# 2. Flip the DSN and resume
++cfg set db.orders.dsn "$AURORA_ORDERS_DSN"
++./bin/cutover --schema orders --resume
+ \`\`\`
+= 9 unchanged lines
+@ 45 52 ## Before Nov 4
+ - [x] Provision Aurora cluster and parameter groups
+ - [x] Catalog dry run with row-count and checksum diff
++- [ ] Ledger replay test passes twice in staging
+ - [ ] Load test checkout at 2× peak against Aurora
+ - [ ] Post cutover window in #eng-announce 48 hours ahead`;
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const words = s => esc(s).replace(/\[-(.*?)-\]/g,'<del>$1</del>').replace(/\{\+(.*?)\+\}/g,'<ins>$1</ins>');
+let o = 0, n = 0;
+document.getElementById('rows').innerHTML = DIFF.split('\n').map(line => {
+  const c = line[0], t = line.slice(1);
+  if (c === '@') { const [, a, b, ...h] = line.split(' '); o = +a; n = +b; return `<div class="hunk"><span class="ln"></span><span class="ln"></span><span class="tx">@@ -${a} +${b} @@ ${esc(h.join(' '))}</span></div>`; }
+  if (c === '=') return `<div class="fold"><span class="ln"></span><span class="ln"></span><span class="tx"><button><svg class="ic sm"><use href="#i-down"/></svg>Show ${esc(t.trim())}</button></span></div>`;
+  if (c === '-') return `<div class="del"><span class="ln">${o++}</span><span class="ln"></span><span class="sg">−</span><span class="tx">${words(t)}</span></div>`;
+  if (c === '+') return `<div class="add"><span class="ln"></span><span class="ln">${n++}</span><span class="sg">+</span><span class="tx">${words(t)}</span></div>`;
+  return `<div><span class="ln">${o++}</span><span class="ln">${n++}</span><span class="sg"></span><span class="tx">${esc(t)}</span></div>`;
+}).join('');
+document.getElementById('sk-rows').innerHTML = [62,40,88,75,93,51,70,0,84,66,90,47].map(w => w ? `<span class="sk" style="width:${w}%"></span>` : '<span style="height:4px"></span>').join('');
+const hl = document.getElementById('hl-toggle');
+hl.onclick = () => { const on = hl.getAttribute('aria-checked') !== 'true'; hl.setAttribute('aria-checked', String(on)); document.getElementById('previews').classList.toggle('hl', on); };
+document.getElementById('retry').onclick = e => { const b = e.currentTarget; b.innerHTML = '<span class="spinner"></span>Retrying'; setTimeout(() => { OA.S.state = 'default'; OA.apply(); b.innerHTML = '<svg class="ic sm"><use href="#i-retry"/></svg>Retry'; }, 900); };
+OA.on(S => {
+  document.querySelectorAll('.menu').forEach(m => { m.hidden = true; });
+  if (S.menu === 'a') OA.open('m-a');
+  if (S.menu === 'b') OA.open('m-b');
+});
+OA.apply();
+</script>
+</body>
+</html>

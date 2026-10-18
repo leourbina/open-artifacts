@@ -1,41 +1,22 @@
-// Placeholder so the ARTIFACT_RUNTIME binding deploys; B1 replaces it.
-export class ArtifactRuntime {
-  // biome-ignore lint/complexity/noUselessConstructor: placeholder signature
-  constructor(_s: DurableObjectState, _e: unknown) {}
-  fetch(): Response {
-    return new Response(null, { status: 501 });
-  }
-}
+import { app } from "./app.js";
+import { contentApp } from "./content/app.js";
+import type { Env } from "./env.js";
 
-const NOINDEX = { "X-Robots-Tag": "noindex, nofollow" };
+export type { Env } from "./env.js";
+export { ArtifactRuntime } from "./runtime/artifact-runtime.js";
 
-const json = (body: unknown, status = 200): Response =>
-  Response.json(body, { status, headers: NOINDEX });
-
-const ROUTES: Record<string, () => Response> = {
-  "/healthz": () => json({ ok: true }),
-  "/robots.txt": () =>
-    new Response("User-agent: *\nDisallow: /", {
-      headers: { ...NOINDEX, "Content-Type": "text/plain; charset=utf-8" },
-    }),
-};
+const normHost = (h: string) =>
+  h.toLowerCase().replace(/:\d+$/, "").replace(/\.$/, "");
 
 export default {
-  fetch(request: Request): Response {
-    const { pathname } = new URL(request.url);
-    const route = Object.hasOwn(ROUTES, pathname) ? ROUTES[pathname] : null;
-    if (route) {
-      if (request.method === "GET") return route();
-      if (request.method === "HEAD") {
-        return new Response(null, route());
-      }
-      return new Response(null, {
-        status: 405,
-        headers: { ...NOINDEX, Allow: "GET, HEAD" },
-      });
-    }
-    return json({ error: { code: "not_found", message: "Not found" } }, 404);
+  fetch(req, env, ctx) {
+    // URL.hostname only: port stripped; X-Forwarded-Host is ignored.
+    const isContent =
+      normHost(new URL(req.url).hostname) === normHost(env.CONTENT_HOST);
+    const target = isContent ? contentApp : app;
+    return target.fetch(req, env, ctx);
   },
-  // No-op until B1 wires the daily cron (17 3 * * *).
-  scheduled(): void {},
-};
+  async scheduled() {
+    // cron.ts lands in B7
+  },
+} satisfies ExportedHandler<Env>;

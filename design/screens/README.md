@@ -1,0 +1,46 @@
+# Dashboard screens (Task D4)
+
+High-fidelity static mockups in the Studio direction (`design/DIRECTION.md`). Frontend matches these; Backend renders `oauth-consent.html`.
+
+## How to view
+
+- **Open the file directly** in a browser (`file://…/design/screens/library.html`). Works offline except Google Fonts.
+- **Or serve the repo:** run `npx serve` from the repo root and open `http://localhost:3000/design/screens/library.html`. Use this if your browser blocks the relative `tokens.css` link on `file://`.
+
+Every screen except the consent page reads these query params:
+
+| Param | Values | Default |
+|---|---|---|
+| `theme` | `light`, `dark` | Follows `prefers-color-scheme` when omitted, on every screen (consent always does) |
+| `state` | `default`, `empty`, `loading`, `error` (plus extras where listed) | `default` |
+
+Each screen is designed for 1280 px and 390 px wide, with no horizontal page scroll.
+
+**Header.** `library.html` and the quota page (`edge-pages.html?page=quota`) use a search box plus Upload in the top bar. The other app screens use breadcrumbs. This is intentional. Every app screen shares the same sidebar (wordmark, workspace button, Library/Usage/Settings, connected agents), which becomes a drawer below 960 px.
+
+**Role preview.** `as=creator|editor|viewer` (default `creator`) previews the screen for a non-creator. It works on `share-dialog.html` and `artifact-view.html`.
+
+## Screens
+
+| File | Screen | Extra params | Notes |
+|---|---|---|---|
+| `library.html` | Library | `layout=grid\|list`, `overlay=none\|drop\|filter\|drawer` | Scope tabs, filters, search, drop-zone overlay |
+| `artifact-view.html` | Artifact view | `tab=versions\|share\|details`, `panel=open\|closed`, `menu=none\|version\|more` | Title bar, version picker, side panel, raw-open |
+| `version-diff.html` | Version diff | `menu=none\|a\|b` | Source diff plus rendered previews side by side |
+| `public-viewer.html` | Anonymous public viewer | none | Minimal chrome, no sign-in |
+| `share-dialog.html` | Share dialog | `as=creator\|editor\|viewer`, `vis=team\|private\|public` | Visibility segmented control, invites with role, copy link. Non-creators see everything read-only except Copy link |
+| `settings.html` | Settings | `tab=members\|agents\|instance\|token-created` | Agents tab: MCP URL, snippets, OAuth clients, tokens. `tab=token-created` opens the Agents tab with the dialog that shows the new token once |
+| `usage.html` | Usage | `state=not-configured` | Four meters with limits; "not configured" state with setup steps |
+| `edge-pages.html` | Edge pages | `page=no-access\|sign-in\|not-found\|quota`; `state` is `default\|loading\|error` only | See below |
+| `oauth-consent.html` | OAuth consent | none | No JavaScript; see below |
+
+### Edge pages
+
+- `?page=no-access`: signed in, not a member, nothing shared. Offers "Sign in as someone else".
+- `?page=sign-in`: "Continue with Cloudflare Access" with the instance name. `state=loading` shows the redirecting button; `state=error` shows a failed-sign-in banner.
+- `?page=not-found`: the 404. An artifact the viewer can't access returns this same page, so the copy never says whether it exists.
+- `?page=quota`: the library with the danger banner "Daily free-plan limit reached; resets at 00:00 UTC". `state=loading` shows skeleton cards.
+
+### OAuth consent
+
+Server-rendered by Backend from this file. It's self-contained (inlined tokens, system font stack, no external requests, under 8 KB) and works without JavaScript. Dark mode follows `prefers-color-scheme` only, so it has no `theme` param. The `{{placeholder}}` list is in the HTML comment at the top of the file. The form POSTs `decision=approve` or `decision=deny` with `csrf` and `request` hidden fields.

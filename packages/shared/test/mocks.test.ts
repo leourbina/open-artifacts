@@ -1,0 +1,741 @@
+import { setupServer } from "msw/node";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { z } from "zod";
+import {
+  ApiErrorSchema,
+  ArtifactSummarySchema,
+  ContentUrlSchema,
+  DataDocSchema,
+  MemberSchema,
+  MeSchema,
+  OAuthClientSchema,
+  PageSchema,
+  PublishResultSchema,
+  QUOTA_MESSAGE,
+  R,
+  SearchHitSchema,
+  SettingsSchema,
+  ShareSchema,
+  SNIPPET_MARK,
+  StorageEntrySchema,
+  StorageKeySchema,
+  TokenCreatedSchema,
+  TokenSchema,
+  UploadCreatedSchema,
+  UsageSchema,
+  VersionInfoSchema,
+  viewerPath,
+} from "../src/index.js";
+import { fixtures } from "../src/mocks/fixtures.js";
+import { createHandlers } from "../src/mocks/handlers.js";
+
+const server = setupServer();
+beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
+afterEach(() => server.resetHandlers());
+afterAll(() => server.close());
+const fresh = (o?: Parameters<typeof createHandlers>[0]) =>
+  server.use(...createHandlers(o));
+
+const O = "http://localhost";
+const H: Record<string, string> = {
+  "content-type": "application/json",
+  "x-oa-request": "1",
+};
+const call = (method: string, path: string, body?: unknown, headers = H) =>
+  fetch(`${O}${path}`, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+const json = async (r: Response) => (await r.json()) as any;
+
+const by = (f: (a: (typeof fixtures.artifacts)[number]) => boolean) =>
+  fixtures.artifacts.find(f) as (typeof fixtures.artifacts)[number];
+const art = fixtures.artifacts[0] as (typeof fixtures.artifacts)[number];
+const pdf = by((a) => a.format === "pdf");
+const poll = by((a) => a.capabilities.db);
+const pub = by((a) => a.visibility === "public");
+const guide = by((a) => a.access === "viewer");
+const ID = art.id;
+const bad = "1111111111111111";
+const member = fixtures.members[1]?.id as string;
+
+const Err = ApiErrorSchema;
+const publish = { title: "T", format: "markdown", content: "hi" };
+type Row = [string, string, string, unknown, number, z.ZodType | null];
+const rows: Row[] = [
+  ["me", "GET", R.me, undefined, 200, MeSchema],
+  [
+    "artifacts",
+    "GET",
+    R.artifacts,
+    undefined,
+    200,
+    PageSchema(ArtifactSummarySchema),
+  ],
+  ["artifacts", "POST", R.artifacts, publish, 201, PublishResultSchema],
+  ["artifact", "GET", R.artifact(ID), undefined, 200, ArtifactSummarySchema],
+  [
+    "artifact",
+    "PATCH",
+    R.artifact(ID),
+    { title: "N" },
+    200,
+    ArtifactSummarySchema,
+  ],
+  [
+    "restoreDeleted",
+    "POST",
+    R.restoreDeleted(ID),
+    undefined,
+    200,
+    ArtifactSummarySchema,
+  ],
+  [
+    "versions",
+    "GET",
+    R.versions(ID),
+    undefined,
+    200,
+    z.array(VersionInfoSchema),
+  ],
+  [
+    "versions",
+    "POST",
+    R.versions(ID),
+    { id: ID, ...publish },
+    201,
+    PublishResultSchema,
+  ],
+  [
+    "versionFile",
+    "GET",
+    R.versionFile(ID, 1, "index.html"),
+    undefined,
+    200,
+    null,
+  ],
+  [
+    "restoreVersion",
+    "POST",
+    R.restoreVersion(ID, 1),
+    undefined,
+    201,
+    PublishResultSchema,
+  ],
+  ["versionText", "PUT", R.versionText(pdf.id, 1), undefined, 204, null],
+  ["thumbnail", "GET", R.thumbnail(ID), undefined, 200, null],
+  ["thumbnail", "PUT", R.thumbnail(ID), undefined, 204, null],
+  ["contentUrl", "GET", R.contentUrl(ID), undefined, 200, ContentUrlSchema],
+  ["shares", "GET", R.shares(ID), undefined, 200, z.array(ShareSchema)],
+  [
+    "shares",
+    "PUT",
+    R.shares(ID),
+    { email: "c@example.com", role: "editor" },
+    200,
+    ShareSchema,
+  ],
+  ["share", "DELETE", R.share(ID, "bob@example.com"), undefined, 204, null],
+  [
+    "uploads",
+    "POST",
+    R.uploads,
+    { path: "a.bin", size: 5 },
+    201,
+    UploadCreatedSchema,
+  ],
+  ["upload", "PUT", R.upload("abc"), undefined, 204, null],
+  [
+    "search",
+    "GET",
+    `${R.search}?q=page`,
+    undefined,
+    200,
+    PageSchema(SearchHitSchema),
+  ],
+  ["members", "GET", R.members, undefined, 200, z.array(MemberSchema)],
+  [
+    "members",
+    "POST",
+    R.members,
+    { email: "n@example.com", role: "member" },
+    201,
+    MemberSchema,
+  ],
+  ["member", "PATCH", R.member(member), { role: "admin" }, 200, MemberSchema],
+  ["member", "DELETE", R.member(member), undefined, 204, null],
+  ["tokens", "GET", R.tokens, undefined, 200, z.array(TokenSchema)],
+  ["tokens", "POST", R.tokens, { label: "ci" }, 201, TokenCreatedSchema],
+  [
+    "token",
+    "DELETE",
+    R.token(fixtures.tokens[0]?.id as string),
+    undefined,
+    204,
+    null,
+  ],
+  [
+    "oauthClients",
+    "GET",
+    R.oauthClients,
+    undefined,
+    200,
+    z.array(OAuthClientSchema),
+  ],
+  [
+    "oauthClient",
+    "DELETE",
+    R.oauthClient(fixtures.oauthClients[0]?.grantId as string),
+    undefined,
+    204,
+    null,
+  ],
+  ["settings", "GET", R.settings, undefined, 200, SettingsSchema],
+  ["settings", "PATCH", R.settings, { name: "X" }, 200, SettingsSchema],
+  ["usage", "GET", R.usage, undefined, 200, UsageSchema],
+  [
+    "dataCollection",
+    "GET",
+    R.dataCollection(poll.id, "votes"),
+    undefined,
+    200,
+    PageSchema(DataDocSchema),
+  ],
+  [
+    "dataQuery",
+    "POST",
+    R.dataQuery(poll.id, "votes"),
+    {},
+    200,
+    PageSchema(DataDocSchema),
+  ],
+  [
+    "dataDoc",
+    "GET",
+    R.dataDoc(poll.id, "votes", "v1"),
+    undefined,
+    200,
+    DataDocSchema,
+  ],
+  [
+    "dataDoc",
+    "PUT",
+    R.dataDoc(poll.id, "votes", "v2"),
+    { a: 1 },
+    200,
+    DataDocSchema,
+  ],
+  [
+    "dataDoc",
+    "PATCH",
+    R.dataDoc(poll.id, "votes", "v1"),
+    { b: 2 },
+    200,
+    DataDocSchema,
+  ],
+  [
+    "dataDoc",
+    "DELETE",
+    R.dataDoc(poll.id, "votes", "v1"),
+    undefined,
+    204,
+    null,
+  ],
+  [
+    "dataSubscribe",
+    "GET",
+    R.dataSubscribe(poll.id, "votes"),
+    undefined,
+    426,
+    null,
+  ],
+  [
+    "storage",
+    "GET",
+    R.storage(poll.id),
+    undefined,
+    200,
+    PageSchema(StorageKeySchema),
+  ],
+  [
+    "storageKey",
+    "GET",
+    R.storageKey(poll.id, "theme"),
+    undefined,
+    200,
+    StorageEntrySchema,
+  ],
+  [
+    "storageKey",
+    "PUT",
+    R.storageKey(poll.id, "k"),
+    { value: 1 },
+    200,
+    StorageEntrySchema,
+  ],
+  [
+    "storageKey",
+    "DELETE",
+    R.storageKey(poll.id, "theme"),
+    undefined,
+    204,
+    null,
+  ],
+];
+
+describe("fixtures", () => {
+  it("parse with their schemas and cover the brief", () => {
+    MeSchema.parse(fixtures.me);
+    for (const a of fixtures.artifacts) ArtifactSummarySchema.parse(a);
+    for (const vs of Object.values(fixtures.versions))
+      for (const v of vs) VersionInfoSchema.parse(v);
+    for (const m of fixtures.members) MemberSchema.parse(m);
+    for (const d of fixtures.data) DataDocSchema.parse(d.doc);
+    const a = fixtures.artifacts;
+    for (const f of ["html", "markdown", "code", "pdf"])
+      expect(a.some((x) => x.format === f)).toBe(true);
+    expect(a.some((x) => x.visibility === "public")).toBe(true);
+    expect(a.some((x) => x.access !== "owner")).toBe(true);
+    expect(a.some((x) => x.capabilities.db)).toBe(true);
+  });
+  it("is consistent", () => {
+    expect(fixtures.versions[guide.id]?.[0]?.createdBy.id).toBe(guide.owner.id);
+    for (const x of fixtures.artifacts)
+      if (x.allowAnonymousWrites) expect(x.visibility).toBe("public");
+  });
+});
+
+describe("every route", () => {
+  for (const [name, method, path, body, status, schema] of rows) {
+    it(`${method} ${name}: ${path}`, async () => {
+      fresh();
+      const r = await call(method, path, body);
+      expect(r.status).toBe(status);
+      if (schema) schema.parse(await r.json());
+    });
+    it(`quota ${method} ${name}`, async () => {
+      fresh({ quotaExceeded: true });
+      const r = await call(method, path, body);
+      expect(r.status).toBe(503);
+      const e = Err.parse(await r.json());
+      expect(e.error.code).toBe("quota_exceeded");
+      expect(e.error.message).toBe(QUOTA_MESSAGE);
+    });
+  }
+});
+
+describe("validation", () => {
+  it("POST artifacts {} -> 400 ApiError", async () => {
+    fresh();
+    const r = await call("POST", R.artifacts, {});
+    expect(r.status).toBe(400);
+    Err.parse(await r.json());
+  });
+  it.each([
+    ["PUT", R.shares(ID), { email: "x", role: "viewer" }],
+    ["POST", R.members, { email: "a@b.co", role: "owner" }],
+    ["PATCH", R.member(member), { role: "guest" }],
+    ["POST", R.tokens, { label: "" }],
+    ["POST", R.versions(ID), {}],
+  ])("%s %s bad body -> 400", async (m, p, b) => {
+    fresh();
+    expect((await call(m, p, b)).status).toBe(400);
+  });
+  it("PUT dataDoc with invalid JSON -> 400", async () => {
+    fresh();
+    const r = await fetch(`${O}${R.dataDoc(poll.id, "votes", "z")}`, {
+      method: "PUT",
+      headers: H,
+      body: "{nope",
+    });
+    expect(r.status).toBe(400);
+  });
+});
+
+describe("not found", () => {
+  it.each([
+    ["GET", R.artifact(bad)],
+    ["PATCH", R.member(bad)],
+    ["DELETE", R.member(bad)],
+    ["DELETE", R.token(bad)],
+    ["DELETE", R.oauthClient(bad)],
+    ["DELETE", R.share(ID, "nobody@example.com")],
+    ["GET", R.versions(bad)],
+  ])("%s %s -> 404 not_found", async (m, p) => {
+    fresh();
+    const r = await call(m, p, m === "PATCH" ? { role: "admin" } : undefined);
+    expect(r.status).toBe(404);
+    expect(Err.parse(await r.json()).error.code).toBe("not_found");
+  });
+});
+
+describe("state", () => {
+  it("mutations are reflected and isolated per createHandlers()", async () => {
+    fresh();
+    await call("PATCH", R.artifact(ID), { title: "Renamed" });
+    expect((await json(await call("GET", R.artifact(ID)))).title).toBe(
+      "Renamed",
+    );
+    await call("DELETE", R.artifact(ID));
+    expect((await call("GET", R.artifact(ID))).status).toBe(404);
+    const all = await json(
+      await call("GET", `${R.artifacts}?includeDeleted=true`),
+    );
+    expect(all.items.some((a: any) => a.id === ID)).toBe(true);
+    const live = await json(await call("GET", R.artifacts));
+    expect(live.items.some((a: any) => a.id === ID)).toBe(false);
+    await call("POST", R.restoreDeleted(ID));
+    expect((await call("GET", R.artifact(ID))).status).toBe(200);
+    server.resetHandlers();
+    fresh();
+    expect((await json(await call("GET", R.artifact(ID)))).title).toBe(
+      art.title,
+    );
+  });
+  it("versions, shares, members, tokens, data, storage persist", async () => {
+    fresh();
+    const v = await json(
+      await call("POST", R.versions(ID), { id: ID, ...publish }),
+    );
+    expect(v.version).toBe((fixtures.versions[ID]?.length ?? 0) + 1);
+    expect((await json(await call("GET", R.versions(ID)))).length).toBe(
+      v.version,
+    );
+    expect((await json(await call("GET", R.artifact(ID)))).currentVersion).toBe(
+      v.version,
+    );
+    await call("PUT", R.shares(ID), { email: "c@example.com", role: "viewer" });
+    await call("PUT", R.shares(ID), { email: "c@example.com", role: "editor" });
+    const sh = await json(await call("GET", R.shares(ID)));
+    expect(sh.filter((s: any) => s.email === "c@example.com")).toMatchObject([
+      { role: "editor" },
+    ]);
+    await call("DELETE", R.share(ID, "c@example.com"));
+    expect(
+      (await json(await call("GET", R.shares(ID)))).some(
+        (s: any) => s.email === "c@example.com",
+      ),
+    ).toBe(false);
+    const m = await json(
+      await call("POST", R.members, { email: "n@example.com", role: "member" }),
+    );
+    expect(
+      (await json(await call("GET", R.members))).some(
+        (x: any) => x.id === m.id,
+      ),
+    ).toBe(true);
+    const t = await json(await call("POST", R.tokens, { label: "ci" }));
+    await call("DELETE", R.token(t.id));
+    expect(
+      (await json(await call("GET", R.tokens))).some((x: any) => x.id === t.id),
+    ).toBe(false);
+    await call("PUT", R.dataDoc(poll.id, "votes", "n1"), { a: 1 });
+    await call("PATCH", R.dataDoc(poll.id, "votes", "n1"), { b: 2 });
+    expect(
+      (await json(await call("GET", R.dataDoc(poll.id, "votes", "n1")))).data,
+    ).toEqual({ a: 1, b: 2 });
+    await call("PUT", R.storageKey(poll.id, "k"), { value: "v" });
+    expect(
+      (await json(await call("GET", R.storageKey(poll.id, "k")))).value,
+    ).toBe("v");
+    expect(
+      (await json(await call("GET", R.storage(poll.id)))).items.some(
+        (e: any) => e.key === "k",
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("list query", () => {
+  const ids = async (qs: string, path: string = R.artifacts) =>
+    (await json(await call("GET", `${path}${qs}`))).items.map((a: any) => a.id);
+  it("scope, format, q, agent", async () => {
+    fresh();
+    expect(await ids("?scope=shared")).toEqual(
+      fixtures.artifacts.filter((a) => a.access !== "owner").map((a) => a.id),
+    );
+    expect(await ids("?scope=mine")).toEqual(
+      fixtures.artifacts
+        .filter((a) => a.owner.id === fixtures.me.user.id)
+        .map((a) => a.id),
+    );
+    expect(await ids("?scope=team")).toEqual(
+      fixtures.artifacts
+        .filter((a) => a.visibility === "team")
+        .map((a) => a.id),
+    );
+    expect(await ids("?format=pdf")).toEqual([pdf.id]);
+    expect(await ids("?q=Q4")).toEqual([pdf.id]);
+    expect(await ids("?agent=nobody")).toEqual([]);
+    expect(await ids("?q=Q4", R.search)).toEqual([pdf.id]);
+  });
+  it("limit + cursor", async () => {
+    fresh();
+    const p1 = await json(await call("GET", `${R.artifacts}?limit=2`));
+    expect(p1.items).toHaveLength(2);
+    expect(p1.nextCursor).toBeTruthy();
+    const p2 = await json(
+      await call(
+        "GET",
+        `${R.artifacts}?limit=2&cursor=${encodeURIComponent(p1.nextCursor)}`,
+      ),
+    );
+    expect(p2.items[0].id).toBe(fixtures.artifacts[2]?.id);
+  });
+});
+
+describe("misc rules", () => {
+  it("content-url: public has null expiry, private has one", async () => {
+    fresh();
+    expect(
+      (await json(await call("GET", R.contentUrl(pub.id)))).expiresAt,
+    ).toBeNull();
+    expect(
+      (await json(await call("GET", R.contentUrl(guide.id)))).expiresAt,
+    ).toBeTruthy();
+  });
+  it("CSRF: cookie without header -> 403 csrf; neither passes", async () => {
+    fresh();
+    const r = await call(
+      "PATCH",
+      R.artifact(ID),
+      { title: "x" },
+      { "content-type": "application/json", cookie: "oa_session=1" },
+    );
+    expect(r.status).toBe(403);
+    expect(Err.parse(await r.json()).error.code).toBe("csrf");
+    expect(
+      (
+        await call(
+          "PATCH",
+          R.artifact(ID),
+          { title: "x" },
+          { "content-type": "application/json" },
+        )
+      ).status,
+    ).toBe(200);
+  });
+});
+
+const text = async (r: Response) => await r.text();
+
+describe("round 3", () => {
+  it("storage PUT rejects unknown keys; POST with unknown client id and no title -> 400", async () => {
+    fresh();
+    expect(
+      (await call("PUT", R.storageKey(poll.id, "k"), { value: 1, x: 1 }))
+        .status,
+    ).toBe(400);
+    const r = await call("POST", R.artifacts, {
+      id: "1111111111111111",
+      format: "html",
+      content: "x",
+    });
+    expect(r.status).toBe(400);
+    expect(Err.parse(await r.json()).error.code).toBe("bad_request");
+  });
+});
+
+describe("round 2", () => {
+  it("version files differ per version; unknown path 404", async () => {
+    fresh();
+    const v1 = await text(
+      await call("GET", R.versionFile(art.id, 1, "index.html")),
+    );
+    const v2 = await text(
+      await call("GET", R.versionFile(art.id, 2, "index.html")),
+    );
+    expect(v1).not.toBe(v2);
+    expect(
+      (await call("GET", R.versionFile(art.id, 1, "style.css"))).status,
+    ).toBe(404);
+    expect(
+      (await call("GET", R.versionFile(art.id, 2, "style.css"))).status,
+    ).toBe(200);
+    expect(
+      (await call("GET", R.versionFile(art.id, 9, "index.html"))).status,
+    ).toBe(404);
+  });
+  it("GET thumbnail serves webp for fixtures with a thumbnailUrl", async () => {
+    fresh();
+    const r = await call("GET", R.thumbnail(art.id));
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toBe("image/webp");
+    const b = new Uint8Array(await r.arrayBuffer());
+    expect(String.fromCharCode(...b.slice(0, 4))).toBe("RIFF");
+    expect((await call("GET", R.thumbnail(pdf.id))).status).toBe(404);
+  });
+  it("PATCH missing data doc upserts", async () => {
+    fresh();
+    const r = await call("PATCH", R.dataDoc(poll.id, "votes", "fresh"), {
+      a: 1,
+    });
+    expect(r.status).toBe(200);
+    expect(
+      (await json(await call("GET", R.dataDoc(poll.id, "votes", "fresh"))))
+        .data,
+    ).toEqual({ a: 1 });
+    expect(
+      (await call("PUT", R.dataDoc(poll.id, "bad.col", "x"), {})).status,
+    ).toBe(400);
+  });
+  it("restoreVersion copies files/entry with message; publish url has no version", async () => {
+    fresh();
+    const r = await json(await call("POST", R.restoreVersion(art.id, 1)));
+    expect(r.url).toBe(fixtures.me.instance.appUrl + viewerPath(art.id));
+    const vs = await json(await call("GET", R.versions(art.id)));
+    const top = vs[0];
+    const src = vs.find((v: any) => v.version === 1);
+    expect(top.message).toBe("Restored v1");
+    expect(top.files).toEqual(src.files);
+    expect(top.entry).toBe(src.entry);
+    expect(
+      await text(
+        await call("GET", R.versionFile(art.id, top.version, "index.html")),
+      ),
+    ).toBe(
+      await text(await call("GET", R.versionFile(art.id, 1, "index.html"))),
+    );
+  });
+  it("publish builds VersionInfo from files/entry", async () => {
+    fresh();
+    await call("POST", R.versions(art.id), {
+      id: art.id,
+      files: { "a.md": "hello", "b/c.txt": "x" },
+      entry: "a.md",
+      message: "m",
+    });
+    const top = (await json(await call("GET", R.versions(art.id))))[0];
+    expect(top.entry).toBe("a.md");
+    expect(top.files.map((f: any) => f.path).sort()).toEqual([
+      "a.md",
+      "b/c.txt",
+    ]);
+    expect(top.files.find((f: any) => f.path === "a.md").size).toBe(5);
+  });
+  it("shares lowercase and reject owner; owner member protected", async () => {
+    fresh();
+    const s = await json(
+      await call("PUT", R.shares(ID), {
+        email: "Carol@Example.com",
+        role: "viewer",
+      }),
+    );
+    expect(s.email).toBe("carol@example.com");
+    expect(
+      (await call("DELETE", R.share(ID, "CAROL@example.com"))).status,
+    ).toBe(204);
+    expect(
+      (
+        await call("PUT", R.shares(ID), {
+          email: art.owner.email.toUpperCase(),
+          role: "viewer",
+        })
+      ).status,
+    ).toBe(400);
+    const owner = fixtures.members.find((m) => m.role === "owner")
+      ?.id as string;
+    expect(
+      (await call("PATCH", R.member(owner), { role: "member" })).status,
+    ).toBe(400);
+    expect((await call("DELETE", R.member(owner))).status).toBe(400);
+  });
+  it("search: empty q 400; snippet marks the match", async () => {
+    fresh();
+    expect((await call("GET", R.search)).status).toBe(400);
+    expect((await call("GET", `${R.search}?q=`)).status).toBe(400);
+    const p = await json(await call("GET", `${R.search}?q=q4`));
+    expect(p.items[0].snippet).toContain(
+      `${SNIPPET_MARK.open}Q4${SNIPPET_MARK.close}`,
+    );
+  });
+  it("visibility/owner filters; deleted carry deletedAt", async () => {
+    fresh();
+    const ids = async (qs: string) =>
+      (await json(await call("GET", `${R.artifacts}${qs}`))).items.map(
+        (a: any) => a.id,
+      );
+    expect(await ids("?visibility=public")).toEqual(
+      fixtures.artifacts
+        .filter((a) => a.visibility === "public")
+        .map((a) => a.id),
+    );
+    expect(await ids(`?owner=${guide.owner.id}`)).toEqual(
+      fixtures.artifacts
+        .filter((a) => a.owner.id === guide.owner.id)
+        .map((a) => a.id),
+    );
+    await call("DELETE", R.artifact(pdf.id));
+    const all = (
+      await json(await call("GET", `${R.artifacts}?includeDeleted=true`))
+    ).items;
+    expect(all.find((a: any) => a.id === pdf.id).deletedAt).toBeTruthy();
+    expect(all.find((a: any) => a.id === art.id).deletedAt).toBeNull();
+  });
+  it("viewer cannot mutate (404); editor cannot share/delete/visibility", async () => {
+    fresh();
+    for (const [m, p, b] of [
+      ["PATCH", R.artifact(guide.id), { title: "x" }],
+      ["POST", R.versions(guide.id), { id: guide.id, ...publish }],
+      ["POST", R.restoreVersion(guide.id, 1), undefined],
+      ["PUT", R.shares(guide.id), { email: "z@example.com", role: "viewer" }],
+      ["DELETE", R.artifact(guide.id), undefined],
+    ] as const) {
+      const r = await call(m, p, b);
+      expect(r.status, `${m} ${p}`).toBe(404);
+    }
+    expect((await call("GET", R.artifact(guide.id))).status).toBe(200);
+  });
+  it("editor can publish/patch/restore but not share, delete or change visibility", async () => {
+    fresh();
+    const d = by((a) => a.access === "editor");
+    expect((await call("PATCH", R.artifact(d.id), { title: "x" })).status).toBe(
+      200,
+    );
+    expect(
+      (await call("POST", R.versions(d.id), { id: d.id, ...publish })).status,
+    ).toBe(201);
+    expect((await call("POST", R.restoreVersion(d.id, 1))).status).toBe(201);
+    expect(
+      (await call("PATCH", R.artifact(d.id), { visibility: "public" })).status,
+    ).toBe(404);
+    expect(
+      (
+        await call("PUT", R.shares(d.id), {
+          email: "z@example.com",
+          role: "viewer",
+        })
+      ).status,
+    ).toBe(404);
+    expect((await call("DELETE", R.artifact(d.id))).status).toBe(404);
+  });
+  it("data and storage lists honor limit/cursor", async () => {
+    fresh();
+    for (const n of ["a1", "a2", "a3"])
+      await call("PUT", R.dataDoc(poll.id, "c", n), {});
+    const p1 = await json(
+      await call("GET", `${R.dataCollection(poll.id, "c")}?limit=2`),
+    );
+    expect(p1.items).toHaveLength(2);
+    const p2 = await json(
+      await call(
+        "GET",
+        `${R.dataCollection(poll.id, "c")}?limit=2&cursor=${encodeURIComponent(p1.nextCursor)}`,
+      ),
+    );
+    expect(p2.items).toHaveLength(1);
+    for (const k of ["k1", "k2"])
+      await call("PUT", R.storageKey(poll.id, k), { value: 1 });
+    const s1 = await json(await call("GET", `${R.storage(poll.id)}?limit=2`));
+    expect(s1.items).toHaveLength(2);
+    expect(s1.items[0]).not.toHaveProperty("value");
+    expect(s1.nextCursor).toBeTruthy();
+  });
+  it("strict bodies reject unknown keys", async () => {
+    fresh();
+    expect(
+      (await call("PATCH", R.settings, { name: "x", extra: 1 })).status,
+    ).toBe(400);
+  });
+});

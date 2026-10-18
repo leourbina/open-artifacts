@@ -1,0 +1,786 @@
+/**
+ * MSW v2 handlers mirroring the R.* contract (see the JSDoc on each key in routes.ts).
+ *
+ * - Stateful: every createHandlers() call deep-copies the fixtures, and mutations are
+ *   reflected by later reads. Ids and timestamps are stable within an instance.
+ * - Relative patterns (`*` + path), so any origin works.
+ * - Access: owner/editor may publish, patch and restore; only the owner may share, change
+ *   visibility, delete or undelete. A caller without the needed access gets 404, never 403.
+ * - CSRF (test convenience): a mutating request carrying a `cookie` header but no
+ *   `X-OA-Request: 1` gets 403 csrf; requests with neither cookie nor header pass.
+ * - quotaExceeded: every /api/v1 route answers 503 quota_exceeded.
+ */
+import { delay, type HttpHandler, HttpResponse, http } from "msw";
+import { z } from "zod";
+import { type ErrorCode, QUOTA_MESSAGE, STATUS_FOR } from "../errors.js";
+import { newId, newPat } from "../ids.js";
+import { LIMITS } from "../limits.js";
+import { viewerPath } from "../routes.js";
+import {
+  ArtifactPatchSchema,
+  type ArtifactSummary,
+  type DataDoc,
+  DataNameSchema,
+  DataPatchBodySchema,
+  DataQuerySchema,
+  DataSetBodySchema,
+  type FileEntry,
+  ListQuerySchema,
+  type Member,
+  MemberInviteSchema,
+  MemberPatchSchema,
+  PublishInputSchema,
+  SettingsPatchSchema,
+  type Share,
+  ShareInputSchema,
+  SNIPPET_MARK,
+  type StorageEntry,
+  TokenCreateInputSchema,
+  UploadCreateInputSchema,
+  type UserRef,
+  type VersionInfo,
+} from "../schemas.js";
+import { fixtures } from "./fixtures.js";
+
+export type MockOptions = { latencyMs?: number; quotaExceeded?: boolean };
+
+const err = (code: ErrorCode, message: string, details?: unknown) =>
+  HttpResponse.json(
+    { error: { code, message, ...(details === undefined ? {} : { details }) } },
+    { status: STATUS_FOR[code] },
+  );
+const notFound = () => err("not_found", "Not found");
+const badRequest = (m: string) => err("bad_request", m);
+const noContent = () => new HttpResponse(null, { status: 204 });
+const iso = () => new Date().toISOString();
+
+// 1x1 lossless WebP.
+const WEBP = Uint8Array.from(
+  atob("UklGRhoAAABXRUJQVlA4TA4AAAAvAAAAAAfQ//73v/+BiOh/AAA="),
+  (c) => c.charCodeAt(0),
+);
+const TYPES: Record<string, string> = {
+  html: "text/html",
+  css: "text/css",
+  js: "text/javascript",
+  json: "application/json",
+  md: "text/markdown",
+  pdf: "application/pdf",
+  png: "image/png",
+};
+const typeOf = (path: string) =>
+  TYPES[path.split(".").pop()?.toLowerCase() ?? ""] ?? "text/plain";
+const DEFAULT_ENTRY = {
+  html: "index.html",
+  markdown: "document.md",
+  code: "file.txt",
+  pdf: "document.pdf",
+} as const;
+
+const userRef = (u: UserRef): UserRef => ({
+  id: u.id,
+  email: u.email,
+  name: u.name,
+});
+
+async function body<T extends z.ZodType>(req: Request, schema: T) {
+  let raw: unknown;
+  try {
+    raw = await req.json();
+  } catch {
+    return { error: badRequest("Body must be valid JSON") };
+  }
+  const r = schema.safeParse(raw);
+  if (!r.success)
+    return {
+      error: err("bad_request", "Invalid request body", r.error.issues),
+    };
+  return { data: r.data as z.infer<T> };
+}
+
+const params = (q: URLSearchParams) => {
+  const o: Record<string, string> = {};
+  q.forEach((v, k) => {
+    o[k] = v;
+  });
+  return o;
+};
+const encodeCursor = (n: number) => btoa(String(n));
+function decodeCursor(c: string | null | undefined): number {
+  if (!c) return 0;
+  try {
+    const n = Number(atob(c));
+    return Number.isInteger(n) && n >= 0 ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+function paginate<T>(all: T[], q: URLSearchParams, defLimit = 25) {
+  const limit = Math.min(
+    500,
+    Math.max(1, Math.trunc(Number(q.get("limit"))) || defLimit),
+  );
+  const start = decodeCursor(q.get("cursor"));
+  const next = start + limit;
+  return HttpResponse.json({
+    items: all.slice(start, next),
+    nextCursor: next < all.length ? encodeCursor(next) : null,
+  });
+}
+
+type Params = Record<string, string | readonly string[] | undefined>;
+type Ctx = { request: Request; params: Params };
+type Need = "read" | "write" | "owner";
+const A = "*/api/v1/artifacts/:id";
+
+export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
+  const { latencyMs = 0, quotaExceeded = false } = opts;
+  const f = structuredClone(fixtures);
+  const me = f.me;
+  const artifacts: ArtifactSummary[] = f.artifacts;
+  const versions = f.versions;
+  const files = new Map(Object.entries(f.files));
+  const shares = f.shares;
+  const members: Member[] = f.members;
+  const tokens = f.tokens;
+  const clients = f.oauthClients;
+  const data = new Map<string, Map<string, Map<string, DataDoc>>>();
+  const storage = new Map<string, Map<string, StorageEntry>>();
+  for (const d of f.data) {
+    const cols = data.get(d.artifactId) ?? new Map();
+    const col = cols.get(d.collection) ?? new Map();
+    col.set(d.doc.id, d.doc);
+    cols.set(d.collection, col);
+    data.set(d.artifactId, cols);
+  }
+  for (const s of f.storage) {
+    const m = storage.get(s.artifactId) ?? new Map();
+    m.set(s.entry.key, s.entry);
+    storage.set(s.artifactId, m);
+  }
+  const docs = (id: string, col: string) => {
+    const cols = data.get(id) ?? new Map<string, Map<string, DataDoc>>();
+    data.set(id, cols);
+    const c = cols.get(col) ?? new Map<string, DataDoc>();
+    cols.set(col, c);
+    return c;
+  };
+  const store = (id: string) => {
+    const m = storage.get(id) ?? new Map<string, StorageEntry>();
+    storage.set(id, m);
+    return m;
+  };
+  const fileBody = (id: string, v: number, path: string) =>
+    files.get(`${id}/${v}/${path}`) ?? `mock ${path} (v${v})`;
+
+  /** Resolve a live artifact the caller may use at the given level, else 404. */
+  const withArt =
+    (
+      fn: (a: ArtifactSummary, ctx: Ctx) => Response | Promise<Response>,
+      need: Need = "read",
+    ) =>
+    (ctx: Ctx) => {
+      const a = artifacts.find((x) => x.id === ctx.params.id);
+      if (!a || a.deletedAt !== null) return notFound();
+      if (need === "owner" && a.access !== "owner") return notFound();
+      if (need === "write" && a.access === "viewer") return notFound();
+      return fn(a, ctx);
+    };
+  const names = (...v: unknown[]) =>
+    v.every((x) => DataNameSchema.safeParse(x).success)
+      ? undefined
+      : badRequest("Invalid collection, document or key name");
+
+  const addVersion = (
+    a: ArtifactSummary,
+    v: {
+      message: string | null;
+      entry: string;
+      language: string | null;
+      list: FileEntry[];
+      bodies: Map<string, string>;
+    },
+  ): Response => {
+    const list = versions[a.id] ?? [];
+    versions[a.id] = list;
+    const version = Math.max(0, ...list.map((x) => x.version)) + 1;
+    const createdAt = iso();
+    list.unshift({
+      version,
+      message: v.message,
+      agent: null,
+      createdBy: userRef(me.user),
+      createdAt,
+      entry: v.entry,
+      files: v.list,
+      language: v.language,
+      textIndexed: !v.list.some((x) => x.contentType === "application/pdf"),
+    });
+    for (const [p, b] of v.bodies) files.set(`${a.id}/${version}/${p}`, b);
+    a.currentVersion = version;
+    a.updatedAt = createdAt;
+    return HttpResponse.json(
+      { id: a.id, version, url: me.instance.appUrl + viewerPath(a.id) },
+      { status: 201 },
+    );
+  };
+  const publishTo = (
+    a: ArtifactSummary,
+    input: z.infer<typeof PublishInputSchema>,
+  ): Response => {
+    const bodies = new Map<string, string>();
+    let entry: string;
+    if (input.content !== undefined) {
+      entry =
+        input.entry ?? DEFAULT_ENTRY[input.format ?? a.format] ?? "index.html";
+      bodies.set(entry, input.content);
+    } else {
+      for (const [p, c] of Object.entries(input.files ?? {})) {
+        bodies.set(
+          p,
+          typeof c === "string" ? c : "base64" in c ? atob(c.base64) : "",
+        );
+      }
+      entry = input.entry ?? [...bodies.keys()][0] ?? "index.html";
+    }
+    if (input.title) a.title = input.title;
+    if (input.description !== undefined) a.description = input.description;
+    if (input.format) a.format = input.format;
+    a.lastAgent = null;
+    return addVersion(a, {
+      message: input.message ?? null,
+      entry,
+      language: input.language ?? null,
+      bodies,
+      list: [...bodies].map(([path, b]) => ({
+        path,
+        size: new TextEncoder().encode(b).length,
+        contentType: typeOf(path),
+      })),
+    });
+  };
+
+  const matches = (a: ArtifactSummary, q: URLSearchParams) => {
+    const needle = (q.get("q") ?? "").toLowerCase();
+    const scope = q.get("scope") ?? "all";
+    const owner = q.get("owner");
+    return (
+      (q.get("includeDeleted") === "true" || a.deletedAt === null) &&
+      (scope === "all" ||
+        (scope === "mine" && a.owner.id === me.user.id) ||
+        (scope === "shared" && a.access !== "owner") ||
+        (scope === "team" && a.visibility === "team")) &&
+      (!q.get("format") || a.format === q.get("format")) &&
+      (!q.get("visibility") || a.visibility === q.get("visibility")) &&
+      (!owner || a.owner.id === owner || a.owner.email === owner) &&
+      (!q.get("agent") || a.lastAgent?.name === q.get("agent")) &&
+      (!needle ||
+        a.title.toLowerCase().includes(needle) ||
+        (a.description ?? "").toLowerCase().includes(needle))
+    );
+  };
+  const mark = (text: string, needle: string) => {
+    const i = text.toLowerCase().indexOf(needle.toLowerCase());
+    return i < 0
+      ? null
+      : `${text.slice(0, i)}${SNIPPET_MARK.open}${text.slice(i, i + needle.length)}${SNIPPET_MARK.close}${text.slice(i + needle.length)}`;
+  };
+  const byId = <T>(list: T[], key: (x: T) => string, id: unknown): number =>
+    list.findIndex((x) => key(x) === id);
+  const settings = () => ({
+    name: me.instance.name,
+    defaultVisibility: me.instance.defaultVisibility,
+  });
+
+  const pre: HttpHandler[] = [
+    http.all("*/api/v1/*", async ({ request }) => {
+      if (latencyMs) await delay(latencyMs);
+      if (quotaExceeded) return err("quota_exceeded", QUOTA_MESSAGE);
+      const mutating = !["GET", "HEAD", "OPTIONS"].includes(request.method);
+      if (
+        mutating &&
+        request.headers.has("cookie") &&
+        request.headers.get("x-oa-request") !== "1"
+      )
+        return err("csrf", "Missing X-OA-Request header");
+      return undefined; // fall through to the route handlers
+    }),
+  ];
+
+  return [
+    ...pre,
+    http.get("*/api/v1/me", () => HttpResponse.json(me)),
+    http.get("*/api/v1/artifacts", ({ request }) => {
+      const q = new URL(request.url).searchParams;
+      const p = ListQuerySchema.safeParse(params(q));
+      if (!p.success)
+        return err("bad_request", "Invalid query", p.error.issues);
+      return paginate(
+        artifacts.filter((a) => matches(a, q)),
+        q,
+      );
+    }),
+    http.post("*/api/v1/artifacts", async ({ request }) => {
+      const r = await body(request, PublishInputSchema);
+      if (r.error) return r.error;
+      const existing = r.data.id
+        ? artifacts.find((a) => a.id === r.data.id)
+        : undefined;
+      if (!existing && r.data.id && r.data.title === undefined)
+        return badRequest("title is required when creating an artifact");
+      if (existing)
+        return existing.deletedAt !== null || existing.access === "viewer"
+          ? notFound()
+          : publishTo(existing, r.data);
+      const now = iso();
+      const a: ArtifactSummary = {
+        id: r.data.id ?? newId(),
+        title: r.data.title ?? "Untitled",
+        description: r.data.description ?? null,
+        format: r.data.format ?? "html",
+        visibility: r.data.visibility ?? me.instance.defaultVisibility,
+        owner: userRef(me.user),
+        currentVersion: 0,
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null,
+        lastAgent: null,
+        thumbnailUrl: null,
+        access: "owner",
+        capabilities: {
+          db: false,
+          viewer: false,
+          storage: false,
+          ...r.data.capabilities,
+        },
+        allowAnonymousWrites: r.data.allowAnonymousWrites ?? false,
+      };
+      artifacts.unshift(a);
+      versions[a.id] = [];
+      return publishTo(a, r.data);
+    }),
+    http.get(
+      A,
+      withArt((a) => HttpResponse.json(a)),
+    ),
+    http.patch(A, async (ctx) => {
+      return withArt(async (a) => {
+        const r = await body(ctx.request, ArtifactPatchSchema);
+        if (r.error) return r.error;
+        if (r.data.visibility !== undefined && a.access !== "owner")
+          return notFound();
+        const { capabilities, ...rest } = r.data;
+        Object.assign(a, rest, { updatedAt: iso() });
+        if (capabilities) Object.assign(a.capabilities, capabilities);
+        return HttpResponse.json(a);
+      }, "write")(ctx);
+    }),
+    http.delete(
+      A,
+      withArt((a) => {
+        a.deletedAt = iso();
+        return noContent();
+      }, "owner"),
+    ),
+    http.post(`${A}/undelete`, ({ params }) => {
+      const a = artifacts.find((x) => x.id === params.id);
+      if (!a || a.access !== "owner") return notFound();
+      a.deletedAt = null;
+      return HttpResponse.json(a);
+    }),
+    http.get(
+      `${A}/versions`,
+      withArt((a) => HttpResponse.json(versions[a.id] ?? [])),
+    ),
+    http.post(
+      `${A}/versions`,
+      withArt(async (a, { request }) => {
+        const r = await body(request, PublishInputSchema);
+        return r.error ?? publishTo(a, r.data);
+      }, "write"),
+    ),
+    http.get(
+      `${A}/versions/:v/files/:path+`,
+      withArt((a, { params }) => {
+        const v = Number(params.v);
+        const path = ([] as string[]).concat(params.path ?? []).join("/");
+        const info = (versions[a.id] ?? []).find((x) => x.version === v);
+        const file = info?.files.find((x) => x.path === path);
+        return file
+          ? new HttpResponse(fileBody(a.id, v, path), {
+              headers: { "content-type": file.contentType },
+            })
+          : notFound();
+      }),
+    ),
+    http.post(
+      `${A}/versions/:v/restore`,
+      withArt((a, { params }) => {
+        const src = (versions[a.id] ?? []).find(
+          (x) => x.version === Number(params.v),
+        );
+        if (!src) return notFound();
+        const bodies = new Map(
+          src.files.map((x) => [x.path, fileBody(a.id, src.version, x.path)]),
+        );
+        return addVersion(a, {
+          message: `Restored v${src.version}`,
+          entry: src.entry,
+          language: src.language,
+          list: structuredClone(src.files),
+          bodies,
+        });
+      }, "write"),
+    ),
+    http.put(
+      `${A}/versions/:v/text`,
+      withArt((a, { params }) => {
+        return (versions[a.id] ?? []).some(
+          (x) => x.version === Number(params.v),
+        )
+          ? noContent()
+          : notFound();
+      }, "write"),
+    ),
+    http.get(
+      `${A}/thumbnail`,
+      withArt((a) =>
+        a.thumbnailUrl
+          ? new HttpResponse(WEBP, {
+              headers: { "content-type": "image/webp" },
+            })
+          : notFound(),
+      ),
+    ),
+    http.put(
+      `${A}/thumbnail`,
+      withArt((a) => {
+        a.thumbnailUrl = `/api/v1/artifacts/${a.id}/thumbnail`;
+        return noContent();
+      }, "write"),
+    ),
+    http.get(
+      `${A}/content-url`,
+      withArt((a) =>
+        HttpResponse.json({
+          url: `https://content.example.com/c/${a.id}/index.html?sig=mock`,
+          expiresAt:
+            a.visibility === "public"
+              ? null
+              : new Date(
+                  Date.now() + LIMITS.signedUrlTtlSec * 1000,
+                ).toISOString(),
+        }),
+      ),
+    ),
+    http.get(
+      `${A}/shares`,
+      withArt((a) => HttpResponse.json(shares[a.id] ?? [])),
+    ),
+    http.put(
+      `${A}/shares`,
+      withArt(async (a, { request }) => {
+        const r = await body(request, ShareInputSchema);
+        if (r.error) return r.error;
+        const email = r.data.email.toLowerCase();
+        if (email === a.owner.email.toLowerCase())
+          return badRequest("Cannot share with the owner");
+        const list = shares[a.id] ?? [];
+        shares[a.id] = list;
+        const i = byId(list, (s) => s.email, email);
+        const share: Share = {
+          email,
+          role: r.data.role,
+          createdAt: list[i]?.createdAt ?? iso(),
+        };
+        if (i >= 0) list[i] = share;
+        else list.push(share);
+        return HttpResponse.json(share);
+      }, "owner"),
+    ),
+    http.delete(
+      `${A}/shares/:email`,
+      withArt((a, { params }) => {
+        const list = shares[a.id] ?? [];
+        const i = byId(
+          list,
+          (s) => s.email,
+          String(params.email).toLowerCase(),
+        );
+        if (i < 0) return notFound();
+        list.splice(i, 1);
+        return noContent();
+      }, "owner"),
+    ),
+    http.post("*/api/v1/uploads", async ({ request }) => {
+      const r = await body(request, UploadCreateInputSchema);
+      if (r.error) return r.error;
+      const uploadId = newId();
+      return HttpResponse.json(
+        {
+          uploadId,
+          artifactId: r.data.artifactId ?? newId(),
+          url: `${me.instance.appUrl}/api/v1/uploads/${uploadId}?sig=mock&exp=0`,
+          expiresAt: new Date(
+            Date.now() + LIMITS.uploadUrlTtlSec * 1000,
+          ).toISOString(),
+        },
+        { status: 201 },
+      );
+    }),
+    http.put("*/api/v1/uploads/:uploadId", () => noContent()),
+    http.get("*/api/v1/search", ({ request }) => {
+      const q = new URL(request.url).searchParams;
+      const needle = (q.get("q") ?? "").trim();
+      if (!needle) return badRequest("q is required");
+      const hits = artifacts
+        .filter(
+          (a) =>
+            a.deletedAt === null &&
+            matches(a, new URLSearchParams({ q: needle })),
+        )
+        .map((a) => ({
+          ...a,
+          snippet:
+            mark(a.description ?? "", needle) ??
+            mark(a.title, needle) ??
+            a.title,
+        }));
+      return paginate(hits, q);
+    }),
+    http.get("*/api/v1/members", () => HttpResponse.json(members)),
+    http.post("*/api/v1/members", async ({ request }) => {
+      const r = await body(request, MemberInviteSchema);
+      if (r.error) return r.error;
+      const email = r.data.email.toLowerCase();
+      if (members.some((m) => m.email === email))
+        return err("conflict", "Already a member");
+      const m: Member = {
+        id: newId(),
+        email,
+        name: null,
+        role: r.data.role,
+        lastSeenAt: null,
+      };
+      members.push(m);
+      return HttpResponse.json(m, { status: 201 });
+    }),
+    http.patch("*/api/v1/members/:id", async ({ request, params }) => {
+      const m = members.find((x) => x.id === params.id);
+      if (!m) return notFound();
+      const r = await body(request, MemberPatchSchema);
+      if (r.error) return r.error;
+      if (m.role === "owner") return badRequest("The owner cannot be demoted");
+      m.role = r.data.role;
+      return HttpResponse.json(m);
+    }),
+    http.delete("*/api/v1/members/:id", ({ params }) => {
+      const i = byId(members, (m) => m.id, params.id);
+      if (i < 0) return notFound();
+      if (members[i]?.role === "owner")
+        return badRequest("The owner cannot be removed");
+      members.splice(i, 1);
+      return noContent();
+    }),
+    http.get("*/api/v1/tokens", () => HttpResponse.json(tokens)),
+    http.post("*/api/v1/tokens", async ({ request }) => {
+      const r = await body(request, TokenCreateInputSchema);
+      if (r.error) return r.error;
+      const t = {
+        id: newId(),
+        label: r.data.label,
+        createdAt: iso(),
+        lastUsedAt: null,
+      };
+      tokens.push(t);
+      return HttpResponse.json({ ...t, token: newPat() }, { status: 201 });
+    }),
+    http.delete("*/api/v1/tokens/:id", ({ params }) => {
+      const i = byId(tokens, (t) => t.id, params.id);
+      if (i < 0) return notFound();
+      tokens.splice(i, 1);
+      return noContent();
+    }),
+    http.get("*/api/v1/oauth-clients", () => HttpResponse.json(clients)),
+    http.delete("*/api/v1/oauth-clients/:grantId", ({ params }) => {
+      const i = byId(clients, (c) => c.grantId, params.grantId);
+      if (i < 0) return notFound();
+      clients.splice(i, 1);
+      return noContent();
+    }),
+    http.get("*/api/v1/settings", () => HttpResponse.json(settings())),
+    http.patch("*/api/v1/settings", async ({ request }) => {
+      const r = await body(request, SettingsPatchSchema);
+      if (r.error) return r.error;
+      Object.assign(me.instance, r.data);
+      return HttpResponse.json(settings());
+    }),
+    http.get("*/api/v1/usage", () =>
+      HttpResponse.json({
+        available: true,
+        date: iso().slice(0, 10),
+        metrics: [
+          { key: "requests", used: 1200, limit: 100000 },
+          { key: "d1_reads", used: 3400, limit: 5000000 },
+          { key: "d1_writes", used: 120, limit: 100000 },
+          { key: "do_requests", used: 80, limit: 100000 },
+        ],
+      }),
+    ),
+    http.get(
+      `${A}/data-subscribe`,
+      withArt(
+        () =>
+          new HttpResponse("WebSocket upgrade is not available in mocks", {
+            status: 426,
+          }),
+      ),
+    ),
+    http.post(
+      `${A}/data/:col/query`,
+      withArt(async (a, { request, params }) => {
+        const bad = names(params.col);
+        if (bad) return bad;
+        const r = await body(request, DataQuerySchema);
+        if (r.error) return r.error;
+        const { where, orderBy, order, limit, cursor } = r.data;
+        let list = [...docs(a.id, params.col as string).values()].filter((d) =>
+          Object.entries(where ?? {}).every(
+            ([k, v]) => (d.data as Record<string, unknown> | null)?.[k] === v,
+          ),
+        );
+        if (orderBy) {
+          const get = (d: DataDoc) =>
+            (d.data as Record<string, string | number> | null)?.[orderBy] ?? "";
+          list = list.sort((x, y) =>
+            get(x) > get(y) ? 1 : get(x) < get(y) ? -1 : 0,
+          );
+          if (order === "desc") list.reverse();
+        }
+        const q = new URLSearchParams({ limit: String(limit) });
+        if (cursor) q.set("cursor", cursor);
+        return paginate(list, q, 100);
+      }),
+    ),
+    http.get(
+      `${A}/data/:col`,
+      withArt((a, { request, params }) => {
+        const bad = names(params.col);
+        if (bad) return bad;
+        return paginate(
+          [...docs(a.id, params.col as string).values()],
+          new URL(request.url).searchParams,
+          100,
+        );
+      }),
+    ),
+    http.get(
+      `${A}/data/:col/:doc`,
+      withArt((a, { params }) => {
+        const bad = names(params.col, params.doc);
+        if (bad) return bad;
+        const d = docs(a.id, params.col as string).get(params.doc as string);
+        return d ? HttpResponse.json(d) : notFound();
+      }),
+    ),
+    http.put(
+      `${A}/data/:col/:doc`,
+      withArt(async (a, { request, params }) => {
+        const bad = names(params.col, params.doc);
+        if (bad) return bad;
+        const r = await body(request, DataSetBodySchema);
+        if (r.error) return r.error;
+        const d: DataDoc = {
+          id: params.doc as string,
+          data: r.data,
+          updatedAt: iso(),
+          updatedBy: me.user.id,
+        };
+        docs(a.id, params.col as string).set(d.id, d);
+        return HttpResponse.json(d);
+      }),
+    ),
+    http.patch(
+      `${A}/data/:col/:doc`,
+      withArt(async (a, { request, params }) => {
+        const bad = names(params.col, params.doc);
+        if (bad) return bad;
+        const r = await body(request, DataPatchBodySchema);
+        if (r.error) return r.error;
+        const col = docs(a.id, params.col as string);
+        const d: DataDoc = col.get(params.doc as string) ?? {
+          id: params.doc as string,
+          data: {},
+          updatedAt: iso(),
+          updatedBy: me.user.id,
+        };
+        d.data = { ...(d.data as object), ...r.data };
+        d.updatedAt = iso();
+        d.updatedBy = me.user.id;
+        col.set(d.id, d);
+        return HttpResponse.json(d);
+      }),
+    ),
+    http.delete(
+      `${A}/data/:col/:doc`,
+      withArt((a, { params }) => {
+        const bad = names(params.col, params.doc);
+        if (bad) return bad;
+        docs(a.id, params.col as string).delete(params.doc as string);
+        return noContent();
+      }),
+    ),
+    http.get(
+      `${A}/storage`,
+      withArt((a, { request }) =>
+        paginate(
+          [...store(a.id).values()].map((e) => ({
+            key: e.key,
+            updatedAt: e.updatedAt,
+          })),
+          new URL(request.url).searchParams,
+          100,
+        ),
+      ),
+    ),
+    http.get(
+      `${A}/storage/:key`,
+      withArt((a, { params }) => {
+        const bad = names(params.key);
+        if (bad) return bad;
+        const e = store(a.id).get(params.key as string);
+        return e ? HttpResponse.json(e) : notFound();
+      }),
+    ),
+    http.put(
+      `${A}/storage/:key`,
+      withArt(async (a, { request, params }) => {
+        const bad = names(params.key);
+        if (bad) return bad;
+        const r = await body(
+          request,
+          // TODO: use a shared StorageSetBody schema once F2 adds one (contract frozen in F2 PR).
+          z.strictObject({ value: z.unknown() }),
+        );
+        if (r.error) return r.error;
+        const entry: StorageEntry = {
+          key: params.key as string,
+          value: r.data.value,
+          updatedAt: iso(),
+        };
+        store(a.id).set(entry.key, entry);
+        return HttpResponse.json(entry);
+      }),
+    ),
+    http.delete(
+      `${A}/storage/:key`,
+      withArt((a, { params }) => {
+        const bad = names(params.key);
+        if (bad) return bad;
+        store(a.id).delete(params.key as string);
+        return noContent();
+      }),
+    ),
+    http.post("*/auth/logout", () => noContent()),
+  ];
+}

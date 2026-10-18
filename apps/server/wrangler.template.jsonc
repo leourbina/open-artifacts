@@ -1,0 +1,50 @@
+{
+  "name": "{{WORKER_NAME}}",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "../dashboard/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
+  },
+  "routes": [
+    { "pattern": "{{APP_HOST}}", "custom_domain": true },
+    { "pattern": "{{CONTENT_HOST}}", "custom_domain": true }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "{{D1_NAME}}",
+      "database_id": "{{D1_ID}}",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "{{R2_BUCKET}}" }],
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "{{KV_ID}}" }],
+  "durable_objects": {
+    "bindings": [
+      { "name": "ARTIFACT_RUNTIME", "class_name": "ArtifactRuntime" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ArtifactRuntime"] }],
+  "ratelimits": [
+    {
+      "name": "RL_ANON",
+      "namespace_id": "1001",
+      "simple": { "limit": 30, "period": 60 }
+    }
+  ],
+  "triggers": { "crons": ["17 3 * * *"] },
+  "vars": {
+    "APP_HOST": "{{APP_HOST}}",
+    "CONTENT_HOST": "{{CONTENT_HOST}}",
+    "OWNER_EMAIL": "{{OWNER_EMAIL}}",
+    "ENVIRONMENT": "production",
+    "ACCESS_TEAM_DOMAIN": "{{ACCESS_TEAM_DOMAIN}}",
+    "ACCESS_CLIENT_ID": "{{ACCESS_CLIENT_ID}}",
+    "CF_ACCOUNT_ID": "{{CF_ACCOUNT_ID}}"
+  },
+  "observability": { "enabled": true }
+}

@@ -6,15 +6,22 @@
   "scripts": {
     "dev": "echo \"@oa/server dev: placeholder\"",
     "test": "vitest run --exclude \"test/smoke/**\" --passWithNoTests",
-    "smoke": "vitest run test/smoke --passWithNoTests",
+    "smoke": "vitest run -c vitest.smoke.config.ts --passWithNoTests",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.4.4",
     "@cloudflare/workers-types": "^5.20261018.1",
     "@types/node": "^20.19.43",
+    "drizzle-kit": "^0.31.11",
     "typescript": "^5.9.3",
     "vitest": "^4.1.12",
     "wrangler": "^4.151.1"
+  },
+  "dependencies": {
+    "@oa/shared": "workspace:*",
+    "drizzle-orm": "^0.45.4",
+    "hono": "^4.13.13"
   },
   "engines": {
     "node": ">=22"
