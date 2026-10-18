@@ -10,6 +10,7 @@ import { useSignOut } from "../auth/signOut";
 import { useMe } from "../auth/useMe";
 import { SearchBox } from "../library/SearchBox";
 import { EdgePanel } from "../pages/Edge";
+import { UndoToast } from "../viewer/undoToast";
 import { QuotaBanner } from "./QuotaBanner";
 
 const icon = (d: string) => (
@@ -47,6 +48,13 @@ const publicRoute = (raw: string) => {
   return p === "/sign-in" || p === "/no-access" || p.startsWith("/a/");
 };
 
+const Toasters = () => (
+  <>
+    <Toaster />
+    <UndoToast />
+  </>
+);
+
 export function AppLayout() {
   const state = useMe();
   const redirect = useRedirect();
@@ -74,13 +82,13 @@ export function AppLayout() {
     if (guestHome) void navigate({ to: "/shared" as string, replace: true });
   }, [guestHome, navigate]);
 
-  if (anonymous || guestHome) return <Toaster />;
+  if (anonymous || guestHome) return <Toasters />;
   if (bareRoute(path))
     return (
       <main id="oa-main">
         <QuotaBanner />
         <Outlet />
-        <Toaster />
+        <Toasters />
       </main>
     );
   if (state.status === "error")
@@ -93,7 +101,7 @@ export function AppLayout() {
             state.error.code === "quota_exceeded"
           }
         />
-        <Toaster />
+        <Toasters />
       </main>
     );
   const me = state.status === "authed" ? state.me : null;
@@ -101,7 +109,7 @@ export function AppLayout() {
     <AppShell nav={<Sidebar me={me} path={path} />} header={<TopBar me={me} />}>
       <QuotaBanner />
       <Outlet />
-      <Toaster />
+      <Toasters />
     </AppShell>
   );
 }

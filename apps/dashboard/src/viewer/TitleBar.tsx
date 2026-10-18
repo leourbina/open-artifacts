@@ -24,6 +24,7 @@ import {
   useVersionInfo,
   useVersions,
 } from "../api/queries";
+import { offerUndo } from "./undoToast";
 import "./viewer.css";
 
 const TITLE_MAX = 200;
@@ -262,6 +263,7 @@ export function TitleBar({
                   onSuccess: () => {
                     deleted.current = true;
                     go("/");
+                    offerUndo(artifact.id, artifact.title);
                   },
                   onError: () => {
                     deleting.current = false;
