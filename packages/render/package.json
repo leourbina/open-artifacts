@@ -7,18 +7,33 @@
     "node": ">=22"
   },
   "exports": {
+    ".": "./src/index.ts",
     "./theme.css": "./src/theme.css",
-    "./shiki-themes": "./src/shiki-themes.ts"
+    "./shiki-themes": "./src/shiki-themes.ts",
+    "./dist/manifest.json": "./dist/manifest.json"
   },
   "scripts": {
+    "build": "vite build && node scripts/check-size.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@types/markdown-it": "^14.2.0",
     "@types/node": "^20.19.43",
+    "happy-dom": "^20.14.6",
     "jsdom": "^29.1.1",
     "shiki": "^4.5.0",
     "typescript": "^5.9.3",
+    "vite": "^7.3.7",
     "vitest": "^4.1.12"
+  },
+  "dependencies": {
+    "@oa/shared": "workspace:*",
+    "@shikijs/langs": "4.5.0",
+    "markdown-it": "^14.3.3",
+    "markdown-it-footnote": "^4.0.0",
+    "markdown-it-task-lists": "^2.1.1",
+    "mermaid": "^11.17.2",
+    "pdfjs-dist": "^5.7.284"
   }
 }
