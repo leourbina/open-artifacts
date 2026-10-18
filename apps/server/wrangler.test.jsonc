@@ -11,10 +11,24 @@
       "migrations_dir": "migrations"
     }
   ],
-  "r2_buckets": [{ "binding": "BLOBS", "bucket_name": "oa-blobs-test" }],
-  "kv_namespaces": [{ "binding": "KV", "id": "oa-kv-test" }],
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "oa-blobs-test" }],
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "oa-kv-test" }],
   "durable_objects": {
-    "bindings": [{ "name": "RUNTIME", "class_name": "ArtifactRuntime" }]
+    "bindings": [
+      { "name": "ARTIFACT_RUNTIME", "class_name": "ArtifactRuntime" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ArtifactRuntime"] }]
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ArtifactRuntime"] }],
+  "vars": {
+    "APP_HOST": "app.localhost",
+    "CONTENT_HOST": "content.localhost",
+    "ENVIRONMENT": "dev",
+    "OWNER_EMAIL": "owner@example.com",
+    "ACCESS_TEAM_DOMAIN": "test.cloudflareaccess.com",
+    "ACCESS_CLIENT_ID": "test-client-id",
+    "ACCESS_CLIENT_SECRET": "test-client-secret",
+    "SESSION_SECRET": "test-session-secret-0123456789abcdef",
+    "CONTENT_SIGNING_KEY": "test-content-signing-key-0123456789",
+    "CF_ACCOUNT_ID": "test-account"
+  }
 }
