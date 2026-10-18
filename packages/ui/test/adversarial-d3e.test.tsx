@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Tabs, Toaster, toast } from "../src/index";
+import { AppShell, Tabs, Toaster, toast } from "../src/index";
 
 afterEach(() => {
   cleanup();
@@ -44,5 +44,48 @@ describe("Tabs index-based values", () => {
     expect(screen.getByRole("tab", { selected: true }).textContent).toBe(
       "Beta",
     );
+  });
+});
+
+describe("AppShell drawer", () => {
+  const shell = (
+    <AppShell nav={<a href="#lib">Library</a>}>
+      <p>Content</p>
+    </AppShell>
+  );
+
+  it("closes on a matchMedia change to wide (sanity)", async () => {
+    let fire = () => {};
+    let matches = false;
+    vi.stubGlobal("matchMedia", () => ({
+      get matches() {
+        return matches;
+      },
+      addEventListener: (_: string, f: () => void) => {
+        fire = f;
+      },
+      removeEventListener() {},
+    }));
+    const user = userEvent.setup();
+    render(shell);
+    await user.click(screen.getByRole("button", { name: "Open navigation" }));
+    act(() => {
+      matches = true;
+      fire();
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("Cmd/Ctrl-click (open in new tab) keeps the drawer open", async () => {
+    const user = userEvent.setup();
+    render(shell);
+    await user.click(screen.getByRole("button", { name: "Open navigation" }));
+    const link = within(screen.getByRole("dialog")).getByRole("link", {
+      name: "Library",
+    });
+    await user.keyboard("{Control>}");
+    await user.click(link);
+    await user.keyboard("{/Control}");
+    expect(screen.queryByRole("dialog")).not.toBeNull();
   });
 });

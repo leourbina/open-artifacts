@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  AppShell,
   Button,
   Dialog,
   Menu,
@@ -139,5 +140,53 @@ describe("toast()", () => {
       .getAllByRole("button", { name: /dismiss/i })
       .map((b) => b.getAttribute("aria-label"));
     expect(new Set(names).size).toBe(names.length);
+  });
+});
+
+describe("AppShell", () => {
+  const shell = (
+    <AppShell nav={<a href="#lib">Library</a>} header={<span>Artifacts</span>}>
+      <p>Content</p>
+    </AppShell>
+  );
+  const openDrawer = async () => {
+    const user = userEvent.setup();
+    render(shell);
+    await user.click(screen.getByRole("button", { name: "Open navigation" }));
+    return user;
+  };
+
+  it("drawer closes when the viewport grows past 960px", async () => {
+    await openDrawer();
+    act(() => {
+      window.innerWidth = 1200;
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("drawer exposes its links inside a navigation landmark", async () => {
+    await openDrawer();
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).queryByRole("navigation")).not.toBeNull();
+  });
+
+  it("following a nav link closes the drawer", async () => {
+    const user = await openDrawer();
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("link", { name: "Library" }),
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("has a skip link to <main> as the first focusable element", async () => {
+    const user = userEvent.setup();
+    render(shell);
+    await user.tab();
+    const first = document.activeElement as HTMLAnchorElement;
+    const main = screen.getByRole("main");
+    expect(first.tagName).toBe("A");
+    expect(main.id).not.toBe("");
+    expect(first.getAttribute("href")).toBe(`#${main.id}`);
   });
 });
