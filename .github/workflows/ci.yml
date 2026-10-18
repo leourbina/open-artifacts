@@ -72,3 +72,36 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: echo "e2e is a no-op until FE12 (Playwright)"
+  # Not a required check: skipped unless a release-config file changed.
+  release-dry-run:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: changed
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if git diff --name-only "$BASE_SHA"...HEAD | grep -qxE 'release-please-config\.json|\.release-please-manifest\.json|\.github/workflows/release-please\.yml|biome\.json|CHANGELOG\.md'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.changed.outputs.run == 'true'
+        uses: pnpm/action-setup@v4
+      - if: steps.changed.outputs.run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - if: steps.changed.outputs.run == 'true'
+        run: pnpm install --frozen-lockfile
+      # release-please 17.3.0 = version locked by googleapis/release-please-action v4.4.1 (package-lock.json)
+      - if: steps.changed.outputs.run == 'true'
+        env:
+          RD_TOKEN: ${{ github.token }}
+        run: |
+          npm install --no-save --prefix "$RUNNER_TEMP/rp" release-please@17.3.0
+          RELEASE_PLEASE="$RUNNER_TEMP/rp/node_modules/.bin/release-please" bash scripts/ci/release-dry-run.sh
