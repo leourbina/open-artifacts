@@ -19,4 +19,5 @@ test("no banner without quota mode", async ({ page }) => {
     page.getByRole("link", { name: "Library" }).first(),
   ).toBeVisible();
   await expect(page.getByText(QUOTA_MESSAGE)).toHaveCount(0);
+  await expect(page.getByRole("article").first()).toBeVisible();
 });

@@ -176,7 +176,11 @@ describe("layout behaviour", () => {
 
   it("guest at / is sent to /shared", async () => {
     mount(async () => meAs("guest"), "/");
-    await screen.findByRole("heading", { name: "Library: shared" });
+    await waitFor(() =>
+      expect(
+        screen.getByRole("tab", { name: "Shared with me", selected: true }),
+      ).toBeInTheDocument(),
+    );
   });
 
   it("/me 500 shows an error panel with Retry that refetches", async () => {
@@ -218,7 +222,7 @@ describe("layout behaviour", () => {
     fail = true;
     await act(() => client.invalidateQueries({ queryKey: qk.me }));
     expect(client.getQueryState(qk.me)?.status).toBe("error");
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByText("Couldn't load your account")).toBeNull();
     expect(
       screen.getAllByRole("link", { name: "Team" }).length,
     ).toBeGreaterThan(0);

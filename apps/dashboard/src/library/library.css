@@ -73,13 +73,29 @@
 }
 .lib-fallback {
   height: 100%;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
-  gap: 6px;
+  justify-content: flex-start;
+  gap: 8px;
   padding: 12px;
+  overflow: hidden;
+  color: var(--oa-text-muted);
+}
+.lib-fallback svg {
+  flex: none;
+}
+.lib-fallback span {
+  color: var(--oa-text);
   font-weight: 600;
-  font-size: var(--oa-text-lg);
+  font-size: var(--oa-text-md, var(--oa-text-sm));
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  overflow-wrap: anywhere;
 }
 .lib-meta {
   display: flex;
