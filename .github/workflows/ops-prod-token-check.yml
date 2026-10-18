@@ -1,0 +1,19 @@
+name: Ops - production token check
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: prod
+  cancel-in-progress: false
+jobs:
+  check:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check production token (read-only)
+        env:
+          PROD_CLOUDFLARE_API_TOKEN: ${{ secrets.PROD_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: bash scripts/ops/check-prod-token.sh

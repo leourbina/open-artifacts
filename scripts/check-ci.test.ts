@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -445,5 +446,62 @@ describe("ops-staging-access.yml hardening", () => {
   });
   it("only runs on main", () => {
     expect(w.jobs.access.if).toBe("github.ref == 'refs/heads/main'");
+  });
+});
+
+describe("prod and staging tokens never cross", () => {
+  const dir = join(root, ".github/workflows");
+  const refs = (file: string, base = dir): Set<string> => {
+    const out = new Set<string>();
+    const walk = (v: unknown) => {
+      if (typeof v === "string")
+        for (const m of v.matchAll(/secrets\.([A-Za-z0-9_]+)/g))
+          out.add(m[1] as string);
+      else if (v && typeof v === "object") Object.values(v).forEach(walk);
+    };
+    walk(parse(readFileSync(join(base, file), "utf8")));
+    return out;
+  };
+  // Returns violations for every workflow file in `base`.
+  const violations = (base: string) => {
+    const bad: string[] = [];
+    for (const f of readdirSync(base).filter((n) => /\.ya?ml$/.test(n))) {
+      const r = refs(f, base);
+      const isProd = f.includes("prod");
+      if (!isProd && r.has("PROD_CLOUDFLARE_API_TOKEN"))
+        bad.push(`${f}: non-prod workflow uses PROD_CLOUDFLARE_API_TOKEN`);
+      if (isProd && r.has("CLOUDFLARE_API_TOKEN"))
+        bad.push(`${f}: prod workflow uses CLOUDFLARE_API_TOKEN`);
+    }
+    return bad;
+  };
+  it("real workflows have no crossings", () => {
+    expect(violations(dir)).toEqual([]);
+  });
+  it("staging workflows never reference the PROD secret", () => {
+    for (const f of [
+      "deploy-staging.yml",
+      "ops-staging-access.yml",
+      "landing-preview.yml",
+      "release-please.yml",
+    ])
+      expect(refs(f), f).not.toContain("PROD_CLOUDFLARE_API_TOKEN");
+  });
+  it("the prod check workflow uses the PROD secret", () => {
+    expect(refs("ops-prod-token-check.yml")).toContain(
+      "PROD_CLOUDFLARE_API_TOKEN",
+    );
+  });
+  it("detects a crossing fixture", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "wf-"));
+    writeFileSync(
+      join(tmp, "deploy-prod.yml"),
+      "on: push\njobs:\n  j:\n    runs-on: x\n    steps:\n      - run: x\n        env:\n          A: ${{ secrets.CLOUDFLARE_API_TOKEN }}\n",
+    );
+    writeFileSync(
+      join(tmp, "stage.yml"),
+      "on: push\njobs:\n  j:\n    runs-on: x\n    steps:\n      - run: x\n        env:\n          A: ${{ secrets.PROD_CLOUDFLARE_API_TOKEN }}\n",
+    );
+    expect(violations(tmp)).toHaveLength(2);
   });
 });
