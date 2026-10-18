@@ -1,0 +1,605 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Library — Open Artifacts</title>
+<!-- D4 screen mockup. Params: ?theme=light|dark &state=default|empty|loading|error &layout=grid|list &overlay=none|drop|filter|drawer -->
+<link rel="stylesheet" href="../../packages/ui/src/tokens/tokens.css">
+<style>
+/* ---------- Base (shared by every D4 screen; mirrors packages/ui components) ---------- */
+*{box-sizing:border-box}
+html,body{margin:0}
+html{overflow-x:hidden}
+[hidden]{display:none !important}
+body{min-height:100vh;background:var(--oa-bg);color:var(--oa-text);font:400 var(--oa-text-sm)/1.45 var(--oa-font-sans);-webkit-font-smoothing:antialiased;overflow-x:hidden}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;padding:0}
+a{color:inherit}
+:focus-visible{outline:2px solid var(--oa-focus);outline-offset:2px}
+svg{display:block}
+.ic{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.ic.sm{width:14px;height:14px}
+.num{font-variant-numeric:tabular-nums}
+.mono{font-family:var(--oa-font-mono)}
+.muted{color:var(--oa-text-muted)}
+.spacer{flex:1}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+
+/* Button (Button.module.css) */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:28px;padding:0 10px;border:1px solid var(--oa-border);border-radius:var(--oa-radius-md);background:var(--oa-surface);color:var(--oa-text);font:500 var(--oa-text-sm)/1 var(--oa-font-sans);white-space:nowrap;text-decoration:none;transition:border-color var(--oa-duration-fast) var(--oa-ease),background var(--oa-duration-fast) var(--oa-ease)}
+.btn:hover{border-color:var(--oa-border-strong)}
+.btn.sm{height:24px;padding:0 8px;border-radius:var(--oa-radius-sm);font-size:var(--oa-text-xs)}
+.btn.primary{background:var(--oa-text);border-color:var(--oa-text);color:var(--oa-surface)}
+.btn.ghost{background:none;border-color:transparent;color:var(--oa-text-2)}
+.btn.ghost:hover{background:var(--oa-sunken);color:var(--oa-text)}
+.btn.danger{background:var(--oa-danger-soft);border-color:transparent;color:var(--oa-danger)}
+.btn.danger:hover{border-color:var(--oa-danger)}
+.btn.icon{padding:0;aspect-ratio:1}
+.btn[aria-expanded="true"]{border-color:var(--oa-border-strong)}
+.btn.ghost[aria-expanded="true"]{background:var(--oa-sunken);color:var(--oa-text)}
+
+/* Display.module.css */
+.badge{display:inline-flex;align-items:center;gap:var(--oa-space-1);height:18px;padding:0 6px;border-radius:var(--oa-radius-sm);font:500 var(--oa-text-xs)/1 var(--oa-font-sans);white-space:nowrap}
+.badge .ic{width:11px;height:11px;stroke-width:1.8}
+.badge.neutral,.badge.private{background:var(--oa-sunken);color:var(--oa-text-2)}
+.badge.accent,.badge.team{background:var(--oa-accent-soft);color:var(--oa-accent-fg)}
+.badge.success,.badge.public{background:var(--oa-success-soft);color:var(--oa-success-fg)}
+.badge.warning{background:var(--oa-warning-soft);color:var(--oa-warning)}
+.badge.danger{background:var(--oa-danger-soft);color:var(--oa-danger)}
+.avatar{--size:20px;display:inline-grid;place-items:center;flex:none;width:var(--size);height:var(--size);border-radius:50%;background:hsl(var(--hue) 45% 30%);color:white;font:600 calc(var(--size) * 0.42)/1 var(--oa-font-sans);user-select:none}
+.avatar.lg{--size:26px}
+.avatar.xs{--size:16px}
+kbd,.kbd{font:500 11px var(--oa-font-mono);color:var(--oa-text-muted);background:var(--oa-surface-2);border:1px solid var(--oa-border);border-bottom-width:2px;border-radius:var(--oa-radius-sm);padding:0 var(--oa-space-1)}
+.spinner{display:inline-block;flex:none;width:14px;height:14px;border:1.5px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulse{to{opacity:.5}}
+.sk{display:block;border-radius:var(--oa-radius-sm);background:var(--oa-sunken);animation:pulse 1.4s var(--oa-ease) infinite alternate}
+.top .sk{background:var(--oa-divider)}
+.card{min-width:0;background:var(--oa-surface);border-radius:var(--oa-radius-lg);box-shadow:var(--oa-shadow-1);overflow:hidden}
+@media (prefers-reduced-motion:reduce){.spinner,.sk{animation-duration:2.4s}}
+
+/* Field.module.css */
+.control{height:30px;width:100%;padding:0 var(--oa-space-2);background:var(--oa-surface);color:var(--oa-text);border:1px solid var(--oa-border);border-radius:var(--oa-radius-md);font:400 var(--oa-text-sm)/1.45 var(--oa-font-sans)}
+.control::placeholder{color:var(--oa-text-muted)}
+.control:hover{border-color:var(--oa-border-strong)}
+textarea.control{height:auto;min-height:72px;padding:6px var(--oa-space-2);resize:vertical}
+.select{display:inline-flex;align-items:center;justify-content:space-between;gap:var(--oa-space-2);cursor:pointer;text-align:left}
+.select .ic{color:var(--oa-text-muted)}
+.label{display:block;margin:0 0 6px;font-weight:500;color:var(--oa-text)}
+.hint{margin:6px 0 0;color:var(--oa-text-muted);font-size:var(--oa-text-xs)}
+.seg{margin:0;min-width:0;display:inline-flex;gap:2px;padding:2px;background:var(--oa-surface-2);border:1px solid var(--oa-border);border-radius:var(--oa-radius-md)}
+.seg button{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 var(--oa-space-2);border-radius:var(--oa-radius-sm);color:var(--oa-text-muted);font:500 var(--oa-text-xs) var(--oa-font-sans);white-space:nowrap}
+.seg button[aria-checked="true"]{background:var(--oa-surface);color:var(--oa-text);box-shadow:var(--oa-shadow-1)}
+
+/* Layout.module.css: banner, empty */
+.banner{display:flex;align-items:center;gap:var(--oa-space-3);padding:var(--oa-space-2) var(--oa-space-4);border-radius:var(--oa-radius-md);font:400 var(--oa-text-sm)/1.45 var(--oa-font-sans);color:var(--oa-text)}
+.banner > .ic{color:var(--oa-danger)}
+.banner .text{flex:1;min-width:0}
+.banner .text strong{font-weight:500}
+.banner.info{background:var(--oa-accent-soft)}
+.banner.success{background:var(--oa-success-soft)}
+.banner.warning{background:var(--oa-warning-soft)}
+.banner.danger{background:var(--oa-danger-soft)}
+.empty{display:flex;flex-direction:column;align-items:center;gap:var(--oa-space-2);padding:var(--oa-space-8) var(--oa-space-4);text-align:center;font:400 var(--oa-text-sm)/1.45 var(--oa-font-sans);color:var(--oa-text)}
+.empty .eicon{display:grid;place-items:center;width:40px;height:40px;border-radius:var(--oa-radius-lg);background:var(--oa-sunken);color:var(--oa-text-muted)}
+.empty .eicon .ic{width:20px;height:20px}
+.empty h2{margin:var(--oa-space-2) 0 0;font-size:var(--oa-text-lg);font-weight:600;letter-spacing:-.01em}
+.empty p{max-width:380px;margin:0 0 var(--oa-space-2);color:var(--oa-text-2)}
+.empty .acts{display:flex;gap:var(--oa-space-2);flex-wrap:wrap;justify-content:center}
+
+/* Overlay.module.css: menu, tabs, dialog */
+.pop{position:relative}
+.menu{position:absolute;top:calc(100% + 4px);right:0;min-width:180px;padding:var(--oa-space-1);background:var(--oa-surface);border-radius:var(--oa-radius-md);box-shadow:var(--oa-shadow-2);z-index:50;text-align:left}
+.menu.left{right:auto;left:0}
+.menu .item{display:flex;align-items:center;gap:var(--oa-space-2);width:100%;height:28px;padding:0 var(--oa-space-2);border-radius:var(--oa-radius-sm);color:var(--oa-text);font:400 var(--oa-text-sm) var(--oa-font-sans);white-space:nowrap;text-decoration:none}
+.menu .item .ic{color:var(--oa-text-muted)}
+.menu .item:hover,.menu .item[data-highlighted]{background:var(--oa-sunken)}
+.menu .item .meta{margin-left:auto;padding-left:var(--oa-space-4);color:var(--oa-text-muted);font-size:var(--oa-text-xs)}
+.menu .item.danger,.menu .item.danger .ic{color:var(--oa-danger)}
+.menu .item.danger:hover{background:var(--oa-danger-soft)}
+.menu .sep{height:1px;margin:var(--oa-space-1) 0;background:var(--oa-divider)}
+.menu .mlabel{padding:6px var(--oa-space-2) 4px;color:var(--oa-text-muted);font-size:var(--oa-text-xs);font-weight:500}
+.tabs{display:flex;gap:18px;overflow-x:auto;scrollbar-width:none;box-shadow:inset 0 -1px 0 var(--oa-divider)}
+.tabs::-webkit-scrollbar{display:none}
+.tabs .tab{flex:none;display:inline-flex;align-items:center;gap:6px;height:34px;white-space:nowrap;color:var(--oa-text-muted);font:500 var(--oa-text-sm) var(--oa-font-sans)}
+.tabs .tab[aria-selected="true"]{color:var(--oa-text);box-shadow:inset 0 -2px 0 var(--oa-text)}
+.tabs .tab:focus-visible{outline-offset:-2px;border-radius:var(--oa-radius-sm)}
+.tabs .n{font-size:11.5px;color:var(--oa-text-muted);background:var(--oa-sunken);border-radius:9px;padding:0 6px;line-height:17px;min-width:20px;text-align:center}
+.scrim{position:fixed;inset:0;z-index:40;background:var(--oa-scrim)}
+
+/* Shell bits shared with studio.html */
+.top{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:10px;height:48px;padding:0 var(--oa-space-5);background:var(--oa-chrome);border-bottom:1px solid var(--oa-divider)}
+.search{flex:1;max-width:520px;display:flex;align-items:center;gap:8px;height:30px;padding:0 8px 0 10px;background:var(--oa-surface);border:1px solid var(--oa-border);border-radius:var(--oa-radius-md);color:var(--oa-text-muted);min-width:0}
+.search:hover{border-color:var(--oa-border-strong)}
+.search:focus-within{outline:2px solid var(--oa-focus);outline-offset:2px}
+.search input{flex:1;min-width:0;border:0;outline:0;background:none;font:inherit;color:var(--oa-text)}
+.search input::placeholder{color:var(--oa-text-muted)}
+.wordmark{display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:var(--oa-text-md);letter-spacing:-.01em;color:var(--oa-text);text-decoration:none;white-space:nowrap}
+.wordmark .logo{width:18px;height:18px;border-radius:5px;background:var(--oa-text);color:var(--oa-surface);display:grid;place-items:center}
+.wordmark .logo svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.crumbs{display:flex;align-items:center;gap:6px;color:var(--oa-text-muted);white-space:nowrap;min-width:0}
+.crumbs a{color:var(--oa-text-muted);text-decoration:none}
+.crumbs a:hover{color:var(--oa-text)}
+.crumbs .sepc{opacity:.6}
+.crumbs .cur{color:var(--oa-text);font-weight:500;overflow:hidden;text-overflow:ellipsis}
+.agentmark{display:inline-flex;align-items:center;gap:5px;color:var(--oa-text-2);white-space:nowrap}
+.agentmark i{width:6px;height:6px;border-radius:1.5px;background:var(--oa-text-muted)}
+.fmt{display:inline-flex;align-items:center;gap:5px;color:var(--oa-text-muted);font-size:var(--oa-text-xs)}
+
+/* Mockup switcher (not part of the product) */
+.dev{position:fixed;right:12px;bottom:12px;z-index:90;display:flex;align-items:center;gap:6px;padding:5px;background:var(--oa-surface);border-radius:var(--oa-radius-lg);box-shadow:var(--oa-shadow-2);max-width:calc(100vw - 24px);flex-wrap:wrap;justify-content:flex-end}
+.dev .seg button{height:22px}
+@media (max-width:560px){.top{padding:0 12px;gap:6px}.hide-s{display:none !important}}
+@media (prefers-reduced-motion:no-preference){.card,.btn{transition:box-shadow var(--oa-duration-fast),border-color var(--oa-duration-fast),background var(--oa-duration-fast)}}
+.control:disabled,.seg button:disabled,.btn:disabled{opacity:.55;cursor:default}
+.control:disabled:hover{border-color:var(--oa-border)}
+
+
+/* ---------- App frame (Layout.module.css: AppShell, SideNav, Drawer) ---------- */
+.app{display:grid;grid-template-columns:224px minmax(0,1fr);min-height:100vh}
+.side{position:sticky;top:0;height:100vh;overflow:auto;display:flex;flex-direction:column;gap:18px;padding:var(--oa-space-3) 10px;background:var(--oa-chrome);border-right:1px solid var(--oa-divider)}
+.side .mark{display:flex;align-items:center;justify-content:space-between;padding:4px 6px 0}
+.ws{display:flex;align-items:center;gap:8px;padding:6px;border-radius:var(--oa-radius-md);border:1px solid var(--oa-border);background:var(--oa-surface);text-align:left;width:100%}
+.ws:hover{border-color:var(--oa-border-strong)}
+.ws .sq{width:20px;height:20px;border-radius:5px;background:var(--oa-text);color:var(--oa-surface);display:grid;place-items:center;font-size:11px;font-weight:600}
+.ws .wsn{flex:1;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ws .ic{color:var(--oa-text-muted)}
+.nav{display:flex;flex-direction:column;gap:1px}
+.nav h4{margin:0 0 4px;padding:0 8px;font-size:var(--oa-text-xs);font-weight:500;color:var(--oa-text-muted)}
+.nav a{display:flex;align-items:center;gap:9px;height:28px;padding:0 var(--oa-space-2);border-radius:var(--oa-radius-sm);color:var(--oa-text-2);text-decoration:none}
+.nav a:hover{background:var(--oa-sunken);color:var(--oa-text)}
+.nav a[aria-current="page"]{background:var(--oa-surface);color:var(--oa-text);box-shadow:var(--oa-shadow-1);font-weight:500}
+.nav a .ct{margin-left:auto;color:var(--oa-text-muted);font-size:var(--oa-text-xs);font-variant-numeric:tabular-nums}
+.nav .dot{width:6px;height:6px;border-radius:1.5px;background:var(--oa-text-muted);margin:0 5px}
+.side .foot{margin-top:auto;display:flex;align-items:center;gap:8px;padding:12px 6px 6px;border-top:1px solid var(--oa-divider)}
+.side .foot div{line-height:1.25;min-width:0}
+.side .foot b{font-weight:500}
+.side .foot small{color:var(--oa-text-muted);display:block;overflow:hidden;text-overflow:ellipsis}
+.drawer-head{display:none}
+.main{min-width:0;display:flex;flex-direction:column}
+.menu-btn{display:none}
+
+/* ---------- Library ---------- */
+.lib{padding:20px 24px 72px;display:flex;flex-direction:column;gap:14px}
+.lib-head{display:flex;align-items:baseline;gap:10px}
+.lib-head h1{margin:0;font-size:var(--oa-text-xl);font-weight:600;letter-spacing:-.02em}
+.lib-head .count{color:var(--oa-text-muted)}
+.bar{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 8px;border:1px dashed var(--oa-border);border-radius:var(--oa-radius-md);color:var(--oa-text-2);font-size:12.5px;white-space:nowrap}
+.chip:hover{border-color:var(--oa-border-strong);color:var(--oa-text)}
+.chip b{font-weight:500;color:var(--oa-text)}
+.chip.set{border-style:solid;background:var(--oa-surface)}
+.chip .ic{color:var(--oa-text-muted)}
+.bar .meta{color:var(--oa-text-muted);font-size:12.5px;margin-left:6px}
+.bar .clear{color:var(--oa-text-muted);font-size:12.5px;text-decoration:underline;text-underline-offset:2px}
+.chk{display:grid;place-items:center;width:16px;height:16px;border:1px solid var(--oa-border-strong);border-radius:var(--oa-radius-sm);background:var(--oa-surface);color:var(--oa-surface);flex:none}
+.chk.on{background:var(--oa-text);border-color:var(--oa-text)}
+.chk svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2}
+.menu .item .ct{margin-left:auto;padding-left:16px;color:var(--oa-text-muted);font-size:var(--oa-text-xs);font-variant-numeric:tabular-nums}
+.menu.filter{min-width:220px}
+.menu .msearch{margin:2px 2px 4px;width:calc(100% - 4px);height:28px}
+
+.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+.grid .card{display:flex;flex-direction:column;cursor:pointer;text-align:left;text-decoration:none;color:inherit}
+.grid .card:hover{box-shadow:var(--oa-shadow-2)}
+.thumb{height:138px;background:var(--oa-surface-2);border-bottom:1px solid var(--oa-divider);position:relative;overflow:hidden;padding:14px 16px 0}
+.thumb .pg{background:var(--oa-surface);border-radius:4px 4px 0 0;box-shadow:0 0 0 1px var(--oa-divider);height:100%;padding:12px 12px 0;overflow:hidden}
+.card .body{padding:10px 12px 11px;display:flex;flex-direction:column;gap:7px;min-width:0}
+.card .ttl{display:flex;align-items:center;gap:7px;font-weight:500;min-width:0}
+.card .ttl span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .ttl .ic{color:var(--oa-text-muted)}
+.card .sub{display:flex;align-items:center;gap:8px;color:var(--oa-text-muted);font-size:var(--oa-text-xs);min-width:0}
+.card .own{display:inline-flex;align-items:center;gap:6px;min-width:0}
+.card .own .name{display:none}
+.card .agent{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.card .when{margin-left:auto;white-space:nowrap}
+
+/* thumbnail primitives (studio.html) */
+.l{height:4px;border-radius:2px;background:var(--oa-divider);margin:0 0 5px}
+.l.h{height:7px;background:var(--oa-text-2);width:62%;margin-bottom:8px;opacity:.85}
+.l.h2{height:5px;background:var(--oa-text-muted);width:40%;margin:8px 0 6px}
+.mini-tbl{display:grid;grid-template-columns:2fr 1fr 1fr;gap:2px;margin-top:6px}
+.mini-tbl i{height:6px;background:var(--oa-sunken);border-radius:1px}
+.mini-tbl i.hd{background:var(--oa-border)}
+.poll .q{font-size:10px;font-weight:600;color:var(--oa-text);margin-bottom:8px;letter-spacing:-.01em}
+.poll .o{display:flex;align-items:center;gap:6px;font-size:8.5px;color:var(--oa-text-2);margin-bottom:5px}
+.poll .o .b{flex:1;height:8px;background:var(--oa-sunken);border-radius:2px;overflow:hidden}
+.poll .o .b i{display:block;height:100%;background:var(--oa-border)}
+.poll .o.lead .b i{background:var(--oa-accent)}
+.poll .o em{font-style:normal;width:18px;text-align:right;color:var(--oa-text-muted)}
+.redl{position:relative}
+.redl .l.del{background:var(--oa-danger);opacity:.55;height:2px;margin-top:-6px;margin-bottom:7px}
+.redl .l.ins{background:var(--oa-success);opacity:.6}
+.redl .stamp{position:absolute;right:10px;top:10px;font:600 8px var(--oa-font-sans);color:var(--oa-danger);border:1px solid var(--oa-danger);border-radius:3px;padding:1px 4px;transform:rotate(-4deg)}
+.code{font:400 8.5px/1.55 var(--oa-font-mono);color:var(--oa-text-2);white-space:pre;padding:10px 10px 0 !important;background:var(--oa-surface-2) !important}
+.code .k{color:var(--oa-accent-fg)} .code .s{color:var(--oa-success)} .code .c{color:var(--oa-text-muted)} .code .ln{color:var(--oa-text-muted);opacity:.6;margin-right:8px}
+.chart{display:flex;align-items:flex-end;gap:5px;height:62px;margin-top:8px;border-bottom:1px solid var(--oa-divider)}
+.chart i{flex:1;background:var(--oa-border);border-radius:2px 2px 0 0}
+.chart i.hi{background:var(--oa-text-2)}
+.deck{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:12px 14px 0 !important;background:none !important;box-shadow:none !important}
+.deck .sl{aspect-ratio:16/9;background:var(--oa-surface);box-shadow:0 0 0 1px var(--oa-divider);border-radius:3px;padding:6px}
+.deck .sl .l{height:3px;margin-bottom:3px}
+.deck .sl .l.h{height:4px;margin-bottom:5px}
+.flow{display:flex;align-items:center;justify-content:center;gap:6px;height:80%}
+.flow .n{border:1px solid var(--oa-border);border-radius:4px;padding:4px 6px;font-size:8px;color:var(--oa-text-2);background:var(--oa-surface)}
+.flow .n.on{border-color:var(--oa-text-2);color:var(--oa-text)}
+.flow .e{width:12px;height:1px;background:var(--oa-border)}
+
+/* list mode */
+.list-head{display:none}
+.grid.list{grid-template-columns:minmax(0,1fr);gap:0;background:var(--oa-surface);border-radius:var(--oa-radius-lg);box-shadow:var(--oa-shadow-1);overflow:hidden}
+.grid.list .list-head,.grid.list .card{display:grid;grid-template-columns:minmax(0,1fr) 150px 120px 84px 84px;align-items:center;column-gap:16px;padding:0 14px}
+.grid.list .list-head{height:32px;color:var(--oa-text-muted);font-size:var(--oa-text-xs);font-weight:500;border-bottom:1px solid var(--oa-divider);background:var(--oa-surface-2)}
+.grid.list .list-head span:last-child{text-align:right}
+.grid.list .card{height:40px;border-radius:0;box-shadow:none;border-bottom:1px solid var(--oa-divider)}
+.grid.list .card:last-child{border-bottom:0}
+.grid.list .card:hover{background:var(--oa-surface-2);box-shadow:none}
+.grid.list .thumb{display:none}
+.grid.list .body,.grid.list .sub{display:contents}
+.grid.list .own .name{display:inline;color:var(--oa-text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.grid.list .agent{color:var(--oa-text-2)}
+.grid.list .vis-cell{justify-self:start}
+.grid.list .when{text-align:right;color:var(--oa-text-muted);font-size:var(--oa-text-xs)}
+
+/* skeleton cards */
+.skc .thumb{background:var(--oa-surface-2)}
+.skc .thumb .sk{height:100%;border-radius:4px 4px 0 0}
+.skc .body .sk{height:10px}
+
+/* drop overlay */
+.drop{position:fixed;inset:0;z-index:60;display:grid;place-items:center;padding:24px;background:var(--oa-scrim)}
+.drop .zone{width:min(560px,100%);display:flex;flex-direction:column;align-items:center;gap:8px;padding:44px 24px;text-align:center;background:var(--oa-surface);border:2px dashed var(--oa-accent);border-radius:var(--oa-radius-lg);box-shadow:var(--oa-shadow-2)}
+.drop .eicon{display:grid;place-items:center;width:44px;height:44px;border-radius:var(--oa-radius-lg);background:var(--oa-accent-soft);color:var(--oa-accent-fg);margin-bottom:6px}
+.drop .eicon .ic{width:22px;height:22px}
+.drop h2{margin:0;font-size:var(--oa-text-lg);font-weight:600;letter-spacing:-.01em}
+.drop p{margin:0;color:var(--oa-text-2);max-width:400px}
+.drop .types{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-top:8px}
+.drop .foot{margin-top:6px;color:var(--oa-text-muted);font-size:var(--oa-text-xs)}
+
+.mcp{display:flex;align-items:center;gap:8px;margin:4px 0 6px;max-width:100%;height:30px;padding:0 4px 0 10px;background:var(--oa-surface-2);border:1px solid var(--oa-border);border-radius:var(--oa-radius-md);font:400 var(--oa-text-xs) var(--oa-font-mono);color:var(--oa-text-2)}
+.mcp span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.empty-card{background:var(--oa-surface);border-radius:var(--oa-radius-lg);box-shadow:var(--oa-shadow-1);padding:24px 0}
+.agents-row{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-top:10px}
+
+@media (max-width:1100px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:959.98px){
+  .app{grid-template-columns:minmax(0,1fr)}
+  .side{position:fixed;inset:0 auto 0 0;z-index:41;width:min(280px,85vw);height:auto;transform:translateX(-105%);transition:transform var(--oa-duration) var(--oa-ease);box-shadow:var(--oa-shadow-2)}
+  .app.drawer-open .side{transform:none}
+  .side .mark{display:none}
+  .drawer-head{display:flex;align-items:center;justify-content:space-between;padding:0 0 0 6px}
+  .menu-btn{display:inline-flex}
+  .top{padding:0 var(--oa-space-3)}
+  .grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .grid.list .list-head,.grid.list .card{grid-template-columns:minmax(0,1fr) 120px 84px 72px}
+  .grid.list .own{display:none}
+  .grid.list .list-head .h-own{display:none}
+}
+@media (max-width:560px){
+  .lib{padding:16px 16px 88px}
+  .grid{grid-template-columns:minmax(0,1fr)}
+  .tabs{gap:14px}
+  .bar .meta{order:10;flex-basis:100%;margin:2px 0 0}
+  .grid.list .list-head,.grid.list .card{grid-template-columns:minmax(0,1fr) 64px}
+  .grid.list .agent,.grid.list .vis-cell,.grid.list .h-agent,.grid.list .h-vis{display:none}
+  .drop .zone{padding:32px 16px}
+}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+    <symbol id="i-md" viewBox="0 0 16 16"><rect x="1.5" y="3" width="13" height="10" rx="1.5"/><path d="M4 10.5v-5l2 2.5 2-2.5v5M11 5.5v5M9.5 9l1.5 1.5L12.5 9"/></symbol>
+    <symbol id="i-html" viewBox="0 0 16 16"><path d="M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5"/></symbol>
+    <symbol id="i-pdf" viewBox="0 0 16 16"><path d="M4 1.5h5.5L13 5v9.5H4z"/><path d="M9.5 1.5V5H13M6 9h5M6 11.5h3.5"/></symbol>
+    <symbol id="i-code" viewBox="0 0 16 16"><path d="M4 1.5h5.5L13 5v9.5H4z"/><path d="M9.5 1.5V5H13M7.3 8.3 6 9.7l1.3 1.3M9.7 8.3 11 9.7 9.7 11"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 16 16"><path d="M2 14h12M4.5 11V8M8 11V4.5M11.5 11V6.5"/></symbol>
+    <symbol id="i-deck" viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="8.5" rx="1"/><path d="M8 11v3M5.5 14h5"/></symbol>
+    <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/></symbol>
+    <symbol id="i-lib" viewBox="0 0 16 16"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></symbol>
+    <symbol id="i-star" viewBox="0 0 16 16"><path d="m8 2 1.8 3.8 4.2.5-3.1 2.9.8 4.1L8 11.3l-3.7 2 .8-4.1L2 6.3l4.2-.5z"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 16 16"><path d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 16 16"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></symbol>
+    <symbol id="i-list" viewBox="0 0 16 16"><path d="M2 4h12M2 8h12M2 12h12"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 16 16"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></symbol>
+    <symbol id="i-team" viewBox="0 0 16 16"><circle cx="6" cy="6" r="2.5"/><path d="M1.5 13.5c.5-2.5 2.3-3.8 4.5-3.8s4 1.3 4.5 3.8M11 3.8a2.3 2.3 0 0 1 0 4.4M12.5 10c1.2.6 1.8 1.8 2 3.5"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c1.8 2 2.6 4 2.6 6S9.8 12 8 14M8 2C6.2 4 5.4 6 5.4 8S6.2 12 8 14"/></symbol>
+    <symbol id="i-down" viewBox="0 0 16 16"><path d="m4.5 6.5 3.5 3.5 3.5-3.5"/></symbol>
+    <symbol id="i-more" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r=".6"/><circle cx="8" cy="8" r=".6"/><circle cx="12.5" cy="8" r=".6"/></symbol>
+    <symbol id="i-ext" viewBox="0 0 16 16"><path d="M9 2.5h4.5V7M13.5 2.5 7.5 8.5M11.5 9.5v4h-9v-9h4"/></symbol>
+    <symbol id="i-panel" viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M10 2.5v11"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 16 16"><circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1 1M11.6 11.6l1 1M3.4 12.6l1-1M11.6 4.4l1-1"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 16 16"><path d="M13.5 9.5A5.5 5.5 0 0 1 6.5 2.5a5.5 5.5 0 1 0 7 7z"/></symbol>
+    <symbol id="i-back" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5"/></symbol>
+    <symbol id="i-check" viewBox="0 0 16 16"><path d="m3.5 8.5 3 3 6-7"/></symbol>
+    <symbol id="i-filter" viewBox="0 0 16 16"><path d="M2.5 4h11M4.5 8h7M6.5 12h3"/></symbol>
+    <symbol id="i-share" viewBox="0 0 16 16"><path d="M8 10V2M5 5l3-3 3 3M3 9v4.5h10V9"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 16 16"><path d="M2 4h12M2 8h12M2 12h12"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 16 16"><path d="M8 10.5V2.5M5 5.5l3-3 3 3M2.5 10v3.5h11V10"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.8v3.7M8 11v.2"/></symbol>
+    <symbol id="i-retry" viewBox="0 0 16 16"><path d="M13 3.5v3h-3M13 6.5A5 5 0 1 0 13.4 10"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></symbol>
+    <symbol id="i-link" viewBox="0 0 16 16"><path d="M7 9a3 3 0 0 0 4.2 0l2-2a3 3 0 0 0-4.2-4.2l-.8.8M9 7a3 3 0 0 0-4.2 0l-2 2a3 3 0 0 0 4.2 4.2l.8-.8"/></symbol>
+    <symbol id="i-swap" viewBox="0 0 16 16"><path d="M3 5.5h10M10.5 3 13 5.5 10.5 8M13 10.5H3M5.5 8 3 10.5 5.5 13"/></symbol>
+    <symbol id="i-x" viewBox="0 0 16 16"><path d="m4 4 8 8M12 4l-8 8"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 16 16"><path d="M10.5 2.5 13.5 5.5 6 13H3v-3z"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 16 16"><path d="M3 8h10M9.5 4.5 13 8l-3.5 3.5"/></symbol>
+    <symbol id="i-download" viewBox="0 0 16 16"><path d="M8 2.5v8M5 7.5l3 3 3-3M2.5 10v3.5h11V10"/></symbol>
+    <symbol id="i-diff" viewBox="0 0 16 16"><rect x="2.5" y="1.5" width="11" height="13" rx="1.5"/><path d="M8 4v5M5.5 6.5h5M5.5 11.5h5"/></symbol>
+    <symbol id="i-plug" viewBox="0 0 16 16"><path d="M6 1.5v3M10 1.5v3M4 4.5h8v3a4 4 0 0 1-8 0zM8 11.5v3"/></symbol>
+    <symbol id="i-file" viewBox="0 0 16 16"><path d="M4 1.5h5.5L13 5v9.5H4z"/><path d="M9.5 1.5V5H13"/></symbol>
+    <symbol id="i-gauge" viewBox="0 0 16 16"><path d="M2.5 11.5a5.5 5.5 0 1 1 11 0M8 11.5l2.5-3.5"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></symbol>
+    <symbol id="i-logo" viewBox="0 0 16 16"><path d="M3 3.5h6.5L13 7v5.5H3z"/><path d="M6 9.5h4"/></symbol>
+  </defs>
+</svg>
+
+
+<div class="app" id="app">
+  <aside class="side" id="side" aria-label="Main navigation">
+    <div class="mark"><a class="wordmark" href="#"><span class="logo"><svg viewBox="0 0 16 16"><use href="#i-logo"/></svg></span>Open Artifacts</a></div>
+    <div class="drawer-head"><a class="wordmark" href="#"><span class="logo"><svg viewBox="0 0 16 16"><use href="#i-logo"/></svg></span>Open Artifacts</a><button class="btn ghost icon" id="drawer-close" aria-label="Close menu"><svg class="ic"><use href="#i-x"/></svg></button></div>
+    <button class="ws"><span class="sq">N</span><span class="wsn">Northwind Eng</span><svg class="ic sm"><use href="#i-down"/></svg></button>
+    <nav class="nav">
+      <a href="#" aria-current="page"><svg class="ic"><use href="#i-lib"/></svg>Library<span class="ct" data-when="default">214</span></a>
+      <a href="#"><svg class="ic"><use href="#i-gauge"/></svg>Usage</a>
+      <a href="#"><svg class="ic"><use href="#i-gear"/></svg>Settings</a>
+    </nav>
+    <nav class="nav" data-when="default loading error">
+      <h4>Connected agents</h4>
+      <a href="#"><span class="dot"></span>Claude Code<span class="ct" data-when="default">92</span></a>
+      <a href="#"><span class="dot"></span>Codex CLI<span class="ct" data-when="default">41</span></a>
+      <a href="#"><span class="dot"></span>Cursor<span class="ct" data-when="default">38</span></a>
+      <a href="#"><span class="dot"></span>OpenCode<span class="ct" data-when="default">19</span></a>
+      <a href="#"><span class="dot"></span>ChatGPT<span class="ct" data-when="default">24</span></a>
+    </nav>
+    <nav class="nav" data-when="empty">
+      <h4>Connected agents</h4>
+      <a href="#"><svg class="ic sm"><use href="#i-plus"/></svg>Connect an agent</a>
+    </nav>
+    <div class="foot"><span class="avatar lg" style="--hue:215">MC</span><div><b>Maya Chen</b><small>maya@northwind.dev</small></div></div>
+  </aside>
+  <div class="scrim" id="drawer-scrim" hidden></div>
+
+  <main class="main">
+    <header class="top">
+      <button class="btn ghost icon menu-btn" id="drawer-open" aria-label="Open menu"><svg class="ic"><use href="#i-menu"/></svg></button>
+      <label class="search"><svg class="ic"><use href="#i-search"/></svg><input placeholder="Search titles, content, and agents" aria-label="Search artifacts"><kbd class="hide-s">⌘K</kbd></label>
+      <div class="spacer hide-s"></div>
+      <button class="btn" id="upload"><svg class="ic sm"><use href="#i-upload"/></svg><span class="hide-s">Upload</span></button>
+    </header>
+
+    <section class="lib">
+      <div class="lib-head">
+        <h1>Library</h1>
+        <span class="count num" data-when="default">214 artifacts</span>
+        <span class="count" data-when="empty">No artifacts yet</span>
+        <span class="sk" data-when="loading" style="width:80px;height:12px"></span>
+      </div>
+
+      <div class="tabs" role="tablist" aria-label="Scope" data-group>
+        <button class="tab" role="tab" aria-selected="true">All <span class="n num" data-when="default">214</span><span class="n" data-when="empty">0</span><span class="sk" data-when="loading" style="width:22px;height:14px;border-radius:9px"></span></button>
+        <button class="tab" role="tab" aria-selected="false">Mine <span class="n num" data-when="default">63</span><span class="n" data-when="empty">0</span><span class="sk" data-when="loading" style="width:22px;height:14px;border-radius:9px"></span></button>
+        <button class="tab" role="tab" aria-selected="false">Shared with me <span class="n num" data-when="default">88</span><span class="n" data-when="empty">0</span><span class="sk" data-when="loading" style="width:22px;height:14px;border-radius:9px"></span></button>
+        <button class="tab" role="tab" aria-selected="false">Team <span class="n num" data-when="default">131</span><span class="n" data-when="empty">0</span><span class="sk" data-when="loading" style="width:22px;height:14px;border-radius:9px"></span></button>
+      </div>
+
+      <div class="bar" data-when="default loading error">
+        <div class="pop">
+          <button class="chip" data-menu="m-format" aria-haspopup="menu" aria-expanded="false"><svg class="ic sm"><use href="#i-filter"/></svg>Format</button>
+          <div class="menu left filter" id="m-format" role="menu" hidden>
+            <button class="item" role="menuitemcheckbox"><span class="chk"></span><svg class="ic sm"><use href="#i-md"/></svg>Markdown<span class="ct">88</span></button>
+            <button class="item" role="menuitemcheckbox"><span class="chk"></span><svg class="ic sm"><use href="#i-html"/></svg>HTML<span class="ct">71</span></button>
+            <button class="item" role="menuitemcheckbox"><span class="chk"></span><svg class="ic sm"><use href="#i-code"/></svg>Code<span class="ct">39</span></button>
+            <button class="item" role="menuitemcheckbox"><span class="chk"></span><svg class="ic sm"><use href="#i-pdf"/></svg>PDF<span class="ct">16</span></button>
+          </div>
+        </div>
+        <div class="pop">
+          <button class="chip set" data-menu="m-agent" aria-haspopup="menu" aria-expanded="false">Agent <b>Claude Code, Cursor</b><svg class="ic sm"><use href="#i-down"/></svg></button>
+          <div class="menu left filter" id="m-agent" role="menu" hidden>
+            <input class="control msearch" placeholder="Filter agents" aria-label="Filter agents">
+            <button class="item" role="menuitemcheckbox" aria-checked="true"><span class="chk on"><svg viewBox="0 0 16 16"><use href="#i-check"/></svg></span>Claude Code<span class="ct">92</span></button>
+            <button class="item" role="menuitemcheckbox" aria-checked="false"><span class="chk"></span>Codex CLI<span class="ct">41</span></button>
+            <button class="item" role="menuitemcheckbox" aria-checked="true" data-highlighted><span class="chk on"><svg viewBox="0 0 16 16"><use href="#i-check"/></svg></span>Cursor<span class="ct">38</span></button>
+            <button class="item" role="menuitemcheckbox" aria-checked="false"><span class="chk"></span>OpenCode<span class="ct">19</span></button>
+            <button class="item" role="menuitemcheckbox" aria-checked="false"><span class="chk"></span>ChatGPT<span class="ct">24</span></button>
+            <div class="sep"></div>
+            <button class="item" role="menuitemcheckbox" aria-checked="false"><span class="chk"></span>Uploaded by hand<span class="ct">12</span></button>
+          </div>
+        </div>
+        <div class="pop">
+          <button class="chip" data-menu="m-owner" aria-haspopup="menu" aria-expanded="false">Owner</button>
+          <div class="menu left filter" id="m-owner" role="menu" hidden>
+            <input class="control msearch" placeholder="Filter people" aria-label="Filter people">
+            <button class="item" role="menuitemcheckbox"><span class="chk"></span><span class="avatar xs" style="--hue:215">MC</span>Maya Chen (you)</button>
+            <button class="item" role="menuitemcheckbox"><span class="chk"></span><span class="avatar xs" style="--hue:285">PR</span>Priya Raman</button>
+            <button class="item" role="menuitemcheckbox"><span class="chk"></span><span class="avatar xs" style="--hue:160">DO</span>Dana Okafor</button>
+            <button class="item" role="menuitemcheckbox"><span class="chk"></span><span class="avatar xs" style="--hue:30">TP</span>Theo Park</button>
+            <button class="item" role="menuitemcheckbox"><span class="chk"></span><span class="avatar xs" style="--hue:210">SR</span>Sam Ruiz</button>
+          </div>
+        </div>
+        <span class="meta num" data-when="default">Showing 8 of 130 · <button class="clear">Clear filters</button></span>
+        <div class="spacer"></div>
+        <div class="pop hide-s">
+          <button class="btn ghost" data-menu="m-sort" aria-haspopup="menu" aria-expanded="false">Last updated<svg class="ic sm"><use href="#i-down"/></svg></button>
+          <div class="menu" id="m-sort" role="menu" hidden>
+            <button class="item" role="menuitemradio" aria-checked="true">Last updated<svg class="ic sm" style="margin-left:auto;color:var(--oa-text)"><use href="#i-check"/></svg></button>
+            <button class="item" role="menuitemradio">Created</button>
+            <button class="item" role="menuitemradio">Title</button>
+          </div>
+        </div>
+        <div class="seg" role="radiogroup" aria-label="Layout">
+          <button role="radio" id="lay-grid" aria-label="Grid" aria-checked="true"><svg class="ic sm"><use href="#i-grid"/></svg></button>
+          <button role="radio" id="lay-list" aria-label="List" aria-checked="false"><svg class="ic sm"><use href="#i-list"/></svg></button>
+        </div>
+      </div>
+
+      <div class="banner danger" role="alert" data-when="error">
+        <svg class="ic"><use href="#i-alert"/></svg>
+        <div class="text"><strong>Couldn't load the library.</strong> The server didn't respond in time (HTTP 503). Your artifacts are safe; this is usually brief.</div>
+        <button class="btn sm" id="retry"><svg class="ic sm"><use href="#i-retry"/></svg>Retry</button>
+      </div>
+
+      <div id="grid" class="grid" data-when="default"></div>
+      <div id="grid-sk" class="grid" data-when="loading" aria-busy="true" aria-label="Loading artifacts"></div>
+
+      <div class="empty-card" data-when="empty">
+        <div class="empty">
+          <div class="eicon"><svg class="ic"><use href="#i-lib"/></svg></div>
+          <h2>No artifacts yet</h2>
+          <p>Artifacts appear here when a connected agent publishes one, or when you drop files onto this page. Connect an agent with this MCP URL:</p>
+          <div class="mcp"><span>https://artifacts.northwind.dev/mcp</span><button class="btn ghost sm icon" aria-label="Copy MCP URL"><svg class="ic sm"><use href="#i-copy"/></svg></button></div>
+          <div class="acts"><a class="btn primary" href="#"><svg class="ic sm"><use href="#i-plug"/></svg>Connect an agent</a><button class="btn" id="upload-empty"><svg class="ic sm"><use href="#i-upload"/></svg>Upload files</button></div>
+          <div class="agents-row"><span class="badge neutral">Claude Code</span><span class="badge neutral">Codex CLI</span><span class="badge neutral">Cursor</span><span class="badge neutral">OpenCode</span><span class="badge neutral">ChatGPT</span></div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="drop" id="drop" role="dialog" aria-modal="true" aria-labelledby="drop-title" hidden>
+  <div class="zone">
+    <div class="eicon"><svg class="ic"><use href="#i-upload"/></svg></div>
+    <h2 id="drop-title">Drop files to create an artifact</h2>
+    <p>One file makes one artifact; several files dropped together make one multi-file artifact. To add a version instead, drop onto an open artifact.</p>
+    <div class="types"><span class="badge neutral"><svg class="ic"><use href="#i-md"/></svg>Markdown</span><span class="badge neutral"><svg class="ic"><use href="#i-html"/></svg>HTML</span><span class="badge neutral"><svg class="ic"><use href="#i-code"/></svg>Code</span><span class="badge neutral"><svg class="ic"><use href="#i-pdf"/></svg>PDF</span></div>
+    <div class="foot num">Up to 25 MB per file and 100 MB per drop · Visibility starts as Private</div>
+  </div>
+</div>
+
+<script>window.OA_PARAMS = { layout: ['grid', 'list'], overlay: ['none', 'drop', 'filter', 'drawer'] };</script>
+<script>
+/* Mockup plumbing: ?theme=light|dark, ?state=default|empty|loading|error, plus per-page params. */
+const OA = (() => {
+  const root = document.documentElement;
+  const q = new URLSearchParams(location.search);
+  const opts = Object.assign({ state: ['default', 'empty', 'loading', 'error'], theme: ['light', 'dark'] }, window.OA_PARAMS || {});
+  const S = {};
+  for (const [k, list] of Object.entries(opts)) S[k] = list.includes(q.get(k)) ? q.get(k) : list[0];
+  /* No ?theme= means follow prefers-color-scheme (tokens.css handles it without data-theme). */
+  if (!opts.theme.includes(q.get('theme'))) S.theme = null;
+  const mq = matchMedia('(prefers-color-scheme: dark)');
+  const listeners = [];
+  const dev = document.createElement('div');
+  dev.className = 'dev';
+  dev.setAttribute('role', 'group');
+  dev.setAttribute('aria-label', 'Mockup controls');
+  dev.innerHTML = Object.entries(opts).map(([k, list]) =>
+    `<div class="seg" role="radiogroup" aria-label="${k}">${list.map(v =>
+      `<button role="radio" data-k="${k}" data-v="${v}">${v[0].toUpperCase() + v.slice(1)}</button>`).join('')}</div>`).join('');
+  document.body.appendChild(dev);
+  function apply() {
+    if (S.theme) root.dataset.theme = S.theme; else root.removeAttribute('data-theme');
+    const eff = { ...S, theme: S.theme || (mq.matches ? 'dark' : 'light') };
+    root.dataset.state = S.state;
+    document.querySelectorAll('[data-when]').forEach(el => { el.toggleAttribute('hidden', !el.dataset.when.split(' ').includes(S.state)); });
+    dev.querySelectorAll('button').forEach(b => b.setAttribute('aria-checked', String(eff[b.dataset.k] === b.dataset.v)));
+    const u = new URL(location);
+    for (const k of Object.keys(opts)) if (S[k]) u.searchParams.set(k, S[k]);
+    history.replaceState(null, '', u);
+    listeners.forEach(f => f(S));
+  }
+  dev.addEventListener('click', e => { const b = e.target.closest('button'); if (b) { S[b.dataset.k] = b.dataset.v; apply(); } });
+  /* Menus: <button data-menu="id" aria-expanded> + <div id="id" class="menu" hidden> */
+  document.addEventListener('click', e => {
+    if (e.target.closest('.dev')) return;
+    const t = e.target.closest('[data-menu]');
+    document.querySelectorAll('.menu').forEach(m => {
+      const own = t && m.id === t.dataset.menu;
+      if (own) { m.hidden = !m.hidden; t.setAttribute('aria-expanded', String(!m.hidden)); }
+      else if (!m.contains(e.target)) { m.hidden = true; document.querySelectorAll(`[data-menu="${m.id}"]`).forEach(b => b.setAttribute('aria-expanded', 'false')); }
+    });
+    /* Generic radio groups (segmented controls, tab lists) inside the page */
+    const r = e.target.closest('[data-group] > [role=radio], [data-group] > [role=tab]');
+    if (r) r.parentNode.querySelectorAll(':scope > [role]').forEach(x => x.setAttribute(x.getAttribute('role') === 'tab' ? 'aria-selected' : 'aria-checked', String(x === r)));
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') document.querySelectorAll('.menu').forEach(m => { m.hidden = true; }); });
+  mq.addEventListener('change', () => { if (!S.theme) apply(); });
+  return { S, apply, on: f => listeners.push(f), open: id => { const m = document.getElementById(id); if (m) { m.hidden = false; document.querySelectorAll(`[data-menu="${id}"]`).forEach(b => b.setAttribute('aria-expanded', 'true')); } } };
+})();
+
+</script>
+<script>
+const VIS = {team:['i-team','Team'], public:['i-globe','Public'], private:['i-lock','Private']};
+const FMT = {md:'Markdown', html:'HTML', pdf:'PDF', code:'Code'};
+const L = (w,c='') => `<div class="l ${c}" style="width:${w}%"></div>`;
+const T = {
+  md: () => `<div class="pg">${L(62,'h')}${L(96)}${L(88)}${L(70)}${L(40,'h2')}<div class="mini-tbl">${'<i class="hd"></i>'.repeat(3)}${'<i></i>'.repeat(6)}</div></div>`,
+  poll: () => `<div class="pg poll"><div class="q">Where should we hold the March offsite?</div>
+    <div class="o lead"><span style="width:50px">Lisbon</span><span class="b"><i style="width:58%"></i></span><em>14</em></div>
+    <div class="o"><span style="width:50px">Mexico City</span><span class="b"><i style="width:33%"></i></span><em>8</em></div>
+    <div class="o"><span style="width:50px">Montréal</span><span class="b"><i style="width:17%"></i></span><em>4</em></div></div>`,
+  pdf: () => `<div class="pg redl" style="margin:0 18px">${L(55,'h')}${L(94)}${L(80)}${L(80,'del')}${L(66,'ins')}${L(90)}${L(48,'del')}${L(72,'ins')}${L(85)}<span class="stamp">REDLINE</span></div>`,
+  code: () => `<div class="pg code"><span class="ln">1</span><span class="k">import</span> psycopg
+<span class="ln">2</span><span class="k">from</span> batching <span class="k">import</span> chunks
+<span class="ln">3</span>
+<span class="ln">4</span><span class="c"># backfill shipped_at for 2023 orders</span>
+<span class="ln">5</span><span class="k">def</span> backfill(conn, size=<span class="s">5000</span>):
+<span class="ln">6</span>    <span class="k">for</span> ids <span class="k">in</span> chunks(pending(conn), size):
+<span class="ln">7</span>        conn.execute(SQL, ids)</div>`,
+  chart: () => `<div class="pg">${L(58,'h')}${L(36)}<div class="chart">${[38,52,47,61,70,58,82,76].map((h,i)=>`<i class="${i==6?'hi':''}" style="height:${h}%"></i>`).join('')}</div></div>`,
+  deck: () => `<div class="pg deck">${[0,1,2,3].map(i=>`<div class="sl">${L(i?50:70,'h')}${L(80)}${L(60)}</div>`).join('')}</div>`,
+  md2: () => `<div class="pg">${L(74,'h')}${L(30,'h2')}${L(92)}${L(84)}${L(90)}${L(36,'h2')}${L(78)}${L(60)}</div>`,
+  flow: () => `<div class="pg"><div class="flow"><span class="n">Sign up</span><span class="e"></span><span class="n on">Workspace</span><span class="e"></span><span class="n">Invite</span></div></div>`,
+};
+const items = [
+  {t:'Q4 data migration plan', f:'md', th:'md', ag:'Claude Code', o:['MC','Maya Chen',215], v:'team', w:'2h ago', href:'artifact-view.html'},
+  {t:'Offsite location poll', f:'html', th:'poll', ag:'Cursor', o:['PR','Priya Raman',285], v:'team', w:'35m ago'},
+  {t:'Vendor MSA — redlined.pdf', f:'pdf', th:'pdf', ag:'Claude Code', o:['DO','Dana Okafor',160], v:'private', w:'Yesterday'},
+  {t:'backfill_shipped_at.py', f:'code', th:'code', ag:'Cursor', o:['MC','Maya Chen',215], v:'private', w:'4h ago'},
+  {t:'Churn by signup cohort', f:'html', th:'chart', ag:'Claude Code', o:['TP','Theo Park',30], v:'public', w:'3d ago', href:'public-viewer.html'},
+  {t:'Billing webhook retries — postmortem', f:'md', th:'md2', ag:'Claude Code', o:['SR','Sam Ruiz',210], v:'team', w:'Mon'},
+  {t:'Platform all-hands, October', f:'html', th:'deck', ag:'Cursor', o:['PR','Priya Raman',285], v:'team', w:'5d ago'},
+  {t:'Onboarding flow v3 prototype', f:'html', th:'flow', ag:'Claude Code', o:['LV','Lena Vogel',350], v:'public', w:'Oct 9'},
+];
+const icon = id => `<svg class="ic"><use href="#i-${id}"/></svg>`;
+const grid = document.getElementById('grid');
+grid.innerHTML = `<div class="list-head"><span>Title</span><span class="h-own">Owner</span><span class="h-agent">Agent</span><span class="h-vis">Visibility</span><span>Updated</span></div>` + items.map(it => `
+  <a class="card" href="${it.href||'#'}">
+    <div class="thumb" aria-hidden="true">${T[it.th]()}</div>
+    <div class="body">
+      <div class="ttl">${icon(it.f)}<span>${it.t}</span><span class="sr">${FMT[it.f]}</span></div>
+      <div class="sub">
+        <span class="agent">${it.ag}</span>
+        <span class="own"><span class="avatar" style="--hue:${it.o[2]}" title="${it.o[1]}">${it.o[0]}</span><span class="name">${it.o[1]}</span></span>
+        <span class="vis-cell"><span class="badge ${it.v}">${icon(VIS[it.v][0].slice(2))}${VIS[it.v][1]}</span></span>
+        <span class="when">${it.w}</span>
+      </div>
+    </div>
+  </a>`).join('');
+/* Grid mode keeps studio's order: owner avatar, agent, badge, time. */
+grid.querySelectorAll('.sub').forEach(s => s.prepend(s.querySelector('.own')));
+document.getElementById('grid-sk').innerHTML = Array.from({length:8}, (_, i) => `
+  <div class="card skc" aria-hidden="true"><div class="thumb"><span class="sk"></span></div>
+  <div class="body"><span class="sk" style="width:${[70,55,80,62][i%4]}%"></span><span class="sk" style="width:${[45,60,50,40][i%4]}%;height:8px"></span></div></div>`).join('');
+
+const app = document.getElementById('app'), scrim = document.getElementById('drawer-scrim'), drop = document.getElementById('drop');
+const setDrawer = open => { app.classList.toggle('drawer-open', open); scrim.hidden = !open || matchMedia('(min-width:960px)').matches; };
+document.getElementById('drawer-open').onclick = () => setDrawer(true);
+document.getElementById('drawer-close').onclick = scrim.onclick = () => setDrawer(false);
+const setLayout = m => {
+  grid.classList.toggle('list', m === 'list');
+  document.getElementById('lay-grid').setAttribute('aria-checked', String(m === 'grid'));
+  document.getElementById('lay-list').setAttribute('aria-checked', String(m === 'list'));
+};
+['grid','list'].forEach(m => document.getElementById('lay-'+m).onclick = () => { OA.S.layout = m; OA.apply(); });
+/* Real drag-and-drop shows the same overlay. */
+let depth = 0;
+addEventListener('dragenter', e => { e.preventDefault(); depth++; drop.hidden = false; });
+addEventListener('dragleave', () => { if (--depth <= 0) { depth = 0; drop.hidden = OA.S.overlay !== 'drop'; } });
+addEventListener('dragover', e => e.preventDefault());
+addEventListener('drop', e => { e.preventDefault(); depth = 0; drop.hidden = true; });
+drop.onclick = () => { OA.S.overlay = 'none'; OA.apply(); };
+document.getElementById('retry').onclick = e => { const b = e.currentTarget; b.innerHTML = '<span class="spinner"></span>Retrying'; setTimeout(() => { OA.S.state = 'default'; OA.apply(); b.innerHTML = '<svg class="ic sm"><use href="#i-retry"/></svg>Retry'; }, 900); };
+OA.on(S => {
+  setLayout(S.layout);
+  drop.hidden = S.overlay !== 'drop';
+  setDrawer(S.overlay === 'drawer');
+  document.querySelectorAll('.menu').forEach(m => { m.hidden = true; });
+  if (S.overlay === 'filter' && S.state !== 'empty') OA.open('m-agent');
+});
+OA.apply();
+</script>
+</body>
+</html>

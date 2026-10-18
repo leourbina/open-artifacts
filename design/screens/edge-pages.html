@@ -1,0 +1,364 @@
+<!doctype html>
+<!--
+  Edge pages (Task D4). Query params:
+    ?page=no-access|sign-in|not-found|quota   (default no-access)
+    ?theme=light|dark                          (default: system)
+    ?state=default|loading|error               (sign-in: loading = redirecting, error = failed sign-in;
+                                                quota: loading = skeleton grid)
+  The not-found page is also what an artifact the viewer can't access returns,
+  so its copy never says whether the artifact exists.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Open Artifacts — Edge pages</title>
+<script>
+  // Set the theme before first paint so there is no flash.
+  (function () {
+    var t = new URLSearchParams(location.search).get("theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  })();
+</script>
+<link rel="stylesheet" href="../../packages/ui/src/tokens/tokens.css">
+<style>
+*{box-sizing:border-box}
+html,body{margin:0}
+[hidden]{display:none !important}
+body{min-height:100vh;background:var(--oa-bg);color:var(--oa-text);font:400 var(--oa-text-sm)/1.45 var(--oa-font-sans);-webkit-font-smoothing:antialiased}
+a{color:inherit}
+svg{display:block}
+.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.ic.sm{width:14px;height:14px}
+.num{font-variant-numeric:tabular-nums}
+.mono{font-family:var(--oa-font-mono)}
+:focus-visible{outline:2px solid var(--oa-focus);outline-offset:2px}
+
+/* Buttons (Button.module.css) */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:28px;padding:0 10px;border:1px solid var(--oa-border);border-radius:var(--oa-radius-md);background:var(--oa-surface);color:var(--oa-text);font:500 var(--oa-text-sm)/1 var(--oa-font-sans);white-space:nowrap;cursor:pointer;text-decoration:none;transition:border-color var(--oa-duration-fast) var(--oa-ease)}
+.btn:hover:not(:disabled){border-color:var(--oa-border-strong)}
+.btn.primary{background:var(--oa-text);border-color:var(--oa-text);color:var(--oa-surface)}
+.btn.ghost{background:none;border-color:transparent;color:var(--oa-text-2)}
+.btn.ghost:hover{background:var(--oa-sunken);color:var(--oa-text)}
+.btn.lg{height:36px;padding:0 14px;font-size:var(--oa-text-md)}
+.btn.block{width:100%}
+.btn:disabled{opacity:.55;cursor:default}
+.spinner{display:inline-block;width:14px;height:14px;border:1.5px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulse{to{opacity:.5}}
+.skeleton{display:block;border-radius:var(--oa-radius-sm);background:var(--oa-sunken);animation:pulse 1.4s var(--oa-ease) infinite alternate}
+
+/* Banner (Display.module.css) */
+.banner{display:flex;align-items:center;gap:var(--oa-space-3);padding:var(--oa-space-2) var(--oa-space-4);border-radius:var(--oa-radius-md);font:400 var(--oa-text-sm)/1.45 var(--oa-font-sans);color:var(--oa-text)}
+.banner .ic{color:var(--oa-danger)}
+.banner.danger{background:var(--oa-danger-soft)}
+.banner-text{flex:1;min-width:0}
+.banner-text strong{font-weight:500}
+
+/* ---------- Standalone edge layout ---------- */
+.edge{min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:0 16px}
+.edge-top{width:100%;max-width:960px;display:flex;align-items:center;gap:8px;height:56px}
+.brand{display:flex;align-items:center;gap:8px;font-weight:600;font-size:var(--oa-text-md);letter-spacing:-.01em;text-decoration:none}
+.brand-sq{width:20px;height:20px;border-radius:5px;background:var(--oa-text);color:var(--oa-surface);display:grid;place-items:center;font-size:11px;font-weight:600}
+.wordmark{display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:var(--oa-text-md);letter-spacing:-.01em;color:var(--oa-text);text-decoration:none;white-space:nowrap}
+.wordmark .logo{width:18px;height:18px;border-radius:5px;background:var(--oa-text);color:var(--oa-surface);display:grid;place-items:center}
+.wordmark .logo svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.edge-top .host{color:var(--oa-text-muted);font-size:var(--oa-text-xs);margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.edge-main{flex:1;width:100%;display:flex;align-items:center;justify-content:center;padding:24px 0 64px}
+.panel{width:100%;max-width:420px;background:var(--oa-surface);border-radius:var(--oa-radius-lg);box-shadow:var(--oa-shadow-1);padding:32px}
+.panel-icon{width:40px;height:40px;border-radius:var(--oa-radius-lg);background:var(--oa-sunken);color:var(--oa-text-muted);display:grid;place-items:center;margin-bottom:20px}
+.panel-icon .ic{width:20px;height:20px}
+.eyebrow{font:500 var(--oa-text-xs)/1 var(--oa-font-mono);color:var(--oa-text-muted);margin:0 0 10px}
+.panel h1{margin:0 0 8px;font-size:var(--oa-text-xl);line-height:1.25;font-weight:600;letter-spacing:-.02em}
+.panel p{margin:0 0 12px;color:var(--oa-text-2)}
+.panel .actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:24px}
+.who{display:flex;align-items:center;gap:10px;margin:20px 0 0;padding:10px 12px;border-radius:var(--oa-radius-md);background:var(--oa-surface-2);box-shadow:0 0 0 1px var(--oa-divider)}
+.who div{min-width:0;line-height:1.3}
+.who small{display:block;color:var(--oa-text-muted);font-size:var(--oa-text-xs)}
+.who b{display:block;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.edge-foot{padding:0 0 24px;color:var(--oa-text-muted);font-size:var(--oa-text-xs);text-align:center}
+.edge-foot a{color:var(--oa-text-2)}
+
+/* Sign in */
+.signin{text-align:center}
+.inst{width:44px;height:44px;border-radius:10px;background:var(--oa-text);color:var(--oa-surface);display:grid;place-items:center;font-size:19px;font-weight:600;margin:0 auto 18px}
+.signin .host-line{font:400 var(--oa-text-xs) var(--oa-font-mono);color:var(--oa-text-muted);margin:0 0 24px}
+.signin .note{margin:16px 0 0;font-size:var(--oa-text-xs);color:var(--oa-text-muted)}
+.signin .banner{text-align:left;margin:0 0 16px}
+
+/* ---------- Quota: library shell ---------- */
+.shell{display:grid;grid-template-columns:224px minmax(0,1fr);min-height:100vh}
+.side{position:sticky;top:0;height:100vh;overflow:auto;display:flex;flex-direction:column;gap:18px;padding:var(--oa-space-3) 10px;background:var(--oa-chrome);border-right:1px solid var(--oa-divider)}
+.wordmark{display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:var(--oa-text-md);letter-spacing:-.01em;color:var(--oa-text);text-decoration:none;white-space:nowrap}
+.wordmark .logo{width:18px;height:18px;border-radius:5px;background:var(--oa-text);color:var(--oa-surface);display:grid;place-items:center}
+.wordmark .logo svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.side .mark{display:flex;align-items:center;justify-content:space-between;padding:4px 6px 0}
+.ws{display:flex;align-items:center;gap:8px;padding:6px;border-radius:var(--oa-radius-md);border:1px solid var(--oa-border);background:var(--oa-surface);text-align:left;width:100%;font:inherit;color:inherit;cursor:pointer}
+.ws:hover{border-color:var(--oa-border-strong)}
+.ws .sq{width:20px;height:20px;border-radius:5px;background:var(--oa-text);color:var(--oa-surface);display:grid;place-items:center;font-size:11px;font-weight:600}
+.ws .wsn{flex:1;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ws .ic{color:var(--oa-text-muted)}
+.nav{display:flex;flex-direction:column;gap:1px}
+.nav h4{margin:0 0 4px;padding:0 8px;font-size:var(--oa-text-xs);font-weight:500;color:var(--oa-text-muted)}
+.nav a{display:flex;align-items:center;gap:9px;height:28px;padding:0 var(--oa-space-2);border-radius:var(--oa-radius-sm);color:var(--oa-text-2);text-decoration:none}
+.nav a:hover{background:var(--oa-sunken);color:var(--oa-text)}
+.nav a[aria-current="page"]{background:var(--oa-surface);color:var(--oa-text);box-shadow:var(--oa-shadow-1);font-weight:500}
+.nav a .ct{margin-left:auto;color:var(--oa-text-muted);font-size:var(--oa-text-xs);font-variant-numeric:tabular-nums}
+.nav .dot{width:6px;height:6px;border-radius:1.5px;background:var(--oa-text-muted);margin:0 5px}
+.side .foot{margin-top:auto;display:flex;align-items:center;gap:8px;padding:12px 6px 6px;border-top:1px solid var(--oa-divider)}
+.side .foot div{line-height:1.25;min-width:0}
+.side .foot b{font-weight:500}
+.side .foot small{color:var(--oa-text-muted);display:block;overflow:hidden;text-overflow:ellipsis}
+.drawer-head{display:none}
+.scrim{position:fixed;inset:0;z-index:40;background:var(--oa-scrim)}
+.btn.icon{width:28px;padding:0}
+.col{display:flex;flex-direction:column;min-width:0}
+.top{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:10px;height:48px;padding:0 20px;background:var(--oa-chrome);border-bottom:1px solid var(--oa-divider)}
+.menu-btn{display:none;width:28px;padding:0}
+.search{flex:1;max-width:520px;display:flex;align-items:center;gap:8px;height:30px;padding:0 8px 0 10px;background:var(--oa-surface);border:1px solid var(--oa-border);border-radius:var(--oa-radius-md);color:var(--oa-text-muted);min-width:0}
+.search input{flex:1;min-width:0;border:0;outline:0;background:none;font:inherit;color:var(--oa-text)}
+.search input::placeholder{color:var(--oa-text-muted)}
+kbd{font:500 11px var(--oa-font-mono);color:var(--oa-text-muted);background:var(--oa-surface-2);border:1px solid var(--oa-border);border-bottom-width:2px;border-radius:var(--oa-radius-sm);padding:0 4px}
+.spacer{flex:1}
+.lib{padding:20px 24px 40px;display:flex;flex-direction:column;gap:14px}
+.lib-head{display:flex;align-items:baseline;gap:10px}
+.lib-head h1{margin:0;font-size:var(--oa-text-xl);font-weight:600;letter-spacing:-.02em}
+.lib-head .count{color:var(--oa-text-muted)}
+.tabs{display:flex;gap:18px;border-bottom:1px solid var(--oa-divider);overflow-x:auto}
+.tabs span{height:34px;display:inline-flex;align-items:center;gap:6px;color:var(--oa-text-muted);font-weight:500;position:relative;white-space:nowrap}
+.tabs span[aria-selected=true]{color:var(--oa-text)}
+.tabs span[aria-selected=true]::after{content:"";position:absolute;left:0;right:0;bottom:0;height:2px;background:var(--oa-text);border-radius:2px}
+.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+.card{min-width:0;background:var(--oa-surface);border-radius:var(--oa-radius-lg);box-shadow:var(--oa-shadow-1);overflow:hidden}
+.thumb{height:138px;padding:14px 16px 0;background:var(--oa-surface-2);border-bottom:1px solid var(--oa-divider)}
+.pg{height:100%;padding:12px 12px 0;background:var(--oa-surface);border-radius:4px 4px 0 0;box-shadow:0 0 0 1px var(--oa-divider)}
+.l{height:4px;border-radius:2px;background:var(--oa-divider);margin:0 0 5px}
+.l.h{height:7px;background:var(--oa-text-2);opacity:.85;margin-bottom:8px}
+.card .body{padding:10px 12px 11px;display:flex;flex-direction:column;gap:7px}
+.card .ttl{display:flex;align-items:center;gap:7px;font-weight:500;min-width:0}
+.card .ttl .ic{color:var(--oa-text-muted)}
+.card .ttl span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card .sub{display:flex;align-items:center;gap:8px;color:var(--oa-text-muted);font-size:var(--oa-text-xs);min-width:0}
+.card .sub .agent{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card .sub .when{margin-left:auto;white-space:nowrap}
+.avatar{--size:20px;display:inline-grid;place-items:center;flex:none;width:var(--size);height:var(--size);border-radius:50%;background:hsl(var(--hue) 45% 30%);color:white;font:600 calc(var(--size) * 0.42)/1 var(--oa-font-sans);user-select:none}
+.avatar.lg{--size:26px}
+.badge{display:inline-flex;align-items:center;gap:4px;height:18px;padding:0 6px;border-radius:var(--oa-radius-sm);font:500 var(--oa-text-xs)/1 var(--oa-font-sans);white-space:nowrap}
+.badge .ic{width:11px;height:11px;stroke-width:1.8}
+.vis-private{background:var(--oa-sunken);color:var(--oa-text-2)}
+.vis-team{background:var(--oa-accent-soft);color:var(--oa-accent-fg)}
+.vis-public{background:var(--oa-success-soft);color:var(--oa-success-fg)}
+
+@media (max-width:1100px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:959.98px){
+  .shell{grid-template-columns:minmax(0,1fr)}
+  .side{position:fixed;inset:0 auto 0 0;z-index:41;width:min(280px,85vw);height:auto;transform:translateX(-105%);transition:transform var(--oa-duration) var(--oa-ease);box-shadow:var(--oa-shadow-2)}
+  .shell.drawer-open .side{transform:none}
+  .side .mark{display:none}
+  .drawer-head{display:flex;align-items:center;justify-content:space-between;padding:0 0 0 6px}
+  .menu-btn{display:inline-flex}
+  .top{padding:0 12px}
+  .grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media (max-width:560px){
+  .top .hide-s{display:none}
+  .lib{padding:16px}
+  .grid{grid-template-columns:minmax(0,1fr)}
+  .banner{align-items:flex-start;flex-wrap:wrap}
+  .banner .ic{margin-top:2px}
+  .banner .btn{margin-left:28px}
+  .panel{padding:24px 20px}
+  .edge-top .host{display:none}
+}
+@media (prefers-reduced-motion:reduce){.spinner,.skeleton{animation-duration:2.4s}}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-logo" viewBox="0 0 16 16"><path d="M3 3.5h6.5L13 7v5.5H3z"/><path d="M6 9.5h4"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 16 16"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></symbol>
+    <symbol id="i-compass" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="m10.5 5.5-1.6 3.4-3.4 1.6 1.6-3.4z"/></symbol>
+    <symbol id="i-key" viewBox="0 0 16 16"><circle cx="5.5" cy="10.5" r="3"/><path d="m7.6 8.4 5.9-5.9M11.5 4.5l1.5 1.5M10 6l1.2 1.2"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 5v3.5M8 11h.01"/></symbol>
+    <symbol id="i-swap" viewBox="0 0 16 16"><path d="M3 5.5h10M10.5 3 13 5.5 10.5 8M13 10.5H3M5.5 8 3 10.5 5.5 13"/></symbol>
+    <symbol id="i-lib" viewBox="0 0 16 16"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></symbol>
+    <symbol id="i-gauge" viewBox="0 0 16 16"><path d="M2.5 11a5.5 5.5 0 1 1 11 0"/><path d="m8 11 2.5-3"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2"/><path d="M8 1.8v1.7M8 12.5v1.7M1.8 8h1.7M12.5 8h1.7M3.6 3.6l1.2 1.2M11.2 11.2l1.2 1.2M3.6 12.4l1.2-1.2M11.2 4.8l1.2-1.2"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 16 16"><path d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4"/></symbol>
+    <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 16 16"><path d="M2 4h12M2 8h12M2 12h12"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></symbol>
+    <symbol id="i-md" viewBox="0 0 16 16"><rect x="1.5" y="3" width="13" height="10" rx="1.5"/><path d="M4 10.5v-5l2 2.5 2-2.5v5M11 5.5v5M9.5 9l1.5 1.5L12.5 9"/></symbol>
+    <symbol id="i-html" viewBox="0 0 16 16"><path d="M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5"/></symbol>
+    <symbol id="i-pdf" viewBox="0 0 16 16"><path d="M4 1.5h5.5L13 5v9.5H4z"/><path d="M9.5 1.5V5H13M6 9h5M6 11.5h3.5"/></symbol>
+    <symbol id="i-code" viewBox="0 0 16 16"><path d="M4 1.5h5.5L13 5v9.5H4z"/><path d="M9.5 1.5V5H13M7.3 8.3 6 9.7l1.3 1.3M9.7 8.3 11 9.7 9.7 11"/></symbol>
+    <symbol id="i-team" viewBox="0 0 16 16"><circle cx="6" cy="6" r="2.5"/><path d="M1.5 13.5c.5-2.5 2.3-3.8 4.5-3.8s4 1.3 4.5 3.8M11 3.8a2.3 2.3 0 0 1 0 4.4M12.5 10c1.2.6 1.8 1.8 2 3.5"/></symbol>
+    <symbol id="i-logo" viewBox="0 0 16 16"><path d="M3 3.5h6.5L13 7v5.5H3z"/><path d="M6 9.5h4"/></symbol>
+    <symbol id="i-x" viewBox="0 0 16 16"><path d="m4 4 8 8M12 4l-8 8"/></symbol>
+    <symbol id="i-down" viewBox="0 0 16 16"><path d="m4.5 6.5 3.5 3.5 3.5-3.5"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c1.8 2 2.6 4 2.6 6S9.8 12 8 14M8 2C6.2 4 5.4 6 5.4 8S6.2 12 8 14"/></symbol>
+  </defs>
+</svg>
+
+<!-- ================= NO ACCESS ================= -->
+<div class="edge" data-page="no-access" hidden>
+  <header class="edge-top">
+    <span class="brand"><span class="brand-sq">N</span>Northwind Eng</span>
+    <span class="host mono">artifacts.northwind.dev</span>
+  </header>
+  <main class="edge-main">
+    <section class="panel" aria-labelledby="na-title">
+      <div class="panel-icon"><svg class="ic"><use href="#i-lock"/></svg></div>
+      <h1 id="na-title">You're signed in, but there's nothing here for you yet</h1>
+      <p>This account isn't a member of Northwind Eng, and no artifacts have been shared with it.</p>
+      <p>If you expected access, ask the person who sent you the link to share it with this email, or ask an admin to invite you.</p>
+      <div class="who">
+        <span class="avatar lg" style="--hue:28">SR</span>
+        <div><small>Signed in as</small><b>sam.rivera@contractor.io</b></div>
+      </div>
+      <div class="actions">
+        <a class="btn primary" href="?page=sign-in"><svg class="ic sm"><use href="#i-swap"/></svg>Sign in as someone else</a>
+        <a class="btn ghost" href="#">Sign out</a>
+      </div>
+    </section>
+  </main>
+  <footer class="edge-foot">Open Artifacts</footer>
+</div>
+
+<!-- ================= SIGN IN ================= -->
+<div class="edge" data-page="sign-in" hidden>
+  <header class="edge-top"><a class="wordmark" href="#"><span class="logo"><svg viewBox="0 0 16 16"><use href="#i-logo"/></svg></span>Open Artifacts</a></header>
+  <main class="edge-main">
+    <section class="panel signin" aria-labelledby="si-title">
+      <div class="inst" aria-hidden="true">N</div>
+      <h1 id="si-title">Sign in to Northwind Eng</h1>
+      <p class="host-line">artifacts.northwind.dev</p>
+      <div class="banner danger" data-state="error" role="alert">
+        <svg class="ic"><use href="#i-alert"/></svg>
+        <span class="banner-text"><strong>Sign-in didn't finish.</strong> The login link expired or was cancelled. Try again.</span>
+      </div>
+      <a class="btn primary lg block" href="#" data-state="default error"><svg class="ic"><use href="#i-key"/></svg>Continue with Cloudflare Access</a>
+      <button class="btn primary lg block" disabled data-state="loading"><span class="spinner" aria-hidden="true"></span>Redirecting to Cloudflare Access…</button>
+      <p class="note">You'll confirm your email with a one-time PIN or your organization's login.</p>
+    </section>
+  </main>
+  <footer class="edge-foot">Open Artifacts</footer>
+</div>
+
+<!-- ================= 404 ================= -->
+<div class="edge" data-page="not-found" hidden>
+  <header class="edge-top">
+    <a class="brand" href="#"><span class="brand-sq">N</span>Northwind Eng</a>
+    <span class="host mono">artifacts.northwind.dev</span>
+  </header>
+  <main class="edge-main">
+    <section class="panel" aria-labelledby="nf-title">
+      <div class="panel-icon"><svg class="ic"><use href="#i-compass"/></svg></div>
+      <p class="eyebrow">404</p>
+      <h1 id="nf-title">Page not found</h1>
+      <p>There's nothing at this address for the account you're using. The link may be mistyped, or it may need a different account.</p>
+      <div class="who">
+        <span class="avatar lg" style="--hue:215">MC</span>
+        <div><small>Signed in as</small><b>maya@northwind.dev</b></div>
+      </div>
+      <div class="actions">
+        <a class="btn primary" href="#"><svg class="ic sm"><use href="#i-lib"/></svg>Go to library</a>
+        <a class="btn" href="?page=sign-in"><svg class="ic sm"><use href="#i-swap"/></svg>Switch account</a>
+      </div>
+    </section>
+  </main>
+  <footer class="edge-foot">Open Artifacts</footer>
+</div>
+
+<!-- ================= QUOTA ================= -->
+<div class="shell" id="app" data-page="quota" hidden>
+  <aside class="side" id="side" aria-label="Main navigation">
+    <div class="mark"><a class="wordmark" href="library.html"><span class="logo"><svg viewBox="0 0 16 16"><use href="#i-logo"/></svg></span>Open Artifacts</a></div>
+    <div class="drawer-head"><a class="wordmark" href="library.html"><span class="logo"><svg viewBox="0 0 16 16"><use href="#i-logo"/></svg></span>Open Artifacts</a><button class="btn ghost icon" id="drawer-close" aria-label="Close menu"><svg class="ic"><use href="#i-x"/></svg></button></div>
+    <button class="ws"><span class="sq">N</span><span class="wsn">Northwind Eng</span><svg class="ic sm"><use href="#i-down"/></svg></button>
+    <nav class="nav">
+      <a href="library.html" aria-current="page"><svg class="ic"><use href="#i-lib"/></svg>Library<span class="ct">214</span></a>
+      <a href="usage.html"><svg class="ic"><use href="#i-gauge"/></svg>Usage</a>
+      <a href="settings.html"><svg class="ic"><use href="#i-gear"/></svg>Settings</a>
+    </nav>
+    <nav class="nav">
+      <h4>Connected agents</h4>
+      <a href="#"><span class="dot"></span>Claude Code<span class="ct">92</span></a>
+      <a href="#"><span class="dot"></span>Codex CLI<span class="ct">41</span></a>
+      <a href="#"><span class="dot"></span>Cursor<span class="ct">38</span></a>
+      <a href="#"><span class="dot"></span>OpenCode<span class="ct">19</span></a>
+      <a href="#"><span class="dot"></span>ChatGPT<span class="ct">24</span></a>
+    </nav>
+    <div class="foot"><span class="avatar lg" style="--hue:215">MC</span><div><b>Maya Chen</b><small>maya@northwind.dev</small></div></div>
+  </aside>
+  <div class="scrim" id="drawer-scrim" hidden></div>
+  <div class="col">
+    <header class="top">
+      <button class="btn ghost menu-btn" id="menu-btn" aria-label="Open menu"><svg class="ic"><use href="#i-menu"/></svg></button>
+      <label class="search"><svg class="ic"><use href="#i-search"/></svg><input placeholder="Search titles, content, and agents" aria-label="Search"><kbd class="hide-s">⌘K</kbd></label>
+      <div class="spacer"></div>
+      <button class="btn hide-s" disabled title="Uploads resume at 00:00 UTC"><svg class="ic sm"><use href="#i-plus"/></svg>Upload</button>
+    </header>
+    <main class="lib">
+      <div class="banner danger" role="alert">
+        <svg class="ic"><use href="#i-alert"/></svg>
+        <span class="banner-text"><strong>Daily free-plan limit reached; resets at 00:00 UTC</strong></span>
+        <a class="btn" href="usage.html">View usage</a>
+      </div>
+      <div class="lib-head"><h1>Library</h1><span class="count num">214 artifacts</span></div>
+      <div class="tabs" role="tablist">
+        <span role="tab" aria-selected="true">All</span><span role="tab">Mine</span><span role="tab">Shared with me</span><span role="tab">Team</span>
+      </div>
+      <div id="grid" class="grid"></div>
+    </main>
+  </div>
+</div>
+
+<script>
+const q = new URLSearchParams(location.search);
+const pages = ["no-access", "sign-in", "not-found", "quota"];
+const page = pages.includes(q.get("page")) ? q.get("page") : "no-access";
+const state = ["loading", "error"].includes(q.get("state")) ? q.get("state") : "default";
+document.querySelector(`[data-page="${page}"]`).hidden = false;
+document.querySelectorAll("[data-state]").forEach((el) => {
+  el.hidden = !el.dataset.state.split(" ").includes(state);
+});
+document.title = "Open Artifacts — " + {"no-access": "No access", "sign-in": "Sign in", "not-found": "Not found", quota: "Library"}[page];
+
+const VIS = { team: ["i-team", "Team"], public: ["i-globe", "Public"], private: ["i-lock", "Private"] };
+const items = [
+  ["Q4 data migration plan", "md", "Claude Code", ["MC", 215], "team", "2h ago"],
+  ["Offsite location poll", "html", "ChatGPT", ["PR", 285], "team", "35m ago"],
+  ["Vendor MSA — redlined.pdf", "pdf", "Codex CLI", ["DO", 160], "private", "Yesterday"],
+  ["backfill_shipped_at.py", "code", "Cursor", ["MC", 215], "private", "4h ago"],
+  ["Churn by signup cohort", "html", "Claude Code", ["TP", 30], "public", "3d ago"],
+  ["Billing webhook retries — postmortem", "md", "OpenCode", ["SR", 200], "team", "Mon"],
+  ["Platform all-hands, October", "html", "Codex CLI", ["PR", 285], "team", "5d ago"],
+  ["Onboarding flow v3 prototype", "html", "Cursor", ["LV", 350], "public", "Oct 9"],
+];
+const L = (w, c = "") => `<div class="l ${c}" style="width:${w}%"></div>`;
+const grid = document.getElementById("grid");
+grid.innerHTML = state === "loading"
+  ? Array.from({ length: 8 }, () => `<div class="card" aria-hidden="true"><div class="thumb"><span class="skeleton" style="height:100%"></span></div>
+      <div class="body"><span class="skeleton" style="height:12px;width:70%"></span><span class="skeleton" style="height:10px;width:45%"></span></div></div>`).join("")
+  : items.map(([t, f, ag, o, v, w], i) => `<article class="card">
+      <div class="thumb" aria-hidden="true"><div class="pg">${L(50 + (i * 7) % 30, "h")}${L(94)}${L(80 - i * 3)}${L(70)}${L(88)}${L(56)}</div></div>
+      <div class="body">
+        <div class="ttl"><svg class="ic"><use href="#i-${f}"/></svg><span>${t}</span></div>
+        <div class="sub"><span class="avatar" style="--hue:${o[1]}">${o[0]}</span><span class="agent">${ag}</span>
+          <span class="badge vis-${v}"><svg class="ic"><use href="#${VIS[v][0]}"/></svg>${VIS[v][1]}</span><span class="when">${w}</span></div>
+      </div></article>`).join("");
+
+// Drawer below 960px (quota page)
+const app = document.getElementById("app"), scrim = document.getElementById("drawer-scrim");
+const setDrawer = (open) => { app.classList.toggle("drawer-open", open); scrim.hidden = !open; };
+document.getElementById("menu-btn").onclick = () => setDrawer(true);
+document.getElementById("drawer-close").onclick = scrim.onclick = () => setDrawer(false);
+if (q.get("drawer") === "open") setDrawer(true);
+</script>
+</body>
+</html>
