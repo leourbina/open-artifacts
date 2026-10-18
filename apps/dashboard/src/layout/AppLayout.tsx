@@ -7,6 +7,7 @@ import { qk } from "../api/queries";
 import { useRedirect } from "../auth/redirect";
 import { useSignOut } from "../auth/signOut";
 import { useMe } from "../auth/useMe";
+import { SearchBox } from "../library/SearchBox";
 import { EdgePanel } from "../pages/Edge";
 import { QuotaBanner } from "./QuotaBanner";
 
@@ -193,27 +194,30 @@ function TopBar({ me }: { me: Me | null }) {
   const signOut = useSignOut();
   if (!me) return null;
   return (
-    <div
-      style={{
-        marginLeft: "auto",
-        display: "flex",
-        gap: 8,
-        alignItems: "center",
-      }}
-    >
-      <span>{me.user.email}</span>
-      <Menu
-        trigger={
-          <button
-            type="button"
-            aria-label="Account menu"
-            style={{ all: "unset", cursor: "pointer" }}
-          >
-            <Avatar name={me.user.name ?? undefined} email={me.user.email} />
-          </button>
-        }
-        items={[{ label: "Sign out", onSelect: signOut }]}
-      />
-    </div>
+    <>
+      <SearchBox />
+      <div
+        style={{
+          marginLeft: "auto",
+          display: "flex",
+          gap: 8,
+          alignItems: "center",
+        }}
+      >
+        <span>{me.user.email}</span>
+        <Menu
+          trigger={
+            <button
+              type="button"
+              aria-label="Account menu"
+              style={{ all: "unset", cursor: "pointer" }}
+            >
+              <Avatar name={me.user.name ?? undefined} email={me.user.email} />
+            </button>
+          }
+          items={[{ label: "Sign out", onSelect: signOut }]}
+        />
+      </div>
+    </>
   );
 }

@@ -15,6 +15,9 @@ describe("router", () => {
   it("/search?q=123 keeps a numeric-looking query as text", () => {
     expect(searchFor("?q=123")).toEqual({ q: "123" });
   });
+  it("/search?q=007 keeps leading zeros", () => {
+    expect(searchFor("?q=007")).toEqual({ q: "007" });
+  });
   it("/search?q=true keeps the query as text", () => {
     expect(searchFor("?q=true")).toEqual({ q: "true" });
   });
