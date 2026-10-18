@@ -695,7 +695,7 @@ interface Collection {
 
 | Step | What it does |
 |---|---|
-| `prereqs` | Checks Node ≥ 20, pnpm, `wrangler whoami`, and that both hosts are in a zone the account owns (`GET /zones?name=`). |
+| `prereqs` | Checks Node ≥ 22, pnpm, `wrangler whoami`, and that both hosts are in a zone the account owns (`GET /zones?name=`). |
 | `resources` | Runs `wrangler d1 create open-artifacts`, `r2 bucket create open-artifacts`, and `kv namespace create OAUTH_KV`, or reuses them if they exist. Renders `apps/server/wrangler.jsonc` from the template with `ENVIRONMENT="production"`. |
 | `access` | Gets a token with `wrangler auth token --json` and calls `GET /accounts/{id}/access/organizations`. A 403 is `action_required`: print a prefilled token-creation link (Access: Apps and Policies Edit; Access: Organizations Read; Zone: DNS Read) and prompt for `CF_API_TOKEN`, using it in memory only. No organization is `action_required` with the link `https://one.dash.cloudflare.com/` and "enable Zero Trust (free), then rerun". Otherwise, create or reuse the reusable policy "Open Artifacts – everyone" (`decision: allow, include: [{ everyone: {} }]`) and the SaaS app (`type: "saas"`, `saas_app.auth_type: "oidc"`, `redirect_uris: ["https://{appHost}/auth/callback"]`, `grant_type: ["authorization_code"]`, scopes `openid email profile`, PKCE on). Store the team domain and client id. |
 | `secrets` | `wrangler secret put` for `ACCESS_CLIENT_SECRET`, plus `SESSION_SECRET` and `CONTENT_SIGNING_KEY` (32 random bytes, base64url; generated only on first run). `ANALYTICS_TOKEN` is optional and prompted for, and skipping it is fine. |
