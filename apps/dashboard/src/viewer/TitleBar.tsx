@@ -24,6 +24,7 @@ import {
   useVersionInfo,
   useVersions,
 } from "../api/queries";
+import { useOfferUndo } from "./useOfferUndo";
 import "./viewer.css";
 
 const TITLE_MAX = 200;
@@ -129,6 +130,7 @@ export function TitleBar({
   const qc = useQueryClient();
   const versions = useVersions(artifact.id, { enabled: authed });
   const del = useDeleteArtifact(artifact.id);
+  const offerUndo = useOfferUndo();
   const [confirm, setConfirm] = useState(false);
   const isOwner = authed && artifact.access === "owner";
   const canEdit = authed && artifact.access !== "viewer";
@@ -262,6 +264,7 @@ export function TitleBar({
                   onSuccess: () => {
                     deleted.current = true;
                     go("/");
+                    offerUndo(artifact.id, artifact.title);
                   },
                   onError: () => {
                     deleting.current = false;

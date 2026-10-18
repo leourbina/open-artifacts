@@ -1,6 +1,8 @@
 import type { ArtifactSummary } from "@oa/shared";
 import { Tabs } from "@oa/ui";
 import { useEffect, useRef } from "react";
+import { Details } from "./Details";
+import { Share } from "./Share";
 import { Versions } from "./Versions";
 
 export const PANEL_TABS = ["versions", "share", "details"] as const;
@@ -65,14 +67,12 @@ export function SidePanel({
           {
             id: "share",
             label: "Share",
-            // TODO(FE6): replace with the real Share panel.
-            content: <p>Sharing settings are coming soon.</p>,
+            content: <Share artifact={artifact} />,
           },
           {
             id: "details",
             label: "Details",
-            // TODO(FE6): replace with the real Details panel.
-            content: <p>Details are coming soon.</p>,
+            content: <Details artifact={artifact} />,
           },
         ]}
       />

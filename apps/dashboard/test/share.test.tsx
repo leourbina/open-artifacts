@@ -1,0 +1,346 @@
+import { R, viewerPath } from "@oa/shared";
+import { fixtures } from "@oa/shared/mocks";
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import { HttpResponse, http } from "msw";
+import { describe, expect, it, vi } from "vitest";
+import { installHarness, mount, seen, server, wait } from "./harness";
+
+vi.mock("../src/viewer/bridge", () => ({
+  createBridge: () => ({
+    dispose: vi.fn(),
+    requestThumbnail: vi.fn(),
+    setTheme: vi.fn(),
+  }),
+}));
+
+installHarness();
+
+const id = (title: string) =>
+  (fixtures.artifacts.find((a) => a.title === title) as { id: string }).id;
+const OWNED = id("Landing page");
+const POLL = id("Team poll");
+const VIEWER = id("Onboarding guide");
+const EDITOR = id("Shared draft");
+const panel = (aid: string, tab = "share") =>
+  `${viewerPath(aid)}?panel=open&tab=${tab}`;
+const writes = () => seen.filter((u) => u.pathname.includes("/artifacts/"));
+
+// Radix Select needs these in jsdom.
+Element.prototype.hasPointerCapture ??= () => false;
+Element.prototype.scrollIntoView ??= () => {};
+
+const patches = () => {
+  const bodies: unknown[] = [];
+  server.events.on("request:start", async ({ request }) => {
+    if (request.method === "PATCH") bodies.push(await request.clone().json());
+  });
+  return bodies;
+};
+
+describe("share panel", () => {
+  it("going public asks first; cancelling keeps the visibility and sends no PATCH", async () => {
+    const bodies = patches();
+    mount(panel(OWNED));
+    const group = await screen.findByRole("radiogroup", { name: "Visibility" });
+    fireEvent.click(within(group).getByRole("radio", { name: "Public" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save visibility" }));
+    await screen.findByText(
+      "Anyone with the link can view. It won't appear in search engines.",
+      { selector: '[role="dialog"] *' },
+    );
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Cancel",
+      }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(bodies).toEqual([]);
+    expect(
+      within(group).getByRole("radio", { name: "Private" }),
+    ).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("an invalid or non-ASCII email never calls the API", async () => {
+    mount(panel(OWNED));
+    const input = await screen.findByRole("textbox", { name: "Email" });
+    for (const bad of ["nope", "josé@example.com", "a@exämple.com"]) {
+      fireEvent.change(input, { target: { value: bad } });
+      fireEvent.click(screen.getByRole("button", { name: "Invite" }));
+      await screen.findByRole("alert");
+    }
+    const puts = seen.filter((u) => u.pathname === R.shares(OWNED));
+    // Only the initial GET of the list.
+    expect(puts).toHaveLength(1);
+  });
+
+  it("invites a trimmed, lowercased email", async () => {
+    mount(panel(OWNED));
+    const input = await screen.findByRole("textbox", { name: "Email" });
+    fireEvent.change(input, { target: { value: "  Eve@Example.com " } });
+    fireEvent.click(screen.getByRole("button", { name: "Invite" }));
+    await screen.findByText("eve@example.com");
+  });
+
+  it("a share row renders its email with a title", async () => {
+    mount(panel(OWNED));
+    expect(await screen.findByTitle("bob@example.com")).toHaveTextContent(
+      "bob@example.com",
+    );
+  });
+
+  it("changes a share role and removes it", async () => {
+    mount(panel(OWNED));
+    const trigger = await screen.findByRole("combobox", {
+      name: "Role for bob@example.com",
+    });
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: "Editor" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("combobox", { name: "Role for bob@example.com" }),
+      ).toHaveTextContent("Editor"),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove bob@example.com" }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByText("bob@example.com")).toBeNull(),
+    );
+  });
+
+  it("allowAnonymousWrites is disabled unless public and db", async () => {
+    mount(panel(OWNED));
+    expect(
+      await screen.findByRole("checkbox", { name: "Allow anonymous writes" }),
+    ).toBeDisabled();
+  });
+
+  it("turning db off also unsets allowAnonymousWrites in the same PATCH", async () => {
+    const bodies = patches();
+    mount(panel(POLL));
+    const anon = await screen.findByRole("checkbox", {
+      name: "Allow anonymous writes",
+    });
+    await waitFor(() => expect(anon).toBeEnabled());
+    expect(anon).toBeChecked();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Database" }));
+    await waitFor(() =>
+      expect(bodies).toEqual([
+        { capabilities: { db: false }, allowAnonymousWrites: false },
+      ]),
+    );
+    await waitFor(() => expect(anon).toBeDisabled());
+    expect(anon).not.toBeChecked();
+  });
+
+  it("a failed save toasts and leaves the UI as the server has it", async () => {
+    server.use(
+      http.patch("*/api/v1/artifacts/:id", () =>
+        HttpResponse.json(
+          { error: { code: "internal", message: "Boom" } },
+          { status: 500 },
+        ),
+      ),
+    );
+    mount(panel(OWNED));
+    const group = await screen.findByRole("radiogroup", { name: "Visibility" });
+    fireEvent.click(within(group).getByRole("radio", { name: "Team" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save visibility" }));
+    await screen.findByText("Boom");
+    expect(
+      within(group).getByRole("radio", { name: "Private" }),
+    ).toHaveAttribute("aria-checked", "true");
+  });
+
+  it.each([
+    ["editor", EDITOR],
+    ["viewer", VIEWER],
+  ])("%s sees no editing controls but can copy the link", async (_, aid) => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    mount(panel(aid));
+    fireEvent.click(await screen.findByRole("button", { name: "Copy link" }));
+    expect(screen.queryByRole("radiogroup", { name: "Visibility" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Email" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Remove / })).toBeNull();
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith(
+        `${location.origin}${viewerPath(aid)}`,
+      ),
+    );
+  });
+});
+
+describe("details panel", () => {
+  it("editors edit the title and description", async () => {
+    const bodies = patches();
+    mount(panel(EDITOR, "details"));
+    const title = await screen.findByRole("textbox", { name: "Title" });
+    fireEvent.change(title, { target: { value: "  New name " } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Description" }), {
+      target: { value: "About" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(bodies).toEqual([{ title: "New name", description: "About" }]),
+    );
+  });
+
+  it("viewers see read-only info with file sizes and no Delete", async () => {
+    mount(panel(VIEWER, "details"));
+    await screen.findByText("1.0 KB");
+    expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Delete artifact" }),
+    ).toBeNull();
+  });
+
+  it("delete confirms, navigates home, and Undo restores and returns to the viewer", async () => {
+    const router = mount(panel(OWNED, "details"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Delete artifact" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+    fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe(viewerPath(OWNED)),
+    );
+    expect(writes().some((u) => u.pathname === R.restoreDeleted(OWNED))).toBe(
+      true,
+    );
+  });
+});
+
+describe("share panel review fixes", () => {
+  it("arrowing Private to Public with the keyboard and cancelling sends no PATCH", async () => {
+    const bodies = patches();
+    mount(panel(OWNED));
+    const group = await screen.findByRole("radiogroup", { name: "Visibility" });
+    const priv = within(group).getByRole("radio", { name: "Private" });
+    priv.focus();
+    fireEvent.keyDown(priv, { key: "ArrowRight" });
+    fireEvent.keyDown(within(group).getByRole("radio", { name: "Team" }), {
+      key: "ArrowRight",
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    await wait(50);
+    expect(bodies).toEqual([]);
+    expect(
+      within(group).getByRole("radio", { name: "Private" }),
+    ).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("confirming Make public sends only the visibility", async () => {
+    const bodies = patches();
+    mount(panel(OWNED));
+    const group = await screen.findByRole("radiogroup", { name: "Visibility" });
+    fireEvent.click(within(group).getByRole("radio", { name: "Public" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save visibility" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Make public" }));
+    await waitFor(() => expect(bodies).toEqual([{ visibility: "public" }]));
+  });
+
+  it("a denied or missing clipboard toasts Couldn't copy with the link", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: () => Promise.reject(new Error("denied")) },
+      configurable: true,
+    });
+    mount(panel(OWNED));
+    fireEvent.click(await screen.findByRole("button", { name: "Copy link" }));
+    await screen.findByText("Couldn't copy");
+    await screen.findByText(`${location.origin}${viewerPath(OWNED)}`);
+  });
+
+  it("shows the owner by display name", async () => {
+    mount(panel(EDITOR));
+    await screen.findByText("Bob Builder");
+  });
+});
+
+describe("details review fixes", () => {
+  it("saving the description after an inline rename keeps the new title", async () => {
+    const bodies = patches();
+    mount(panel(OWNED, "details"));
+    await screen.findByRole("textbox", { name: "Title" });
+    fireEvent.click(screen.getByTitle("Rename"));
+    const inline = await waitFor(
+      () => document.querySelector("input.oa-vt-input") as HTMLInputElement,
+    );
+    fireEvent.change(inline, { target: { value: "Renamed" } });
+    fireEvent.keyDown(inline, { key: "Enter" });
+    await waitFor(() => expect(bodies).toEqual([{ title: "Renamed" }]));
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue(
+        "Renamed",
+      ),
+    );
+    fireEvent.change(screen.getByRole("textbox", { name: "Description" }), {
+      target: { value: "About" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    expect(bodies[1]).toEqual({ description: "About" });
+  });
+
+  it("a failed save toasts the error and restores the fields", async () => {
+    server.use(
+      http.patch("*/api/v1/artifacts/:id", () =>
+        HttpResponse.json(
+          { error: { code: "internal", message: "Nope" } },
+          { status: 500 },
+        ),
+      ),
+    );
+    mount(panel(EDITOR, "details"));
+    const title = await screen.findByRole("textbox", { name: "Title" });
+    const before = (title as HTMLInputElement).value;
+    fireEvent.change(title, { target: { value: "Other" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("Nope");
+    expect(title).toHaveValue(before);
+  });
+});
+
+describe("undo toast", () => {
+  const del = async () => {
+    const router = mount(panel(OWNED, "details"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Delete artifact" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+    return router;
+  };
+
+  it("offers Undo, which restores and navigates back", async () => {
+    const router = await del();
+    fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
+    await waitFor(() =>
+      expect(router.state.location.pathname).toMatch(/^\/a\//),
+    );
+  });
+
+  it("toasts the error when undo fails", async () => {
+    server.use(
+      http.post("*/api/v1/artifacts/:id/undelete", () =>
+        HttpResponse.json(
+          { error: { code: "internal", message: "Too late" } },
+          { status: 500 },
+        ),
+      ),
+    );
+    await del();
+    fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
+    await screen.findByText("Too late");
+  });
+});
