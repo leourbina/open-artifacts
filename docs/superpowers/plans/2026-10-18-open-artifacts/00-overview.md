@@ -30,11 +30,11 @@
 | File | Track | Owner session |
 |---|---|---|
 | `00-overview.md` | Shared rules, contracts, milestones, review focus | all |
-| `01-foundation.md` | F1–F4: repo, `packages/shared` contract, test harness | **OpenArtifacts Backend** (runs first) |
-| `02-backend.md` | B1–B17: server, render, runtime, MCP, setup | **OpenArtifacts Backend** |
+| `01-foundation.md` | F1–F4: repo, `packages/shared` contract, test harness, CI/CD | **OpenArtifacts Backend** for F1–F3 (runs first). F4 belongs to **OpenArtifacts Platform**. |
+| `02-backend.md` | B1–B17: server, render, runtime, MCP, setup | **OpenArtifacts Backend**, except B16 (setup CLI) and B4's staging step, which belong to **OpenArtifacts Platform** |
 | `03-design.md` | D1–D7: direction, `packages/ui`, screens, themes, brand, landing | **OpenArtifacts Design** |
 | `04-frontend.md` | FE1–FE12: dashboard, shell, bridge, settings, end-to-end tests | **OpenArtifacts Frontend** |
-| `05-integration.md` | I1–I4: cross-track end-to-end, adversarial security pass, live deploy, release | Backend leads; all participate |
+| `05-integration.md` | I1–I4: cross-track end-to-end, adversarial security pass, live deploy, release | I1 and I2 belong to **OpenArtifacts QA & Security**; Backend holds them until that session exists. I3 and I4 belong to **OpenArtifacts Platform**. |
 
 ## How each lead executes (required)
 
@@ -51,7 +51,7 @@ Every lead runs its track using **superpowers:subagent-driven-development**. Eac
 - The lead dispatches one **whole-track adversarial review** on the most capable model, and runs the milestone's end-to-end check.
 - The lead reports to the other leads in **three lines or fewer**: what shipped, what contract changed, and what's blocked.
 
-**Coordinating with other leads** happens over SendMessage, using the session names `OpenArtifacts Backend`, `OpenArtifacts Frontend`, and `OpenArtifacts Design`. Keep messages terse.
+**Coordinating with other leads** happens over SendMessage, using the session names `OpenArtifacts Backend`, `OpenArtifacts Frontend`, `OpenArtifacts Design`, `OpenArtifacts Platform`, and (once it exists) `OpenArtifacts QA & Security`. Keep messages terse.
 
 **Changing a contract:**
 - Covers any change to `packages/shared`, the postMessage protocol, `packages/ui` exports, or the REST routes.
@@ -82,9 +82,9 @@ Every lead runs its track using **superpowers:subagent-driven-development**. Eac
   | `staging.open-artifacts.com` | App |
   | `staging-content.open-artifacts.com` | Content |
 
-  Then a smoke job hits `/healthz`, plus every milestone's smoke checks as they land. **If staging is red, every lead stops merging** until the lead who broke it fixes forward or reverts. Reverts go through a PR too.
+  Then a smoke job hits `/healthz`, plus every milestone's smoke checks as they land. **If staging is red, every lead stops merging** until the lead who broke it fixes forward or reverts. **Platform watches staging:** it triages each red run, pings the lead who broke it, and owns the pipeline itself. Reverts go through a PR too.
 - **The landing site** (`apps/landing`) gets a Workers preview URL on every PR, posted as a PR comment by CI. It deploys to `open-artifacts.com` only when a release is published.
-- **Releases** use release-please (`googleapis/release-please-action`, manifest mode, a single root component, `release-type: node`, starting at `0.1.0`). It keeps a release PR open on `main`. **The Backend lead merges the release PR** at each milestone (M1, M2, M3) once staging is green (user decision: no human approval needed). Merging it publishes a GitHub release and tag, deploys the landing site, and sets the version `llms.txt` installs.
+- **Releases** use release-please (`googleapis/release-please-action`, manifest mode, a single root component, `release-type: node`, starting at `0.1.0`). It keeps a release PR open on `main`. **The Platform lead merges the release PR** at each milestone (M1, M2, M3) once staging is green (user decision: no human approval needed). Merging it publishes a GitHub release and tag, deploys the landing site, and sets the version `llms.txt` installs.
 - **Database migrations** must stay compatible with the code that was running before them, because staging deploys every merge. Columns are added, never renamed or dropped within a release.
 
 ## Working copies
@@ -94,6 +94,8 @@ All three leads work in the same repository, so each one needs its own git workt
 | Lead | Worktree |
 |---|---|
 | Backend | `/Users/leonardourbina/code/projects/openartifacts` (the main checkout) |
+| Platform | `/Users/leonardourbina/code/projects/openartifacts-pl` |
+| QA & Security | `/Users/leonardourbina/code/projects/openartifacts-qa` |
 | Frontend | `/Users/leonardourbina/code/projects/openartifacts-fe` |
 | Design | `/Users/leonardourbina/code/projects/openartifacts-de` |
 
@@ -171,7 +173,7 @@ M0  F1 → F4 (CI/CD + staging live) → F2 → F3   (Backend; unblocks everyone
         └── Frontend: FE1 (mocks from F2) → FE2 → FE3 … FE11 (uses D3 when ready; until then, unstyled primitives) → FE12
 M1  "Publish & view":      B1–B11 + FE1–FE5 → I1 partial (agent publishes, owner views)
 M2  "Share & live data":   B12–B16 + FE6–FE11 → I1 full + I2 adversarial
-M3  "Ship":                B17, D7, FE12 → I3 staging becomes a real open instance → I4 milestone release (Backend lead merges the release-please PR)
+M3  "Ship":                B17, D7, FE12 → I3 staging becomes a real open instance → I4 milestone release (Platform lead merges the release-please PR)
 ```
 
 Frontend never waits on Backend. It works against `packages/shared` schemas, using the MSW mocks from F3. Frontend never waits on Design either. It uses Radix primitives with `packages/ui` tokens, and adopts D3 components as they land.

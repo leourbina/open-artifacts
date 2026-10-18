@@ -320,7 +320,7 @@ export const METHOD_CAPABILITY: Record<RuntimeMethod, keyof Capabilities> = { "d
 
 ---
 
-### Task F4: CI/CD, branch protection, staging, release-please (runs second, right after F1)
+### Task F4 (owner: **OpenArtifacts Platform**, taking over PR #1 from Backend): CI/CD, branch protection, staging, release-please (runs second, right after F1)
 
 **Files:**
 - Create: `.github/workflows/ci.yml`, `.github/workflows/deploy-staging.yml`, `.github/workflows/landing-preview.yml`, `.github/workflows/release-please.yml`, `release-please-config.json`, `.release-please-manifest.json`, `docs/ops/staging.md`, `apps/server/wrangler.staging.jsonc`, and `apps/server/src/index.ts` (minimal `/healthz` only, so staging has something to serve).

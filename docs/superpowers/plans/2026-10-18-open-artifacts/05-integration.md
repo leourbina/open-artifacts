@@ -2,7 +2,7 @@
 
 Read `00-overview.md` first.
 
-**Ownership:** OpenArtifacts Backend leads this track. Frontend and Design join where noted. These tasks start once their milestone inputs (listed in the overview) are green.
+**Ownership:** I1 and I2 belong to **OpenArtifacts QA & Security**, an independent red team that didn't write the code. Backend holds them until that session exists. I3 and I4 belong to **OpenArtifacts Platform**. Frontend and Design join where noted. These tasks start once their milestone inputs (listed in the overview) are green.
 
 Anything shown to the user goes to them as visually rich HTML in the visual companion.
 
@@ -97,7 +97,7 @@ Anything shown to the user goes to them as visually rich HTML in the visual comp
 
 ---
 
-### Task I4: M3 release via release-please (merged by the Backend lead; no human gate)
+### Task I4: M3 release via release-please (merged by the Platform lead; no human gate)
 
 Earlier releases go out the same way at M1 (expected 0.1.0) and M2. Use Steps 1–3 below for those as well.
 

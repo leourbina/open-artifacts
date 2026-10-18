@@ -236,7 +236,9 @@ One master plan covers the whole system: `docs/superpowers/plans/2026-10-18-open
 
 | Lead | Track |
 |---|---|
-| **OpenArtifacts Backend** | Foundation (repo, `packages/shared` contract), `apps/server`, `packages/render`, `packages/runtime`, `scripts/setup` |
+| **OpenArtifacts Backend** | Foundation (repo, `packages/shared` contract), `apps/server`, `packages/render`, `packages/runtime` |
+| **OpenArtifacts Platform** | CI/CD, staging (deploys, secrets, Access apps, watching staging), `scripts/setup`, releases (release-please), live verification |
+| **OpenArtifacts QA & Security** (being provisioned) | An independent red team: the cross-track end-to-end journey, the sandbox-escape and security pass, attacks on each merge on staging, and the "stranger install" check before releases |
 | **OpenArtifacts Frontend** | `apps/dashboard` (SPA, viewer shell, bridge, upload, settings, usage), local end-to-end suite |
 | **OpenArtifacts Design** | Visual direction (the user picks from options), `packages/ui`, screen designs, render themes, brand assets, `apps/landing` with docs and llms.txt |
 
@@ -262,5 +264,5 @@ One master plan covers the whole system: `docs/superpowers/plans/2026-10-18-open
 - **Small PRs:** everything ships as small, single-task PRs to `github.com/leourbina/open-artifacts`. `main` is protected: a PR and passing CI are required, admins are held to the same rules, and merges are squash only, with Conventional Commit titles.
 - **Staging:** every merge to `main` deploys to **staging**: `staging.open-artifacts.com` serves the app and `staging-content.open-artifacts.com` serves content (designer's call for the second host). Migrations run first, then a smoke test. A red staging deploy blocks all merges until it's fixed.
   - Staging has no Access gate. It's public from the start (user decision).
-- **Releases** are managed by **release-please**: manifest mode, a single root component, starting at 0.1.0. The Backend lead merges the release PR at each milestone once staging is green. No human approval is needed (user decision). Publishing a release tags it, creates a GitHub release, and deploys the landing site to **open-artifacts.com**, which is on the user's Cloudflare account. Landing changes get preview URLs on their PRs.
+- **Releases** are managed by **release-please**: manifest mode, a single root component, starting at 0.1.0. The Platform lead merges the release PR at each milestone once staging is green. No human approval is needed (user decision). Publishing a release tags it, creates a GitHub release, and deploys the landing site to **open-artifacts.com**, which is on the user's Cloudflare account. Landing changes get preview URLs on their PRs.
 - **Migrations** must stay compatible with the previous code, because staging deploys continuously.
