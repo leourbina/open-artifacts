@@ -4,6 +4,8 @@ import {
   clearOidcCookie,
   handleCallback,
   logOidcFail,
+  OidcStateError,
+  pickStateCookie,
   safeNext,
 } from "../auth/oidc.js";
 import {
@@ -22,32 +24,80 @@ const redirect = (location: string, cookies: string[]) => {
   return new Response(null, { status: 302, headers: h });
 };
 
+const esc = (s: string) =>
+  s.replace(
+    /[&<>"']/g,
+    (ch) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
+        ch
+      ] as string,
+  );
+
+const RETRY_PAGE_CSP =
+  "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+/** Static page for a second state failure. Only user-derived content: escaped `next`. */
+function retryPage(next: string, cookies: string[]): Response {
+  const href = esc(`${AUTH.login}?next=${encodeURIComponent(next)}`);
+  const html = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign-in interrupted</title>
+<style>:root{color-scheme:light dark}body{font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 16px;color:#1a1a1a;background:#fff}@media (prefers-color-scheme:dark){body{color:#eee;background:#111}a{color:#8ab4ff}}</style>
+</head><body><h1>Sign-in interrupted</h1>
+<p>Sign-in took too long or was opened in another tab. Try again.</p>
+<p><a href="${href}">Sign in again</a></p></body></html>`;
+  const h = new Headers({
+    "content-type": "text/html; charset=utf-8",
+    "content-security-policy": RETRY_PAGE_CSP,
+    "cache-control": "no-store",
+  });
+  for (const c of cookies) h.append("set-cookie", c);
+  return new Response(html, { status: 400, headers: h });
+}
+
 const EmailSchema = MemberSchema.shape.email;
 
 export function mountAuth(app: AppType): void {
   app.get(AUTH.login, async (c) => {
-    const { location, stateCookie } = await buildAuthorizeRedirect(
+    const { location, stateCookie, evict } = await buildAuthorizeRedirect(
       c.env,
       c.req.query("next") ?? "/",
+      {
+        retry: c.req.query("retry") === "1",
+        cookieHeader: c.req.header("cookie"),
+      },
     );
-    return redirect(location, [stateCookie]);
+    return redirect(location, [...evict, stateCookie]);
   });
 
   app.get(AUTH.callback, async (c) => {
-    // oa_oidc is single-use: cleared on success and on every failure.
-    const clear = clearOidcCookie(c.env);
+    // This attempt's state cookie is single-use: cleared on success and on
+    // every failure. Other attempts' cookies (other tabs) are left alone.
+    const picked = await pickStateCookie(
+      c.env,
+      c.req.raw,
+      c.req.query("state") ?? "",
+    );
+    const clear = picked ? [clearOidcCookie(c.env, picked.name)] : [];
     try {
       const { email, name, next } = await handleCallback(c.env, c.req.raw);
       const user = await upsertOnLogin(c.env, email, name);
       if (!user) {
         logOidcFail("no_access");
-        return redirect(PAGES.noAccess, [clear]);
+        return redirect(PAGES.noAccess, clear);
       }
       const sess = sessionCookie(await signSession(c.env, user.id), c.env);
-      return redirect(next, [clear, sess]);
+      return redirect(next, [...clear, sess]);
     } catch (e) {
+      if (e instanceof OidcStateError) {
+        if (e.retry) return retryPage(e.next, clear);
+        return redirect(
+          `${AUTH.login}?next=${encodeURIComponent(e.next)}&retry=1`,
+          clear,
+        );
+      }
       const res = toErrorResponse(e);
-      res.headers.append("set-cookie", clear);
+      for (const k of clear) res.headers.append("set-cookie", k);
       res.headers.set("cache-control", "no-store");
       return res;
     }
