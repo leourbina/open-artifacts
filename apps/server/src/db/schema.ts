@@ -185,3 +185,11 @@ export const settings = sqliteTable("settings", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),
 });
+
+// Small D1 counters and markers (e.g. daily OAuth client registrations), kept
+// out of KV because KV writes are the scarcer Free-plan quota.
+export const counters = sqliteTable("counters", {
+  key: text("key").primaryKey(),
+  n: integer("n").notNull(),
+  day: text("day").notNull(),
+});
