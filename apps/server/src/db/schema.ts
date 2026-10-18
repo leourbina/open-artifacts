@@ -17,6 +17,14 @@ import {
 const inList = (col: string, values: readonly string[]) =>
   sql.raw(`"${col}" in (${values.map((v) => `'${v}'`).join(", ")})`);
 
+// EMAIL RULE: all email writes and lookups go through normEmail() (./email.ts),
+// because SQLite COLLATE NOCASE only folds ASCII.
+//
+// FTS RULE (for B8): artifact_search rows use rowid = artifacts.rowid (the implicit
+// integer rowid). Insert with that rowid and delete with
+// `DELETE FROM artifact_search WHERE rowid = (SELECT rowid FROM artifacts WHERE id = ?)`;
+// deleting by the UNINDEXED artifact_id column is a full scan.
+//
 // NOTE: users.email and shares.email need `COLLATE NOCASE`, which Drizzle cannot
 // express; migrations/0001_init.sql is hand-edited for those two columns.
 export const users = sqliteTable(
@@ -60,7 +68,24 @@ export const artifacts = sqliteTable(
   (t) => [
     index("artifacts_owner_updated_idx").on(t.ownerId, t.updatedAt),
     index("artifacts_visibility_updated_idx").on(t.visibility, t.updatedAt),
-    index("artifacts_deleted_idx").on(t.deletedAt),
+    index("artifacts_deleted_idx")
+      .on(t.deletedAt)
+      .where(sql`${t.deletedAt} is not null`),
+    index("artifacts_visibility_updated_live_idx")
+      .on(t.visibility, t.updatedAt)
+      .where(sql`${t.deletedAt} is null`),
+    index("artifacts_owner_updated_live_idx")
+      .on(t.ownerId, t.updatedAt)
+      .where(sql`${t.deletedAt} is null`),
+    check(
+      "artifacts_allow_anon_check",
+      sql`${t.allowAnonymousWrites} in (0, 1)`,
+    ),
+    check("artifacts_thumbnail_check", sql`${t.hasThumbnail} in (0, 1)`),
+    check(
+      "artifacts_capabilities_json_check",
+      sql`json_valid(${t.capabilities})`,
+    ),
     check("artifacts_format_check", inList("format", FORMATS)),
     check(
       "artifacts_visibility_check",
@@ -74,7 +99,7 @@ export const versions = sqliteTable(
   {
     artifactId: text("artifact_id")
       .notNull()
-      .references(() => artifacts.id),
+      .references(() => artifacts.id, { onDelete: "cascade" }),
     version: integer("version").notNull(),
     entry: text("entry").notNull(),
     // JSON: [{path,key,size,contentType}]
@@ -89,7 +114,10 @@ export const versions = sqliteTable(
     createdAt: integer("created_at").notNull(),
     textIndexed: integer("text_indexed").notNull().default(0),
   },
-  (t) => [primaryKey({ columns: [t.artifactId, t.version] })],
+  (t) => [
+    primaryKey({ columns: [t.artifactId, t.version] }),
+    check("versions_manifest_json_check", sql`json_valid(${t.manifest})`),
+  ],
 );
 
 export const shares = sqliteTable(
@@ -97,7 +125,7 @@ export const shares = sqliteTable(
   {
     artifactId: text("artifact_id")
       .notNull()
-      .references(() => artifacts.id),
+      .references(() => artifacts.id, { onDelete: "cascade" }),
     email: text("email").notNull(),
     role: text("role").notNull(),
     createdBy: text("created_by")
