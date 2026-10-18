@@ -16,6 +16,14 @@ async function startMocks() {
   const quotaExceeded =
     import.meta.env.VITE_MOCK_QUOTA === "1" ||
     new URLSearchParams(location.search).get("mock") === "quota";
+  // Mock-only: the mocks treat unauthenticated requests as anonymous, and a service worker
+  // can't see the cookie header, so authenticate with a bearer token instead.
+  const realFetch = window.fetch.bind(window);
+  window.fetch = (input, init) => {
+    const req = new Request(input, init);
+    req.headers.set("Authorization", "Bearer mock");
+    return realFetch(req);
+  };
   await setupWorker(...createHandlers({ quotaExceeded })).start({
     onUnhandledRequest: "bypass",
   });
