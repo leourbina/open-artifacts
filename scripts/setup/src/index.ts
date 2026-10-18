@@ -4,11 +4,13 @@ import { parseArgs } from "node:util";
 import { type Deps, makeApi, makeWrangler, realDeps, realFs } from "./cf.ts";
 import { readState, type State, writeState } from "./state.ts";
 import type { Ctx, Opts, Step } from "./step.ts";
+import { access } from "./steps/access.ts";
 import { prereqs } from "./steps/prereqs.ts";
 import { resources } from "./steps/resources.ts";
+import { secrets } from "./steps/secrets.ts";
 
-// access, secrets, deploy, owner-token, selftest, agent-config: B16-2/B16-3.
-export const STEPS: Step[] = [prereqs, resources];
+// deploy, owner-token, selftest, agent-config: B16-3.
+export const STEPS: Step[] = [prereqs, resources, access, secrets];
 
 type Line = {
   step: string;
@@ -101,23 +103,40 @@ export async function run(
   Object.assign(state, { name, appHost, contentHost, ownerEmail });
   const wrangler = makeWrangler(deps, root, () => state.accountId);
   const api = makeApi(deps, wrangler);
-  const ctx: Ctx = { deps, fs, root, opts, wrangler, api };
+  const accessApi = makeApi(deps, wrangler, deps.env.OA_ACCESS_TOKEN);
+  const ctx: Ctx = {
+    deps,
+    fs,
+    root,
+    opts,
+    wrangler,
+    api,
+    accessApi,
+    notes: [],
+  };
+  const msg = (fallback: string) => ctx.notes.splice(0).join("; ") || fallback;
   for (const step of steps) {
     try {
       if ((await step.check(state, ctx)) === "done") {
-        report({ step: step.name, status: "skipped", message: "already done" });
+        report({
+          step: step.name,
+          status: "skipped",
+          message: msg("already done"),
+        });
         continue;
       }
       const r = await step.apply(state, ctx);
       if (r) {
+        ctx.notes.length = 0;
         report({ step: step.name, ...r });
         return 2;
       }
-      report({ step: step.name, status: "ok", message: "done" });
+      report({ step: step.name, status: "ok", message: msg("done") });
     } catch (e) {
+      ctx.notes.length = 0;
       const message = (e as Error).message;
       report({ step: step.name, status: "error", message });
-      return 1;
+      return (e as { exitCode?: number }).exitCode ?? 1;
     } finally {
       writeState(fs, root, state);
     }

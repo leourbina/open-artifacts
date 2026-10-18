@@ -11,9 +11,13 @@ export type State = {
   r2Bucket?: string;
   kvId?: string;
   accessAppId?: string;
+  /** Set right after the app POST, cleared once recorded: an app with this id is ours. */
+  pendingAccessAppId?: string;
   accessClientId?: string;
   teamDomain?: string;
   deployedVersion?: string;
+  /** The user declined the optional ANALYTICS_TOKEN; don't ask again. */
+  analyticsSkipped?: boolean;
 };
 
 /** `.openartifacts/state.json` under the repo root (gitignored). */

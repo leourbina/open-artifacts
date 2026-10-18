@@ -25,7 +25,10 @@ describe("prereqs + resources", () => {
       "r2 bucket create open-artifacts",
       "kv namespace create open-artifacts-oauth",
     ]);
-    expect(statuses(w.lines)).toEqual(["prereqs:skipped", "resources:ok"]);
+    expect(statuses(w.lines).slice(0, 2)).toEqual([
+      "prereqs:skipped",
+      "resources:ok",
+    ]);
     expect(JSON.parse(w.files.get(STATE) ?? "")).toMatchObject({
       accountId: "acc1",
       d1Id: "d1-0",
@@ -42,14 +45,14 @@ describe("prereqs + resources", () => {
     w.creates.length = 0;
     expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
     expect(w.creates).toEqual([]);
-    expect(statuses(w.lines)).toEqual(ALL_SKIPPED);
+    expect(statuses(w.lines).slice(0, 2)).toEqual(ALL_SKIPPED);
   });
 
   it("adopts staging's existing resources by name, even past the first KV page", async () => {
     const w = world({ ...STAGING, kv: [...filler(150), ...STAGING.kv] });
     expect(await run(STAGING_ARGS, w.deps, ROOT)).toBe(0);
     expect(w.creates).toEqual([]);
-    expect(statuses(w.lines)).toEqual(ALL_SKIPPED);
+    expect(statuses(w.lines).slice(0, 2)).toEqual(ALL_SKIPPED);
     const cfg = JSON.parse(w.files.get(CONFIG) ?? "");
     expect(cfg.d1_databases[0].database_id).toBe(STAGING.d1[0].uuid);
     expect(cfg.kv_namespaces[0].id).toBe(STAGING.kv[0].id);

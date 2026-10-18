@@ -77,6 +77,11 @@ const configVars = (s: State, ctx: Ctx) => ({
 /** Records ids in state and (re)writes the gitignored config; local only. */
 function sync(state: State, ctx: Ctx, found: Awaited<ReturnType<typeof find>>) {
   Object.assign(state, found);
+  writeConfig(state, ctx);
+}
+
+/** Renders `apps/server/wrangler.jsonc` from the template and current state. */
+export function writeConfig(state: State, ctx: Ctx) {
   const template = ctx.fs.read(join(ctx.root, TEMPLATE));
   if (template === null) throw new Error(`missing ${TEMPLATE}`);
   const text = renderConfig(template, configVars(state, ctx));
