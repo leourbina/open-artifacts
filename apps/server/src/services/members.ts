@@ -19,6 +19,7 @@ import {
   users,
   versions,
 } from "../db/schema.js";
+import { stmt } from "../db/stmt.js";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
 import { revokeAllGrants } from "../mcp/oauth-api.js";
@@ -153,8 +154,14 @@ const DEFAULT_SETTINGS: Settings = {
 };
 const KEY = { name: "name", defaultVisibility: "default_visibility" } as const;
 
+const SETTINGS_ALL = "select key, value from settings";
+
+/** Every publish and /me: one prepared D1 statement. */
 export async function getSettings(env: Env): Promise<Settings> {
-  const rows = await getDb(env).select().from(settings);
+  const { results: rows } = await stmt(env.DB, SETTINGS_ALL).all<{
+    key: string;
+    value: string;
+  }>();
   const kv = new Map(rows.map((r) => [r.key, r.value]));
   const name = kv.get(KEY.name);
   const vis = kv.get(KEY.defaultVisibility);
