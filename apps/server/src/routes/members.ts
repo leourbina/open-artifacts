@@ -8,7 +8,7 @@ import type { Context } from "hono";
 import { requireUser } from "../auth/authz.js";
 import { jsonBody } from "../http/body.js";
 import { ApiError } from "../http/errors.js";
-import type { AppEnv } from "../http/middleware.js";
+import { type AppEnv, execCtx } from "../http/middleware.js";
 import {
   inviteMember,
   listMembers,
@@ -48,7 +48,7 @@ export function mountMembers(app: AppType): void {
 
   app.delete(MEMBER, async (c) => {
     requireManager(c);
-    await removeMember(c.env, c.req.param("id"));
+    await removeMember(c.env, c.req.param("id"), execCtx(c));
     return c.body(null, 204);
   });
 }

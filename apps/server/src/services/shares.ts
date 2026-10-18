@@ -6,6 +6,7 @@ import { normEmail } from "../db/email.js";
 import { shares } from "../db/schema.js";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
+import { closeRuntimeSockets } from "../runtime/revoke.js";
 
 export const MAX_SHARES = 200;
 
@@ -74,6 +75,7 @@ export async function deleteShare(
   user: Member,
   id: string,
   email: string,
+  ctx?: Pick<ExecutionContext, "waitUntil">,
 ): Promise<void> {
   await ownerOnly(env, user, id);
   const e = normEmail(email);
@@ -83,4 +85,5 @@ export async function deleteShare(
     .where(and(eq(shares.artifactId, id), eq(shares.email, e)))
     .returning({ e: shares.email });
   if (out.length === 0) throw new ApiError("not_found", "Not found");
+  await closeRuntimeSockets(env, [id], "share revoked", ctx);
 }

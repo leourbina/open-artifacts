@@ -5,5 +5,24 @@
   "type": "module",
   "engines": {
     "node": ">=22"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "vite build --mode snapshot && vite build --mode schemas && vite build && node scripts/check-size.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@oa/shared": "workspace:*",
+    "html-to-image": "1.11.13"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "happy-dom": "^20.14.6",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.7",
+    "vitest": "^4.1.12"
   }
 }

@@ -3,7 +3,7 @@ import type { Context } from "hono";
 import { requireUser } from "../auth/authz.js";
 import { jsonBody } from "../http/body.js";
 import { ApiError } from "../http/errors.js";
-import type { AppEnv } from "../http/middleware.js";
+import { type AppEnv, execCtx } from "../http/middleware.js";
 import { deleteShare, listShares, putShare } from "../services/shares.js";
 import type { AppType } from "./index.js";
 
@@ -34,7 +34,7 @@ export function mountShares(app: AppType): void {
     const user = requireUser(c);
     const id = idParam(c);
     // Hono already decodes the path param.
-    await deleteShare(c.env, user, id, c.req.param("email"));
+    await deleteShare(c.env, user, id, c.req.param("email"), execCtx(c));
     return c.body(null, 204);
   });
 }

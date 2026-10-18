@@ -1,0 +1,537 @@
+import { env } from "cloudflare:workers";
+import {
+  DataDocSchema,
+  type Member,
+  newId,
+  PageSchema,
+  R,
+  StorageEntrySchema,
+  StorageKeySchema,
+} from "@oa/shared";
+import { beforeAll, describe, expect, it } from "vitest";
+import { createApp } from "../src/app.js";
+import { ipKey } from "../src/runtime/routes.js";
+import { publish } from "../src/services/artifacts.js";
+import { getUser } from "../src/services/users.js";
+import { api, errOf, login } from "./helpers.js";
+
+const app = createApp();
+const tag = newId().slice(0, 6).toLowerCase();
+type U = { cookie: string; userId: string; member: Member; email: string };
+let owner: U;
+let viewer: U;
+let guest: U;
+
+async function mk(prefix: string, role: Member["role"]): Promise<U> {
+  const email = `${prefix}-${tag}@x.com`;
+  const l = await login(email, role);
+  const m = await getUser(env, l.userId);
+  if (!m) throw new Error("no user");
+  return { ...l, member: m, email };
+}
+
+const ALL = { db: true, viewer: true, storage: true };
+const pub = async (extra: Record<string, unknown> = {}) =>
+  (
+    await publish(
+      env,
+      owner.member,
+      {
+        title: "live",
+        format: "html",
+        content: "<p>hi</p>",
+        capabilities: ALL,
+        ...extra,
+      } as never,
+      null,
+      undefined,
+      "create",
+    )
+  ).id;
+
+const ctx = { waitUntil() {}, passThroughOnException() {} } as never;
+type Limiter = { limit(o: { key: string }): Promise<{ success: boolean }> };
+
+/** Anonymous request from `ip` (none when null), with an optional RL_ANON stub. */
+function anon(
+  path: string,
+  init: { method?: string; body?: unknown } = {},
+  ip: string | null = "203.0.113.7",
+  rl?: Limiter,
+) {
+  const headers: Record<string, string> = {};
+  if (ip) headers["cf-connecting-ip"] = ip;
+  if (init.body !== undefined) headers["content-type"] = "application/json";
+  return app.fetch(
+    new Request(`http://app.localhost${path}`, {
+      method: init.method ?? "GET",
+      headers,
+      body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    }),
+    rl ? { ...env, RL_ANON: rl } : env,
+    ctx,
+  );
+}
+
+const put = (id: string, u: U | null, doc: string, body: unknown) =>
+  u
+    ? api(app, R.dataDoc(id, "c", doc), u.cookie, { method: "PUT", body })
+    : anon(R.dataDoc(id, "c", doc), { method: "PUT", body });
+
+beforeAll(async () => {
+  owner = await mk("rt-owner", "member");
+  viewer = await mk("rt-viewer", "member");
+  guest = await mk("rt-guest", "guest");
+});
+
+describe("capabilities", () => {
+  it("db.set without capabilities.db → 403 capability_denied", async () => {
+    const id = await pub({ capabilities: { db: false, storage: true } });
+    const r = await put(id, owner, "a", { n: 1 });
+    expect(r.status).toBe(403);
+    expect((await errOf(r)).code).toBe("capability_denied");
+    const g = await api(app, R.dataCollection(id, "c"), owner.cookie);
+    expect(g.status).toBe(403);
+  });
+
+  it("storage without capabilities.storage → 403; invisible artifact → 404 first", async () => {
+    const id = await pub({ capabilities: { db: true } });
+    const r = await api(app, R.storageKey(id, "k"), owner.cookie);
+    expect(r.status).toBe(403);
+    expect((await errOf(r)).code).toBe("capability_denied");
+    // A caller with no access never learns about capabilities.
+    const priv = await pub({ capabilities: { db: false } });
+    const g = await put(priv, guest, "a", 1);
+    expect(g.status).toBe(404);
+    expect((await errOf(g)).code).toBe("not_found");
+  });
+});
+
+describe("data routes", () => {
+  it("round trip for a signed-in viewer, attributed u:{id}", async () => {
+    const id = await pub({ visibility: "team" });
+    const s = await put(id, viewer, "a", { n: 1 });
+    expect(s.status).toBe(200);
+    expect(DataDocSchema.parse(await s.json())).toMatchObject({
+      id: "a",
+      data: { n: 1 },
+      updatedBy: `u:${viewer.userId}`,
+    });
+    const g = await api(app, R.dataDoc(id, "c", "a"), viewer.cookie);
+    expect(g.status).toBe(200);
+    expect(((await g.json()) as { data: unknown }).data).toEqual({ n: 1 });
+    const p = await api(app, R.dataDoc(id, "c", "a"), owner.cookie, {
+      method: "PATCH",
+      body: { m: 2 },
+    });
+    expect(((await p.json()) as { data: unknown }).data).toEqual({
+      n: 1,
+      m: 2,
+    });
+    const l = await api(
+      app,
+      `${R.dataCollection(id, "c")}?limit=1`,
+      viewer.cookie,
+    );
+    const page = PageSchema(DataDocSchema).parse(await l.json());
+    expect(page.items.map((d) => d.id)).toEqual(["a"]);
+    const q = await api(app, R.dataQuery(id, "c"), viewer.cookie, {
+      method: "POST",
+      body: { where: { m: 2 } },
+    });
+    expect(q.status).toBe(200);
+    expect(PageSchema(DataDocSchema).parse(await q.json()).items).toHaveLength(
+      1,
+    );
+    const d = await api(app, R.dataDoc(id, "c", "a"), viewer.cookie, {
+      method: "DELETE",
+    });
+    expect(d.status).toBe(204);
+    const gone = await api(app, R.dataDoc(id, "c", "a"), viewer.cookie);
+    expect(gone.status).toBe(404);
+  });
+
+  it("validates names, bodies and list params", async () => {
+    const id = await pub({ visibility: "team" });
+    const bad = await api(app, R.dataDoc(id, "c", "a b"), viewer.cookie, {
+      method: "PUT",
+      body: 1,
+    });
+    expect(bad.status).toBe(400);
+    const patch = await api(app, R.dataDoc(id, "c", "a"), viewer.cookie, {
+      method: "PATCH",
+      body: [1],
+    });
+    expect(patch.status).toBe(400);
+    const lim = await api(
+      app,
+      `${R.dataCollection(id, "c")}?limit=0`,
+      viewer.cookie,
+    );
+    expect(lim.status).toBe(400);
+    const q = await api(app, R.dataQuery(id, "c"), viewer.cookie, {
+      method: "POST",
+      body: { nope: 1 },
+    });
+    expect(q.status).toBe(400);
+  });
+
+  it("cookie writes need X-OA-Request (CSRF)", async () => {
+    const id = await pub({ visibility: "team" });
+    const r = await api(app, R.dataDoc(id, "c", "a"), viewer.cookie, {
+      method: "PUT",
+      body: 1,
+      headers: { "x-oa-request": "0" },
+    });
+    expect(r.status).toBe(403);
+    expect((await errOf(r)).code).toBe("csrf");
+  });
+});
+
+describe("anonymous access", () => {
+  it("reads a public artifact; writes → 401 unless allowAnonymousWrites", async () => {
+    const id = await pub({ visibility: "public" });
+    await put(id, owner, "a", { v: 1 });
+    const g = await anon(R.dataCollection(id, "c"));
+    expect(g.status).toBe(200);
+    expect(PageSchema(DataDocSchema).parse(await g.json()).items).toHaveLength(
+      1,
+    );
+    expect((await anon(R.dataDoc(id, "c", "a"))).status).toBe(200);
+    const w = await put(id, null, "b", 1);
+    expect(w.status).toBe(401);
+    expect((await errOf(w)).code).toBe("unauthorized");
+    const del = await anon(R.dataDoc(id, "c", "a"), { method: "DELETE" });
+    expect(del.status).toBe(401);
+  });
+
+  it("private artifact → 404 for anonymous reads and writes", async () => {
+    const id = await pub({ allowAnonymousWrites: true });
+    expect((await anon(R.dataCollection(id, "c"))).status).toBe(404);
+    expect((await put(id, null, "a", 1)).status).toBe(404);
+  });
+
+  it("allowAnonymousWrites: ip:{ip} actor; the 31st write per minute → 429", async () => {
+    const id = await pub({ visibility: "public", allowAnonymousWrites: true });
+    const ip = "198.51.100.31";
+    for (let i = 0; i < 30; i++) {
+      const r = await anon(
+        R.dataDoc(id, "c", `d${i}`),
+        { method: "PUT", body: i },
+        ip,
+      );
+      expect(r.status).toBe(200);
+      if (i === 0)
+        expect(((await r.json()) as { updatedBy: string }).updatedBy).toBe(
+          `ip:${ip}`,
+        );
+    }
+    const r = await anon(
+      R.dataDoc(id, "c", "x"),
+      { method: "PUT", body: 1 },
+      ip,
+    );
+    expect(r.status).toBe(429);
+    expect((await errOf(r)).code).toBe("rate_limited");
+    // Another IP is unaffected.
+    const o = await anon(
+      R.dataDoc(id, "c", "x"),
+      { method: "PUT", body: 1 },
+      "198.51.100.32",
+    );
+    expect(o.status).toBe(200);
+  });
+
+  it("RL_ANON rejection → 429, keyed ip:{ip}; missing IP → 429", async () => {
+    const id = await pub({ visibility: "public", allowAnonymousWrites: true });
+    const keys: string[] = [];
+    const deny: Limiter = {
+      async limit({ key }) {
+        keys.push(key);
+        return { success: false };
+      },
+    };
+    const r = await anon(
+      R.dataDoc(id, "c", "a"),
+      { method: "PUT", body: 1 },
+      "192.0.2.1",
+      deny,
+    );
+    expect(r.status).toBe(429);
+    expect(keys).toEqual(["ip:192.0.2.1"]);
+    const allow: Limiter = { limit: async () => ({ success: true }) };
+    const ok = await anon(
+      R.dataDoc(id, "c", "a"),
+      { method: "PUT", body: 1 },
+      "192.0.2.1",
+      allow,
+    );
+    expect(ok.status).toBe(200);
+    // Reads never hit the limiter.
+    keys.length = 0;
+    await anon(R.dataCollection(id, "c"), {}, "192.0.2.1", deny);
+    expect(keys).toEqual([]);
+    const noIp = await anon(
+      R.dataDoc(id, "c", "a"),
+      { method: "PUT", body: 1 },
+      null,
+    );
+    expect(noIp.status).toBe(429);
+  });
+});
+
+describe("shares", () => {
+  it("a viewer whose share was revoked → 404", async () => {
+    const id = await pub();
+    expect((await put(id, guest, "a", 1)).status).toBe(404);
+    const s = await api(app, R.shares(id), owner.cookie, {
+      method: "PUT",
+      body: { email: guest.email, role: "viewer" },
+    });
+    expect(s.status).toBe(200);
+    expect((await put(id, guest, "a", 1)).status).toBe(200);
+    const del = await api(app, R.share(id, guest.email), owner.cookie, {
+      method: "DELETE",
+    });
+    expect(del.status).toBe(204);
+    const r = await put(id, guest, "a", 2);
+    expect(r.status).toBe(404);
+    expect((await errOf(r)).code).toBe("not_found");
+    expect((await api(app, R.dataDoc(id, "c", "a"), guest.cookie)).status).toBe(
+      404,
+    );
+    expect((await api(app, R.storageKey(id, "k"), guest.cookie)).status).toBe(
+      404,
+    );
+  });
+});
+
+describe("storage routes", () => {
+  it("per-viewer get/set/list/delete", async () => {
+    const id = await pub({ visibility: "team" });
+    const s = await api(app, R.storageKey(id, "k1"), viewer.cookie, {
+      method: "PUT",
+      body: { value: { done: true } },
+    });
+    expect(s.status).toBe(200);
+    expect(StorageEntrySchema.parse(await s.json())).toMatchObject({
+      key: "k1",
+      value: { done: true },
+    });
+    const g = await api(app, R.storageKey(id, "k1"), viewer.cookie);
+    expect(StorageEntrySchema.parse(await g.json()).value).toEqual({
+      done: true,
+    });
+    // Another viewer sees nothing.
+    expect((await api(app, R.storageKey(id, "k1"), owner.cookie)).status).toBe(
+      404,
+    );
+    const l = await api(app, R.storage(id), viewer.cookie);
+    expect(
+      PageSchema(StorageKeySchema)
+        .parse(await l.json())
+        .items.map((k) => k.key),
+    ).toEqual(["k1"]);
+    const d = await api(app, R.storageKey(id, "k1"), viewer.cookie, {
+      method: "DELETE",
+    });
+    expect(d.status).toBe(204);
+    expect((await api(app, R.storageKey(id, "k1"), viewer.cookie)).status).toBe(
+      404,
+    );
+    const bad = await api(app, R.storageKey(id, "k2"), viewer.cookie, {
+      method: "PUT",
+      body: { value: 1, extra: 1 },
+    });
+    expect(bad.status).toBe(400);
+  });
+
+  it("anonymous storage → 401, even with allowAnonymousWrites", async () => {
+    const id = await pub({ visibility: "public", allowAnonymousWrites: true });
+    const g = await anon(R.storageKey(id, "k"));
+    expect(g.status).toBe(401);
+    expect((await anon(R.storage(id))).status).toBe(401);
+    const s = await anon(R.storageKey(id, "k"), {
+      method: "PUT",
+      body: { value: 1 },
+    });
+    expect(s.status).toBe(401);
+  });
+});
+
+describe("data subscribe", () => {
+  it("426 without Upgrade; 101 websocket with it", async () => {
+    const id = await pub({ visibility: "team" });
+    const no = await api(app, R.dataSubscribe(id, "c"), viewer.cookie);
+    expect(no.status).toBe(426);
+    const r = await api(app, R.dataSubscribe(id, "c"), viewer.cookie, {
+      headers: { upgrade: "websocket" },
+    });
+    expect(r.status).toBe(101);
+    const ws = r.webSocket;
+    if (!ws) throw new Error("no websocket");
+    ws.accept();
+    const got = new Promise<string>((res) =>
+      ws.addEventListener("message", (e) => res(String(e.data))),
+    );
+    await put(id, viewer, "a", { n: 1 });
+    expect(JSON.parse(await got)).toMatchObject({
+      type: "db.change",
+      collection: "c",
+      docs: [{ id: "a", data: { n: 1 } }],
+    });
+    ws.close();
+  });
+
+  it("checks access, capability, collection and origin", async () => {
+    const id = await pub({ visibility: "team" });
+    const up = { upgrade: "websocket" };
+    expect(
+      (await api(app, R.dataSubscribe(id, "c"), guest.cookie, { headers: up }))
+        .status,
+    ).toBe(404);
+    const noDb = await pub({ visibility: "team", capabilities: { db: false } });
+    expect(
+      (
+        await api(app, R.dataSubscribe(noDb, "c"), viewer.cookie, {
+          headers: up,
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await api(app, R.dataSubscribe(id, "a b"), viewer.cookie, {
+          headers: up,
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await api(app, R.dataSubscribe(id, "c"), viewer.cookie, {
+          headers: { ...up, origin: "https://evil.example" },
+        })
+      ).status,
+    ).toBe(403);
+  });
+});
+
+describe("fix round 1", () => {
+  it("ipKey: IPv4 as is, IPv6 by /64, junk → null", () => {
+    expect(ipKey("203.0.113.7")).toBe("203.0.113.7");
+    expect(ipKey("2001:DB8:1:2:aaaa::1")).toBe("2001:db8:1:2::/64");
+    expect(ipKey("2001:db8:1:2::2")).toBe("2001:db8:1:2::/64");
+    expect(ipKey("2001:db8::")).toBe("2001:db8:0:0::/64");
+    expect(ipKey("::ffff:1.2.3.4")).toBe("0:0:0:0::/64");
+    expect(ipKey("::1")).toBe("0:0:0:0::/64");
+    for (const bad of [
+      "",
+      "1.2.3.999",
+      "zz",
+      "1::2::3",
+      "1:2:3:4:5:6:7:8:9",
+      "12345::",
+    ])
+      expect(ipKey(bad), bad).toBeNull();
+  });
+
+  it("raw bodies: strict JSON only, stored as sent, echoed unparsed", async () => {
+    const id = await pub({ visibility: "team" });
+    const raw = (body: string, doc = "a") =>
+      app.fetch(
+        new Request(`http://app.localhost${R.dataDoc(id, "c", doc)}`, {
+          method: "PUT",
+          headers: { cookie: viewer.cookie, "x-oa-request": "1" },
+          body,
+        }),
+        env,
+        ctx,
+      );
+    for (const bad of ["{a:1}", "[1,]", "", "\u00ff", "NaN"])
+      expect((await raw(bad)).status, bad).toBe(400);
+    const ok = await raw('{ "x" : [1, 2] }');
+    expect(ok.status).toBe(200);
+    expect(DataDocSchema.parse(await ok.json()).data).toEqual({ x: [1, 2] });
+    const g = await api(app, R.dataDoc(id, "c", "a"), viewer.cookie);
+    expect(((await g.json()) as { data: unknown }).data).toEqual({ x: [1, 2] });
+  });
+
+  it("anonymous subscribe: RL_ANON sub:ip:{key}; unbound outside dev → 503", async () => {
+    const id = await pub({ visibility: "public" });
+    const keys: string[] = [];
+    const deny: Limiter = {
+      async limit({ key }) {
+        keys.push(key);
+        return { success: false };
+      },
+    };
+    const sub = (e: object, ip = "2001:db8:9:9::5") =>
+      app.fetch(
+        new Request(`http://app.localhost${R.dataSubscribe(id, "c")}`, {
+          headers: { upgrade: "websocket", "cf-connecting-ip": ip },
+        }),
+        { ...env, ...e } as never,
+        ctx,
+      );
+    expect((await sub({ RL_ANON: deny })).status).toBe(429);
+    expect(keys).toEqual(["sub:ip:2001:db8:9:9::/64"]);
+    const prod = await sub({ RL_ANON: undefined, ENVIRONMENT: "production" });
+    expect(prod.status).toBe(503);
+    const w = await app.fetch(
+      new Request(`http://app.localhost${R.dataDoc(id, "c", "a")}`, {
+        method: "PUT",
+        headers: { "cf-connecting-ip": "203.0.113.1" },
+        body: "1",
+      }),
+      { ...env, RL_ANON: undefined, ENVIRONMENT: "production" } as never,
+      ctx,
+    );
+    expect(w.status).toBe(401); // allowAnonymousWrites is off: 401 before the limiter
+  });
+
+  const closed = async (ws: WebSocket) =>
+    new Promise<number>((res) =>
+      ws.addEventListener("close", (e) => res((e as CloseEvent).code)),
+    );
+  const open = async (id: string, u: U) => {
+    const r = await api(app, R.dataSubscribe(id, "c"), u.cookie, {
+      headers: { upgrade: "websocket" },
+    });
+    const ws = r.webSocket;
+    if (!ws) throw new Error(`no websocket (${r.status})`);
+    ws.accept();
+    return ws;
+  };
+
+  it("visibility change and soft delete close sockets with 4403", async () => {
+    const id = await pub({ visibility: "team" });
+    const ws = await open(id, viewer);
+    const code = closed(ws);
+    const p = await api(app, R.artifact(id), owner.cookie, {
+      method: "PATCH",
+      body: { visibility: "private" },
+    });
+    expect(p.status).toBe(200);
+    expect(await code).toBe(4403);
+
+    const id2 = await pub({ visibility: "team" });
+    const ws2 = await open(id2, viewer);
+    const code2 = closed(ws2);
+    expect(
+      (await api(app, R.artifact(id2), owner.cookie, { method: "DELETE" }))
+        .status,
+    ).toBe(204);
+    expect(await code2).toBe(4403);
+  });
+
+  it("at most 20 sockets per actor", async () => {
+    const id = await pub({ visibility: "team" });
+    const socks: WebSocket[] = [];
+    for (let i = 0; i < 20; i++) socks.push(await open(id, viewer));
+    const r = await api(app, R.dataSubscribe(id, "c"), viewer.cookie, {
+      headers: { upgrade: "websocket" },
+    });
+    expect(r.status).toBe(429);
+    expect((await open(id, owner)).readyState).toBe(1);
+    for (const w of socks) w.close();
+  });
+});
