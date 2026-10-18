@@ -20,6 +20,7 @@ import {
   listVersions,
   patch,
   publish,
+  putThumbnail,
   readThumbnail,
   readVersionFile,
   restoreVersion,
@@ -259,6 +260,17 @@ export function mountArtifacts(app: AppType): void {
         "Cache-Control": "private, no-store",
       },
     });
+  });
+
+  app.put(`${ARTIFACT}/thumbnail`, async (c) => {
+    const user = requireUser(c);
+    const id = idParam(c);
+    const ct = c.req.header("content-type") ?? "";
+    if (!/^image\/webp\s*(;|$)/i.test(ct))
+      throw new ApiError("bad_request", "Content-Type must be image/webp");
+    const buf = await readCapped(c, LIMITS.thumbnailBytes);
+    await putThumbnail(c.env, user, id, buf);
+    return c.body(null, 204);
   });
 
   app.post(R.artifacts, async (c) => {

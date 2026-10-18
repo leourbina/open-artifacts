@@ -8,7 +8,10 @@ import { mountMembers } from "./members.js";
 import { mountSearch } from "./search.js";
 import { mountSettings } from "./settings.js";
 import { mountShares } from "./shares.js";
+import { mountShell } from "./shell.js";
+import { mountTokens } from "./tokens.js";
 import { mountUploads } from "./uploads.js";
+import { mountUsage } from "./usage.js";
 
 export type AppType = Hono<AppEnv>;
 
@@ -24,4 +27,8 @@ export function mountRoutes(app: AppType): void {
   mountShares(app);
   mountSearch(app);
   mountRuntime(app);
+  mountTokens(app);
+  mountUsage(app);
+  // /a/:id(/v/:v) OG shells; other /a/* paths fall to the SPA fallback.
+  mountShell(app);
 }
