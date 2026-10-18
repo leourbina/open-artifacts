@@ -1,15 +1,38 @@
 import {
+  type AccessLevel,
   type AgentRef,
+  type ArtifactPatch,
+  type ArtifactSummary,
+  type Format,
+  isId,
+  LIMITS,
+  type ListQuery,
   type Member,
   newId,
+  type Page,
   type PublishInput,
   type PublishResult,
+  R,
+  type UserRef,
+  VERSIONS_PAGE_SIZE,
+  type VersionInfo,
   viewerPath,
 } from "@oa/shared";
-import { requireAccess } from "../auth/authz.js";
+import { and, desc, eq, gte, type SQL, sql } from "drizzle-orm";
+import {
+  type ArtifactRow,
+  accessLevel,
+  type Caller,
+  listFilterSql,
+  requireAccess,
+} from "../auth/authz.js";
+import { getDb } from "../db/client.js";
+import { normEmail } from "../db/email.js";
+import { artifacts, shares, users } from "../db/schema.js";
 import type { Env } from "../env.js";
 import { ApiError, appOrigin } from "../http/errors.js";
-import { materialize, planFiles } from "./manifest.js";
+import { ArtifactRuntime } from "../runtime/artifact-runtime.js";
+import { type ManifestEntry, materialize, planFiles } from "./manifest.js";
 import { getSettings } from "./members.js";
 import { indexVersion } from "./search.js";
 
@@ -158,19 +181,7 @@ export async function publish(
           .bind(id, user.id, id),
       );
   }
-  const sets = [
-    "current_version = current_version + 1",
-    "updated_at = ?",
-    "last_agent_name = ?",
-    "last_agent_version = ?",
-    "format = ?",
-  ];
-  const vals: unknown[] = [
-    now,
-    agent?.name ?? null,
-    agent?.version ?? null,
-    plan.format,
-  ];
+  const extra: [string, unknown][] = [];
   if (!create) {
     const opt: [string, unknown][] = [
       ["title", input.title],
@@ -186,39 +197,24 @@ export async function publish(
             : 0,
       ],
     ];
-    for (const [col, v] of opt)
-      if (v !== undefined) {
-        sets.push(`${col} = ?`);
-        vals.push(v);
-      }
+    for (const [col, v] of opt) if (v !== undefined) extra.push([col, v]);
   }
   const bump = stmts.length;
   stmts.push(
-    db
-      .prepare(
-        `update artifacts set ${sets.join(", ")}
-         where id = ? and deleted_at is null${guard} returning current_version`,
-      )
-      .bind(...vals, id, ...guardArgs),
-    db
-      .prepare(
-        `insert into versions (artifact_id, version, entry, manifest, language, message,
-           agent_name, agent_version, created_by, created_at)
-         select id, current_version, ?, ?, ?, ?, ?, ?, ?, ? from artifacts
-         where id = ? and deleted_at is null${guard}`,
-      )
-      .bind(
-        plan.entry,
-        JSON.stringify(manifest),
-        plan.language,
-        input.message ?? null,
-        agent?.name ?? null,
-        agent?.version ?? null,
-        user.id,
-        now,
-        id,
-        ...guardArgs,
-      ),
+    ...allocateVersion(db, {
+      id,
+      now,
+      agent,
+      userId: user.id,
+      format: plan.format,
+      entry: plan.entry,
+      manifest: JSON.stringify(manifest),
+      language: plan.language,
+      message: input.message ?? null,
+      extra,
+      guard,
+      guardArgs,
+    }),
   );
   // Last: the guard above still sees every listed upload unconsumed.
   if (n)
@@ -260,4 +256,602 @@ export async function publish(
   }
   await later(ctx, indexVersion(env, id, version));
   return { id, version, url: appOrigin(env) + viewerPath(id) };
+}
+
+const notFound = () => new ApiError("not_found", "Not found");
+const bad = (message: string, path?: string) =>
+  new ApiError(
+    "bad_request",
+    message,
+    path ? { path, reason: "invalid" } : undefined,
+  );
+const DAY = 86400_000;
+const iso = (ms: number) => new Date(ms).toISOString();
+const asUser = (user: Member): Caller => ({ kind: "user", user });
+
+type Alloc = {
+  id: string;
+  now: number;
+  agent: AgentRef | null;
+  userId: string;
+  /** Set on publish; omitted on restore, which keeps the artifact's format. */
+  format?: Format;
+  entry: string;
+  /** JSON of ManifestEntry[] */
+  manifest: string;
+  language: string | null;
+  message: string | null;
+  /** Further `col = ?` assignments on the artifact row. */
+  extra?: [string, unknown][];
+  /** Extra guard appended to both WHEREs (e.g. the publish uploads guard). */
+  guard?: string;
+  guardArgs?: unknown[];
+};
+
+/**
+ * The race-safe version allocation shared by publish and restore: two
+ * statements for one D1 batch. The first bumps `current_version` (RETURNING
+ * it; no row → artifact gone), the second inserts the version row reading that
+ * same number via INSERT … SELECT, so concurrent writers never collide.
+ */
+export function allocateVersion(
+  db: D1Database,
+  a: Alloc,
+): [D1PreparedStatement, D1PreparedStatement] {
+  const guard = a.guard ?? "";
+  const guardArgs = a.guardArgs ?? [];
+  const sets = [
+    "current_version = current_version + 1",
+    "updated_at = ?",
+    "last_agent_name = ?",
+    "last_agent_version = ?",
+  ];
+  const vals: unknown[] = [
+    a.now,
+    a.agent?.name ?? null,
+    a.agent?.version ?? null,
+  ];
+  const extra: [string, unknown][] = [
+    ...(a.format === undefined
+      ? []
+      : [["format", a.format] as [string, unknown]]),
+    ...(a.extra ?? []),
+  ];
+  for (const [col, v] of extra) {
+    sets.push(`${col} = ?`);
+    vals.push(v);
+  }
+  return [
+    db
+      .prepare(
+        `update artifacts set ${sets.join(", ")}
+         where id = ? and deleted_at is null${guard} returning current_version`,
+      )
+      .bind(...vals, a.id, ...guardArgs),
+    db
+      .prepare(
+        `insert into versions (artifact_id, version, entry, manifest, language, message,
+           agent_name, agent_version, created_by, created_at)
+         select id, current_version, ?, ?, ?, ?, ?, ?, ?, ? from artifacts
+         where id = ? and deleted_at is null${guard}`,
+      )
+      .bind(
+        a.entry,
+        a.manifest,
+        a.language,
+        a.message,
+        a.agent?.name ?? null,
+        a.agent?.version ?? null,
+        a.userId,
+        a.now,
+        a.id,
+        ...guardArgs,
+      ),
+  ];
+}
+
+// ---------------------------------------------------------------- summaries
+
+function toSummary(
+  env: Env,
+  a: ArtifactRow,
+  owner: UserRef,
+  access: AccessLevel,
+): ArtifactSummary {
+  return {
+    id: a.id,
+    title: a.title,
+    description: a.description,
+    format: a.format as Format,
+    visibility: a.visibility as ArtifactSummary["visibility"],
+    owner,
+    currentVersion: a.currentVersion,
+    createdAt: iso(a.createdAt),
+    updatedAt: iso(a.updatedAt),
+    deletedAt: a.deletedAt == null ? null : iso(a.deletedAt),
+    lastAgent:
+      a.lastAgentName == null
+        ? null
+        : { name: a.lastAgentName, version: a.lastAgentVersion },
+    thumbnailUrl: a.hasThumbnail ? appOrigin(env) + R.thumbnail(a.id) : null,
+    access,
+    capabilities: { ...CAPS, ...(JSON.parse(a.capabilities) as object) },
+    allowAnonymousWrites: a.allowAnonymousWrites === 1,
+  };
+}
+
+/** Anonymous callers never see member emails. */
+function redact(ref: UserRef, caller: Caller): UserRef {
+  return caller.kind === "user" ? ref : { ...ref, email: null };
+}
+
+async function ownerRef(env: Env, ownerId: string): Promise<UserRef> {
+  const u = await env.DB.prepare(
+    "select id, email, name from users where id = ?",
+  )
+    .bind(ownerId)
+    .first<UserRef>();
+  if (!u) throw notFound();
+  return u;
+}
+
+/** Viewer+; otherwise 404. Deleted artifacts are 404 (see list includeDeleted). */
+export async function getSummary(
+  env: Env,
+  caller: Caller,
+  id: string,
+): Promise<ArtifactSummary> {
+  const r = await accessLevel(env, caller, id);
+  if (!r) throw notFound();
+  return toSummary(
+    env,
+    r.artifact,
+    redact(await ownerRef(env, r.artifact.ownerId), caller),
+    r.level,
+  );
+}
+
+// --------------------------------------------------------------------- list
+
+type Cursor = { u: number; i: string };
+const B64URL = /^[A-Za-z0-9_-]+$/;
+
+export function encodeCursor(c: Cursor): string {
+  return btoa(JSON.stringify(c))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+/** Strict: anything but b64url JSON `{u: int, i: id}` → 400. */
+export function decodeCursor(s: string): Cursor {
+  const invalid = () => bad("Invalid cursor", "cursor");
+  if (!B64URL.test(s) || s.length > 200) throw invalid();
+  let v: unknown;
+  try {
+    v = JSON.parse(atob(s.replace(/-/g, "+").replace(/_/g, "/")));
+  } catch {
+    throw invalid();
+  }
+  if (
+    !v ||
+    typeof v !== "object" ||
+    Array.isArray(v) ||
+    Object.keys(v).length !== 2 ||
+    !Number.isSafeInteger((v as Cursor).u) ||
+    typeof (v as Cursor).i !== "string" ||
+    !isId((v as Cursor).i)
+  )
+    throw invalid();
+  return { u: (v as Cursor).u, i: (v as Cursor).i };
+}
+
+const ISO_DATE =
+  /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2}))?$/;
+
+/** LIKE stopgap until B8's FTS; short to bound the scan cost. */
+const MAX_Q = 40;
+const likeEscape = (s: string) => `%${s.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
+
+/**
+ * The list SELECT (exported for the EXPLAIN test). The visibility filter is
+ * listFilterSql, whose top-level `deleted_at is null` lets SQLite use the
+ * partial live indexes; order is the keyset (updated_at desc, id desc).
+ */
+export function listQuery(env: Env, caller: Caller, q: ListQuery) {
+  const db = getDb(env);
+  const email = caller.kind === "user" ? normEmail(caller.user.email) : null;
+  const conds: (SQL | undefined)[] = [
+    listFilterSql(caller, q.scope, q.includeDeleted),
+  ];
+  if (q.format) conds.push(eq(artifacts.format, q.format));
+  if (q.visibility) conds.push(eq(artifacts.visibility, q.visibility));
+  if (q.agent !== undefined) conds.push(eq(artifacts.lastAgentName, q.agent));
+  if (q.owner !== undefined) {
+    const e = normEmail(q.owner);
+    if (!e) throw bad("Invalid owner email", "owner");
+    conds.push(
+      sql`${artifacts.ownerId} = (select u.id from users u where u.email = ${e})`,
+    );
+  }
+  if (q.updatedSince !== undefined) {
+    const t = ISO_DATE.test(q.updatedSince) ? Date.parse(q.updatedSince) : NaN;
+    if (Number.isNaN(t)) throw bad("Invalid updatedSince", "updatedSince");
+    conds.push(gte(artifacts.updatedAt, t));
+  }
+  const text = q.q?.trim();
+  if (text && text.length > MAX_Q)
+    throw bad(`q exceeds ${MAX_Q} characters`, "q");
+  if (text) {
+    const p = likeEscape(text);
+    conds.push(
+      sql`(${artifacts.title} like ${p} escape '\\' or ${artifacts.description} like ${p} escape '\\')`,
+    );
+  }
+  if (q.cursor !== undefined) {
+    const c = decodeCursor(q.cursor);
+    conds.push(
+      sql`(${artifacts.updatedAt} < ${c.u} or (${artifacts.updatedAt} = ${c.u} and ${artifacts.id} < ${c.i}))`,
+    );
+  }
+  return db
+    .select({
+      a: artifacts,
+      ownerEmail: users.email,
+      ownerName: users.name,
+      shareRole: shares.role,
+    })
+    .from(artifacts)
+    .innerJoin(users, eq(users.id, artifacts.ownerId))
+    .leftJoin(
+      shares,
+      and(
+        eq(shares.artifactId, artifacts.id),
+        email ? eq(shares.email, email) : sql`0`,
+      ),
+    )
+    .where(and(...conds))
+    .orderBy(desc(artifacts.updatedAt), desc(artifacts.id))
+    .limit(q.limit + 1);
+}
+
+/** Signed-in callers only (anonymous → 401). */
+export async function list(
+  env: Env,
+  caller: Caller,
+  q: ListQuery,
+): Promise<Page<ArtifactSummary>> {
+  if (caller.kind !== "user")
+    throw new ApiError("unauthorized", "Sign in required");
+  const me = caller.user.id;
+  const rows = await listQuery(env, caller, q);
+  const page = rows.slice(0, q.limit);
+  const last = page[page.length - 1];
+  return {
+    items: page.map((r) =>
+      toSummary(
+        env,
+        r.a,
+        { id: r.a.ownerId, email: r.ownerEmail, name: r.ownerName },
+        r.a.ownerId === me
+          ? "owner"
+          : r.shareRole === "editor" || r.shareRole === "viewer"
+            ? r.shareRole
+            : "viewer",
+      ),
+    ),
+    nextCursor:
+      rows.length > q.limit && last
+        ? encodeCursor({ u: last.a.updatedAt, i: last.a.id })
+        : null,
+  };
+}
+
+// ----------------------------------------------------------------- versions
+
+type VersionRow = {
+  version: number;
+  entry: string;
+  manifest: string;
+  language: string | null;
+  message: string | null;
+  agent_name: string | null;
+  agent_version: string | null;
+  created_by: string;
+  created_at: number;
+  text_indexed: number;
+  email: string;
+  name: string | null;
+};
+
+/**
+ * Viewer+; newest first, at most VERSIONS_PAGE_SIZE, keyset `version < before`
+ * (bounds the manifests parsed per request).
+ */
+export async function listVersions(
+  env: Env,
+  caller: Caller,
+  id: string,
+  before?: number,
+): Promise<VersionInfo[]> {
+  await requireAccess(env, caller, id, "viewer");
+  const { results } = await env.DB.prepare(
+    `select v.version, v.entry, v.manifest, v.language, v.message, v.agent_name,
+       v.agent_version, v.created_by, v.created_at, v.text_indexed, u.email, u.name
+     from versions v join users u on u.id = v.created_by
+     where v.artifact_id = ? and v.version < ? order by v.version desc limit ?`,
+  )
+    .bind(id, before ?? Number.MAX_SAFE_INTEGER, VERSIONS_PAGE_SIZE)
+    .all<VersionRow>();
+  return results.map((v) => ({
+    version: v.version,
+    message: v.message,
+    agent:
+      v.agent_name == null
+        ? null
+        : { name: v.agent_name, version: v.agent_version },
+    createdBy: redact(
+      { id: v.created_by, email: v.email, name: v.name },
+      caller,
+    ),
+    createdAt: iso(v.created_at),
+    entry: v.entry,
+    files: (JSON.parse(v.manifest) as ManifestEntry[]).map(
+      ({ path, size, contentType }) => ({ path, size, contentType }),
+    ),
+    language: v.language,
+    textIndexed: v.text_indexed === 1,
+  }));
+}
+
+/** Viewer+. The R2 body of one file of one version, with the manifest's content type. */
+export async function readVersionFile(
+  env: Env,
+  caller: Caller,
+  id: string,
+  v: number,
+  path: string,
+): Promise<{ body: R2ObjectBody; contentType: string }> {
+  await requireAccess(env, caller, id, "viewer");
+  const row = await env.DB.prepare(
+    "select manifest from versions where artifact_id = ? and version = ?",
+  )
+    .bind(id, v)
+    .first<{ manifest: string }>();
+  if (!row) throw notFound();
+  const entry = (JSON.parse(row.manifest) as ManifestEntry[]).find(
+    (e) => e.path === path,
+  );
+  if (!entry) throw notFound();
+  const body = await env.FILES.get(entry.key);
+  if (!body) throw notFound();
+  return { body, contentType: entry.contentType };
+}
+
+/** Viewer+. The thumbnail object, or 404. */
+export async function readThumbnail(
+  env: Env,
+  caller: Caller,
+  id: string,
+): Promise<R2ObjectBody> {
+  const a = await requireAccess(env, caller, id, "viewer");
+  const body = a.hasThumbnail ? await env.FILES.get(`thumbs/${id}.webp`) : null;
+  if (!body) throw notFound();
+  return body;
+}
+
+/**
+ * Editor+. Copies version `v`'s manifest/entry/language as a new version
+ * ("Restored v{v}") via allocateVersion; restored versions share R2 keys.
+ */
+export async function restoreVersion(
+  env: Env,
+  user: Member,
+  id: string,
+  v: number,
+  agent: AgentRef | null,
+  ctx?: Ctx,
+): Promise<PublishResult> {
+  await requireAccess(env, asUser(user), id, "editor");
+  const src = await env.DB.prepare(
+    "select entry, manifest, language from versions where artifact_id = ? and version = ?",
+  )
+    .bind(id, v)
+    .first<{ entry: string; manifest: string; language: string | null }>();
+  if (!src) throw notFound();
+  const res = await env.DB.batch<{ current_version: number }>(
+    allocateVersion(env.DB, {
+      id,
+      now: Date.now(),
+      agent,
+      userId: user.id,
+      entry: src.entry,
+      manifest: src.manifest,
+      language: src.language,
+      message: `Restored v${v}`,
+    }),
+  );
+  const version = res[0]?.results[0]?.current_version;
+  if (version === undefined) throw notFound();
+  await later(ctx, indexVersion(env, id, version));
+  return { id, version, url: appOrigin(env) + viewerPath(id) };
+}
+
+// ------------------------------------------------------- patch and delete
+
+/** title/description: editor+; visibility/capabilities/allowAnonymousWrites: owner only. */
+export async function patch(
+  env: Env,
+  user: Member,
+  id: string,
+  p: ArtifactPatch,
+): Promise<ArtifactSummary> {
+  const a = await requireAccess(env, asUser(user), id, "editor");
+  const sharing =
+    p.visibility !== undefined ||
+    p.capabilities !== undefined ||
+    p.allowAnonymousWrites !== undefined;
+  if (sharing && a.ownerId !== user.id)
+    throw new ApiError("bad_request", "only the owner can change sharing");
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  const set = (col: string, v: unknown) => {
+    sets.push(col);
+    vals.push(v);
+  };
+  if (p.title !== undefined) set("title = ?", p.title);
+  if (p.description !== undefined) set("description = ?", p.description);
+  if (p.visibility !== undefined) set("visibility = ?", p.visibility);
+  if (p.capabilities !== undefined)
+    set(
+      "capabilities = json_patch(capabilities, ?)",
+      JSON.stringify(p.capabilities),
+    );
+  if (p.allowAnonymousWrites !== undefined)
+    set("allow_anonymous_writes = ?", p.allowAnonymousWrites ? 1 : 0);
+  if (sets.length) {
+    set("updated_at = ?", Date.now());
+    await env.DB.prepare(
+      `update artifacts set ${sets.join(", ")} where id = ? and deleted_at is null`,
+    )
+      .bind(...vals, id)
+      .run();
+  }
+  return getSummary(env, asUser(user), id);
+}
+
+/** Owner only (others 404). Sets deleted_at and drops the search row. */
+export async function softDelete(
+  env: Env,
+  user: Member,
+  id: string,
+): Promise<void> {
+  await requireAccess(env, asUser(user), id, "owner");
+  await env.DB.batch([
+    env.DB.prepare(
+      "delete from artifact_search where rowid = (select rowid from artifacts where id = ?)",
+    ).bind(id),
+    env.DB.prepare(
+      "update artifacts set deleted_at = ? where id = ? and deleted_at is null",
+    ).bind(Date.now(), id),
+  ]);
+}
+
+/** Owner only, within LIMITS.softDeleteDays; re-indexes the current version. */
+export async function undelete(
+  env: Env,
+  user: Member,
+  id: string,
+  ctx?: Ctx,
+): Promise<ArtifactSummary> {
+  const a = await requireAccess(env, asUser(user), id, "owner", {
+    allowDeleted: true,
+  });
+  if (a.deletedAt != null) {
+    const cutoff = Date.now() - LIMITS.softDeleteDays * DAY;
+    const r = await env.DB.prepare(
+      "update artifacts set deleted_at = null where id = ? and deleted_at >= ?",
+    )
+      .bind(id, cutoff)
+      .run();
+    if (!r.meta.changes) throw notFound();
+    await later(ctx, indexVersion(env, id, a.currentVersion));
+  }
+  return getSummary(env, asUser(user), id);
+}
+
+// -------------------------------------------------------------------- purge
+
+const PURGE_BATCH = 50;
+/**
+ * R2 delete calls per run. Each list is followed by one delete, and with
+ * PURGE_BATCH artifacts and PURGE_KEYS_LISTED keys a run makes at most ~60 of
+ * each, well under 1000 subrequests; this cap is a backstop.
+ */
+const PURGE_R2_DELETES = 600;
+/** R2 keys listed per run: bounds cron CPU. */
+const PURGE_KEYS_LISTED = 5000;
+type PurgeBudget = { deletes: number; listed: number };
+const canPurge = (b: PurgeBudget) => b.deletes > 0 && b.listed > 0;
+
+/**
+ * Hard-deletes artifacts soft-deleted more than softDeleteDays ago, at most
+ * PURGE_BATCH per run, PURGE_R2_DELETES deletes and PURGE_KEYS_LISTED listed
+ * keys; the rest wait for the next
+ * run. Per artifact: R2 `files/{id}/` (restored versions share these keys) and
+ * `thumbs/{id}.webp`, then DO storage, then the rows (versions/shares cascade).
+ * Returns the number purged.
+ */
+export async function purgeDeleted(env: Env, now: number): Promise<number> {
+  const cutoff = now - LIMITS.softDeleteDays * DAY;
+  const { results } = await env.DB.prepare(
+    `select id, rowid as rid from artifacts
+     where deleted_at is not null and deleted_at < ? order by deleted_at limit ?`,
+  )
+    .bind(cutoff, PURGE_BATCH)
+    .all<{ id: string; rid: number }>();
+  const budget: PurgeBudget = {
+    deletes: PURGE_R2_DELETES,
+    listed: PURGE_KEYS_LISTED,
+  };
+  let purged = 0;
+  for (const { id, rid } of results) {
+    if (!canPurge(budget)) break;
+    try {
+      if (await purgeOne(env, id, rid, cutoff, budget)) purged++;
+    } catch (e) {
+      // One bad artifact must not block the rest; it is retried next run.
+      console.error("purge failed", id, e);
+    }
+  }
+  return purged;
+}
+
+/** True when fully purged; false when the R2 budget ran out first. */
+async function purgeOne(
+  env: Env,
+  id: string,
+  rid: number,
+  cutoff: number,
+  budget: PurgeBudget,
+): Promise<boolean> {
+  // Deleted keys vanish from the listing, so each page re-lists from the start.
+  // 999 per page leaves room for the thumbnail in R2's 1000-key delete.
+  for (;;) {
+    if (!canPurge(budget)) return false;
+    const page = await env.FILES.list({
+      prefix: `files/${id}/`,
+      limit: Math.min(999, budget.listed),
+    });
+    budget.listed -= page.objects.length;
+    budget.deletes -= 1;
+    const keys = page.objects.map((o) => o.key);
+    if (!page.truncated) keys.push(`thumbs/${id}.webp`);
+    await env.FILES.delete(keys);
+    if (!page.truncated) break;
+  }
+  await destroyRuntime(env, id);
+  await env.DB.batch([
+    env.DB.prepare("delete from artifact_search where rowid = ?").bind(rid),
+    env.DB.prepare("delete from uploads where artifact_id = ?").bind(id),
+    env.DB.prepare(
+      "delete from artifacts where id = ? and deleted_at is not null and deleted_at < ?",
+    ).bind(id, cutoff),
+  ]);
+  return true;
+}
+
+async function destroyRuntime(env: Env, id: string): Promise<void> {
+  // TODO(B12): ArtifactRuntime.destroy() must wipe DO storage. RPC stubs expose
+  // every name as a callable, so probe the class instead; drop this guard once
+  // B12 lands the method.
+  if (
+    typeof (ArtifactRuntime.prototype as { destroy?: unknown }).destroy !==
+    "function"
+  )
+    return;
+  const stub = env.ARTIFACT_RUNTIME.get(
+    env.ARTIFACT_RUNTIME.idFromName(id),
+  ) as unknown as { destroy: () => Promise<void> };
+  await stub.destroy();
 }

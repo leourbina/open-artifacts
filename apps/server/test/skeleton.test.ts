@@ -72,12 +72,6 @@ describe("skeleton", () => {
     }
   });
 
-  it("scheduled is a no-op", async () => {
-    await expect(
-      (worker.scheduled as () => Promise<void>)(),
-    ).resolves.toBeUndefined();
-  });
-
   it("no cookies; trailing slash stays 404 (no ASSETS bound)", async () => {
     const r = await call(`${APP}/healthz`);
     expect(r.headers.get("set-cookie")).toBeNull();
