@@ -3,6 +3,9 @@ import {
   ArtifactSummarySchema,
   type ListQueryInput,
   ListQuerySchema,
+  type Member,
+  type MemberInvite,
+  type MemberPatch,
   MemberSchema,
   OAuthClientSchema,
   PageSchema,
@@ -183,4 +186,42 @@ export const useDeleteShare = (id: string) =>
   useInvalidating(
     (email: string) => api.send("DELETE", R.share(id, email), undefined),
     () => [qk.shares(id)],
+  );
+
+export const useInviteMember = () =>
+  useInvalidating(
+    (input: MemberInvite) => api.send("POST", R.members, input, MemberSchema),
+    () => [qk.members],
+  );
+
+/** Optimistic: `mutate` shows the new value at once; a failure restores the cached list. */
+const useOptimisticMembers = <V>(
+  fn: (v: V) => Promise<unknown>,
+  apply: (list: Member[], v: V) => Member[],
+) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onMutate: async (v: V) => {
+      await qc.cancelQueries({ queryKey: qk.members });
+      const prev = qc.getQueryData<Member[]>(qk.members);
+      if (prev) qc.setQueryData(qk.members, apply(prev, v));
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(qk.members, ctx.prev);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.members }),
+  });
+};
+export const usePatchMember = () =>
+  useOptimisticMembers(
+    (v: { id: string } & MemberPatch) =>
+      api.send("PATCH", R.member(v.id), { role: v.role }, MemberSchema),
+    (list, v) => list.map((m) => (m.id === v.id ? { ...m, role: v.role } : m)),
+  );
+export const useRemoveMember = () =>
+  useOptimisticMembers(
+    (id: string) => api.send("DELETE", R.member(id), undefined),
+    (list, id) => list.filter((m) => m.id !== id),
   );

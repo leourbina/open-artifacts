@@ -1,4 +1,4 @@
-import { FormatSchema } from "@oa/shared";
+import { FormatSchema, type Role } from "@oa/shared";
 import {
   createRootRoute,
   createRoute,
@@ -14,6 +14,8 @@ import type { Scope } from "./library/useLibraryQuery";
 import { NoAccess } from "./pages/NoAccess";
 import { NotFound } from "./pages/NotFound";
 import { SignIn } from "./pages/SignIn";
+import { Members } from "./settings/Members";
+import { Gate, SettingsLayout } from "./settings/SettingsLayout";
 import { Diff } from "./viewer/Diff";
 import { Shell } from "./viewer/Shell";
 
@@ -88,6 +90,38 @@ const search = createRoute({
   component: SearchPage,
 });
 
+const ADMINS: Role[] = ["owner", "admin"];
+/** Guests go to /shared; a member is sent to the page they may see. */
+const gated = (
+  path: string,
+  allow: Role[],
+  memberTo: string,
+  C: () => React.ReactNode,
+) =>
+  createRoute({
+    getParentRoute: () => settings,
+    path,
+    component: () => (
+      <Gate allow={allow} redirects={{ guest: "/shared", member: memberTo }}>
+        <C />
+      </Gate>
+    ),
+  });
+const settings = createRoute({
+  getParentRoute: () => root,
+  id: "settings",
+  component: SettingsLayout,
+});
+const usage = createRoute({
+  getParentRoute: () => root,
+  path: "/settings/usage",
+  component: () => (
+    <Gate allow={ADMINS} redirects={{ guest: "/shared", member: "/" }}>
+      <Placeholder title="Usage" />
+    </Gate>
+  ),
+});
+
 const routeTree = root.addChildren([
   library("/", "all"),
   library("/mine", "mine"),
@@ -97,10 +131,12 @@ const routeTree = root.addChildren([
   route("/a/$id", ViewerRoute),
   route("/a/$id/v/$v", ViewerRoute),
   route("/a/$id/diff/$from/$to", DiffRoute),
-  route("/settings/members", page("Members")),
-  route("/settings/agents", page("Agents")),
-  route("/settings/instance", page("Instance")),
-  route("/settings/usage", page("Usage")),
+  settings.addChildren([
+    gated("/settings/members", ADMINS, "/settings/agents", Members),
+    gated("/settings/agents", [...ADMINS, "member"], "/", page("Agents")),
+    gated("/settings/instance", ADMINS, "/settings/agents", page("Instance")),
+  ]),
+  usage,
   route("/no-access", NoAccess),
   route("/sign-in", () => (
     <SignIn failed={new URLSearchParams(location.search).has("error")} />
