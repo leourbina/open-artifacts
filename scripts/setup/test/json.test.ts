@@ -118,7 +118,8 @@ describe("access rerun without OA_ACCESS_TOKEN", () => {
     expect(accessCalls(w)).toEqual([]);
     expect(step(w, "access")).toMatchObject({
       status: "skipped",
-      message: "Access not re-verified: set OA_ACCESS_TOKEN to re-check",
+      message:
+        "Access not re-verified: run `read -rs OA_ACCESS_TOKEN; export OA_ACCESS_TOKEN` to re-check",
     });
   });
 
@@ -248,7 +249,7 @@ describe("B16-4 review fixes", () => {
     const w = world({ org: "forbidden" });
     expect(await run(JSON_ONLY, w.deps, ROOT)).toBe(2);
     expect(last(w).message).toContain(
-      "set OA_ACCESS_TOKEN (non-interactive/--json)",
+      "run `read -rs OA_ACCESS_TOKEN; export OA_ACCESS_TOKEN` (non-interactive/--json)",
     );
   });
 });

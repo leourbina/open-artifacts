@@ -36,12 +36,10 @@ const WELCOME = readFileSync(
 const line = (w: W, step: string) => parsed(w).find((j) => j.step === step);
 const patOf = (w: W): string => line(w, "owner-token").data.token;
 
-/** The PAT is only in owner-token's and agent-config's lines: never state, files, argv, prompts or other steps. */
+/** The PAT is only in owner-token's line: never state, files, argv, prompts, agent-config or other steps. */
 function patContained(w: W, pat: string) {
   expect(isPat(pat)).toBe(true);
-  const others = w.lines.filter(
-    (l) => !/^(\{"step":"|. )(owner-token|agent-config)/.test(l),
-  );
+  const others = w.lines.filter((l) => !/^(\{"step":"|. )owner-token/.test(l));
   const hay = [...others, ...w.files.values(), ...w.argv, ...w.prompts];
   expect(hay.join("\n")).not.toContain(pat);
   expect(w.sqls.join("\n")).toContain(
@@ -154,17 +152,18 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     expect(cfg.url).toBe("https://app.example.com/mcp");
     for (const s of Object.values(cfg.snippets) as string[]) {
       expect(s).toContain("https://app.example.com/mcp");
-      expect(s).toContain(`Bearer ${pat}`);
+      expect(s).not.toContain(pat);
     }
+    expect(JSON.stringify(cfg)).not.toContain(pat);
     expect(cfg.snippets.claudeCode).toMatch(
-      /^claude mcp add --transport http open-artifacts https:\/\/app\.example\.com\/mcp --header 'Authorization: Bearer oa_pat_/,
+      /^read -rs OA_TOKEN\nclaude mcp add --transport http open-artifacts https:\/\/app\.example\.com\/mcp --header "Authorization: Bearer \$OA_TOKEN"$/,
     );
     expect(cfg.snippets.codex).toContain("[mcp_servers.open-artifacts]");
     expect(JSON.parse(cfg.snippets.cursor)).toEqual({
       mcpServers: {
         "open-artifacts": {
           url: "https://app.example.com/mcp",
-          headers: { Authorization: `Bearer ${pat}` },
+          headers: { Authorization: "Bearer ${env:OA_TOKEN}" },
         },
       },
     });
@@ -174,7 +173,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     expect(JSON.parse(cfg.snippets.json).mcpServers["open-artifacts"]).toEqual({
       type: "http",
       url: "https://app.example.com/mcp",
-      headers: { Authorization: `Bearer ${pat}` },
+      headers: { Authorization: "Bearer <YOUR_TOKEN>" },
     });
   });
 
@@ -197,8 +196,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     );
     expect(line(w, "selftest").data).toEqual({ mcp: "skipped" });
     const cfg = line(w, "agent-config");
-    expect(cfg.message).toContain("<YOUR_TOKEN>");
-    expect(cfg.data.snippets.claudeCode).toContain("Bearer <YOUR_TOKEN>");
+    expect(cfg.data.snippets.claudeCode).toContain("$OA_TOKEN");
     expect(w.lines.join("\n")).not.toMatch(/oa_pat_/);
   });
 
@@ -375,7 +373,9 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     expect(own).toContain(tokenId);
     const cfg = w.lines.find((l) => l.startsWith("✓ agent-config")) ?? "";
     expect(cfg).toContain("claude mcp add --transport http");
-    expect(cfg).toContain(`Bearer ${pat}`);
+    expect(cfg).toContain("read -rs OA_TOKEN");
+    expect(cfg).toContain("owner-token step");
+    expect(cfg).not.toContain(pat);
     patContained(w, pat);
   });
 
