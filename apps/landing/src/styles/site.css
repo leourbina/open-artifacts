@@ -69,7 +69,7 @@ code,
 .skip {
   position: absolute;
   left: 16px;
-  top: -48px;
+  top: -80px;
   padding: 8px 12px;
   background: var(--oa-surface);
   border-radius: var(--oa-radius-md);
@@ -96,11 +96,7 @@ code,
 .wordmark {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  font-weight: 600;
-  font-size: var(--oa-text-md);
-  letter-spacing: -0.01em;
-  text-decoration: none;
+  border-radius: var(--oa-radius-sm);
 }
 .site-head nav,
 .site-foot nav {
