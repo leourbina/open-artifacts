@@ -1,11 +1,11 @@
 import { type ArtifactSummary, LIMITS, R } from "@oa/shared";
-import { useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
 import { api } from "../api/client";
 import { qk, useVersionInfo } from "../api/queries";
 
-// Once per session, across remounts.
-const thumbAsked = new Set<string>();
+// Once per session, across remounts. Shared with background capture in the library.
+export const thumbAsked = new Set<string>();
 const textSent = new Set<string>();
 
 /** Cuts to at most `max` UTF-8 bytes, never in the middle of a character or surrogate pair. */
@@ -15,6 +15,25 @@ export function truncateUtf8(text: string, max: number): string {
   let end = max;
   while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
   return new TextDecoder().decode(bytes.subarray(0, end));
+}
+
+/** PUTs a captured thumbnail, then calls `invalidate`; failures are only logged. */
+export function uploadThumbnail(
+  id: string,
+  blob: Blob,
+  put: SideEffectDeps["put"],
+  invalidate: () => void,
+) {
+  if (blob.size > LIMITS.thumbnailBytes) return;
+  put(R.thumbnail(id), blob, "image/webp").then(invalidate, (e) =>
+    console.debug("thumbnail upload failed", e),
+  );
+}
+
+/** Refreshes everything that shows an artifact's thumbnail, and nothing below it (versions, shares). */
+export function invalidateThumbnail(qc: QueryClient, id: string) {
+  void qc.invalidateQueries({ queryKey: qk.artifact(id), exact: true });
+  void qc.invalidateQueries({ queryKey: ["artifacts"] });
 }
 
 export interface SideEffectDeps {
@@ -42,11 +61,8 @@ export function createSideEffects(d: SideEffectDeps) {
       if (d.requestThumbnail()) thumbAsked.add(id);
     },
     onThumb(blob: Blob) {
-      if (!canEdit || blob.size > LIMITS.thumbnailBytes) return;
-      d.put(R.thumbnail(id), blob, "image/webp").then(
-        () => d.invalidate("thumbnail"),
-        (e) => console.debug("thumbnail upload failed", e),
-      );
+      if (canEdit)
+        uploadThumbnail(id, blob, d.put, () => d.invalidate("thumbnail"));
     },
     onPdfText(text: string) {
       pending = text;
@@ -103,10 +119,8 @@ export function useArtifactSideEffects(
         requestThumbnail: () => latest.current.requestThumbnail(),
         put: (path, body, ct) => api.putBody(path, body, ct),
         invalidate: (what) => {
-          if (what === "thumbnail") {
-            void qc.invalidateQueries({ queryKey: qk.artifact(id) });
-            void qc.invalidateQueries({ queryKey: ["artifacts"] });
-          } else void qc.invalidateQueries({ queryKey: qk.versions(id) });
+          if (what === "thumbnail") invalidateThumbnail(qc, id);
+          else void qc.invalidateQueries({ queryKey: qk.versions(id) });
         },
       }),
     [key, qc],

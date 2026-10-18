@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 
 export type Theme = "light" | "dark";
 
-const read = (): Theme => {
+/** Effective theme right now; see useTheme. */
+export const currentTheme = (): Theme => {
   const t = document.documentElement.dataset.theme;
   if (t === "light" || t === "dark") return t;
   return globalThis.matchMedia?.("(prefers-color-scheme: dark)").matches
@@ -12,9 +13,9 @@ const read = (): Theme => {
 
 /** Effective theme: `[data-theme]` on <html> wins over the OS preference. */
 export function useTheme(): Theme {
-  const [theme, setTheme] = useState(read);
+  const [theme, setTheme] = useState(currentTheme);
   useEffect(() => {
-    const update = () => setTheme(read());
+    const update = () => setTheme(currentTheme());
     const mq = globalThis.matchMedia?.("(prefers-color-scheme: dark)");
     const mo = new MutationObserver(update);
     mo.observe(document.documentElement, {

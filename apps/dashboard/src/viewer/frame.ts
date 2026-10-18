@@ -2,6 +2,9 @@
 export const SANDBOX =
   "allow-scripts allow-forms allow-popups allow-modals allow-downloads";
 
+/** Background thumbnail capture: a strict subset of SANDBOX, as no one is watching. */
+export const BACKGROUND_SANDBOX = "allow-scripts";
+
 /** Only http(s) URLs on another origin may be framed or linked as raw content. */
 export const safeContentUrl = (u: string | null) => {
   if (!u) return null;

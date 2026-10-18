@@ -11,6 +11,7 @@ import { ArtifactRow } from "./ArtifactRow";
 import { Filters } from "./Filters";
 import { LibraryIcon } from "./icons";
 import "./library.css";
+import { useBackgroundThumbnails } from "./useBackgroundThumbnails";
 import { uniqueItems, useSentinel } from "./useInfinite";
 import { type Scope, useLibraryQuery } from "./useLibraryQuery";
 
@@ -88,6 +89,7 @@ export function Library({ scope }: { scope: Scope }) {
 
   const q = useLibraryQuery({ scope, format: s.format, agent: s.agent });
   const items = uniqueItems(q.data?.pages);
+  useBackgroundThumbnails(items);
   // Remember agents seen so far so others stay selectable while one is filtered.
   const seenAgents = useRef(new Set<string>());
   for (const a of items)
