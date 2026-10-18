@@ -58,6 +58,11 @@ type World = {
   healthFails?: number;
   /** tools/list omits publish_artifact. */
   noPublishTool?: boolean;
+  /** The token INSERT fails, or silently writes nothing. */
+  d1Fails?: boolean;
+  dropTokenInsert?: boolean;
+  /** The signed content URL serves this body instead of the published content. */
+  contentBody?: string;
 };
 // biome-ignore lint/suspicious/noExplicitAny: loose API fixtures
 type Obj = any;
@@ -135,6 +140,7 @@ export function world(w: World = {}) {
   const sha = (s: string) => createHash("sha256").update(s).digest("hex");
   const d1 = (sql: string) => {
     sqls.push(sql);
+    if (w.d1Fails && sql.includes("INSERT")) throw new Error("D1 down");
     const sel = sql.match(/^SELECT id FROM tokens WHERE id = '([^']*)'/);
     if (sel) return db.tokens.filter((t) => t.id === sel[1] && !t.revoked_at);
     const u = sql.match(
@@ -151,7 +157,14 @@ export function world(w: World = {}) {
       db.users.push(user);
     }
     user.role = "owner";
-    db.tokens.push({ id: t[1], user_id: user.id, token_hash: t[2] });
+    const rev = sql.match(
+      /UPDATE tokens SET revoked_at = (\d+) WHERE id = '(\w+)' AND revoked_at IS NULL;/,
+    );
+    for (const x of db.tokens)
+      if (rev && x.id === rev[2] && !x.revoked_at)
+        x.revoked_at = Number(rev[1]);
+    if (!w.dropTokenInsert)
+      db.tokens.push({ id: t[1], user_id: user.id, token_hash: t[2] });
     ops.push("d1 owner+token");
     return [];
   };
@@ -190,7 +203,7 @@ export function world(w: World = {}) {
       if (a.startsWith("secret list ")) {
         if (!secrets)
           return { code: 1, stdout: "", stderr: 'Worker "x" not found.' };
-        stdout = JSON.stringify(secrets.map((name) => ({ name })));
+        stdout = `wrangler 4.151.1 [x]\n${JSON.stringify(secrets.map((name) => ({ name })))}`;
       } else if (put) {
         values.push(opts?.input ?? "");
         if (put[1] === w.putFails)
@@ -206,7 +219,7 @@ export function world(w: World = {}) {
         secrets = secrets?.filter((n) => n !== del[1]);
       } else if (exe) {
         try {
-          stdout = `wrangler banner\n${JSON.stringify([{ results: d1(exe[2]), success: true }])}`;
+          stdout = `wrangler 4.151.1 (update available [4.152])\n${JSON.stringify([{ results: d1(exe[2]), success: true }])}`;
         } catch (e) {
           return { code: 1, stdout: "", stderr: (e as Error).message };
         }
@@ -241,7 +254,9 @@ export function world(w: World = {}) {
         }
         if (u.pathname === "/mcp") {
           const tok = auth?.replace(/^Bearer /, "") ?? "";
-          if (!db.tokens.some((t) => t.token_hash === sha(tok)))
+          if (
+            !db.tokens.some((t) => t.token_hash === sha(tok) && !t.revoked_at)
+          )
             return Response.json({ error: "unauthorized" }, { status: 401 });
           hits.push(`mcp ${body.method}`);
           const reply = (result: unknown, sse = false) => {
@@ -283,11 +298,26 @@ export function world(w: World = {}) {
             );
           }
         }
-        if (u.pathname === "/a/art1") {
-          hits.push("GET /a/art1");
-          return new Response("<html>");
+        if (u.pathname === "/api/v1/artifacts/art1/content-url") {
+          hits.push("GET content-url");
+          const tok = auth?.replace(/^Bearer /, "") ?? "";
+          if (
+            !db.tokens.some((t) => t.token_hash === sha(tok) && !t.revoked_at)
+          )
+            return Response.json({ error: "unauthorized" }, { status: 401 });
+          return Response.json({
+            url: "https://a.b.usercontent.example.com/s/sig/art1/1/__view",
+            expiresAt: "2026-10-18T00:00:00.000Z",
+          });
         }
         return new Response("nf", { status: 404 });
+      }
+      if (u.host === "a.b.usercontent.example.com") {
+        hits.push(`GET content ${auth ? "with auth" : "no auth"}`);
+        const last = mcpCalls.at(-1)?.arguments?.content ?? "";
+        return new Response(
+          w.contentBody ?? `<html><body>${last}</body></html>`,
+        );
       }
       if (u.host === "team.cloudflareaccess.com") {
         hits.push(`GET ${u.pathname}`);

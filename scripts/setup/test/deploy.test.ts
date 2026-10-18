@@ -2,10 +2,11 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { isPat } from "../../../packages/shared/src/ids.ts";
+import { sha256Hex } from "../../../apps/server/src/util/crypto.ts";
+import { isId, isPat } from "../../../packages/shared/src/ids.ts";
 import { run } from "../src/index.ts";
 import { deploy } from "../src/steps/deploy.ts";
-import { newPat, ownerSql } from "../src/steps/owner-token.ts";
+import { newPat, ownerSql, tokenHash } from "../src/steps/owner-token.ts";
 import { ROOT, STATE } from "./fakes.ts";
 import { HOSTS, world } from "./world.ts";
 
@@ -103,7 +104,8 @@ describe("deploy, owner-token, selftest, agent-config", () => {
       "mcp notifications/initialized",
       "mcp tools/list",
       "mcp tools/call",
-      "GET /a/art1",
+      "GET content-url",
+      "GET content no auth",
     ]);
     expect(w.mcpCalls[0]).toEqual({
       name: "publish_artifact",
@@ -120,9 +122,20 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     expect(st.deployedVersion).toBe("0.1.0");
     expect(st.ownerTokenId).toBe(w.db.tokens[0].id);
     expect(JSON.parse(w.deployed() ?? "").vars.ENVIRONMENT).toBe("production");
-    expect(line(w, "selftest").data).toMatchObject({
-      artifactUrl: "https://app.example.com/a/art1",
+    expect(line(w, "selftest").data).toEqual({
+      mcp: "ok",
+      artifactId: "art1",
+      contentUrl: "https://a.b.usercontent.example.com/s/sig/art1/1/__view",
     });
+    expect(st.welcomeArtifactId).toBe("art1");
+    expect(isId(st.ownerTokenId)).toBe(true);
+    expect(isId(w.db.users[0].id)).toBe(true);
+    expect(w.argv.some((a) => a.includes("--filter @oa/server... build"))).toBe(
+      true,
+    );
+    expect([...w.files.keys()].some((k) => k.includes("dashboard"))).toBe(
+      false,
+    );
     const pat = patOf(w);
     patContained(w, pat);
     const cfg = line(w, "agent-config").data;
@@ -172,6 +185,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     expect(line(w, "selftest").message).toMatch(
       /MCP check skipped.*--new-owner-token/,
     );
+    expect(line(w, "selftest").data).toEqual({ mcp: "skipped" });
     const cfg = line(w, "agent-config");
     expect(cfg.message).toContain("<YOUR_TOKEN>");
     expect(cfg.data.snippets.claudeCode).toContain("Bearer <YOUR_TOKEN>");
@@ -184,7 +198,17 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     expect(await run([...HOSTS, "--new-owner-token"], w.deps, ROOT)).toBe(0);
     expect(w.db.tokens).toHaveLength(2);
     expect(w.state().ownerTokenId).not.toBe(first);
+    expect(w.db.tokens[0]).toMatchObject({
+      id: first,
+      revoked_at: expect.any(Number),
+    });
+    expect(w.db.tokens[1].revoked_at).toBeUndefined();
+    expect(w.sqls.at(-2)).toMatch(
+      /^UPDATE tokens SET revoked_at = \d+ WHERE id = '\w+' AND revoked_at IS NULL; INSERT/,
+    );
     expect(w.hits).toContain("mcp tools/call");
+    // M5: the welcome artifact is updated in place, not duplicated.
+    expect(w.mcpCalls[0].arguments.id).toBe("art1");
     patContained(w, patOf(w));
     w.lines.length = 0;
     w.db.tokens[1].revoked_at = 1;
@@ -202,7 +226,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
       ),
     );
     expect(w.ops).toEqual(["build", "migrate open-artifacts", "deploy"]);
-    expect(w.sqls).toHaveLength(1); // the first run's insert only
+    expect(w.sqls).toHaveLength(2); // the first run's insert and re-SELECT only
     w.lines.length = 0;
     const argv = [...HOSTS, "--upgrade", "--new-owner-token"];
     expect(await run(argv, w.deps, ROOT)).toBe(0);
@@ -242,13 +266,48 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     const w = deployWorld({}, [...SECRETS, "CF_ACCOUNT_ID", "ANALYTICS_TOKEN"]);
     expect(await run(HOSTS, w.deps, ROOT, [deploy])).toBe(0);
     expect(w.ops).toEqual([
-      "delete secret CF_ACCOUNT_ID",
       "build",
+      "delete secret CF_ACCOUNT_ID",
       "migrate open-artifacts",
       "deploy",
     ]);
     expect(line(w, "deploy").message).toContain("CF_ACCOUNT_ID");
     expect(w.state().deployedVersion).toBe("0.1.0");
+  });
+
+  it("selftest fetches the signed content URL and checks the welcome text", async () => {
+    const w = world({ contentBody: "<html>an SPA shell</html>" });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(1);
+    expect(line(w, "selftest").message).toMatch(
+      /content.*Welcome to Open Artifacts/,
+    );
+  });
+
+  it("owner-token records the id before the insert and fails clearly when the row is missing", async () => {
+    const down = world({ d1Fails: true });
+    expect(await run(HOSTS, down.deps, ROOT)).toBe(1);
+    expect(line(down, "owner-token").status).toBe("error");
+    expect(isId(down.state().ownerTokenId)).toBe(true);
+    const lost = world({ dropTokenInsert: true });
+    expect(await run(HOSTS, lost.deps, ROOT)).toBe(1);
+    expect(line(lost, "owner-token").message).toMatch(/token row .* missing/);
+    expect(lost.lines.join("\n")).not.toMatch(/oa_pat_/);
+  });
+
+  it("normalises the owner email (trim, lowercase, ASCII) for state and SQL", async () => {
+    const argv = HOSTS.map((a) =>
+      a === "owner@example.com" ? "  Owner@Example.COM " : a,
+    );
+    const w = world();
+    expect(await run(argv, w.deps, ROOT)).toBe(0);
+    expect(w.state().ownerEmail).toBe("owner@example.com");
+    expect(w.sqls.at(-2)).toContain("'owner@example.com'");
+    const bad = world();
+    const nonAscii = HOSTS.map((a) =>
+      a === "owner@example.com" ? "o\u212a@example.com" : a,
+    );
+    expect(await run(nonAscii, bad.deps, ROOT)).toBe(1);
+    expect(line(bad, "args").message).toContain("--owner-email");
   });
 
   it("selftest retries propagation with bounded backoff", async () => {
@@ -298,8 +357,12 @@ describe("deploy, owner-token, selftest, agent-config", () => {
       );
   });
 
-  it("the local PAT matches @oa/shared's format; SQL escapes and carries only the hash", () => {
-    for (let i = 0; i < 50; i++) expect(isPat(newPat())).toBe(true);
+  it("the local PAT matches @oa/shared's format; SQL escapes and carries only the hash", async () => {
+    for (let i = 0; i < 50; i++) {
+      const pat = newPat();
+      expect(isPat(pat)).toBe(true);
+      expect(tokenHash(pat)).toBe(await sha256Hex(pat));
+    }
     const sql = ownerSql("o'brien@example.com", "tid", "ab".repeat(32), 1);
     expect(sql).toContain("'o''brien@example.com'");
     expect(sql).not.toMatch(/oa_pat_/);

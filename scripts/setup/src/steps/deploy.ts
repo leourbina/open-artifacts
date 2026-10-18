@@ -5,7 +5,6 @@ import { ACCESS_SECRET, listSecrets } from "./secrets.ts";
 
 const CONFIG = "apps/server/wrangler.jsonc";
 const REQUIRED = [ACCESS_SECRET, "SESSION_SECRET", "CONTENT_SIGNING_KEY"];
-const DASH = "apps/dashboard/dist/index.html";
 
 /** The rendered config's vars, refusing anything that isn't a complete production config. */
 function renderedVars(ctx: Ctx): Record<string, string> {
@@ -48,6 +47,10 @@ export const deploy: Step = {
       throw new Error(
         `refusing to deploy: Worker secrets missing: ${missing.join(", ")}; rerun setup without --upgrade`,
       );
+    const build = ["--dir", ctx.root, "--filter", "@oa/server...", "build"];
+    const b = await ctx.deps.exec("pnpm", build);
+    if (b.code !== 0)
+      throw new Error(`pnpm build failed: ${(b.stderr || b.stdout).trim()}`);
     // A secret with a var's name makes `wrangler deploy` fail: drop the secret.
     for (const n of Object.keys(vars).filter((k) => have.has(k))) {
       await ctx.wrangler(["secret", "delete", n, "--name", ctx.opts.name], {
@@ -55,15 +58,6 @@ export const deploy: Step = {
       });
       ctx.notes.push(`deleted Worker secret ${n} (shadowed the var)`);
     }
-    const b = await ctx.deps.exec("pnpm", ["--dir", ctx.root, "build"]);
-    if (b.code !== 0)
-      throw new Error(`pnpm build failed: ${(b.stderr || b.stdout).trim()}`);
-    // The dashboard has no build yet; assets need a directory (as CI does).
-    if (ctx.fs.read(join(ctx.root, DASH)) === null)
-      ctx.fs.write(
-        join(ctx.root, DASH),
-        "<!doctype html><title>Open Artifacts</title>\n",
-      );
     const d1 = names(ctx.opts.name).d1;
     await ctx.wrangler(["d1", "migrations", "apply", d1, "--remote"]);
     await ctx.wrangler(["deploy"]);

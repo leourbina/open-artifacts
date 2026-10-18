@@ -41,6 +41,15 @@ function valid(flag: string, val: string, re: RegExp) {
   return val;
 }
 
+// apps/server/src/db/email.ts: printable ASCII, checked before and after lowercasing.
+const ASCII_EMAIL = /^[!-?A-~]+@[!-?A-~]+$/;
+function normEmail(raw: string) {
+  const e = raw.trim().toLowerCase();
+  if (![raw.trim(), e].every((x) => x.length <= 320 && ASCII_EMAIL.test(x)))
+    throw new Error(`invalid --owner-email: ${JSON.stringify(raw)}`);
+  return e;
+}
+
 async function resolve(argv: string[], deps: Deps, state: State) {
   const { values: v } = parseArgs({
     args: argv,
@@ -79,7 +88,11 @@ async function resolve(argv: string[], deps: Deps, state: State) {
     name,
     appHost: await need("--app-host", HOST, state.appHost),
     contentHost: await need("--content-host", HOST, state.contentHost),
-    ownerEmail: await need("--owner-email", EMAIL, state.ownerEmail),
+    ownerEmail: valid(
+      "--owner-email",
+      normEmail(await need("--owner-email", /./, state.ownerEmail)),
+      EMAIL,
+    ),
     accountId:
       v["account-id"] ?? state.accountId ?? deps.env.CLOUDFLARE_ACCOUNT_ID,
     yes: v.yes,

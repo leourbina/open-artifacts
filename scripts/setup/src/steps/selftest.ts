@@ -46,8 +46,8 @@ async function rpcResult(res: Response, id: number, method: string) {
   return msg.result;
 }
 
-/** tools/list, then publish the welcome page; returns its URL. */
-async function mcp(ctx: Ctx, token: string): Promise<string> {
+/** tools/list, then publish (or update) the welcome page; returns its id. */
+async function mcp(ctx: Ctx, token: string, prev?: string): Promise<string> {
   const url = `https://${ctx.opts.appHost}/mcp`;
   const headers: Record<string, string> = {
     authorization: `Bearer ${token}`,
@@ -88,14 +88,33 @@ async function mcp(ctx: Ctx, token: string): Promise<string> {
   if (content === null) throw new Error(`missing ${WELCOME}`);
   const r = await post("tools/call", {
     name: "publish_artifact",
-    arguments: { title: TITLE, format: "markdown", content },
+    arguments: {
+      ...(prev ? { id: prev } : {}),
+      title: TITLE,
+      format: "markdown",
+      content,
+    },
   });
-  const out = r?.structuredContent?.url;
+  const out = r?.structuredContent?.id;
   if (r?.isError || typeof out !== "string")
     throw new Error(
-      `MCP publish_artifact: ${r?.content?.[0]?.text ?? "no url"}`,
+      `MCP publish_artifact: ${r?.content?.[0]?.text ?? "no id"}`,
     );
   return out;
+}
+
+/** The private artifact's signed content URL must serve the welcome text. */
+async function content(ctx: Ctx, token: string, id: string): Promise<string> {
+  const api = `https://${ctx.opts.appHost}/api/v1/artifacts/${encodeURIComponent(id)}/content-url`;
+  const res = await until200(ctx, "content-url", api, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const { url } = (await res.json()) as { url?: string };
+  if (typeof url !== "string") throw new Error("content-url: no url");
+  const body = await (await until200(ctx, "welcome content", url)).text();
+  if (!body.includes(TITLE))
+    throw new Error(`welcome content at ${url} lacks "${TITLE}"`);
+  return url;
 }
 
 export const selftest: Step = {
@@ -110,12 +129,14 @@ export const selftest: Step = {
       ctx.notes.push(
         "healthz and OIDC discovery ok; MCP check skipped: no token minted this run (rerun with --new-owner-token to test it)",
       );
+      ctx.data = { mcp: "skipped" };
       return undefined;
     }
-    const artifactUrl = await mcp(ctx, ctx.pat);
-    await until200(ctx, "welcome artifact", artifactUrl);
-    ctx.notes.push(`healthz, OIDC discovery, MCP publish ok: ${artifactUrl}`);
-    ctx.data = { artifactUrl };
+    const artifactId = await mcp(ctx, ctx.pat, state.welcomeArtifactId);
+    state.welcomeArtifactId = artifactId;
+    const contentUrl = await content(ctx, ctx.pat, artifactId);
+    ctx.notes.push(`healthz, OIDC discovery, MCP publish, content ok`);
+    ctx.data = { mcp: "ok", artifactId, contentUrl };
     return undefined;
   },
 };

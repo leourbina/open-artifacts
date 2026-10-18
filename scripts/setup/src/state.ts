@@ -18,6 +18,8 @@ export type State = {
   deployedVersion?: string;
   /** The setup-minted owner token row; the token itself is never stored. */
   ownerTokenId?: string;
+  /** The selftest's private welcome artifact, updated in place on later runs. */
+  welcomeArtifactId?: string;
   /** The user declined the optional ANALYTICS_TOKEN; don't ask again. */
   analyticsSkipped?: boolean;
 };
