@@ -42,9 +42,9 @@ const NOTE: Record<Visibility, string> = {
   public: "Anyone with the link can view. It won't appear in search engines.",
 };
 const CAPS = [
-  ["db", "Database"],
-  ["viewer", "Viewer identity"],
-  ["storage", "File storage"],
+  ["db", "Database", "Lets the page store shared data."],
+  ["viewer", "Viewer identity", "Lets the page see who is viewing."],
+  ["storage", "File storage", "Lets the page keep uploaded files."],
 ] as const;
 
 const fail = (e: unknown, fallback: string) =>
@@ -210,13 +210,15 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
         <ul className="oa-people">
           <li>
             <Avatar name={artifact.owner.name} email={artifact.owner.email} />
-            <span>{displayName(artifact.owner)}</span>
+            <span title={displayName(artifact.owner)}>
+              {displayName(artifact.owner)}
+            </span>
             <span className="oa-muted">Owner</span>
           </li>
           {(shares.data ?? []).map((s) => (
             <li key={s.email}>
               <Avatar name={null} email={s.email} />
-              <span>{s.email}</span>
+              <span title={s.email}>{s.email}</span>
               {owner ? (
                 <>
                   <Select
@@ -253,26 +255,33 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
 
       <section>
         <h3>Live data</h3>
-        {CAPS.map(([k, label]) => (
-          <Checkbox
-            key={k}
-            label={label}
-            checked={artifact.capabilities[k]}
-            disabled={!owner || patch.isPending}
-            onCheckedChange={(on) => setCap(k, on === true)}
-          />
+        {CAPS.map(([k, label, hint]) => (
+          <div className="oa-cap" key={k}>
+            <Checkbox
+              label={label}
+              checked={artifact.capabilities[k]}
+              disabled={!owner || patch.isPending}
+              onCheckedChange={(on) => setCap(k, on === true)}
+            />
+            <small className="oa-muted">{hint}</small>
+          </div>
         ))}
-        <Checkbox
-          label="Allow anonymous writes"
-          checked={artifact.allowAnonymousWrites}
-          disabled={
-            !owner ||
-            patch.isPending ||
-            artifact.visibility !== "public" ||
-            !artifact.capabilities.db
-          }
-          onCheckedChange={(on) => save({ allowAnonymousWrites: on === true })}
-        />
+        <div className="oa-cap">
+          <Checkbox
+            label="Allow anonymous writes"
+            checked={artifact.allowAnonymousWrites}
+            disabled={
+              !owner ||
+              patch.isPending ||
+              artifact.visibility !== "public" ||
+              !artifact.capabilities.db
+            }
+            onCheckedChange={(on) =>
+              save({ allowAnonymousWrites: on === true })
+            }
+          />
+          <small className="oa-muted">Public and database only.</small>
+        </div>
       </section>
 
       <Button onClick={copy}>Copy link</Button>

@@ -318,3 +318,35 @@
   border-radius: var(--oa-radius-md);
   box-shadow: var(--oa-shadow-2);
 }
+.oa-share input,
+.oa-share textarea,
+.oa-details input,
+.oa-details textarea {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+}
+.oa-invite {
+  align-items: center;
+}
+.oa-invite input {
+  flex: 1 0 100%;
+}
+.oa-people li > span:nth-child(2) {
+  flex: 1 1 0;
+  min-width: 0;
+  white-space: nowrap;
+}
+.oa-people li > button[role="combobox"] {
+  flex: none;
+  width: 96px;
+}
+.oa-cap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 10px;
+}
+.oa-cap small {
+  padding-left: 28px;
+}

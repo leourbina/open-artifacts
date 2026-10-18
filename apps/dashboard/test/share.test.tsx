@@ -87,6 +87,13 @@ describe("share panel", () => {
     await screen.findByText("eve@example.com");
   });
 
+  it("a share row renders its email with a title", async () => {
+    mount(panel(OWNED));
+    expect(await screen.findByTitle("bob@example.com")).toHaveTextContent(
+      "bob@example.com",
+    );
+  });
+
   it("changes a share role and removes it", async () => {
     mount(panel(OWNED));
     const trigger = await screen.findByRole("combobox", {
