@@ -15,7 +15,9 @@ export function ArtifactRow({
     <article className="lib-row">
       <FormatIcon format={a.format} />
       <div className="lib-row-main">
-        <AppLink href={`/a/${a.id}`}>{a.title}</AppLink>
+        <AppLink className="lib-title" href={`/a/${a.id}`}>
+          {a.title}
+        </AppLink>
         {snippet && (
           <p className="lib-snippet">
             <Snippet text={snippet} />

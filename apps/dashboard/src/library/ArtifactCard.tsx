@@ -37,7 +37,9 @@ export function ArtifactCard(p: CardProps) {
         )}
       </div>
       <h3>
-        <AppLink href={`/a/${a.id}`}>{a.title}</AppLink>
+        <AppLink className="lib-title" href={`/a/${a.id}`}>
+          {a.title}
+        </AppLink>
       </h3>
       <Meta {...p} />
     </article>
