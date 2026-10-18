@@ -62,10 +62,10 @@ votes.subscribe(async () => render((await votes.list()).items));
 
 | Limit | Default |
 |---|---|
-| Document size | 1 MB |
-| Data per artifact | 50 MB |
-| Writes per viewer | 100 per minute |
-| Anonymous writes per IP | 30 per minute |
+| Document size | {LIMIT_DOC} |
+| Data per artifact | {LIMIT_ARTIFACT_DATA} |
+| Writes per viewer | {LIMIT_VIEWER_WRITES} |
+| Anonymous writes per IP | {LIMIT_ANON_WRITES} |
 
 ## How it works
 

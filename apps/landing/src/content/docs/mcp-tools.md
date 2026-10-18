@@ -29,7 +29,7 @@ Only the artifact's creator can change `visibility`, `capabilities`, or `allowAn
 
 It returns the artifact's `id`, the new `version`, and its view URL.
 
-Inline `content` and `files` are capped at 2 MB in total. For anything larger, call `create_upload` to get a signed upload URL, upload the bytes there, and publish with the result. Files can be up to 25 MB each and 100 MB per publish.
+Inline `content` and `files` are capped at {LIMIT_INLINE} in total. For anything larger, call `create_upload` to get a signed upload URL, upload the bytes there, and publish with the result. Files can be up to {LIMIT_FILE} each and {LIMIT_PUBLISH} per publish.
 
 ## Reading
 
@@ -52,7 +52,7 @@ Only an artifact's creator can share it, change its visibility, or delete it.
 
 ## Deleting
 
-`delete_artifact` moves an artifact to the trash. It can be recovered for 30 days, then it's purged.
+`delete_artifact` moves an artifact to the trash. It can be recovered for {LIMIT_SOFT_DELETE}, then it's purged.
 
 ## Live-page data
 
