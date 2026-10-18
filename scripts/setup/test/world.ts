@@ -342,9 +342,9 @@ export function world(w: World = {}) {
           { status: w.contentStatus ?? 200 },
         );
       }
-      if (u.host === "team.cloudflareaccess.com") {
+      if (u.host.endsWith(".cloudflareaccess.com")) {
         hits.push(`GET ${u.pathname}`);
-        return Response.json({ issuer: "https://team.cloudflareaccess.com" });
+        return Response.json({ issuer: `https://${u.host}` });
       }
       const p = u.pathname.replace("/client/v4", "");
       auths.push(`${p} ${auth}`);

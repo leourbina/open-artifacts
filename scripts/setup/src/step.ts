@@ -9,6 +9,8 @@ export type Opts = {
   accountId?: string;
   yes: boolean;
   upgrade: boolean;
+  /** Read-only: run every check(), never apply, write nothing. */
+  check: boolean;
   newOwnerToken: boolean;
   /** False under --yes or --json: never prompt. */
   interactive: boolean;

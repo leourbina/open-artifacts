@@ -1,7 +1,15 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { type Deps, makeApi, makeWrangler, realDeps, realFs } from "./cf.ts";
+import {
+  type Api,
+  type Deps,
+  makeApi,
+  makeWrangler,
+  realDeps,
+  realFs,
+  type Wrangler,
+} from "./cf.ts";
 import { readState, type State, writeState } from "./state.ts";
 import { type Ctx, NeedInput, type Opts, type Step } from "./step.ts";
 import { access } from "./steps/access.ts";
@@ -26,11 +34,19 @@ export const STEPS: Step[] = [
 
 type Line = {
   step: string;
-  status: "ok" | "skipped" | "action_required" | "error";
+  /** `done`/`todo` only under --check. */
+  status: "ok" | "skipped" | "action_required" | "error" | "done" | "todo";
   message: string;
   data?: unknown;
 };
-const ICON = { ok: "✓", skipped: "·", action_required: "!", error: "✗" };
+const ICON = {
+  ok: "✓",
+  skipped: "·",
+  action_required: "!",
+  error: "✗",
+  done: "✓",
+  todo: "○",
+};
 
 const HOST = /^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i;
 const EMAIL = /^[^\s@"\\]+@[a-z0-9.-]+\.[a-z]{2,}$/i;
@@ -62,6 +78,7 @@ async function resolve(argv: string[], deps: Deps, state: State) {
       "account-id": { type: "string" },
       yes: { type: "boolean", default: false },
       upgrade: { type: "boolean", default: false },
+      check: { type: "boolean", default: false },
       "new-owner-token": { type: "boolean", default: false },
       json: { type: "boolean", default: false },
     },
@@ -103,11 +120,98 @@ async function resolve(argv: string[], deps: Deps, state: State) {
       v["account-id"] ?? state.accountId ?? deps.env.CLOUDFLARE_ACCOUNT_ID,
     yes: v.yes,
     upgrade: v.upgrade,
+    check: v.check,
     newOwnerToken: v["new-owner-token"],
     interactive,
     json: v.json,
   };
   return opts;
+}
+
+/** Wrangler subcommands --check may run: all read-only. */
+const READ_ONLY = [
+  (a: string[]) => a[0] === "whoami",
+  (a: string[]) => a[0] === "auth" && a[1] === "token",
+  (a: string[]) => a[0] === "secret" && a[1] === "list",
+  (a: string[]) =>
+    a[0] === "d1" &&
+    a[1] === "execute" &&
+    /^\s*SELECT\b[^;]*;?\s*$/i.test(a[a.indexOf("--command") + 1] ?? ""),
+];
+const refuse = (what: string) =>
+  new Error(`--check is read-only: refused ${what}`);
+
+function readOnlyWrangler(w: Wrangler): Wrangler {
+  return (args, o) =>
+    READ_ONLY.some((ok) => ok(args))
+      ? w(args, o)
+      : Promise.reject(refuse(`wrangler ${args.slice(0, 3).join(" ")}`));
+}
+
+function readOnlyApi(api: Api): Api {
+  const get = <T>(method: string, path: string, body?: unknown) =>
+    method === "GET"
+      ? api<T>(method, path, body)
+      : Promise.reject(refuse(`${method} ${path}`));
+  return Object.assign(get, { all: api.all });
+}
+
+/** State fields --check reports: ids and hosts, never secrets. */
+const REPORTED = [
+  "name",
+  "accountId",
+  "appHost",
+  "contentHost",
+  "ownerEmail",
+  "d1Id",
+  "r2Bucket",
+  "kvId",
+  "accessAppId",
+  "accessClientId",
+  "teamDomain",
+  "ownerTokenId",
+] as const;
+
+/** --check: every step's check(), never apply; the rebuilt state goes in the last line. */
+async function checkOnly(
+  steps: Step[],
+  state: State,
+  ctx: Ctx,
+  report: (l: Line) => void,
+): Promise<number> {
+  for (const step of steps) {
+    ctx.data = ctx.human = undefined;
+    try {
+      const r = await step.check(state, ctx);
+      const notes = ctx.notes.splice(0).join("; ");
+      report({
+        step: step.name,
+        status: r,
+        message: notes ? `${r}: ${notes}` : r,
+      });
+    } catch (e) {
+      ctx.notes.length = 0;
+      const message = (e as Error).message;
+      const ar = e instanceof NeedInput;
+      report({
+        step: step.name,
+        status: ar ? "action_required" : "error",
+        message,
+      });
+      return ar ? 2 : 1;
+    }
+  }
+  ctx.data = ctx.human = undefined;
+  const data = Object.fromEntries(
+    REPORTED.filter((k) => state[k] !== undefined).map((k) => [k, state[k]]),
+  );
+  report({
+    step: "state",
+    status: "ok",
+    message: "rebuilt from Cloudflare (not written)",
+    data,
+  });
+  return 0;
 }
 
 /** Runs setup; resolves to the exit code (0 ok, 2 action_required, 1 error). */
@@ -150,12 +254,18 @@ export async function run(
     accountId: state.accountId,
   };
   Object.assign(state, { name, appHost, contentHost, ownerEmail });
-  const wrangler = makeWrangler(deps, root, () => state.accountId);
-  const api = makeApi(deps, wrangler);
-  const accessApi = makeApi(deps, wrangler, deps.env.OA_ACCESS_TOKEN);
+  let wrangler = makeWrangler(deps, root, () => state.accountId);
+  let api = makeApi(deps, wrangler);
+  let accessApi = makeApi(deps, wrangler, deps.env.OA_ACCESS_TOKEN);
+  if (opts.check) {
+    wrangler = readOnlyWrangler(wrangler);
+    api = readOnlyApi(api);
+    accessApi = readOnlyApi(accessApi);
+  }
   const ctx: Ctx = {
     deps,
-    fs,
+    // --check writes nothing: no state, no rendered config.
+    fs: opts.check ? { read: fs.read, write: () => {} } : fs,
     root,
     opts,
     wrangler,
@@ -173,6 +283,7 @@ export async function run(
     const l: Line = { step: "", status, message: msg(fallback) };
     return data === undefined ? l : { ...l, data };
   };
+  if (opts.check) return checkOnly(steps, state, ctx, report);
   for (const step of steps) {
     human = ctx.data = ctx.human = undefined;
     try {
@@ -180,6 +291,8 @@ export async function run(
         report({ ...take("skipped", "already done"), step: step.name });
         continue;
       }
+      // Check-time notes explain the todo; apply reports its own.
+      ctx.notes.length = 0;
       const r = await step.apply(state, ctx);
       if (r) {
         ctx.notes.length = 0;

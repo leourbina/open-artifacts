@@ -52,28 +52,78 @@ const callback = (ctx: Ctx) => `https://${ctx.opts.appHost}/auth/callback`;
 const linked = (app: Obj, policyId?: string) =>
   Boolean(policyId) && app.policies?.some((p: Obj) => p.id === policyId);
 
+const HOST = /^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i;
+const TEAM = /(?:^|\/\/)([a-z0-9-]+\.cloudflareaccess\.com)(?=$|[/:?#])/i;
+
+/**
+ * The team domain from the Access app object, when a field carries it. The
+ * documented OIDC `saas_app` has none; SAML's `sso_endpoint`/`idp_entity_id`
+ * do, and the app's `domain` does when the API returns it.
+ */
+export function teamDomainOf(app: Obj): string | undefined {
+  const fields = [
+    app?.domain,
+    app?.saas_app?.issuer,
+    app?.saas_app?.sso_endpoint,
+    app?.saas_app?.idp_entity_id,
+  ];
+  for (const v of fields) {
+    const m = typeof v === "string" ? v.match(TEAM) : null;
+    if (m) return m[1].toLowerCase();
+  }
+  return undefined;
+}
+
+/** OA_TEAM_DOMAIN (a non-secret CI variable), as a bare host. */
+function envTeamDomain(ctx: Ctx): string | undefined {
+  const raw = ctx.deps.env.OA_TEAM_DOMAIN?.trim();
+  if (!raw) return undefined;
+  const host = raw.replace(/^https:\/\//i, "").replace(/\/+$/, "");
+  if (!HOST.test(host))
+    throw new Error(
+      `invalid OA_TEAM_DOMAIN: ${JSON.stringify(raw)} (expected <team>.cloudflareaccess.com)`,
+    );
+  return host.toLowerCase();
+}
+
+/** Thrown when only the organization (team domain) is unreadable. */
+const orgDenied = () =>
+  Object.assign(new Error("GET organizations: 403"), {
+    status: 403,
+    teamDomain: true,
+  });
+
+/** Finds the policy and app by name; the team domain from the app, the organization, then OA_TEAM_DOMAIN. */
 async function lookup(ctx: Ctx, accountId: string) {
   const a = `/accounts/${accountId}/access`;
-  // A 404 or a null result both mean "no Zero Trust organization".
-  const org = await ctx
-    .accessApi<{ auth_domain?: string } | null>("GET", `${a}/organizations`)
-    .catch((e) => {
-      if (status(e) === 404) return null;
-      throw e;
-    });
   const policy = (await ctx.accessApi.all<Obj>(`${a}/policies`)).find(
     (p) => p.name === POLICY_NAME,
   );
   const app = (await ctx.accessApi.all<Obj>(`${a}/apps`)).find(
     (x) => x.name === ctx.opts.name,
   );
-  return {
-    a,
-    domain: org?.auth_domain,
-    policy,
-    app,
-    have: await listSecrets(ctx),
-  };
+  let domain = app && teamDomainOf(app);
+  if (!domain) {
+    let forbidden = false;
+    // A 404 or a null result both mean "no Zero Trust organization".
+    const org = await ctx
+      .accessApi<{ auth_domain?: string } | null>("GET", `${a}/organizations`)
+      .catch((e) => {
+        if (status(e) === 404) return null;
+        if (status(e) !== 403) throw e;
+        forbidden = true;
+        return null;
+      });
+    // A token without Access scopes lists no apps instead of a 403: with the
+    // organization also denied, an empty list proves nothing, so never fall back.
+    if (forbidden && !app)
+      throw Object.assign(new Error("GET organizations: 403, no apps"), {
+        status: 403,
+      });
+    domain = org?.auth_domain ?? (forbidden ? envTeamDomain(ctx) : undefined);
+    if (forbidden && !domain) throw orgDenied();
+  }
+  return { a, domain, policy, app, have: await listSecrets(ctx) };
 }
 
 function record(state: State, ctx: Ctx, teamDomain: string, app: Obj) {
@@ -97,23 +147,27 @@ async function lookupWithToken(ctx: Ctx, accountId: string) {
   const how = ctx.opts.interactive
     ? "run `read -rs OA_ACCESS_TOKEN; export OA_ACCESS_TOKEN`, or rerun interactively and paste it (kept in memory only)"
     : "run `read -rs OA_ACCESS_TOKEN; export OA_ACCESS_TOKEN` (non-interactive/--json)";
-  const denied = AR(
-    `This token cannot read Access. Create one (Access: Apps and Policies Edit; Access: Organizations Read; Zone: DNS Read), then ${how}.`,
-    { url: TOKEN_URL },
-  );
+  const create = `Create one (Access: Apps and Policies Edit; Access: Organizations Read; Zone: DNS Read), then ${how}`;
+  const deny = (e: unknown) =>
+    AR(
+      (e as { teamDomain?: boolean }).teamDomain
+        ? `This token cannot read the Access organization, so the team domain is unknown. Set OA_TEAM_DOMAIN=<team>.cloudflareaccess.com, or ${create[0].toLowerCase()}${create.slice(1)}.`
+        : `This token cannot read Access. ${create}. (OA_TEAM_DOMAIN can stand in for Organizations Read.)`,
+      { url: TOKEN_URL },
+    );
   try {
     return await lookup(ctx, accountId);
   } catch (e) {
     if (status(e) !== 403) throw e;
-    if (!ctx.opts.interactive) return denied;
+    if (!ctx.opts.interactive) return deny(e);
     const q = `Paste an OA_ACCESS_TOKEN (input hidden; create one at ${TOKEN_URL}):`;
     const token = await ctx.deps.prompt(q, { secret: true });
-    if (!token) return denied;
+    if (!token) return deny(e);
     ctx.accessApi = makeApi(ctx.deps, ctx.wrangler, token);
     try {
       return await lookup(ctx, accountId);
     } catch (e2) {
-      if (status(e2) === 403) return denied;
+      if (status(e2) === 403) return deny(e2);
       throw e2;
     }
   }
@@ -206,22 +260,40 @@ export const access: Step = {
       return "done";
     }
     const l = await lookup(ctx, state.accountId ?? "").catch((e) => {
-      if (status(e) === 403) return undefined;
-      throw e;
+      if (status(e) !== 403) throw e;
+      ctx.notes.push(
+        e.teamDomain
+          ? "team domain unknown: organizations 403; set OA_TEAM_DOMAIN or use an OA_ACCESS_TOKEN with Access: Organizations Read"
+          : `this token cannot read Access (organizations 403, no app named ${ctx.opts.name} visible); set OA_ACCESS_TOKEN`,
+      );
+      return undefined;
     });
-    if (
-      !l?.domain ||
-      !l.policy ||
-      !policyMatches(l.policy) ||
-      !l.app ||
-      l.app.type !== "saas" ||
-      l.app.saas_app?.auth_type !== "oidc" ||
-      !linked(l.app, l.policy.id) ||
-      !l.app.saas_app.client_id ||
-      !l.have.has(ACCESS_SECRET)
-    )
+    if (!l) return "todo";
+    const drift = !l.policy || !policyMatches(l.policy);
+    const why = !l.domain
+      ? "no Zero Trust organization"
+      : !l.app
+        ? `Access app ${ctx.opts.name} not found`
+        : l.app.type !== "saas" || l.app.saas_app?.auth_type !== "oidc"
+          ? `Access app ${ctx.opts.name} is not SaaS OIDC`
+          : !linked(l.app, l.policy?.id)
+            ? `Access app ${ctx.opts.name} not linked to policy "${POLICY_NAME}"`
+            : !l.app.saas_app.client_id
+              ? `Access app ${ctx.opts.name} has no client_id`
+              : !l.have.has(ACCESS_SECRET)
+                ? `${ACCESS_SECRET} missing on the Worker`
+                : drift && !ctx.opts.upgrade
+                  ? `policy "${POLICY_NAME}" drifted`
+                  : undefined;
+    if (why) {
+      ctx.notes.push(why);
       return "todo";
-    record(state, ctx, l.domain, l.app);
+    }
+    if (drift)
+      ctx.notes.push(
+        `policy "${POLICY_NAME}" drifted; not reconciled (--upgrade), rerun without --upgrade to fix`,
+      );
+    record(state, ctx, l.domain as string, l.app);
     return "done";
   },
   async apply(state, ctx) {
@@ -236,6 +308,7 @@ export const access: Step = {
     const where = `Zero Trust > Access > Applications > ${ctx.opts.name}`;
     let app = l.app;
     if (
+      !ctx.opts.upgrade &&
       app &&
       app.id === state.pendingAccessAppId &&
       !l.have.has(ACCESS_SECRET) &&
@@ -264,6 +337,15 @@ export const access: Step = {
         return AR(
           `${ACCESS_SECRET} is missing on the Worker and can't be recovered: the API returns the client secret only on create. Delete the Access app (${where}), then rerun.`,
         );
+    }
+    if (ctx.opts.upgrade) {
+      // --upgrade never writes Access: no create, no policy POST or PUT.
+      if (!app)
+        return AR(
+          `Access app ${ctx.opts.name} not found on account ${state.accountId}; --upgrade never creates it, run a full setup first (without --upgrade).`,
+        );
+      record(state, ctx, l.domain, app);
+      return undefined;
     }
     // The policy is written only once the existing-app checks have passed.
     let policyId: string = l.policy?.id;
