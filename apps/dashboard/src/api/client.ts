@@ -72,6 +72,7 @@ export const api = {
     path: string,
     body: unknown,
     schema?: z.ZodType<T>,
+    signal?: AbortSignal,
   ): Promise<T> {
     const headers: Record<string, string> = { "X-OA-Request": "1" };
     if (body !== undefined) headers["Content-Type"] = "application/json";
@@ -79,6 +80,7 @@ export const api = {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal,
     });
     return parse(res, schema);
   },
