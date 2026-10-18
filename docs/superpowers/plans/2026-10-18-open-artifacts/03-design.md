@@ -98,8 +98,9 @@ Avatar({ name?: string; email: string; size?: 24|32 })     // initials, determin
 Card, EmptyState({ icon; title; description; action? }), Skeleton({ width?; height? }), Spinner
 FormatIcon({ format: Format; size? })                       // distinct glyph per html|markdown|code|pdf
 VisibilityBadge({ visibility: Visibility })                 // lock / users / globe
-Kbd, Banner({ tone; title; children; action? })            // used for the quota banner
+Kbd, Banner({ tone: "info"|"success"|"warning"|"danger"; title; children; action? }) // used for the quota banner
 AppShell({ nav: ReactNode; header?: ReactNode; children }) // responsive: sidebar ≥ 960px, drawer below
+NavItem({ href; icon?; label: ReactNode; count?: number; active?: boolean } & AnchorHTMLAttributes) // sidebar row; aria-current when active
 ```
 
 **Steps:**
