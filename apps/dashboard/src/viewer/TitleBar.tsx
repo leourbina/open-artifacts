@@ -134,7 +134,11 @@ export function TitleBar({
   const canEdit = authed && artifact.access !== "viewer";
   const go = (to: string) => void navigate({ to: to as string });
 
-  const entry = useVersionInfo(artifact.id, version, authed).data?.entry;
+  const info = useVersionInfo(artifact.id, version, authed).data;
+  const entry = info?.entry;
+  const iconFormat =
+    info?.format ??
+    (version === artifact.currentVersion ? artifact.format : undefined);
   const deleting = useRef(false);
   const deleted = useRef(false);
   // Dropped only once the viewer has unmounted, so nothing refetches the 404.
@@ -182,7 +186,7 @@ export function TitleBar({
   return (
     <div className="oa-vt">
       <div className="oa-vt-group">
-        <FormatIcon format={artifact.format} />
+        {iconFormat && <FormatIcon format={iconFormat} />}
         {canEdit ? (
           <EditableTitle artifact={artifact} />
         ) : (

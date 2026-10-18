@@ -3,7 +3,7 @@ import { Button, toast } from "@oa/ui";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { ApiClientError } from "../api/client";
-import { useArtifact } from "../api/queries";
+import { useArtifact, useVersionInfo } from "../api/queries";
 import { useLoginRedirect } from "../auth/redirect";
 import { useMe } from "../auth/useMe";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
@@ -92,6 +92,9 @@ function Viewer({
     });
   const bridge = useRef<Bridge | null>(null);
   // Latest values for the effect: the parent's key remounts this on id/version change.
+  const vformat = useVersionInfo(artifact.id, version).data?.format;
+  const formatRef = useRef(vformat);
+  formatRef.current = vformat;
   const latest = useRef({ artifact, viewer, theme });
   latest.current = { artifact, viewer, theme };
 
@@ -101,6 +104,7 @@ function Viewer({
       iframe: el,
       ...latest.current,
       version,
+      formatOf: () => formatRef.current,
       // TODO(FE11): wire thumbnail upload and PDF text extraction.
       onPdfText: () => {},
       onThumb: () => {},

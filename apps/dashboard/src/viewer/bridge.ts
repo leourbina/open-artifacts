@@ -27,6 +27,8 @@ export interface BridgeOptions {
   iframe: HTMLIFrameElement;
   artifact: ArtifactSummary;
   version: number;
+  /** This version's format; the artifact's own is only the current version's. */
+  formatOf?: () => string | undefined;
   viewer: Viewer | null;
   theme: Theme;
   onPdfText: (text: string) => void;
@@ -317,7 +319,13 @@ export function createBridge(opts: BridgeOptions) {
         void handleCall(m);
         break;
       case "pdf.text":
-        if (artifact.format === "pdf" && m.version === opts.version)
+        if (
+          (opts.formatOf?.() ??
+            (opts.version === artifact.currentVersion
+              ? artifact.format
+              : undefined)) === "pdf" &&
+          m.version === opts.version
+        )
           onPdfText(m.text);
         break;
       case "thumb.ready": {

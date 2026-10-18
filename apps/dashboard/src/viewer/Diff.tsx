@@ -252,14 +252,12 @@ function Compare({
   to,
   a,
   b,
-  format,
 }: {
   id: string;
   from: number;
   to: number;
   a: VersionInfo;
   b: VersionInfo;
-  format: string;
 }) {
   const paths = [
     ...new Set([...a.files.map((f) => f.path), ...b.files.map((f) => f.path)]),
@@ -298,7 +296,9 @@ function Compare({
       />
     </>
   );
-  const previewable = format === "html" || format === "markdown";
+  const previewable = [a, b].every(
+    (v) => v.format === "html" || v.format === "markdown",
+  );
   if (!previewable) return source;
   return (
     <Tabs
@@ -358,14 +358,7 @@ export function Diff({
         <h1>
           Compare v{from} → v{to}
         </h1>
-        <Compare
-          id={id}
-          from={from}
-          to={to}
-          a={a.data}
-          b={b.data}
-          format={art.data.format}
-        />
+        <Compare id={id} from={from} to={to} a={a.data} b={b.data} />
       </div>
     </div>
   );

@@ -248,17 +248,24 @@ describe("pdf / thumb / resize", () => {
   const PDF = { ...ART, format: "pdf" } as unknown as ArtifactSummary;
 
   it("routes pdf text for this version of a pdf artifact", () => {
-    const o = opts(PDF);
+    const o = { ...opts(), formatOf: () => "pdf" };
     live.push(createBridge(o));
     send({ oa: 1, type: "pdf.text", version: 1, text: "hi" });
     expect(o.onPdfText).toHaveBeenCalledWith("hi");
+  });
+
+  it("uses the shown version's format, not the artifact's", () => {
+    const o = { ...opts(PDF), formatOf: () => "html" };
+    live.push(createBridge(o));
+    send({ oa: 1, type: "pdf.text", version: 1, text: "x" });
+    expect(o.onPdfText).not.toHaveBeenCalled();
   });
 
   it("ignores pdf text from non-pdf artifacts or other versions", () => {
     const o = opts();
     live.push(createBridge(o));
     send({ oa: 1, type: "pdf.text", version: 1, text: "x" });
-    const p = opts(PDF);
+    const p = { ...opts(), formatOf: () => "pdf" };
     live.push(createBridge(p));
     send({ oa: 1, type: "pdf.text", version: 99, text: "x" });
     expect(o.onPdfText).not.toHaveBeenCalled();
