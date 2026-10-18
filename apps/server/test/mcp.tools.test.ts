@@ -271,7 +271,7 @@ describe("MCP artifact data tools", () => {
       }),
     );
     expect(set).toMatchObject({ id: "a", data: { choice: "A", n: 1 } });
-    expect(set.updatedBy).toBe(`agent:${owner.userId}`);
+    expect(set.updatedBy).toBe(`u:${owner.userId}`);
     const got = sc<{ doc: { data: unknown } }>(
       await tool(client, "artifact_data_get", {
         id,
@@ -328,7 +328,7 @@ describe("MCP artifact data tools", () => {
     expect(miss.doc).toBeNull();
   });
 
-  it("non-owners: viewer reads, editor writes, capability required", async () => {
+  it("non-owners: viewers read and write (as REST), capability required", async () => {
     const viewer = await login(`mcp-viewer-${tag}@x.com`);
     const editor = await login(`mcp-editor-${tag}@x.com`);
     await shareWith(id, `mcp-viewer-${tag}@x.com`, "viewer");
@@ -353,14 +353,15 @@ describe("MCP artifact data tools", () => {
       }),
     );
     sc(await tool(vc, "artifact_data_get", get));
-    // Viewers can't write through MCP: indistinguishable from no access.
-    expect(textOf(await tool(vc, "artifact_data_set", set))).toMatch(
-      /^not_found/,
+    // Viewers write through MCP, as on the REST runtime routes (spec §6.7).
+    const vw = sc<{ updatedBy: string }>(
+      await tool(vc, "artifact_data_set", set),
     );
+    expect(vw.updatedBy).toBe(`u:${viewer.userId}`);
     const w = sc<{ updatedBy: string }>(
       await tool(ec, "artifact_data_set", set),
     );
-    expect(w.updatedBy).toBe(`agent:${editor.userId}`);
+    expect(w.updatedBy).toBe(`u:${editor.userId}`);
     const stranger = await login(`mcp-stranger-${tag}@x.com`);
     const sc2 = await connect(
       (await createPat(env, stranger.userId, "s")).token,

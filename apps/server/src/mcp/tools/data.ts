@@ -18,22 +18,13 @@ import { guard, ok, type ToolEnv } from "../server.js";
 import { describeTool } from "../tool-defs.js";
 
 /**
- * The artifact's runtime DO, after the access check: viewer+ to read, editor+ to
- * write (else 404). The owner may use the store whether or not the artifact
- * declares `db`; anyone else needs the capability (403 capability_denied, as on
- * the runtime routes, since access is already proven).
+ * The artifact's runtime DO, after the access check, as on the REST runtime
+ * routes (spec §6.7): viewer+ reads and writes (else 404). The owner may use
+ * the store whether or not the artifact declares `db` (B14); anyone else needs
+ * the capability (403 capability_denied, since access is already proven).
  */
-async function store(
-  t: ToolEnv,
-  id: string,
-  write: boolean,
-): Promise<RuntimeStub> {
-  const a = await requireAccess(
-    t.env,
-    t.caller,
-    id,
-    write ? "editor" : "viewer",
-  );
+async function store(t: ToolEnv, id: string): Promise<RuntimeStub> {
+  const a = await requireAccess(t.env, t.caller, id, "viewer");
   if (a.ownerId !== t.user.id) {
     const caps = JSON.parse(a.capabilities) as { db?: boolean };
     if (caps.db !== true)
@@ -46,7 +37,8 @@ async function store(
 }
 
 export function registerDataTools(server: McpServer, t: ToolEnv): void {
-  const actor = `agent:${t.user.id}`;
+  // Same actor as the user's REST writes: one rate bucket per user.
+  const actor = `u:${t.user.id}`;
   const where = (id: string, collection: string) =>
     `${id} collection "${collection}"`;
 
@@ -58,7 +50,7 @@ export function registerDataTools(server: McpServer, t: ToolEnv): void {
     },
     (i) =>
       guard(async () => {
-        const s = await store(t, i.id, false);
+        const s = await store(t, i.id);
         const doc = await runtimeCall(() => s.get(i.collection, i.docId));
         return ok(
           `${doc ? "Found" : "No"} document "${i.docId}" in ${where(i.id, i.collection)}`,
@@ -75,7 +67,7 @@ export function registerDataTools(server: McpServer, t: ToolEnv): void {
     },
     (i) =>
       guard(async () => {
-        const s = await store(t, i.id, false);
+        const s = await store(t, i.id);
         const page = await runtimeCall(() =>
           s.list(i.collection, i.cursor, i.limit),
         );
@@ -94,7 +86,7 @@ export function registerDataTools(server: McpServer, t: ToolEnv): void {
     },
     (i) =>
       guard(async () => {
-        const s = await store(t, i.id, false);
+        const s = await store(t, i.id);
         const page = await runtimeCall(() => s.query(i.collection, i.query));
         return ok(
           `${page.items.length} matching documents in ${where(i.id, i.collection)}${page.nextCursor ? " (more: pass cursor)" : ""}`,
@@ -111,7 +103,7 @@ export function registerDataTools(server: McpServer, t: ToolEnv): void {
     },
     (i) =>
       guard(async () => {
-        const s = await store(t, i.id, true);
+        const s = await store(t, i.id);
         const doc = await runtimeCall(() =>
           s.set(i.collection, i.docId, i.data, actor),
         );
@@ -127,7 +119,7 @@ export function registerDataTools(server: McpServer, t: ToolEnv): void {
     },
     (i) =>
       guard(async () => {
-        const s = await store(t, i.id, true);
+        const s = await store(t, i.id);
         const doc = await runtimeCall(() =>
           s.update(i.collection, i.docId, i.patch, actor),
         );
@@ -143,7 +135,7 @@ export function registerDataTools(server: McpServer, t: ToolEnv): void {
     },
     (i) =>
       guard(async () => {
-        const s = await store(t, i.id, true);
+        const s = await store(t, i.id);
         await runtimeCall(() => s.delete(i.collection, i.docId, actor));
         return ok(`Deleted "${i.docId}" from ${where(i.id, i.collection)}`, {
           id: i.id,
