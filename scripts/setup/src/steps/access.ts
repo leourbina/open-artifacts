@@ -177,15 +177,19 @@ async function create(
 export const access: Step = {
   name: "access",
   async check(state, ctx) {
+    // From state alone under --upgrade, or when no OA_ACCESS_TOKEN can re-check.
+    const noToken = !ctx.deps.env.OA_ACCESS_TOKEN;
     if (
-      ctx.opts.upgrade &&
+      (ctx.opts.upgrade || noToken) &&
       state.accessAppId &&
       state.accessClientId &&
       state.teamDomain
     ) {
       if (!(await listSecrets(ctx)).has(ACCESS_SECRET)) return "todo";
       ctx.notes.push(
-        "verified from state only (--upgrade); rerun without --upgrade to reconcile Access",
+        ctx.opts.upgrade
+          ? "verified from state only (--upgrade); rerun without --upgrade to reconcile Access"
+          : "Access not re-verified: set OA_ACCESS_TOKEN to re-check",
       );
       return "done";
     }

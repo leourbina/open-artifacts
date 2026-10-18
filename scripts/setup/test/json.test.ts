@@ -100,3 +100,58 @@ describe("welcome link", () => {
     expect(cfg).toContain(url);
   });
 });
+
+describe("access rerun without OA_ACCESS_TOKEN", () => {
+  const accessCalls = (w: W) => w.auths.filter((a) => a.includes("/access/"));
+  const step = (w: W, s: string) => parsed(w).find((j) => j.step === s);
+  async function installed() {
+    const w = world();
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    w.lines.length = 0;
+    w.auths.length = 0;
+    return w;
+  }
+
+  it("is skipped from state with a note and no Access calls", async () => {
+    const w = await installed();
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    expect(accessCalls(w)).toEqual([]);
+    expect(step(w, "access")).toMatchObject({
+      status: "skipped",
+      message: "Access not re-verified: set OA_ACCESS_TOKEN to re-check",
+    });
+  });
+
+  it("with OA_ACCESS_TOKEN runs the full check", async () => {
+    const w = await installed();
+    w.deps.env.OA_ACCESS_TOKEN = "oa";
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    expect(accessCalls(w).length).toBeGreaterThan(0);
+    expect(accessCalls(w).every((a) => a.endsWith("Bearer oa"))).toBe(true);
+    expect(step(w, "access").status).toBe("skipped");
+    expect(step(w, "access").message).not.toContain("not re-verified");
+  });
+
+  it("--new-owner-token without the token skips access", async () => {
+    const w = await installed();
+    const argv = [...HOSTS, "--new-owner-token"];
+    expect(await run(argv, w.deps, ROOT)).toBe(0);
+    expect(accessCalls(w)).toEqual([]);
+    expect(step(w, "access").status).toBe("skipped");
+    expect(step(w, "owner-token").status).toBe("ok");
+  });
+
+  it("a missing Worker secret still runs the full check", async () => {
+    const w = world({ org: "forbidden" });
+    w.deps.env.OA_ACCESS_TOKEN = "oa";
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    delete w.deps.env.OA_ACCESS_TOKEN;
+    w.lines.length = 0;
+    w.auths.length = 0;
+    // Same state, but the Worker lost ACCESS_CLIENT_SECRET: no shortcut.
+    const st = w.state();
+    const fresh = world({ org: "forbidden", state: st, secrets: [] });
+    expect(await run(HOSTS, fresh.deps, ROOT)).toBe(2);
+    expect(step(fresh, "access").status).toBe("action_required");
+  });
+});
