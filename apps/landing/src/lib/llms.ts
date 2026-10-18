@@ -45,12 +45,7 @@ export function docMarkdown(doc: Doc): string {
 // Release-gate markers for the stand-ins the agent files depend on: one TODO
 // comment line each, then one OA-UNRELEASED line listing them all.
 export async function markerLines(): Promise<string> {
-  const active: FallbackId[] = [
-    ...toolListFallbacks,
-    ...(await docs()).flatMap((d) =>
-      d.data.fallback ? [d.data.fallback] : [],
-    ),
-  ];
+  const active: FallbackId[] = [...toolListFallbacks];
   if (active.length === 0) return "";
   const todos = active.map((id) => `<!-- ${FALLBACKS[id].todo} -->\n`).join("");
   const labels = active.map((id) => FALLBACKS[id].label).join(", ");

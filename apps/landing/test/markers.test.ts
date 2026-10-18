@@ -9,29 +9,21 @@ const dist = fileURLToPath(new URL("../dist/", import.meta.url));
 const manifest = fileURLToPath(
   new URL("../../server/src/mcp/tool-manifest.json", import.meta.url),
 );
+const src = fileURLToPath(new URL("../src/content/docs/", import.meta.url));
 const read = (p: string) => readFileSync(`${dist}${p}`, "utf8");
 
 const B14 = "<!-- TODO(B14): fallback tool list -->";
-const B16 = "<!-- TODO(B16): setup flags unverified -->";
 const D6 = "<!-- TODO(D6): text wordmark -->";
 const META = '<meta name="oa-status" content="OA-UNRELEASED">';
 
 describe("release-gate markers", () => {
   it("puts the agent-file markers on their own lines at the top", () => {
     const hasManifest = existsSync(manifest);
-    const todos = [...(hasManifest ? [] : [B14]), B16]
-      .map((m) => `${m}\n`)
-      .join("");
-    const labels = [
-      ...(hasManifest ? [] : ["B14 tool list"]),
-      "B16 setup flags",
-    ];
-    const status = `OA-UNRELEASED: ${labels.join(", ")}\n\n`;
+    const top = hasManifest ? "" : `${B14}\nOA-UNRELEASED: B14 tool list\n\n`;
     for (const file of ["llms.txt", "llms-full.txt"]) {
-      expect(
-        read(file).startsWith(`${todos}${status}# Open Artifacts\n`),
-        file,
-      ).toBe(true);
+      expect(read(file).startsWith(`${top}# Open Artifacts\n`), file).toBe(
+        true,
+      );
     }
   });
 
@@ -65,10 +57,24 @@ describe("release-gate markers", () => {
     expect(read("docs/setup/index.html")).not.toContain(B14);
   });
 
-  it("marks the unverified setup flags", () => {
+  // The Welcome-URL TODO lives in setup.md's frontmatter only; the gate fails
+  // on any "TODO" outside the known markers.
+  it("keeps source-only TODOs out of the build", () => {
+    expect(readFileSync(`${src}setup.md`, "utf8")).toContain(
+      "TODO(B16 welcomeUrl)",
+    );
+    for (const page of [
+      "docs/setup/index.html",
+      "docs/setup.md",
+      "llms.txt",
+      "llms-full.txt",
+    ])
+      expect(read(page), page).not.toContain("welcomeUrl");
+  });
+
+  it("has no B16 marker now that the setup docs follow scripts/setup", () => {
     for (const page of ["docs/setup/index.html", "llms.txt", "llms-full.txt"])
-      expect(read(page), page).toContain(B16);
-    expect(read("index.html")).not.toContain(B16);
+      expect(read(page), page).not.toMatch(/TODO\(B16\)|B16 setup flags/);
   });
 
   it("marks the text wordmark on every page", () => {
