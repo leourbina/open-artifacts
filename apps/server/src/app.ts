@@ -91,3 +91,7 @@ export function createApp(mount: (app: AppType) => void = mountRoutes) {
 }
 
 export const app = createApp();
+// Build the route matchers now (module scope counts toward the startup limit,
+// not a request's CPU): Hono compiles them on the first match, ~2.5 ms of a
+// cold isolate's first request. No routes are added after this.
+app.router.match("GET", "/");
