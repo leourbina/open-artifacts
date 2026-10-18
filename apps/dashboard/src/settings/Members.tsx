@@ -1,13 +1,5 @@
-import { type Member, MemberInviteSchema } from "@oa/shared";
-import {
-  Avatar,
-  Button,
-  Dialog,
-  displayName,
-  Input,
-  Select,
-  toast,
-} from "@oa/ui";
+import { type Member, MemberInviteSchema, type Role } from "@oa/shared";
+import { Avatar, Button, Dialog, displayName, Input, Select } from "@oa/ui";
 import { useState } from "react";
 import { ApiClientError } from "../api/client";
 import {
@@ -27,11 +19,12 @@ const ROLES: { value: Assignable; label: string }[] = [
   { value: "member", label: "Member" },
 ];
 
-const fail = (e: unknown, fallback: string) =>
-  toast({
-    title: e instanceof ApiClientError ? e.message : fallback,
-    tone: "danger",
-  });
+const ROLE_LABEL: Record<Role, string> = {
+  owner: "Owner",
+  admin: "Admin",
+  member: "Member",
+  guest: "Guest",
+};
 
 /** Trimmed, lowercased, ASCII-only email, or null. */
 export const parseInviteEmail = (raw: string) => {
@@ -48,6 +41,7 @@ function InviteDialog({ onClose }: { onClose: () => void }) {
   const [role, setRole] = useState<Assignable>("member");
   const [error, setError] = useState<string | null>(null);
   const submit = () => {
+    if (invite.isPending) return;
     const parsed = parseInviteEmail(email);
     if (!parsed) return setError("Enter a valid email address (ASCII only).");
     setError(null);
@@ -82,6 +76,7 @@ function InviteDialog({ onClose }: { onClose: () => void }) {
       }
     >
       <form
+        id="oa-invite-form"
         className="oa-form"
         onSubmit={(e) => {
           e.preventDefault();
@@ -113,20 +108,12 @@ function InviteDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
-function Row({
-  m,
-  you,
-  canEdit,
-}: {
-  m: Member;
-  you: boolean;
-  canEdit: boolean;
-}) {
+function Row({ m, you }: { m: Member; you: boolean }) {
   const patch = usePatchMember();
   const [confirm, setConfirm] = useState(false);
   const remove = useRemoveMember();
   const label = displayName(m);
-  const locked = m.role === "owner" || you || !canEdit;
+  const locked = m.role === "owner" || you;
   return (
     <li className="oa-member">
       <div className="oa-who">
@@ -141,24 +128,19 @@ function Row({
       </div>
       {m.role === "owner" ? (
         <span>Owner</span>
-      ) : you || !canEdit ? (
-        <span>{m.role[0]?.toUpperCase() + m.role.slice(1)}</span>
+      ) : you ? (
+        <span>{ROLE_LABEL[m.role]}</span>
       ) : (
         <Select
           aria-label={`Role for ${label}`}
           options={ROLES}
           value={m.role === "admin" || m.role === "member" ? m.role : undefined}
           placeholder="Guest"
-          onChange={(role) =>
-            patch.mutate(
-              { id: m.id, role },
-              { onError: (e) => fail(e, "Couldn't change the role.") },
-            )
-          }
+          onChange={(role) => patch.mutate({ id: m.id, role })}
         />
       )}
       <span className="oa-seen">
-        {m.lastSeenAt ? relativeTime(m.lastSeenAt) : "Never"}
+        {m.lastSeenAt ? relativeTime(m.lastSeenAt) || "Unknown" : "Never"}
       </span>
       {locked ? (
         <span />
@@ -185,9 +167,7 @@ function Row({
               variant="primary"
               onClick={() => {
                 setConfirm(false);
-                remove.mutate(m.id, {
-                  onError: (e) => fail(e, "Couldn't remove the member."),
-                });
+                remove.mutate(m.id);
               }}
             >
               Remove member
@@ -220,7 +200,7 @@ export function Members() {
       ) : (
         <ul className="oa-members">
           {q.data?.map((m) => (
-            <Row key={m.id} m={m} you={m.id === me?.id} canEdit={!!me} />
+            <Row key={m.id} m={m} you={m.id === me?.id} />
           ))}
         </ul>
       )}

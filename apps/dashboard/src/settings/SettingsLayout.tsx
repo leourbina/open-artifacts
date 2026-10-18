@@ -19,6 +19,9 @@ export function SettingsLayout() {
   const state = useMe();
   const path = useRouterState({ select: (s) => s.location.pathname });
   const role = state.status === "authed" ? state.me.user.role : null;
+  // Compare the normalized path: the router matches case-insensitively, ignoring a trailing slash.
+  const here = path.toLowerCase().replace(/\/+$/, "");
+  if (role === "guest") return <Outlet />; // no chrome; the gate redirects
   return (
     <div className="oa-settings">
       <h1>Settings</h1>
@@ -27,7 +30,7 @@ export function SettingsLayout() {
           <AppLink
             key={t.to}
             href={t.to}
-            aria-current={path === t.to ? "page" : undefined}
+            aria-current={here === t.to ? "page" : undefined}
           >
             {t.label}
           </AppLink>

@@ -20,6 +20,7 @@ import {
   UsageSchema,
   VersionInfoSchema,
 } from "@oa/shared";
+import { toast } from "@oa/ui";
 import {
   useInfiniteQuery,
   useMutation,
@@ -27,7 +28,13 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { z } from "zod";
-import { api } from "./client";
+import { ApiClientError, api } from "./client";
+
+const failToast = (e: unknown, fallback: string) =>
+  toast({
+    title: e instanceof ApiClientError ? e.message : fallback,
+    tone: "danger",
+  });
 
 export type SearchQuery = { q: string; cursor?: string; limit?: number };
 
@@ -188,16 +195,21 @@ export const useDeleteShare = (id: string) =>
     () => [qk.shares(id)],
   );
 
-export const useInviteMember = () =>
-  useInvalidating(
-    (input: MemberInvite) => api.send("POST", R.members, input, MemberSchema),
-    () => [qk.members],
-  );
+export const useInviteMember = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: MemberInvite) =>
+      api.send("POST", R.members, input, MemberSchema),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.members }),
+    onError: (e) => failToast(e, "Couldn't send the invite."),
+  });
+};
 
 /** Optimistic: `mutate` shows the new value at once; a failure restores the cached list. */
 const useOptimisticMembers = <V>(
   fn: (v: V) => Promise<unknown>,
   apply: (list: Member[], v: V) => Member[],
+  failure: string,
 ) => {
   const qc = useQueryClient();
   return useMutation({
@@ -208,7 +220,9 @@ const useOptimisticMembers = <V>(
       if (prev) qc.setQueryData(qk.members, apply(prev, v));
       return { prev };
     },
-    onError: (_e, _v, ctx) => {
+    // Here, not at the call site: the row (and its component) may be gone by now.
+    onError: (e, _v, ctx) => {
+      failToast(e, failure);
       if (ctx?.prev) qc.setQueryData(qk.members, ctx.prev);
     },
     onSettled: () => qc.invalidateQueries({ queryKey: qk.members }),
@@ -219,9 +233,11 @@ export const usePatchMember = () =>
     (v: { id: string } & MemberPatch) =>
       api.send("PATCH", R.member(v.id), { role: v.role }, MemberSchema),
     (list, v) => list.map((m) => (m.id === v.id ? { ...m, role: v.role } : m)),
+    "Couldn't change the role.",
   );
 export const useRemoveMember = () =>
   useOptimisticMembers(
     (id: string) => api.send("DELETE", R.member(id), undefined),
     (list, id) => list.filter((m) => m.id !== id),
+    "Couldn't remove the member.",
   );

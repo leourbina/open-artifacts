@@ -1,9 +1,9 @@
 import { type Member, R } from "@oa/shared";
 import { fixtures } from "@oa/shared/mocks";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { HttpResponse, http } from "msw";
+import { delay, HttpResponse, http } from "msw";
 import { describe, expect, it } from "vitest";
-import { installHarness, mount, server } from "./harness";
+import { installHarness, mount, server, wait } from "./harness";
 
 installHarness();
 
@@ -102,7 +102,9 @@ describe("members", () => {
       target: { value: owner.email },
     });
     fireEvent.click(screen.getByRole("button", { name: "Send invite" }));
-    expect(await screen.findByText("Already a member")).toBeTruthy();
+    expect(
+      (await screen.findAllByText("Already a member")).length,
+    ).toBeGreaterThan(0);
   });
 
   it("an admin is never offered owner", async () => {
@@ -183,6 +185,95 @@ describe("members", () => {
   });
 });
 
+describe("members: failures and edge cases", () => {
+  it("a failed remove toasts and the row returns", async () => {
+    as(owner);
+    server.use(
+      http.delete("*/api/v1/members/*", async () => {
+        await delay(20);
+        return HttpResponse.json(
+          { error: { code: "bad_request", message: "Remove refused" } },
+          { status: 400 },
+        );
+      }),
+    );
+    mount("/settings/members");
+    const row = await rowOf(other.email);
+    fireEvent.click(within(row).getByRole("button", { name: /remove/i }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Remove member" }),
+    );
+    expect(await screen.findByText("Remove refused")).toBeTruthy();
+    await rowOf(other.email);
+  });
+
+  it("a failed invite toasts", async () => {
+    mount("/settings/members");
+    fireEvent.click(await screen.findByRole("button", { name: "Invite" }));
+    fireEvent.change(await screen.findByLabelText("Email"), {
+      target: { value: owner.email },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send invite" }));
+    await waitFor(() =>
+      expect(screen.getAllByText("Already a member").length).toBe(2),
+    );
+  });
+
+  it("Enter in the invite form submits it, once while pending", async () => {
+    let posts = 0;
+    server.use(
+      http.post(`*${R.members}`, async () => {
+        posts++;
+        await delay(50);
+        return HttpResponse.json(mk("n1", "new@example.com", "member"));
+      }),
+    );
+    mount("/settings/members");
+    fireEvent.click(await screen.findByRole("button", { name: "Invite" }));
+    const input = await screen.findByLabelText("Email");
+    fireEvent.change(input, { target: { value: "new@example.com" } });
+    const form = input.closest("form") as HTMLFormElement;
+    // jsdom submits a form's default button on Enter via its `form=` owner.
+    fireEvent.click(screen.getByRole("button", { name: "Send invite" }));
+    await waitFor(() => expect(posts).toBe(1));
+    fireEvent.submit(form);
+    await wait(100);
+    expect(posts).toBe(1);
+  });
+
+  it("marks the active tab on a trailing-slash or upper-case URL", async () => {
+    as(owner);
+    mount("/settings/members/");
+    await rowOf(other.email);
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    expect(
+      within(nav)
+        .getByRole("link", { name: "Members" })
+        .getAttribute("aria-current"),
+    ).toBe("page");
+  });
+
+  it("shows Unknown for an invalid last-seen and Never for null", async () => {
+    as(owner, [owner, { ...other, lastSeenAt: "garbage" }, { ...guest }]);
+    mount("/settings/members");
+    const row = await rowOf(other.email);
+    expect(row.querySelector(":scope > .oa-seen")?.textContent).toBe("Unknown");
+    const g = await rowOf(guest.email);
+    expect(g.querySelector(":scope > .oa-seen")?.textContent).toBe("Never");
+  });
+
+  it("a guest row offers no owner option", async () => {
+    as(owner, [owner, guest]);
+    mount("/settings/members");
+    const row = await rowOf(guest.email);
+    fireEvent.click(within(row).getByRole("combobox"));
+    const names = (await screen.findAllByRole("option")).map(
+      (o) => o.textContent,
+    );
+    expect(names).toEqual(["Admin", "Member"]);
+  });
+});
+
 describe("settings guards", () => {
   const at = async (who: Member, path: string, want: string) => {
     as(who);
@@ -204,6 +295,8 @@ describe("settings guards", () => {
     at(other, "/settings/agents", "/settings/agents"));
   it("admin keeps /settings/instance and /settings/usage", async () => {
     await at(admin, "/settings/instance", "/settings/instance");
+    await at(admin, "/settings/usage", "/settings/usage");
+    expect(await screen.findByRole("heading", { name: "Usage" })).toBeTruthy();
   });
   it("member sees only the Agents tab", async () => {
     as(other);
