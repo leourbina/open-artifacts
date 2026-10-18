@@ -13,7 +13,6 @@ const src = fileURLToPath(new URL("../src/content/docs/", import.meta.url));
 const read = (p: string) => readFileSync(`${dist}${p}`, "utf8");
 
 const B14 = "<!-- TODO(B14): fallback tool list -->";
-const D6 = "<!-- TODO(D6): text wordmark -->";
 const META = '<meta name="oa-status" content="OA-UNRELEASED">';
 
 describe("release-gate markers", () => {
@@ -27,16 +26,14 @@ describe("release-gate markers", () => {
     }
   });
 
-  it("flags every page as unreleased with one meta tag", () => {
-    for (const page of [
-      "index.html",
-      "docs/setup/index.html",
-      "docs/mcp-tools/index.html",
-      "docs/security/index.html",
-    ]) {
+  it("flags only the tool-list pages as unreleased, with one meta tag", () => {
+    const hasManifest = existsSync(manifest);
+    for (const page of ["index.html", "docs/mcp-tools/index.html"]) {
       const head = read(page).split("</head>")[0];
-      expect(head.split(META).length - 1, page).toBe(1);
+      expect(head.split(META).length - 1, page).toBe(hasManifest ? 0 : 1);
     }
+    for (const page of ["docs/setup/index.html", "docs/security/index.html"])
+      expect(read(page), page).not.toContain(META);
   });
 
   it("uses the fallback only when there is no manifest", () => {
@@ -69,8 +66,31 @@ describe("release-gate markers", () => {
       expect(read(page), page).not.toMatch(/TODO\(B16\)|B16 setup flags/);
   });
 
-  it("marks the text wordmark on every page", () => {
-    for (const page of ["index.html", "docs/setup/index.html"])
-      expect(read(page)).toContain(D6);
+  it("has no D6 marker now that the header uses the D6 logo", () => {
+    for (const page of ["index.html", "docs/setup/index.html"]) {
+      expect(read(page), page).not.toContain("TODO(D6)");
+      expect(read(page), page).toMatch(
+        /<img src="\/_astro\/logo\.[^"]+\.svg" alt="Open Artifacts"/,
+      );
+      expect(read(page), page).toMatch(
+        /media="\(prefers-color-scheme: dark\)" srcset="\/_astro\/logo-dark\./,
+      );
+    }
+  });
+
+  it("references the D6 favicon, og image and theme color", () => {
+    const head = read("index.html").split("</head>")[0];
+    expect(head).toContain(
+      '<link rel="icon" href="/favicon.svg" type="image/svg+xml">',
+    );
+    expect(head).toContain(
+      '<meta property="og:image" content="https://open-artifacts.com/og.png">',
+    );
+    expect(head).toContain(
+      '<meta name="twitter:card" content="summary_large_image">',
+    );
+    expect(head).toMatch(/<meta name="theme-color"/);
+    for (const f of ["favicon.svg", "og.png"])
+      expect(existsSync(`${dist}${f}`), f).toBe(true);
   });
 });
