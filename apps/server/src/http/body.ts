@@ -23,13 +23,39 @@ export async function jsonBody<T>(c: Context, schema: Parser<T>): Promise<T> {
   return r.data;
 }
 
-/** Reads the body with a running cap: 413 as soon as `max` is exceeded. */
+/** A declared Content-Length in [0, max], or null (absent or malformed). */
+function declaredLength(c: Context, max: number): number | null {
+  const h = c.req.header("content-length");
+  if (h === undefined || !/^\d{1,16}$/.test(h)) return null;
+  const n = Number(h);
+  return n <= max ? n : null;
+}
+
+const tooLargeError = (max: number) =>
+  new ApiError("too_large", `Request body exceeds ${max} bytes`);
+
+/**
+ * Reads the body with a running cap: 413 as soon as `max` is exceeded.
+ * With a Content-Length ≤ max (the HTTP framing bounds the body to it) the
+ * body is read natively in one call; otherwise chunk by chunk. A JS read loop
+ * over a 2 MB body costs ~3 ms CPU on workerd (one promise per chunk).
+ */
 export async function readCapped(c: Context, max: number): Promise<Uint8Array> {
-  const tooLarge = () =>
-    new ApiError("too_large", `Request body exceeds ${max} bytes`);
-  if (Number(c.req.header("content-length") ?? 0) > max) throw tooLarge();
-  const body = c.req.raw.body;
-  if (!body) return new Uint8Array(0);
+  if (Number(c.req.header("content-length") ?? 0) > max)
+    throw tooLargeError(max);
+  if (!c.req.raw.body) return new Uint8Array(0);
+  if (declaredLength(c, max) !== null) {
+    const out = new Uint8Array(await c.req.raw.arrayBuffer());
+    if (out.byteLength > max) throw tooLargeError(max);
+    return out;
+  }
+  return readStreamCapped(c.req.raw.body, max);
+}
+
+async function readStreamCapped(
+  body: ReadableStream<Uint8Array>,
+  max: number,
+): Promise<Uint8Array> {
   const reader = body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
@@ -39,7 +65,7 @@ export async function readCapped(c: Context, max: number): Promise<Uint8Array> {
     size += value.byteLength;
     if (size > max) {
       await reader.cancel().catch(() => {});
-      throw tooLarge();
+      throw tooLargeError(max);
     }
     chunks.push(value);
   }
