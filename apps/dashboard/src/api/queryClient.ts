@@ -18,7 +18,13 @@ export const QUOTA_KEY = ["quota-exceeded"] as const;
 export const makeQueryClient = () => {
   const client: QueryClient = new QueryClient({
     defaultOptions: { queries: { retry: shouldRetry } },
-    queryCache: new QueryCache({ onError: (e) => flagQuota(client, e) }),
+    queryCache: new QueryCache({
+      onError: (e) => flagQuota(client, e),
+      onSuccess: () => {
+        if (client.getQueryData(QUOTA_KEY))
+          client.setQueryData(QUOTA_KEY, false);
+      },
+    }),
     mutationCache: new MutationCache({ onError: (e) => flagQuota(client, e) }),
   });
   return client;

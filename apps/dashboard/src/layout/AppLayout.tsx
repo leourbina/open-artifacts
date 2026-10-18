@@ -1,10 +1,13 @@
 import { AUTH, type Me } from "@oa/shared";
-import { AppShell, Avatar, Menu, NavItem } from "@oa/ui";
+import { AppShell, Avatar, Menu, NavItem, Toaster } from "@oa/ui";
+import { useQueryClient } from "@tanstack/react-query";
 import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { type ReactNode, useEffect } from "react";
-import { api } from "../api/client";
+import { qk } from "../api/queries";
 import { useRedirect } from "../auth/redirect";
+import { useSignOut } from "../auth/signOut";
 import { useMe } from "../auth/useMe";
+import { EdgePanel } from "../pages/Edge";
 import { QuotaBanner } from "./QuotaBanner";
 
 const icon = (d: string) => (
@@ -35,10 +38,12 @@ const I = {
 };
 
 /** Routes that render without the app shell (edge pages, viewer owns its chrome). */
-const bareRoute = (p: string) =>
-  p === "/sign-in" || p === "/no-access" || p.startsWith("/a/");
+const bareRoute = (p: string) => publicRoute(p) || p === "/no-access";
 /** Routes an anonymous visitor may see. */
-const publicRoute = (p: string) => p === "/sign-in" || p.startsWith("/a/");
+const publicRoute = (raw: string) => {
+  const p = raw.toLowerCase(); // the router matches case-insensitively
+  return p === "/sign-in" || p === "/no-access" || p.startsWith("/a/");
+};
 
 export function AppLayout() {
   const state = useMe();
@@ -54,20 +59,58 @@ export function AppLayout() {
       );
   }, [anonymous, redirect, path, loc.searchStr]);
 
-  if (anonymous) return null;
+  const navigate = useNavigate();
+  const guestHome =
+    state.status === "authed" &&
+    state.me.user.role === "guest" &&
+    ["/", "/mine", "/team"].includes(path);
+  useEffect(() => {
+    if (guestHome) void navigate({ to: "/shared" as string, replace: true });
+  }, [guestHome, navigate]);
+
+  if (anonymous || guestHome) return <Toaster />;
   if (bareRoute(path))
     return (
-      <>
+      <main id="oa-main">
         <QuotaBanner />
         <Outlet />
-      </>
+        <Toaster />
+      </main>
+    );
+  if (state.status === "error")
+    return (
+      <main id="oa-main">
+        <QuotaBanner />
+        <LoadError />
+        <Toaster />
+      </main>
     );
   const me = state.status === "authed" ? state.me : null;
   return (
     <AppShell nav={<Sidebar me={me} path={path} />} header={<TopBar me={me} />}>
       <QuotaBanner />
       <Outlet />
+      <Toaster />
     </AppShell>
+  );
+}
+
+function LoadError() {
+  const client = useQueryClient();
+  return (
+    <EdgePanel>
+      <h1>Couldn't load your account</h1>
+      <p>Something went wrong reaching the server.</p>
+      <div className="oa-actions">
+        <button
+          type="button"
+          className="oa-btn oa-primary"
+          onClick={() => void client.refetchQueries({ queryKey: qk.me })}
+        >
+          Retry
+        </button>
+      </div>
+    </EdgePanel>
   );
 }
 
@@ -147,17 +190,18 @@ function Sidebar({ me, path }: { me: Me | null; path: string }) {
 }
 
 function TopBar({ me }: { me: Me | null }) {
-  const redirect = useRedirect();
+  const signOut = useSignOut();
   if (!me) return null;
-  const signOut = async () => {
-    try {
-      await api.send("POST", AUTH.logout, undefined);
-    } finally {
-      redirect(AUTH.login);
-    }
-  };
   return (
-    <div style={{ marginLeft: "auto" }}>
+    <div
+      style={{
+        marginLeft: "auto",
+        display: "flex",
+        gap: 8,
+        alignItems: "center",
+      }}
+    >
+      <span>{me.user.email}</span>
       <Menu
         trigger={
           <button
@@ -168,11 +212,7 @@ function TopBar({ me }: { me: Me | null }) {
             <Avatar name={me.user.name ?? undefined} email={me.user.email} />
           </button>
         }
-        items={[
-          { label: me.user.email, onSelect: () => {} },
-          "separator",
-          { label: "Sign out", onSelect: signOut },
-        ]}
+        items={[{ label: "Sign out", onSelect: signOut }]}
       />
     </div>
   );

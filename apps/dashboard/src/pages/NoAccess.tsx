@@ -1,17 +1,9 @@
 import { AUTH } from "@oa/shared";
-import { api } from "../api/client";
-import { useRedirect } from "../auth/redirect";
+import { useSignOut } from "../auth/signOut";
 import { EdgePanel, SignedInAs } from "./Edge";
 
 export function NoAccess() {
-  const redirect = useRedirect();
-  const signOut = async () => {
-    try {
-      await api.send("POST", AUTH.logout, undefined);
-    } finally {
-      redirect(AUTH.login);
-    }
-  };
+  const signOut = useSignOut();
   return (
     <EdgePanel>
       <h1>You're signed in, but there's nothing here for you yet</h1>
