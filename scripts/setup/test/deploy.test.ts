@@ -136,6 +136,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
       mcp: "ok",
       artifactId: "art1",
       content: "https://a.b.usercontent.example.com/…",
+      welcomeUrl: "https://app.example.com/a/art1",
     });
     noSignedUrl(w);
     expect(st.welcomeArtifactId).toBe("art1");

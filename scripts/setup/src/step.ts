@@ -10,6 +10,9 @@ export type Opts = {
   yes: boolean;
   upgrade: boolean;
   newOwnerToken: boolean;
+  /** False under --yes or --json: never prompt. */
+  interactive: boolean;
+  json: boolean;
 };
 export type Ctx = {
   deps: Deps;
@@ -27,7 +30,12 @@ export type Ctx = {
   human?: string;
   /** The PAT minted this run, in memory only. */
   pat?: string;
+  /** The welcome artifact's view URL, when selftest published it this run. */
+  welcomeUrl?: string;
 };
+
+/** Missing input where prompting isn't allowed (--json): reported as action_required, exit 2. */
+export class NeedInput extends Error {}
 export type ActionRequired = {
   status: "action_required";
   message: string;

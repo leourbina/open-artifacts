@@ -98,7 +98,7 @@ async function lookupWithToken(ctx: Ctx, accountId: string) {
     return await lookup(ctx, accountId);
   } catch (e) {
     if (status(e) !== 403) throw e;
-    if (ctx.opts.yes) return denied;
+    if (!ctx.opts.interactive) return denied;
     const q = `Paste an OA_ACCESS_TOKEN (input hidden; create one at ${TOKEN_URL}):`;
     const token = await ctx.deps.prompt(q, { secret: true });
     if (!token) return denied;

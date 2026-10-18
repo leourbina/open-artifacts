@@ -48,7 +48,7 @@ async function rpcResult(res: Response, id: number, method: string) {
 }
 
 /** tools/list, then publish (or update) the welcome page; returns its id. */
-async function mcp(ctx: Ctx, token: string, prev?: string): Promise<string> {
+async function mcp(ctx: Ctx, token: string, prev?: string) {
   const url = `https://${ctx.opts.appHost}/mcp`;
   const headers: Record<string, string> = {
     authorization: `Bearer ${token}`,
@@ -108,7 +108,8 @@ async function mcp(ctx: Ctx, token: string, prev?: string): Promise<string> {
   const out = r?.structuredContent?.id;
   if (r?.isError || typeof out !== "string")
     throw new Error(`MCP publish_artifact: ${text(r)}`);
-  return out;
+  const view = r?.structuredContent?.url;
+  return { id: out, url: typeof view === "string" ? view : undefined };
 }
 
 /** The private artifact's signed content URL must serve the welcome text; returns the redacted URL. */
@@ -143,11 +144,16 @@ export const selftest: Step = {
       ctx.data = { mcp: "skipped" };
       return undefined;
     }
-    const artifactId = await mcp(ctx, ctx.pat, state.welcomeArtifactId);
+    const { id: artifactId, url: welcomeUrl } = await mcp(
+      ctx,
+      ctx.pat,
+      state.welcomeArtifactId,
+    );
+    ctx.welcomeUrl = welcomeUrl;
     state.welcomeArtifactId = artifactId;
     const shown = await content(ctx, ctx.pat, artifactId);
     ctx.notes.push(`healthz, OIDC discovery, MCP publish, content ok`);
-    ctx.data = { mcp: "ok", artifactId, content: shown };
+    ctx.data = { mcp: "ok", artifactId, content: shown, welcomeUrl };
     return undefined;
   },
 };
