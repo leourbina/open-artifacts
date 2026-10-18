@@ -26,6 +26,7 @@ export function withSecurityHeaders(
   res: Response,
   opts: SecurityOpts = {},
 ): Response {
+  if (res.status === 101) return res;
   const out = new Response(res.body, res);
   const h = out.headers;
   h.set("X-Robots-Tag", "noindex, nofollow");

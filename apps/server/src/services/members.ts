@@ -6,7 +6,7 @@ import {
   type Settings,
   type SettingsPatch,
 } from "@oa/shared";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, isNull } from "drizzle-orm";
 import { getDb } from "../db/client.js";
 import { normEmail } from "../db/email.js";
 import {
@@ -21,6 +21,7 @@ import {
 } from "../db/schema.js";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
+import { revokeAllGrants } from "../mcp/oauth-api.js";
 import { closeRuntimeSockets, MAX_CLOSE } from "../runtime/revoke.js";
 import { toMember } from "./users.js";
 
@@ -70,12 +71,23 @@ export async function patchMember(
   const row = await getRow(env, id);
   if (row.role === "owner")
     throw new ApiError("bad_request", "The owner cannot be demoted");
-  const [out] = await getDb(env)
+  const db = getDb(env);
+  const [out] = await db
     .update(users)
     .set({ role: patch.role })
     .where(eq(users.id, id))
     .returning();
   if (!out) throw new ApiError("not_found", "Not found");
+  // Guests can't connect agents: a demotion revokes their PATs and OAuth grants.
+  // (MemberPatch allows only admin|member today; this guards a wider contract.)
+  const role: string = patch.role;
+  if (role === "guest") {
+    await db
+      .update(tokens)
+      .set({ revokedAt: Date.now() })
+      .where(and(eq(tokens.userId, id), isNull(tokens.revokedAt)));
+    await revokeAllGrants(env, id);
+  }
   return toMember(out);
 }
 
@@ -103,6 +115,8 @@ export async function removeMember(
       .limit(1)
   )[0];
   if (!owner) throw new ApiError("bad_request", "No owner to reassign to");
+  // OAuth grants live in KV, outside the batch: revoke them first.
+  await revokeAllGrants(env, id);
   const to = owner.id;
   await db.batch([
     db.update(artifacts).set({ ownerId: to }).where(eq(artifacts.ownerId, id)),

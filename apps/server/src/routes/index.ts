@@ -1,5 +1,6 @@
 import type { Hono } from "hono";
 import type { AppEnv } from "../http/middleware.js";
+import { mountOAuth } from "../mcp/oauth.js";
 import { mountRuntime } from "../runtime/routes.js";
 import { mountArtifacts } from "./artifacts.js";
 import { mountAuth } from "./auth.js";
@@ -29,6 +30,7 @@ export function mountRoutes(app: AppType): void {
   mountRuntime(app);
   mountTokens(app);
   mountUsage(app);
+  mountOAuth(app);
   // /a/:id(/v/:v) OG shells; other /a/* paths fall to the SPA fallback.
   mountShell(app);
 }

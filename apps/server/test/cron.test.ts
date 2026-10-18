@@ -94,7 +94,11 @@ describe("purgeDeleted", () => {
     await scheduled({} as ScheduledController, env, ctx);
     expect(waits).toHaveLength(1);
     const settled = (await waits[0]) as PromiseSettledResult<unknown>[];
-    expect(settled.map((s) => s.status)).toEqual(["fulfilled", "fulfilled"]);
+    expect(settled.map((s) => s.status)).toEqual([
+      "fulfilled",
+      "fulfilled",
+      "fulfilled",
+    ]);
     expect(
       await count("select count(*) n from artifacts where id = ?", gone),
     ).toBe(0);
