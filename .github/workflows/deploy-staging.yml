@@ -23,6 +23,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: mkdir -p apps/dashboard/dist && [ -f apps/dashboard/dist/index.html ] || echo '<!doctype html><title>Open Artifacts</title>' > apps/dashboard/dist/index.html
+      - name: preflight (required Worker secrets)
+        working-directory: apps/server
+        run: pnpm exec wrangler secret list -c wrangler.staging.jsonc --env staging --format json | node ../../scripts/ops/check-staging-secrets.ts
       - run: pnpm --filter @oa/server exec wrangler d1 migrations apply open-artifacts-staging --remote -c wrangler.staging.jsonc --env staging
       - run: pnpm --filter @oa/server exec wrangler deploy -c wrangler.staging.jsonc --env staging
   smoke:
@@ -56,4 +59,12 @@ jobs:
           body=$(cat robots.body)
           grep -iq '^x-robots-tag: noindex, nofollow' <<< "$headers"
           grep -q 'Disallow: /' <<< "$body"
+      - name: auth login redirects to Access
+        run: |
+          team=$(sed -n 's/.*"ACCESS_TEAM_DOMAIN": *"\([^"]*\)".*/\1/p' apps/server/wrangler.staging.jsonc)
+          [ -n "$team" ] || { echo "::error::ACCESS_TEAM_DOMAIN not found in wrangler.staging.jsonc"; exit 1; }
+          headers=$(curl -fsS -D - -o /dev/null --retry 20 --retry-delay 5 --retry-max-time 180 --retry-all-errors https://staging.open-artifacts.com/auth/login)
+          echo "$headers"
+          grep -q '^HTTP/[0-9.]* 302' <<< "$headers" || { echo "::error::/auth/login did not return 302"; exit 1; }
+          grep -iq "^location: https://$team/" <<< "$headers" || { echo "::error::/auth/login Location is not https://$team/"; exit 1; }
       - run: pnpm --filter @oa/server smoke
