@@ -73,7 +73,11 @@ export function mountAuth(app: AppType): void {
   app.get(AUTH.callback, async (c) => {
     // This attempt's state cookie is single-use: cleared on success and on
     // every failure. Other attempts' cookies (other tabs) are left alone.
-    const picked = await pickStateCookie(c.req.raw, c.req.query("state") ?? "");
+    const picked = await pickStateCookie(
+      c.env,
+      c.req.raw,
+      c.req.query("state") ?? "",
+    );
     const clear = picked ? [clearOidcCookie(c.env, picked.name)] : [];
     try {
       const { email, name, next } = await handleCallback(c.env, c.req.raw);

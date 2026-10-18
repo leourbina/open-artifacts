@@ -12,29 +12,42 @@ import {
 /*
  * OIDC login state.
  *
- * Each login attempt gets its own signed cookie `oa_oidc_<k>` where
- * k = first 10 base64url chars of sha256(state). The callback recomputes k
- * from the `state` query param to pick the cookie, then still verifies the
- * HMAC and compares state in constant time. Parallel tabs therefore don't
- * clobber each other, and at most MAX_ATTEMPTS cookies are kept (oldest by
- * signed exp evicted at login; unparseable ones first).
+ * Each login attempt gets its own signed cookie `__Host-oa_oidc_<k>` (dev over
+ * http: plain `oa_oidc_<k>`, Path=/auth), where k = first 10 base64url chars of
+ * sha256(state). The callback recomputes k from the `state` query param to pick
+ * the cookie, then still verifies the HMAC and compares state in constant time.
+ * Parallel tabs therefore don't clobber each other, and at most MAX_ATTEMPTS
+ * cookies are kept (oldest by signed exp evicted at login; unparseable first).
  *
- * Security: login CSRF is still prevented. A callback is accepted only if its
- * `state` equals the state inside an HMAC-signed cookie that this browser
- * holds (set by our own /auth/login, HttpOnly, SameSite=Lax, Path=/auth). An
- * attacker cannot plant such a cookie, and choosing a different `state` only
- * selects a different (absent) cookie name. k is a public hash prefix, not a
- * secret; nothing is accepted on k alone.
+ * Security (login CSRF / cookie tossing): a callback is accepted only if its
+ * `state` equals the state inside an HMAC-signed cookie this browser presents.
+ * The HMAC alone does not bind the cookie to a browser: an attacker can run
+ * /auth/login themselves and obtain a perfectly valid (state, cookie) pair. What
+ * stops them is that they cannot make the victim's browser *hold* that cookie.
+ * A sibling or parent-domain host they control (e.g. another *.example.com
+ * app, or the content host) could otherwise set `Domain=.example.com` cookies
+ * that the app host receives. The `__Host-` prefix forbids exactly that: the
+ * browser only stores a `__Host-` cookie if it is set by this exact host with
+ * `Secure`, `Path=/` and no `Domain` attribute, so no other host can plant or
+ * overwrite one. Hence the prefixed name is the only one read in production,
+ * and the legacy un-prefixed `oa_oidc` cookie is no longer accepted at all.
+ * k is a public hash prefix, not a secret; nothing is accepted on k alone.
  *
  * State failures (missing / bad sig / expired / mismatch) redirect once to
  * /auth/login?retry=1. The retry flag rides in the signed payload and as a
  * public `r1.` prefix on `state` (so it survives even if the cookie never comes
  * back); a second state failure renders a static page instead: no loop.
  */
-/** Legacy single cookie: accepted (read only) for one release. */
-export const OIDC_COOKIE = "oa_oidc";
-const OIDC_PREFIX = "oa_oidc_";
-const OIDC_NAME_RE = /^oa_oidc_[A-Za-z0-9_-]{10}$/;
+const OIDC_BASE = "oa_oidc_";
+const hostPrefixed = (env: Env) => env.ENVIRONMENT !== "dev";
+const oidcPrefix = (env: Env) =>
+  hostPrefixed(env) ? `__Host-${OIDC_BASE}` : OIDC_BASE;
+const oidcNameRe = (env: Env) =>
+  hostPrefixed(env)
+    ? /^__Host-oa_oidc_[A-Za-z0-9_-]{10}$/
+    : /^oa_oidc_[A-Za-z0-9_-]{10}$/;
+/** Browsers silently drop cookies over ~4096 bytes; stay well under. */
+const MAX_SET_COOKIE_LEN = 3800;
 const OIDC_MAX_AGE_S = 900;
 const MAX_ATTEMPTS = 3;
 const MAX_SCANNED = 16;
@@ -102,16 +115,22 @@ function oidcCookie(
   value: string,
   maxAge: number,
 ): string {
-  const secure = env.ENVIRONMENT === "dev" ? "" : " Secure;";
-  return `${name}=${value}; HttpOnly;${secure} SameSite=Lax; Path=/auth; Max-Age=${maxAge}`;
+  // __Host- requires Secure, Path=/ and no Domain.
+  const attrs = hostPrefixed(env)
+    ? "HttpOnly; Secure; SameSite=Lax; Path=/"
+    : "HttpOnly; SameSite=Lax; Path=/auth";
+  return `${name}=${value}; ${attrs}; Max-Age=${maxAge}`;
 }
 
 export const clearOidcCookie = (env: Env, name: string) =>
   oidcCookie(env, name, "", 0);
 
 /** Per-attempt cookie name for a state value. */
-export async function stateCookieName(state: string): Promise<string> {
-  return `${OIDC_PREFIX}${(await s256(state)).slice(0, 10)}`;
+export async function stateCookieName(
+  env: Env,
+  state: string,
+): Promise<string> {
+  return `${oidcPrefix(env)}${(await s256(state)).slice(0, 10)}`;
 }
 
 function parseCookies(header: string | null | undefined): [string, string][] {
@@ -132,7 +151,7 @@ async function evictions(
 ): Promise<string[]> {
   const seen = new Map<string, string>();
   for (const [n, v] of parseCookies(cookieHeader))
-    if (OIDC_NAME_RE.test(n) && !seen.has(n)) seen.set(n, v);
+    if (oidcNameRe(env).test(n) && !seen.has(n)) seen.set(n, v);
   const excess = seen.size - (MAX_ATTEMPTS - 1);
   if (excess <= 0) return [];
   const ranked: { name: string; exp: number }[] = [];
@@ -162,8 +181,23 @@ export async function buildAuthorizeRedirect(
     exp: Date.now() + OIDC_MAX_AGE_S * 1000,
     ...(retry ? { retry: true } : {}),
   };
-  const p = b64urlEncode(new TextEncoder().encode(JSON.stringify(st)));
-  const value = `${p}.${await hmacSign(secret, p)}`;
+  const name = await stateCookieName(env, st.state);
+  const sign = async () => {
+    const p = b64urlEncode(new TextEncoder().encode(JSON.stringify(st)));
+    return oidcCookie(
+      env,
+      name,
+      `${p}.${await hmacSign(secret, p)}`,
+      OIDC_MAX_AGE_S,
+    );
+  };
+  // Measure the final Set-Cookie (JSON escaping can inflate `next`, e.g.
+  // backslashes); if it would be dropped by the browser, fall back to "/".
+  let stateCookie = await sign();
+  if (stateCookie.length > MAX_SET_COOKIE_LEN) {
+    st.next = "/";
+    stateCookie = await sign();
+  }
   const u = new URL(`${accessIssuer(env)}/authorization`);
   u.search = new URLSearchParams({
     client_id: env.ACCESS_CLIENT_ID,
@@ -177,12 +211,7 @@ export async function buildAuthorizeRedirect(
   }).toString();
   return {
     location: u.toString(),
-    stateCookie: oidcCookie(
-      env,
-      await stateCookieName(st.state),
-      value,
-      OIDC_MAX_AGE_S,
-    ),
+    stateCookie,
     evict: await evictions(env, secret, opts.cookieHeader),
   };
 }
@@ -224,18 +253,15 @@ const fail = (
   throw new ApiError("unauthorized", "Login failed");
 };
 
-/** The cookie for this attempt (by state), else the legacy cookie, else null. */
+/** The cookie for this attempt (by state), else null. No legacy fallback. */
 export async function pickStateCookie(
+  env: Env,
   req: Request,
   state: string,
 ): Promise<{ name: string; value: string } | null> {
-  const jar = parseCookies(req.headers.get("cookie"));
-  const want = await stateCookieName(state);
-  for (const name of [want, OIDC_COOKIE]) {
-    const hit = jar.find(([n]) => n === name);
-    if (hit) return { name, value: hit[1] };
-  }
-  return null;
+  const name = await stateCookieName(env, state);
+  const hit = parseCookies(req.headers.get("cookie")).find(([n]) => n === name);
+  return hit ? { name, value: hit[1] } : null;
 }
 
 type StateRead =
@@ -349,7 +375,7 @@ export async function handleCallback(
       from?.retry === true || state.startsWith(RETRY_MARK),
     );
   };
-  const picked = await pickStateCookie(req, state);
+  const picked = await pickStateCookie(env, req, state);
   if (!picked) return failState("no_state_cookie");
   const read = await readOidcState(secret, picked.value);
   if (read.stage === "state_bad_sig") return failState("state_bad_sig");

@@ -98,7 +98,7 @@ const call = (path: string, init?: RequestInit, e: Env = env) =>
   app.fetch(new Request(`${APP}${path}`, init), e, ctx);
 
 const setCookies = (r: Response) => r.headers.getSetCookie();
-const OIDC_NAME = /^oa_oidc_[A-Za-z0-9_-]{10}$/;
+const OIDC_NAME = /^(__Host-)?oa_oidc_[A-Za-z0-9_-]{10}$/;
 async function kOf(state: string) {
   const d = await crypto.subtle.digest(
     "SHA-256",
@@ -112,7 +112,7 @@ const oidcSet = (r: Response) =>
   );
 const clearedNames = (r: Response) =>
   setCookies(r)
-    .filter((c) => /Max-Age=0/.test(c) && c.startsWith("oa_oidc"))
+    .filter((c) => /Max-Age=0/.test(c) && /^(__Host-)?oa_oidc/.test(c))
     .map((c) => c.split("=")[0]);
 const cookieVal = (r: Response, name: string) => {
   const c = setCookies(r).find((s) => s.startsWith(`${name}=`));
@@ -156,7 +156,9 @@ const callback = async (
   name?: string,
   extraCookie?: string,
 ) => {
-  const n = name ?? `oa_oidc_${await kOf(q.state)}`;
+  const n =
+    name ??
+    `${e.ENVIRONMENT === "dev" ? "" : "__Host-"}oa_oidc_${await kOf(q.state)}`;
   const parts = [oidc === undefined ? undefined : `${n}=${oidc}`, extraCookie]
     .filter(Boolean)
     .join("; ");
@@ -799,20 +801,78 @@ describe("resilient OIDC state", () => {
     expect(html).not.toMatch(/onerror=alert/i);
   });
 
-  it("legacy oa_oidc cookie still works (read only) and is cleared", async () => {
+  it("legacy oa_oidc cookie is no longer accepted", async () => {
     await login("legacy@x.com");
     const b = await begin({ email: "legacy@x.com" }, "/a/l");
     const r = await call(
       `/auth/callback?code=${b.code}&state=${encodeURIComponent(b.state)}`,
       { headers: { cookie: `oa_oidc=${b.oidc}` } },
     );
-    expect(r.status).toBe(302);
-    expect(r.headers.get("location")).toBe("/a/l");
-    expect(clearedNames(r)).toEqual(["oa_oidc"]);
+    expectRetry(r, "/");
   });
 
   it("token/JWT failures keep the generic 401", async () => {
     const b = await begin({ email: "n@x.com", nonce: "wrong" });
     await expect401(await callback(b, b.oidc));
+  });
+});
+
+describe("REVIEW breaks", () => {
+  const prod = { ...env, ENVIRONMENT: "production" as const };
+  it("B1: backslash-heavy next makes the state cookie exceed 4096 (browser drops it)", async () => {
+    const next = `/?${"\\".repeat(2000)}`;
+    expect(safeNext(env, next).length).toBeLessThanOrEqual(2048);
+    const r = await call(`/auth/login?next=${encodeURIComponent(next)}`);
+    const c = oidcSet(r) ?? "";
+    expect(c.length).toBeGreaterThan(0);
+    expect(c.length).toBeLessThan(4096);
+    expect(c.length).toBeLessThanOrEqual(3800);
+  });
+  it("B2: state cookie is not browser-bound: a planted (tossed) attacker cookie completes login CSRF", async () => {
+    const e = { ...prod, OWNER_EMAIL: "attacker@x.com" };
+    const atk = await begin({ email: "attacker@x.com" }, "/", e);
+    // victim's browser: a sibling host can only plant the un-prefixed name
+    const r = await callback(
+      atk,
+      atk.oidc,
+      e,
+      `oa_oidc_${await kOf(atk.state)}`,
+    );
+    expect(cookieVal(r, "oa_session")).toBeUndefined();
+  });
+  it("B2b: same via the legacy oa_oidc name", async () => {
+    for (const e of [
+      { ...env, OWNER_EMAIL: "attacker@x.com" },
+      { ...prod, OWNER_EMAIL: "attacker@x.com" },
+    ]) {
+      const atk = await begin({ email: "attacker@x.com" }, "/", e);
+      const r = await callback(atk, atk.oidc, e, "oa_oidc");
+      expect(cookieVal(r, "oa_session")).toBeUndefined();
+    }
+  });
+  it("B2c: issued cookie is not __Host- prefixed / Path=/ (tossable)", async () => {
+    const r = await call("/auth/login?next=/", {}, prod);
+    const c = oidcSet(r) ?? "";
+    expect(c).toMatch(/^__Host-oa_oidc_[A-Za-z0-9_-]{10}=/);
+    expect(c).toMatch(/; Secure/);
+    expect(c).toMatch(/; Path=\/(;|$)/);
+    expect(c).not.toMatch(/Domain=/i);
+  });
+  it("prod: full flow with __Host- cookie works and clears it with the same attributes", async () => {
+    await login("hostp@x.com");
+    const b = await begin({ email: "hostp@x.com" }, "/a/h", prod);
+    expect(b.cname).toBe(`__Host-oa_oidc_${await kOf(b.state)}`);
+    const r = await callback(b, b.oidc, prod);
+    expect(r.headers.get("location")).toBe("/a/h");
+    const cleared = setCookies(r).find((c) => c.startsWith(`${b.cname}=;`));
+    expect(cleared).toBe(
+      `${b.cname}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`,
+    );
+  });
+  it("dev: plain oa_oidc_<k> name with Path=/auth", async () => {
+    const r = await call("/auth/login?next=/");
+    const c = oidcSet(r) ?? "";
+    expect(c).toMatch(/^oa_oidc_[A-Za-z0-9_-]{10}=/);
+    expect(c).toMatch(/; Path=\/auth(;|$)/);
   });
 });
