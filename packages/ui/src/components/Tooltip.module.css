@@ -1,0 +1,8 @@
+.tip {
+  background: var(--oa-text);
+  color: var(--oa-surface);
+  font: 500 var(--oa-text-xs) / 1.4 var(--oa-font-sans);
+  padding: var(--oa-space-1) var(--oa-space-2);
+  border-radius: var(--oa-radius-sm);
+  z-index: 50;
+}

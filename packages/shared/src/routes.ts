@@ -1,0 +1,94 @@
+const A = "/api/v1/artifacts";
+// "." and ".." segments (even percent-encoded) are collapsed by URL parsers, so they cannot be
+// represented safely; refuse them rather than emit a URL that resolves elsewhere.
+const seg = (s: string): string => {
+  if (s === "." || s === "..")
+    throw new RangeError(`Unsafe path segment: ${JSON.stringify(s)}`);
+  return encodeURIComponent(s);
+};
+
+export const R = {
+  /** GET -> Me */
+  me: "/api/v1/me",
+  /** GET (ListQuery) -> Page<ArtifactSummary>; POST PublishInput (JSON) -> PublishResult. Publishing to an uploaded/reserved id with no existing artifact requires title; the server returns 400 without it. */
+  artifacts: A,
+  /** GET -> ArtifactSummary; PATCH ArtifactPatch -> ArtifactSummary; DELETE soft-delete -> 204 */
+  artifact: (id: string) => `${A}/${seg(id)}`,
+  /** POST -> ArtifactSummary */
+  restoreDeleted: (id: string) => `${A}/${seg(id)}/undelete`,
+  /** GET -> VersionInfo[]; POST PublishInput (new version) -> PublishResult */
+  versions: (id: string) => `${A}/${seg(id)}/versions`,
+  /** GET raw file bytes (auth), for diff */
+  versionFile: (id: string, v: number, path: string) =>
+    `${A}/${seg(id)}/versions/${v}/files/${path.split("/").map(seg).join("/")}`,
+  /** POST -> PublishResult */
+  restoreVersion: (id: string, v: number) =>
+    `${A}/${seg(id)}/versions/${v}/restore`,
+  /** PUT text/plain (PDF extraction) -> 204 */
+  versionText: (id: string, v: number) => `${A}/${seg(id)}/versions/${v}/text`,
+  /** GET -> image/webp; PUT image/webp -> 204 */
+  thumbnail: (id: string) => `${A}/${seg(id)}/thumbnail`,
+  /** GET -> ContentUrl */
+  contentUrl: (id: string, v?: number) =>
+    `${A}/${seg(id)}/content-url${v !== undefined ? `?v=${v}` : ""}`,
+  /** GET -> Share[]; PUT ShareInput -> Share */
+  shares: (id: string) => `${A}/${seg(id)}/shares`,
+  /** DELETE -> 204 */
+  share: (id: string, email: string) => `${A}/${seg(id)}/shares/${seg(email)}`,
+  /** POST UploadCreateInput -> UploadCreated */
+  uploads: "/api/v1/uploads",
+  /** PUT raw body (signed: ?sig=...&exp=...) -> 204 */
+  upload: (uploadId: string) => `/api/v1/uploads/${seg(uploadId)}`,
+  /** GET ?q=&cursor=&limit= -> Page<SearchHit> */
+  search: "/api/v1/search",
+  /** GET -> Member[]; POST MemberInvite -> Member */
+  members: "/api/v1/members",
+  /** PATCH MemberPatch -> Member; DELETE -> 204 */
+  member: (id: string) => `/api/v1/members/${seg(id)}`,
+  /** GET -> Token[]; POST TokenCreateInput -> TokenCreated */
+  tokens: "/api/v1/tokens",
+  /** DELETE -> 204 */
+  token: (id: string) => `/api/v1/tokens/${seg(id)}`,
+  /** GET -> OAuthClient[] */
+  oauthClients: "/api/v1/oauth-clients",
+  /** DELETE -> 204 */
+  oauthClient: (grantId: string) => `/api/v1/oauth-clients/${seg(grantId)}`,
+  /** GET -> Settings; PATCH SettingsPatch -> Settings */
+  settings: "/api/v1/settings",
+  /** GET -> Usage */
+  usage: "/api/v1/usage",
+  /** GET -> Page<DataDoc> */
+  dataCollection: (id: string, col: string) =>
+    `${A}/${seg(id)}/data/${seg(col)}`,
+  /** POST DataQuery -> Page<DataDoc> */
+  dataQuery: (id: string, col: string) =>
+    `${A}/${seg(id)}/data/${seg(col)}/query`,
+  /** GET -> DataDoc; PUT DataSetBody (raw JSON doc) -> DataDoc; PATCH DataPatchBody (merge) -> DataDoc; DELETE -> 204 */
+  dataDoc: (id: string, col: string, doc: string) =>
+    `${A}/${seg(id)}/data/${seg(col)}/${seg(doc)}`,
+  /** GET Upgrade: websocket; frames are DataChange */
+  dataSubscribe: (id: string, col: string) =>
+    `${A}/${seg(id)}/data-subscribe?collection=${seg(col)}`,
+  /** GET -> Page<StorageKey> */
+  storage: (id: string) => `${A}/${seg(id)}/storage`,
+  /** GET -> StorageEntry; PUT { value } -> StorageEntry; DELETE -> 204 */
+  storageKey: (id: string, key: string) =>
+    `${A}/${seg(id)}/storage/${seg(key)}`,
+} as const;
+
+export const AUTH = {
+  login: "/auth/login",
+  callback: "/auth/callback",
+  logout: "/auth/logout",
+  devLogin: "/auth/dev-login",
+} as const;
+
+export const MCP_PATH = "/mcp";
+
+export const diffPath = (id: string, from: number, to: number) =>
+  `/a/${seg(id)}/diff/${from}/${to}`;
+
+export const PAGES = { noAccess: "/no-access", search: "/search" } as const;
+
+export const viewerPath = (id: string, v?: number) =>
+  v !== undefined ? `/a/${seg(id)}/v/${v}` : `/a/${seg(id)}`;
