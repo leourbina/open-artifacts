@@ -238,7 +238,7 @@ One master plan covers the whole system: `docs/superpowers/plans/2026-10-18-open
 |---|---|
 | **OpenArtifacts Backend** | Foundation (repo, `packages/shared` contract), `apps/server`, `packages/render`, `packages/runtime` |
 | **OpenArtifacts Platform** | CI/CD, staging (deploys, secrets, Access apps, watching staging), `scripts/setup`, releases (release-please), live verification |
-| **OpenArtifacts QA & Security** (being provisioned) | An independent red team: the cross-track end-to-end journey, the sandbox-escape and security pass, attacks on each merge on staging, and the "stranger install" check before releases |
+| **OpenArtifacts QA & Security** (a cyberstrike agent, reached on the agent-bus) | An independent red team: the cross-track end-to-end journey, the sandbox-escape and security pass, attacks on each merge on staging, and the "stranger install" check before releases |
 | **OpenArtifacts Frontend** | `apps/dashboard` (SPA, viewer shell, bridge, upload, settings, usage), local end-to-end suite |
 | **OpenArtifacts Design** | Visual direction (the user picks from options), `packages/ui`, screen designs, render themes, brand assets, `apps/landing` with docs and llms.txt |
 
