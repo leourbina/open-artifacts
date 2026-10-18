@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { tokens } from "../src/index";
 
@@ -37,5 +38,82 @@ describe.each(["light", "dark"] as const)("%s theme", (theme) => {
     expect(a, fg).toMatch(/^#[0-9a-f]{6}$/i);
     expect(b, bg).toMatch(/^#[0-9a-f]{6}$/i);
     expect(contrast(a as string, b as string)).toBeGreaterThanOrEqual(min);
+  });
+});
+
+// WCAG 1.4.11: form-control boundaries need 3:1 against what they sit on.
+describe("control borders in Field.module.css", () => {
+  const css = readFileSync(
+    `${import.meta.dirname}/../src/components/Field.module.css`,
+    "utf8",
+  );
+  const borderToken = (selector: string) => {
+    const body = new RegExp(`(?:^|\\n)\\${selector}\\s*\\{([^}]*)\\}`).exec(
+      css,
+    )?.[1];
+    return /border:[^;]*var\(--oa-([\w-]+)\)/.exec(body ?? "")?.[1];
+  };
+
+  it.each([".control", ".seg"])("%s border is at least 3:1", (selector) => {
+    const token = borderToken(selector);
+    expect(token, selector).toBeDefined();
+    for (const theme of ["light", "dark"] as const)
+      for (const bg of ["bg", "surface"]) {
+        const ratio = contrast(
+          tokens[token as string]?.[theme] as string,
+          tokens[bg]?.[theme] as string,
+        );
+        expect(ratio, `${token} on ${bg} (${theme})`).toBeGreaterThanOrEqual(3);
+      }
+  });
+});
+
+describe("render .oa-error", () => {
+  const css = readFileSync(
+    `${import.meta.dirname}/../../render/src/theme.css`,
+    "utf8",
+  );
+  const pairs = [
+    ...css.matchAll(
+      /--oa-error-fg:\s*(#[0-9a-f]{6});\s*--oa-error-bg:\s*(#[0-9a-f]{6})/gi,
+    ),
+  ].map((m) => [m[1] as string, m[2] as string]);
+
+  it("defines light and both dark variants", () => {
+    expect(pairs).toHaveLength(3);
+  });
+
+  it("uses the danger tokens", () => {
+    const [light, ...dark] = pairs;
+    expect(light).toEqual(
+      [tokens.danger?.light, tokens["danger-soft"]?.light].map((v) =>
+        v?.toLowerCase(),
+      ),
+    );
+    for (const d of dark)
+      expect(d).toEqual(
+        [tokens.danger?.dark, tokens["danger-soft"]?.dark].map((v) =>
+          v?.toLowerCase(),
+        ),
+      );
+  });
+
+  it("keeps danger text at 4.5:1 on its background", () => {
+    for (const [fg, bg] of pairs)
+      expect(contrast(fg as string, bg as string)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("paints the page bg behind the error in light and dark", () => {
+    const bgFor = (selector: string) => {
+      const at = css.indexOf(`${selector} {`);
+      expect(at, selector).toBeGreaterThan(-1);
+      return /background:\s*(#[0-9a-f]{6})/i.exec(css.slice(at))?.[1];
+    };
+    expect(bgFor(":root:has(.oa-error)")).toBe(tokens.bg?.light.toLowerCase());
+    for (const sel of [
+      ':root:not([data-theme="light"]):has(.oa-error)',
+      ':root[data-theme="dark"]:has(.oa-error)',
+    ])
+      expect(bgFor(sel)).toBe(tokens.bg?.dark.toLowerCase());
   });
 });
