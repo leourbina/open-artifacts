@@ -51,7 +51,7 @@ Every lead runs its track using **superpowers:subagent-driven-development**. Eac
 - The lead dispatches one **whole-track adversarial review** on the most capable model, and runs the milestone's end-to-end check.
 - The lead reports to the other leads in **three lines or fewer**: what shipped, what contract changed, and what's blocked.
 
-**Coordinating with other leads** happens over SendMessage, using the session names `OpenArtifacts Backend`, `OpenArtifacts Frontend`, `OpenArtifacts Design`, `OpenArtifacts Platform`, and `OpenArtifacts QA & Security`. That last one is a **cyberstrike** session on the **agent-bus**, not a Claude Code session. Reach it with `mcp__agent-bus__send_message` to bus id `65dd7d13-5297-4291-bf45-13146ca81433` (its display name may change). If you can't reach it, message `OpenArtifacts Coordinator` on the bus. Keep messages terse.
+**Coordinating with other leads** happens over SendMessage, using the session names `OpenArtifacts Backend`, `OpenArtifacts Frontend`, `OpenArtifacts Design`, `OpenArtifacts Platform`, and `OpenArtifacts QA & Security`. That last one is a **cyberstrike** session on the **agent-bus**, not a Claude Code session. Reach it with `mcp__agent-bus__send_message` to the name `Security` (kind `cyberstrike`). Bus ids change between sessions, so use the name, not an id. If you can't reach it, message `OpenArtifacts Coordinator` on the bus. Keep messages terse.
 
 **Changing a contract:**
 - Covers any change to `packages/shared`, the postMessage protocol, `packages/ui` exports, or the REST routes.
