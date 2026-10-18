@@ -7,14 +7,17 @@
  * - Access: owner/editor may publish, patch and restore; only the owner may share, change
  *   visibility, delete or undelete. A caller without the needed access gets 404, never 403.
  * - CSRF (test convenience): a mutating request carrying a `cookie` header but no
- *   `X-OA-Request: 1` gets 403 csrf; requests with neither cookie nor header pass.
+ *   `X-OA-Request: 1` gets 403 csrf; Bearer requests are exempt.
+ * - Auth: a request with no cookie and no Bearer gets 401 on every authed route (all mutations
+ *   except signed-URL upload PUT, plus me/members/tokens/oauth-clients/settings/usage/list/search);
+ *   public-artifact reads stay anonymous-OK.
  * - quotaExceeded: every /api/v1 route answers 503 quota_exceeded.
  */
 import { delay, type HttpHandler, HttpResponse, http } from "msw";
-import { z } from "zod";
+import type { z } from "zod";
 import { type ErrorCode, QUOTA_MESSAGE, STATUS_FOR } from "../errors.js";
 import { newId, newPat } from "../ids.js";
-import { LIMITS } from "../limits.js";
+import { LIMITS, VERSIONS_PAGE_SIZE } from "../limits.js";
 import { viewerPath } from "../routes.js";
 import {
   ArtifactPatchSchema,
@@ -35,10 +38,10 @@ import {
   ShareInputSchema,
   SNIPPET_MARK,
   type StorageEntry,
+  StorageSetBodySchema,
   TokenCreateInputSchema,
   UploadCreateInputSchema,
   type UserRef,
-  type VersionInfo,
 } from "../schemas.js";
 import { fixtures } from "./fixtures.js";
 
@@ -76,6 +79,16 @@ const DEFAULT_ENTRY = {
   code: "file.txt",
   pdf: "document.pdf",
 } as const;
+
+/** Anonymous = no cookie and no Bearer token. */
+const isAnon = (req: Request) =>
+  !req.headers.has("cookie") &&
+  !/^bearer\s/i.test(req.headers.get("authorization") ?? "");
+const hideEmail = (u: UserRef): UserRef => ({ ...u, email: null });
+const redactArt = (a: ArtifactSummary, req: Request): ArtifactSummary =>
+  a.visibility === "public" && isAnon(req)
+    ? { ...a, owner: hideEmail(a.owner) }
+    : a;
 
 const userRef = (u: UserRef): UserRef => ({
   id: u.id,
@@ -297,6 +310,15 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
       if (latencyMs) await delay(latencyMs);
       if (quotaExceeded) return err("quota_exceeded", QUOTA_MESSAGE);
       const mutating = !["GET", "HEAD", "OPTIONS"].includes(request.method);
+      const path = new URL(request.url).pathname.replace(/^.*\/api\/v1/, "");
+      // Signed-URL uploads carry no session; public artifact reads are anonymous-OK.
+      const needsAuth = mutating
+        ? !/^\/uploads\/[^/]+$/.test(path)
+        : /^\/(me|members|tokens|oauth-clients|settings|usage|artifacts|search)\/?$/.test(
+            path,
+          );
+      if (needsAuth && isAnon(request))
+        return err("unauthorized", "Authentication required");
       if (
         mutating &&
         request.headers.has("cookie") &&
@@ -311,12 +333,16 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
     ...pre,
     http.get("*/api/v1/me", () => HttpResponse.json(me)),
     http.get("*/api/v1/artifacts", ({ request }) => {
+      if (isAnon(request))
+        return err("unauthorized", "Authentication required");
       const q = new URL(request.url).searchParams;
       const p = ListQuerySchema.safeParse(params(q));
       if (!p.success)
         return err("bad_request", "Invalid query", p.error.issues);
       return paginate(
-        artifacts.filter((a) => matches(a, q)),
+        artifacts
+          .filter((a) => matches(a, q))
+          .map((a) => redactArt(a, request)),
         q,
       );
     }),
@@ -361,7 +387,7 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
     }),
     http.get(
       A,
-      withArt((a) => HttpResponse.json(a)),
+      withArt((a, { request }) => HttpResponse.json(redactArt(a, request))),
     ),
     http.patch(A, async (ctx) => {
       return withArt(async (a) => {
@@ -390,7 +416,22 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
     }),
     http.get(
       `${A}/versions`,
-      withArt((a) => HttpResponse.json(versions[a.id] ?? [])),
+      withArt((a, { request }) => {
+        const raw = new URL(request.url).searchParams.get("before");
+        if (raw !== null && !/^[1-9]\d*$/.test(raw))
+          return badRequest("before must be a positive integer");
+        const before = raw === null ? Infinity : Number(raw);
+        const anon = a.visibility === "public" && isAnon(request);
+        return HttpResponse.json(
+          (versions[a.id] ?? [])
+            .filter((v) => v.version < before)
+            .sort((x, y) => y.version - x.version)
+            .slice(0, VERSIONS_PAGE_SIZE)
+            .map((v) =>
+              anon ? { ...v, createdBy: hideEmail(v.createdBy) } : v,
+            ),
+        );
+      }),
     ),
     http.post(
       `${A}/versions`,
@@ -483,7 +524,7 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
         const r = await body(request, ShareInputSchema);
         if (r.error) return r.error;
         const email = r.data.email.toLowerCase();
-        if (email === a.owner.email.toLowerCase())
+        if (email === a.owner.email?.toLowerCase())
           return badRequest("Cannot share with the owner");
         const list = shares[a.id] ?? [];
         shares[a.id] = list;
@@ -530,6 +571,8 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
     }),
     http.put("*/api/v1/uploads/:uploadId", () => noContent()),
     http.get("*/api/v1/search", ({ request }) => {
+      if (isAnon(request))
+        return err("unauthorized", "Authentication required");
       const q = new URL(request.url).searchParams;
       const needle = (q.get("q") ?? "").trim();
       if (!needle) return badRequest("q is required");
@@ -540,7 +583,7 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
             matches(a, new URLSearchParams({ q: needle })),
         )
         .map((a) => ({
-          ...a,
+          ...redactArt(a, request),
           snippet:
             mark(a.description ?? "", needle) ??
             mark(a.title, needle) ??
@@ -757,11 +800,7 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
       withArt(async (a, { request, params }) => {
         const bad = names(params.key);
         if (bad) return bad;
-        const r = await body(
-          request,
-          // TODO: use a shared StorageSetBody schema once F2 adds one (contract frozen in F2 PR).
-          z.strictObject({ value: z.unknown() }),
-        );
+        const r = await body(request, StorageSetBodySchema);
         if (r.error) return r.error;
         const entry: StorageEntry = {
           key: params.key as string,

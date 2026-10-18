@@ -51,6 +51,10 @@
   font: 600 calc(var(--size) * 0.42) / 1 var(--oa-font-sans);
   user-select: none;
 }
+.unknown {
+  background: var(--oa-sunken);
+  color: var(--oa-text-2);
+}
 .kbd {
   font: 500 11px var(--oa-font-mono);
   color: var(--oa-text-muted);

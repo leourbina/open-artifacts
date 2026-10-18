@@ -1,3 +1,6 @@
+/** GET versions returns at most this many VersionInfo per request. */
+export const VERSIONS_PAGE_SIZE = 20;
+
 export const LIMITS = {
   fileBytes: 25 * 1024 * 1024,
   publishBytes: 100 * 1024 * 1024,
