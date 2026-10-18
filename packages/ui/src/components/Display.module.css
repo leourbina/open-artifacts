@@ -87,6 +87,7 @@
   animation: pulse 1.4s var(--oa-ease) infinite alternate;
 }
 .card {
+  min-width: 0;
   background: var(--oa-surface);
   border-radius: var(--oa-radius-lg);
   box-shadow: var(--oa-shadow-1);
