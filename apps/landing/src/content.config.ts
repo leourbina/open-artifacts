@@ -38,6 +38,8 @@ const docs = defineCollection({
     title: z.string(),
     description: z.string(),
     order: z.number(),
+    // A release-gate fallback this page still depends on (src/lib/release.ts).
+    fallback: z.enum(["B16"]).optional(),
   }),
 });
 
