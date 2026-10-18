@@ -1,14 +1,11 @@
 ---
 import { REPO_URL } from "@oa/shared";
+import logo from "@oa/ui/brand/logo.svg";
+import logoDark from "@oa/ui/brand/logo-dark.svg";
 import tokensCss from "@oa/ui/tokens.css?raw";
 import "../styles/site.css";
 import Todo from "../components/Todo.astro";
-import {
-  d6Active,
-  FALLBACKS,
-  type FallbackId,
-  UNRELEASED,
-} from "../lib/release";
+import { FALLBACKS, type FallbackId, UNRELEASED } from "../lib/release";
 
 // Inline the Studio tokens without their font @import, which would block rendering.
 // The same Google Fonts stylesheet loads below without blocking.
@@ -19,16 +16,14 @@ const tokens = tokensCss.replace(fontImport, "");
 interface Props {
   title: string;
   description: string;
-  /** Release-gate fallbacks this page depends on, besides the D6 wordmark. */
+  /** Release-gate fallbacks this page depends on. */
   fallbacks?: FallbackId[];
 }
 
 const { title, description, fallbacks = [] } = Astro.props;
-const active: FallbackId[] = [
-  ...(d6Active ? ["D6" as const] : []),
-  ...fallbacks,
-];
+const active = fallbacks;
 const canonical = new URL(Astro.url.pathname, Astro.site);
+const ogImage = new URL("/og.png", Astro.site);
 ---
 
 <!doctype html>
@@ -51,6 +46,11 @@ const canonical = new URL(Astro.url.pathname, Astro.site);
     <meta property="og:description" content={description} />
     <meta property="og:type" content="website" />
     <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Open Artifacts" />
+    <meta name="twitter:card" content="summary_large_image" />
     <meta name="theme-color" content="#eef0f3" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#131518" media="(prefers-color-scheme: dark)" />
   </head>
@@ -58,10 +58,11 @@ const canonical = new URL(Astro.url.pathname, Astro.site);
     <a class="skip" href="#main">Skip to content</a>
     <header class="site-head">
       <div class="wrap head-row">
-        {/* Import the logo from @oa/ui/brand once D6 merges (see d6Active). */}
         <a class="wordmark" href="/">
-          <img src="/favicon.svg" alt="" width="18" height="18" />
-          Open Artifacts
+          <picture>
+            <source media="(prefers-color-scheme: dark)" srcset={logoDark.src} />
+            <img src={logo.src} alt="Open Artifacts" width="124" height="22" />
+          </picture>
         </a>
         <nav aria-label="Site">
           <a href="/docs/setup/">Docs</a>

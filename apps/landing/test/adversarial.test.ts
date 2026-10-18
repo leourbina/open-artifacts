@@ -60,10 +60,7 @@ describe("D7 adversarial", () => {
   // Internal TODO comments ship in every published HTML page. Only the
   // release-gate markers (see markers.test.ts) may appear.
   it("no internal TODO comments in the built HTML", () => {
-    const allowed = new Set([
-      "<!-- TODO(B14): fallback tool list -->",
-      "<!-- TODO(D6): text wordmark -->",
-    ]);
+    const allowed = new Set(["<!-- TODO(B14): fallback tool list -->"]);
     for (const f of htmlFiles(dist)) {
       const todos = readFileSync(f, "utf8").match(/<!--\s*TODO[\s\S]*?-->/g);
       for (const todo of todos ?? []) expect(allowed, f).toContain(todo);
