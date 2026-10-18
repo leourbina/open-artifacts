@@ -24,4 +24,10 @@ describe.skipIf(!base || !pat)("staging smoke: mcp", () => {
     expect(body.result.tools.map((t) => t.name)).toContain("publish_artifact");
     expect(body.result.tools).toHaveLength(17);
   });
+
+  it("no auth → 401 with a resource-metadata challenge", async () => {
+    const r = await fetch(`${base}/mcp`, { method: "POST" });
+    expect(r.status).toBe(401);
+    expect(r.headers.get("www-authenticate")).toContain("resource_metadata=");
+  });
 });
