@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "pnpm --filter @oa/dashboard run --if-present build && pnpm --filter @oa/render build --if-present && pnpm --filter @oa/runtime build --if-present && node scripts/assemble-assets.mjs && node scripts/check-worker-size.mjs",
+    "build": "node --experimental-strip-types scripts/emit-tool-manifest.ts && pnpm --filter @oa/dashboard run --if-present build && pnpm --filter @oa/render build --if-present && pnpm --filter @oa/runtime build --if-present && node scripts/assemble-assets.mjs && node scripts/check-worker-size.mjs",
     "dev": "echo \"@oa/server dev: placeholder\"",
     "test": "vitest run --exclude \"test/smoke/**\" --passWithNoTests",
     "smoke": "pnpm --filter @oa/shared build && vitest run -c vitest.smoke.config.ts --passWithNoTests",
@@ -13,20 +13,25 @@
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.4.4",
     "@cloudflare/workers-types": "^5.20261018.1",
+    "@modelcontextprotocol/client": "2.3.1",
+    "@oa/dashboard": "workspace:*",
+    "@oa/render": "workspace:*",
     "@types/node": "^20.19.43",
     "drizzle-kit": "^0.31.11",
     "typescript": "^5.9.3",
     "vitest": "^4.1.12",
     "wrangler": "^4.151.1",
-    "@oa/render": "workspace:*",
-    "@oa/runtime": "workspace:*",
-    "@oa/dashboard": "workspace:*"
+    "@oa/runtime": "workspace:*"
   },
   "dependencies": {
+    "@cloudflare/workers-oauth-provider": "1.2.3",
+    "@modelcontextprotocol/server": "2.3.1",
     "@oa/shared": "workspace:*",
+    "agents": "0.28.1",
     "drizzle-orm": "^0.45.4",
     "hono": "^4.13.13",
-    "jose": "^6.2.12"
+    "jose": "^6.2.12",
+    "zod": "^4.6.7"
   },
   "engines": {
     "node": ">=22"
