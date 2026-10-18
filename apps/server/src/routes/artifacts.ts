@@ -25,6 +25,7 @@ import {
   undelete,
 } from "../services/artifacts.js";
 import { planFiles, RESERVED_KEYS } from "../services/manifest.js";
+import { putExtractedText } from "../services/search.js";
 import type { AppType } from "./index.js";
 
 // Base64 inflates inline bytes by 4/3; allow some JSON overhead on top.
@@ -232,6 +233,25 @@ export function mountArtifacts(app: AppType): void {
       await restoreVersion(c.env, user, id, v, agentOf(c), execCtx(c)),
       201,
     );
+  });
+
+  // Signed-in viewer+ contributes a pdf version's text (text/plain, ≤ extractedTextBytes).
+  app.put(`${VERSIONS}/:v/text`, async (c) => {
+    const user = requireUser(c);
+    const id = idParam(c);
+    const v = versionParam(c);
+    const ct = c.req.header("content-type") ?? "";
+    if (!/^text\/plain\s*(;|$)/i.test(ct))
+      throw new ApiError("bad_request", "Content-Type must be text/plain");
+    const buf = await readCapped(c, LIMITS.extractedTextBytes);
+    await putExtractedText(
+      c.env,
+      { kind: "user", user },
+      id,
+      v,
+      new TextDecoder().decode(buf),
+    );
+    return c.body(null, 204);
   });
 
   app.get(`${ARTIFACT}/thumbnail`, async (c) => {

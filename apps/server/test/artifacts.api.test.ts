@@ -145,7 +145,8 @@ describe("list", () => {
     expect(await ids("format=html")).toEqual([html.id]);
     expect(await ids("q=needle")).toEqual([html.id]);
     expect(await ids(`q=${encodeURIComponent("100%")}`)).toEqual([md.id]);
-    expect(await ids("q=%25")).toEqual([md.id]);
+    // FTS: a q with no word characters is a 400.
+    expect((await list(f, "scope=mine&q=%25")).status).toBe(400);
     expect(await ids("agent=agent-x")).toEqual([html.id]);
     expect(
       (await ids(`owner=${encodeURIComponent(f.email.toUpperCase())}`)).length,
@@ -294,11 +295,13 @@ describe("summary, patch, delete", () => {
 
   it("soft delete removes the search row", async () => {
     const a = await pub(owner, "searchable");
-    await env.DB.prepare(
-      "insert into artifact_search (rowid, artifact_id, title, description, body) select rowid, id, title, '', '' from artifacts where id = ?",
+    // Publish indexed it (B8).
+    const before = await env.DB.prepare(
+      "select count(*) n from artifact_search where rowid = (select rowid from artifacts where id = ?)",
     )
       .bind(a.id)
-      .run();
+      .first<{ n: number }>();
+    expect(before?.n).toBe(1);
     await api(app, R.artifact(a.id), owner.cookie, { method: "DELETE" });
     const row = await env.DB.prepare(
       "select count(*) n from artifact_search where artifact_id = ?",
