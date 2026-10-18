@@ -18,6 +18,11 @@ const bad: [string, PathError][] = [
   ["a\u0000b", "control_char"],
   ["a\x7fb", "control_char"],
   ["x".repeat(513), "too_long"],
+  ["%2e%2e/x", "traversal"],
+  ["a/%2E/b", "traversal"],
+  ["a%2fb", "traversal"],
+  ["a/x%2Fy", "traversal"],
+  ["%2e", "traversal"],
 ];
 
 describe("normalizePath", () => {
@@ -29,6 +34,8 @@ describe("normalizePath", () => {
   it("normalizes", () => {
     expect(normalizePath("./a/b.css")).toEqual({ ok: true, path: "a/b.css" });
     expect(normalizePath("a/./b")).toEqual({ ok: true, path: "a/b" });
+    expect(normalizePath("100%.txt")).toEqual({ ok: true, path: "100%.txt" });
+    expect(normalizePath("a%20b%2g")).toEqual({ ok: true, path: "a%20b%2g" });
     expect(normalizePath("x".repeat(512))).toEqual({
       ok: true,
       path: "x".repeat(512),

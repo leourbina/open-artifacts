@@ -145,6 +145,13 @@ function filePath(c: Context<AppEnv>): string {
   }
 }
 
+/** RFC 5987 ext-value: encodeURIComponent plus the ' ( ) * it leaves bare. */
+const rfc5987 = (s: string) =>
+  encodeURIComponent(s).replace(
+    /['()*]/g,
+    (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+
 export function mountArtifacts(app: AppType): void {
   app.get(R.artifacts, async (c) => {
     const user = requireUser(c);
@@ -246,7 +253,7 @@ export function mountArtifacts(app: AppType): void {
         "Content-Type": contentType,
         "Content-Length": String(body.size),
         "X-Content-Type-Options": "nosniff",
-        "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(name)}`,
+        "Content-Disposition": `attachment; filename*=UTF-8''${rfc5987(name)}`,
         "Cache-Control": "private, no-store",
       },
     });

@@ -43,6 +43,8 @@ function norm(p: unknown): string {
   if (typeof p !== "string") throw bad(String(p), "invalid");
   const r = normalizePath(p);
   if (!r.ok) throw bad(p, r.error);
+  // The content host answers `{prefix}__view` itself; a root file there is unreachable.
+  if (r.path === "__view") throw bad(p, "reserved_name");
   return r.path;
 }
 

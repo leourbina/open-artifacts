@@ -15,6 +15,13 @@
       "when": 1792339818312,
       "tag": "0001_upload_received",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1792347783020,
+      "tag": "0002_version_format",
+      "breakpoints": true
     }
   ]
 }

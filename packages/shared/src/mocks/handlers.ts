@@ -16,6 +16,7 @@
 import { delay, type HttpHandler, HttpResponse, http } from "msw";
 import type { z } from "zod";
 import { type ErrorCode, QUOTA_MESSAGE, STATUS_FOR } from "../errors.js";
+import type { Format } from "../formats.js";
 import { newId, newPat } from "../ids.js";
 import { LIMITS, VERSIONS_PAGE_SIZE } from "../limits.js";
 import { viewerPath } from "../routes.js";
@@ -210,6 +211,7 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
       message: string | null;
       entry: string;
       language: string | null;
+      format: Format;
       list: FileEntry[];
       bodies: Map<string, string>;
     },
@@ -228,7 +230,9 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
       files: v.list,
       language: v.language,
       textIndexed: !v.list.some((x) => x.contentType === "application/pdf"),
+      format: v.format,
     });
+    a.format = v.format;
     for (const [p, b] of v.bodies) files.set(`${a.id}/${version}/${p}`, b);
     a.currentVersion = version;
     a.updatedAt = createdAt;
@@ -264,6 +268,7 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
       message: input.message ?? null,
       entry,
       language: input.language ?? null,
+      format: a.format,
       bodies,
       list: [...bodies].map(([path, b]) => ({
         path,
@@ -468,6 +473,7 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
           message: `Restored v${src.version}`,
           entry: src.entry,
           language: src.language,
+          format: src.format,
           list: structuredClone(src.files),
           bodies,
         });

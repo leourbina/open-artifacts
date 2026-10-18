@@ -16,6 +16,8 @@ type ManifestEntry = {
 type VersionData = {
   entry: string;
   language: string | null;
+  /** Null for rows written before migration 0002: use the artifact's. */
+  format: Format | null;
   files: Map<string, ManifestEntry>;
 };
 type CEnv = { Bindings: Env };
@@ -154,6 +156,7 @@ type Row = {
   entry?: string;
   manifest?: string;
   language?: string | null;
+  vformat?: Format | null;
 };
 
 /**
@@ -176,7 +179,8 @@ async function load(
     return row ? { row, data: cached } : null;
   }
   const row = await env.DB.prepare(
-    `select a.format, a.visibility, a.deleted_at, v.entry, v.manifest, v.language
+    `select a.format, a.visibility, a.deleted_at, v.entry, v.manifest, v.language,
+       v.format as vformat
      from artifacts a join versions v on v.artifact_id = a.id
      where a.id = ? and v.version = ?`,
   )
@@ -187,6 +191,7 @@ async function load(
   const data: VersionData = {
     entry: row.entry,
     language: row.language ?? null,
+    format: row.vformat ?? null,
     files: new Map(entries.map((e) => [e.path, e])),
   };
   lruSet(key, data);
@@ -240,13 +245,13 @@ const RENDERER_MISSING = `<!doctype html>
 <body><p>Renderer not deployed yet.</p></body></html>
 `;
 
-/** Decode once, normalize; null when invalid. */
+/** Decode once (malformed escapes, e.g. `100%.txt`, stay raw), normalize; null when invalid. */
 function filePath(rest: string): string | null {
   let p: string;
   try {
     p = decodeURIComponent(rest);
   } catch {
-    return null;
+    p = rest;
   }
   const r = normalizePath(p);
   return r.ok ? r.path : null;
@@ -342,9 +347,10 @@ async function serve(
     if (!e) throw notFound();
     return serveFile(c, e, cache);
   }
-  if (row.format !== "html") {
+  const format = data.format ?? row.format;
+  if (format !== "html") {
     const oa = await loadOa(c.env);
-    const page = renderPage(oa, data.entry, row.format, data.language);
+    const page = renderPage(oa, data.entry, format, data.language);
     return new Response(page ?? RENDERER_MISSING, {
       status: page ? 200 : 503,
       headers: {
