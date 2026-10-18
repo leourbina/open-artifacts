@@ -12,6 +12,7 @@ async function until200(
   label: string,
   url: string,
   init?: RequestInit,
+  shown = url,
 ) {
   const sleep =
     ctx.deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
@@ -26,7 +27,7 @@ async function until200(
     }
     const delay = DELAYS[i];
     if (delay === undefined)
-      throw new Error(`${label}: ${url} not 200 after ~60s (last: ${last})`);
+      throw new Error(`${label}: ${shown} not 200 after ~60s (last: ${last})`);
     await sleep(delay * 1000);
   }
 }
@@ -110,7 +111,7 @@ async function mcp(ctx: Ctx, token: string, prev?: string): Promise<string> {
   return out;
 }
 
-/** The private artifact's signed content URL must serve the welcome text. */
+/** The private artifact's signed content URL must serve the welcome text; returns the redacted URL. */
 async function content(ctx: Ctx, token: string, id: string): Promise<string> {
   const api = `https://${ctx.opts.appHost}/api/v1/artifacts/${encodeURIComponent(id)}/content-url`;
   const res = await until200(ctx, "content-url", api, {
@@ -118,10 +119,13 @@ async function content(ctx: Ctx, token: string, id: string): Promise<string> {
   });
   const { url } = (await res.json()) as { url?: string };
   if (typeof url !== "string") throw new Error("content-url: no url");
-  const body = await (await until200(ctx, "welcome content", url)).text();
+  // The signed URL is a bearer capability: report only its origin.
+  const shown = `${new URL(url).origin}/…`;
+  const res2 = await until200(ctx, "welcome content", url, undefined, shown);
+  const body = await res2.text();
   if (!body.includes(TITLE))
-    throw new Error(`welcome content at ${url} lacks "${TITLE}"`);
-  return url;
+    throw new Error(`welcome content at ${shown} lacks "${TITLE}"`);
+  return shown;
 }
 
 export const selftest: Step = {
@@ -141,9 +145,9 @@ export const selftest: Step = {
     }
     const artifactId = await mcp(ctx, ctx.pat, state.welcomeArtifactId);
     state.welcomeArtifactId = artifactId;
-    const contentUrl = await content(ctx, ctx.pat, artifactId);
+    const shown = await content(ctx, ctx.pat, artifactId);
     ctx.notes.push(`healthz, OIDC discovery, MCP publish, content ok`);
-    ctx.data = { mcp: "ok", artifactId, contentUrl };
+    ctx.data = { mcp: "ok", artifactId, content: shown };
     return undefined;
   },
 };

@@ -63,6 +63,8 @@ type World = {
   dropTokenInsert?: boolean;
   /** The signed content URL serves this body instead of the published content. */
   contentBody?: string;
+  /** The signed content URL answers with this status. */
+  contentStatus?: number;
   /** Artifact ids that no longer exist (publish with that id → not_found). */
   deletedArtifacts?: string[];
   /** Every publish fails with this tool error text. */
@@ -332,7 +334,10 @@ export function world(w: World = {}) {
         hits.push(`GET content ${auth ? "with auth" : "no auth"}`);
         const last = mcpCalls.at(-1)?.arguments?.content ?? "";
         return new Response(
-          w.contentBody ?? `<html><body>${last}</body></html>`,
+          w.contentStatus
+            ? "denied"
+            : (w.contentBody ?? `<html><body>${last}</body></html>`),
+          { status: w.contentStatus ?? 200 },
         );
       }
       if (u.host === "team.cloudflareaccess.com") {

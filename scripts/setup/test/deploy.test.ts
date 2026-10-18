@@ -49,6 +49,16 @@ function patContained(w: W, pat: string) {
   );
 }
 
+const SIGNED = /usercontent\.example\.com\/s\/sig/;
+/** The signed content URL is a bearer capability: never in any line, json or file. */
+function noSignedUrl(w: W) {
+  const decoded = w.lines.map((l) =>
+    l.startsWith("{") ? JSON.stringify(JSON.parse(l)) : l,
+  );
+  for (const l of [...w.lines, ...decoded, ...w.files.values()])
+    expect(l).not.toMatch(SIGNED);
+}
+
 /** A world whose cloud side is fully set up, then run once. */
 async function installed() {
   const w = world();
@@ -125,8 +135,9 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     expect(line(w, "selftest").data).toEqual({
       mcp: "ok",
       artifactId: "art1",
-      contentUrl: "https://a.b.usercontent.example.com/s/sig/art1/1/__view",
+      content: "https://a.b.usercontent.example.com/…",
     });
+    noSignedUrl(w);
     expect(st.welcomeArtifactId).toBe("art1");
     expect(isId(st.ownerTokenId)).toBe(true);
     expect(isId(w.db.users[0].id)).toBe(true);
@@ -281,6 +292,14 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     expect(line(w, "selftest").message).toMatch(
       /content.*Welcome to Open Artifacts/,
     );
+    expect(line(w, "selftest").message).toContain(
+      "https://a.b.usercontent.example.com/…",
+    );
+    noSignedUrl(w);
+    const denied = world({ contentStatus: 403 });
+    expect(await run(HOSTS, denied.deps, ROOT)).toBe(1);
+    expect(line(denied, "selftest").message).toMatch(/HTTP 403/);
+    noSignedUrl(denied);
   });
 
   it("owner-token records the id before the insert and fails clearly when the row is missing", async () => {
