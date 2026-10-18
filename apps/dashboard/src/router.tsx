@@ -13,6 +13,7 @@ import type { Scope } from "./library/useLibraryQuery";
 import { NoAccess } from "./pages/NoAccess";
 import { NotFound } from "./pages/NotFound";
 import { SignIn } from "./pages/SignIn";
+import { Diff } from "./viewer/Diff";
 import { Shell } from "./viewer/Shell";
 
 // Placeholders; later tasks replace each with the real page.
@@ -60,6 +61,19 @@ function ViewerRoute() {
   return <Shell id={id} v={n} />;
 }
 
+function DiffRoute() {
+  const { id, from, to } = useParams({ strict: false }) as {
+    id: string;
+    from: string;
+    to: string;
+  };
+  const a = Number(from);
+  const b = Number(to);
+  const ok = (n: number) => Number.isInteger(n) && n >= 1;
+  if (!ok(a) || !ok(b)) return <NotFound />;
+  return <Diff key={`${id}:${a}:${b}`} id={id} from={a} to={b} />;
+}
+
 const search = createRoute({
   getParentRoute: () => root,
   path: "/search",
@@ -77,7 +91,7 @@ const routeTree = root.addChildren([
   search,
   route("/a/$id", ViewerRoute),
   route("/a/$id/v/$v", ViewerRoute),
-  route("/a/$id/diff/$from/$to", page("Diff")),
+  route("/a/$id/diff/$from/$to", DiffRoute),
   route("/settings/members", page("Members")),
   route("/settings/agents", page("Agents")),
   route("/settings/instance", page("Instance")),

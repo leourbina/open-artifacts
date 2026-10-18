@@ -1,5 +1,6 @@
 import { type ArtifactSummary, AUTH, viewerPath } from "@oa/shared";
 import { Button } from "@oa/ui";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { ApiClientError } from "../api/client";
 import { useArtifact } from "../api/queries";
@@ -7,26 +8,15 @@ import { useRedirect } from "../auth/redirect";
 import { useMe } from "../auth/useMe";
 import { NotFound } from "../pages/NotFound";
 import { createBridge } from "./bridge";
+import { Crumbs } from "./Crumbs";
+import { SANDBOX, safeContentUrl } from "./frame";
+import { isPanelTab, type PanelTab, SidePanel } from "./panels/SidePanel";
 import { TitleBar } from "./TitleBar";
 import { useContentUrl } from "./useContentUrl";
 import { useTheme } from "./useTheme";
 import "./viewer.css";
 
 type Bridge = ReturnType<typeof createBridge>;
-
-/** Only http(s) URLs on another origin may be framed or linked as raw content. */
-const safeContentUrl = (u: string | null) => {
-  if (!u) return null;
-  try {
-    const p = new URL(u);
-    return (p.protocol === "https:" || p.protocol === "http:") &&
-      p.origin !== location.origin
-      ? u
-      : null;
-  } catch {
-    return null;
-  }
-};
 
 function ErrorPanel({ onRetry }: { onRetry?: () => void }) {
   return (
@@ -58,7 +48,23 @@ function Viewer({
   const rawUrl = safeContentUrl(content.current);
   const theme = useTheme();
   const [el, setEl] = useState<HTMLIFrameElement | null>(null);
-  const [panel, setPanel] = useState<"share" | null>(null);
+  const navigate = useNavigate();
+  const search = useSearch({ strict: false }) as {
+    panel?: string;
+    tab?: string;
+  };
+  const panelOpen = search.panel === "open";
+  const tab: PanelTab = isPanelTab(search.tab) ? search.tab : "versions";
+  const setPanel = (open: boolean, t: PanelTab = tab) =>
+    void navigate({
+      to: ".",
+      replace: true,
+      search: ((p: Record<string, unknown>) => ({
+        ...p,
+        panel: open ? "open" : "closed",
+        tab: t,
+      })) as never,
+    });
   const bridge = useRef<Bridge | null>(null);
   // Latest values for the effect: the parent's key remounts this on id/version change.
   const latest = useRef({ artifact, viewer, theme });
@@ -86,13 +92,16 @@ function Viewer({
   if (content.notFound) return <NotFound />;
   return (
     <div className="oa-viewer">
+      <Crumbs title={artifact.title} />
       <TitleBar
         artifact={artifact}
         version={version}
         explicitVersion={explicitVersion}
         rawUrl={rawUrl}
         authed={authed}
-        onShare={() => setPanel("share")}
+        onShare={() => setPanel(true, "share")}
+        panelOpen={panelOpen}
+        onPanel={() => setPanel(!panelOpen)}
       />
       <div className="oa-vbody">
         {content.current && !url && <ErrorPanel />}
@@ -103,16 +112,18 @@ function Viewer({
             src={url}
             onLoad={content.onLoad}
             title={artifact.title}
-            sandbox="allow-scripts allow-forms allow-popups allow-modals allow-downloads"
+            sandbox={SANDBOX}
             referrerPolicy="no-referrer"
             allow="clipboard-write"
           />
         )}
-        {panel && (
-          // TODO(FE6): replace with the real Share panel.
-          <aside className="oa-vpanel" aria-label="Side panel">
-            Sharing settings are coming soon.
-          </aside>
+        {panelOpen && authed && (
+          <SidePanel
+            artifact={artifact}
+            tab={tab}
+            onTab={(t) => setPanel(true, t)}
+            onClose={() => setPanel(false)}
+          />
         )}
       </div>
     </div>
