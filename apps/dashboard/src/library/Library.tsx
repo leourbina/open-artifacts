@@ -4,6 +4,7 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useRef } from "react";
 import { useMe } from "../auth/useMe";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
+import { DropZone } from "../upload/DropZone";
 import { AppLink } from "./AppLink";
 import { ArtifactCard } from "./ArtifactCard";
 import { ArtifactRow } from "./ArtifactRow";
@@ -102,7 +103,11 @@ export function Library({ scope }: { scope: Scope }) {
 
   return (
     <section className="lib">
-      <h1>Library</h1>
+      <div className="lib-bar">
+        <h1>Library</h1>
+        <span className="lib-spacer" />
+        <DropZone button allowed={me.status === "authed" && !guest} />
+      </div>
       {me.status === "authed" && (
         <Tabs
           value={scope}

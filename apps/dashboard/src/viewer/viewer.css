@@ -336,3 +336,8 @@
 .oa-cap small {
   padding-left: 28px;
 }
+
+/* During a file drag the artifact must not see the drop; the upload overlay takes it. */
+.oa-file-drag .oa-vframe {
+  pointer-events: none;
+}

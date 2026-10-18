@@ -8,6 +8,7 @@ import { useLoginRedirect } from "../auth/redirect";
 import { useMe } from "../auth/useMe";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { NotFound } from "../pages/NotFound";
+import { DropZone } from "../upload/DropZone";
 import { createBridge } from "./bridge";
 import { Crumbs } from "./Crumbs";
 import { SANDBOX, safeContentUrl } from "./frame";
@@ -134,6 +135,7 @@ function Viewer({
         onShare={() => setPanel(true, "share")}
         panelOpen={panelOpen}
         onPanel={() => setPanel(!panelOpen)}
+        upload={<DropZone artifact={artifact} allowed={authed} button />}
       />
       <div className="oa-vbody">
         {!url && (content.current || content.error) ? (
