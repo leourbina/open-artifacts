@@ -26,6 +26,69 @@ describe("requiredSecrets", () => {
   });
 });
 
+describe("requiredSecrets parser (fixtures)", () => {
+  const W = '{"env":{"staging":{"vars":{"V":"x"}}}}';
+  const env = (body: string) =>
+    `import x from "y";\nexport interface Env {\n${body}\n}\nexport const z = 1;\n`;
+  const req = (body: string) => requiredSecrets(env(body), W);
+  it("accepts readonly, , and ; terminators", () => {
+    expect(req("  readonly A: string;\n  B: string,\n  C: string")).toEqual([
+      "A",
+      "B",
+      "C",
+    ]);
+  });
+  it("treats `| undefined` and `?` as optional", () => {
+    expect(
+      req(
+        "  A: string | undefined;\n  B?: string;\n  C?: string | undefined;\n  D: string;",
+      ),
+    ).toEqual(["D"]);
+  });
+  it("skips vars, literal unions (multi-line) and bindings", () => {
+    expect(
+      req(
+        [
+          "  V: string;",
+          '  E: "dev" | "production";',
+          "  M:",
+          '    | "a"',
+          '    | "b";',
+          "  DB: D1Database;",
+          "  F: R2Bucket; K: KVNamespace;",
+          "  DO: DurableObjectNamespace<Foo>;",
+          "  AS: Fetcher;",
+          "  RL: RateLimit;",
+          "  S: string;",
+        ].join("\n"),
+      ),
+    ).toEqual(["S"]);
+  });
+  it("ignores comments, including braces and fake fields in them", () => {
+    expect(
+      req(
+        "  // X: string;\n  /* Y: string; } */\n  A: string; // trailing }\n  /** doc\n   * Z: string;\n   */\n  B: string;",
+      ),
+    ).toEqual(["A", "B"]);
+  });
+  it("does not truncate at an inner closing brace line", () => {
+    expect(() =>
+      req("  A: string;\n  N: {\n    x: string;\n  };\n  B: string;"),
+    ).toThrow();
+  });
+  it("throws on unknown types", () => {
+    expect(() => req("  A: SomethingNew;")).toThrow(/A/);
+    expect(() => req("  A: number;")).toThrow();
+    expect(() => req("  A: string[];")).toThrow();
+  });
+  it("throws on a nested object", () => {
+    expect(() => req("  A: { b: string };")).toThrow();
+  });
+  it("throws when interface Env is missing", () => {
+    expect(() => requiredSecrets("export interface Other {}", W)).toThrow();
+  });
+});
+
 describe("missingSecrets", () => {
   it("names every missing required secret", () => {
     expect(
@@ -64,7 +127,13 @@ describe("cli", () => {
   it("exits zero when complete", () => {
     expect(run(JSON.stringify(list(...ALL))).status).toBe(0);
   });
-  it("fails on unparseable input", () => {
-    expect(run("not json").status).not.toBe(0);
+  it("fails on unparseable input with exit 2", () => {
+    const r = run("not json");
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain("cannot parse");
+  });
+  it("extracts the array from the first [ of noisy output", () => {
+    const r = run(` ⛅️ wrangler 4.151.1\n${JSON.stringify(list(...ALL))}\n`);
+    expect(r.status).toBe(0);
   });
 });

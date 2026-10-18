@@ -78,6 +78,7 @@ describe("deploy-staging.yml", () => {
     const step = runs("deploy")[p] as string;
     expect(step).toContain("wrangler secret list");
     expect(step).toContain("--format json");
+    expect(step).toContain("set -o pipefail");
     expect(step).toContain("wrangler.staging.jsonc");
     expect(step).toContain("--env staging");
   });
@@ -93,7 +94,15 @@ describe("deploy-staging.yml", () => {
     expect(all).toContain("--retry 20 --retry-delay 5 --retry-max-time 180");
     expect(all).not.toMatch(/\s-[a-zA-Z]*L\b|--location/);
     expect(all).toContain("302");
-    expect(all).toContain("ACCESS_TEAM_DOMAIN");
+    expect(all).toContain(
+      `sed -n 's/.*"ACCESS_TEAM_DOMAIN": *"\\([^"]*\\)".*/\\1/p' apps/server/wrangler.staging.jsonc | head -1`,
+    );
+    expect(all).toContain("tr -d '\\r'");
+    expect(all).toContain("grep -i '^location:'");
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell
+    expect(all).toContain('[ "${loc#"$prefix"}" != "$loc" ]');
+    expect(all).toContain('prefix="https://$team/cdn-cgi/access/sso/oidc/"');
+    expect(all).toContain("END{print b}");
     expect(all).toMatch(/[Ll]ocation/);
   });
   it("smoke checks robots on the content host", () => {

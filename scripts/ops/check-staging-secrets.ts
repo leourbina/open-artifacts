@@ -8,15 +8,15 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
-/** Strip // and /* *\/ comments outside of string literals. */
-function stripJsonc(src: string): string {
+/** Remove // and block comments outside string literals. */
+function stripComments(src: string): string {
   let out = "";
   let i = 0;
   while (i < src.length) {
     const c = src[i] as string;
-    if (c === '"') {
+    if (c === '"' || c === "'" || c === "`") {
       let j = i + 1;
-      while (j < src.length && src[j] !== '"') j += src[j] === "\\" ? 2 : 1;
+      while (j < src.length && src[j] !== c) j += src[j] === "\\" ? 2 : 1;
       out += src.slice(i, j + 1);
       i = j + 1;
     } else if (c === "/" && src[i + 1] === "/") {
@@ -24,28 +24,88 @@ function stripJsonc(src: string): string {
     } else if (c === "/" && src[i + 1] === "*") {
       const end = src.indexOf("*/", i + 2);
       i = end < 0 ? src.length : end + 2;
+      out += " ";
     } else {
       out += c;
       i++;
     }
   }
-  return out.replace(/,(\s*[}\]])/g, "$1");
+  return out;
+}
+
+const stripJsonc = (src: string) =>
+  stripComments(src).replace(/,(\s*[}\]])/g, "$1");
+
+const BINDING =
+  /^(D1Database|R2Bucket|KVNamespace|Fetcher|RateLimit|DurableObjectNamespace)(<[^;{}]*>)?$/;
+const LITERAL_UNION = /^\|?\s*("[^"]*"|'[^']*')(\s*\|\s*("[^"]*"|'[^']*'))*$/;
+
+function interfaceBody(src: string): string {
+  const m = /\binterface\s+Env\s*{/.exec(src);
+  if (!m) throw new Error("interface Env not found");
+  let depth = 1;
+  for (let i = m.index + m[0].length; i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    else if (src[i] === "}" && --depth === 0)
+      return src.slice(m.index + m[0].length, i);
+  }
+  throw new Error("interface Env is not closed");
+}
+
+/** Split into members at depth-0 `;`/`,`, or at a newline when the member is complete. */
+function members(body: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let depth = 0;
+  const flush = () => {
+    if (cur.trim()) out.push(cur.trim());
+    cur = "";
+  };
+  const lines = body.split("\n");
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li] as string;
+    for (const ch of line) {
+      if ("{[(<".includes(ch)) depth++;
+      else if ("}])>".includes(ch)) depth--;
+      if (depth === 0 && (ch === ";" || ch === ",")) flush();
+      else cur += ch;
+    }
+    const t = cur.trim();
+    const next = (lines[li + 1] ?? "").trim();
+    const open = t.endsWith("|") || t.endsWith(":") || next.startsWith("|");
+    if (depth === 0 && !open) flush();
+    else cur += "\n";
+  }
+  flush();
+  return out;
 }
 
 export function requiredSecrets(
   envTs: string,
   wranglerJsonc: string,
 ): string[] {
-  const body = /interface\s+Env\s*{([\s\S]*?)\n}/.exec(envTs)?.[1];
-  if (body === undefined) throw new Error("interface Env not found");
   const cfg = JSON.parse(stripJsonc(wranglerJsonc));
   const vars = new Set(Object.keys(cfg.env?.staging?.vars ?? {}));
   const names: string[] = [];
-  for (const m of body.matchAll(
-    /^\s*([A-Za-z_][A-Za-z0-9_]*)(\?)?:\s*string\s*;/gm,
+  for (const member of members(
+    stripComments(interfaceBody(stripComments(envTs))),
   )) {
+    const m =
+      /^(?:readonly\s+)?([A-Za-z_][A-Za-z0-9_]*)(\?)?\s*:\s*([\s\S]+)$/.exec(
+        member,
+      );
+    if (!m) throw new Error(`cannot parse Env member: ${member}`);
     const name = m[1] as string;
-    if (!m[2] && !vars.has(name)) names.push(name);
+    const type = (m[3] as string).replace(/\s+/g, " ").trim();
+    if (type === "string") {
+      if (!m[2] && !vars.has(name)) names.push(name);
+    } else if (type === "string | undefined" || type === "undefined | string") {
+      // optional
+    } else if (LITERAL_UNION.test(type) || BINDING.test(type)) {
+      // var literal or binding
+    } else {
+      throw new Error(`unrecognized type for Env.${name}: ${type}`);
+    }
   }
   return names;
 }
@@ -67,7 +127,10 @@ function main(): number {
   );
   let listed: { name: string }[];
   try {
-    listed = JSON.parse(readFileSync(0, "utf8"));
+    const raw = readFileSync(0, "utf8");
+    const start = raw.indexOf("[");
+    if (start < 0) throw new Error("no JSON array in input");
+    listed = JSON.parse(raw.slice(start));
     if (!Array.isArray(listed)) throw new Error("not an array");
   } catch (e) {
     console.error(
