@@ -82,6 +82,19 @@ describe("deploy-staging.yml", () => {
     expect(step).toContain("wrangler.staging.jsonc");
     expect(step).toContain("--env staging");
   });
+  it("clears conflicting secrets after preflight and before deploy", () => {
+    const p = idx("deploy", "check-staging-secrets");
+    const c = idx("deploy", "conflicting-secrets");
+    expect(c).toBeGreaterThan(p);
+    expect(c).toBeLessThan(idx("deploy", "wrangler deploy"));
+    const step = runs("deploy")[c] as string;
+    expect(step).toContain("set -o pipefail");
+    expect(step).toContain("wrangler secret list");
+    expect(step).toContain(
+      'wrangler secret delete "$name" -c wrangler.staging.jsonc --env staging',
+    );
+    expect(step).toContain("echo y |");
+  });
   it("ensures dashboard dist exists before wrangler deploy", () => {
     const e = idx("deploy", "mkdir -p apps/dashboard/dist");
     expect(e).toBeGreaterThan(idx("deploy", "pnpm build"));
