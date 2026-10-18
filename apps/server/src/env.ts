@@ -1,4 +1,4 @@
-import type { ArtifactRuntime } from "./runtime/artifact-runtime.js";
+import type { ArtifactRuntime } from "./runtime/do.js";
 
 export interface Env {
   DB: D1Database;

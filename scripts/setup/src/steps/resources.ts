@@ -36,7 +36,7 @@ async function find(ctx: Ctx, accountId: string) {
 }
 
 /** Strips JSONC comments outside strings. */
-const stripComments = (text: string) =>
+export const stripComments = (text: string) =>
   text.replace(
     /("(?:[^"\\]|\\.)*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g,
     (_, str) => str ?? "",

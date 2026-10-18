@@ -1,4 +1,10 @@
 import { type CollectionEntry, getCollection } from "astro:content";
+import {
+  FALLBACKS,
+  type FallbackId,
+  toolListFallbacks,
+  UNRELEASED,
+} from "./release";
 import { tools } from "./tools";
 
 export const SITE = "https://open-artifacts.com";
@@ -36,6 +42,16 @@ export function docMarkdown(doc: Doc): string {
   return `# ${doc.data.title}\n\n> ${doc.data.description}\n\n${agentMarkdown(doc.body ?? "")}\n`;
 }
 
+// Release-gate markers for the stand-ins the agent files depend on: one TODO
+// comment line each, then one OA-UNRELEASED line listing them all.
+export async function markerLines(): Promise<string> {
+  const active: FallbackId[] = [...toolListFallbacks];
+  if (active.length === 0) return "";
+  const todos = active.map((id) => `<!-- ${FALLBACKS[id].todo} -->\n`).join("");
+  const labels = active.map((id) => FALLBACKS[id].label).join(", ");
+  return `${todos}${UNRELEASED}: ${labels}\n\n`;
+}
+
 export async function llmsTxt(): Promise<string> {
   const all = await docs();
   const byId = (id: string) => {
@@ -43,7 +59,7 @@ export async function llmsTxt(): Promise<string> {
     if (!doc) throw new Error(`missing doc ${id}`);
     return doc;
   };
-  return [
+  const body = [
     "# Open Artifacts",
     `> ${SUMMARY}`,
     "## Set up Open Artifacts for your user",
@@ -62,7 +78,6 @@ export async function llmsTxt(): Promise<string> {
       ),
       `- [All docs in one file](${SITE}/llms-full.txt)`,
     ].join("\n"),
-  ]
-    .join("\n\n")
-    .concat("\n");
+  ].join("\n\n");
+  return `${await markerLines()}${body}\n`;
 }

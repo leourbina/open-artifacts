@@ -20,6 +20,9 @@ function isForbiddenChar(c: number): boolean {
   );
 }
 
+/** `%2e` / `%2f` (any case): percent-encoded "." or "/". */
+const ENCODED_DOT_SLASH = /%2[ef]/i;
+
 export function normalizePath(
   p: string,
 ): { ok: true; path: string } | { ok: false; error: PathError } {
@@ -34,7 +37,8 @@ export function normalizePath(
   if (p.startsWith("/")) return fail("absolute");
   const out: string[] = [];
   for (const seg of p.split("/")) {
-    if (seg === "..") return fail("traversal");
+    // An encoded "." or "/" would decode into traversal on a later decode.
+    if (seg === ".." || ENCODED_DOT_SLASH.test(seg)) return fail("traversal");
     if (seg === "") return fail("empty_segment");
     if (seg === ".") continue;
     out.push(seg);

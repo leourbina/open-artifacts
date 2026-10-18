@@ -266,7 +266,7 @@ export async function indexVersion(
 ): Promise<void> {
   try {
     const row = await env.DB.prepare(
-      `select a.rowid as rid, a.format, a.current_version as cv,
+      `select a.rowid as rid, coalesce(v.format, a.format) as format, a.current_version as cv,
               v.entry, v.manifest, v.text_indexed
        from artifacts a join versions v on v.artifact_id = a.id and v.version = ?
        where a.id = ? and a.deleted_at is null`,

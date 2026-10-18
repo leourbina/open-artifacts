@@ -20,7 +20,10 @@ const tools: { name: string }[] = JSON.parse(
 
 describe("llms.txt", () => {
   it("has the exact headings, in order", () => {
-    expect(llms.startsWith("# Open Artifacts\n\n")).toBe(true);
+    // Release-gate marker lines (markers.test.ts) may come first.
+    expect(
+      llms.replace(/^(<!-- TODO\(.+ -->\n)*(OA-UNRELEASED: .+\n\n)?/, ""),
+    ).toMatch(/^# Open Artifacts\n\n/);
     const headings = llms.match(/^##? .+$/gm);
     expect(headings).toEqual([
       "# Open Artifacts",
@@ -38,7 +41,7 @@ describe("llms.txt", () => {
   });
 
   it("runs setup non-interactively", () => {
-    expect(llms).toContain("pnpm oa:setup --json");
+    expect(llms).toContain("pnpm -s oa:setup --json");
   });
 
   it("names the repo once, as the clone source of the latest tag", () => {

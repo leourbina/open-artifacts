@@ -30,6 +30,8 @@ let jwk: Record<string, unknown>;
 type CodeEntry = { challenge: string; claims: JWTPayload; key?: CryptoKey };
 const codes = new Map<string, CodeEntry>();
 let tokenStatus = 200;
+let tokenRaw: string | null = null;
+let tokenResp: (() => Response) | null = null;
 let tokenCalls: { body: URLSearchParams }[] = [];
 
 const issuer = new Hono();
@@ -37,8 +39,13 @@ issuer.get("/jwks", (c) => c.json({ keys: [jwk] }));
 issuer.post("/token", async (c) => {
   const body = new URLSearchParams(await c.req.text());
   tokenCalls.push({ body });
+  if (tokenResp) return tokenResp();
   if (tokenStatus !== 200)
     return c.text("upstream-secret-detail", tokenStatus as 500);
+  if (tokenRaw !== null)
+    return new Response(tokenRaw, {
+      headers: { "content-type": "application/json" },
+    });
   const entry = codes.get(body.get("code") ?? "");
   if (!entry) return c.json({ error: "invalid_grant" }, 400);
   const digest = await crypto.subtle.digest(
@@ -69,6 +76,8 @@ beforeAll(async () => {
 
 beforeEach(() => {
   tokenStatus = 200;
+  tokenRaw = null;
+  tokenResp = null;
   tokenCalls = [];
   const realFetch = globalThis.fetch;
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
@@ -89,6 +98,22 @@ const call = (path: string, init?: RequestInit, e: Env = env) =>
   app.fetch(new Request(`${APP}${path}`, init), e, ctx);
 
 const setCookies = (r: Response) => r.headers.getSetCookie();
+const OIDC_NAME = /^(__Host-)?oa_oidc_[A-Za-z0-9_-]{10}$/;
+async function kOf(state: string) {
+  const d = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(state),
+  );
+  return b64urlEncode(new Uint8Array(d)).slice(0, 10);
+}
+const oidcSet = (r: Response) =>
+  setCookies(r).find(
+    (c) => OIDC_NAME.test(c.split("=")[0] ?? "") && !/Max-Age=0/.test(c),
+  );
+const clearedNames = (r: Response) =>
+  setCookies(r)
+    .filter((c) => /Max-Age=0/.test(c) && /^(__Host-)?oa_oidc/.test(c))
+    .map((c) => c.split("=")[0]);
 const cookieVal = (r: Response, name: string) => {
   const c = setCookies(r).find((s) => s.startsWith(`${name}=`));
   return c ? c.slice(name.length + 1).split(";")[0] : undefined;
@@ -100,11 +125,18 @@ async function begin(
   next = "/a/xyz",
   e: Env = env,
   key?: CryptoKey,
+  extra: { retry?: boolean; cookie?: string } = {},
 ) {
-  const r = await call(`/auth/login?next=${encodeURIComponent(next)}`, {}, e);
+  const r = await call(
+    `/auth/login?next=${encodeURIComponent(next)}${extra.retry ? "&retry=1" : ""}`,
+    extra.cookie ? { headers: { cookie: extra.cookie } } : {},
+    e,
+  );
   expect(r.status).toBe(302);
   const loc = new URL(r.headers.get("location") ?? "");
-  const oidc = cookieVal(r, "oa_oidc");
+  const set = oidcSet(r) ?? "";
+  const cname = set.split("=")[0] ?? "";
+  const oidc = set ? set.slice(cname.length + 1).split(";")[0] : undefined;
   const state = loc.searchParams.get("state") ?? "";
   const nonce = loc.searchParams.get("nonce") ?? "";
   const code = newId();
@@ -113,19 +145,47 @@ async function begin(
     claims: { nonce, ...claims },
     key,
   });
-  return { code, state, nonce, oidc, loc, res: r };
+  return { code, state, nonce, oidc, cname, loc, res: r };
 }
 
-const callback = (
+/** Sends `oidc` under the per-attempt name derived from q.state (or `name`). */
+const callback = async (
   q: { code: string; state: string },
   oidc: string | undefined,
   e: Env = env,
-) =>
-  call(
+  name?: string,
+  extraCookie?: string,
+) => {
+  const n =
+    name ??
+    `${e.ENVIRONMENT === "dev" ? "" : "__Host-"}oa_oidc_${await kOf(q.state)}`;
+  const parts = [oidc === undefined ? undefined : `${n}=${oidc}`, extraCookie]
+    .filter(Boolean)
+    .join("; ");
+  return call(
     `/auth/callback?code=${q.code}&state=${encodeURIComponent(q.state)}`,
-    { headers: oidc === undefined ? {} : { cookie: `oa_oidc=${oidc}` } },
+    { headers: parts ? { cookie: parts } : {} },
     e,
   );
+};
+
+const later = async <T>(ms: number, f: () => Promise<T>): Promise<T> => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(Date.now() + ms);
+  try {
+    return await f();
+  } finally {
+    vi.useRealTimers();
+  }
+};
+
+function expectRetry(r: Response, next = "/") {
+  expect(r.status).toBe(302);
+  expect(r.headers.get("location")).toBe(
+    `/auth/login?next=${encodeURIComponent(next)}&retry=1`,
+  );
+  expect(cookieVal(r, "oa_session")).toBeUndefined();
+}
 
 const userByEmail = (email: string) =>
   env.DB.prepare("select * from users where email = ?")
@@ -137,9 +197,7 @@ async function expect401(r: Response) {
   const text = await r.text();
   expect(JSON.parse(text).error.code).toBe("unauthorized");
   expect(text).not.toContain("upstream-secret-detail");
-  expect(
-    setCookies(r).some((c) => c.startsWith("oa_oidc=;") && /Max-Age=0/.test(c)),
-  ).toBe(true);
+  expect(clearedNames(r).length).toBe(1);
   expect(cookieVal(r, "oa_session")).toBeUndefined();
 }
 
@@ -161,11 +219,11 @@ describe("GET /auth/login", () => {
     );
     expect(p.get("state")?.length).toBeGreaterThanOrEqual(32);
     expect(p.get("nonce")?.length).toBeGreaterThanOrEqual(32);
-    const c = setCookies(res).find((s) => s.startsWith("oa_oidc="));
+    const c = oidcSet(res);
     expect(c).toMatch(/; HttpOnly/);
     expect(c).toMatch(/SameSite=Lax/);
     expect(c).toMatch(/Path=\/auth(;|$)/);
-    expect(c).toMatch(/Max-Age=600/);
+    expect(c).toMatch(/Max-Age=900/);
     // dev env → no Secure; production → Secure
     expect(c).not.toMatch(/Secure/);
     const prod = await call(
@@ -173,9 +231,7 @@ describe("GET /auth/login", () => {
       {},
       { ...env, ENVIRONMENT: "production" },
     );
-    expect(setCookies(prod).find((s) => s.startsWith("oa_oidc="))).toMatch(
-      /; Secure/,
-    );
+    expect(oidcSet(prod)).toMatch(/; Secure/);
     // verifier never leaks in the URL
     expect(loc.href).not.toContain("verifier");
   });
@@ -210,13 +266,13 @@ describe("safeNext", () => {
     const r = await call(
       `/auth/login?next=${encodeURIComponent(`/${"é".repeat(2000)}`)}`,
     );
-    const c = setCookies(r).find((x) => x.startsWith("oa_oidc=")) ?? "";
+    const c = oidcSet(r) ?? "";
     expect(c.length).toBeGreaterThan(0);
     expect(c.length).toBeLessThan(4096);
     const r2 = await call(
       `/auth/login?next=${encodeURIComponent(`/${"a".repeat(2040)}`)}`,
     );
-    const c2 = setCookies(r2).find((x) => x.startsWith("oa_oidc=")) ?? "";
+    const c2 = oidcSet(r2) ?? "";
     expect(c2.length).toBeLessThan(4096);
   });
 });
@@ -233,11 +289,7 @@ describe("GET /auth/callback", () => {
     expect(row?.role).toBe("owner");
     expect(row?.name).toBe("Olive");
     expect(sess?.uid).toBe(row?.id);
-    expect(
-      setCookies(r).some(
-        (c) => c.startsWith("oa_oidc=;") && /Max-Age=0/.test(c),
-      ),
-    ).toBe(true);
+    expect(clearedNames(r)).toEqual([b.cname]);
     // token exchange carried PKCE verifier + client creds
     const body = tokenCalls[0]?.body;
     expect(body?.get("grant_type")).toBe("authorization_code");
@@ -291,9 +343,9 @@ describe("GET /auth/callback", () => {
     const b2 = await begin({});
     await expect401(await callback(b2, b2.oidc));
   });
-  it("rejects missing state cookie", async () => {
+  it("missing state cookie → retry", async () => {
     const b = await begin({ email: "n@x.com" });
-    await expect401(await callback(b, undefined));
+    expectRetry(await callback(b, undefined));
   });
   it("rejects forged state cookie", async () => {
     const b = await begin({ email: "n@x.com" });
@@ -304,21 +356,15 @@ describe("GET /auth/callback", () => {
     const forged = b64urlEncode(
       new TextEncoder().encode(JSON.stringify({ ...payload, state: "x" })),
     );
-    await expect401(await callback({ ...b, state: "x" }, `${forged}.${sig}`));
+    expectRetry(await callback({ ...b, state: "x" }, `${forged}.${sig}`));
   });
-  it("rejects state mismatch", async () => {
+  it("state mismatch → retry", async () => {
     const b = await begin({ email: "n@x.com" });
-    await expect401(await callback({ ...b, state: `${b.state}x` }, b.oidc));
+    expectRetry(await callback({ ...b, state: `${b.state}x` }, b.oidc));
   });
-  it("rejects expired state cookie", async () => {
-    const b = await begin({ email: "n@x.com" });
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(Date.now() + 11 * 60 * 1000);
-    try {
-      await expect401(await callback(b, b.oidc));
-    } finally {
-      vi.useRealTimers();
-    }
+  it("expired state cookie → retry with its next", async () => {
+    const b = await begin({ email: "n@x.com" }, "/a/q");
+    expectRetry(await later(16 * 60_000, () => callback(b, b.oidc)), "/a/q");
   });
   it("token endpoint error → 401 without upstream body", async () => {
     const b = await begin({ email: "n@x.com" });
@@ -329,7 +375,7 @@ describe("GET /auth/callback", () => {
     const b = await begin({ email: "n@x.com" });
     const r = await call(
       `/auth/callback?error=access_denied&state=${b.state}`,
-      { headers: { cookie: `oa_oidc=${b.oidc}` } },
+      { headers: { cookie: `${b.cname}=${b.oidc}` } },
     );
     await expect401(r);
   });
@@ -472,5 +518,361 @@ describe("session middleware", () => {
     const { cookie, userId } = await login("gone@x.com");
     await env.DB.prepare("delete from users where id = ?").bind(userId).run();
     expect((await get({ cookie })).user).toBeNull();
+  });
+});
+
+describe("callback failure logging", () => {
+  type Log = { evt: string; stage: string; [k: string]: unknown };
+  let warn: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+  const logs = (): Log[] =>
+    warn.mock.calls.map((a: unknown[]) => JSON.parse(String(a[0])) as Log);
+  const raw = () =>
+    warn.mock.calls.map((a: unknown[]) => a.join(" ")).join("\n");
+
+  const EMAIL = "secret-person@leak.example";
+  async function run(
+    expectStage: string,
+    setup: (
+      b: Awaited<ReturnType<typeof begin>>,
+    ) => Promise<Response> | Response,
+    claims: JWTPayload = { email: EMAIL },
+  ) {
+    const b = await begin(claims);
+    warn.mockClear();
+    const r = await setup(b);
+    const l = logs().filter((x) => x.evt === "oidc_fail");
+    expect(l.map((x) => x.stage)).toEqual([expectStage]);
+    const text = raw();
+    for (const secret of [
+      EMAIL,
+      "leak.example",
+      b.code,
+      b.state,
+      b.nonce,
+      b.oidc ?? "",
+      env.ACCESS_CLIENT_SECRET,
+      env.SESSION_SECRET,
+      "upstream-secret-detail",
+      "eyJ",
+    ])
+      expect(text).not.toContain(secret);
+    return { r, l: l[0] as Log };
+  }
+
+  it("no_state_cookie", async () => {
+    await run("no_state_cookie", (b) => callback(b, undefined));
+  });
+  it("state_bad_sig", async () => {
+    await run("state_bad_sig", (b) => callback(b, `${b.oidc}x`));
+  });
+  it("state_expired", async () => {
+    await run("state_expired", async (b) => {
+      return later(16 * 60_000, () => callback(b, b.oidc));
+    });
+  });
+  it("state_mismatch", async () => {
+    await run("state_mismatch", (b) =>
+      callback({ ...b, state: `${b.state}x` }, b.oidc),
+    );
+  });
+  it("idp_error with sanitized error", async () => {
+    const { l } = await run("idp_error", (b) =>
+      call(
+        `/auth/callback?error=${encodeURIComponent("Access_Denied<script>")}&state=${encodeURIComponent(b.state)}`,
+        { headers: { cookie: `${b.cname}=${b.oidc}` } },
+      ),
+    );
+    expect(l.error).toMatch(/^access_denied[a-z_]{0,51}$/);
+  });
+  it("token_http_<status>", async () => {
+    tokenStatus = 502;
+    const { r } = await run("token_http_502", (b) => callback(b, b.oidc));
+    expect(r.status).toBe(401);
+    expect(await r.text()).not.toContain("upstream");
+  });
+  it("token 302 (Access error redirect) logs error + description", async () => {
+    tokenResp = () =>
+      new Response(null, {
+        status: 302,
+        headers: {
+          location: `${APP}/auth/callback?error=invalid_client&error_description=${encodeURIComponent(`Client auth failed\u0000\n${"x".repeat(300)}`)}`,
+        },
+      });
+    const { l, r } = await run("token_http_302", (b) => callback(b, b.oidc));
+    expect(r.status).toBe(401);
+    expect(l.error).toBe("invalid_client");
+    expect(String(l.description)).toMatch(/^Client auth failedx+$/);
+    expect(String(l.description).length).toBe(200);
+    expect(await r.text()).not.toContain("invalid_client");
+  });
+  it("token 4xx JSON body logs error + description", async () => {
+    tokenResp = () =>
+      Response.json(
+        { error: "invalid_grant", error_description: "Code expired" },
+        { status: 400 },
+      );
+    const { l } = await run("token_http_400", (b) => callback(b, b.oidc));
+    expect(l.error).toBe("invalid_grant");
+    expect(l.description).toBe("Code expired");
+  });
+  it("token_bad_json", async () => {
+    tokenRaw = "not json";
+    await run("token_bad_json", (b) => callback(b, b.oidc));
+  });
+  it("no_id_token", async () => {
+    tokenRaw = JSON.stringify({ access_token: "at" });
+    await run("no_id_token", (b) => callback(b, b.oidc));
+  });
+  it("jwt_verify with code and claim", async () => {
+    const { l } = await run("jwt_verify", (b) => callback(b, b.oidc), {
+      email: EMAIL,
+      aud: "other-client",
+    });
+    expect(l.code).toBe("ERR_JWT_CLAIM_VALIDATION_FAILED");
+    expect(l.claim).toBe("aud");
+    const { l: l2 } = await run("jwt_verify", (b) => callback(b, b.oidc), {
+      email: EMAIL,
+      exp: Math.floor(Date.now() / 1000) - 600,
+    });
+    expect(l2.code).toBe("ERR_JWT_EXPIRED");
+    expect(l2.claim).toBe("exp");
+  });
+  it("aud (multi-audience)", async () => {
+    await run("aud", (b) => callback(b, b.oidc), {
+      email: EMAIL,
+      aud: [env.ACCESS_CLIENT_ID, "other"],
+    });
+  });
+  it("nonce", async () => {
+    await run("nonce", (b) => callback(b, b.oidc), {
+      email: EMAIL,
+      nonce: "wrong",
+    });
+  });
+  it("email", async () => {
+    await run("email", (b) => callback(b, b.oidc), {});
+  });
+  it("email_unverified", async () => {
+    await run("email_unverified", (b) => callback(b, b.oidc), {
+      email: EMAIL,
+      email_verified: false,
+    });
+  });
+  it("no_access", async () => {
+    const { r } = await run("no_access", (b) => callback(b, b.oidc));
+    expect(r.headers.get("location")).toBe("/no-access");
+  });
+});
+
+describe("resilient OIDC state", () => {
+  const decode = (v: string) =>
+    JSON.parse(
+      atob((v.split(".")[0] ?? "").replace(/-/g, "+").replace(/_/g, "/")),
+    ) as { exp: number; retry?: boolean; next: string };
+
+  it("TTL is 900s (signed exp and Max-Age); still valid at 14 min", async () => {
+    const t0 = Date.now();
+    const b = await begin({ email: "ttl@x.com" });
+    expect(oidcSet(b.res)).toMatch(/Max-Age=900(;|$)/);
+    const exp = decode(b.oidc ?? "").exp;
+    expect(exp).toBeGreaterThanOrEqual(t0 + 900_000);
+    expect(exp).toBeLessThanOrEqual(Date.now() + 900_000);
+    await login("ttl@x.com");
+    const r = await later(14 * 60_000, () => callback(b, b.oidc));
+    expect(r.status).toBe(302);
+    expect(r.headers.get("location")).toBe("/a/xyz");
+    expect(cookieVal(r, "oa_session")).toBeDefined();
+  });
+
+  it("cookie name is oa_oidc_<first 10 b64url of sha256(state)>", async () => {
+    const b = await begin({});
+    expect(b.cname).toBe(`oa_oidc_${await kOf(b.state)}`);
+  });
+
+  it("older tab completes after a newer one starts; only its cookie is cleared", async () => {
+    await login("tabs@x.com");
+    const a = await begin({ email: "tabs@x.com" }, "/a/old");
+    const n = await begin({ email: "tabs@x.com" }, "/a/new", env, undefined, {
+      cookie: `${a.cname}=${a.oidc}`,
+    });
+    expect(clearedNames(n.res)).toEqual([]);
+    const both = `${a.cname}=${a.oidc}; ${n.cname}=${n.oidc}`;
+    const r = await call(
+      `/auth/callback?code=${a.code}&state=${encodeURIComponent(a.state)}`,
+      { headers: { cookie: both } },
+    );
+    expect(r.status).toBe(302);
+    expect(r.headers.get("location")).toBe("/a/old");
+    expect(clearedNames(r)).toEqual([a.cname]);
+    const r2 = await call(
+      `/auth/callback?code=${n.code}&state=${encodeURIComponent(n.state)}`,
+      { headers: { cookie: `${n.cname}=${n.oidc}` } },
+    );
+    expect(r2.headers.get("location")).toBe("/a/new");
+    expect(clearedNames(r2)).toEqual([n.cname]);
+  });
+
+  it("4 attempts evict the oldest, keeping at most 3", async () => {
+    const jar: string[] = [];
+    const names: string[] = [];
+    const t0 = Date.now();
+    for (let i = 0; i < 3; i++) {
+      const b = await later(i * 1000, () =>
+        begin({}, "/", env, undefined, { cookie: jar.join("; ") || undefined }),
+      );
+      expect(clearedNames(b.res)).toEqual([]);
+      jar.push(`${b.cname}=${b.oidc}`);
+      names.push(b.cname);
+    }
+    // send them newest-first so eviction must use exp, not header order
+    const b4 = await later(Date.now() - t0 + 5000, () =>
+      begin({}, "/", env, undefined, { cookie: [...jar].reverse().join("; ") }),
+    );
+    expect(clearedNames(b4.res)).toEqual([names[0]]);
+    expect(oidcSet(b4.res)).toBeDefined();
+  });
+
+  it("unparseable oa_oidc_* cookies are evicted first", async () => {
+    const a = await begin({});
+    const b = await begin({}, "/", env, undefined, {
+      cookie: `${a.cname}=${a.oidc}`,
+    });
+    const junk = "oa_oidc_AAAAAAAAAA=garbage";
+    const r = await begin({}, "/", env, undefined, {
+      cookie: `${a.cname}=${a.oidc}; ${junk}; ${b.cname}=${b.oidc}`,
+    });
+    expect(clearedNames(r.res)).toEqual(["oa_oidc_AAAAAAAAAA"]);
+  });
+
+  it("expired state → retry once, then the static page", async () => {
+    const b = await begin({ email: "slow@x.com" }, "/a/q");
+    const r1 = await later(16 * 60_000, () => callback(b, b.oidc));
+    expectRetry(r1, "/a/q");
+    expect(clearedNames(r1)).toEqual([b.cname]);
+    // follow the retry login
+    const b2 = await begin({ email: "slow@x.com" }, "/a/q", env, undefined, {
+      retry: true,
+    });
+    expect(decode(b2.oidc ?? "").retry).toBe(true);
+    const r2 = await later(16 * 60_000, () => callback(b2, b2.oidc));
+    expect(r2.status).toBe(400);
+    expect(r2.headers.get("content-type")).toMatch(/^text\/html/);
+    expect(r2.headers.get("content-security-policy")).toMatch(
+      /default-src 'none'/,
+    );
+    expect(r2.headers.get("x-frame-options")).toBe("DENY");
+    expect(r2.headers.get("location")).toBeNull();
+    const html = await r2.text();
+    expect(html).toContain(
+      "Sign-in took too long or was opened in another tab. Try again.",
+    );
+    expect(html).toContain('href="/auth/login?next=%2Fa%2Fq"');
+    expect(clearedNames(r2)).toEqual([b2.cname]);
+  });
+
+  it("mismatch goes to retry, and on a retry attempt to the page", async () => {
+    const b = await begin({ email: "m@x.com" });
+    expectRetry(await callback({ ...b, state: `${b.state}x` }, b.oidc));
+    const b2 = await begin({}, "/", env, undefined, { retry: true });
+    const r = await callback({ ...b2, state: `${b2.state}x` }, b2.oidc);
+    expect(r.status).toBe(400);
+  });
+
+  it("retry loop can't happen even when no state cookie comes back", async () => {
+    const b = await begin({}, "/a/z", env, undefined, { retry: true });
+    const r = await callback(b, undefined);
+    expect(r.status).toBe(400);
+    expect(r.headers.get("location")).toBeNull();
+    // bad signature on a retry attempt → page too
+    const b2 = await begin({}, "/", env, undefined, { retry: true });
+    expect((await callback(b2, `${b2.oidc}x`)).status).toBe(400);
+  });
+
+  it("the page escapes next and contains no other user input", async () => {
+    const next = `/a?x='"><img src=x onerror=alert(1)>`;
+    const b = await begin({}, next, env, undefined, { retry: true });
+    const r = await later(16 * 60_000, () => callback(b, b.oidc));
+    const html = await r.text();
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain(b.state);
+    expect(html).not.toMatch(/onerror=alert/i);
+  });
+
+  it("legacy oa_oidc cookie is no longer accepted", async () => {
+    await login("legacy@x.com");
+    const b = await begin({ email: "legacy@x.com" }, "/a/l");
+    const r = await call(
+      `/auth/callback?code=${b.code}&state=${encodeURIComponent(b.state)}`,
+      { headers: { cookie: `oa_oidc=${b.oidc}` } },
+    );
+    expectRetry(r, "/");
+  });
+
+  it("token/JWT failures keep the generic 401", async () => {
+    const b = await begin({ email: "n@x.com", nonce: "wrong" });
+    await expect401(await callback(b, b.oidc));
+  });
+});
+
+describe("REVIEW breaks", () => {
+  const prod = { ...env, ENVIRONMENT: "production" as const };
+  it("B1: backslash-heavy next makes the state cookie exceed 4096 (browser drops it)", async () => {
+    const next = `/?${"\\".repeat(2000)}`;
+    expect(safeNext(env, next).length).toBeLessThanOrEqual(2048);
+    const r = await call(`/auth/login?next=${encodeURIComponent(next)}`);
+    const c = oidcSet(r) ?? "";
+    expect(c.length).toBeGreaterThan(0);
+    expect(c.length).toBeLessThan(4096);
+    expect(c.length).toBeLessThanOrEqual(3800);
+  });
+  it("B2: state cookie is not browser-bound: a planted (tossed) attacker cookie completes login CSRF", async () => {
+    const e = { ...prod, OWNER_EMAIL: "attacker@x.com" };
+    const atk = await begin({ email: "attacker@x.com" }, "/", e);
+    // victim's browser: a sibling host can only plant the un-prefixed name
+    const r = await callback(
+      atk,
+      atk.oidc,
+      e,
+      `oa_oidc_${await kOf(atk.state)}`,
+    );
+    expect(cookieVal(r, "oa_session")).toBeUndefined();
+  });
+  it("B2b: same via the legacy oa_oidc name", async () => {
+    for (const e of [
+      { ...env, OWNER_EMAIL: "attacker@x.com" },
+      { ...prod, OWNER_EMAIL: "attacker@x.com" },
+    ]) {
+      const atk = await begin({ email: "attacker@x.com" }, "/", e);
+      const r = await callback(atk, atk.oidc, e, "oa_oidc");
+      expect(cookieVal(r, "oa_session")).toBeUndefined();
+    }
+  });
+  it("B2c: issued cookie is not __Host- prefixed / Path=/ (tossable)", async () => {
+    const r = await call("/auth/login?next=/", {}, prod);
+    const c = oidcSet(r) ?? "";
+    expect(c).toMatch(/^__Host-oa_oidc_[A-Za-z0-9_-]{10}=/);
+    expect(c).toMatch(/; Secure/);
+    expect(c).toMatch(/; Path=\/(;|$)/);
+    expect(c).not.toMatch(/Domain=/i);
+  });
+  it("prod: full flow with __Host- cookie works and clears it with the same attributes", async () => {
+    await login("hostp@x.com");
+    const b = await begin({ email: "hostp@x.com" }, "/a/h", prod);
+    expect(b.cname).toBe(`__Host-oa_oidc_${await kOf(b.state)}`);
+    const r = await callback(b, b.oidc, prod);
+    expect(r.headers.get("location")).toBe("/a/h");
+    const cleared = setCookies(r).find((c) => c.startsWith(`${b.cname}=;`));
+    expect(cleared).toBe(
+      `${b.cname}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`,
+    );
+  });
+  it("dev: plain oa_oidc_<k> name with Path=/auth", async () => {
+    const r = await call("/auth/login?next=/");
+    const c = oidcSet(r) ?? "";
+    expect(c).toMatch(/^oa_oidc_[A-Za-z0-9_-]{10}=/);
+    expect(c).toMatch(/; Path=\/auth(;|$)/);
   });
 });

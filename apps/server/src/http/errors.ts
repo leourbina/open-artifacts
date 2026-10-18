@@ -75,3 +75,9 @@ export function toErrorResponse(e: unknown): Response {
 export function appOrigin(env: Pick<Env, "APP_HOST" | "ENVIRONMENT">): string {
   return `${env.ENVIRONMENT === "dev" ? "http" : "https"}://${env.APP_HOST}`;
 }
+
+export function contentOrigin(
+  env: Pick<Env, "CONTENT_HOST" | "ENVIRONMENT">,
+): string {
+  return `${env.ENVIRONMENT === "dev" ? "http" : "https"}://${env.CONTENT_HOST}`;
+}

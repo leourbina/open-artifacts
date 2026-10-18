@@ -169,6 +169,8 @@ export const VersionInfoSchema = z.object({
   files: z.array(FileEntrySchema),
   language: z.string().nullable(),
   textIndexed: z.boolean(),
+  /** This version's format (old versions keep theirs after a later publish). */
+  format: FormatSchema,
 });
 export type VersionInfo = z.infer<typeof VersionInfoSchema>;
 

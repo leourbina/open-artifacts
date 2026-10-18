@@ -37,8 +37,11 @@ describe("skeleton", () => {
       const res = await call(url);
       expect(res.headers.get("x-robots-tag")).toBe("noindex, nofollow");
       expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+      // Content host: no-referrer, so signed tokens never leak via Referer.
       expect(res.headers.get("referrer-policy")).toBe(
-        "strict-origin-when-cross-origin",
+        url.startsWith(CONTENT)
+          ? "no-referrer"
+          : "strict-origin-when-cross-origin",
       );
     });
   }

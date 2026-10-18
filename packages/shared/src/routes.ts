@@ -17,8 +17,10 @@ export const R = {
   /** POST -> ArtifactSummary */
   restoreDeleted: (id: string) => `${A}/${seg(id)}/undelete`,
   /**
-   * GET -> VersionInfo[]: at most the newest VERSIONS_PAGE_SIZE (20) with version < `before`
-   * (all versions when omitted), newest first; an empty array means no more.
+   * GET -> VersionInfo[]: newest first with version < `before` (all versions when omitted).
+   * A page holds at most VERSIONS_PAGE_SIZE (20) and stops early once its manifests pass
+   * ~1 MiB (always at least one), so pages may be shorter than 20: page on with
+   * `before` = the last version; only an empty array means the end.
    * POST PublishInput (new version) -> PublishResult
    */
   versions: (id: string, before?: number) => {
