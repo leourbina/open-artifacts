@@ -3,6 +3,7 @@ import {
   APP_NAME,
   type Api,
   cliWrangler,
+  deepEqual,
   LEGACY_POLICY_NAME,
   POLICY_NAME,
   parseSecretList,
@@ -135,6 +136,9 @@ const SPEC = {
   include: [{ everyone: {} }],
   exclude: [],
   require: [],
+  approval_required: false,
+  isolation_required: false,
+  purpose_justification_required: false,
 };
 const existingPolicy = { id: "pol-1", ...SPEC };
 const appPuts = (calls: Call[]) =>
@@ -320,6 +324,48 @@ describe("staging-access", () => {
     expect(h.logs).toContain(`policy ${POLICY_NAME}: reconciled (pol-1)`);
   });
 
+  it("carries over session_duration when reconciling", async () => {
+    const legacy = {
+      id: "pol-1",
+      name: LEGACY_POLICY_NAME,
+      decision: "allow",
+      include: [{ email: { email: "me@leourbina.com" } }],
+      session_duration: "24h",
+      approval_required: true,
+      approval_groups: [{ email_addresses: ["a@b.c"] }],
+      created_at: "2026-01-01",
+    };
+    const h = harness({ apps: [existingApp], policies: [legacy] }, ALL);
+    await h.go();
+    expect(policyPuts(h.calls).map((c) => c.body)).toEqual([
+      { session_duration: "24h", ...SPEC },
+    ]);
+  });
+
+  it("reconciles drift in approval/isolation/purpose_justification", async () => {
+    for (const k of [
+      "approval_required",
+      "isolation_required",
+      "purpose_justification_required",
+    ]) {
+      const h = harness(
+        { apps: [existingApp], policies: [{ ...existingPolicy, [k]: true }] },
+        ALL,
+      );
+      await h.go();
+      expect(policyPuts(h.calls).map((c) => c.body)).toEqual([SPEC]);
+    }
+  });
+
+  it("compares include by deep equality, not key order", () => {
+    expect(
+      deepEqual([{ a: 1, b: { c: 2, d: 3 } }], [{ b: { d: 3, c: 2 }, a: 1 }]),
+    ).toBe(true);
+    expect(deepEqual([{ everyone: {} }], [{ everyone: { x: 1 } }])).toBe(false);
+    expect(deepEqual([{ a: 1 }], [{ a: 1 }, { a: 1 }])).toBe(false);
+    expect(deepEqual({}, [])).toBe(false);
+  });
+
   it("fixes a drifted decision or require", async () => {
     for (const d of [
       { ...existingPolicy, decision: "deny" },
@@ -389,7 +435,7 @@ describe("staging-access", () => {
     expect(appPuts(fresh.calls)).toEqual([]);
   });
 
-  it("fails clearly when an existing app lacks the owner policy, without PUT", async () => {
+  it("fails clearly when an existing app lacks the everyone policy, without PUT", async () => {
     const h = harness(
       { apps: [{ ...existingApp, policies: [] }], policies: [existingPolicy] },
       ALL,

@@ -228,6 +228,11 @@ describe("ops-staging-access.yml hardening", () => {
       expect.arrayContaining(["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"]),
     );
   });
+  it("shares the staging concurrency group with deploy-staging", () => {
+    const want = { group: "staging", "cancel-in-progress": false };
+    expect(w.concurrency).toEqual(want);
+    expect(wf("deploy-staging.yml").concurrency).toEqual(want);
+  });
   it("only runs on main", () => {
     expect(w.jobs.access.if).toBe("github.ref == 'refs/heads/main'");
   });

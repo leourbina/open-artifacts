@@ -41,7 +41,7 @@ Enable Settings > Actions > General > "Allow GitHub Actions to create and approv
 
 ## B4 Access setup
 
-`ops-staging-access.yml` (manual only) runs `scripts/ops/staging-access.ts`. It is idempotent: a re-run creates and changes nothing that already exists.
+`ops-staging-access.yml` (manual only, main only) shares the `staging` concurrency group with `deploy-staging.yml`, so the two never race on Worker secrets. It runs `scripts/ops/staging-access.ts`. It is idempotent: a re-run creates and changes nothing that already exists.
 
 ```sh
 gh workflow run ops-staging-access.yml                       # defaults: team_name=leourbina, force_rotate=false
@@ -52,7 +52,7 @@ It reads the team domain from the Access organization, falling back to `<team_na
 
 Policy: the reusable allow policy `Open Artifacts – everyone` uses `include: [{ everyone: {} }]` with no exclude or require (spec 6.5). Access authenticates everyone, and the app does authorization. The script reconciles this policy in place with `PUT /accounts/{id}/access/policies/{policy_id}`:
 - A legacy `open-artifacts-staging-owner` policy is renamed. Its id stays the same, so the app's link still works.
-- A policy that has drifted is put back to the spec.
+- A policy that has drifted is put back to the spec: decision, include, exclude or require, or any of approval_required, isolation_required or purpose_justification_required set. `session_duration` is carried over.
 - The policy is created only if neither name exists.
 
 The log prints `policy …: reconciled|unchanged|created`. The app itself is never PUT.

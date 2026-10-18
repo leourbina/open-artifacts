@@ -17,7 +17,12 @@ const POLICY_BODY = {
   include: [{ everyone: {} }],
   exclude: [],
   require: [],
+  approval_required: false,
+  isolation_required: false,
+  purpose_justification_required: false,
 };
+// Non-spec optional fields kept from an existing policy on reconcile.
+const CARRY_OVER = ["session_duration"] as const;
 export const REDIRECT_URI = "https://staging.open-artifacts.com/auth/callback";
 
 export type Api = (
@@ -80,13 +85,28 @@ async function teamDomain(o: Options): Promise<string> {
 const empty = (x: unknown) =>
   x === undefined || x === null || (Array.isArray(x) && x.length === 0);
 
+export function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== "object" || typeof b !== "object" || !a || !b) return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  const ka = Object.keys(a);
+  const kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  return ka.every(
+    (k) => Object.hasOwn(b, k) && deepEqual((a as Obj)[k], (b as Obj)[k]),
+  );
+}
+
 function policyMatches(p: Obj): boolean {
   return (
     p.name === POLICY_NAME &&
     p.decision === POLICY_BODY.decision &&
-    JSON.stringify(p.include ?? []) === JSON.stringify(POLICY_BODY.include) &&
+    deepEqual(p.include ?? [], POLICY_BODY.include) &&
     empty(p.exclude) &&
-    empty(p.require)
+    empty(p.require) &&
+    !p.approval_required &&
+    !p.isolation_required &&
+    !p.purpose_justification_required
   );
 }
 
@@ -102,7 +122,10 @@ async function ensurePolicy(o: Options): Promise<string> {
     if (policyMatches(found)) {
       o.out.log(`policy ${POLICY_NAME}: unchanged (${found.id})`);
     } else {
-      await o.api("PUT", `${base}/${found.id}`, POLICY_BODY);
+      const kept: Obj = {};
+      for (const k of CARRY_OVER)
+        if (found[k] !== undefined) kept[k] = found[k];
+      await o.api("PUT", `${base}/${found.id}`, { ...kept, ...POLICY_BODY });
       o.out.log(`policy ${POLICY_NAME}: reconciled (${found.id})`);
     }
     return found.id;
