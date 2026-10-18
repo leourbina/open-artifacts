@@ -1,0 +1,1 @@
+ALTER TABLE `uploads` ADD `received_at` integer;

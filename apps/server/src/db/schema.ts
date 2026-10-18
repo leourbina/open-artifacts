@@ -164,6 +164,8 @@ export const uploads = sqliteTable("uploads", {
   path: text("path").notNull(),
   createdAt: integer("created_at").notNull(),
   consumed: integer("consumed").notNull().default(0),
+  // set once the signed PUT stored exactly `size` bytes
+  receivedAt: integer("received_at"),
 });
 
 // ids handed out by create_upload before the first publish
