@@ -21,10 +21,10 @@ Upgrades keep all your artifacts, versions, shares, and live-page data. Database
    ```
 
 3. **Install dependencies:** `pnpm install`.
-4. **Run the upgrade:** `pnpm -s oa:setup --upgrade --json --yes`. It reuses the hostnames and email saved by setup. Every step runs, but only `deploy` (new database migrations, then a redeploy) and `selftest` do work: `prereqs` and `resources` verify, and `access`, `secrets`, `owner-token`, and `agent-config` report `skipped` unless something is missing. It keeps the existing owner token and needs no `OA_ACCESS_TOKEN`. Go by the exit code, as in setup:
+4. **Run the upgrade:** `pnpm -s oa:setup --upgrade --json`. It reuses the hostnames and email saved by setup. Every step runs, but only `deploy` (new database migrations, then a redeploy) and `selftest` do work: `prereqs` and `resources` verify, and `access`, `secrets`, `owner-token`, and `agent-config` report `skipped` unless something is missing. It keeps the existing owner token and needs no `OA_ACCESS_TOKEN`. Go by the exit code, as in setup:
    - **0:** done.
    - **2:** relay the `action_required` line's `message` to the user verbatim, wait until they've done it, then run the same command again.
-   - **1:** show the user the `error` line's `message`. If it says to rerun setup without `--upgrade`, run `pnpm -s oa:setup --json --yes`, with `OA_ACCESS_TOKEN` set if setup needed it, then the upgrade again.
+   - **1:** show the user the `error` line's `message`. If it says to rerun setup without `--upgrade`, run `pnpm -s oa:setup --json` (it may ask for `OA_ACCESS_TOKEN` again), then the upgrade again.
 5. **Tell the user** which version is now running: the `deploy` line's `data.deployedVersion`.
 
 ## If the Cloudflare login has expired

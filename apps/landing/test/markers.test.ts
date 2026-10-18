@@ -57,19 +57,11 @@ describe("release-gate markers", () => {
     expect(read("docs/setup/index.html")).not.toContain(B14);
   });
 
-  // The Welcome-URL TODO lives in setup.md's frontmatter only; the gate fails
-  // on any "TODO" outside the known markers.
-  it("keeps source-only TODOs out of the build", () => {
-    expect(readFileSync(`${src}setup.md`, "utf8")).toContain(
-      "TODO(B16 welcomeUrl)",
-    );
-    for (const page of [
-      "docs/setup/index.html",
-      "docs/setup.md",
-      "llms.txt",
-      "llms-full.txt",
-    ])
-      expect(read(page), page).not.toContain("welcomeUrl");
+  // #70 added data.welcomeUrl, so the source-only Welcome TODO is gone.
+  it("points the Welcome step at data.welcomeUrl", () => {
+    expect(readFileSync(`${src}setup.md`, "utf8")).not.toContain("TODO");
+    for (const page of ["docs/setup.md", "llms.txt"])
+      expect(read(page), page).toContain("`data.welcomeUrl`");
   });
 
   it("has no B16 marker now that the setup docs follow scripts/setup", () => {
