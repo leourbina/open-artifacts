@@ -44,13 +44,17 @@ export const agentConfig: Step = {
   async apply(_state, ctx) {
     const url = `https://${ctx.opts.appHost}/mcp`;
     const s = snippets(ctx.opts.name, url, ctx.pat ?? PLACEHOLDER);
-    ctx.data = { url, snippets: s };
-    ctx.human = Object.entries(s)
-      .map(
-        ([k, v]) =>
-          `\n  ${TITLES[k as keyof typeof s]}:\n${v.replace(/^/gm, "    ")}`,
-      )
-      .join("\n");
+    const welcomeUrl = ctx.welcomeUrl;
+    ctx.data = { url, snippets: s, ...(welcomeUrl ? { welcomeUrl } : {}) };
+    const welcome = welcomeUrl ? `\n  Welcome artifact: ${welcomeUrl}\n` : "";
+    ctx.human =
+      welcome +
+      Object.entries(s)
+        .map(
+          ([k, v]) =>
+            `\n  ${TITLES[k as keyof typeof s]}:\n${v.replace(/^/gm, "    ")}`,
+        )
+        .join("\n");
     return undefined;
   },
 };

@@ -58,7 +58,8 @@ export const secrets: Step = {
   name: "secrets",
   async check(state, ctx) {
     const have = await listSecrets(ctx);
-    const quiet = ctx.opts.yes || ctx.opts.upgrade || state.analyticsSkipped;
+    const quiet =
+      !ctx.opts.interactive || ctx.opts.upgrade || state.analyticsSkipped;
     const done =
       GENERATED.every((n) => have.has(n)) && (quiet || have.has(OPTIONAL));
     return done ? "done" : "todo";
@@ -69,7 +70,7 @@ export const secrets: Step = {
       if (!have.has(n)) await putSecret(ctx, n, random());
     if (
       have.has(OPTIONAL) ||
-      ctx.opts.yes ||
+      !ctx.opts.interactive ||
       ctx.opts.upgrade ||
       state.analyticsSkipped
     )

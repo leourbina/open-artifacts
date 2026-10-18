@@ -3,7 +3,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { type Deps, makeApi, makeWrangler, realDeps, realFs } from "./cf.ts";
 import { readState, type State, writeState } from "./state.ts";
-import type { Ctx, Opts, Step } from "./step.ts";
+import { type Ctx, NeedInput, type Opts, type Step } from "./step.ts";
 import { access } from "./steps/access.ts";
 import { agentConfig } from "./steps/agent-config.ts";
 import { deploy } from "./steps/deploy.ts";
@@ -66,19 +66,25 @@ async function resolve(argv: string[], deps: Deps, state: State) {
       json: { type: "boolean", default: false },
     },
   });
+  const interactive = !v.yes && !v.json;
   // Precedence: flag, then saved state, then an interactive prompt.
   const need = async (flag: string, re: RegExp, saved?: string) => {
     const q = `${flag.slice(2).replace("-", " ")}:`;
     const val =
       (v[flag.slice(2) as keyof typeof v] as string | undefined) ??
       saved ??
-      (v.yes ? undefined : await deps.prompt(q));
-    if (!val) throw new Error(`missing ${flag} (required with --yes)`);
-    return valid(flag, val, re);
+      (interactive ? await deps.prompt(q) : undefined);
+    if (val) return valid(flag, val, re);
+    if (v.json) throw new NeedInput(`pass ${flag} (--json never prompts)`);
+    throw new Error(`missing ${flag} (required with --yes)`);
   };
   const name = valid("--name", v.name ?? state.name ?? "open-artifacts", NAME);
   if (state.name && name !== state.name) {
     const q = `State is for --name ${state.name}; switch to ${name}? [y/N]`;
+    if (v.json)
+      throw new NeedInput(
+        `--name ${name} conflicts with saved --name ${state.name}; pass --name ${state.name}, or rerun interactively to switch`,
+      );
     if (v.yes || !/^y(es)?$/i.test(await deps.prompt(q)))
       throw new Error(
         `--name ${name} conflicts with saved --name ${state.name}; confirm interactively to switch`,
@@ -98,6 +104,8 @@ async function resolve(argv: string[], deps: Deps, state: State) {
     yes: v.yes,
     upgrade: v.upgrade,
     newOwnerToken: v["new-owner-token"],
+    interactive,
+    json: v.json,
   };
   return opts;
 }
@@ -130,10 +138,17 @@ export async function run(
     state = readState(fs, root);
     opts = await resolve(argv, deps, state);
   } catch (e) {
-    report({ step: "args", status: "error", message: (e as Error).message });
-    return 1;
+    const ar = e instanceof NeedInput;
+    const status = ar ? "action_required" : "error";
+    report({ step: "args", status, message: (e as Error).message });
+    return ar ? 2 : 1;
   }
   const { name, appHost, contentHost, ownerEmail } = opts;
+  const prev = {
+    name: state.name,
+    appHost: state.appHost,
+    accountId: state.accountId,
+  };
   Object.assign(state, { name, appHost, contentHost, ownerEmail });
   const wrangler = makeWrangler(deps, root, () => state.accountId);
   const api = makeApi(deps, wrangler);
@@ -147,6 +162,7 @@ export async function run(
     api,
     accessApi,
     notes: [],
+    prev,
   };
   const msg = (fallback: string) => ctx.notes.splice(0).join("; ") || fallback;
   /** Moves the step's data (and human text) out of ctx onto its line. */
@@ -174,6 +190,10 @@ export async function run(
     } catch (e) {
       ctx.notes.length = 0;
       const message = (e as Error).message;
+      if (e instanceof NeedInput) {
+        report({ step: step.name, status: "action_required", message });
+        return 2;
+      }
       report({ step: step.name, status: "error", message });
       return (e as { exitCode?: number }).exitCode ?? 1;
     } finally {
