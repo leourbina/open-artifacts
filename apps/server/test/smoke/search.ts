@@ -10,7 +10,7 @@ const base = process.env.STAGING_URL;
 const pat = process.env.STAGING_OWNER_PAT;
 
 describe.skipIf(!base || !pat)("staging smoke: search", () => {
-  it("publishes, then finds it by a body word (indexing runs in waitUntil)", async () => {
+  it("publishes, then finds it by a body word (indexing runs in the DO alarm)", async () => {
     const word = `smokesearch${Date.now().toString(36)}`;
     const r = await fetch(`${base}${R.artifacts}`, {
       method: "POST",
@@ -26,18 +26,25 @@ describe.skipIf(!base || !pat)("staging smoke: search", () => {
     });
     expect(r.status).toBe(201);
     const { id } = PublishResultSchema.parse(await r.json());
+    // C3: the body is indexed asynchronously by the artifact DO's alarm.
     let found = false;
-    for (let i = 0; i < 10 && !found; i++) {
+    let last = "";
+    const deadline = Date.now() + 60_000;
+    for (;;) {
       const s = await fetch(`${base}${R.search}?q=${word}`, {
         headers: { authorization: `Bearer ${pat}` },
       });
-      expect(s.status).toBe(200);
-      const page = PageSchema(SearchHitSchema).parse(await s.json());
+      last = `${s.status} ${await s.text()}`;
+      expect(s.status, last).toBe(200);
+      const page = PageSchema(SearchHitSchema).parse(JSON.parse(last.slice(4)));
       found = page.items.some((h) => h.id === id);
-      if (!found) await new Promise((res) => setTimeout(res, 500));
+      if (found || Date.now() >= deadline) break;
+      await new Promise((res) => setTimeout(res, 2_000));
     }
-    expect(found).toBe(true);
+    expect(found, `not found in 60 s; last search response: ${last}`).toBe(
+      true,
+    );
     const anon = await fetch(`${base}${R.search}?q=${word}`);
     expect(anon.status).toBe(401);
-  });
+  }, 75_000);
 });
