@@ -30,9 +30,10 @@ export const CapabilitiesPatchSchema = z.strictObject({
 });
 export type CapabilitiesPatch = z.infer<typeof CapabilitiesPatchSchema>;
 
+/** `email` is null for anonymous viewers (no session, no Bearer) of public artifacts. */
 export const UserRefSchema = z.object({
   id: z.string(),
-  email: z.string().email(),
+  email: z.string().email().nullable(),
   name: z.string().nullable(),
 });
 export type UserRef = z.infer<typeof UserRefSchema>;
@@ -252,6 +253,10 @@ export const StorageEntrySchema = z.object({
   updatedAt: z.string(),
 });
 export type StorageEntry = z.infer<typeof StorageEntrySchema>;
+
+/** PUT body for storageKey. */
+export const StorageSetBodySchema = z.strictObject({ value: z.unknown() });
+export type StorageSetBody = z.infer<typeof StorageSetBodySchema>;
 
 export const StorageKeySchema = z.object({
   key: z.string(),

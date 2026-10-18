@@ -140,26 +140,68 @@ describe("deploy-staging.yml", () => {
 describe("landing-preview.yml", () => {
   const w = wf("landing-preview.yml");
   const raw = read(".github/workflows/landing-preview.yml");
-  it("triggers on PRs touching apps/landing", () => {
+  const sameRepo =
+    "github.event.pull_request.head.repo.full_name == github.repository";
+  // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
+  const steps = w.jobs.preview.steps as any[];
+  it("triggers on PRs touching apps/landing, incl. closed", () => {
     expect(triggers(w)).toEqual(["pull_request"]);
     expect(w.on.pull_request.paths).toEqual(["apps/landing/**"]);
+    expect(w.on.pull_request.types).toEqual([
+      "opened",
+      "synchronize",
+      "reopened",
+      "closed",
+    ]);
   });
-  it("skips fork PRs", () => {
-    expect(w.jobs.preview.if).toBe(
-      "github.event.pull_request.head.repo.full_name == github.repository",
+  it("skips fork PRs and closed events in the preview job", () => {
+    expect(w.jobs.preview.if).toContain(sameRepo);
+    expect(w.jobs.preview.if).toContain("github.event.action != 'closed'");
+  });
+  it("serializes per PR", () => {
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal workflow expression
+    expect(w.concurrency.group).toBe(
+      "landing-preview-${{ github.event.pull_request.number }}",
     );
   });
-  it("gates early and passes the URL via env", () => {
-    // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
-    const steps = w.jobs.preview.steps as any[];
+  it("uses wrangler preview, never versions upload", () => {
+    expect(raw).toContain("wrangler preview --name pr-");
+    expect(raw).toContain("--json");
+    expect(raw).not.toContain("versions upload");
+  });
+  it("gates early and fails without a URL", () => {
     expect(steps.some((s) => s.id === "gate")).toBe(true);
     const install = steps.find((s) => (s.run ?? "").includes("pnpm install"));
     expect(install.if).toContain("steps.gate.outputs.present");
+    const prev = steps.find((s) => s.id === "preview");
+    expect(prev.run).toContain("jq -er");
+    expect(prev.run).not.toContain("|| true");
+  });
+  it("scopes the Cloudflare token to the preview step only", () => {
+    expect(w.jobs.preview.env).toBeUndefined();
+    expect(w.env).toBeUndefined();
+    const prev = steps.find((s) => s.id === "preview");
+    expect(prev.env.CLOUDFLARE_API_TOKEN).toContain(
+      "secrets.CLOUDFLARE_API_TOKEN",
+    );
+    const others = steps.filter((s) => s.id !== "preview");
+    expect(JSON.stringify(others)).not.toContain("CLOUDFLARE_API_TOKEN");
+  });
+  it("updates one sticky comment via marker", () => {
     const gh = steps.find((s) => s.uses?.startsWith("actions/github-script"));
     expect(gh.env.PREVIEW_URL).toBeDefined();
-    expect(gh.with.script).toContain("process.env.PREVIEW_URL");
+    expect(gh.with.script).toContain("<!-- landing-preview -->");
+    expect(gh.with.script).toContain("updateComment");
+    expect(gh.with.script).toContain("createComment");
     expect(gh.with.script).not.toContain("${{");
-    expect(raw).toContain("|| true");
+  });
+  it("deletes the preview when the PR closes", () => {
+    const c = w.jobs.cleanup;
+    expect(c.if).toContain(sameRepo);
+    expect(c.if).toContain("github.event.action == 'closed'");
+    expect(raw).toContain("wrangler preview delete --name pr-");
+    expect(raw).toContain("--skip-confirmation");
+    expect(JSON.stringify(c.steps)).toContain("steps.gate.outputs.present");
   });
 });
 
@@ -198,6 +240,10 @@ describe("release-please", () => {
   it("first release is 0.1.0 via initial-version", () => {
     const c = JSON.parse(read("release-please-config.json"));
     expect(c.packages["."]["initial-version"]).toBe("0.1.0");
+  });
+  it("release tags are vX.Y.Z without the component prefix", () => {
+    const c = JSON.parse(read("release-please-config.json"));
+    expect(c.packages["."]["include-component-in-tag"]).toBe(false);
   });
 });
 

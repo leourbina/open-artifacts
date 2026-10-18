@@ -94,7 +94,8 @@ Menu({ trigger: ReactNode; items: Array<{ label; onSelect; danger?: boolean; ico
 Tabs({ tabs: {id; label; content}[]; value?; onValueChange? })
 Tooltip({ content; children }), Toast API: toast({ title; description?; tone?: "info"|"success"|"danger" })
 Badge({ tone?: "neutral"|"accent"|"success"|"warning"|"danger"; children })
-Avatar({ name?: string; email: string; size?: 24|32 })     // initials, deterministic hue from email
+Avatar({ name?: string|null; email?: string|null; size?: 24|32 }) // initials (name → email → "?"); hue from email, else name; neutral "Unknown" when both are missing
+displayName(u: { name?: string|null; email?: string|null }) // name, else email, else "Unknown"
 Card, EmptyState({ icon; title; description; action? }), Skeleton({ width?; height? }), Spinner
 FormatIcon({ format: Format; size? })                       // distinct glyph per html|markdown|code|pdf
 VisibilityBadge({ visibility: Visibility })                 // lock / users / globe

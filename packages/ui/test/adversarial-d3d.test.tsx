@@ -13,6 +13,7 @@ import {
   Toaster,
   toast,
 } from "../src/index";
+import { flushAnnouncement, useToastClock } from "./toast-clock";
 
 afterEach(() => {
   cleanup();
@@ -111,10 +112,11 @@ describe("Tabs", () => {
 });
 
 describe("toast()", () => {
-  it("danger toasts are announced assertively", async () => {
+  it("danger toasts are announced assertively", () => {
+    useToastClock();
     render(<Toaster />);
     act(() => toast({ title: "Upload failed", tone: "danger" }));
-    await act(() => new Promise((r) => setTimeout(r, 50)));
+    flushAnnouncement();
     const assertive = [
       ...document.querySelectorAll('[aria-live="assertive"]'),
     ].some((el) => el.textContent?.includes("Upload failed"));

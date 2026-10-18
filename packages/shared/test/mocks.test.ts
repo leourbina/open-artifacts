@@ -19,10 +19,12 @@ import {
   SNIPPET_MARK,
   StorageEntrySchema,
   StorageKeySchema,
+  StorageSetBodySchema,
   TokenCreatedSchema,
   TokenSchema,
   UploadCreatedSchema,
   UsageSchema,
+  VERSIONS_PAGE_SIZE,
   VersionInfoSchema,
   viewerPath,
 } from "../src/index.js";
@@ -40,6 +42,7 @@ const O = "http://localhost";
 const H: Record<string, string> = {
   "content-type": "application/json",
   "x-oa-request": "1",
+  cookie: "s=1",
 };
 const call = (method: string, path: string, body?: unknown, headers = H) =>
   fetch(`${O}${path}`, {
@@ -495,7 +498,7 @@ describe("misc rules", () => {
       (await json(await call("GET", R.contentUrl(guide.id)))).expiresAt,
     ).toBeTruthy();
   });
-  it("CSRF: cookie without header -> 403 csrf; neither passes", async () => {
+  it("CSRF: cookie without header -> 403 csrf; Bearer without header passes", async () => {
     fresh();
     const r = await call(
       "PATCH",
@@ -511,7 +514,7 @@ describe("misc rules", () => {
           "PATCH",
           R.artifact(ID),
           { title: "x" },
-          { "content-type": "application/json" },
+          { "content-type": "application/json", authorization: "Bearer x" },
         )
       ).status,
     ).toBe(200);
@@ -586,7 +589,7 @@ describe("round 2", () => {
     expect(r.url).toBe(fixtures.me.instance.appUrl + viewerPath(art.id));
     const vs = await json(await call("GET", R.versions(art.id)));
     const top = vs[0];
-    const src = vs.find((v: any) => v.version === 1);
+    const src = vs.find((v: { version: number }) => v.version === 1);
     expect(top.message).toBe("Restored v1");
     expect(top.files).toEqual(src.files);
     expect(top.entry).toBe(src.entry);
@@ -629,7 +632,7 @@ describe("round 2", () => {
     expect(
       (
         await call("PUT", R.shares(ID), {
-          email: art.owner.email.toUpperCase(),
+          email: art.owner.email?.toUpperCase(),
           role: "viewer",
         })
       ).status,
@@ -737,5 +740,146 @@ describe("round 2", () => {
     expect(
       (await call("PATCH", R.settings, { name: "x", extra: 1 })).status,
     ).toBe(400);
+  });
+});
+
+describe("contract C1", () => {
+  const long = () =>
+    Object.entries(fixtures.versions).find(([, v]) => v.length > 20) as [
+      string,
+      (typeof fixtures.versions)[string],
+    ];
+  it("has a fixture artifact with more than a page of versions", () => {
+    expect(long()[1].length).toBeGreaterThan(VERSIONS_PAGE_SIZE);
+    expect(VERSIONS_PAGE_SIZE).toBe(20);
+    const a = fixtures.artifacts.find((x) => x.id === long()[0]);
+    expect(a?.currentVersion).toBe(long()[1][0]?.version);
+  });
+  it("versions GET pages by before, newest first, 20 at a time", async () => {
+    fresh();
+    const id = long()[0];
+    const total = long()[1].length;
+    const p1 = z
+      .array(VersionInfoSchema)
+      .parse(await json(await call("GET", R.versions(id))));
+    expect(p1.length).toBe(20);
+    expect(p1[0]?.version).toBe(total);
+    const p2 = await json(await call("GET", R.versions(id, p1[19]?.version)));
+    expect(p2.map((v: { version: number }) => v.version)).toEqual(
+      Array.from({ length: total - 20 }, (_, i) => total - 20 - i),
+    );
+    expect(await json(await call("GET", R.versions(id, 1)))).toEqual([]);
+  });
+  it("rejects bad before values", async () => {
+    fresh();
+    for (const b of ["0", "-1", "1.5", "abc", "", "01"])
+      expect((await call("GET", `${R.versions(ID)}?before=${b}`)).status).toBe(
+        400,
+      );
+  });
+  it("list and search require auth; hits are redacted for authed only", async () => {
+    fresh();
+    const anon = { "content-type": "application/json" };
+    expect((await call("GET", R.artifacts, undefined, anon)).status).toBe(401);
+    expect(
+      (await call("GET", `${R.search}?q=q4`, undefined, anon)).status,
+    ).toBe(401);
+    const hit = (await json(await call("GET", `${R.search}?q=q4`))).items[0];
+    expect(hit.owner.email).toBe(pub.owner.email);
+    const own = encodeURIComponent(pub.owner.email as string);
+    const authed = await json(await call("GET", `${R.artifacts}?owner=${own}`));
+    expect(authed.items.length).toBeGreaterThan(0);
+  });
+  it("R.versions builds before only when defined", () => {
+    expect(R.versions("id")).toBe("/api/v1/artifacts/id/versions");
+    expect(R.versions("id", 5)).toBe("/api/v1/artifacts/id/versions?before=5");
+    for (const b of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])
+      expect(() => R.versions("id", b)).toThrow(RangeError);
+  });
+  it("anonymous requests on public artifacts get null emails", async () => {
+    fresh();
+    const anon = { "content-type": "application/json" };
+    const a = await json(
+      await call("GET", R.artifact(pub.id), undefined, anon),
+    );
+    ArtifactSummarySchema.parse(a);
+    expect(a.owner.email).toBeNull();
+    expect(a.owner.name).toBe(pub.owner.name);
+    const vs = await json(
+      await call("GET", R.versions(pub.id), undefined, anon),
+    );
+    expect(vs[0].createdBy.email).toBeNull();
+    const authed = await json(
+      await call("GET", R.artifact(pub.id), undefined, { ...H, cookie: "s=1" }),
+    );
+    expect(authed.owner.email).toBe(pub.owner.email);
+    const bearer = await json(
+      await call("GET", R.artifact(pub.id), undefined, {
+        authorization: "Bearer x",
+      }),
+    );
+    expect(bearer.owner.email).toBe(pub.owner.email);
+    const cookie = await json(
+      await call("GET", R.artifact(pub.id), undefined, { cookie: "s=1" }),
+    );
+    expect(cookie.owner.email).toBe(pub.owner.email);
+  });
+  it("storageKey PUT uses StorageSetBodySchema (strict)", async () => {
+    fresh();
+    expect(StorageSetBodySchema.safeParse({ value: 1 }).success).toBe(true);
+    expect(StorageSetBodySchema.safeParse({ value: 1, x: 2 }).success).toBe(
+      false,
+    );
+    const r = await call("PUT", R.storageKey(poll.id, "k2"), {
+      value: 1,
+      x: 2,
+    });
+    expect(r.status).toBe(400);
+    expect(
+      (await call("PUT", R.storageKey(poll.id, "k2"), { value: 1 })).status,
+    ).toBe(200);
+  });
+});
+
+describe("anonymous callers on authed routes", () => {
+  const anon = { "content-type": "application/json" };
+  const rows: [string, string, string][] = [
+    ["GET", "me", R.me],
+    ["GET", "members", R.members],
+    ["GET", "tokens", R.tokens],
+    ["GET", "oauthClients", R.oauthClients],
+    ["GET", "settings", R.settings],
+    ["GET", "usage", R.usage],
+    ["GET", "artifacts", R.artifacts],
+    ["GET", "search", `${R.search}?q=q4`],
+    ["POST", "uploads", R.uploads],
+    ["POST", "artifacts", R.artifacts],
+    ["PATCH", "artifact", R.artifact(ID)],
+    ["DELETE", "artifact", R.artifact(ID)],
+    ["POST", "versions", R.versions(ID)],
+    ["PUT", "storageKey", R.storageKey(poll.id, "k")],
+  ];
+  for (const [method, name, path] of rows)
+    it(`${method} ${name} -> 401 without cookie or Bearer`, async () => {
+      fresh();
+      const r = await call(
+        method,
+        path,
+        method === "GET" ? undefined : {},
+        anon,
+      );
+      expect(r.status).toBe(401);
+      expect((await json(r)).error.code).toBe("unauthorized");
+    });
+  it("Bearer counts as authed; public artifact reads stay anonymous", async () => {
+    fresh();
+    const b = { ...anon, authorization: "Bearer x" };
+    expect((await call("GET", R.me, undefined, b)).status).toBe(200);
+    expect(
+      (await call("GET", R.artifact(pub.id), undefined, anon)).status,
+    ).toBe(200);
+    expect(
+      (await call("GET", R.versions(pub.id), undefined, anon)).status,
+    ).toBe(200);
   });
 });
