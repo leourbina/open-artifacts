@@ -16,8 +16,16 @@ export const R = {
   artifact: (id: string) => `${A}/${seg(id)}`,
   /** POST -> ArtifactSummary */
   restoreDeleted: (id: string) => `${A}/${seg(id)}/undelete`,
-  /** GET -> VersionInfo[]; POST PublishInput (new version) -> PublishResult */
-  versions: (id: string) => `${A}/${seg(id)}/versions`,
+  /**
+   * GET -> VersionInfo[]: at most the newest VERSIONS_PAGE_SIZE (20) with version < `before`
+   * (all versions when omitted), newest first; an empty array means no more.
+   * POST PublishInput (new version) -> PublishResult
+   */
+  versions: (id: string, before?: number) => {
+    if (before !== undefined && !(Number.isInteger(before) && before >= 1))
+      throw new RangeError(`before must be an integer >= 1: ${before}`);
+    return `${A}/${seg(id)}/versions${before === undefined ? "" : `?before=${before}`}`;
+  },
   /** GET raw file bytes (auth), for diff */
   versionFile: (id: string, v: number, path: string) =>
     `${A}/${seg(id)}/versions/${v}/files/${path.split("/").map(seg).join("/")}`,
@@ -71,7 +79,7 @@ export const R = {
     `${A}/${seg(id)}/data-subscribe?collection=${seg(col)}`,
   /** GET -> Page<StorageKey> */
   storage: (id: string) => `${A}/${seg(id)}/storage`,
-  /** GET -> StorageEntry; PUT { value } -> StorageEntry; DELETE -> 204 */
+  /** GET -> StorageEntry; PUT StorageSetBody { value } (strict; StorageSetBodySchema) -> StorageEntry; DELETE -> 204 */
   storageKey: (id: string, key: string) =>
     `${A}/${seg(id)}/storage/${seg(key)}`,
 } as const;
