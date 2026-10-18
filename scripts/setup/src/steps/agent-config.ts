@@ -87,8 +87,13 @@ export const agentConfig: Step = {
       note: NOTES[k],
       snippet,
     }));
+    const ci = ctx.opts.ci;
+    const tokenNote = ci
+      ? "create a token in the dashboard (Settings → Tokens)"
+      : undefined;
     ctx.data = {
       url,
+      ...(tokenNote ? { tokenNote } : {}),
       snippets: s,
       configs,
       ...(welcomeUrl ? { welcomeUrl } : {}),
@@ -96,7 +101,9 @@ export const agentConfig: Step = {
     const welcome = welcomeUrl ? `\n  Welcome artifact: ${welcomeUrl}\n` : "";
     ctx.human =
       welcome +
-      "\n  Token: shown once in the owner-token step above; snippets never embed it." +
+      (ci
+        ? "\n  Token: create a token in the dashboard (Settings → Tokens); snippets never embed it."
+        : "\n  Token: shown once in the owner-token step above; snippets never embed it.") +
       Object.entries(s)
         .map(
           ([k, v]) =>
