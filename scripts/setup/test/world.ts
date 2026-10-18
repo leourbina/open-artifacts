@@ -62,6 +62,10 @@ type World = {
   /** The token INSERT fails, or silently writes nothing. */
   d1Fails?: boolean;
   dropTokenInsert?: boolean;
+  /** Any statement matching this fails (earlier statements keep their effects). */
+  failOn?: RegExp;
+  /** The first d1 command answers with one result fewer than statements. */
+  shortResult?: boolean;
   /** Preloaded users and tokens (token user_id refers to a seeded user id). */
   seed?: {
     users?: { id: string; email: string; role: string }[];
@@ -176,7 +180,9 @@ export function world(w: World = {}) {
       success: boolean;
       meta: { changes: number };
     }[] = [];
-    for (const st of sql.split(/;\s+(?=SELECT|UPDATE|INSERT)/)) {
+    for (const st of sql
+      .replace(/;\s*$/, "")
+      .split(/;\s+(?=SELECT|UPDATE|INSERT)/)) {
       let results: unknown[] = [];
       let changes = 0;
       let m: string[] = [];
@@ -186,6 +192,7 @@ export function world(w: World = {}) {
       };
       if (w.d1Fails && st.includes("INSERT INTO tokens"))
         throw new Error("D1 down");
+      if (w.failOn?.test(st)) throw new Error("D1 statement failed");
       if (is(/^SELECT id FROM tokens WHERE id = '([^']*)'/)) {
         const id = m[1];
         results = db.tokens.filter((t) => t.id === id && !t.revoked_at);
@@ -198,6 +205,13 @@ export function world(w: World = {}) {
         results = db.users
           .filter((u) => u.role === "owner" && u.email !== me)
           .map((u) => ({ email: u.email }));
+      } else if (
+        is(
+          /^SELECT email FROM users WHERE role = 'owner' AND email = '((?:[^']|'')*)'$/,
+        )
+      ) {
+        const me = unq(m[1]).toLowerCase();
+        results = db.users.filter((u) => u.role === "owner" && u.email === me);
       } else if (
         is(
           /^UPDATE users SET role = 'admin' WHERE role = 'owner' AND email <> '((?:[^']|'')*)'/,
@@ -264,6 +278,7 @@ export function world(w: World = {}) {
       out.push({ results, success: true, meta: { changes } });
     }
     if (sql.includes("INSERT INTO tokens")) ops.push("d1 owner+token");
+    if (w.shortResult && sql.includes("INSERT INTO tokens")) out.pop();
     return out;
   };
   const c = core({

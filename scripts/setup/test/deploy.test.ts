@@ -211,7 +211,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
       revoked_at: expect.any(Number),
     });
     expect(w.db.tokens[1].revoked_at).toBeUndefined();
-    expect(w.sqls.at(-1)).toMatch(
+    expect(w.sqls.at(-2)).toMatch(
       /UPDATE tokens SET revoked_at = \d+ WHERE user_id/,
     );
     expect(w.hits).toContain("mcp tools/call");
@@ -234,7 +234,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
       ),
     );
     expect(w.ops).toEqual(["build", "migrate open-artifacts", "deploy"]);
-    expect(w.sqls).toHaveLength(1); // the first run's single command only
+    expect(w.sqls).toHaveLength(2); // the first run's mint and demote commands only
     w.lines.length = 0;
     const argv = [...HOSTS, "--upgrade", "--new-owner-token"];
     expect(await run(argv, w.deps, ROOT)).toBe(0);
@@ -299,11 +299,11 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     noSignedUrl(denied);
   });
 
-  it("owner-token records the id before the insert and fails clearly when the row is missing", async () => {
+  it("owner-token restores state when the command fails, and fails clearly when the row is missing", async () => {
     const down = world({ d1Fails: true });
-    expect(await run(HOSTS, down.deps, ROOT)).toBe(1);
-    expect(line(down, "owner-token").status).toBe("error");
-    expect(isId(down.state().ownerTokenId)).toBe(true);
+    expect(await run(HOSTS, down.deps, ROOT)).toBe(2);
+    expect(line(down, "owner-token").status).toBe("action_required");
+    expect(down.state().ownerTokenId).toBeUndefined();
     const lost = world({ dropTokenInsert: true });
     expect(await run(HOSTS, lost.deps, ROOT)).toBe(1);
     expect(line(lost, "owner-token").message).toMatch(/token row .* missing/);
@@ -408,7 +408,6 @@ describe("deploy, owner-token, selftest, agent-config", () => {
 });
 
 describe("B16-6 owner token hardening", () => {
-  const NEW = "o@example.com";
   const seeded = (over: Record<string, unknown> = {}) =>
     world({
       seed: {
@@ -450,38 +449,87 @@ describe("B16-6 owner token hardening", () => {
     expect(live(w)).toEqual([w.state().ownerTokenId]);
   });
 
-  it("a cap hit is action_required and revokes nothing", async () => {
-    const many = Array.from({ length: 48 }, (_, i) => ({
-      id: `t${i}`,
-      user_id: "u1",
-      label: "api",
-      token_hash: `h${i}`,
-    }));
-    const w = world({
+  const capped = (extra: Record<string, unknown> = {}) =>
+    world({
       seed: {
-        users: [{ id: "u1", email: "owner@example.com", role: "owner" }],
+        users: [
+          { id: "u1", email: "owner@example.com", role: "member" },
+          { id: "u0", email: "old@example.com", role: "owner" },
+        ],
         tokens: [
           { id: "old1", user_id: "u1", label: "setup", token_hash: "h1" },
-          { id: "old2", user_id: "u1", label: "setup", token_hash: "h2" },
-          ...many,
+          ...Array.from({ length: 49 }, (_, i) => ({
+            id: `t${i}`,
+            user_id: "u1",
+            label: "api",
+            token_hash: `h${i}`,
+          })),
         ],
       },
+      ...extra,
     });
+  const role = (w: W, id: string) => w.db.users.find((u) => u.id === id)?.role;
+
+  it("a cap hit is action_required, revokes nobody and demotes nobody", async () => {
+    const w = capped();
     expect(await run(HOSTS, w.deps, ROOT)).toBe(2);
     expect(line(w, "owner-token")).toMatchObject({
       status: "action_required",
-      message: expect.stringMatching(/50 active tokens.*Settings/),
+      message: expect.stringMatching(
+        /50 active tokens.*Settings.*old setup token still counts toward the cap; revoke it in Settings/,
+      ),
     });
     expect(live(w)).toHaveLength(50);
     expect(live(w)).toContain("old1");
+    expect(role(w, "u0")).toBe("owner");
+    expect(w.sqls).toHaveLength(1);
     expect(w.state().ownerTokenId).toBeUndefined();
     expect(w.lines.join("\n")).not.toMatch(/oa_pat_/);
   });
 
-  it("a failed insert leaves the old setup tokens live", async () => {
+  it("a failed insert leaves old tokens live and the old owner in place", async () => {
     const w = seeded({ d1Fails: true });
-    expect(await run(HOSTS, w.deps, ROOT)).toBe(1);
+    w.db.users.push({ id: "u0", email: "old@example.com", role: "owner" });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(2);
     expect(live(w)).toEqual(expect.arrayContaining(["old1", "old2", "keep"]));
+    expect(role(w, "u0")).toBe("owner");
+    expect(w.sqls).toHaveLength(1);
+    expect(line(w, "owner-token").message).toContain(
+      "owner token state uncertain; rerun with --new-owner-token",
+    );
+  });
+
+  it("a short result is uncertain: state restored, action_required", async () => {
+    const w = seeded({ shortResult: true });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(2);
+    expect(line(w, "owner-token")).toMatchObject({
+      status: "action_required",
+      message: expect.stringContaining("owner token state uncertain"),
+    });
+    expect(w.state().ownerTokenId).toBeUndefined();
+    expect(w.lines.join("\n")).not.toMatch(/oa_pat_/);
+    expect(w.sqls).toHaveLength(1);
+  });
+
+  it("a revoke failure after the insert is uncertain and demotes nobody", async () => {
+    const w = seeded({ failOn: /^UPDATE tokens SET revoked_at/ });
+    w.db.users.push({ id: "u0", email: "old@example.com", role: "owner" });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(2);
+    expect(line(w, "owner-token").message).toContain("state uncertain");
+    expect(w.state().ownerTokenId).toBeUndefined();
+    expect(role(w, "u0")).toBe("owner");
+    expect(w.sqls).toHaveLength(1);
+  });
+
+  it("reports the revoked count only when above zero", async () => {
+    const w = seeded();
+    await run(HOSTS, w.deps, ROOT);
+    expect(line(w, "owner-token").message).toContain(
+      "revoked 2 prior setup tokens",
+    );
+    const fresh = world();
+    await run(HOSTS, fresh.deps, ROOT);
+    expect(line(fresh, "owner-token").message).not.toMatch(/revoked \d+ prior/);
   });
 
   it("an owner change demotes the previous owner to admin and says so", async () => {
@@ -505,20 +553,21 @@ describe("B16-6 owner token hardening", () => {
     expect(line(w, "owner-token").message).not.toMatch(/demoted/);
   });
 
-  it("sends one command, ordered demote, upsert, capped insert, revoke, verify", async () => {
+  it("sends the mint command (upsert, capped insert, revoke, verify), then the demote command", async () => {
     const w = seeded();
     await run(HOSTS, w.deps, ROOT);
-    expect(w.sqls).toHaveLength(1);
-    const at = (re: RegExp) => w.sqls[0].search(re);
+    expect(w.sqls).toHaveLength(2);
+    expect(w.sqls[0]).not.toContain("SET role = 'admin'");
+    const all = w.sqls.join("; ");
+    const at = (re: RegExp) => all.search(re);
     const order = [
-      /SET role = 'admin'/,
       /ON CONFLICT\(email\)/,
       /\) < 50/,
       /SET revoked_at/,
       /SELECT id FROM tokens WHERE id/,
+      /SET role = 'admin'/,
     ].map(at);
     expect(order.every((i) => i >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
-    expect(NEW).toBeTruthy();
   });
 });

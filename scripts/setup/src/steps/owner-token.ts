@@ -19,12 +19,13 @@ const lit = (s: string) => `'${s.replaceAll("'", "''")}'`;
 const MAX_ACTIVE = 50;
 
 /**
- * One command, in this order (D1 `execute` has no transaction, so a failure
- * keeps earlier effects; the order makes every partial state re-mintable):
- *  0 SELECT the previous owner (reported), 1 demote it to admin, 2 upsert the
- *  owner, 3 capped insert (changes 0 = cap hit), 4 revoke the other live
- *  'setup' tokens (only after the insert, so a failed or capped insert never
- *  leaves the owner without a token), 5 verify the new row.
+ * Command 1 (D1 `execute` has no transaction, so a failure keeps earlier
+ * effects; the order makes every partial state re-mintable):
+ *  0 upsert the owner, 1 capped insert (changes 0 = cap hit), 2 revoke the
+ *  other live 'setup' tokens, 3 verify the new row.
+ * The revoke deliberately runs AFTER the insert (and is guarded on the new row
+ * existing): a capped or failed insert then never leaves the owner without a
+ * working token. Cost: a leftover setup token counts toward the cap.
  * Carries the hash only, never the token.
  */
 export function ownerStatements(
@@ -36,8 +37,6 @@ export function ownerStatements(
   const name = email.split("@")[0] || email;
   const e = lit(email);
   return [
-    `SELECT email FROM users WHERE role = 'owner' AND email <> ${e}`,
-    `UPDATE users SET role = 'admin' WHERE role = 'owner' AND email <> ${e}`,
     `INSERT INTO users (id, email, name, role, created_at) VALUES (${lit(base58(16))}, ${e}, ${lit(name)}, 'owner', ${now}) ON CONFLICT(email) DO UPDATE SET role = 'owner'`,
     `INSERT INTO tokens (id, user_id, label, token_hash, created_at) SELECT ${lit(tokenId)}, id, 'setup', ${lit(hash)}, ${now} FROM users WHERE email = ${e} AND (SELECT count(*) FROM tokens WHERE user_id = users.id AND revoked_at IS NULL) < ${MAX_ACTIVE}`,
     `UPDATE tokens SET revoked_at = ${now} WHERE user_id = (SELECT id FROM users WHERE email = ${e}) AND label = 'setup' AND revoked_at IS NULL AND id <> ${lit(tokenId)} AND EXISTS (SELECT 1 FROM tokens WHERE id = ${lit(tokenId)})`,
@@ -46,6 +45,16 @@ export function ownerStatements(
 }
 export const ownerSql = (...a: Parameters<typeof ownerStatements>) =>
   `${ownerStatements(...a).join("; ")};`;
+
+/** Command 2, only after the insert succeeded: select, demote, verify. */
+export function demoteStatements(email: string) {
+  const e = lit(email);
+  return [
+    `SELECT email FROM users WHERE role = 'owner' AND email <> ${e}`,
+    `UPDATE users SET role = 'admin' WHERE role = 'owner' AND email <> ${e}`,
+    `SELECT email FROM users WHERE role = 'owner' AND email = ${e}`,
+  ];
+}
 
 type D1Result = { results?: unknown[]; meta?: { changes?: number } };
 /** Runs SQL on the remote D1; returns one result per statement. */
@@ -85,28 +94,48 @@ export const ownerToken: Step = {
     // Recorded first, so a crash after the insert still leaves the row tracked.
     state.ownerTokenId = id;
     writeState(ctx.fs, ctx.root, state);
-    const sql = ownerSql(ctx.opts.ownerEmail, id, tokenHash(token), Date.now());
-    const res = await d1Raw(ctx, sql);
-    const [before, , , insert, , verify] = res;
+    const uncertain = () => {
+      state.ownerTokenId = prev;
+      writeState(ctx.fs, ctx.root, state);
+      return {
+        status: "action_required" as const,
+        message: "owner token state uncertain; rerun with --new-owner-token",
+      };
+    };
+    const email = ctx.opts.ownerEmail;
+    let res: D1Result[];
+    try {
+      res = await d1Raw(ctx, ownerSql(email, id, tokenHash(token), Date.now()));
+    } catch {
+      return uncertain();
+    }
+    if (res.length < 4) return uncertain();
+    const [, insert, revoke, verify] = res;
     if (!insert?.meta?.changes) {
       state.ownerTokenId = prev;
       writeState(ctx.fs, ctx.root, state);
       return {
         status: "action_required",
-        message: `owner has ${MAX_ACTIVE} active tokens; revoke some in Settings, then rerun setup`,
+        message: `owner has ${MAX_ACTIVE} active tokens; revoke some in Settings, then rerun setup (an old setup token still counts toward the cap; revoke it in Settings)`,
       };
     }
     if (!verify?.results?.length)
       throw new Error(
-        `token row ${id} missing after the insert; is ${ctx.opts.ownerEmail} in users? rerun setup`,
+        `token row ${id} missing after the insert; is ${email} in users? rerun setup`,
       );
-    const old = (before?.results ?? []) as { email?: string }[];
+    const revoked = revoke?.meta?.changes ?? 0;
     ctx.pat = token;
-    ctx.notes.push(
-      `minted owner token ${id}${prev ? ` (revoked prior setup tokens, last ${prev})` : ""}; shown once, store it now`,
-    );
-    for (const o of old)
-      ctx.notes.push(`previous owner ${o.email} demoted to admin`);
+    ctx.notes.push(`minted owner token ${id}; shown once, store it now`);
+    if (revoked > 0) ctx.notes.push(`revoked ${revoked} prior setup tokens`);
+    try {
+      const dem = await d1Raw(ctx, demoteStatements(email).join("; ") + ";");
+      for (const o of (dem[0]?.results ?? []) as { email?: string }[])
+        ctx.notes.push(`previous owner ${o.email} demoted to admin`);
+    } catch {
+      ctx.notes.push(
+        "could not demote the previous owner; rerun with --new-owner-token",
+      );
+    }
     ctx.data = { tokenId: id, token };
     ctx.human = `  token: ${token}`;
     return undefined;
