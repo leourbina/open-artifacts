@@ -10,7 +10,6 @@
   place-items: center;
   padding: 24px;
   background: var(--oa-scrim);
-  pointer-events: none;
 }
 .up-zone {
   width: min(560px, 100%);
@@ -58,7 +57,7 @@
   margin-top: 12px;
 }
 .up-form label,
-.up-form span {
+.up-entry-label {
   display: block;
   margin-bottom: 4px;
   font-size: var(--oa-text-sm);

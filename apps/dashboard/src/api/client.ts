@@ -101,9 +101,16 @@ export const api = {
     body: Blob,
     contentType: string,
     onProgress?: (p: number) => void,
+    signal?: AbortSignal,
   ): Promise<void> {
     return new Promise((resolve, reject) => {
+      const abort = () => new DOMException("Aborted", "AbortError");
+      if (signal?.aborted) return reject(abort());
       const xhr = new XMLHttpRequest();
+      signal?.addEventListener("abort", () => {
+        xhr.abort();
+        reject(abort());
+      });
       xhr.open("PUT", url);
       xhr.setRequestHeader("Content-Type", contentType);
       xhr.upload.onprogress = (e) => {

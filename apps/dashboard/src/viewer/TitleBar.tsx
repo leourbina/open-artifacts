@@ -113,6 +113,7 @@ export function TitleBar({
   onShare,
   panelOpen,
   onPanel,
+  upload,
 }: {
   artifact: ArtifactSummary;
   version: number;
@@ -125,6 +126,8 @@ export function TitleBar({
   onShare: () => void;
   panelOpen: boolean;
   onPanel: () => void;
+  /** Upload-version control (editors and above), rendered with the actions. */
+  upload?: React.ReactNode;
 }) {
   const navigate = useNavigate();
   const qc = useQueryClient();
@@ -197,6 +200,7 @@ export function TitleBar({
         <VisibilityBadge visibility={artifact.visibility} />
       </div>
       <div className="oa-vt-actions">
+        {canEdit && upload}
         {authed && (
           <Menu
             trigger={

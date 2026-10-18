@@ -1,10 +1,11 @@
 import type { ArtifactSummary } from "@oa/shared";
-import { Button } from "@oa/ui";
-import { useEffect, useRef, useState } from "react";
+import { Button, toast } from "@oa/ui";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { filesFromDrop, filterIgnored } from "./collect";
 import { UploadDialog } from "./UploadDialog";
 import "./upload.css";
 
+const RANK = { viewer: 0, editor: 1, owner: 2 } as const;
 const hasFiles = (e: DragEvent) => e.dataTransfer?.types.includes("Files");
 
 const UploadIcon = () => (
@@ -38,24 +39,35 @@ export function DropZone({
   allowed: boolean;
   button?: boolean;
 }) {
-  const enabled = allowed && (!artifact || artifact.access !== "viewer");
+  const enabled =
+    allowed && (!artifact || RANK[artifact.access] >= RANK.editor);
   const [dragging, setDragging] = useState(false);
-  const [files, setFiles] = useState<File[] | null>(null);
+  const [batch, setBatch] = useState<{ n: number; files: File[] } | null>(null);
+  const busy = useRef(false);
+  busy.current = batch !== null;
+  const nextBatch = useRef(0);
+  const start = useCallback((f: File[]) => {
+    if (f.length === 0) return toast({ title: "No files to upload" });
+    setBatch({ n: nextBatch.current++, files: f });
+  }, []);
   const filePicker = useRef<HTMLInputElement>(null);
   const folderPicker = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!enabled) return;
     let depth = 0; // dragenter/leave fire per child element, so count them
+    const root = document.documentElement;
     const reset = () => {
       depth = 0;
       setDragging(false);
+      root.classList.remove("oa-file-drag");
     };
     const enter = (e: DragEvent) => {
       if (!hasFiles(e)) return;
       e.preventDefault();
       depth++;
       setDragging(true);
+      root.classList.add("oa-file-drag");
     };
     const leave = (e: DragEvent) => {
       if (!hasFiles(e)) return;
@@ -68,7 +80,9 @@ export function DropZone({
       if (!hasFiles(e) || !e.dataTransfer) return;
       e.preventDefault();
       reset();
-      void filesFromDrop(e.dataTransfer).then((f) => f.length && setFiles(f));
+      if (busy.current)
+        return toast({ title: "Finish the current upload first" });
+      void filesFromDrop(e.dataTransfer).then(start);
     };
     const key = (e: KeyboardEvent) => e.key === "Escape" && reset();
     window.addEventListener("dragenter", enter);
@@ -84,24 +98,32 @@ export function DropZone({
       window.removeEventListener("keydown", key);
       reset();
     };
-  }, [enabled]);
+  }, [enabled, start]);
 
   if (!enabled) return null;
   const picked = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = filterIgnored([...(e.target.files ?? [])]);
     e.target.value = "";
-    if (f.length) setFiles(f);
+    start(f);
   };
   return (
     <>
       {button && (
         <span className="up-buttons">
-          <Button onClick={() => filePicker.current?.click()}>
-            Upload files
+          <Button
+            size={artifact ? "sm" : undefined}
+            onClick={() => filePicker.current?.click()}
+          >
+            {artifact ? "Upload version" : "Upload files"}
           </Button>
-          <Button variant="ghost" onClick={() => folderPicker.current?.click()}>
-            Upload folder
-          </Button>
+          {!artifact && (
+            <Button
+              variant="ghost"
+              onClick={() => folderPicker.current?.click()}
+            >
+              Upload folder
+            </Button>
+          )}
           <input
             ref={filePicker}
             type="file"
@@ -144,11 +166,12 @@ export function DropZone({
           </div>
         </div>
       )}
-      {files && (
+      {batch && (
         <UploadDialog
-          files={files}
+          key={batch.n}
+          files={batch.files}
           artifact={artifact}
-          onClose={() => setFiles(null)}
+          onClose={() => setBatch(null)}
         />
       )}
     </>

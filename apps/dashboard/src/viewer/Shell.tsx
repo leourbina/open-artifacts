@@ -123,7 +123,6 @@ function Viewer({
   if (signedOut) return null;
   return (
     <div className="oa-viewer">
-      <DropZone artifact={artifact} allowed={authed} />
       <Crumbs title={artifact.title} />
       <TitleBar
         artifact={artifact}
@@ -136,6 +135,7 @@ function Viewer({
         onShare={() => setPanel(true, "share")}
         panelOpen={panelOpen}
         onPanel={() => setPanel(!panelOpen)}
+        upload={<DropZone artifact={artifact} allowed={authed} button />}
       />
       <div className="oa-vbody">
         {!url && (content.current || content.error) ? (

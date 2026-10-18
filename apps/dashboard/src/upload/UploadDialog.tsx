@@ -1,12 +1,13 @@
-import { type ArtifactSummary, viewerPath } from "@oa/shared";
+import { type ArtifactSummary, normalizePath, viewerPath } from "@oa/shared";
 import { Button, Dialog, Input, Select, Textarea, toast } from "@oa/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiClientError } from "../api/client";
 import { qk } from "../api/queries";
 import "./upload.css";
 import {
+  commonFolder,
   defaultEntry,
   type Progress,
   relativePaths,
@@ -25,9 +26,15 @@ export function UploadDialog({
   artifact?: ArtifactSummary;
   onClose: () => void;
 }) {
-  const paths = relativePaths(files);
+  // NFC, as the server and the pipeline see them.
+  const paths = relativePaths(files).map((p) => {
+    const r = normalizePath(p);
+    return r.ok ? r.path : p;
+  });
   const auto = defaultEntry(paths);
-  const [title, setTitle] = useState(stem(auto ?? paths[0] ?? ""));
+  const [title, setTitle] = useState(
+    commonFolder(files) ?? stem(auto ?? paths[0] ?? ""),
+  );
   const [message, setMessage] = useState("");
   const [entry, setEntry] = useState<string | undefined>(auto);
   const [progress, setProgress] = useState<Progress | null>(null);
@@ -38,6 +45,8 @@ export function UploadDialog({
   const busy = progress !== null;
   const needsEntry = auto === undefined;
   const invalid = (!artifact && !title.trim()) || (needsEntry && !entry);
+
+  useEffect(() => () => abort.current?.abort(), []);
 
   const cancel = () => {
     abort.current?.abort();
@@ -64,7 +73,7 @@ export function UploadDialog({
       onClose();
       void navigate({ to: viewerPath(r.id, r.version) as never });
     } catch (e) {
-      if (e instanceof Error && e.name === "AbortError") return;
+      if ((e as { name?: string }).name === "AbortError") return;
       setProgress(null);
       setError(
         e instanceof UploadValidationError || e instanceof ApiClientError
@@ -119,7 +128,9 @@ export function UploadDialog({
         )}
         {needsEntry && (
           <div>
-            <span id="up-entry">Entry file</span>
+            <span id="up-entry" className="up-entry-label">
+              Entry file
+            </span>
             <Select
               aria-labelledby="up-entry"
               options={paths.map((p) => ({ value: p, label: p }))}

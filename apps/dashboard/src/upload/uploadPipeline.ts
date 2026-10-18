@@ -30,14 +30,24 @@ export class UploadValidationError extends Error {
 const mb = (n: number) => `${Math.round(n / 1024 / 1024)} MB`;
 const rawPath = (f: File) => f.webkitRelativePath || f.name;
 
+const RESERVED = new Set(["__proto__", "constructor", "prototype"]);
+
+/** The folder shared by every file (a folder drop), if any. */
+export function commonFolder(files: File[]): string | undefined {
+  const paths = files.map(rawPath);
+  const top = paths[0]?.split("/")[0];
+  if (!top || top === "." || top === "..") return undefined;
+  return paths.every((p) => p.includes("/") && p.split("/")[0] === top)
+    ? top
+    : undefined;
+}
+
 /** Paths relative to the dropped folder: a top folder shared by every file is stripped. */
 export function relativePaths(files: File[]): string[] {
   const paths = files.map(rawPath);
-  const tops = new Set(paths.map((p) => p.split("/")[0]));
-  const nested = paths.every((p) => p.includes("/"));
-  const top = [...tops][0];
-  if (!nested || tops.size !== 1 || top === ".." || top === ".") return paths;
-  return paths.map((p) => p.slice(p.indexOf("/") + 1));
+  return commonFolder(files)
+    ? paths.map((p) => p.slice(p.indexOf("/") + 1))
+    : paths;
 }
 
 /** index.html, else README.md, else the only file; undefined when the user must choose. */
@@ -70,6 +80,10 @@ export function validateUpload(files: File[]): string[] {
         `"${p}" has an invalid path (${r.error})`,
       );
     const size = files[i]?.size ?? 0;
+    if (size === 0)
+      throw new UploadValidationError(`"${r.path}" is empty (0 bytes)`);
+    if (r.path.split("/").some((seg) => RESERVED.has(seg)))
+      throw new UploadValidationError(`"${r.path}" uses a reserved name`);
     if (size > LIMITS.fileBytes)
       throw new UploadValidationError(
         `"${r.path}" is ${mb(size)}; the limit is ${mb(LIMITS.fileBytes)} per file`,
@@ -91,6 +105,19 @@ export function validateUpload(files: File[]): string[] {
   return paths;
 }
 
+/** Rejects as soon as the signal aborts, even if `p` never settles. */
+const abortable = <T>(p: Promise<T>, signal?: AbortSignal): Promise<T> =>
+  signal
+    ? Promise.race([
+        p,
+        new Promise<never>((_, reject) => {
+          const fail = () => reject(new DOMException("Aborted", "AbortError"));
+          if (signal.aborted) fail();
+          else signal.addEventListener("abort", fail, { once: true });
+        }),
+      ])
+    : p;
+
 /**
  * Uploads each file to its signed URL, then publishes once. A new artifact reuses the
  * id the first upload reserved; pass `artifactId` to add a version instead.
@@ -104,18 +131,26 @@ export async function uploadArtifact(
   const isNew = input.artifactId === undefined;
   if (isNew && !input.title.trim())
     throw new UploadValidationError("A title is required");
-  const entry = input.entry ?? defaultEntry(paths);
+  const given =
+    input.entry === undefined ? undefined : normalizePath(input.entry);
+  if (given && !given.ok)
+    throw new UploadValidationError(
+      `Entry "${input.entry}" is not a valid path`,
+    );
+  const entry = given?.ok ? given.path : defaultEntry(paths);
+  if (entry === undefined && paths.length > 1)
+    throw new UploadValidationError("Choose which file to open first (entry)");
   if (entry !== undefined && !paths.includes(entry))
     throw new UploadValidationError(`Entry "${entry}" is not one of the files`);
 
   const total = paths.length;
   let reserved = input.artifactId;
-  const files: Record<string, { uploadId: string }> = {};
+  const files: Record<string, { uploadId: string }> = Object.create(null);
   onProgress({ done: 0, total });
   for (const [i, file] of input.files.entries()) {
     const path = paths[i] as string;
     signal?.throwIfAborted();
-    const contentType = file.type || contentTypeFor(path);
+    const contentType = contentTypeFor(path);
     const created = await api.send(
       "POST",
       R.uploads,
@@ -125,7 +160,17 @@ export async function uploadArtifact(
     );
     reserved ??= created.artifactId;
     signal?.throwIfAborted();
-    await api.putRaw(created.url, file, contentType);
+    try {
+      await abortable(
+        api.putRaw(created.url, file, contentType, undefined, signal),
+        signal,
+      );
+    } catch (e) {
+      if ((e as { name?: string }).name === "AbortError") throw e;
+      throw new UploadValidationError(
+        `Couldn't upload "${path}": ${e instanceof Error ? e.message : "upload failed"}`,
+      );
+    }
     files[path] = { uploadId: created.uploadId };
     onProgress({ done: i + 1, total });
   }

@@ -33,19 +33,29 @@ async function walk(entry: FileSystemEntry, out: File[]): Promise<void> {
   }
 }
 
+const byPath = (a: File, b: File) =>
+  (a.webkitRelativePath || a.name).localeCompare(
+    b.webkitRelativePath || b.name,
+  );
+
 /** Files from a drop, recursing into dropped folders. Call synchronously from the drop event. */
-export function filesFromDrop(dt: DataTransfer): Promise<File[]> {
-  const entries = [...dt.items]
-    .filter((i) => i.kind === "file")
-    .map((i) => i.webkitGetAsEntry?.() ?? null);
-  if (entries.length === 0 || entries.some((e) => e === null))
-    return Promise.resolve(filterIgnored([...dt.files]));
+export async function filesFromDrop(dt: DataTransfer): Promise<File[]> {
+  const items = [...dt.items].filter((i) => i.kind === "file");
+  if (items.length > 0 && !items[0]?.webkitGetAsEntry)
+    return filterIgnored([...dt.files]).sort(byPath);
+  // Entries must be taken before the first await; the DataTransfer empties after the event.
+  const picked = items.map((i) => ({
+    entry: i.webkitGetAsEntry?.() ?? null,
+    file: i.getAsFile(),
+  }));
   const out: File[] = [];
-  return Promise.all(
-    (entries as FileSystemEntry[]).map((e) => walk(e, out)),
-  ).then(() => out);
+  for (const { entry, file } of picked) {
+    if (entry) await walk(entry, out);
+    else if (file && !isIgnored(file.name)) out.push(file);
+  }
+  return out.sort(byPath);
 }
 
 /** Files from a picker (webkitRelativePath already set for folders). */
 export const filterIgnored = (files: File[]) =>
-  files.filter((f) => !isIgnored(f.webkitRelativePath || f.name));
+  files.filter((f) => !isIgnored(f.webkitRelativePath || f.name)).sort(byPath);
