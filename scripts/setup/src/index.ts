@@ -5,12 +5,24 @@ import { type Deps, makeApi, makeWrangler, realDeps, realFs } from "./cf.ts";
 import { readState, type State, writeState } from "./state.ts";
 import type { Ctx, Opts, Step } from "./step.ts";
 import { access } from "./steps/access.ts";
+import { agentConfig } from "./steps/agent-config.ts";
+import { deploy } from "./steps/deploy.ts";
+import { ownerToken } from "./steps/owner-token.ts";
 import { prereqs } from "./steps/prereqs.ts";
 import { resources } from "./steps/resources.ts";
 import { secrets } from "./steps/secrets.ts";
+import { selftest } from "./steps/selftest.ts";
 
-// deploy, owner-token, selftest, agent-config: B16-3.
-export const STEPS: Step[] = [prereqs, resources, access, secrets];
+export const STEPS: Step[] = [
+  prereqs,
+  resources,
+  access,
+  secrets,
+  deploy,
+  ownerToken,
+  selftest,
+  agentConfig,
+];
 
 type Line = {
   step: string;
@@ -41,6 +53,7 @@ async function resolve(argv: string[], deps: Deps, state: State) {
       "account-id": { type: "string" },
       yes: { type: "boolean", default: false },
       upgrade: { type: "boolean", default: false },
+      "new-owner-token": { type: "boolean", default: false },
       json: { type: "boolean", default: false },
     },
   });
@@ -71,6 +84,7 @@ async function resolve(argv: string[], deps: Deps, state: State) {
       v["account-id"] ?? state.accountId ?? deps.env.CLOUDFLARE_ACCOUNT_ID,
     yes: v.yes,
     upgrade: v.upgrade,
+    newOwnerToken: v["new-owner-token"],
   };
   return opts;
 }
@@ -83,12 +97,19 @@ export async function run(
   steps: Step[] = STEPS,
 ): Promise<number> {
   const json = argv.includes("--json");
-  const report = (l: Line) =>
+  let human: string | undefined;
+  const report = (l: Line) => {
+    const extra = human
+      ? `\n${human}`
+      : l.data
+        ? ` ${JSON.stringify(l.data)}`
+        : "";
     deps.out(
       json
         ? JSON.stringify(l)
-        : `${ICON[l.status]} ${l.step}: ${l.message}${l.data ? ` ${JSON.stringify(l.data)}` : ""}`,
+        : `${ICON[l.status]} ${l.step}: ${l.message}${extra}`,
     );
+  };
   const fs = deps.fs ?? realFs;
   let opts: Opts;
   let state: State;
@@ -115,14 +136,19 @@ export async function run(
     notes: [],
   };
   const msg = (fallback: string) => ctx.notes.splice(0).join("; ") || fallback;
+  /** Moves the step's data (and human text) out of ctx onto its line. */
+  const take = (status: "ok" | "skipped", fallback: string): Line => {
+    const { data } = ctx;
+    human = ctx.human;
+    ctx.data = ctx.human = undefined;
+    const l: Line = { step: "", status, message: msg(fallback) };
+    return data === undefined ? l : { ...l, data };
+  };
   for (const step of steps) {
+    human = ctx.data = ctx.human = undefined;
     try {
       if ((await step.check(state, ctx)) === "done") {
-        report({
-          step: step.name,
-          status: "skipped",
-          message: msg("already done"),
-        });
+        report({ ...take("skipped", "already done"), step: step.name });
         continue;
       }
       const r = await step.apply(state, ctx);
@@ -131,7 +157,7 @@ export async function run(
         report({ step: step.name, ...r });
         return 2;
       }
-      report({ step: step.name, status: "ok", message: msg("done") });
+      report({ ...take("ok", "done"), step: step.name });
     } catch (e) {
       ctx.notes.length = 0;
       const message = (e as Error).message;

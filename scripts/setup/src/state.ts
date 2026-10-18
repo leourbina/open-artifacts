@@ -16,6 +16,8 @@ export type State = {
   accessClientId?: string;
   teamDomain?: string;
   deployedVersion?: string;
+  /** The setup-minted owner token row; the token itself is never stored. */
+  ownerTokenId?: string;
   /** The user declined the optional ANALYTICS_TOKEN; don't ask again. */
   analyticsSkipped?: boolean;
 };

@@ -9,6 +9,7 @@ export type Opts = {
   accountId?: string;
   yes: boolean;
   upgrade: boolean;
+  newOwnerToken: boolean;
 };
 export type Ctx = {
   deps: Deps;
@@ -21,6 +22,11 @@ export type Ctx = {
   wrangler: Wrangler;
   /** Notes appended to the current step's reported message. */
   notes: string[];
+  /** `data` for the current step's line; `human` replaces it in human output. */
+  data?: unknown;
+  human?: string;
+  /** The PAT minted this run, in memory only. */
+  pat?: string;
 };
 export type ActionRequired = {
   status: "action_required";
