@@ -419,6 +419,70 @@ describe("db.subscribe", () => {
     b.dispose();
     expect(FakeWS.all[0]?.closed).toBe(true);
   });
+
+  describe("db.resync", () => {
+    const resync = (collection: string) => ({
+      oa: 1,
+      type: "event",
+      event: "db.resync",
+      collection,
+    });
+    const resyncs = () =>
+      post.mock.calls.filter(([m]) => m?.event === "db.resync");
+    const close = (ws: FakeWS | undefined, code: number) =>
+      (ws?.onclose as ((e: { code: number }) => void) | null)?.({ code });
+
+    it("posts one on first open", async () => {
+      mk();
+      sub("1");
+      await flush();
+      expect(resyncs()).toHaveLength(0);
+      FakeWS.all[0]?.onopen?.();
+      expect(resyncs()).toEqual([[resync("c"), "*"]]);
+    });
+
+    it("posts another on reconnect after 4408", async () => {
+      vi.useFakeTimers();
+      mk();
+      sub("1");
+      await vi.advanceTimersByTimeAsync(0);
+      FakeWS.all[0]?.onopen?.();
+      close(FakeWS.all[0], 4408);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(FakeWS.all).toHaveLength(2);
+      FakeWS.all[1]?.onopen?.();
+      expect(resyncs()).toHaveLength(2);
+    });
+
+    it("posts none when unsubscribed before open", async () => {
+      mk();
+      sub("1");
+      await flush();
+      unsub("2");
+      await flush();
+      FakeWS.all[0]?.onopen?.();
+      expect(resyncs()).toHaveLength(0);
+    });
+
+    it("posts none after dispose", async () => {
+      const b = mk();
+      sub("1");
+      await flush();
+      b.dispose();
+      FakeWS.all[0]?.onopen?.();
+      expect(resyncs()).toHaveLength(0);
+    });
+
+    it("posts one per collection", async () => {
+      mk();
+      sub("1", "a");
+      sub("2", "b");
+      await flush();
+      FakeWS.all[0]?.onopen?.();
+      FakeWS.all[1]?.onopen?.();
+      expect(resyncs().map(([m]) => m.collection)).toEqual(["a", "b"]);
+    });
+  });
 });
 
 describe("bridge limits", () => {
