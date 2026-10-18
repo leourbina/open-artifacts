@@ -1,0 +1,605 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Open Artifacts — Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#EEF0F3; --chrome:#F5F6F8; --surface:#FFFFFF; --surface-2:#F6F7F9; --sunken:#ECEEF1;
+  --line:#E0E3E8; --line-strong:#C9CED6;
+  --text:#15181C; --text-2:#454C56; --text-3:#5F6670;
+  --accent:#2350D0; --accent-soft:#E7EDFC; --accent-text:#1D45B8;
+  --ok:#17803D; --ok-soft:#E3F3E8; --bad:#BE2F1C; --bad-soft:#FBE7E3; --warn:#8A5A00; --warn-soft:#FBF0D9;
+  --team:#2350D0; --team-soft:#E7EDFC; --pub:#17803D; --pub-soft:#E3F3E8; --priv:#5F6670; --priv-soft:#ECEEF1;
+  --code-bg:#F4F5F7; --shadow:0 1px 0 rgba(20,24,30,.04), 0 0 0 1px var(--line);
+  --pop:0 8px 24px rgba(20,24,30,.10), 0 0 0 1px var(--line);
+  --sans:"Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono:"Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+[data-theme=dark]{
+  --bg:#131518; --chrome:#17191D; --surface:#1C1F23; --surface-2:#212429; --sunken:#181A1E;
+  --line:#2C3037; --line-strong:#3B414A;
+  --text:#E9EBEE; --text-2:#B7BDC6; --text-3:#9097A1;
+  --accent:#7F9CFF; --accent-soft:#1F2A4A; --accent-text:#A3B8FF;
+  --ok:#5BC77F; --ok-soft:#173022; --bad:#FF7F6B; --bad-soft:#3A1E1A; --warn:#E7B44F; --warn-soft:#352914;
+  --team:#A3B8FF; --team-soft:#1F2A4A; --pub:#6FD08F; --pub-soft:#173022; --priv:#AEB4BD; --priv-soft:#272B31;
+  --code-bg:#16181C; --shadow:0 0 0 1px var(--line);
+  --pop:0 10px 30px rgba(0,0,0,.45), 0 0 0 1px var(--line-strong);
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+[hidden]{display:none !important}
+body{background:var(--bg);color:var(--text);font:400 13px/1.45 var(--sans);-webkit-font-smoothing:antialiased;font-feature-settings:"ss01","cv11"}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;padding:0}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+svg{display:block}
+.ic{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.ic.sm{width:14px;height:14px}
+.num{font-variant-numeric:tabular-nums}
+
+/* ---------- App frame ---------- */
+.app{display:grid;grid-template-columns:224px 1fr;min-height:100vh}
+.side{background:var(--chrome);border-right:1px solid var(--line);padding:12px 10px;display:flex;flex-direction:column;gap:18px;position:sticky;top:0;height:100vh}
+.mark{display:flex;align-items:center;justify-content:space-between;padding:4px 6px 0}
+.mark b{font-weight:600;font-size:14px;letter-spacing:-.01em}
+.ws{display:flex;align-items:center;gap:8px;padding:6px;border-radius:6px;border:1px solid var(--line);background:var(--surface)}
+.ws .sq{width:20px;height:20px;border-radius:5px;background:var(--text);color:var(--surface);display:grid;place-items:center;font-size:11px;font-weight:600}
+.ws span{flex:1;font-weight:500}
+.ws small{color:var(--text-3)}
+.nav{display:flex;flex-direction:column;gap:1px}
+.nav h4{margin:0 0 4px;padding:0 8px;font-size:12px;font-weight:500;color:var(--text-3)}
+.nav a{display:flex;align-items:center;gap:9px;height:28px;padding:0 8px;border-radius:5px;color:var(--text-2);text-decoration:none}
+.nav a:hover{background:var(--sunken);color:var(--text)}
+.nav a.on{background:var(--surface);color:var(--text);box-shadow:var(--shadow);font-weight:500}
+.nav a .ct{margin-left:auto;color:var(--text-3);font-size:12px}
+.nav .dot{width:8px;height:8px;border-radius:2px;background:var(--line-strong);margin:0 4px}
+.side .foot{margin-top:auto;display:flex;align-items:center;gap:8px;padding:6px;border-top:1px solid var(--line);padding-top:12px}
+.side .foot div{line-height:1.25}
+.side .foot small{color:var(--text-3);display:block}
+
+.main{min-width:0;display:flex;flex-direction:column}
+.top{height:48px;display:flex;align-items:center;gap:10px;padding:0 20px;border-bottom:1px solid var(--line);background:var(--chrome);position:sticky;top:0;z-index:5}
+.search{flex:1;max-width:520px;display:flex;align-items:center;gap:8px;height:30px;padding:0 8px 0 10px;background:var(--surface);border:1px solid var(--line);border-radius:6px;color:var(--text-3)}
+.search input{flex:1;border:0;outline:0;background:none;font:inherit;color:var(--text);min-width:0}
+.search input::placeholder{color:var(--text-3)}
+kbd{font:500 11px var(--mono);color:var(--text-3);border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 4px;background:var(--surface-2)}
+.spacer{flex:1}
+.btn{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:6px;border:1px solid var(--line);background:var(--surface);color:var(--text);font-weight:500;white-space:nowrap}
+.btn:hover{border-color:var(--line-strong)}
+.btn.primary{background:var(--text);color:var(--surface);border-color:var(--text)}
+.btn.ghost{border-color:transparent;background:none;color:var(--text-2)}
+.btn.ghost:hover{background:var(--sunken);color:var(--text)}
+.btn.icon{width:28px;padding:0;justify-content:center}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;background:var(--surface-2);padding:2px;gap:2px}
+.seg button{height:22px;padding:0 8px;border-radius:4px;color:var(--text-3);font-size:12px;font-weight:500;display:inline-flex;align-items:center;gap:5px}
+.seg button.on{background:var(--surface);color:var(--text);box-shadow:var(--shadow)}
+.av{width:20px;height:20px;border-radius:50%;display:inline-grid;place-items:center;font-size:9.5px;font-weight:600;color:#fff;flex:none;letter-spacing:.01em}
+.av.lg{width:26px;height:26px;font-size:11px}
+
+/* ---------- Library ---------- */
+.lib{padding:20px 24px 40px;display:flex;flex-direction:column;gap:14px}
+.lib-head{display:flex;align-items:baseline;gap:10px}
+.lib-head h1{margin:0;font-size:20px;font-weight:600;letter-spacing:-.02em}
+.lib-head .count{color:var(--text-3)}
+.tabs{display:flex;gap:18px;border-bottom:1px solid var(--line)}
+.tabs button{height:34px;color:var(--text-3);font-weight:500;position:relative;display:inline-flex;align-items:center;gap:6px}
+.tabs button .n{font-size:11.5px;color:var(--text-3);background:var(--sunken);border-radius:9px;padding:0 6px;line-height:17px}
+.tabs button.on{color:var(--text)}
+.tabs button.on::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--text);border-radius:2px}
+.bar{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 8px;border:1px dashed var(--line-strong);border-radius:6px;color:var(--text-2);font-size:12.5px}
+.chip b{font-weight:500;color:var(--text)}
+.chip.set{border-style:solid;background:var(--surface);}
+.chip .x{color:var(--text-3)}
+.bar .meta{color:var(--text-3);font-size:12.5px;margin-left:6px}
+
+.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+.card{background:var(--surface);border-radius:8px;box-shadow:var(--shadow);overflow:hidden;display:flex;flex-direction:column;cursor:pointer;text-align:left}
+.card:hover{box-shadow:0 0 0 1px var(--line-strong),0 4px 14px rgba(20,24,30,.06)}
+.thumb{height:138px;background:var(--surface-2);border-bottom:1px solid var(--line);position:relative;overflow:hidden;padding:14px 16px 0}
+.thumb .pg{background:var(--surface);border-radius:4px 4px 0 0;box-shadow:0 0 0 1px var(--line);height:100%;padding:12px 12px 0;overflow:hidden}
+.card .body{padding:10px 12px 11px;display:flex;flex-direction:column;gap:7px}
+.card .ttl{display:flex;align-items:center;gap:7px;font-weight:500;min-width:0}
+.card .ttl span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .ttl .ic{color:var(--text-3)}
+.card .sub{display:flex;align-items:center;gap:8px;color:var(--text-3);font-size:12px;min-width:0}
+.card .sub .agent{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .sub .when{margin-left:auto;white-space:nowrap}
+.vis{display:inline-flex;align-items:center;gap:4px;height:18px;padding:0 6px;border-radius:4px;font-size:11.5px;font-weight:500;white-space:nowrap}
+.vis.team{background:var(--team-soft);color:var(--team)}
+.vis.public{background:var(--pub-soft);color:var(--pub)}
+.vis.private{background:var(--priv-soft);color:var(--priv)}
+.vis .ic{width:11px;height:11px;stroke-width:1.8}
+
+/* thumbnail primitives */
+.l{height:4px;border-radius:2px;background:var(--line);margin:0 0 5px}
+.l.h{height:7px;background:var(--text-2);width:62%;margin-bottom:8px;opacity:.85}
+.l.h2{height:5px;background:var(--text-3);width:40%;margin:8px 0 6px}
+.mini-tbl{display:grid;grid-template-columns:2fr 1fr 1fr;gap:2px;margin-top:6px}
+.mini-tbl i{height:6px;background:var(--sunken);border-radius:1px}
+.mini-tbl i.hd{background:var(--line-strong)}
+.poll .q{font-size:10px;font-weight:600;color:var(--text);margin-bottom:8px;letter-spacing:-.01em}
+.poll .o{display:flex;align-items:center;gap:6px;font-size:8.5px;color:var(--text-2);margin-bottom:5px}
+.poll .o .b{flex:1;height:8px;background:var(--sunken);border-radius:2px;overflow:hidden}
+.poll .o .b i{display:block;height:100%;background:var(--line-strong)}
+.poll .o.lead .b i{background:var(--accent)}
+.poll .o em{font-style:normal;width:18px;text-align:right;color:var(--text-3)}
+.redl .l.del{background:var(--bad);opacity:.55;height:2px;margin-top:-6px;margin-bottom:7px}
+.redl .l.ins{background:var(--ok);opacity:.6}
+.redl .stamp{position:absolute;right:22px;top:24px;font:600 8px var(--sans);color:var(--bad);border:1px solid var(--bad);border-radius:3px;padding:1px 4px;transform:rotate(-4deg)}
+.code{font:400 8.5px/1.55 var(--mono);color:var(--text-2);white-space:pre;padding:10px 10px 0 !important;background:var(--code-bg) !important}
+.code .k{color:var(--accent-text)} .code .s{color:var(--ok)} .code .c{color:var(--text-3)} .code .ln{color:var(--text-3);opacity:.6;margin-right:8px}
+.chart{display:flex;align-items:flex-end;gap:5px;height:62px;margin-top:8px;border-bottom:1px solid var(--line)}
+.chart i{flex:1;background:var(--line-strong);border-radius:2px 2px 0 0}
+.chart i.hi{background:var(--text-2)}
+.deck{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:12px 14px 0 !important;background:none !important;box-shadow:none !important}
+.deck .sl{aspect-ratio:16/9;background:var(--surface);box-shadow:0 0 0 1px var(--line);border-radius:3px;padding:6px}
+.deck .sl .l{height:3px;margin-bottom:3px}
+.deck .sl .l.h{height:4px;margin-bottom:5px}
+.flow{display:flex;align-items:center;justify-content:center;gap:6px;height:80%}
+.flow .n{border:1px solid var(--line-strong);border-radius:4px;padding:4px 6px;font-size:8px;color:var(--text-2);background:var(--surface)}
+.flow .n.on{border-color:var(--text-2);color:var(--text)}
+.flow .e{width:12px;height:1px;background:var(--line-strong)}
+
+/* list mode */
+.grid.list{grid-template-columns:1fr;gap:0;background:var(--surface);border-radius:8px;box-shadow:var(--shadow);overflow:hidden}
+.grid.list .card{flex-direction:row;align-items:center;border-radius:0;box-shadow:none;border-bottom:1px solid var(--line);height:40px;padding:0 14px}
+.grid.list .card:last-child{border-bottom:0}
+.grid.list .card:hover{background:var(--surface-2);box-shadow:none}
+.grid.list .thumb{display:none}
+.grid.list .body{flex-direction:row;align-items:center;padding:0;flex:1;gap:16px;min-width:0}
+.grid.list .ttl{flex:1}
+.grid.list .sub{flex:0 0 auto;gap:14px}
+.grid.list .sub .agent{width:96px}
+.grid.list .sub .when{width:72px;text-align:right}
+.list-head{display:none}
+.grid.list + .x{}
+
+/* ---------- Artifact view ---------- */
+.av-wrap{display:flex;flex-direction:column;min-height:100vh}
+.crumbs{display:flex;align-items:center;gap:6px;color:var(--text-3);white-space:nowrap;min-width:0}
+.crumbs a{color:var(--text-3);text-decoration:none}
+.crumbs a:hover{color:var(--text)}
+.crumbs .sep{opacity:.6}
+.crumbs .cur{color:var(--text);font-weight:500;overflow:hidden;text-overflow:ellipsis}
+.titlebar{display:flex;align-items:center;gap:10px;padding:10px 20px;border-bottom:1px solid var(--line);background:var(--surface);flex-wrap:wrap}
+.titlebar h1{margin:0;font-size:16px;font-weight:600;letter-spacing:-.015em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.fmt{display:inline-flex;align-items:center;gap:5px;color:var(--text-3);font-size:12px}
+.vpick{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 8px 0 9px;border:1px solid var(--line);border-radius:6px;background:var(--surface-2);font-weight:500}
+.vpick .v{font-family:var(--mono);font-size:12px}
+.vpick .t{color:var(--text-3);font-weight:400}
+.split{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 340px;min-height:0;background:var(--surface)}
+.split.closed{grid-template-columns:minmax(0,1fr) 0}
+.split.closed .panel{display:none}
+.docpane{min-width:0;overflow:auto;padding:40px 48px 80px;position:relative}
+.doc{max-width:680px;margin:0 auto;font-size:14.5px;line-height:1.62;color:var(--text)}
+.doc .docmeta{display:flex;align-items:center;gap:10px;color:var(--text-3);font-size:12.5px;margin-bottom:22px;padding-bottom:16px;border-bottom:1px solid var(--line)}
+.doc h1{font-size:28px;line-height:1.2;letter-spacing:-.025em;font-weight:600;margin:0 0 10px}
+.doc h2{font-size:18px;letter-spacing:-.015em;font-weight:600;margin:34px 0 8px;scroll-margin-top:20px}
+.doc h3{font-size:14.5px;font-weight:600;margin:22px 0 4px}
+.doc p{margin:0 0 12px;color:var(--text)}
+.doc .lede{color:var(--text-2);font-size:15.5px}
+.doc ul,.doc ol{margin:0 0 14px;padding-left:22px}
+.doc li{margin:3px 0}
+.doc li::marker{color:var(--text-3)}
+.doc code{font:400 12.5px var(--mono);background:var(--code-bg);border:1px solid var(--line);border-radius:4px;padding:0 4px}
+.doc pre{font:400 12.5px/1.6 var(--mono);background:var(--code-bg);border:1px solid var(--line);border-radius:6px;padding:12px 14px;margin:6px 0 16px;overflow:auto;position:relative}
+.doc pre .lang{position:absolute;top:8px;right:10px;font:500 11px var(--sans);color:var(--text-3)}
+.doc pre .k{color:var(--accent-text)} .doc pre .s{color:var(--ok)} .doc pre .c{color:var(--text-3)} .doc pre .n{color:var(--warn)}
+.doc blockquote{margin:14px 0 18px;padding:2px 0 2px 14px;border-left:3px solid var(--line-strong);color:var(--text-2)}
+.doc blockquote p{margin:0}
+.doc blockquote cite{display:block;font-style:normal;color:var(--text-3);font-size:12.5px;margin-top:4px}
+.doc table{width:100%;border-collapse:collapse;font-size:13px;margin:8px 0 18px}
+.doc th{text-align:left;font-weight:500;color:var(--text-3);border-bottom:1px solid var(--line-strong);padding:6px 10px 6px 0}
+.doc td{border-bottom:1px solid var(--line);padding:7px 10px 7px 0;vertical-align:top}
+.doc td.r,.doc th.r{text-align:right}
+.st{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:500;white-space:nowrap}
+.st::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.st.ok{color:var(--ok)} .st.run{color:var(--accent-text)} .st.wait{color:var(--text-3)} .st.risk{color:var(--warn)}
+.tasks{list-style:none;padding-left:0 !important}
+.tasks li{display:flex;gap:9px;align-items:flex-start}
+.cb{width:15px;height:15px;border:1.5px solid var(--line-strong);border-radius:4px;flex:none;margin-top:3px;display:grid;place-items:center}
+.cb.on{background:var(--text);border-color:var(--text)}
+.cb.on svg{stroke:var(--surface);width:11px;height:11px;stroke-width:2.2;fill:none}
+.tasks li.done span{color:var(--text-3);text-decoration:line-through;text-decoration-color:var(--line-strong)}
+
+.panel{border-left:1px solid var(--line);background:var(--chrome);display:flex;flex-direction:column;min-width:0;position:sticky;top:0;max-height:calc(100vh - 0px)}
+.ptabs{display:flex;align-items:center;gap:2px;padding:8px 10px;border-bottom:1px solid var(--line)}
+.ptabs button.t{height:26px;padding:0 10px;border-radius:5px;color:var(--text-3);font-weight:500}
+.ptabs button.t.on{background:var(--surface);color:var(--text);box-shadow:var(--shadow)}
+.ptabs .spacer{flex:1}
+.pbody{padding:14px 14px 20px;overflow:auto}
+.ptitle{display:flex;align-items:center;justify-content:space-between;margin:0 2px 10px;color:var(--text-3);font-size:12px}
+.tl{position:relative;display:flex;flex-direction:column}
+.ver{position:relative;display:grid;grid-template-columns:22px 1fr;gap:0 10px;padding:9px 8px 11px 6px;border-radius:7px}
+.ver::before{content:"";position:absolute;left:16px;top:24px;bottom:-9px;width:1px;background:var(--line-strong)}
+.ver:last-child::before{display:none}
+.ver .node{width:11px;height:11px;border-radius:50%;border:1.5px solid var(--line-strong);background:var(--chrome);margin:4px 0 0 5px;position:relative;z-index:1}
+.ver.cur{background:var(--surface);box-shadow:var(--shadow)}
+.ver.cur .node{border-color:var(--accent);background:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.ver .row1{display:flex;align-items:center;gap:8px}
+.ver .vn{font:500 12px var(--mono)}
+.ver .tag{font-size:11px;font-weight:500;color:var(--accent-text);background:var(--accent-soft);border-radius:4px;padding:0 5px;line-height:17px}
+.ver .when{margin-left:auto;color:var(--text-3);font-size:12px}
+.ver .note{margin:3px 0 6px;color:var(--text);line-height:1.4}
+.ver .row3{display:flex;align-items:center;gap:8px;color:var(--text-3);font-size:12px}
+.ver .diff{font:500 11.5px var(--mono);display:inline-flex;gap:6px}
+.ver .diff .a{color:var(--ok)} .ver .diff .d{color:var(--bad)}
+.ver .act{margin-left:auto;display:flex;gap:2px;opacity:0}
+.ver:hover .act,.ver:focus-within .act,.ver.show .act{opacity:1}
+.ver .act button{height:22px;padding:0 7px;border-radius:4px;font-size:12px;font-weight:500;color:var(--text-2);border:1px solid var(--line);background:var(--surface)}
+.ver .act button:hover{color:var(--text);border-color:var(--line-strong)}
+.agentmark{display:inline-flex;align-items:center;gap:5px;color:var(--text-2)}
+.agentmark i{width:6px;height:6px;border-radius:1.5px;background:var(--text-3)}
+
+/* toggles */
+.dev{position:fixed;right:14px;bottom:14px;z-index:20;display:flex;gap:6px;padding:5px;background:var(--surface);border-radius:8px;box-shadow:var(--pop)}
+
+.mob-only{display:none}
+@media (max-width:1100px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}.split{grid-template-columns:minmax(0,1fr) 300px}}
+@media (max-width:860px){
+  .app{grid-template-columns:1fr}
+  .side{display:none}
+  .mob-only{display:inline-flex}
+  .grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .split{grid-template-columns:minmax(0,1fr)}
+  .panel{border-left:0;border-top:1px solid var(--line);position:static;max-height:none}
+}
+@media (max-width:560px){
+  .top{padding:0 12px;gap:6px}
+  .top .hide-s{display:none}
+  .lib{padding:16px}
+  .grid{grid-template-columns:1fr}
+  .tabs{gap:14px;overflow-x:auto}
+  .tabs button{white-space:nowrap}
+  .titlebar{padding:10px 16px}
+  .titlebar .hide-s{display:none}
+  .titlebar h1{flex:1 0 calc(100% - 30px)}
+  .titlebar>.spacer{display:none}
+  .doc .docmeta .num{display:none}
+  .docpane{padding:24px 16px 40px}
+  .doc h1{font-size:23px}
+  .doc table{display:block;overflow-x:auto}
+  .grid.list .sub .agent,.grid.list .vis{display:none}
+  .grid.list .sub .when{width:auto}
+}
+@media (prefers-reduced-motion:no-preference){
+  .card,.btn,.ver .act{transition:box-shadow .12s, border-color .12s, opacity .12s}
+}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <symbol id="i-md" viewBox="0 0 16 16"><rect x="1.5" y="3" width="13" height="10" rx="1.5"/><path d="M4 10.5v-5l2 2.5 2-2.5v5M11 5.5v5M9.5 9l1.5 1.5L12.5 9"/></symbol>
+    <symbol id="i-html" viewBox="0 0 16 16"><path d="M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5"/></symbol>
+    <symbol id="i-pdf" viewBox="0 0 16 16"><path d="M4 1.5h5.5L13 5v9.5H4z"/><path d="M9.5 1.5V5H13M6 9h5M6 11.5h3.5"/></symbol>
+    <symbol id="i-code" viewBox="0 0 16 16"><path d="M4 1.5h5.5L13 5v9.5H4z"/><path d="M9.5 1.5V5H13M7.3 8.3 6 9.7l1.3 1.3M9.7 8.3 11 9.7 9.7 11"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 16 16"><path d="M2 14h12M4.5 11V8M8 11V4.5M11.5 11V6.5"/></symbol>
+    <symbol id="i-deck" viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="8.5" rx="1"/><path d="M8 11v3M5.5 14h5"/></symbol>
+    <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/></symbol>
+    <symbol id="i-lib" viewBox="0 0 16 16"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></symbol>
+    <symbol id="i-star" viewBox="0 0 16 16"><path d="m8 2 1.8 3.8 4.2.5-3.1 2.9.8 4.1L8 11.3l-3.7 2 .8-4.1L2 6.3l4.2-.5z"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 16 16"><path d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 16 16"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></symbol>
+    <symbol id="i-list" viewBox="0 0 16 16"><path d="M2 4h12M2 8h12M2 12h12"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 16 16"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></symbol>
+    <symbol id="i-team" viewBox="0 0 16 16"><circle cx="6" cy="6" r="2.5"/><path d="M1.5 13.5c.5-2.5 2.3-3.8 4.5-3.8s4 1.3 4.5 3.8M11 3.8a2.3 2.3 0 0 1 0 4.4M12.5 10c1.2.6 1.8 1.8 2 3.5"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c1.8 2 2.6 4 2.6 6S9.8 12 8 14M8 2C6.2 4 5.4 6 5.4 8S6.2 12 8 14"/></symbol>
+    <symbol id="i-down" viewBox="0 0 16 16"><path d="m4.5 6.5 3.5 3.5 3.5-3.5"/></symbol>
+    <symbol id="i-more" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r=".6"/><circle cx="8" cy="8" r=".6"/><circle cx="12.5" cy="8" r=".6"/></symbol>
+    <symbol id="i-ext" viewBox="0 0 16 16"><path d="M9 2.5h4.5V7M13.5 2.5 7.5 8.5M11.5 9.5v4h-9v-9h4"/></symbol>
+    <symbol id="i-panel" viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M10 2.5v11"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 16 16"><circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1 1M11.6 11.6l1 1M3.4 12.6l1-1M11.6 4.4l1-1"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 16 16"><path d="M13.5 9.5A5.5 5.5 0 0 1 6.5 2.5a5.5 5.5 0 1 0 7 7z"/></symbol>
+    <symbol id="i-back" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5"/></symbol>
+    <symbol id="i-check" viewBox="0 0 16 16"><path d="m3.5 8.5 3 3 6-7"/></symbol>
+    <symbol id="i-filter" viewBox="0 0 16 16"><path d="M2.5 4h11M4.5 8h7M6.5 12h3"/></symbol>
+    <symbol id="i-share" viewBox="0 0 16 16"><path d="M8 10V2M5 5l3-3 3 3M3 9v4.5h10V9"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 16 16"><path d="M2 4h12M2 8h12M2 12h12"/></symbol>
+  </defs>
+</svg>
+
+<!-- ================= LIBRARY ================= -->
+<div id="view-library" class="app">
+  <aside class="side">
+    <div class="mark"><b>Open Artifacts</b></div>
+    <div class="ws"><div class="sq">N</div><span>Northwind Eng</span><svg class="ic sm"><use href="#i-down"/></svg></div>
+    <nav class="nav">
+      <a href="#" class="on"><svg class="ic"><use href="#i-lib"/></svg>Library<span class="ct num">214</span></a>
+      <a href="#"><svg class="ic"><use href="#i-clock"/></svg>Recent</a>
+      <a href="#"><svg class="ic"><use href="#i-star"/></svg>Starred<span class="ct num">9</span></a>
+      <a href="#"><svg class="ic"><use href="#i-trash"/></svg>Trash</a>
+    </nav>
+    <nav class="nav">
+      <h4>Collections</h4>
+      <a href="#"><span class="dot"></span>Platform<span class="ct num">48</span></a>
+      <a href="#"><span class="dot"></span>Legal &amp; vendors<span class="ct num">17</span></a>
+      <a href="#"><span class="dot"></span>Growth analytics<span class="ct num">31</span></a>
+      <a href="#"><span class="dot"></span>Team ops<span class="ct num">22</span></a>
+    </nav>
+    <nav class="nav">
+      <h4>Connected agents</h4>
+      <a href="#">Claude Code<span class="ct num">92</span></a>
+      <a href="#">Codex CLI<span class="ct num">41</span></a>
+      <a href="#">Cursor<span class="ct num">38</span></a>
+      <a href="#">OpenCode<span class="ct num">19</span></a>
+      <a href="#">ChatGPT<span class="ct num">24</span></a>
+    </nav>
+    <div class="foot"><span class="av lg" style="background:#3E5C8A">MC</span><div><b style="font-weight:500">Maya Chen</b><small>maya@northwind.dev</small></div></div>
+  </aside>
+
+  <main class="main">
+    <header class="top">
+      <button class="btn ghost icon mob-only" aria-label="Menu"><svg class="ic"><use href="#i-menu"/></svg></button>
+      <label class="search"><svg class="ic"><use href="#i-search"/></svg><input placeholder="Search titles, content, and agents"><kbd>⌘K</kbd></label>
+      <div class="spacer"></div>
+      <button class="btn hide-s"><svg class="ic sm"><use href="#i-plus"/></svg>Upload</button>
+    </header>
+
+    <section class="lib">
+      <div class="lib-head"><h1>Library</h1><span class="count num">214 artifacts</span></div>
+      <div class="tabs" role="tablist">
+        <button class="on" role="tab">All <span class="n num">214</span></button>
+        <button role="tab">Mine <span class="n num">63</span></button>
+        <button role="tab">Shared with me <span class="n num">88</span></button>
+        <button role="tab">Team <span class="n num">131</span></button>
+      </div>
+      <div class="bar">
+        <button class="chip"><svg class="ic sm"><use href="#i-filter"/></svg>Format</button>
+        <button class="chip set">Agent <b>Any of 3</b><svg class="ic sm x"><use href="#i-down"/></svg></button>
+        <button class="chip">Owner</button>
+        <button class="chip">Updated</button>
+        <span class="meta">Showing 8 of 214</span>
+        <div class="spacer"></div>
+        <button class="btn ghost hide-s">Last updated<svg class="ic sm"><use href="#i-down"/></svg></button>
+        <div class="seg" role="group" aria-label="Layout">
+          <button id="lay-grid" class="on" aria-label="Grid"><svg class="ic sm"><use href="#i-grid"/></svg></button>
+          <button id="lay-list" aria-label="List"><svg class="ic sm"><use href="#i-list"/></svg></button>
+        </div>
+      </div>
+      <div id="grid" class="grid"></div>
+    </section>
+  </main>
+</div>
+
+<!-- ================= ARTIFACT ================= -->
+<div id="view-artifact" class="av-wrap" hidden>
+  <header class="top">
+    <button class="btn ghost icon" data-go="library" aria-label="Back to library"><svg class="ic"><use href="#i-back"/></svg></button>
+    <nav class="crumbs"><b style="font-weight:600;color:var(--text);margin-right:6px" class="hide-s">Open Artifacts</b><a href="#" data-go="library" class="hide-s">Library</a><span class="sep hide-s">/</span><a href="#">Platform</a><span class="sep">/</span><span class="cur">Q4 data migration plan</span></nav>
+    <div class="spacer"></div>
+    <label class="search hide-s" style="max-width:260px"><svg class="ic"><use href="#i-search"/></svg><input placeholder="Search"><kbd>⌘K</kbd></label>
+    <span class="av" style="background:#3E5C8A">MC</span>
+  </header>
+
+  <div class="titlebar">
+    <svg class="ic" style="color:var(--text-3)"><use href="#i-md"/></svg>
+    <h1>Q4 data migration plan</h1>
+    <span class="fmt hide-s">Markdown</span>
+    <span class="vis team"><svg class="ic"><use href="#i-team"/></svg>Team</span>
+    <div class="spacer"></div>
+    <button class="vpick" aria-label="Version"><span class="v">v7</span><span class="t">· 2h ago</span><svg class="ic sm" style="color:var(--text-3)"><use href="#i-down"/></svg></button>
+    <button class="btn ghost hide-s"><svg class="ic sm"><use href="#i-ext"/></svg>Open raw</button>
+    <button class="btn primary"><svg class="ic sm"><use href="#i-share"/></svg>Share</button>
+    <button class="btn icon" aria-label="More"><svg class="ic"><use href="#i-more"/></svg></button>
+    <button class="btn icon" id="panel-toggle" aria-label="Toggle side panel" aria-pressed="true"><svg class="ic"><use href="#i-panel"/></svg></button>
+  </div>
+
+  <div class="split" id="split">
+    <div class="docpane">
+      <article class="doc">
+        <div class="docmeta">
+          <span class="av" style="background:#3E5C8A">MC</span><span>Maya Chen</span>
+          <span class="agentmark"><i></i>Claude Code</span>
+          <span>Updated Oct 18, 2:14 PM</span>
+          <span class="num" style="margin-left:auto">1,240 words</span>
+        </div>
+        <h1>Q4 data migration plan</h1>
+        <p class="lede">Move the orders and billing tables from the legacy Postgres 11 cluster to the new Aurora cluster with no more than 5 minutes of write downtime, finishing before the December freeze.</p>
+
+        <h2>Scope</h2>
+        <p>Three schemas move this quarter. Analytics replicas stay on the old cluster until January and read through a foreign data wrapper in the meantime.</p>
+        <ul>
+          <li><code>orders</code> — 1.8 TB, 412M rows, highest write volume</li>
+          <li><code>billing</code> — 240 GB, includes the Stripe event ledger</li>
+          <li><code>catalog</code> — 36 GB, read-heavy, safe to move first</li>
+        </ul>
+
+        <h2>Phases</h2>
+        <table>
+          <thead><tr><th>Phase</th><th>Window</th><th>Owner</th><th class="r">Status</th></tr></thead>
+          <tbody>
+            <tr><td>1. Catalog dry run</td><td class="num">Oct 7 – Oct 11</td><td>Maya Chen</td><td class="r"><span class="st ok">Done</span></td></tr>
+            <tr><td>2. Logical replication for orders</td><td class="num">Oct 14 – Oct 25</td><td>Sam Ruiz</td><td class="r"><span class="st run">In progress</span></td></tr>
+            <tr><td>3. Billing cutover</td><td class="num">Nov 4 – Nov 8</td><td>Dana Okafor</td><td class="r"><span class="st risk">At risk</span></td></tr>
+            <tr><td>4. Decommission old cluster</td><td class="num">Dec 2 – Dec 6</td><td>Theo Park</td><td class="r"><span class="st wait">Not started</span></td></tr>
+          </tbody>
+        </table>
+
+        <blockquote><p>Billing cutover is at risk until we confirm the ledger's sequence gaps are safe to replay. Don't schedule the window until the replay test passes twice in staging.</p><cite>Dana Okafor, review on v6</cite></blockquote>
+
+        <h2>Cutover procedure</h2>
+        <p>Run from the bastion host. The script pauses writers, waits for replication lag to reach zero, then flips the connection string in the config service.</p>
+<pre><span class="lang">bash</span><span class="c"># 1. Freeze writers and wait for lag to drain</span>
+<span class="k">./bin/cutover</span> --schema orders --pause-writers
+<span class="k">./bin/lag</span> --until <span class="n">0</span> --timeout <span class="n">240s</span>
+
+<span class="c"># 2. Flip the DSN and resume</span>
+<span class="k">cfg</span> set db.orders.dsn <span class="s">"$AURORA_ORDERS_DSN"</span>
+<span class="k">./bin/cutover</span> --schema orders --resume</pre>
+
+        <h3>Rollback</h3>
+        <p>If error rate on <code>/checkout</code> exceeds 0.5% for two minutes, point the DSN back at the old primary. Reverse replication stays on for 72 hours after each cutover.</p>
+
+        <h2>Before Nov 4</h2>
+        <ul class="tasks">
+          <li class="done"><span class="cb on"><svg viewBox="0 0 16 16"><use href="#i-check"/></svg></span><span>Provision Aurora cluster and parameter groups</span></li>
+          <li class="done"><span class="cb on"><svg viewBox="0 0 16 16"><use href="#i-check"/></svg></span><span>Catalog dry run with row-count and checksum diff</span></li>
+          <li><span class="cb"></span><span>Ledger replay test passes twice in staging</span></li>
+          <li><span class="cb"></span><span>Load test checkout at 2× peak against Aurora</span></li>
+          <li><span class="cb"></span><span>Post cutover window in #eng-announce 48 hours ahead</span></li>
+        </ul>
+      </article>
+    </div>
+
+    <aside class="panel" id="panel">
+      <div class="ptabs" role="tablist">
+        <button class="t on" role="tab">Versions</button>
+        <button class="t" role="tab">Share</button>
+        <button class="t" role="tab">Details</button>
+        <div class="spacer"></div>
+        <button class="btn ghost icon" id="panel-close" aria-label="Close panel"><svg class="ic sm"><use href="#i-panel"/></svg></button>
+      </div>
+      <div class="pbody">
+        <div class="ptitle"><span class="num">7 versions</span><button class="btn ghost" style="height:22px;padding:0 6px;font-size:12px">Compare</button></div>
+        <div class="tl">
+          <div class="ver cur">
+            <span class="node"></span>
+            <div>
+              <div class="row1"><span class="vn">v7</span><span class="tag">Current</span><span class="when">2h ago</span></div>
+              <p class="note">Marked billing cutover at risk; added ledger replay task and Dana's review note.</p>
+              <div class="row3"><span class="agentmark"><i></i>Claude Code</span><span class="diff"><span class="a">+18</span><span class="d">−4</span></span></div>
+            </div>
+          </div>
+          <div class="ver show">
+            <span class="node"></span>
+            <div>
+              <div class="row1"><span class="vn">v6</span><span class="when">Yesterday</span></div>
+              <p class="note">Rewrote cutover procedure around the new <code style="font:12px var(--mono)">bin/cutover</code> script.</p>
+              <div class="row3"><span class="agentmark"><i></i>Claude Code</span><span class="diff"><span class="a">+41</span><span class="d">−29</span></span><span class="act"><button>View</button><button>Restore</button></span></div>
+            </div>
+          </div>
+          <div class="ver">
+            <span class="node"></span>
+            <div>
+              <div class="row1"><span class="vn">v5</span><span class="when">Oct 16</span></div>
+              <p class="note">Added rollback thresholds from the SRE review.</p>
+              <div class="row3"><span class="agentmark"><i></i>Codex CLI</span><span class="diff"><span class="a">+9</span><span class="d">−1</span></span><span class="act"><button>View</button><button>Restore</button></span></div>
+            </div>
+          </div>
+          <div class="ver">
+            <span class="node"></span>
+            <div>
+              <div class="row1"><span class="vn">v4</span><span class="when">Oct 14</span></div>
+              <p class="note">Catalog dry run results; phase 1 marked done.</p>
+              <div class="row3"><span class="agentmark"><i></i>Claude Code</span><span class="diff"><span class="a">+12</span><span class="d">−6</span></span><span class="act"><button>View</button><button>Restore</button></span></div>
+            </div>
+          </div>
+          <div class="ver">
+            <span class="node"></span>
+            <div>
+              <div class="row1"><span class="vn">v3</span><span class="when">Oct 10</span></div>
+              <p class="note">Split billing out of the orders phase.</p>
+              <div class="row3"><span class="agentmark"><i></i>Cursor</span><span class="diff"><span class="a">+22</span><span class="d">−15</span></span><span class="act"><button>View</button><button>Restore</button></span></div>
+            </div>
+          </div>
+          <div class="ver">
+            <span class="node"></span>
+            <div>
+              <div class="row1"><span class="vn">v2</span><span class="when">Oct 8</span></div>
+              <p class="note">Edited by hand: owners and dates.</p>
+              <div class="row3"><span class="agentmark"><span class="av" style="width:14px;height:14px;font-size:7px;background:#3E5C8A">MC</span>Maya Chen</span><span class="diff"><span class="a">+7</span><span class="d">−7</span></span><span class="act"><button>View</button><button>Restore</button></span></div>
+            </div>
+          </div>
+          <div class="ver">
+            <span class="node"></span>
+            <div>
+              <div class="row1"><span class="vn">v1</span><span class="when">Oct 6</span></div>
+              <p class="note">First draft from the migration kickoff notes.</p>
+              <div class="row3"><span class="agentmark"><i></i>Claude Code</span><span class="diff"><span class="a">+96</span></span><span class="act"><button>View</button><button>Restore</button></span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<div class="dev" role="group" aria-label="Mockup controls">
+  <div class="seg"><button data-view="library">Library</button><button data-view="artifact">Artifact</button></div>
+  <div class="seg"><button data-theme-set="light" aria-label="Light"><svg class="ic sm"><use href="#i-sun"/></svg></button><button data-theme-set="dark" aria-label="Dark"><svg class="ic sm"><use href="#i-moon"/></svg></button></div>
+</div>
+
+<script>
+const VIS = {team:['i-team','Team'], public:['i-globe','Public'], private:['i-lock','Private']};
+const L = (w,c='') => `<div class="l ${c}" style="width:${w}%"></div>`;
+const T = {
+  md: () => `<div class="pg">${L(62,'h')}${L(96)}${L(88)}${L(70)}${L(40,'h2')}<div class="mini-tbl">${'<i class="hd"></i>'.repeat(3)}${'<i></i>'.repeat(6)}</div></div>`,
+  poll: () => `<div class="pg poll"><div class="q">Where should we hold the March offsite?</div>
+    <div class="o lead"><span style="width:50px">Lisbon</span><span class="b"><i style="width:58%"></i></span><em>14</em></div>
+    <div class="o"><span style="width:50px">Mexico City</span><span class="b"><i style="width:33%"></i></span><em>8</em></div>
+    <div class="o"><span style="width:50px">Montréal</span><span class="b"><i style="width:17%"></i></span><em>4</em></div></div>`,
+  pdf: () => `<div class="pg redl" style="margin:0 18px">${L(55,'h')}${L(94)}${L(80)}${L(80,'del')}${L(66,'ins')}${L(90)}${L(48,'del')}${L(72,'ins')}${L(85)}<span class="stamp">REDLINE</span></div>`,
+  code: () => `<div class="pg code"><span class="ln">1</span><span class="k">import</span> psycopg
+<span class="ln">2</span><span class="k">from</span> batching <span class="k">import</span> chunks
+<span class="ln">3</span>
+<span class="ln">4</span><span class="c"># backfill shipped_at for 2023 orders</span>
+<span class="ln">5</span><span class="k">def</span> backfill(conn, size=<span class="s">5000</span>):
+<span class="ln">6</span>    <span class="k">for</span> ids <span class="k">in</span> chunks(pending(conn), size):
+<span class="ln">7</span>        conn.execute(SQL, ids)</div>`,
+  chart: () => `<div class="pg">${L(58,'h')}${L(36)}<div class="chart">${[38,52,47,61,70,58,82,76].map((h,i)=>`<i class="${i==6?'hi':''}" style="height:${h}%"></i>`).join('')}</div></div>`,
+  deck: () => `<div class="pg deck">${[0,1,2,3].map(i=>`<div class="sl">${L(i?50:70,'h')}${L(80)}${L(60)}</div>`).join('')}</div>`,
+  md2: () => `<div class="pg">${L(74,'h')}${L(30,'h2')}${L(92)}${L(84)}${L(90)}${L(36,'h2')}${L(78)}${L(60)}</div>`,
+  flow: () => `<div class="pg"><div class="flow"><span class="n">Sign up</span><span class="e"></span><span class="n on">Workspace</span><span class="e"></span><span class="n">Invite</span></div></div>`,
+};
+const items = [
+  {t:'Q4 data migration plan', f:'md', th:'md', ag:'Claude Code', o:['MC','#3E5C8A'], v:'team', w:'2h ago', open:true},
+  {t:'Offsite location poll', f:'html', th:'poll', ag:'ChatGPT', o:['PR','#7A4E8C'], v:'team', w:'35m ago'},
+  {t:'Vendor MSA — redlined.pdf', f:'pdf', th:'pdf', ag:'Codex CLI', o:['DO','#2F6B5A'], v:'private', w:'Yesterday'},
+  {t:'backfill_shipped_at.py', f:'code', th:'code', ag:'Cursor', o:['MC','#3E5C8A'], v:'private', w:'4h ago'},
+  {t:'Churn by signup cohort', f:'chart', th:'chart', ag:'Claude Code', o:['TP','#8A5A2B'], v:'public', w:'3d ago'},
+  {t:'Billing webhook retries — postmortem', f:'md', th:'md2', ag:'OpenCode', o:['SR','#5A6472'], v:'team', w:'Mon'},
+  {t:'Platform all-hands, October', f:'deck', th:'deck', ag:'Codex CLI', o:['PR','#7A4E8C'], v:'team', w:'5d ago'},
+  {t:'Onboarding flow v3 prototype', f:'html', th:'flow', ag:'Cursor', o:['LV','#9A3F4A'], v:'public', w:'Oct 9'},
+];
+const icon = id => `<svg class="ic"><use href="#i-${id}"/></svg>`;
+document.getElementById('grid').innerHTML = items.map(it => `
+  <article class="card" tabindex="0" ${it.open?'data-go="artifact"':''}>
+    <div class="thumb" aria-hidden="true">${T[it.th]()}</div>
+    <div class="body">
+      <div class="ttl">${icon(it.f)}<span>${it.t}</span></div>
+      <div class="sub"><span class="av" style="background:${it.o[1]}">${it.o[0]}</span><span class="agent">${it.ag}</span>
+        <span class="vis ${it.v}"><svg class="ic"><use href="#${VIS[it.v][0]}"/></svg>${VIS[it.v][1]}</span>
+        <span class="when">${it.w}</span></div>
+    </div>
+  </article>`).join('');
+
+const root = document.documentElement;
+const q = new URLSearchParams(location.search);
+const state = {view: q.get('view')==='artifact'?'artifact':'library', theme: q.get('theme')==='dark'?'dark':'light'};
+function render(){
+  root.dataset.theme = state.theme;
+  document.getElementById('view-library').hidden = state.view!=='library';
+  document.getElementById('view-artifact').hidden = state.view!=='artifact';
+  document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('on', b.dataset.view===state.view));
+  document.querySelectorAll('[data-theme-set]').forEach(b=>b.classList.toggle('on', b.dataset.themeSet===state.theme));
+  const u = new URL(location); u.searchParams.set('view',state.view); u.searchParams.set('theme',state.theme);
+  history.replaceState(null,'',u);
+}
+document.addEventListener('click', e => {
+  const v = e.target.closest('[data-view],[data-go]'); if (v){ e.preventDefault(); state.view = v.dataset.view||v.dataset.go; render(); scrollTo(0,0); }
+  const t = e.target.closest('[data-theme-set]'); if (t){ state.theme = t.dataset.themeSet; render(); }
+  const tab = e.target.closest('.ptabs .t'); if (tab){ tab.parentNode.querySelectorAll('.t').forEach(x=>x.classList.toggle('on',x===tab)); }
+  const st = e.target.closest('.tabs button'); if (st){ st.parentNode.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===st)); }
+});
+const grid = document.getElementById('grid');
+['grid','list'].forEach(m => document.getElementById('lay-'+m).onclick = () => {
+  grid.classList.toggle('list', m==='list');
+  document.getElementById('lay-grid').classList.toggle('on', m==='grid');
+  document.getElementById('lay-list').classList.toggle('on', m==='list');
+});
+const split = document.getElementById('split'), pt = document.getElementById('panel-toggle');
+const togglePanel = () => { const c = split.classList.toggle('closed'); pt.setAttribute('aria-pressed', String(!c)); };
+pt.onclick = togglePanel; document.getElementById('panel-close').onclick = togglePanel;
+render();
+</script>
+</body>
+</html>
