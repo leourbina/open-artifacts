@@ -174,6 +174,9 @@ export async function publish(
     user.id,
     plan,
   );
+  // The inline content is in R2 now: drop the plan's copies so they don't
+  // stay reachable through the D1 batch and enqueue awaits below.
+  plan.files.length = 0;
 
   // Uploads guard: all listed uploads still unconsumed (uncorrelated subquery).
   const n = uploadIds.length;
