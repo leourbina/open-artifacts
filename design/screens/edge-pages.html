@@ -3,6 +3,7 @@
   Edge pages (Task D4). Query params:
     ?page=no-access|sign-in|not-found|quota   (default no-access)
     ?theme=light|dark                          (default: system)
+    ?role=owner|admin|member|guest             (quota: role-aware sidebar; default owner)
     ?state=default|loading|error               (sign-in: loading = redirecting, error = failed sign-in;
                                                 quota: loading = skeleton grid)
   The not-found page is also what an artifact the viewer can't access returns,
@@ -281,11 +282,11 @@ kbd{font:500 11px var(--oa-font-mono);color:var(--oa-text-muted);background:var(
     <div class="drawer-head"><a class="wordmark" href="library.html"><span class="logo"><svg viewBox="0 0 16 16"><use href="#i-logo"/></svg></span>Open Artifacts</a><button class="btn ghost icon" id="drawer-close" aria-label="Close menu"><svg class="ic"><use href="#i-x"/></svg></button></div>
     <button class="ws"><span class="sq">N</span><span class="wsn">Northwind Eng</span><svg class="ic sm"><use href="#i-down"/></svg></button>
     <nav class="nav">
-      <a href="library.html" aria-current="page"><svg class="ic"><use href="#i-lib"/></svg>Library<span class="ct">214</span></a>
-      <a href="usage.html"><svg class="ic"><use href="#i-gauge"/></svg>Usage</a>
-      <a href="settings.html"><svg class="ic"><use href="#i-gear"/></svg>Settings</a>
+      <a href="library.html" aria-current="page"><svg class="ic"><use href="#i-lib"/></svg><span data-lib-label>Library</span><span class="ct" data-lib-count>214</span></a>
+      <a href="usage.html" data-roles="owner admin"><svg class="ic"><use href="#i-gauge"/></svg>Usage</a>
+      <a href="settings.html" data-roles="owner admin member"><svg class="ic"><use href="#i-gear"/></svg>Settings</a>
     </nav>
-    <nav class="nav">
+    <nav class="nav" data-roles="owner admin member">
       <h4>Connected agents</h4>
       <a href="#"><span class="dot"></span>Claude Code<span class="ct">92</span></a>
       <a href="#"><span class="dot"></span>Codex CLI<span class="ct">41</span></a>
@@ -293,7 +294,7 @@ kbd{font:500 11px var(--oa-font-mono);color:var(--oa-text-muted);background:var(
       <a href="#"><span class="dot"></span>OpenCode<span class="ct">19</span></a>
       <a href="#"><span class="dot"></span>ChatGPT<span class="ct">24</span></a>
     </nav>
-    <div class="foot"><span class="avatar lg" style="--hue:215">MC</span><div><b>Maya Chen</b><small>maya@northwind.dev</small></div></div>
+    <div class="foot"><span class="avatar lg" id="me-av" style="--hue:215">MC</span><div><b id="me-name">Maya Chen</b><small id="me-email">maya@northwind.dev</small></div></div>
   </aside>
   <div class="scrim" id="drawer-scrim" hidden></div>
   <div class="col">
@@ -301,16 +302,16 @@ kbd{font:500 11px var(--oa-font-mono);color:var(--oa-text-muted);background:var(
       <button class="btn ghost menu-btn" id="menu-btn" aria-label="Open menu"><svg class="ic"><use href="#i-menu"/></svg></button>
       <label class="search"><svg class="ic"><use href="#i-search"/></svg><input placeholder="Search titles, content, and agents" aria-label="Search"><kbd class="hide-s">⌘K</kbd></label>
       <div class="spacer"></div>
-      <button class="btn hide-s" disabled title="Uploads resume at 00:00 UTC"><svg class="ic sm"><use href="#i-plus"/></svg>Upload</button>
+      <button class="btn hide-s" data-roles="owner admin member" disabled title="Uploads resume at 00:00 UTC"><svg class="ic sm"><use href="#i-plus"/></svg>Upload</button>
     </header>
     <main class="lib">
       <div class="banner danger" role="alert">
         <svg class="ic"><use href="#i-alert"/></svg>
         <span class="banner-text"><strong>Daily free-plan limit reached; resets at 00:00 UTC</strong></span>
-        <a class="btn" href="usage.html">View usage</a>
+        <a class="btn" href="usage.html" data-roles="owner admin">View usage</a>
       </div>
-      <div class="lib-head"><h1>Library</h1><span class="count num">214 artifacts</span></div>
-      <div class="tabs" role="tablist">
+      <div class="lib-head"><h1 id="lib-title">Library</h1><span class="count num" id="lib-count">214 artifacts</span></div>
+      <div class="tabs" role="tablist" data-roles="owner admin member">
         <span role="tab" aria-selected="true">All</span><span role="tab">Mine</span><span role="tab">Shared with me</span><span role="tab">Team</span>
       </div>
       <div id="grid" class="grid"></div>
@@ -352,6 +353,21 @@ grid.innerHTML = state === "loading"
         <div class="sub"><span class="avatar" style="--hue:${o[1]}">${o[0]}</span><span class="agent">${ag}</span>
           <span class="badge vis-${v}"><svg class="ic"><use href="#${VIS[v][0]}"/></svg>${VIS[v][1]}</span><span class="when">${w}</span></div>
       </div></article>`).join("");
+
+// ?role=owner|admin|member|guest (default owner): role-aware sidebar on the quota page.
+const role = ["owner", "admin", "member", "guest"].includes(q.get("role")) ? q.get("role") : "owner";
+document.querySelectorAll("[data-roles]").forEach((el) => { if (!el.dataset.roles.split(" ").includes(role)) el.hidden = true; });
+const ME = { owner: ["Maya Chen", "maya@northwind.dev", "MC", 215], admin: ["Sam Ruiz", "sam@northwind.dev", "SR", 160],
+  member: ["Dana Okafor", "dana@northwind.dev", "DO", 28], guest: ["Jordan Lee", "jordan@lumenpay.com · Guest", "JL", 20] }[role];
+document.getElementById("me-name").textContent = ME[0];
+document.getElementById("me-email").textContent = ME[1];
+const meAv = document.getElementById("me-av"); meAv.textContent = ME[2]; meAv.style.setProperty("--hue", ME[3]);
+if (role === "guest") {
+  document.querySelector("[data-lib-label]").textContent = "Shared with me";
+  document.querySelector("[data-lib-count]").textContent = "8";
+  document.getElementById("lib-title").textContent = "Shared with me";
+  document.getElementById("lib-count").textContent = "8 artifacts from Northwind Eng";
+}
 
 // Drawer below 960px (quota page)
 const app = document.getElementById("app"), scrim = document.getElementById("drawer-scrim");

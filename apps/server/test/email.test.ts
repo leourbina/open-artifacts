@@ -1,9 +1,24 @@
 import { expect, it } from "vitest";
-import { normEmail } from "../src/db/email.js";
+import { isAsciiEmail, normEmail } from "../src/db/email.js";
 
-it("normEmail trims, NFC-normalizes and lowercases", () => {
+it("normEmail trims and lowercases printable-ASCII emails", () => {
   expect(normEmail("  A@X.com ")).toBe("a@x.com");
-  // precomposed E-acute vs E + combining acute, and lowercase e-acute, all collide
-  expect(normEmail("É@x.com")).toBe(normEmail("É@x.com"));
-  expect(normEmail("É@x.com")).toBe(normEmail("é@x.com"));
+});
+
+it("normEmail rejects non-ASCII (no Unicode folding onto ASCII accounts)", () => {
+  for (const bad of [
+    "\u212Aim@x.com",
+    "É@x.com",
+    "é@x.com",
+    "a b@x.com",
+    "a@x.com\u0000",
+    "",
+    "noat",
+    "@x.com",
+    "a@",
+  ]) {
+    expect(isAsciiEmail(bad)).toBe(false);
+    expect(normEmail(bad)).toBeNull();
+  }
+  expect(isAsciiEmail(" Kim@X.com ")).toBe(true);
 });

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Q4 data migration plan — Open Artifacts</title>
-<!-- D4 screen mockup. Params: ?theme=light|dark &state=default|empty|loading|error &tab=versions|share|details &panel=open|closed &menu=none|version|more &as=creator|editor|viewer -->
+<!-- D4 screen mockup. Params: ?theme=light|dark &state=default|empty|loading|error &tab=versions|share|details &panel=open|closed &menu=none|version|more &as=creator|editor|viewer &role=owner|admin|member|guest (guests are never the creator) -->
 <link rel="stylesheet" href="../../packages/ui/src/tokens/tokens.css">
 <style>
 /* ---------- Base (shared by every D4 screen; mirrors packages/ui components) ---------- */
@@ -325,14 +325,14 @@ textarea.control{height:auto;min-height:72px;padding:6px var(--oa-space-2);resiz
     <a class="btn ghost icon" href="library.html" aria-label="Back to library"><svg class="ic"><use href="#i-back"/></svg></a>
     <nav class="crumbs" aria-label="Breadcrumb">
       <a class="wordmark hide-s" href="library.html" style="margin-right:6px"><span class="logo"><svg viewBox="0 0 16 16"><use href="#i-logo"/></svg></span>Open Artifacts</a>
-      <a href="library.html" class="hide-s">Library</a><span class="sepc hide-s">/</span>
+      <a href="library.html" class="hide-s" data-role="owner admin member">Library</a><a href="library.html?role=guest" class="hide-s" data-role="guest">Shared with me</a><span class="sepc hide-s">/</span>
       <span class="cur" data-when="default error">Q4 data migration plan</span>
       <span class="cur" data-when="empty">Vendor MSA — redlined.pdf</span>
       <span class="sk" data-when="loading" style="width:140px;height:10px"></span>
     </nav>
     <div class="spacer"></div>
     <label class="search hide-s" style="max-width:260px"><svg class="ic"><use href="#i-search"/></svg><input placeholder="Search" aria-label="Search artifacts"><kbd>⌘K</kbd></label>
-    <span class="avatar" style="--hue:215" title="Maya Chen">MC</span>
+    <span class="avatar" style="--hue:215" title="Maya Chen" data-role="owner admin member">MC</span><span class="avatar" style="--hue:20" title="Jordan Lee" data-role="guest">JL</span>
   </header>
 
   <div class="titlebar">
@@ -554,9 +554,9 @@ textarea.control{height:auto;min-height:72px;padding:6px var(--oa-space-2);resiz
           <h3>People with access</h3>
           <div class="people">
             <div class="person"><span class="avatar lg" style="--hue:215">MC</span><div class="who"><b>Maya Chen<span data-only="creator"> (you)</span></b><small>maya@northwind.dev</small></div><span class="role">Creator</span></div>
-            <div class="person"><span class="avatar lg" style="--hue:160">DO</span><div class="who"><b>Dana Okafor<span data-only="editor"> (you)</span></b><small>dana@northwind.dev</small></div><button data-lock="creator" class="role">Editor<svg class="ic sm"><use href="#i-down"/></svg></button></div>
-            <div class="person"><span class="avatar lg" style="--hue:210">SR</span><div class="who"><b>Sam Ruiz<span data-only="viewer"> (you)</span></b><small>sam@northwind.dev</small></div><button data-lock="creator" class="role">Viewer<svg class="ic sm"><use href="#i-down"/></svg></button></div>
-            <div class="person"><span class="avatar lg" style="--hue:20">JL</span><div class="who"><b>jordan@lumenpay.com</b><small>Invited · hasn't signed in yet</small></div><button data-lock="creator" class="role">Viewer<svg class="ic sm"><use href="#i-down"/></svg></button></div>
+            <div class="person"><span class="avatar lg" style="--hue:160">DO</span><div class="who"><b>Dana Okafor<span data-only="editor" data-role="owner admin member"> (you)</span></b><small>dana@northwind.dev</small></div><button data-lock="creator" class="role">Editor<svg class="ic sm"><use href="#i-down"/></svg></button></div>
+            <div class="person"><span class="avatar lg" style="--hue:210">SR</span><div class="who"><b>Sam Ruiz<span data-only="viewer" data-role="owner admin member"> (you)</span></b><small>sam@northwind.dev</small></div><button data-lock="creator" class="role">Viewer<svg class="ic sm"><use href="#i-down"/></svg></button></div>
+            <div class="person"><span class="avatar lg" style="--hue:20">JL</span><div class="who"><b><span data-role="owner admin member">jordan@lumenpay.com</span><span data-role="guest">Jordan Lee (you)</span></b><small><span data-role="owner admin member">Invited · hasn't signed in yet</span><span data-role="guest">jordan@lumenpay.com · Guest</span></small></div><button data-lock="creator" class="role"><span data-role="owner admin member">Viewer</span><span data-role="guest" data-only="creator viewer">Viewer</span><span data-role="guest" data-only="editor">Editor</span><svg class="ic sm"><use href="#i-down"/></svg></button></div>
           </div>
         </div>
         <div class="sect">
@@ -602,7 +602,7 @@ textarea.control{height:auto;min-height:72px;padding:6px var(--oa-space-2);resiz
   </div>
 </div>
 
-<script>window.OA_PARAMS = { tab: ['versions', 'share', 'details'], panel: ['open', 'closed'], menu: ['none', 'version', 'more'], as: ['creator', 'editor', 'viewer'] };</script>
+<script>window.OA_PARAMS = { tab: ['versions', 'share', 'details'], panel: ['open', 'closed'], menu: ['none', 'version', 'more'], as: ['creator', 'editor', 'viewer'], role: ['owner', 'admin', 'member', 'guest'] };</script>
 <script>
 /* Mockup plumbing: ?theme=light|dark, ?state=default|empty|loading|error, plus per-page params. */
 const OA = (() => {
@@ -627,7 +627,11 @@ const OA = (() => {
     if (S.theme) root.dataset.theme = S.theme; else root.removeAttribute('data-theme');
     const eff = { ...S, theme: S.theme || (mq.matches ? 'dark' : 'light') };
     root.dataset.state = S.state;
-    document.querySelectorAll('[data-when]').forEach(el => { el.toggleAttribute('hidden', !el.dataset.when.split(' ').includes(S.state)); });
+    /* data-when = state, data-role = workspace role, data-only = per-artifact access (as=); all must match. */
+    const has = (list, v) => !list || list.split(' ').includes(v);
+    document.querySelectorAll('[data-when],[data-role],[data-only]').forEach(el => {
+      el.toggleAttribute('hidden', !(has(el.dataset.when, S.state) && has(el.dataset.role, S.role) && has(el.dataset.only, S.as)));
+    });
     dev.querySelectorAll('button').forEach(b => b.setAttribute('aria-checked', String(eff[b.dataset.k] === b.dataset.v)));
     const u = new URL(location);
     for (const k of Object.keys(opts)) if (S[k]) u.searchParams.set(k, S[k]);
@@ -666,7 +670,7 @@ document.getElementById('share-btn').onclick = () => { OA.S.tab = 'share'; OA.S.
 pt.onclick = document.getElementById('panel-close').onclick = () => { OA.S.panel = OA.S.panel === 'open' ? 'closed' : 'open'; OA.apply(); };
 document.getElementById('retry').onclick = e => { const b = e.currentTarget; b.innerHTML = '<span class="spinner"></span>Retrying'; setTimeout(() => { OA.S.state = 'default'; OA.apply(); b.innerHTML = '<svg class="ic sm"><use href="#i-retry"/></svg>Retry'; }, 900); };
 OA.on(S => {
-  document.querySelectorAll('[data-only]').forEach(el => el.toggleAttribute('hidden', !el.dataset.only.split(' ').includes(S.as)));
+  if (S.role === 'guest' && S.as === 'creator') { S.as = 'viewer'; return OA.apply(); }
   document.querySelectorAll('[data-lock]').forEach(el => { el.disabled = !el.dataset.lock.split(' ').includes(S.as); });
   setTab(S.tab);
   split.classList.toggle('closed', S.panel === 'closed');

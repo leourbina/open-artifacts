@@ -1,7 +1,13 @@
+import { AUTH } from "@oa/shared";
 import { Hono } from "hono";
-import type { Env } from "./env.js";
 import { ApiError, errorJson, toErrorResponse } from "./http/errors.js";
-import { securityHeaders } from "./http/middleware.js";
+import {
+  type AppEnv,
+  csrf,
+  sameOrigin,
+  securityHeaders,
+  session,
+} from "./http/middleware.js";
 import { type AppType, mountRoutes } from "./routes/index.js";
 
 export const ROBOTS = "User-agent: *\nDisallow: /";
@@ -32,8 +38,16 @@ function normalizedPath(url: string): string | null {
   return `/${out.join("/")}`;
 }
 
+const SESSION_PATHS = [
+  "/api/*",
+  "/auth/*",
+  "/oauth/*",
+  "/mcp",
+  "/mcp/*",
+] as const;
+
 export function createApp(mount: (app: AppType) => void = mountRoutes) {
-  const app = new Hono<{ Bindings: Env }>();
+  const app: AppType = new Hono<AppEnv>();
   app.use(securityHeaders({ frameDeny: true }));
   app.onError((e) => toErrorResponse(e));
   app.notFound(() => toErrorResponse(new ApiError("not_found", "Not found")));
@@ -44,6 +58,13 @@ export function createApp(mount: (app: AppType) => void = mountRoutes) {
   // first; app.all only catches the remaining methods.
   app.all("/healthz", methodNotAllowed);
   app.all("/robots.txt", methodNotAllowed);
+
+  // c.var.user (Bearer PAT wins over the cookie) for Worker routes only, so
+  // SPA/asset requests never touch D1. Elsewhere caller() sees anonymous.
+  for (const p of SESSION_PATHS) app.use(p, session());
+  // Cookie-authenticated mutations need X-OA-Request: 1 (PATs exempt).
+  app.use("/api/v1/*", csrf());
+  app.use(AUTH.logout, sameOrigin(), csrf());
 
   mount(app);
 
