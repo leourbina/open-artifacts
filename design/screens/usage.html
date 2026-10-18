@@ -339,7 +339,7 @@ code{font:400 12px var(--oa-font-mono);background:var(--oa-surface-2);border:1px
     <main class="main">
       <div class="page">
         <div class="pageHead">
-          <h1>Usage</h1><span class="badge neutral">Workers Free plan</span>
+          <h1>Usage</h1>
           <div class="spacer"></div>
           <button class="btn ghost" data-when="default empty" onclick="location.reload()"><svg class="ic sm"><use href="#i-refresh"/></svg>Refresh</button>
         </div>
@@ -376,7 +376,7 @@ code{font:400 12px var(--oa-font-mono);background:var(--oa-surface-2);border:1px
         <section class="card guide" id="upgrade" data-when="default empty" aria-labelledby="upH">
           <h2 id="upH">When to upgrade</h2>
           <div>
-            <p>The free plan's limits reset every day at 00:00 UTC. A meter turns amber at 75% and red at 90%. Once a limit is reached, writes fail until the reset.</p>
+            <p>The free plan's limits reset every day at 00:00 UTC. A meter turns amber at 80% and red at 95%. Once a limit is reached, writes fail until the reset.</p>
             <p style="margin-top:8px">If one turns red most days, move the account to Workers Paid in the Cloudflare dashboard. Nothing in Open Artifacts changes, and no redeploy is needed.</p>
           </div>
           <ul>
@@ -529,7 +529,7 @@ const fmt = (n) => n.toLocaleString('en-US');
 document.getElementById('meters').innerHTML = METERS.map((m) => {
   const used = OA.state === 'empty' ? 0 : m.used;
   const pct = Math.round((used / m.limit) * 100);
-  const lvl = pct >= 90 ? 'danger' : pct >= 75 ? 'warn' : '';
+  const lvl = pct >= 95 ? 'danger' : pct >= 80 ? 'warn' : '';
   const badge = lvl === 'danger' ? `<span class="badge danger">${pct}% · near limit</span>` : lvl === 'warn' ? `<span class="badge warning">${pct}%</span>` : `<span class="badge neutral">${pct}%</span>`;
   return `<section class="card meter ${lvl}" aria-label="${m.name}">
     <div class="mHead"><h2>${m.name}</h2>${badge}</div>

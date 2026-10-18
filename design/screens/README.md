@@ -41,13 +41,13 @@ A screen a role can't reach renders the `edge-pages.html?page=not-found` 404 in 
 | `share-dialog.html` | Share dialog | `as=creator\|editor\|viewer`, `vis=team\|private\|public` | Visibility segmented control, invites with role, copy link. Non-creators see everything read-only except Copy link |
 | `settings.html` | Settings | `tab=members\|agents\|instance\|token-created` | Agents tab: MCP URL, snippets, OAuth clients, tokens. `tab=token-created` opens the Agents tab with the dialog that shows the new token once |
 | `usage.html` | Usage | `state=not-configured` | Four meters with limits; "not configured" state with setup steps |
-| `edge-pages.html` | Edge pages | `page=no-access\|sign-in\|not-found\|quota`; `state` is `default\|loading\|error` only | See below |
+| `edge-pages.html` | Edge pages | `page=no-access\|sign-in\|not-found\|quota`, `name=` (sign-in); `state` is `default\|loading\|error` only | See below |
 | `oauth-consent.html` | OAuth consent | none | No JavaScript; see below |
 
 ### Edge pages
 
 - `?page=no-access`: signed in, not a member, nothing shared. Offers "Sign in as someone else".
-- `?page=sign-in`: "Continue with Cloudflare Access" with the instance name. `state=loading` shows the redirecting button; `state=error` shows a failed-sign-in banner.
+- `?page=sign-in`: "Continue with Cloudflare Access". The heading reads "Sign in to Open Artifacts" by default, because anonymous visitors may not know the instance name. Add `name=` (for example `name=Northwind%20Eng`) to show the variant for a known instance name. `state=loading` shows the redirecting button; `state=error` shows a failed-sign-in banner.
 - `?page=not-found`: the 404. An artifact the viewer can't access returns this same page, so the copy never says whether it exists.
 - `?page=quota`: the library with the danger banner "Daily free-plan limit reached; resets at 00:00 UTC". `state=loading` shows skeleton cards.
 
