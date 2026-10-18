@@ -79,6 +79,8 @@ export async function publish(
   let create = true;
   let reserved = false;
   let capabilities = CAPS;
+  /** Sharing fields changed on an existing artifact: live sockets must reconnect. */
+  let accessChanged = false;
   if (input.id === undefined) {
     if (mode === "version") throw notFound();
     id = newId();
@@ -101,6 +103,13 @@ export async function publish(
       if (sharing && a.ownerId !== user.id)
         throw new ApiError("bad_request", "only the owner can change sharing");
       capabilities = { ...CAPS, ...(JSON.parse(a.capabilities) as object) };
+      accessChanged =
+        (input.visibility !== undefined && input.visibility !== a.visibility) ||
+        (input.capabilities !== undefined &&
+          JSON.stringify({ ...capabilities, ...input.capabilities }) !==
+            JSON.stringify(capabilities)) ||
+        (input.allowAnonymousWrites !== undefined &&
+          (input.allowAnonymousWrites ? 1 : 0) !== a.allowAnonymousWrites);
     } else {
       if (mode === "version") throw notFound();
       const r = await db
@@ -257,6 +266,8 @@ export async function publish(
     throw notFound();
   }
   await later(ctx, indexVersion(env, id, version));
+  if (accessChanged)
+    await closeRuntimeSockets(env, [id], "access changed", ctx);
   return { id, version, url: appOrigin(env) + viewerPath(id) };
 }
 
