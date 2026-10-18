@@ -34,6 +34,10 @@ export interface BridgeOptions {
   onPdfText: (text: string) => void;
   onThumb: (blob: Blob) => void;
   onResize?: (h: number) => void;
+  /** The frame said hello. */
+  onHello?: () => void;
+  /** A data subscription was closed with 4403: access was revoked. */
+  onAccessLost?: () => void;
 }
 
 const BACKOFF_BASE_MS = 1_000;
@@ -78,7 +82,15 @@ const qs = (p: { cursor?: string; limit?: number }) => {
 };
 
 export function createBridge(opts: BridgeOptions) {
-  const { iframe, artifact, onPdfText, onThumb, onResize } = opts;
+  const {
+    iframe,
+    artifact,
+    onPdfText,
+    onThumb,
+    onResize,
+    onHello,
+    onAccessLost,
+  } = opts;
   const id = artifact.id; // the only artifact id any route is ever built from
   const viewer = artifact.capabilities.viewer ? opts.viewer : null;
   const subs = new Map<string, Sub>();
@@ -133,9 +145,10 @@ export function createBridge(opts: BridgeOptions) {
         deleted: ch.data.deleted,
       });
     };
-    ws.onclose = () => {
+    ws.onclose = (e) => {
       if (disposed || s.ws !== ws || s.refs <= 0) return;
       s.ws = null;
+      if (e?.code === 4403) return onAccessLost?.();
       const delay = Math.min(
         BACKOFF_CAP_MS,
         BACKOFF_BASE_MS * 2 ** s.attempt++,
@@ -314,6 +327,7 @@ export function createBridge(opts: BridgeOptions) {
           viewer,
           theme: opts.theme,
         });
+        onHello?.();
         break;
       case "call":
         void handleCall(m);

@@ -95,6 +95,20 @@ export const api = {
     });
     return parse(res, schema);
   },
+  /** Same-origin PUT of a raw body (cookie-authed, so it carries the CSRF header). */
+  async putBody(
+    path: string,
+    body: Blob | string,
+    contentType: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await request(path, {
+      method: "PUT",
+      headers: { "X-OA-Request": "1", "Content-Type": contentType },
+      body,
+      signal,
+    });
+  },
   /** XHR (not fetch) so upload progress is observable. */
   putRaw(
     url: string,
