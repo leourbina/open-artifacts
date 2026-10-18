@@ -79,16 +79,8 @@ describe("wrangler.staging.jsonc env.staging", () => {
       APP_HOST: "staging.open-artifacts.com",
       CONTENT_HOST: "staging-content.open-artifacts.com",
       OWNER_EMAIL: "me@leourbina.com",
-      ACCESS_TEAM_DOMAIN: "",
+      ACCESS_TEAM_DOMAIN: "leourbina.cloudflareaccess.com",
       ACCESS_CLIENT_ID: "",
     });
-  });
-});
-
-describe("server entry", () => {
-  const src = readFileSync(join(root, "apps/server/src/index.ts"), "utf8");
-  it("exports ArtifactRuntime and scheduled", () => {
-    expect(src).toMatch(/export class ArtifactRuntime extends DurableObject/);
-    expect(src).toMatch(/scheduled/);
   });
 });

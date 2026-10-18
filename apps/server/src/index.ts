@@ -1,7 +1,11 @@
-import { DurableObject } from "cloudflare:workers";
-
 // Placeholder so the ARTIFACT_RUNTIME binding deploys; B1 replaces it.
-export class ArtifactRuntime extends DurableObject {}
+export class ArtifactRuntime {
+  // biome-ignore lint/complexity/noUselessConstructor: placeholder signature
+  constructor(_s: DurableObjectState, _e: unknown) {}
+  fetch(): Response {
+    return new Response(null, { status: 501 });
+  }
+}
 
 const NOINDEX = { "X-Robots-Tag": "noindex, nofollow" };
 

@@ -11,6 +11,8 @@ Public (no Access gate). Worker `open-artifacts-staging`; hosts `staging.open-ar
 | R2 | open-artifacts-staging | (by name) |
 | KV (binding `OAUTH_KV`) | open-artifacts-staging-oauth | 886a49c875024e8ab5262928d75f85b7 |
 
+Zero Trust team: `leourbina`; team domain: `leourbina.cloudflareaccess.com`.
+
 Config: `apps/server/wrangler.staging.jsonc` (`env.staging`).
 
 ## Recreate

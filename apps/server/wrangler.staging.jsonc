@@ -49,13 +49,14 @@
         }
       ],
       "triggers": { "crons": ["17 3 * * *"] },
-      // Secrets are NOT configured here. ACCESS_* are filled by Access setup.
+      // Secrets are NOT configured here. Deploys overwrite vars, so commit
+      // ACCESS_CLIENT_ID here once the Access app exists.
       "vars": {
         "ENVIRONMENT": "production",
         "APP_HOST": "staging.open-artifacts.com",
         "CONTENT_HOST": "staging-content.open-artifacts.com",
         "OWNER_EMAIL": "me@leourbina.com",
-        "ACCESS_TEAM_DOMAIN": "",
+        "ACCESS_TEAM_DOMAIN": "leourbina.cloudflareaccess.com",
         "ACCESS_CLIENT_ID": ""
       }
     }

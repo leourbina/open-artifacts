@@ -70,6 +70,16 @@ describe("deploy-staging.yml", () => {
       expect(c).toContain("wrangler.staging.jsonc");
     }
   });
+  it("ensures dashboard dist exists before wrangler deploy", () => {
+    const e = idx("deploy", "mkdir -p apps/dashboard/dist");
+    expect(e).toBeGreaterThan(idx("deploy", "pnpm build"));
+    expect(e).toBeLessThan(idx("deploy", "wrangler deploy"));
+    expect(runs("deploy")[e]).toContain("apps/dashboard/dist/index.html");
+  });
+  it("smoke checks robots on the content host", () => {
+    const all = runs("smoke").join("\n");
+    expect(all).toContain("staging-content.open-artifacts.com/robots.txt");
+  });
   it("migrate, deploy and smoke are never skippable or tolerated", () => {
     for (const id of ["deploy", "smoke"]) {
       expect(w.jobs[id].if).toBeUndefined();
