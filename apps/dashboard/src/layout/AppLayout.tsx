@@ -169,7 +169,7 @@ function Sidebar({ me, path }: { me: Me | null; path: string }) {
   const on = (p: string) => path === p || path.startsWith(`${p}/`);
   return (
     <>
-      <strong>Open Artifacts</strong>
+      <strong>{me?.instance.name || "Open Artifacts"}</strong>
       {guest ? (
         <Link
           to="/shared"

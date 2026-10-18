@@ -92,11 +92,17 @@ describe("usage", () => {
     );
   });
 
-  it("limit 0 does not crash or divide by zero", async () => {
-    usage([{ key: "requests", used: 5, limit: 0 }]);
+  it("limit 0 does not crash; with usage it is over the limit, without it is normal", async () => {
+    usage([
+      { key: "requests", used: 5, limit: 0 },
+      { key: "d1_reads", used: 0, limit: 0 },
+    ]);
     mount("/settings/usage");
     const m = await meter("Worker requests");
-    expect(m.getAttribute("data-tone")).toBe("normal");
+    expect(m.getAttribute("data-tone")).toBe("danger");
+    expect((await meter("D1 rows read")).getAttribute("data-tone")).toBe(
+      "normal",
+    );
     expect(document.body.textContent).not.toMatch(/NaN|Infinity/);
   });
 
@@ -105,7 +111,7 @@ describe("usage", () => {
     mount("/settings/usage");
     const m = await meter("Worker requests");
     expect(m.getAttribute("data-tone")).toBe("danger");
-    expect(screen.getByText(/100%\+/)).toBeTruthy();
+    expect(screen.getByText("Limit reached")).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/250%/);
     expect((m.firstElementChild as HTMLElement).style.width).toBe("100%");
   });

@@ -280,3 +280,35 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+.oa-settings .oa-bare {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.oa-settings .oa-instance .oa-err {
+  margin-top: 6px;
+}
+.oa-guide {
+  padding: 16px 18px;
+  display: grid;
+  gap: 8px;
+  color: var(--oa-text-2);
+  min-width: 0;
+}
+.oa-guide h2,
+.oa-guide p {
+  margin: 0;
+}
+.oa-guide h2 {
+  color: var(--oa-text);
+  font-size: var(--oa-text-md);
+}
+.oa-guide ul {
+  margin: 0;
+  padding-left: 18px;
+}
+.oa-guide b {
+  font-weight: 500;
+  color: var(--oa-text);
+}

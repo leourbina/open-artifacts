@@ -8,6 +8,7 @@ const VISIBILITY = [
   { value: "private", label: "Private" },
   { value: "team", label: "Team" },
 ] as const;
+const NAME_MAX = 80;
 const HELP = {
   private: "Only the creator and the people they share with.",
   team: "Everyone on this instance can find and open it.",
@@ -19,7 +20,9 @@ export function Instance() {
   const update = useUpdateSettings();
   // Only edited fields live here; everything else reads through from the server.
   const [draft, setDraft] = useState<Partial<Settings>>({});
-  if (settings.isError)
+  // Local, not `saving`: it must lock the form in the same render as the click.
+  const [saving, setSaving] = useState(false);
+  if (settings.isError && !settings.data)
     return (
       <Banner
         tone="danger"
@@ -37,6 +40,7 @@ export function Instance() {
   const visibility = draft.defaultVisibility ?? server.defaultVisibility;
   const patch: Partial<Settings> = {};
   const trimmed = name.trim();
+  const nameOk = trimmed.length >= 1 && trimmed.length <= NAME_MAX;
   if (draft.name !== undefined && trimmed !== server.name) patch.name = trimmed;
   if (
     draft.defaultVisibility !== undefined &&
@@ -44,10 +48,17 @@ export function Instance() {
   )
     patch.defaultVisibility = draft.defaultVisibility;
   const dirty = Object.keys(patch).length > 0;
-  const valid = SettingsSchema.partial().safeParse(patch).success;
-  const save = () =>
+  const valid = nameOk && SettingsSchema.partial().safeParse(patch).success;
+  const save = () => {
+    setSaving(true);
     // Success or failure, drop the draft: the refetch shows the truth (a rollback on error).
-    update.mutate(patch, { onSettled: () => setDraft({}) });
+    update.mutate(patch, {
+      onSettled: () => {
+        setSaving(false);
+        setDraft({});
+      },
+    });
+  };
   return (
     <form
       className="oa-card oa-instance"
@@ -56,19 +67,33 @@ export function Instance() {
         if (dirty && valid) save();
       }}
     >
+      {settings.isError && (
+        <Banner tone="warning" title="Couldn't refresh settings.">
+          Showing the last loaded values. Your edits are kept.
+        </Banner>
+      )}
       <div className="oa-frow">
         <div className="oa-flabel">
           <label htmlFor="oa-inst-name">Instance name</label>
           <small>Shown in the sidebar and on the sign-in page.</small>
         </div>
-        <Input
-          id="oa-inst-name"
-          value={name}
-          maxLength={200}
-          placeholder="e.g. Northwind Eng"
-          aria-invalid={!valid || undefined}
-          onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-        />
+        <div>
+          <Input
+            id="oa-inst-name"
+            value={name}
+            maxLength={NAME_MAX}
+            disabled={saving}
+            aria-describedby={nameOk ? undefined : "oa-inst-name-err"}
+            placeholder="e.g. Northwind Eng"
+            aria-invalid={!nameOk || undefined}
+            onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+          />
+          {!nameOk && (
+            <p className="oa-err" id="oa-inst-name-err" role="alert">
+              Name must be 1 to {NAME_MAX} characters.
+            </p>
+          )}
+        </div>
       </div>
       <div className="oa-frow">
         <div className="oa-flabel">
@@ -78,7 +103,7 @@ export function Instance() {
             per artifact.
           </small>
         </div>
-        <div>
+        <fieldset className="oa-bare" disabled={saving}>
           <SegmentedControl
             aria-label="Default visibility"
             options={[...VISIBILITY]}
@@ -86,13 +111,13 @@ export function Instance() {
             onChange={(v) => setDraft({ ...draft, defaultVisibility: v })}
           />
           <p className="oa-seen">{HELP[visibility]}</p>
-        </div>
+        </fieldset>
       </div>
       <div className="oa-form-foot">
         <Button
           variant="ghost"
           type="button"
-          disabled={!Object.keys(draft).length || update.isPending}
+          disabled={!Object.keys(draft).length || saving}
           onClick={() => setDraft({})}
         >
           Discard
@@ -100,7 +125,7 @@ export function Instance() {
         <Button
           variant="primary"
           type="submit"
-          disabled={!dirty || !valid || update.isPending}
+          disabled={!dirty || !valid || saving}
         >
           Save changes
         </Button>
