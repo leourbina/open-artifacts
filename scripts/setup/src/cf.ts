@@ -22,6 +22,7 @@ export type Deps = {
   out: (line: string) => void;
   env: Record<string, string | undefined>;
   fs?: Fs;
+  sleep?: (ms: number) => Promise<void>;
 };
 
 export const realFs: Fs = {
@@ -42,6 +43,7 @@ export function realDeps(): Deps {
   return {
     env: process.env,
     fetch: globalThis.fetch,
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     out: (l) => console.log(l),
     prompt: async (q, opts) => {
       let muted = false;

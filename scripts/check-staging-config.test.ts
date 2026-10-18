@@ -56,7 +56,7 @@ describe("wrangler.staging.jsonc env.staging", () => {
   it("binds ASSETS with run_worker_first true", () => {
     expect(env.assets).toEqual({
       binding: "ASSETS",
-      directory: "../dashboard/dist",
+      directory: "./dist-assets",
       not_found_handling: "single-page-application",
       run_worker_first: true,
     });
