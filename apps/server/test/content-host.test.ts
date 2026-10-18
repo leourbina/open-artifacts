@@ -233,7 +233,7 @@ describe("content host serving", () => {
     await patch(env, owner.member, id, { visibility: "public" });
     const ok = await call(p);
     expect(ok.status).toBe(200);
-    expect(ok.headers.get("cache-control")).toBe("public, max-age=60");
+    expect(ok.headers.get("cache-control")).toBe("public, max-age=0, must-revalidate");
     expect((await call(`${publicPrefix(id, 1)}style.css`)).status).toBe(200);
     await patch(env, owner.member, id, { visibility: "team" });
     expect((await call(p)).status).toBe(404);
@@ -353,7 +353,7 @@ describe("content host serving", () => {
     await patch(env, owner.member, id, { visibility: "public" });
     const p = await call(`${publicPrefix(id, 1)}__view`);
     expect(p.status).toBe(302);
-    expect(p.headers.get("cache-control")).toBe("public, max-age=60");
+    expect(p.headers.get("cache-control")).toBe("public, max-age=0, must-revalidate");
   });
 
   it("the API and auth routes 404 on the content host", async () => {
