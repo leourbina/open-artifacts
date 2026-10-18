@@ -25,4 +25,26 @@ describe("worker", () => {
     });
     expect(r.headers.get("x-robots-tag")).toBe("noindex, nofollow");
   });
+  it("HEAD works on known paths", async () => {
+    for (const path of ["/healthz", "/robots.txt"]) {
+      const r = await worker.fetch(
+        new Request(`https://x.test${path}`, { method: "HEAD" }),
+      );
+      expect(r.status).toBe(200);
+      expect(r.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+    }
+  });
+  it("405 with Allow on other methods", async () => {
+    for (const path of ["/healthz", "/robots.txt"]) {
+      const r = await worker.fetch(
+        new Request(`https://x.test${path}`, { method: "POST" }),
+      );
+      expect(r.status).toBe(405);
+      expect(r.headers.get("allow")).toBe("GET, HEAD");
+      expect(r.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+    }
+  });
+  it("trailing slash stays 404", async () => {
+    expect((await get("/healthz/")).status).toBe(404);
+  });
 });

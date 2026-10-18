@@ -32,3 +32,7 @@ Put the new ids into `wrangler.staging.jsonc`, then deploy once.
 
 `deploy-staging.yml` on push to `main`: build, migrate, deploy, smoke. Manual:
 `pnpm --filter @oa/server exec wrangler deploy -c wrangler.staging.jsonc --env staging`.
+
+## Repo settings
+
+Enable Settings > Actions > General > "Allow GitHub Actions to create and approve pull requests" (needed by release-please). Release PRs made with `GITHUB_TOKEN` don't trigger CI, so `release-please.yml` dispatches `ci.yml` on the release branch via `workflow_dispatch`.

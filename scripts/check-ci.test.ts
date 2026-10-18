@@ -14,8 +14,13 @@ const triggers = (w: { on: Record<string, unknown> }) => Object.keys(w.on);
 describe("ci.yml", () => {
   const w = wf("ci.yml");
   it("triggers on pull_request and push to main", () => {
-    expect(triggers(w).sort()).toEqual(["pull_request", "push"]);
+    expect(triggers(w).sort()).toEqual([
+      "pull_request",
+      "push",
+      "workflow_dispatch",
+    ]);
     expect(w.on.push.branches).toEqual(["main"]);
+    expect("workflow_dispatch" in w.on).toBe(true);
   });
   it("defines exactly the five required jobs", () => {
     expect(Object.keys(w.jobs).sort()).toEqual(
@@ -31,6 +36,12 @@ describe("ci.yml", () => {
 
 describe("deploy-staging.yml", () => {
   const w = wf("deploy-staging.yml");
+  // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
+  type Step = any;
+  const runs = (id: string): string[] =>
+    w.jobs[id].steps.map((s: Step) => s.run ?? "");
+  const idx = (id: string, needle: string) =>
+    runs(id).findIndex((r) => r.includes(needle));
   it("triggers on push to main with serialized staging concurrency", () => {
     expect(triggers(w)).toEqual(["push"]);
     expect(w.on.push.branches).toEqual(["main"]);
@@ -39,25 +50,45 @@ describe("deploy-staging.yml", () => {
       "cancel-in-progress": false,
     });
   });
-  it("orders build -> migrate -> deploy -> smoke", () => {
-    const j = w.jobs;
-    expect(Object.keys(j)).toEqual(["build", "migrate", "deploy", "smoke"]);
-    expect(j.migrate.needs).toContain("build");
-    expect(j.deploy.needs).toContain("migrate");
-    expect(j.smoke.needs).toContain("deploy");
+  it("has deploy then smoke jobs", () => {
+    expect(Object.keys(w.jobs)).toEqual(["deploy", "smoke"]);
+    expect(w.jobs.smoke.needs).toEqual(["deploy"]);
   });
-  it("migrates, deploys and smokes the right things", () => {
-    const steps = (id: string) =>
-      // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
-      JSON.stringify(w.jobs[id].steps.map((s: any) => s.run ?? s.with));
-    expect(steps("migrate")).toContain(
-      "d1 migrations apply open-artifacts-staging",
-    );
-    expect(steps("migrate")).toContain("--remote");
-    expect(steps("deploy")).toContain("wrangler.staging.jsonc");
-    expect(steps("deploy")).toContain("deploy");
-    expect(steps("smoke")).toContain("staging.open-artifacts.com/healthz");
-    expect(steps("smoke")).toContain("@oa/server smoke");
+  it("deploy steps run build -> migrate -> deploy in order", () => {
+    const b = idx("deploy", "pnpm build");
+    const m = idx("deploy", "d1 migrations apply open-artifacts-staging");
+    const d = idx("deploy", "wrangler deploy");
+    expect(b).toBeGreaterThan(-1);
+    expect(m).toBeGreaterThan(b);
+    expect(d).toBeGreaterThan(m);
+    const migrate = runs("deploy")[m] as string;
+    const deploy = runs("deploy")[d] as string;
+    expect(migrate).toContain("--remote");
+    for (const c of [migrate, deploy]) {
+      expect(c).toContain("--env staging");
+      expect(c).toContain("wrangler.staging.jsonc");
+    }
+  });
+  it("migrate, deploy and smoke are never skippable or tolerated", () => {
+    for (const id of ["deploy", "smoke"]) {
+      expect(w.jobs[id].if).toBeUndefined();
+      expect(w.jobs[id]["continue-on-error"]).toBeUndefined();
+      for (const st of w.jobs[id].steps) {
+        expect(st.if).toBeUndefined();
+        expect(st["continue-on-error"]).toBeUndefined();
+        expect(st.run ?? "").not.toContain("|| true");
+      }
+    }
+  });
+  it("smoke checks healthz, robots and runs the smoke suite", () => {
+    const all = runs("smoke").join("\n");
+    expect(all).toContain("staging.open-artifacts.com/healthz");
+    expect(all).toContain("--retry 20 --retry-delay 5 --retry-max-time 180");
+    expect(all).not.toMatch(/\|\s*grep/);
+    expect(all).toContain("/robots.txt");
+    expect(all).toContain("noindex, nofollow");
+    expect(all).toContain("Disallow: /");
+    expect(all).toContain("@oa/server smoke");
   });
   it("uses Cloudflare secrets", () => {
     const raw = read(".github/workflows/deploy-staging.yml");
@@ -67,10 +98,28 @@ describe("deploy-staging.yml", () => {
 });
 
 describe("landing-preview.yml", () => {
+  const w = wf("landing-preview.yml");
+  const raw = read(".github/workflows/landing-preview.yml");
   it("triggers on PRs touching apps/landing", () => {
-    const w = wf("landing-preview.yml");
     expect(triggers(w)).toEqual(["pull_request"]);
     expect(w.on.pull_request.paths).toEqual(["apps/landing/**"]);
+  });
+  it("skips fork PRs", () => {
+    expect(w.jobs.preview.if).toBe(
+      "github.event.pull_request.head.repo.full_name == github.repository",
+    );
+  });
+  it("gates early and passes the URL via env", () => {
+    // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
+    const steps = w.jobs.preview.steps as any[];
+    expect(steps.some((s) => s.id === "gate")).toBe(true);
+    const install = steps.find((s) => (s.run ?? "").includes("pnpm install"));
+    expect(install.if).toContain("steps.gate.outputs.present");
+    const gh = steps.find((s) => s.uses?.startsWith("actions/github-script"));
+    expect(gh.env.PREVIEW_URL).toBeDefined();
+    expect(gh.with.script).toContain("process.env.PREVIEW_URL");
+    expect(gh.with.script).not.toContain("${{");
+    expect(raw).toContain("|| true");
   });
 });
 
@@ -80,12 +129,23 @@ describe("release-please", () => {
     expect(triggers(w)).toEqual(["push"]);
     expect(w.on.push.branches).toEqual(["main"]);
     expect(w.permissions).toEqual({
+      actions: "write",
       contents: "write",
       "pull-requests": "write",
     });
     expect(read(".github/workflows/release-please.yml")).toContain(
       "googleapis/release-please-action@v4",
     );
+  });
+  it("dispatches CI on the release branch and deploys the tag", () => {
+    const raw = read(".github/workflows/release-please.yml");
+    expect(raw).toContain("gh workflow run ci.yml");
+    expect(raw).toContain("prs_created");
+    expect(raw).toContain("headBranchName");
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal workflow expression
+    expect(raw).toContain("ref: ${{ needs.release-please.outputs.tag_name }}");
+    const gate = wf("release-please.yml").jobs["deploy-landing"].steps;
+    expect(JSON.stringify(gate)).toContain("steps.gate.outputs.present");
   });
   it("config is release-type node, manifest starts at 0.0.0", () => {
     const c = JSON.parse(read("release-please-config.json"));
