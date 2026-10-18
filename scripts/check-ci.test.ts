@@ -177,6 +177,12 @@ describe("landing-preview.yml", () => {
     expect(prev.run).toContain("jq -er");
     expect(prev.run).not.toContain("|| true");
   });
+  it("hides the wrangler banner and extracts JSON from stdout", () => {
+    const prev = steps.find((s) => s.id === "preview");
+    expect(prev.env.WRANGLER_HIDE_BANNER).toBe("true");
+    expect(prev.run).toContain("sed -n '/^{/,$p'");
+    expect(prev.run).toContain("cat preview.json");
+  });
   it("scopes the Cloudflare token to the preview step only", () => {
     expect(w.jobs.preview.env).toBeUndefined();
     expect(w.env).toBeUndefined();
