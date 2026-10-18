@@ -68,4 +68,23 @@ describe("useContentUrl", () => {
     expect(fetchMock.mock.calls.length).toBeGreaterThan(2);
     expect(result.current.url).toBe("https://c.test/u2");
   });
+
+  it("unparseable expiresAt does not hot-loop", async () => {
+    expiry = "soon";
+    await mount();
+    await act(() => vi.advanceTimersByTimeAsync(14_000));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await act(() => vi.advanceTimersByTimeAsync(2_000));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores client clock skew when scheduling refresh", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    expiry = new Date(Date.now() - 20 * 60_000 + 600_000).toISOString();
+    renderHook(() => useContentUrl("a1", 1), { wrapper: wrap });
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await act(() => vi.advanceTimersByTimeAsync(480_000));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });

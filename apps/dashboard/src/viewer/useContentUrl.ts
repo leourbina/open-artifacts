@@ -1,9 +1,7 @@
-import { type ContentUrl, ContentUrlSchema, R } from "@oa/shared";
+import { type ContentUrl, ContentUrlSchema, LIMITS, R } from "@oa/shared";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client";
 
-const REFRESH_BEFORE_MS = 60_000;
-const MIN_DELAY_MS = 5_000;
 const RETRY_MS = 15_000;
 
 /**
@@ -26,8 +24,13 @@ export function useContentUrl(id: string, v: number) {
           if (dead) return;
           setFresh(c);
           if (c.expiresAt === null) return;
-          const at = Date.parse(c.expiresAt) - REFRESH_BEFORE_MS;
-          timer = setTimeout(load, Math.max(MIN_DELAY_MS, at - Date.now()));
+          // Relative to local fetch time, so client clock skew can't matter.
+          timer = setTimeout(
+            load,
+            Number.isFinite(Date.parse(c.expiresAt))
+              ? (LIMITS.signedUrlTtlSec - 60) * 1000
+              : RETRY_MS,
+          );
         },
         () => {
           if (!dead) timer = setTimeout(load, RETRY_MS);

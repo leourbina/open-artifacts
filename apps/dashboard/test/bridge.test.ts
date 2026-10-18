@@ -1,10 +1,11 @@
-import { type ArtifactSummary, R } from "@oa/shared";
+import { type ArtifactSummary, LIMITS, R } from "@oa/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBridge } from "../src/viewer/bridge";
 
 const ART = {
   id: "art1",
   title: "T",
+  format: "html",
   capabilities: { db: true, viewer: true, storage: false },
 } as unknown as ArtifactSummary;
 const VIEWER = { email: "a@b.c", name: "A" };
@@ -79,35 +80,18 @@ afterEach(() => {
 });
 
 describe("bridge message gating", () => {
-  it("ignores messages from window or another iframe", async () => {
-    mk();
-    call("db.get", { collection: "c", id: "d1" }, "a");
-    call("db.get", { collection: "c", id: "d1" }, "b");
-    send(
-      { oa: 1, type: "call", id: "x", method: "db.get", params: {} },
-      { source: window },
-    );
-    send(
-      { oa: 1, type: "call", id: "y", method: "db.get", params: {} },
-      { source: { postMessage: vi.fn() } },
-    );
-    await flush();
-    expect(post.mock.calls.map((c) => c[0].id)).not.toContain("x");
-    expect(post.mock.calls.map((c) => c[0].id)).not.toContain("y");
-  });
-
   it("forged sources get no fetch and no reply", async () => {
     mk();
-    send(
-      {
-        oa: 1,
-        type: "call",
-        id: "x",
-        method: "db.get",
-        params: { collection: "c", id: "d" },
-      },
-      { source: window },
-    );
+    const msg = {
+      oa: 1,
+      type: "call",
+      id: "x",
+      method: "db.get",
+      params: { collection: "c", id: "d" },
+    };
+    send(msg, { source: window });
+    send(msg, { source: { postMessage: vi.fn() } });
+    send(msg, { source: null });
     await flush();
     expect(fetchMock).not.toHaveBeenCalled();
     expect(post).not.toHaveBeenCalled();
@@ -247,31 +231,85 @@ describe("calls", () => {
   });
 });
 
+const webp = (n = 0) =>
+  `data:image/webp;base64,${btoa(`RIFF\0\0\0\0WEBP${"x".repeat(n)}`)}`;
+
 describe("pdf / thumb / resize", () => {
-  it("routes callbacks", () => {
-    const o = {
-      iframe,
-      artifact: ART,
-      version: 1,
-      viewer: null,
-      theme: "dark" as const,
-      onPdfText: vi.fn(),
-      onThumb: vi.fn(),
-      onResize: vi.fn(),
-    };
-    createBridge(o);
+  const opts = (art = ART) => ({
+    iframe,
+    artifact: art,
+    version: 1,
+    viewer: null,
+    theme: "dark" as const,
+    onPdfText: vi.fn(),
+    onThumb: vi.fn(),
+    onResize: vi.fn(),
+  });
+  const PDF = { ...ART, format: "pdf" } as unknown as ArtifactSummary;
+
+  it("routes pdf text for this version of a pdf artifact", () => {
+    const o = opts(PDF);
+    live.push(createBridge(o));
     send({ oa: 1, type: "pdf.text", version: 1, text: "hi" });
-    send({ oa: 1, type: "resize", height: 42 });
-    send({
-      oa: 1,
-      type: "thumb.ready",
-      dataUrl: "data:image/webp;base64,AAEC",
-    });
     expect(o.onPdfText).toHaveBeenCalledWith("hi");
+  });
+
+  it("ignores pdf text from non-pdf artifacts or other versions", () => {
+    const o = opts();
+    live.push(createBridge(o));
+    send({ oa: 1, type: "pdf.text", version: 1, text: "x" });
+    const p = opts(PDF);
+    live.push(createBridge(p));
+    send({ oa: 1, type: "pdf.text", version: 99, text: "x" });
+    expect(o.onPdfText).not.toHaveBeenCalled();
+    expect(p.onPdfText).not.toHaveBeenCalled();
+  });
+
+  it("routes resize and drops out-of-range heights", () => {
+    const o = opts();
+    live.push(createBridge(o));
+    send({ oa: 1, type: "resize", height: 42 });
     expect(o.onResize).toHaveBeenCalledWith(42);
+    send({ oa: 1, type: "resize", height: -1 });
+    send({ oa: 1, type: "resize", height: 1e9 });
+    expect(o.onResize).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts one thumb only after requestThumbnail", () => {
+    const o = opts();
+    const b = createBridge(o);
+    live.push(b);
+    send({ oa: 1, type: "thumb.ready", dataUrl: webp() });
+    expect(o.onThumb).not.toHaveBeenCalled();
+    b.requestThumbnail();
+    send({ oa: 1, type: "thumb.ready", dataUrl: webp() });
+    send({ oa: 1, type: "thumb.ready", dataUrl: webp() });
+    expect(o.onThumb).toHaveBeenCalledTimes(1);
     const blob = o.onThumb.mock.calls[0]?.[0] as Blob;
     expect(blob.type).toBe("image/webp");
-    expect(blob.size).toBe(3);
+    expect(blob.size).toBe(12);
+  });
+
+  it("rejects thumbs that are not RIFF/WEBP or are too large", () => {
+    const o = opts();
+    const b = createBridge(o);
+    live.push(b);
+    for (const dataUrl of [
+      "data:image/webp;base64,PHN2Zz4=",
+      webp(LIMITS.thumbnailBytes),
+    ]) {
+      b.requestThumbnail();
+      send({ oa: 1, type: "thumb.ready", dataUrl });
+    }
+    expect(o.onThumb).not.toHaveBeenCalled();
+  });
+
+  it("malformed base64 never throws from the listener", () => {
+    const b = mk();
+    b.requestThumbnail();
+    expect(() =>
+      send({ oa: 1, type: "thumb.ready", dataUrl: "data:image/webp;base64,A" }),
+    ).not.toThrow();
   });
 
   it("requestThumbnail and setTheme post to the frame", () => {
@@ -373,5 +411,46 @@ describe("db.subscribe", () => {
     await flush();
     b.dispose();
     expect(FakeWS.all[0]?.closed).toBe(true);
+  });
+});
+
+describe("bridge limits", () => {
+  it("caps subscribed collections at 32 and replies rate_limited", async () => {
+    mk();
+    for (let i = 0; i < 33; i++)
+      call("db.subscribe", { collection: `c${i}` }, `s${i}`);
+    await flush();
+    expect(FakeWS.all).toHaveLength(32);
+    const last = post.mock.calls.find((c) => c[0].id === "s32")?.[0];
+    expect(last.error.code).toBe("rate_limited");
+  });
+
+  it("caps in-flight calls at 64 with no extra fetch", async () => {
+    fetchMock.mockImplementation(() => new Promise<Response>(() => {}));
+    mk({ ...ART, capabilities: { db: false, viewer: false, storage: true } });
+    for (let i = 0; i < 65; i++) call("storage.get", { key: "k" }, `g${i}`);
+    await flush();
+    expect(fetchMock).toHaveBeenCalledTimes(64);
+    expect(post.mock.calls[0]?.[0]).toMatchObject({
+      id: "g64",
+      error: { code: "rate_limited" },
+    });
+  });
+
+  it("posts nothing for a call that resolves after dispose", async () => {
+    let release!: (r: Response) => void;
+    fetchMock.mockImplementationOnce(
+      () => new Promise<Response>((r) => (release = r)),
+    );
+    const b = mk();
+    call("db.get", { collection: "c", id: "d1" });
+    await flush();
+    b.dispose();
+    release(json(DOC));
+    await flush();
+    await flush();
+    expect(post).not.toHaveBeenCalled();
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(init.signal?.aborted).toBe(true);
   });
 });

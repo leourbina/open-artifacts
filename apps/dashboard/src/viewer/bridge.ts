@@ -4,6 +4,7 @@ import {
   DataChangeSchema,
   DataDocSchema,
   type ErrorCode,
+  LIMITS,
   METHOD_CAPABILITY,
   PageSchema,
   parseArtifactMessage,
@@ -16,6 +17,7 @@ import {
   StorageKeySchema,
   type StorageSetBody,
 } from "@oa/shared";
+import type { z } from "zod";
 import { ApiClientError, api } from "../api/client";
 
 type Viewer = { email: string; name: string | null };
@@ -44,8 +46,23 @@ type Sub = {
   timer?: ReturnType<typeof setTimeout>;
 };
 
-function dataUrlToBlob(dataUrl: string): Blob {
-  const bin = atob(dataUrl.slice(dataUrl.indexOf(",") + 1));
+const MAX_SUBSCRIPTIONS = 32;
+const MAX_IN_FLIGHT = 64;
+
+/** Decodes a webp data URL; null unless it is a RIFF/WEBP image within the size limit. */
+function dataUrlToBlob(dataUrl: string): Blob | null {
+  let bin: string;
+  try {
+    bin = atob(dataUrl.slice(dataUrl.indexOf(",") + 1));
+  } catch {
+    return null;
+  }
+  if (
+    bin.length > LIMITS.thumbnailBytes ||
+    bin.slice(0, 4) !== "RIFF" ||
+    bin.slice(8, 12) !== "WEBP"
+  )
+    return null;
   const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
   return new Blob([bytes], { type: "image/webp" });
 }
@@ -64,12 +81,17 @@ export function createBridge(opts: BridgeOptions) {
   const viewer = artifact.capabilities.viewer ? opts.viewer : null;
   const subs = new Map<string, Sub>();
   let disposed = false;
+  let thumbPending = false;
+  let inFlight = 0;
+  const abort = new AbortController();
 
   // The sandboxed frame has an opaque origin, so the only valid targetOrigin is "*".
   // Replies carry no secrets beyond what this frame is already entitled to, and the
   // recipient is pinned to iframe.contentWindow.
-  const reply = (msg: ShellToArtifact) =>
+  const reply = (msg: ShellToArtifact) => {
+    if (disposed) return;
     iframe.contentWindow?.postMessage(msg, "*");
+  };
   const ok = (rid: string, value: unknown) =>
     reply({ oa: 1, type: "result", id: rid, ok: true, value });
   const fail = (rid: string, code: ErrorCode, message: string) =>
@@ -129,13 +151,15 @@ export function createBridge(opts: BridgeOptions) {
     ws?.close();
   };
 
-  const subscribe = (col: string) => {
+  const subscribe = (col: string): boolean => {
     let s = subs.get(col);
     if (!s) {
+      if (subs.size >= MAX_SUBSCRIPTIONS) return false;
       s = { ws: null, refs: 0, attempt: 0 };
       subs.set(col, s);
     }
     if (s.refs++ === 0) connect(col, s);
+    return true;
   };
   const unsubscribe = (col: string) => {
     const s = subs.get(col);
@@ -155,6 +179,18 @@ export function createBridge(opts: BridgeOptions) {
     }
   };
 
+  // Aborted on dispose so in-flight calls stop and never reply.
+  const http = {
+    get: <T>(path: string, schema: z.ZodType<T>) =>
+      api.get(path, schema, abort.signal),
+    send: <T = void>(
+      method: "POST" | "PUT" | "PATCH" | "DELETE",
+      path: string,
+      body: unknown,
+      schema?: z.ZodType<T>,
+    ) => api.send(method, path, body, schema, abort.signal),
+  };
+
   async function run(
     method: RuntimeMethod,
     p: Record<string, any>,
@@ -162,36 +198,41 @@ export function createBridge(opts: BridgeOptions) {
     switch (method) {
       case "db.get":
         return nullIfNotFound(
-          api.get(R.dataDoc(id, p.collection, p.id), DataDocSchema),
+          http.get(R.dataDoc(id, p.collection, p.id), DataDocSchema),
         );
       case "db.list":
-        return api.get(R.dataCollection(id, p.collection) + qs(p), DocPage);
+        return http.get(R.dataCollection(id, p.collection) + qs(p), DocPage);
       case "db.query":
-        return api.send(
+        return http.send(
           "POST",
           R.dataQuery(id, p.collection),
           p.query,
           DocPage,
         );
       case "db.set":
-        return api.send(
+        return http.send(
           "PUT",
           R.dataDoc(id, p.collection, p.id),
           p.data ?? null,
           DataDocSchema,
         );
       case "db.update":
-        return api.send(
+        return http.send(
           "PATCH",
           R.dataDoc(id, p.collection, p.id),
           p.patch,
           DataDocSchema,
         );
       case "db.delete":
-        await api.send("DELETE", R.dataDoc(id, p.collection, p.id), undefined);
+        await http.send("DELETE", R.dataDoc(id, p.collection, p.id), undefined);
         return null;
       case "db.subscribe":
-        subscribe(p.collection);
+        if (!subscribe(p.collection))
+          throw new ApiClientError(
+            "rate_limited",
+            "Too many subscriptions",
+            429,
+          );
         return null;
       case "db.unsubscribe":
         unsubscribe(p.collection);
@@ -200,13 +241,13 @@ export function createBridge(opts: BridgeOptions) {
         return viewer;
       case "storage.get": {
         const e = await nullIfNotFound(
-          api.get(R.storageKey(id, p.key), StorageEntrySchema),
+          http.get(R.storageKey(id, p.key), StorageEntrySchema),
         );
         return e ? e.value : null;
       }
       case "storage.set": {
         const body: StorageSetBody = { value: p.value ?? null };
-        await api.send(
+        await http.send(
           "PUT",
           R.storageKey(id, p.key),
           body,
@@ -215,15 +256,17 @@ export function createBridge(opts: BridgeOptions) {
         return null;
       }
       case "storage.delete":
-        await api.send("DELETE", R.storageKey(id, p.key), undefined);
+        await http.send("DELETE", R.storageKey(id, p.key), undefined);
         return null;
       case "storage.list":
-        return api.get(R.storage(id) + qs(p), KeyPage);
+        return http.get(R.storage(id) + qs(p), KeyPage);
     }
   }
 
   async function handleCall(m: Extract<ArtifactToShell, { type: "call" }>) {
     const method = m.method;
+    if (inFlight >= MAX_IN_FLIGHT)
+      return fail(m.id, "rate_limited", "Too many concurrent calls");
     if (!artifact.capabilities[METHOD_CAPABILITY[method]])
       return fail(
         m.id,
@@ -233,6 +276,7 @@ export function createBridge(opts: BridgeOptions) {
     const params = RUNTIME_PARAMS[method].safeParse(m.params);
     if (!params.success)
       return fail(m.id, "bad_request", `Invalid params for ${method}`);
+    inFlight++;
     try {
       const value = await run(method, params.data as Record<string, any>);
       const checked = RUNTIME_RESULTS[method].safeParse(value);
@@ -241,11 +285,21 @@ export function createBridge(opts: BridgeOptions) {
     } catch (e) {
       if (e instanceof ApiClientError) fail(m.id, e.code, e.message);
       else fail(m.id, "internal", "Internal error");
+    } finally {
+      inFlight--;
     }
   }
 
   const onMessage = (ev: Event) => {
-    const e = ev as MessageEvent;
+    try {
+      handle(ev as MessageEvent);
+    } catch {
+      // Nothing from the untrusted frame may throw out of the listener.
+    }
+  };
+
+  const handle = (e: MessageEvent) => {
+    if (disposed) return;
     if (e.source !== iframe.contentWindow || e.origin !== "null") return;
     const m = parseArtifactMessage(e.data);
     if (!m) return;
@@ -263,13 +317,19 @@ export function createBridge(opts: BridgeOptions) {
         void handleCall(m);
         break;
       case "pdf.text":
-        onPdfText(m.text);
+        if (artifact.format === "pdf" && m.version === opts.version)
+          onPdfText(m.text);
         break;
-      case "thumb.ready":
-        onThumb(dataUrlToBlob(m.dataUrl));
+      case "thumb.ready": {
+        if (!thumbPending) break;
+        thumbPending = false;
+        const blob = dataUrlToBlob(m.dataUrl);
+        if (blob) onThumb(blob);
         break;
+      }
       case "resize":
-        onResize?.(m.height);
+        if (Number.isFinite(m.height) && m.height >= 0 && m.height <= 100_000)
+          onResize?.(m.height);
         break;
     }
   };
@@ -279,11 +339,13 @@ export function createBridge(opts: BridgeOptions) {
   return {
     dispose() {
       disposed = true;
+      abort.abort();
       window.removeEventListener("message", onMessage);
       for (const s of subs.values()) stop(s);
       subs.clear();
     },
     requestThumbnail() {
+      thumbPending = true;
       reply({ oa: 1, type: "thumb.request" });
     },
     setTheme(t: Theme) {
