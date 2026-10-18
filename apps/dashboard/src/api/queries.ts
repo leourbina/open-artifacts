@@ -138,11 +138,13 @@ export const useRevokeToken = () =>
   useInvalidating(
     (id: string) => api.send("DELETE", R.token(id), undefined),
     () => [qk.tokens],
+    "Couldn't revoke the token.",
   );
 export const useRevokeOAuthClient = () =>
   useInvalidating(
     (grantId: string) => api.send("DELETE", R.oauthClient(grantId), undefined),
     () => [qk.oauthClients],
+    "Couldn't revoke the agent.",
   );
 export const useSettings = () =>
   useQuery({
@@ -159,10 +161,24 @@ export const useUsage = () =>
 const useInvalidating = <V, T>(
   fn: (v: V) => Promise<T>,
   keys: () => (readonly unknown[])[],
+  failure?: string,
 ) => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: fn,
+    // Here, not at the call site: the row (and its component) may be gone by now.
+    ...(failure
+      ? {
+          onError: (e: unknown) =>
+            toast({
+              title: failure,
+              ...(e instanceof ApiClientError
+                ? { description: e.message }
+                : {}),
+              tone: "danger",
+            }),
+        }
+      : {}),
     onSuccess: () =>
       Promise.all(keys().map((queryKey) => qc.invalidateQueries({ queryKey }))),
   });

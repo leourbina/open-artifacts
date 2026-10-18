@@ -52,18 +52,38 @@ function Code({ code, label }: { code: string; label: string }) {
   );
 }
 
-function Connect({
+/** Agent picker over one variant's snippets. */
+function SnippetTabs({
   mcpUrl,
   token,
   variant,
-  onVariant,
 }: {
   mcpUrl: string;
-  token: string | undefined;
+  token?: string;
   variant: "oauth" | "token";
-  onVariant: (v: "oauth" | "token") => void;
 }) {
   const list = snippets(mcpUrl, token).filter((s) => s.variant === variant);
+  return (
+    <Tabs
+      tabs={list.map((s) => ({
+        id: s.agent,
+        label: s.agent,
+        content: (
+          <>
+            {s.file && <p className="oa-seen">{s.file}</p>}
+            <Code
+              code={s.code}
+              label={s.language === "bash" ? "Copy command" : "Copy config"}
+            />
+          </>
+        ),
+      }))}
+    />
+  );
+}
+
+function Connect({ mcpUrl }: { mcpUrl: string }) {
+  const [variant, setVariant] = useState<"oauth" | "token">("oauth");
   return (
     <>
       <SegmentedControl
@@ -73,23 +93,9 @@ function Connect({
           { value: "token", label: "Token" },
         ]}
         value={variant}
-        onChange={onVariant}
+        onChange={setVariant}
       />
-      <Tabs
-        tabs={list.map((s) => ({
-          id: s.agent,
-          label: s.agent,
-          content: (
-            <>
-              {s.file && <p className="oa-seen">{s.file}</p>}
-              <Code
-                code={s.code}
-                label={s.language === "bash" ? "Copy command" : "Copy config"}
-              />
-            </>
-          ),
-        }))}
-      />
+      <SnippetTabs mcpUrl={mcpUrl} variant={variant} />
     </>
   );
 }
@@ -160,6 +166,7 @@ function OAuthClients() {
               <Button
                 variant="ghost"
                 aria-label={`Revoke ${c.clientName}`}
+                disabled={revoke.isPending && revoke.variables === c.grantId}
                 onClick={() => setTarget(c)}
               >
                 Revoke
@@ -181,13 +188,9 @@ function OAuthClients() {
 }
 
 /** The token lives only in this component's state; closing clears it. */
-function CreateDialog({
-  onClose,
-  onUse,
-}: {
-  onClose: () => void;
-  onUse: (token: string) => void;
-}) {
+function CreateDialog({ onClose }: { onClose: () => void }) {
+  const state = useMe();
+  const mcpUrl = state.status === "authed" ? state.me.instance.mcpUrl : null;
   const qc = useQueryClient();
   const [label, setLabel] = useState("");
   const [busy, setBusy] = useState(false);
@@ -216,7 +219,8 @@ function CreateDialog({
   return (
     <Dialog
       open
-      onOpenChange={(o) => !o && onClose()}
+      // Mid-request or with the token on screen, only Done closes it.
+      onOpenChange={(o) => !o && !busy && !created && onClose()}
       title={created ? "Token created" : "Create token"}
       description={
         created
@@ -225,17 +229,12 @@ function CreateDialog({
       }
       footer={
         created ? (
-          <>
-            <Button variant="ghost" onClick={() => onUse(created.token)}>
-              Show snippets with this token
-            </Button>
-            <Button variant="primary" onClick={onClose}>
-              Done
-            </Button>
-          </>
+          <Button variant="primary" onClick={onClose}>
+            Done
+          </Button>
         ) : (
           <>
-            <Button variant="ghost" onClick={onClose}>
+            <Button variant="ghost" disabled={busy} onClick={onClose}>
               Cancel
             </Button>
             <Button
@@ -253,6 +252,13 @@ function CreateDialog({
         <div className="oa-form">
           <p role="alert">You won't see this again.</p>
           <Code code={created.token} label="Copy token" />
+          {mcpUrl && (
+            <SnippetTabs
+              mcpUrl={mcpUrl}
+              token={created.token}
+              variant="token"
+            />
+          )}
         </div>
       ) : (
         <form
@@ -279,7 +285,7 @@ function CreateDialog({
   );
 }
 
-function Tokens({ onUse }: { onUse: (token: string) => void }) {
+function Tokens() {
   const q = useTokens();
   const revoke = useRevokeToken();
   const [creating, setCreating] = useState(false);
@@ -309,11 +315,12 @@ function Tokens({ onUse }: { onUse: (token: string) => void }) {
               <b>{t.label}</b>
               <span className="oa-seen">Created {when(t.createdAt)}</span>
               <span className="oa-seen">
-                {t.lastUsedAt ? when(t.lastUsedAt) : "Never"}
+                Last used {t.lastUsedAt ? when(t.lastUsedAt) : "Never"}
               </span>
               <Button
                 variant="ghost"
                 aria-label={`Revoke ${t.label}`}
+                disabled={revoke.isPending && revoke.variables === t.id}
                 onClick={() => setTarget(t)}
               >
                 Revoke
@@ -322,15 +329,7 @@ function Tokens({ onUse }: { onUse: (token: string) => void }) {
           ))}
         </ul>
       )}
-      {creating && (
-        <CreateDialog
-          onClose={() => setCreating(false)}
-          onUse={(tok) => {
-            setCreating(false);
-            onUse(tok);
-          }}
-        />
-      )}
+      {creating && <CreateDialog onClose={() => setCreating(false)} />}
       {target && (
         <Confirm
           title={`Revoke ${target.label}?`}
@@ -347,9 +346,6 @@ export function Agents() {
   useDocumentTitle("Agents");
   const state = useMe();
   const mcpUrl = state.status === "authed" ? state.me.instance.mcpUrl : null;
-  const [variant, setVariant] = useState<"oauth" | "token">("oauth");
-  // In memory only, and only if the user asked to see it in the snippets.
-  const [token, setToken] = useState<string>();
   return (
     <div className="oa-stack">
       {mcpUrl && (
@@ -366,21 +362,11 @@ export function Agents() {
               Copy URL
             </Button>
           </div>
-          <Connect
-            mcpUrl={mcpUrl}
-            token={token}
-            variant={variant}
-            onVariant={setVariant}
-          />
+          <Connect mcpUrl={mcpUrl} />
         </section>
       )}
       <OAuthClients />
-      <Tokens
-        onUse={(t) => {
-          setToken(t);
-          setVariant("token");
-        }}
-      />
+      <Tokens />
     </div>
   );
 }

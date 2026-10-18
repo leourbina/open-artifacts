@@ -87,6 +87,7 @@
 }
 .oa-settings .oa-stack {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
 }
 .oa-settings .oa-row {
@@ -114,7 +115,7 @@
 }
 .oa-code pre {
   margin: 0;
-  padding: 12px;
+  padding: 12px 72px 12px 12px;
   overflow-x: auto;
   border-radius: var(--oa-radius-md, 6px);
   background: var(--oa-surface-2, rgba(127, 127, 127, 0.1));
@@ -124,4 +125,7 @@
   position: absolute;
   top: 6px;
   right: 24px;
+}
+.oa-settings .oa-card {
+  min-width: 0;
 }
