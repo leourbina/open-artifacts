@@ -17,12 +17,7 @@ import { cappedJson, readCapped } from "../http/body.js";
 import { ApiError, appOrigin } from "../http/errors.js";
 import type { AppEnv } from "../http/middleware.js";
 import type { AppType } from "../routes/index.js";
-import {
-  ACTOR_HEADER,
-  publicActor,
-  runtimeCall,
-  runtimeStub,
-} from "./do.js";
+import { ACTOR_HEADER, publicActor, runtimeCall, runtimeStub } from "./do.js";
 
 // Literals so Hono infers params; must equal R.data* / R.storage* in @oa/shared.
 const ART = "/api/v1/artifacts/:id";

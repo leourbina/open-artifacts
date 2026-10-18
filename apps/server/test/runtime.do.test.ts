@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { ApiError } from "../src/http/errors.js";
 import {
   type ArtifactRuntime,
+  DAILY_WRITES,
   type RuntimeStub,
   runtimeCall,
   runtimeStub,
@@ -173,7 +174,7 @@ describe("ArtifactRuntime limits", () => {
     expect(await inDo(s, (i) => i.totalBytes())).toBe(4 + 3 + 1 + 64);
     await inDo(s, (_i, state) => {
       state.storage.sql.exec(
-        "update meta set v = ? where k = 'bytes'",
+        "update totals set bytes = ? where id = 1",
         LIMITS.artifactDataBytes - 100,
       );
     });
@@ -198,19 +199,73 @@ describe("ArtifactRuntime limits", () => {
     expect(await codeOf(s.set("v", "x", 1, "u:1"))).toBe("rate_limited");
     expect(await codeOf(s.storageSet("u:1", "k", 1))).toBe("rate_limited");
     await s.set("v", "x", 1, "u:2");
-    // Next minute resets and prunes old minutes.
+    // Next minute resets; the counter lives in memory, not SQLite.
     await inDo(s, (i) => {
       i.now = () => 1_700_000_000_000 + 60_000;
     });
     await s.set("v", "x", 1, "u:1");
-    const rows = await inDo(s, (_i, state) =>
-      state.storage.sql.exec("select minute from writes").toArray(),
+    const tables = await inDo(s, (_i, state) =>
+      state.storage.sql
+        .exec("select name from sqlite_master where type = 'table'")
+        .toArray()
+        .map((r) => r.name),
     );
-    expect(
-      rows.every(
-        (r) => r.minute === Math.floor((1_700_000_000_000 + 60_000) / 60_000),
-      ),
-    ).toBe(true);
+    expect(tables).not.toContain("writes");
+  });
+
+  it("10,001st write of the UTC day is rate_limited (totals row); next day resets", async () => {
+    const s = stubFor();
+    const t = Date.UTC(2026, 0, 1, 12);
+    await inDo(s, (i) => {
+      i.now = () => t;
+    });
+    await s.set("v", "a", 1, "u:1");
+    await inDo(s, (_i, state) => {
+      state.storage.sql.exec(
+        "update totals set writes = ? where id = 1",
+        DAILY_WRITES,
+      );
+    });
+    const e = await s.set("v", "b", 1, "u:2").catch((x: Error) => x);
+    expect(String((e as Error).message)).toBe(
+      "oa:rate_limited:daily write limit reached",
+    );
+    expect(await s.get("v", "b")).toBeNull();
+    await inDo(s, (i) => {
+      i.now = () => t + 86_400_000;
+    });
+    await s.set("v", "b", 1, "u:2");
+  });
+
+  it("a rolled-back first-ever write leaves the schema in place (next write succeeds)", async () => {
+    const s = stubFor();
+    await inDo(s, (i) => {
+      const o = i as unknown as { bump: (...a: unknown[]) => void };
+      const orig = o.bump;
+      o.bump = () => {
+        o.bump = orig;
+        throw new Error("oa:too_large:artifact data exceeds 50 MB");
+      };
+    });
+    expect(await codeOf(s.set("v", "a", 1, "u:1"))).toBe("too_large");
+    const d = await s.set("v", "b", 1, "u:1");
+    expect(d.id).toBe("b");
+    expect(await inDo(s, (i) => i.totalBytes())).toBeGreaterThan(0);
+  });
+
+  it("migrates a pre-M2 meta/writes schema into the totals row", async () => {
+    const s = stubFor();
+    await inDo(s, (_i, state) => {
+      state.storage.sql.exec(`
+        create table meta (k text primary key, v integer not null) without rowid;
+        insert into meta values ('bytes', 500), ('c:v', 400);
+        create table writes (actor text, minute integer, n integer);`);
+    });
+    expect(await inDo(s, (i) => i.totalBytes())).toBe(500);
+    const row = await inDo(s, (_i, state) =>
+      state.storage.sql.exec("select cols from totals").one(),
+    );
+    expect(JSON.parse(String(row.cols))).toEqual({ v: 400 });
   });
 
   it("anonymous ip: actors get the lower per-IP limit", async () => {

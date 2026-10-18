@@ -219,8 +219,8 @@ describe("B12 adversarial scan", () => {
     inDo(s, (_i, st) => [
       st.storage.sql
         .exec<{ v: number }>(
-          "select coalesce((select v from meta where k = ?), 0) v",
-          `c:${c}`,
+          "select coalesce(json_extract(cols, ?), 0) v from totals",
+          `$."${c}"`,
         )
         .one().v,
       st.storage.sql
@@ -245,7 +245,7 @@ describe("B12 adversarial scan", () => {
         );
       // Mirror what writes would have tracked.
       st.storage.sql.exec(
-        "insert or replace into meta (k, v) values ('c:v', ?)",
+        "update totals set cols = json_set(cols, '$.\"v\"', ?)",
         2000 * body.length,
       );
     });
@@ -254,7 +254,7 @@ describe("B12 adversarial scan", () => {
       "bad_request",
     );
     expect(Date.now() - t0).toBeLessThan(250);
-    // Refused from the meta row alone: no doc rows are scanned.
+    // Refused from the totals row alone: no doc rows are scanned.
     const probe = await rowsReadBy(s, (i) =>
       i.query("v", { where: { choice: "B" } }),
     );
@@ -285,7 +285,7 @@ describe("B12 adversarial scan", () => {
     // Loose guard only (locally ~4 ms); the scan bound is the rows-read check below.
     expect(Date.now() - t0).toBeLessThan(250);
     expect(r.items.map((d) => d.id)).toEqual(["d7"]);
-    // The scan touches only this collection's 83 rows (+ the meta row), never "w".
+    // The scan touches only this collection's 83 rows (+ the totals row), never "w".
     const probe = await rowsReadBy(s, (i) =>
       i.query("v", { where: { choice: "B" } }),
     );
