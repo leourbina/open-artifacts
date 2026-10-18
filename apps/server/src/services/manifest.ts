@@ -12,6 +12,7 @@ import {
 } from "@oa/shared";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
+import { isWellFormed, utf8Encoder, utf8Length } from "../util/text.js";
 
 /** One file of a version, as stored in versions.manifest (JSON). */
 export type ManifestEntry = {
@@ -20,8 +21,15 @@ export type ManifestEntry = {
   size: number;
   contentType: string;
 };
-/** Inline files are encoded/decoded once, here, so their size is exact before any write. */
-export type PlannedSource = { bytes: Uint8Array } | { uploadId: string };
+/**
+ * Inline files are sized once, here, so their size is exact before any write.
+ * Well-formed text stays a string (R2 encodes it natively; `size` is its UTF-8
+ * length): no 2× copy of the content in an encoded buffer per publish.
+ */
+export type PlannedSource =
+  | { bytes: Uint8Array }
+  | { text: string; size: number }
+  | { uploadId: string };
 export type Plan = {
   files: Array<{ path: string; source: PlannedSource }>;
   entry: string;
@@ -139,11 +147,21 @@ function decodeBase64(s: string): Uint8Array | null {
  * inline bytes (UTF-8 text, decoded base64) total ≤ LIMITS.inlineBytes (413).
  */
 export function planFiles(input: PublishInput): Plan {
-  const enc = new TextEncoder();
   let budget: number = LIMITS.inlineBytes;
-  const take = (path: string, bytes: Uint8Array) => {
-    if (bytes.length > budget) throw inlineTooLarge(path);
-    budget -= bytes.length;
+  const take = (path: string, size: number) => {
+    if (size > budget) throw inlineTooLarge(path);
+    budget -= size;
+  };
+  /** Text as TextEncoder would store it: lone surrogates become U+FFFD bytes. */
+  const textSource = (path: string, v: string): PlannedSource => {
+    if (!isWellFormed(v)) {
+      const bytes = utf8Encoder.encode(v);
+      take(path, bytes.length);
+      return { bytes };
+    }
+    const size = utf8Length(v);
+    take(path, size);
+    return { text: v, size };
   };
   const { content, files } = input as { content?: unknown; files?: unknown };
 
@@ -161,10 +179,8 @@ export function planFiles(input: PublishInput): Plan {
     const entry = entryIn ?? defaultEntry(format, language);
     // UTF-8 is ≥ 1 byte per UTF-16 unit: reject before encoding when obviously too big.
     if (content.length > budget) throw inlineTooLarge(entry);
-    const bytes = enc.encode(content);
-    take(entry, bytes);
     return {
-      files: [{ path: entry, source: { bytes } }],
+      files: [{ path: entry, source: textSource(entry, content) }],
       entry,
       format,
       language,
@@ -225,9 +241,7 @@ export function planFiles(input: PublishInput): Plan {
     const v = record[key];
     if (typeof v === "string") {
       if (v.length > budget) throw inlineTooLarge(key);
-      const bytes = enc.encode(v);
-      take(key, bytes);
-      out.push({ path, source: { bytes } });
+      out.push({ path, source: textSource(key, v) });
     } else if (v && typeof v === "object" && "base64" in v) {
       const b64 = (v as { base64: unknown }).base64;
       if (typeof b64 !== "string") throw bad(key, "invalid_base64");
@@ -235,7 +249,7 @@ export function planFiles(input: PublishInput): Plan {
         throw inlineTooLarge(key);
       const bytes = decodeBase64(b64);
       if (!bytes) throw bad(key, "invalid_base64");
-      take(key, bytes);
+      take(key, bytes.length);
       out.push({ path, source: { bytes } });
     } else if (
       v &&
@@ -253,6 +267,10 @@ export function planFiles(input: PublishInput): Plan {
     input.language ?? (format === "code" ? inferLanguage(entry) : null);
   return { files: out, entry, format, language };
 }
+
+const inlineSize = (
+  s: { bytes: Uint8Array } | { text: string; size: number },
+) => ("text" in s ? s.size : s.bytes.length);
 
 type UploadRow = {
   id: string;
@@ -296,8 +314,8 @@ export async function materialize(
   }
   let total = 0;
   for (const f of plan.files) {
-    if ("bytes" in f.source) {
-      total += f.source.bytes.length;
+    if (!("uploadId" in f.source)) {
+      total += inlineSize(f.source);
       continue;
     }
     const row = rows.get(f.source.uploadId);
@@ -336,11 +354,13 @@ export async function materialize(
     manifest.push({
       path: f.path,
       key,
-      size: f.source.bytes.length,
+      size: inlineSize(f.source),
       contentType,
     });
     puts.push(
-      env.FILES.put(key, f.source.bytes, { httpMetadata: { contentType } }),
+      env.FILES.put(key, "text" in f.source ? f.source.text : f.source.bytes, {
+        httpMetadata: { contentType },
+      }),
     );
   }
   const res = await Promise.allSettled(puts);
