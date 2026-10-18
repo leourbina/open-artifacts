@@ -4,9 +4,11 @@ import { parseArgs } from "node:util";
 import { type Deps, makeApi, makeWrangler, realDeps, realFs } from "./cf.ts";
 import { readState, type State, writeState } from "./state.ts";
 import type { Ctx, Opts, Step } from "./step.ts";
+import { prereqs } from "./steps/prereqs.ts";
+import { resources } from "./steps/resources.ts";
 
-// Steps arrive in B16-1b (prereqs, resources), B16-2 and B16-3.
-export const STEPS: Step[] = [];
+// access, secrets, deploy, owner-token, selftest, agent-config: B16-2/B16-3.
+export const STEPS: Step[] = [prereqs, resources];
 
 type Line = {
   step: string;
