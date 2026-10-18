@@ -173,10 +173,16 @@ code,
   padding-top: 72px;
 }
 .hero h1 {
-  max-width: 20ch;
+  max-width: 26ch;
+  text-wrap: balance;
   font-size: clamp(34px, 5.2vw, 56px);
   line-height: 1.06;
   letter-spacing: -0.03em;
+}
+@media (max-width: 639px) {
+  .hero h1 br {
+    display: none;
+  }
 }
 .lede {
   max-width: 60ch;
@@ -280,6 +286,10 @@ code,
   margin-top: 8px;
   color: var(--oa-text-2);
   max-width: 40ch;
+}
+.steps p code {
+  font-size: 0.9em;
+  color: var(--oa-text);
 }
 .step-visual {
   display: grid;
