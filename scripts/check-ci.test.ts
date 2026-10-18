@@ -199,6 +199,10 @@ describe("release-please", () => {
     const c = JSON.parse(read("release-please-config.json"));
     expect(c.packages["."]["initial-version"]).toBe("0.1.0");
   });
+  it("release tags are vX.Y.Z without the component prefix", () => {
+    const c = JSON.parse(read("release-please-config.json"));
+    expect(c.packages["."]["include-component-in-tag"]).toBe(false);
+  });
 });
 
 describe(".nvmrc", () => {
