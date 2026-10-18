@@ -254,12 +254,25 @@ describe("release-please", () => {
   it("dispatches CI on the release branch and deploys the tag", () => {
     const raw = read(".github/workflows/release-please.yml");
     expect(raw).toContain("gh workflow run ci.yml");
-    expect(raw).toContain("prs_created");
-    expect(raw).toContain("headBranchName");
+    expect(raw).toContain("headRefName");
     // biome-ignore lint/suspicious/noTemplateCurlyInString: literal workflow expression
     expect(raw).toContain("needs.release-please.outputs.tag_name");
     const gate = wf("release-please.yml").jobs["deploy-landing"].steps;
     expect(JSON.stringify(gate)).toContain("steps.gate.outputs.present");
+  });
+  it("dispatches CI whenever the release PR exists, not only when created", () => {
+    const steps = wf("release-please.yml").jobs["release-please"].steps;
+    // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
+    const step = steps.find((s: any) =>
+      (s.run ?? "").includes("gh workflow run ci.yml"),
+    );
+    expect(step).toBeDefined();
+    expect(String(step.if ?? "")).not.toBe(
+      "steps.rp.outputs.prs_created == 'true'",
+    );
+    expect(String(step.if ?? "")).toContain("release_created");
+    expect(step.run).toContain("gh pr list");
+    expect(step.env.BRANCH).toContain("release-please--branches--main");
   });
   it("gates landing deploy on a release-ready dist, between build and deploy", () => {
     const steps = wf("release-please.yml").jobs["deploy-landing"].steps;
