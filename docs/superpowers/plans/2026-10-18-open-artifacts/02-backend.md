@@ -143,7 +143,8 @@ export async function sha256Hex(s: string): Promise<string>;
 export type Session = { uid: string; exp: number };
 export async function signSession(env: Env, uid: string, now?: number): Promise<string>;   // cookie value "<b64url(json)>.<sig>", exp = now + 7d
 export async function readSession(env: Env, cookieValue: string | undefined, now?: number): Promise<Session | null>;
-export function sessionCookie(value: string, env: Env): string;   // "oa_session=…; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=604800" (Secure omitted when ENVIRONMENT=dev)
+export function sessionCookieName(env: Env): string;   // "__Host-oa_session" (plain "oa_session" when ENVIRONMENT=dev)
+export function sessionCookie(value: string, env: Env): string;   // "__Host-oa_session=…; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=604800", no Domain (dev: "oa_session=…", Secure omitted)
 // auth/pat.ts
 export async function createPat(env: Env, userId: string, label: string): Promise<{ id: string; token: string }>;
 export async function verifyPat(env: Env, token: string): Promise<{ userId: string; tokenId: string; label: string } | null>; // rejects revoked; updates last_used_at at most once per hour (via waitUntil)
@@ -182,7 +183,7 @@ export async function getUser(env: Env, id: string): Promise<Member | null>;
 ```
 - **Routes:**
   - `GET /auth/login?next=/path` → 302 to the Access authorize endpoint. `next` must be a same-origin path, otherwise it's replaced with `/`.
-  - `GET /auth/callback` → sets `oa_session`, then 302 to `next`. If `upsertOnLogin` returns `null`, it responds 302 `/no-access` instead.
+  - `GET /auth/callback` → sets `__Host-oa_session` (plain `oa_session` in dev), then 302 to `next`. If `upsertOnLogin` returns `null`, it responds 302 `/no-access` instead.
   - `POST /auth/logout` clears the cookie.
   - `GET /auth/dev-login?email=&role=` works **only** when `ENVIRONMENT === "dev"`. Otherwise it returns 404. It upserts the user with the given role and sets the session.
 - **Middleware:** `session` sets `c.var.user: Member | null`. It reads the cookie and loads the user; deleted users count as `null`.

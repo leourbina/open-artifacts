@@ -14,13 +14,14 @@ import {
 import { createApp } from "../src/app.js";
 import { accessIssuer, safeNext } from "../src/auth/oidc.js";
 import { createPat } from "../src/auth/pat.js";
-import { readSession } from "../src/auth/session.js";
+import { readSession, sessionCookieName } from "../src/auth/session.js";
 import type { Env } from "../src/env.js";
 import { type AppVariables, session } from "../src/http/middleware.js";
 import { b64urlEncode } from "../src/util/crypto.js";
 import { login } from "./helpers.js";
 
 const APP = "http://app.localhost";
+const SESSION = sessionCookieName(env);
 const ISS = accessIssuer(env);
 const ctx = { waitUntil() {}, passThroughOnException() {} } as never;
 
@@ -184,7 +185,7 @@ function expectRetry(r: Response, next = "/") {
   expect(r.headers.get("location")).toBe(
     `/auth/login?next=${encodeURIComponent(next)}&retry=1`,
   );
-  expect(cookieVal(r, "oa_session")).toBeUndefined();
+  expect(cookieVal(r, SESSION)).toBeUndefined();
 }
 
 const userByEmail = (email: string) =>
@@ -198,7 +199,7 @@ async function expect401(r: Response) {
   expect(JSON.parse(text).error.code).toBe("unauthorized");
   expect(text).not.toContain("upstream-secret-detail");
   expect(clearedNames(r).length).toBe(1);
-  expect(cookieVal(r, "oa_session")).toBeUndefined();
+  expect(cookieVal(r, SESSION)).toBeUndefined();
 }
 
 // ---------- tests ----------
@@ -284,7 +285,7 @@ describe("GET /auth/callback", () => {
     const r = await callback(b, b.oidc, e);
     expect(r.status).toBe(302);
     expect(r.headers.get("location")).toBe("/a/xyz");
-    const sess = await readSession(env, cookieVal(r, "oa_session"));
+    const sess = await readSession(env, cookieVal(r, SESSION));
     const row = await userByEmail("owner@x.com");
     expect(row?.role).toBe("owner");
     expect(row?.name).toBe("Olive");
@@ -393,7 +394,7 @@ describe("GET /auth/callback", () => {
     const r = await callback(b, b.oidc);
     expect(r.status).toBe(302);
     expect(r.headers.get("location")).toBe("/no-access");
-    expect(cookieVal(r, "oa_session")).toBeUndefined();
+    expect(cookieVal(r, SESSION)).toBeUndefined();
     expect(await userByEmail("nobody@x.com")).toBeNull();
   });
 
@@ -415,9 +416,7 @@ describe("GET /auth/callback", () => {
     expect(r.headers.get("location")).toBe("/a/xyz");
     const row = await userByEmail("guest@x.com");
     expect(row?.role).toBe("guest");
-    expect((await readSession(env, cookieVal(r, "oa_session")))?.uid).toBe(
-      row?.id,
-    );
+    expect((await readSession(env, cookieVal(r, SESSION)))?.uid).toBe(row?.id);
   });
 });
 
@@ -428,7 +427,7 @@ describe("email folding", () => {
     const r = await callback(b, b.oidc, e);
     expect(r.status).toBe(302);
     expect(r.headers.get("location")).toBe("/no-access");
-    expect(cookieVal(r, "oa_session")).toBeUndefined();
+    expect(cookieVal(r, SESSION)).toBeUndefined();
     expect(await userByEmail("kim@x.com")).toBeNull();
     const n = await env.DB.prepare(
       "select count(*) as n from users where email like '%im@x.com'",
@@ -446,18 +445,18 @@ describe("id_token claims", () => {
 });
 
 describe("POST /auth/logout", () => {
-  it("clears oa_session with 204; GET is not allowed", async () => {
+  it("clears the session cookie with 204; GET is not allowed", async () => {
     const r = await call("/auth/logout", { method: "POST" });
     expect(r.status).toBe(204);
-    const c = setCookies(r).find((s) => s.startsWith("oa_session="));
-    expect(c).toBe("oa_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
+    const c = setCookies(r).find((s) => s.startsWith(`${SESSION}=`));
+    expect(c).toBe(`${SESSION}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
     const prod = await call(
       "/auth/logout",
       { method: "POST" },
       { ...env, ENVIRONMENT: "production" },
     );
     expect(setCookies(prod)).toContain(
-      "oa_session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0",
+      `${sessionCookieName({ ENVIRONMENT: "production" })}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`,
     );
     expect((await call("/auth/logout")).status).toBe(404);
   });
@@ -514,7 +513,7 @@ describe("session middleware", () => {
   });
   it("no/garbage cookie → null; deleted user → null", async () => {
     expect((await get({})).user).toBeNull();
-    expect((await get({ cookie: "oa_session=garbage" })).user).toBeNull();
+    expect((await get({ cookie: `${SESSION}=garbage` })).user).toBeNull();
     const { cookie, userId } = await login("gone@x.com");
     await env.DB.prepare("delete from users where id = ?").bind(userId).run();
     expect((await get({ cookie })).user).toBeNull();
@@ -684,7 +683,7 @@ describe("resilient OIDC state", () => {
     const r = await later(14 * 60_000, () => callback(b, b.oidc));
     expect(r.status).toBe(302);
     expect(r.headers.get("location")).toBe("/a/xyz");
-    expect(cookieVal(r, "oa_session")).toBeDefined();
+    expect(cookieVal(r, SESSION)).toBeDefined();
   });
 
   it("cookie name is oa_oidc_<first 10 b64url of sha256(state)>", async () => {
@@ -817,9 +816,9 @@ describe("resilient OIDC state", () => {
   });
 });
 
-describe("REVIEW breaks", () => {
+describe("state cookie hardening (size cap, cookie tossing)", () => {
   const prod = { ...env, ENVIRONMENT: "production" as const };
-  it("B1: backslash-heavy next makes the state cookie exceed 4096 (browser drops it)", async () => {
+  it("backslash-heavy next: final Set-Cookie stays ≤3800 chars (falls back to next=/)", async () => {
     const next = `/?${"\\".repeat(2000)}`;
     expect(safeNext(env, next).length).toBeLessThanOrEqual(2048);
     const r = await call(`/auth/login?next=${encodeURIComponent(next)}`);
@@ -828,7 +827,7 @@ describe("REVIEW breaks", () => {
     expect(c.length).toBeLessThan(4096);
     expect(c.length).toBeLessThanOrEqual(3800);
   });
-  it("B2: state cookie is not browser-bound: a planted (tossed) attacker cookie completes login CSRF", async () => {
+  it("prod: a tossed un-prefixed state cookie is ignored (no login CSRF)", async () => {
     const e = { ...prod, OWNER_EMAIL: "attacker@x.com" };
     const atk = await begin({ email: "attacker@x.com" }, "/", e);
     // victim's browser: a sibling host can only plant the un-prefixed name
@@ -838,19 +837,19 @@ describe("REVIEW breaks", () => {
       e,
       `oa_oidc_${await kOf(atk.state)}`,
     );
-    expect(cookieVal(r, "oa_session")).toBeUndefined();
+    expect(cookieVal(r, sessionCookieName(e))).toBeUndefined();
   });
-  it("B2b: same via the legacy oa_oidc name", async () => {
+  it("legacy oa_oidc state cookie is never read (dev and prod)", async () => {
     for (const e of [
       { ...env, OWNER_EMAIL: "attacker@x.com" },
       { ...prod, OWNER_EMAIL: "attacker@x.com" },
     ]) {
       const atk = await begin({ email: "attacker@x.com" }, "/", e);
       const r = await callback(atk, atk.oidc, e, "oa_oidc");
-      expect(cookieVal(r, "oa_session")).toBeUndefined();
+      expect(cookieVal(r, sessionCookieName(e))).toBeUndefined();
     }
   });
-  it("B2c: issued cookie is not __Host- prefixed / Path=/ (tossable)", async () => {
+  it("prod: issued state cookie is __Host- prefixed, Secure, Path=/, no Domain", async () => {
     const r = await call("/auth/login?next=/", {}, prod);
     const c = oidcSet(r) ?? "";
     expect(c).toMatch(/^__Host-oa_oidc_[A-Za-z0-9_-]{10}=/);
@@ -864,6 +863,14 @@ describe("REVIEW breaks", () => {
     expect(b.cname).toBe(`__Host-oa_oidc_${await kOf(b.state)}`);
     const r = await callback(b, b.oidc, prod);
     expect(r.headers.get("location")).toBe("/a/h");
+    const sess = setCookies(r).find((c) =>
+      c.startsWith(`${sessionCookieName(prod)}=`),
+    );
+    expect(sess).toMatch(
+      /^__Host-[^=]+=[^;]+; HttpOnly; Secure; SameSite=Lax; Path=\/; Max-Age=604800$/,
+    );
+    expect(sess).not.toMatch(/domain=/i);
+    expect(cookieVal(r, SESSION)).toBeUndefined();
     const cleared = setCookies(r).find((c) => c.startsWith(`${b.cname}=;`));
     expect(cleared).toBe(
       `${b.cname}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`,

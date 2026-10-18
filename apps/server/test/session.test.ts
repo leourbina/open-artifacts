@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   readSession,
   sessionCookie,
+  sessionCookieName,
   signSession,
 } from "../src/auth/session.js";
 import type { Env } from "../src/env.js";
@@ -51,14 +52,16 @@ describe("session", () => {
         ENVIRONMENT: "production",
       } as Env),
     ).toBe(
-      `oa_session=v; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=604800`,
+      `__Host-${sessionCookieName(env)}=v; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=604800`,
     );
     expect(
       sessionCookie("v", {
         SESSION_SECRET: env.SESSION_SECRET,
         ENVIRONMENT: "dev",
       } as Env),
-    ).toBe(`oa_session=v; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800`);
+    ).toBe(
+      `${sessionCookieName(env)}=v; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800`,
+    );
   });
   it("signSession rejects short secret and bad uid", async () => {
     const short = { SESSION_SECRET: "short" } as Env;

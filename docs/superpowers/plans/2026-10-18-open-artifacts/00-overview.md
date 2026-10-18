@@ -136,7 +136,7 @@ Every task's requirements include this section implicitly.
 - Artifacts are untrusted. They run only in `<iframe sandbox="allow-scripts allow-forms allow-popups allow-modals allow-downloads">` from the content host. `allow-same-origin` and `allow-top-navigation` are never set.
 - Every content-host response sends `Content-Security-Policy: sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads` and never sets a cookie.
 - **No access returns `404 not_found`.** The API never returns 403 for an artifact the caller can't see.
-- Mutating `/api/v1` calls that use a session cookie require the header `X-OA-Request: 1`, and return `403 csrf` without it. Cookie: `oa_session`, with `HttpOnly; Secure; SameSite=Lax; Path=/`, max age 7 days.
+- Mutating `/api/v1` calls that use a session cookie require the header `X-OA-Request: 1`, and return `403 csrf` without it. Cookie: `__Host-oa_session` (plain `oa_session` in dev), with `HttpOnly; Secure; SameSite=Lax; Path=/` and no `Domain`, max age 7 days. `Secure` is omitted in dev.
 - `X-Robots-Tag: noindex, nofollow` is on every response from both hosts, and `/robots.txt` is `User-agent: *\nDisallow: /` on both.
 
 **Values pinned by the spec:**
