@@ -95,6 +95,7 @@ export function TitleBar({
   rawUrl,
   authed,
   onShare,
+  panelOpen,
   onPanel,
 }: {
   artifact: ArtifactSummary;
@@ -103,6 +104,7 @@ export function TitleBar({
   rawUrl: string | null;
   authed: boolean;
   onShare: () => void;
+  panelOpen: boolean;
   onPanel: () => void;
 }) {
   const navigate = useNavigate();
@@ -185,8 +187,8 @@ export function TitleBar({
           </a>
         )}
         {authed && (
-          <Button size="sm" onClick={onPanel}>
-            Panel
+          <Button size="sm" aria-expanded={panelOpen} onClick={onPanel}>
+            Versions
           </Button>
         )}
         {isOwner && (

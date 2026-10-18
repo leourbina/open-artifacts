@@ -1,6 +1,6 @@
 import { type ArtifactSummary, diffPath, viewerPath } from "@oa/shared";
 import { Avatar, Button, Dialog, displayName, toast } from "@oa/ui";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useState } from "react";
 import { ApiClientError } from "../../api/client";
 import { useRestoreVersion, useVersionPages } from "../../api/queries";
@@ -12,6 +12,7 @@ export function Versions({ artifact }: { artifact: ArtifactSummary }) {
   const q = useVersionPages(id);
   const restore = useRestoreVersion(id);
   const navigate = useNavigate();
+  const search = useSearch({ strict: false }) as Record<string, unknown>;
   const [target, setTarget] = useState<number | null>(null);
   const canRestore = artifact.access !== "viewer";
   const items = q.data?.pages.flat() ?? [];
@@ -78,7 +79,10 @@ export function Versions({ artifact }: { artifact: ArtifactSummary }) {
               restore.mutate(target, {
                 onSuccess: (r) => {
                   setTarget(null);
-                  void navigate({ to: viewerPath(id, r.version) as string });
+                  void navigate({
+                    to: viewerPath(id, r.version) as string,
+                    search: search as never,
+                  });
                 },
                 onError: (e) =>
                   toast({

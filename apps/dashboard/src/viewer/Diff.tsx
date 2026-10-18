@@ -18,6 +18,7 @@ import "./viewer.css";
 
 const MAX_BYTES = 1_000_000;
 const CONTEXT = 3;
+const CHUNK = 2000;
 
 type Row = {
   kind: "add" | "del" | "ctx";
@@ -27,7 +28,20 @@ type Row = {
 };
 
 export function diffRows(a: string, b: string): Row[] | null {
-  const parts = diffLines(a, b, { maxEditLength: 20_000 });
+  const side = (text: string, kind: "add" | "del"): Row[] => {
+    const lines = text.split("\n");
+    if (lines[lines.length - 1] === "") lines.pop();
+    return lines.map((t, i) => ({
+      kind,
+      text: t,
+      oldNo: kind === "del" ? i + 1 : null,
+      newNo: kind === "add" ? i + 1 : null,
+    }));
+  };
+  if (a === "") return side(b, "add");
+  if (b === "") return side(a, "del");
+  // Bounded so a pathological pair of files can't freeze the tab.
+  const parts = diffLines(a, b, { maxEditLength: 20_000, timeout: 500 });
   if (!parts) return null;
   const rows: Row[] = [];
   let o = 1;
@@ -47,12 +61,18 @@ export function diffRows(a: string, b: string): Row[] | null {
 
 function Unified({ rows }: { rows: Row[] }) {
   const [all, setAll] = useState(false);
-  const shown = useMemo(() => {
+  const [limit, setLimit] = useState(CHUNK);
+  const { shown, truncated } = useMemo(() => {
     const keep = new Array<boolean>(rows.length).fill(all);
     if (!all)
       rows.forEach((r, i) => {
         if (r.kind === "ctx") return;
-        for (let j = i - CONTEXT; j <= i + CONTEXT; j++) keep[j] = true;
+        for (
+          let j = Math.max(0, i - CONTEXT);
+          j <= Math.min(rows.length - 1, i + CONTEXT);
+          j++
+        )
+          keep[j] = true;
       });
     const out: (Row | { gap: number })[] = [];
     let hidden = 0;
@@ -64,13 +84,21 @@ function Unified({ rows }: { rows: Row[] }) {
       } else hidden++;
     });
     if (hidden) out.push({ gap: hidden });
-    return out;
-  }, [rows, all]);
+    return { shown: out.slice(0, limit), truncated: out.length > limit };
+  }, [rows, all, limit]);
   if (!rows.some((r) => r.kind !== "ctx")) return <p>No changes.</p>;
-  const hiddenAny = shown.some((r) => "gap" in r);
+  const hiddenAny = all || shown.some((r) => "gap" in r);
   return (
     <>
       <table className="oa-dtable">
+        <thead className="oa-sr">
+          <tr>
+            <th>Old line</th>
+            <th>New line</th>
+            <th>Change</th>
+            <th>Text</th>
+          </tr>
+        </thead>
         <tbody>
           {shown.map((r, i) =>
             "gap" in r ? (
@@ -89,8 +117,19 @@ function Unified({ rows }: { rows: Row[] }) {
           )}
         </tbody>
       </table>
+      {truncated && (
+        <Button size="sm" onClick={() => setLimit(limit + CHUNK)}>
+          Show {CHUNK} more
+        </Button>
+      )}
       {(hiddenAny || all) && (
-        <Button size="sm" onClick={() => setAll(!all)}>
+        <Button
+          size="sm"
+          onClick={() => {
+            setAll(!all);
+            setLimit(CHUNK);
+          }}
+        >
           {all ? "Show changes only" : "Show all"}
         </Button>
       )}
@@ -120,19 +159,27 @@ function FileDiff({
   id,
   from,
   to,
-  path,
   a,
   b,
 }: {
   id: string;
   from: number;
   to: number;
-  path: string;
   a?: FileEntry;
   b?: FileEntry;
 }) {
   const q = useQuery({
-    queryKey: ["artifact", id, "diff", from, to, path, a?.size, b?.size],
+    queryKey: [
+      "artifact",
+      id,
+      "diff",
+      from,
+      to,
+      a?.path,
+      b?.path,
+      a?.size,
+      b?.size,
+    ],
     queryFn: async ({ signal }) =>
       Promise.all([loadSide(id, from, a, signal), loadSide(id, to, b, signal)]),
   });
@@ -147,7 +194,22 @@ function FileDiff({
   if (!q.data) return <p aria-busy="true">Loading…</p>;
   if (q.data.some((s) => s.binary)) return <p>Binary file changed</p>;
   if (q.data.some((s) => s.big)) return <p>File too large to diff</p>;
-  if (!rows) return <p>Too many differences to display.</p>;
+  if (!rows)
+    return (
+      <p>
+        Too many differences to display. Download both:{" "}
+        {a && (
+          <a href={R.versionFile(id, from, a.path)} download>
+            v{from}
+          </a>
+        )}{" "}
+        {b && (
+          <a href={R.versionFile(id, to, b.path)} download>
+            v{to}
+          </a>
+        )}
+      </p>
+    );
   return <Unified rows={rows} />;
 }
 
@@ -158,7 +220,7 @@ const LABEL: Record<Status, string> = {
   added: "Added",
   removed: "Removed",
   changed: "Changed",
-  same: "Same size",
+  same: "No size change",
 };
 
 function Preview({ id, v }: { id: string; v: number }) {
@@ -200,7 +262,9 @@ function Compare({
   ];
   const find = (v: VersionInfo, p: string) => v.files.find((f) => f.path === p);
   const [picked, setPicked] = useState<string | null>(null);
-  const path = picked ?? (paths.includes(b.entry) ? b.entry : paths[0]);
+  const fa = picked ? find(a, picked) : find(a, a.entry);
+  const fb = picked ? find(b, picked) : find(b, b.entry);
+  const path = picked ?? b.entry;
   const source = (
     <>
       <ul className="oa-dfiles" aria-label="Files">
@@ -220,17 +284,14 @@ function Compare({
           );
         })}
       </ul>
-      {path && (
-        <FileDiff
-          key={path}
-          id={id}
-          from={from}
-          to={to}
-          path={path}
-          a={find(a, path)}
-          b={find(b, path)}
-        />
-      )}
+      <FileDiff
+        key={`${fa?.path}:${fb?.path}`}
+        id={id}
+        from={from}
+        to={to}
+        a={fa}
+        b={fb}
+      />
     </>
   );
   const previewable = format === "html" || format === "markdown";

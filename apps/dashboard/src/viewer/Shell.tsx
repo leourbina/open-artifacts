@@ -100,6 +100,7 @@ function Viewer({
         rawUrl={rawUrl}
         authed={authed}
         onShare={() => setPanel(true, "share")}
+        panelOpen={panelOpen}
         onPanel={() => setPanel(!panelOpen)}
       />
       <div className="oa-vbody">

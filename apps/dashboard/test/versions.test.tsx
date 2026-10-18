@@ -3,6 +3,7 @@ import { fixtures } from "@oa/shared/mocks";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { describe, expect, it, vi } from "vitest";
+import { diffRows } from "../src/viewer/Diff";
 import { installHarness, mount, seen, server } from "./harness";
 
 vi.mock("../src/viewer/bridge", () => ({
@@ -135,5 +136,176 @@ describe("diff", () => {
       expect(f.getAttribute("sandbox")).toBe(
         "allow-scripts allow-forms allow-popups allow-modals allow-downloads",
       );
+  });
+});
+
+describe("diff robustness", () => {
+  it("gives up within 2 s on two very different files", () => {
+    const l = Array.from({ length: 30_000 }, (_, i) => `line${i}`);
+    const t = performance.now();
+    diffRows(l.join("\n"), [...l].reverse().join("\n"));
+    expect(performance.now() - t).toBeLessThan(2000);
+  }, 120_000);
+
+  it("renders a 25k-line added file", () => {
+    const rows = diffRows("", "x\n".repeat(25_000));
+    expect(rows).not.toBeNull();
+    expect(rows?.filter((r) => r.kind === "add")).toHaveLength(25_000);
+  });
+
+  it("compares the old entry with the new entry when the entry was renamed", async () => {
+    const tpl = (fixtures.versions[SCRIPT] ?? [])[0];
+    const mk = (v: number, entry: string) => ({
+      ...tpl,
+      version: v,
+      entry,
+      files: [{ path: entry, size: 10 + v, contentType: "text/plain" }],
+    });
+    const fetched: string[] = [];
+    server.use(
+      http.get(`*/api/v1/artifacts/${SCRIPT}/versions`, ({ request }) => {
+        const b = Number(new URL(request.url).searchParams.get("before") ?? 99);
+        return HttpResponse.json(
+          [mk(2, "new.py"), mk(1, "old.py")].filter((x) => x.version < b),
+        );
+      }),
+      http.get(
+        `*/api/v1/artifacts/${SCRIPT}/versions/:v/files/*`,
+        ({ params, request }) => {
+          fetched.push(new URL(request.url).pathname);
+          return new HttpResponse(
+            params.v === "1" ? "same\nold\n" : "same\nnew\n",
+            { headers: { "content-type": "text/plain" } },
+          );
+        },
+      ),
+    );
+    mount(diffPath(SCRIPT, 1, 2));
+    await screen.findByText("new");
+    expect(fetched.includes(R.versionFile(SCRIPT, 1, "old.py"))).toBe(true);
+    expect(screen.getByText("same").closest("tr")).toHaveAttribute(
+      "data-kind",
+      "ctx",
+    );
+  });
+
+  it("Show all renders rows in bounded chunks", async () => {
+    server.use(
+      http.get(
+        `*/api/v1/artifacts/${SCRIPT}/versions/:v/files/*`,
+        ({ params }) =>
+          new HttpResponse(`${params.v}\n${"x\n".repeat(20_000)}`, {
+            headers: { "content-type": "text/plain" },
+          }),
+      ),
+    );
+    mount(diffPath(SCRIPT, 1, 2));
+    fireEvent.click(await screen.findByRole("button", { name: "Show all" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Show changes only" }),
+      ).toBeInTheDocument(),
+    );
+    expect(document.querySelectorAll("tr").length).toBeLessThan(5_000);
+    fireEvent.click(screen.getByRole("button", { name: "Show 2000 more" }));
+    await waitFor(() =>
+      expect(document.querySelectorAll("tr").length).toBeGreaterThan(4_000),
+    );
+  }, 120_000);
+
+  it("collapses unchanged lines and Show all expands them", async () => {
+    server.use(
+      http.get(
+        `*/api/v1/artifacts/${SCRIPT}/versions/:v/files/*`,
+        ({ params }) =>
+          new HttpResponse(
+            `${"keep\n".repeat(50)}${params.v}\n${"keep\n".repeat(50)}`,
+            { headers: { "content-type": "text/plain" } },
+          ),
+      ),
+    );
+    mount(diffPath(SCRIPT, 1, 2));
+    expect(await screen.findAllByText("47 unchanged lines")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "Show all" }));
+    await waitFor(() =>
+      expect(screen.queryByText("47 unchanged lines")).toBeNull(),
+    );
+    expect(document.querySelectorAll("tr[data-kind='ctx']").length).toBe(100);
+  });
+
+  it("falls back to downloads when the diff is too expensive", async () => {
+    const l = Array.from({ length: 30_000 }, (_, i) => `line${i}`);
+    server.use(
+      http.get(
+        `*/api/v1/artifacts/${SCRIPT}/versions/:v/files/*`,
+        ({ params }) =>
+          new HttpResponse(
+            (params.v === "1" ? l : [...l].reverse()).join("\n"),
+            { headers: { "content-type": "text/plain" } },
+          ),
+      ),
+    );
+    mount(diffPath(SCRIPT, 1, 2));
+    expect(
+      await screen.findByText(
+        /Too many differences to display/,
+        {},
+        { timeout: 5000 },
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "v1" })).toHaveAttribute(
+      "href",
+      R.versionFile(SCRIPT, 1, "parse.ts"),
+    );
+  }, 20_000);
+});
+
+describe("versions and diff details", () => {
+  it("links Compare with current", async () => {
+    mount(panel(OWNED));
+    await screen.findByText("Initial version");
+    expect(
+      screen.getByRole("link", { name: "Compare with current" }),
+    ).toHaveAttribute("href", diffPath(OWNED, 1, 2));
+  });
+
+  it("labels added files and a file with no counterpart", async () => {
+    mount(diffPath(OWNED, 1, 2));
+    expect(await screen.findByText("Added")).toBeInTheDocument();
+    expect(screen.getByText("Changed")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "style.css" }));
+    expect(await screen.findByText("h1 { color: teal; }")).toBeInTheDocument();
+    expect(
+      screen.getByText("h1 { color: teal; }").closest("tr"),
+    ).toHaveAttribute("data-kind", "add");
+  });
+
+  it("labels removed files and shows them as deletions", async () => {
+    mount(diffPath(OWNED, 2, 1));
+    expect(await screen.findByText("Removed")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "style.css" }));
+    expect(
+      (await screen.findByText("h1 { color: teal; }")).closest("tr"),
+    ).toHaveAttribute("data-kind", "del");
+  });
+
+  it("keeps panel and tab after restore", async () => {
+    const router = mount(panel(OWNED));
+    await screen.findByText("Initial version");
+    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Restore version" }),
+    );
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe(viewerPath(OWNED, 3)),
+    );
+    expect(router.state.location.search).toMatchObject({
+      panel: "open",
+      tab: "versions",
+    });
+  });
+
+  it("diffRows handles one-sided input", () => {
+    expect(diffRows("a\nb\n", "")?.map((r) => r.kind)).toEqual(["del", "del"]);
   });
 });
