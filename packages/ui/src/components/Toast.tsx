@@ -31,6 +31,12 @@ export function toast(options: ToastOptions) {
   emit();
 }
 
+/** Clears every toast. For tests: the queue is module state. */
+export function resetToasts() {
+  queue = [];
+  emit();
+}
+
 export function Toaster() {
   const [entries, setEntries] = useState(queue);
   useEffect(() => {
