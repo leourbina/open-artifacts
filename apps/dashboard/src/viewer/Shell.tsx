@@ -1,7 +1,7 @@
 import { type ArtifactSummary, viewerPath } from "@oa/shared";
-import { Button } from "@oa/ui";
+import { Button, toast } from "@oa/ui";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { type MouseEvent, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiClientError } from "../api/client";
 import { useArtifact } from "../api/queries";
 import { useLoginRedirect } from "../auth/redirect";
@@ -53,14 +53,22 @@ function Viewer({
     signedOut,
     viewerPath(artifact.id, explicitVersion ? version : undefined),
   );
-  // A stale signed URL is refreshed first; the tab opens with the new one.
-  const openRaw = (e: MouseEvent) => {
-    if (content.fresh() && !content.refreshing) return;
-    e.preventDefault();
-    if (content.refreshing) return;
-    void content.refresh().then((u) => {
+  // The tab opens synchronously (no popup blocking) and is pointed at a URL known
+  // to be fresh, refreshing a stale one first.
+  const openRaw = () => {
+    const w = window.open("about:blank", "_blank");
+    if (!w) return;
+    w.opener = null;
+    const ready = content.fresh()
+      ? Promise.resolve(content.current)
+      : content.refresh();
+    void ready.then((u) => {
       const safe = safeContentUrl(u);
-      if (safe) window.open(safe, "_blank", "noopener,noreferrer");
+      if (safe) w.location.href = safe;
+      else {
+        w.close();
+        toast({ title: "Couldn't open the raw view", tone: "danger" });
+      }
     });
   };
   const theme = useTheme();
@@ -162,7 +170,15 @@ export function Shell({ id, v }: { id: string; v?: number }) {
 
   const status = q.error instanceof ApiClientError ? q.error.status : null;
   const authed = me.status === "authed";
+  // Signed out mid-visit (a 401 anywhere): only a public artifact stays viewable.
+  const wasAuthed = useRef(false);
+  if (authed) wasAuthed.current = true;
+  const expired =
+    wasAuthed.current &&
+    me.status === "anonymous" &&
+    q.data?.visibility !== "public";
   const toLogin =
+    expired ||
     status === 401 ||
     (status === 404 && (me.status === "anonymous" || me.status === "error"));
   useLoginRedirect(toLogin, viewerPath(id, v));

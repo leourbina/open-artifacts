@@ -74,8 +74,9 @@
   border-left: 1px solid var(--oa-divider);
   background: var(--oa-surface);
 }
-/* Only ever focused programmatically (on open), so :focus, not :focus-visible. */
-.oa-vpanel:focus {
+/* Focus moved here on open is programmatic, so :focus-visible may not match. */
+.oa-vpanel:focus-visible,
+.oa-vpanel[data-focus="programmatic"]:focus {
   outline: 2px solid var(--oa-focus);
   outline-offset: -2px;
 }

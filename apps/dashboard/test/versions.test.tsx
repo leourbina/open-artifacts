@@ -57,6 +57,10 @@ describe("versions panel", () => {
     );
     await screen.findByText("Update 5");
     expect(seen.some((u) => u.searchParams.get("before") === "6")).toBe(true);
+    // A short page is not the end (contract C2); the empty one after it is.
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Load older versions" }),
+    );
     await waitFor(() =>
       expect(
         screen.queryByRole("button", { name: "Load older versions" }),

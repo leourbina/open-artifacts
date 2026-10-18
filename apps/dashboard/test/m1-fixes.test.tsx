@@ -1,9 +1,11 @@
-// M1 fixes without a reviewer test: document.title per route (10) and quota at /me (triage).
-import { AUTH, QUOTA_MESSAGE } from "@oa/shared";
+// M1 fixes without a reviewer test: document.title, quota at /me, Open raw, session expiry, paging.
+import { AUTH, QUOTA_MESSAGE, type VersionInfo } from "@oa/shared";
+import { fixtures } from "@oa/shared/mocks";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import {
   act,
+  fireEvent,
   render,
   renderHook,
   screen,
@@ -177,5 +179,121 @@ describe("M1 content URL errors and freshness", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("M1 Open raw", () => {
+  const fakeWindow = () => {
+    const w = {
+      opener: {} as unknown,
+      location: { href: "about:blank" },
+      close: vi.fn(),
+    };
+    const open = vi.spyOn(window, "open").mockReturnValue(w as never);
+    return { w, open };
+  };
+  const raw = () => screen.findByRole("button", { name: "Open raw" });
+
+  it("is a button (no href to middle-click), opens a blank tab synchronously and fills it", async () => {
+    mount(`/a/${id("Landing page")}`);
+    const btn = await raw();
+    expect(screen.queryByRole("link", { name: "Open raw" })).toBeNull();
+    const { w, open } = fakeWindow();
+    fireEvent.click(btn);
+    expect(open).toHaveBeenCalledWith("about:blank", "_blank");
+    expect(w.opener).toBeNull();
+    await waitFor(() => expect(w.location.href).toMatch(/^https?:\/\//));
+    expect(w.close).not.toHaveBeenCalled();
+    open.mockRestore();
+  });
+
+  it("refreshes a stale URL before filling the tab; closes it on failure", async () => {
+    mount(`/a/${id("Landing page")}`);
+    const btn = await raw();
+    let refetches = 0;
+    server.use(
+      http.get("*/api/v1/artifacts/:id/content-url", () => {
+        refetches++;
+        return HttpResponse.json(
+          { error: { code: "internal", message: "boom" } },
+          { status: 500 },
+        );
+      }),
+    );
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now + 11 * 60_000);
+    const { w, open } = fakeWindow();
+    fireEvent.click(btn);
+    expect(open).toHaveBeenCalledWith("about:blank", "_blank");
+    await waitFor(() => expect(w.close).toHaveBeenCalled());
+    expect(w.location.href).toBe("about:blank");
+    expect(refetches).toBe(1);
+    await screen.findByText(/couldn't open/i);
+    clock.mockRestore();
+    open.mockRestore();
+  });
+});
+
+describe("M1 session expiry on the viewer", () => {
+  const unauthorized = () =>
+    HttpResponse.json(
+      { error: { code: "unauthorized", message: "unauthorized" } },
+      { status: 401 },
+    );
+
+  it("a 401 elsewhere on a private artifact sends the viewer to sign in", async () => {
+    server.use(http.get("*/api/v1/artifacts/:id/versions", unauthorized));
+    const redirect = mount(`/a/${id("Landing page")}`);
+    await waitFor(() =>
+      expect(redirect).toHaveBeenCalledWith(
+        expect.stringContaining(AUTH.login),
+      ),
+    );
+  });
+
+  it("a 401 elsewhere on a public artifact stays in the anonymous view", async () => {
+    server.use(http.get("*/api/v1/artifacts/:id/versions", unauthorized));
+    const redirect = mount(`/a/${id("Q4 report")}`);
+    await screen.findByRole("link", { name: "Sign in" }, { timeout: 2000 });
+    expect(redirect).not.toHaveBeenCalled();
+  });
+});
+
+describe("M1 versions paging (contract C2)", () => {
+  it("a short page is not the last page; only an empty one is", async () => {
+    const SCRIPT = id("Parser script");
+    const all = [
+      ...((fixtures.versions as Record<string, VersionInfo[]>)[SCRIPT] ?? []),
+    ].sort((a, b) => b.version - a.version);
+    const befores: (string | null)[] = [];
+    server.use(
+      http.get("*/api/v1/artifacts/:id/versions", ({ request }) => {
+        const b = new URL(request.url).searchParams.get("before");
+        befores.push(b);
+        const before = b ? Number(b) : Number.POSITIVE_INFINITY;
+        return HttpResponse.json(
+          all.filter((x) => x.version < before).slice(0, 7),
+        );
+      }),
+    );
+    mount(`/a/${SCRIPT}?panel=open&tab=versions`);
+    await screen.findByText("Update 25");
+    expect(screen.queryByText("Update 18")).toBeNull();
+    const more = () =>
+      screen.findByRole("button", { name: "Load older versions" });
+    fireEvent.click(await more());
+    await screen.findByText("Update 18");
+    fireEvent.click(await more());
+    await screen.findByText("Update 11");
+    fireEvent.click(await more());
+    await screen.findByText("Update 4");
+    // v4–v1 is short too; only the empty page after it ends the timeline.
+    fireEvent.click(await more());
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Load older versions" }),
+      ).toBeNull(),
+    );
+    expect(befores).toContain("1");
   });
 });

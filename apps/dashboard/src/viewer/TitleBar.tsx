@@ -15,7 +15,7 @@ import {
 } from "@oa/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { type MouseEvent, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiClientError } from "../api/client";
 import {
   qk,
@@ -119,7 +119,7 @@ export function TitleBar({
   rawUrl: string | null;
   /** The signed URL is being refreshed; "Open raw" is disabled meanwhile. */
   rawBusy?: boolean;
-  onOpenRaw?: (e: MouseEvent) => void;
+  onOpenRaw?: () => void;
   authed: boolean;
   onShare: () => void;
   panelOpen: boolean;
@@ -205,16 +205,10 @@ export function TitleBar({
           />
         )}
         {rawUrl && (
-          <a
-            className="oa-btn oa-sm"
-            href={rawUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-disabled={rawBusy || undefined}
-            onClick={onOpenRaw}
-          >
+          // A button, not a link: an href could be middle-clicked after it expired.
+          <Button size="sm" disabled={rawBusy} onClick={onOpenRaw}>
             Open raw
-          </a>
+          </Button>
         )}
         {authed && (
           <Button size="sm" aria-expanded={panelOpen} onClick={onPanel}>

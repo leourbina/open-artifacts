@@ -50,12 +50,12 @@ const publicRoute = (raw: string) => {
 export function AppLayout() {
   const state = useMe();
   const redirect = useRedirect();
-  // The rendered location: mid-navigation `location` is already the target while
+  const loc = useRouterState({ select: (s) => s.location });
+  // The rendered leaf match: mid-navigation `location` is already the target while
   // the old match still renders, which would remount it under the other layout.
-  const loc = useRouterState({
-    select: (s) => s.resolvedLocation ?? s.location,
-  });
-  const path = loc.pathname;
+  const path =
+    useRouterState({ select: (s) => s.matches.at(-1)?.pathname }) ??
+    loc.pathname;
   const anonymous = state.status === "anonymous" && !publicRoute(path);
 
   useEffect(() => {

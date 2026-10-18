@@ -18,7 +18,7 @@ test("side panel shows a focus ring when it takes focus", async ({ page }) => {
 
 test("Open raw matches the height of its neighbours", async ({ page }) => {
   await page.goto("/a/Cd5fGhJkLm6nPqRs");
-  const raw = page.getByRole("link", { name: "Open raw" });
+  const raw = page.getByRole("button", { name: "Open raw" });
   const versions = page.getByRole("button", { name: "Versions" });
   await expect(raw).toBeVisible();
   const h = async (l: typeof raw) => (await l.boundingBox())?.height;

@@ -15,7 +15,6 @@ import {
   ShareSchema,
   TokenSchema,
   UsageSchema,
-  VERSIONS_PAGE_SIZE,
   VersionInfoSchema,
 } from "@oa/shared";
 import {
@@ -74,17 +73,17 @@ export const useVersions = (id: string, opts?: { enabled?: boolean }) =>
     queryFn: ({ signal }) =>
       api.get(R.versions(id), z.array(VersionInfoSchema), signal),
   });
-/** Timeline pages, newest first; each next page is `before` the last version seen. */
+/**
+ * Timeline pages, newest first; each next page is `before` the last version seen.
+ * Pages may be short (contract C2), so only an empty page ends the timeline.
+ */
 export const useVersionPages = (id: string) =>
   useInfiniteQuery({
     queryKey: [...qk.versions(id), "pages"] as const,
     initialPageParam: undefined as number | undefined,
     queryFn: ({ pageParam, signal }) =>
       api.get(R.versions(id, pageParam), z.array(VersionInfoSchema), signal),
-    getNextPageParam: (last) =>
-      last.length < VERSIONS_PAGE_SIZE
-        ? undefined
-        : last[last.length - 1]?.version,
+    getNextPageParam: (last) => last[last.length - 1]?.version,
   });
 /** Info for one version, however old: the first item of the page just below `v + 1`. */
 export const useVersionInfo = (id: string, v: number, enabled = true) =>
