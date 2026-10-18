@@ -3,6 +3,7 @@ import { FORMATS } from "./formats.js";
 import { isId } from "./ids.js";
 import { LIMITS } from "./limits.js";
 import { findCaseCollision, normalizePath } from "./paths.js";
+import { utf8Exceeds } from "./utf8.js";
 
 export const VisibilitySchema = z.enum(["private", "team", "public"]);
 export type Visibility = z.infer<typeof VisibilitySchema>;
@@ -58,8 +59,6 @@ export const InlineFileSchema = z.union([
 ]);
 export type InlineFile = z.infer<typeof InlineFileSchema>;
 
-const utf8Bytes = (s: string) => new TextEncoder().encode(s).length;
-
 export const PublishInputSchema = z
   .strictObject({
     id: z.string().optional(),
@@ -93,7 +92,7 @@ export const PublishInputSchema = z
     if (hasContent && v.format === undefined && v.entry === undefined) {
       issue("content requires format or entry", ["format"]);
     }
-    if (v.content !== undefined && utf8Bytes(v.content) > LIMITS.inlineBytes) {
+    if (v.content !== undefined && utf8Exceeds(v.content, LIMITS.inlineBytes)) {
       issue(`content exceeds ${LIMITS.inlineBytes} bytes`, ["content"]);
     }
     const normalized = new Map<string, string>();
