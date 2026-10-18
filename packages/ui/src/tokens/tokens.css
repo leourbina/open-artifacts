@@ -31,6 +31,7 @@
   --oa-danger-soft: #fbe7e3;
   --oa-warning: #8a5a00;
   --oa-warning-soft: #fbf0d9;
+  --oa-scrim: rgb(0 0 0 / 0.32);
 
   --oa-font-sans:
     "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -90,6 +91,7 @@
     --oa-danger-soft: #3a1e1a;
     --oa-warning: #e7b44f;
     --oa-warning-soft: #352914;
+    --oa-scrim: rgb(0 0 0 / 0.6);
 
     --oa-shadow-1: 0 0 0 1px var(--oa-border);
     --oa-shadow-2:
@@ -123,6 +125,7 @@
   --oa-danger-soft: #3a1e1a;
   --oa-warning: #e7b44f;
   --oa-warning-soft: #352914;
+  --oa-scrim: rgb(0 0 0 / 0.6);
 
   --oa-shadow-1: 0 0 0 1px var(--oa-border);
   --oa-shadow-2:

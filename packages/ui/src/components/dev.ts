@@ -10,9 +10,13 @@ export function isDev(): boolean {
   return env ? env.NODE_ENV !== "production" : false;
 }
 
-/** console.errors once per mount (and on change), in development only. */
-export function useDevError(failed: boolean, message: string) {
+/** Logs once per mount (and on change), in development only. */
+export function useDevError(
+  failed: boolean,
+  message: string,
+  level: "error" | "warn" = "error",
+) {
   useEffect(() => {
-    if (isDev() && failed) console.error(message);
-  }, [failed, message]);
+    if (isDev() && failed) console[level](message);
+  }, [failed, message, level]);
 }
