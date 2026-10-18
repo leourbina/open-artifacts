@@ -10,7 +10,8 @@
  *   `X-OA-Request: 1` gets 403 csrf; Bearer requests are exempt.
  * - Auth: a request with no cookie and no Bearer gets 401 on every authed route (all mutations
  *   except signed-URL upload PUT, plus me/members/tokens/oauth-clients/settings/usage/list/search);
- *   public-artifact reads stay anonymous-OK.
+ *   public-artifact reads stay anonymous-OK, and so do data doc writes on a public artifact
+ *   with allowAnonymousWrites (updatedBy "anon"), as on the server (B13).
  * - quotaExceeded: every /api/v1 route answers 503 quota_exceeded.
  */
 import { delay, type HttpHandler, HttpResponse, http } from "msw";
@@ -310,6 +311,15 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
     defaultVisibility: me.instance.defaultVisibility,
   });
 
+  /** A data doc write on a public artifact that allows anonymous writes (B13). */
+  const anonDataWrite = (path: string): boolean => {
+    const m = /^\/artifacts\/([^/]+)\/data\/[^/]+\/[^/]+$/.exec(path);
+    const a = m && artifacts.find((x) => x.id === m[1]);
+    return !!a && a.visibility === "public" && a.allowAnonymousWrites === true;
+  };
+  /** updatedBy for a data write: "anon" for anonymous callers. */
+  const writer = (request: Request) => (isAnon(request) ? "anon" : me.user.id);
+
   const pre: HttpHandler[] = [
     http.all("*/api/v1/*", async ({ request }) => {
       if (latencyMs) await delay(latencyMs);
@@ -322,7 +332,7 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
         : /^\/(me|members|tokens|oauth-clients|settings|usage|artifacts|search)\/?$/.test(
             path,
           );
-      if (needsAuth && isAnon(request))
+      if (needsAuth && isAnon(request) && !anonDataWrite(path))
         return err("unauthorized", "Authentication required");
       if (
         mutating &&
@@ -743,7 +753,7 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
           id: params.doc as string,
           data: r.data,
           updatedAt: iso(),
-          updatedBy: me.user.id,
+          updatedBy: writer(request),
         };
         docs(a.id, params.col as string).set(d.id, d);
         return HttpResponse.json(d);
@@ -761,11 +771,11 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
           id: params.doc as string,
           data: {},
           updatedAt: iso(),
-          updatedBy: me.user.id,
+          updatedBy: writer(request),
         };
         d.data = { ...(d.data as object), ...r.data };
         d.updatedAt = iso();
-        d.updatedBy = me.user.id;
+        d.updatedBy = writer(request);
         col.set(d.id, d);
         return HttpResponse.json(d);
       }),
