@@ -57,27 +57,72 @@
   color: inherit;
   text-decoration: none;
 }
-.lib-card a:hover,
-.lib-row a:hover {
-  text-decoration: underline;
-}
-/* The title link covers the whole card or row, so the thumbnail and the rest
-   open it too. It is the only control in either today; another one added later
-   needs `position: relative` to sit above it. */
 .lib-card a::after,
 .lib-row a::after {
   content: "";
   position: absolute;
   inset: 0;
 }
-.lib-card a:focus-visible,
-.lib-row a:focus-visible {
+/* The border is the 1px ring in --oa-shadow-1/-2, so border-color hover is the
+   shadow swap. Nested controls (menu, avatar link) other than the title link
+   sit above the stretched link. */
+.lib-card :is(button, a):not(.lib-title),
+.lib-row :is(button, a):not(.lib-title) {
+  position: relative;
+  z-index: 1;
+}
+.lib-card,
+.lib-row {
+  cursor: pointer;
+}
+.lib-card {
+  transition:
+    box-shadow var(--oa-duration-fast) var(--oa-ease),
+    border-color var(--oa-duration-fast) var(--oa-ease),
+    transform var(--oa-duration-fast) var(--oa-ease);
+}
+.lib-row {
+  transition: background-color var(--oa-duration-fast) var(--oa-ease);
+}
+.lib-card:hover,
+.lib-card:has(a:focus-visible) {
+  box-shadow: var(--oa-shadow-2);
+  border-color: var(--oa-border-strong);
+  transform: translateY(-1px);
+}
+.lib-row:hover {
+  background: var(--oa-surface-2);
+}
+.lib-card:has(a:focus-visible) {
   outline: 2px solid var(--oa-focus);
   outline-offset: 2px;
 }
-.lib-card:has(a:hover),
-.lib-row:has(a:hover) {
-  box-shadow: var(--oa-shadow-2);
+.lib-row:has(a:focus-visible) {
+  outline: 2px solid var(--oa-focus);
+  outline-offset: -2px;
+}
+.lib-card a:focus-visible,
+.lib-row a:focus-visible {
+  outline: none;
+}
+.lib-card:active {
+  transform: translateY(0);
+  box-shadow: var(--oa-shadow-1);
+  background: var(--oa-surface-2);
+}
+.lib-row:active {
+  background: var(--oa-sunken);
+}
+@media (prefers-reduced-motion: reduce) {
+  .lib-card,
+  .lib-row {
+    transition: none;
+  }
+  .lib-card:hover,
+  .lib-card:has(a:focus-visible),
+  .lib-card:active {
+    transform: none;
+  }
 }
 .lib-thumb {
   aspect-ratio: 16 / 10;

@@ -1,3 +1,4 @@
+import { eq } from "drizzle-orm";
 import { type DrizzleD1Database, drizzle } from "drizzle-orm/d1";
 import type { Env } from "../env.js";
 import * as schema from "./schema.js";
@@ -19,3 +20,14 @@ export function getDb(env: Pick<Env, "DB">): Db {
   }
   return db;
 }
+
+// Module-scope warm-up (startup limit, not a request's CPU): the first
+// drizzle() and the first query build compile drizzle's code paths, ~1 ms of a
+// cold isolate's first request. No binding is touched: the client is a
+// placeholder and toSQL() only renders.
+drizzle({} as D1Database, { schema })
+  .select()
+  .from(schema.tokens)
+  .where(eq(schema.tokens.tokenHash, ""))
+  .limit(1)
+  .toSQL();
