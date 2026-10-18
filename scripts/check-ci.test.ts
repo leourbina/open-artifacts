@@ -70,11 +70,40 @@ describe("deploy-staging.yml", () => {
       expect(c).toContain("wrangler.staging.jsonc");
     }
   });
+  it("preflights required Worker secrets before migrate and deploy", () => {
+    const p = idx("deploy", "check-staging-secrets");
+    expect(p).toBeGreaterThan(idx("deploy", "pnpm build"));
+    expect(p).toBeLessThan(idx("deploy", "d1 migrations apply"));
+    expect(p).toBeLessThan(idx("deploy", "wrangler deploy"));
+    const step = runs("deploy")[p] as string;
+    expect(step).toContain("wrangler secret list");
+    expect(step).toContain("--format json");
+    expect(step).toContain("set -o pipefail");
+    expect(step).toContain("wrangler.staging.jsonc");
+    expect(step).toContain("--env staging");
+  });
   it("ensures dashboard dist exists before wrangler deploy", () => {
     const e = idx("deploy", "mkdir -p apps/dashboard/dist");
     expect(e).toBeGreaterThan(idx("deploy", "pnpm build"));
     expect(e).toBeLessThan(idx("deploy", "wrangler deploy"));
     expect(runs("deploy")[e]).toContain("apps/dashboard/dist/index.html");
+  });
+  it("smoke asserts /auth/login redirects to Cloudflare Access", () => {
+    const all = runs("smoke").join("\n");
+    expect(all).toContain("staging.open-artifacts.com/auth/login");
+    expect(all).toContain("--retry 20 --retry-delay 5 --retry-max-time 180");
+    expect(all).not.toMatch(/\s-[a-zA-Z]*L\b|--location/);
+    expect(all).toContain("302");
+    expect(all).toContain(
+      `sed -n 's/.*"ACCESS_TEAM_DOMAIN": *"\\([^"]*\\)".*/\\1/p' apps/server/wrangler.staging.jsonc | head -1`,
+    );
+    expect(all).toContain("tr -d '\\r'");
+    expect(all).toContain("grep -i '^location:'");
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell
+    expect(all).toContain('[ "${loc#"$prefix"}" != "$loc" ]');
+    expect(all).toContain('prefix="https://$team/cdn-cgi/access/sso/oidc/"');
+    expect(all).toContain("END{print b}");
+    expect(all).toMatch(/[Ll]ocation/);
   });
   it("smoke checks robots on the content host", () => {
     const all = runs("smoke").join("\n");
