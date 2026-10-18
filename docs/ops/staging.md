@@ -109,6 +109,24 @@ One-time install of the production instance with `@oa/setup --ci`. Runs only on 
 gh workflow run ops-prod-install.yml -f tag=vX.Y.Z
 ```
 
-The workflow checks out the tag and runs `scripts/ci/prod-install.sh --ci`, which logs each JSON line from setup and writes a step/status table to the job summary. It fails on any `error` or `action_required` line.
+The workflow checks out the tag and runs `scripts/ci/prod-setup.sh install`, which logs each JSON line from setup and writes a step/status table to the job summary. It fails on any `error` or `action_required` line.
 
 The owner PAT is never printed: `--ci` uses it only for the selftest and revokes it at the end, and the script aborts if any output line matches the token pattern. After the install, create your own tokens in the dashboard.
+
+## Production deploys
+
+Every **stable** release upgrades prod (`deploy-prod` in `release-please.yml`). Pushes to `main` never touch prod, and pre-releases are skipped by a guard (`gh release view --json isPrerelease`). The job is in the `prod` concurrency group and independent of `deploy-landing`. Requires the first install above.
+
+Manual redeploy, only for the latest stable tag:
+
+```
+gh workflow run release-please.yml -f tag=vX.Y.Z
+```
+
+(The same `tag` input also redeploys the landing site.) The job checks out the tag and runs `scripts/ci/prod-setup.sh` in three steps, each with the PROD token scoped to that step:
+
+1. `preflight`: `oa:setup --check --strict --upgrade`. Read-only; fails if the instance is not installed (missing D1/R2/KV, Worker secrets, Access app, Worker never deployed) or has drifted (Worker vars differ from the flags, Access app not linked to its policy). Deploy and selftest always run, so they never count as drift.
+2. `upgrade`: `oa:setup --ci --upgrade`. Deploys and runs selftest with a CI token. `--upgrade` never creates resources, secrets or Access config, and keeps the owner token.
+3. `cleanup` (`always()`): `oa:setup --ci --revoke-ci-tokens`. Revokes any leaked setup-ci token.
+
+A failed preflight skips the upgrade; cleanup still runs.
