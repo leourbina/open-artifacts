@@ -23,6 +23,10 @@ export type Deps = {
   env: Record<string, string | undefined>;
   fs?: Fs;
   sleep?: (ms: number) => Promise<void>;
+  /** Test seam: process.exit. */
+  exit?: (code: number) => void;
+  /** Test seam: process.on for SIGTERM/SIGINT; returns the unsubscribe. */
+  onSignal?: (sig: "SIGTERM" | "SIGINT", h: () => void) => () => void;
 };
 
 export const realFs: Fs = {

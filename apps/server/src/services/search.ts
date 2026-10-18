@@ -226,16 +226,19 @@ class HtmlText {
   }
 }
 
-/** Input bytes read per entry, at most (the inline-parse budget). */
-const INPUT_BUDGET = LIMITS.inlineBytes;
+/**
+ * Indexing reads and extracts at most this many leading bytes of an entry
+ * (the DO alarm's CPU budget); the rest of the document is not indexed.
+ */
+export const INDEX_INPUT_BYTES = 128 * 1024;
 
 /**
  * Indexable text of an entry, at most LIMITS.searchBodyChars, with SNIPPET_MARK
  * characters stripped. html: markup stripped, script/style/noscript/template
  * and comment content dropped, entities decoded, whitespace collapsed;
  * markdown/code: raw; pdf: "" (the viewer extracts and PUTs it).
- * A stream is read until the output reaches the cap, INPUT_BUDGET bytes
- * have been read (it stops before a read likely to cross it) or MAX_SKIPS
+ * A stream is read until the output reaches the cap, INDEX_INPUT_BYTES bytes
+ * have been read (the chunk crossing it is truncated there) or MAX_SKIPS
  * comments/skipped elements were opened, then cancelled; at most
  * MAX_ENTITIES entities are decoded. These bound the CPU per entry (B17).
  *
@@ -260,12 +263,11 @@ export async function extractText(
   const h = new HtmlText();
   let out = "";
   let bytes = 0;
-  let last = 0;
   const dec = new TextDecoder();
   const reader = body.getReader();
   for (;;) {
     const stop =
-      bytes + last >= INPUT_BUDGET ||
+      bytes >= INDEX_INPUT_BYTES ||
       h.exhausted ||
       // Entities only shrink text, so the cap on undecoded text is safe.
       out.length >= (html ? cap * 1.25 : cap);
@@ -274,10 +276,9 @@ export async function extractText(
     let chunk: string;
     if (r.done) chunk = dec.decode();
     else {
-      const room = INPUT_BUDGET - bytes;
+      const room = INDEX_INPUT_BYTES - bytes;
       const v = r.value.byteLength > room ? r.value.subarray(0, room) : r.value;
       bytes += v.byteLength;
-      last = v.byteLength;
       chunk = dec.decode(v, { stream: true });
     }
     out += html ? collapse(h.push(chunk, r.done)) : chunk;
@@ -345,7 +346,15 @@ export async function indexVersionOrThrow(
     const entry = (JSON.parse(row.manifest) as ManifestEntry[]).find(
       (e) => e.path === row.entry,
     );
-    const obj = entry ? await env.FILES.get(entry.key) : null;
+    // Only the first INDEX_INPUT_BYTES are read: ask R2 for no more.
+    const obj = entry
+      ? await env.FILES.get(
+          entry.key,
+          entry.size > INDEX_INPUT_BYTES
+            ? { range: { offset: 0, length: INDEX_INPUT_BYTES } }
+            : undefined,
+        )
+      : null;
     if (obj) body = await extractText(row.format, obj.body);
   }
   const guard = [artifactId, version] as const;

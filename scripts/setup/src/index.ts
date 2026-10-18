@@ -3,12 +3,16 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { type Deps, makeApi, makeWrangler, realDeps, realFs } from "./cf.ts";
 import { readOnlyDeps } from "./readonly.ts";
-import { readState, type State, writeState } from "./state.ts";
+import { readState, type State, statePath, writeState } from "./state.ts";
 import { type Ctx, NeedInput, type Opts, type Step } from "./step.ts";
 import { access } from "./steps/access.ts";
 import { agentConfig } from "./steps/agent-config.ts";
 import { deploy } from "./steps/deploy.ts";
-import { ownerToken } from "./steps/owner-token.ts";
+import {
+  ownerToken,
+  revokeCiTokens,
+  revokeToken,
+} from "./steps/owner-token.ts";
 import { prereqs } from "./steps/prereqs.ts";
 import { resources } from "./steps/resources.ts";
 import { secrets } from "./steps/secrets.ts";
@@ -41,6 +45,7 @@ const ICON = {
   todo: "○",
 };
 
+const PAT_RE = /oa_pat_[1-9A-HJ-NP-Za-km-z]+/g;
 const HOST = /^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i;
 const EMAIL = /^[^\s@"\\]+@[a-z0-9.-]+\.[a-z]{2,}$/i;
 const NAME = /^[a-z0-9-]+$/;
@@ -75,9 +80,12 @@ async function resolve(argv: string[], deps: Deps, state: State) {
       strict: { type: "boolean", default: false },
       "new-owner-token": { type: "boolean", default: false },
       json: { type: "boolean", default: false },
+      ci: { type: "boolean", default: false },
+      "revoke-ci-tokens": { type: "boolean", default: false },
     },
   });
-  const interactive = !v.yes && !v.json;
+  const json = v.json || v.ci;
+  const interactive = !v.yes && !json;
   // Precedence: flag, then saved state, then an interactive prompt.
   const need = async (flag: string, re: RegExp, saved?: string) => {
     const q = `${flag.slice(2).replace("-", " ")}:`;
@@ -86,9 +94,16 @@ async function resolve(argv: string[], deps: Deps, state: State) {
       saved ??
       (interactive ? await deps.prompt(q) : undefined);
     if (val) return valid(flag, val, re);
-    if (v.json) throw new NeedInput(`pass ${flag} (--json never prompts)`);
+    if (json) throw new NeedInput(`pass ${flag} (--json never prompts)`);
     throw new Error(`missing ${flag} (required with --yes)`);
   };
+  if (v.ci && !v.name) throw new Error("--ci requires --name");
+  if (v.ci && v["new-owner-token"])
+    throw new Error(
+      "--ci mints and revokes its own token; drop --new-owner-token",
+    );
+  if (v["revoke-ci-tokens"] && !v.ci)
+    throw new Error("--revoke-ci-tokens needs --ci");
   if (v.strict && !v.check) throw new Error("--strict needs --check");
   // Without state, the name is what everything is found by: never guess it.
   if (!v.name && !state.name && (v.upgrade || v.check || v.yes || v.json))
@@ -98,7 +113,7 @@ async function resolve(argv: string[], deps: Deps, state: State) {
   const name = valid("--name", v.name ?? state.name ?? "open-artifacts", NAME);
   if (state.name && name !== state.name) {
     const q = `State is for --name ${state.name}; switch to ${name}? [y/N]`;
-    if (v.json)
+    if (json)
       throw new NeedInput(
         `--name ${name} conflicts with saved --name ${state.name}; pass --name ${state.name}, or rerun interactively to switch`,
       );
@@ -109,8 +124,13 @@ async function resolve(argv: string[], deps: Deps, state: State) {
   }
   const opts: Opts = {
     name,
-    appHost: await need("--app-host", HOST, state.appHost),
-    contentHost: await need("--content-host", HOST, state.contentHost),
+    // The cleanup-only mode touches D1 by name: no hosts needed.
+    appHost: v["revoke-ci-tokens"]
+      ? (v["app-host"] ?? state.appHost ?? "")
+      : await need("--app-host", HOST, state.appHost),
+    contentHost: v["revoke-ci-tokens"]
+      ? (v["content-host"] ?? state.contentHost ?? "")
+      : await need("--content-host", HOST, state.contentHost),
     ownerEmail: valid(
       "--owner-email",
       normEmail(await need("--owner-email", /./, state.ownerEmail)),
@@ -118,13 +138,15 @@ async function resolve(argv: string[], deps: Deps, state: State) {
     ),
     accountId:
       v["account-id"] ?? state.accountId ?? deps.env.CLOUDFLARE_ACCOUNT_ID,
-    yes: v.yes,
+    yes: v.yes || v.ci,
     upgrade: v.upgrade,
     check: v.check,
     strict: v.strict,
     newOwnerToken: v["new-owner-token"],
     interactive,
-    json: v.json,
+    json,
+    ci: v.ci,
+    revokeCi: v["revoke-ci-tokens"],
   };
   return opts;
 }
@@ -197,7 +219,8 @@ export async function run(
   root: string,
   steps: Step[] = STEPS,
 ): Promise<number> {
-  const json = argv.includes("--json");
+  const ci = argv.includes("--ci");
+  const json = argv.includes("--json") || ci;
   let human: string | undefined;
   const report = (l: Line) => {
     const extra = human
@@ -205,13 +228,14 @@ export async function run(
       : l.data
         ? ` ${JSON.stringify(l.data)}`
         : "";
-    deps.out(
-      json
-        ? JSON.stringify(l)
-        : `${ICON[l.status]} ${l.step}: ${l.message}${extra}`,
-    );
+    const text = json
+      ? JSON.stringify(l)
+      : `${ICON[l.status]} ${l.step}: ${l.message}${extra}`;
+    // --ci: belt and braces, a PAT echoed by a library error never reaches the output.
+    deps.out(ci ? text.replace(PAT_RE, "[redacted]") : text);
   };
-  const fs = deps.fs ?? realFs;
+  const rawFs = deps.fs ?? realFs;
+  let fs = rawFs;
   let opts: Opts;
   let state: State;
   try {
@@ -223,6 +247,14 @@ export async function run(
     report({ step: "args", status, message: (e as Error).message });
     return ar ? 2 : 1;
   }
+  // --ci never writes state.json (an ephemeral runner; ownerTokenId is meaningless once revoked).
+  if (opts.ci)
+    fs = {
+      read: rawFs.read,
+      write: (p, d) => {
+        if (p !== statePath(root)) rawFs.write(p, d);
+      },
+    };
   const { name, appHost, contentHost, ownerEmail } = opts;
   const prev = {
     name: state.name,
@@ -258,38 +290,115 @@ export async function run(
     const l: Line = { step: "", status, message: msg(fallback) };
     return data === undefined ? l : { ...l, data };
   };
-  if (opts.check) return checkOnly(steps, state, ctx, report);
-  for (const step of steps) {
-    human = ctx.data = ctx.human = undefined;
+  if (opts.revokeCi && !opts.check) {
     try {
-      if ((await step.check(state, ctx)) === "done") {
-        report({ ...take("skipped", "already done"), step: step.name });
-        continue;
-      }
-      // Check-time notes explain the todo; apply reports its own.
-      ctx.notes.length = 0;
-      const r = await step.apply(state, ctx);
-      if (r) {
-        ctx.notes.length = 0;
-        report({ step: step.name, ...r });
-        return 2;
-      }
-      report({ ...take("ok", "done"), step: step.name });
+      const n = await revokeCiTokens(ctx);
+      report({
+        step: "revoke-ci-tokens",
+        status: "ok",
+        message: `revoked ${n} live setup-ci tokens`,
+        data: { revoked: n },
+      });
+      return 0;
     } catch (e) {
-      ctx.notes.length = 0;
-      const message = (e as Error).message;
-      if (e instanceof NeedInput) {
-        report({ step: step.name, status: "action_required", message });
-        return 2;
-      }
-      report({ step: step.name, status: "error", message });
-      return (e as { exitCode?: number }).exitCode ?? 1;
-    } finally {
-      writeState(fs, root, state);
+      report({
+        step: "revoke-ci-tokens",
+        status: "error",
+        message: `could not revoke setup-ci tokens: ${(e as Error).message}; revoke tokens labelled setup-ci in Settings → Tokens`,
+      });
+      return 1;
     }
   }
-  writeState(fs, root, state);
-  return 0;
+  if (opts.check) return checkOnly(steps, state, ctx, report);
+  const runSteps = async (): Promise<number> => {
+    for (const step of steps) {
+      human = ctx.data = ctx.human = undefined;
+      try {
+        if ((await step.check(state, ctx)) === "done") {
+          report({ ...take("skipped", "already done"), step: step.name });
+          continue;
+        }
+        // Check-time notes explain the todo; apply reports its own.
+        ctx.notes.length = 0;
+        const r = await step.apply(state, ctx);
+        if (r) {
+          ctx.notes.length = 0;
+          report({ step: step.name, ...r });
+          return 2;
+        }
+        report({ ...take("ok", "done"), step: step.name });
+      } catch (e) {
+        ctx.notes.length = 0;
+        const message = (e as Error).message;
+        if (e instanceof NeedInput) {
+          report({ step: step.name, status: "action_required", message });
+          return 2;
+        }
+        report({ step: step.name, status: "error", message });
+        return (e as { exitCode?: number }).exitCode ?? 1;
+      } finally {
+        writeState(fs, root, state);
+      }
+    }
+    writeState(fs, root, state);
+    return 0;
+  };
+  let revokeFailed = false;
+  let revoking: Promise<void> | undefined;
+  /** Best-effort, guarded: runs at most once, from the end of the run or a signal. */
+  const revokeOnce = async () => {
+    if (!opts.ci) return;
+    if (!revoking && ctx.ciTokenId) {
+      const id = ctx.ciTokenId;
+      ctx.pat = ctx.ciTokenId = state.ownerTokenId = undefined;
+      revoking = (async () => {
+        try {
+          await revokeToken(ctx, id);
+          report({
+            step: "revoke-ci-token",
+            status: "ok",
+            message: `revoked CI owner token ${id}`,
+          });
+        } catch {
+          report({
+            step: "revoke-ci-token",
+            status: "error",
+            message: `could not revoke CI owner token ${id}; action_required: revoke it in Settings → Tokens`,
+            data: { tokenId: id },
+          });
+          revokeFailed = true;
+        }
+      })();
+    }
+    await revoking;
+  };
+  const unsub: (() => void)[] = [];
+  if (opts.ci) {
+    const on =
+      deps.onSignal ??
+      ((sig, h) => {
+        process.on(sig, h);
+        return () => void process.off(sig, h);
+      });
+    for (const [sig, c] of [
+      ["SIGTERM", 143],
+      ["SIGINT", 130],
+    ] as const)
+      unsub.push(
+        on(sig, () => {
+          human = undefined;
+          void revokeOnce().finally(() => (deps.exit ?? process.exit)(c));
+        }),
+      );
+  }
+  let code = 1;
+  try {
+    code = await runSteps();
+  } finally {
+    await revokeOnce();
+    for (const u of unsub) u();
+  }
+  return revokeFailed && code === 0 ? 2 : code;
 }
 
 if (

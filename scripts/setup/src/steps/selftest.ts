@@ -99,6 +99,22 @@ async function mcp(ctx: Ctx, token: string, prev?: string) {
     });
   const text = (r: { content?: { text?: string }[] }) =>
     r?.content?.[0]?.text ?? "no id";
+  // --ci keeps no state: find the owner's existing welcome page by title instead of publishing a new one each run.
+  if (
+    !prev &&
+    ctx.opts.ci &&
+    tools.some((t: { name: string }) => t.name === "list_artifacts")
+  ) {
+    const l = await post("tools/call", {
+      name: "list_artifacts",
+      arguments: { scope: "mine", limit: 100 },
+    });
+    const items = l?.structuredContent?.items;
+    const hit = Array.isArray(items)
+      ? items.find((a: { title?: string }) => a?.title === TITLE)
+      : undefined;
+    if (typeof hit?.id === "string") prev = hit.id;
+  }
   let r = await publish(prev);
   // The saved welcome artifact was deleted: publish a fresh one instead.
   if (prev && r?.isError && /^not_found\b/.test(text(r))) {

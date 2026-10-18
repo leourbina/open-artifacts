@@ -41,6 +41,11 @@ const VERSION_FILE = `${VERSIONS}/:v/files/*`;
 const MAX_PATCH = 64 * 1024;
 const VERSION_NUM = /^[1-9]\d{0,8}$/;
 
+// Module-scope warm-up (startup limit, not a request's CPU): zod builds a
+// schema's parser on its first parse, ~1 ms of a cold isolate's first request.
+ListQuerySchema.safeParse({ limit: "25" });
+PublishInputSchema.safeParse({ title: "t", format: "html", content: "" });
+
 /** Parses PublishInput; schema failures re-run planFiles for a precise {path, reason}. */
 async function publishInput(
   c: Context<AppEnv>,

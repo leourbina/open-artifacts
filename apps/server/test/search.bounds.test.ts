@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 import {
   extractText,
+  INDEX_INPUT_BYTES,
   MAX_ENTITIES,
   MAX_SKIPS,
 } from "../src/services/search.js";
@@ -54,5 +55,37 @@ describe("extractText bounds", () => {
       "<p>a</p><SCRIPT>bad()</ScRiPt ><style>.x{}</style><p>b</p><!-- x --><p>c</p>";
     for (const size of [1, 3, 7, 64])
       expect(await extractText("html", chunked(html, size))).toBe("a b c");
+  });
+
+  it(`reads and extracts at most the first ${INDEX_INPUT_BYTES} bytes`, async () => {
+    expect(INDEX_INPUT_BYTES).toBe(128 * 1024);
+    // Markdown is raw: exactly the first INDEX_INPUT_BYTES bytes, whatever the chunking.
+    const md = "abcdefgh".repeat(40 * 1024); // 320 KB
+    for (const size of [1000, 64 * 1024, 100 * 1024, 512 * 1024])
+      expect(await extractText("markdown", chunked(md, size))).toBe(
+        md.slice(0, INDEX_INPUT_BYTES),
+      );
+    // HTML: text past the cap is never indexed, even when the output cap isn't reached.
+    const html = `<p>head</p>${"<i></i>".repeat(INDEX_INPUT_BYTES / 7)}<p>past</p>`;
+    const t = await extractText("html", chunked(html));
+    expect(t).toBe("head");
+    // The stream is cancelled at the cap: no more than one chunk past it is pulled.
+    let pulled = 0;
+    let cancelled = false;
+    const chunk = new Uint8Array(16 * 1024).fill(0x61);
+    const endless = new ReadableStream<Uint8Array>({
+      pull(c) {
+        pulled += chunk.byteLength;
+        c.enqueue(chunk);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    expect((await extractText("code", endless)).length).toBe(INDEX_INPUT_BYTES);
+    expect(cancelled).toBe(true);
+    expect(pulled).toBeLessThanOrEqual(
+      INDEX_INPUT_BYTES + 2 * chunk.byteLength,
+    );
   });
 });

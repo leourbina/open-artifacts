@@ -33,15 +33,38 @@ export function ownerStatements(
   tokenId: string,
   hash: string,
   now: number,
+  label = "setup",
+  cleanStale = false,
 ) {
   const name = email.split("@")[0] || email;
   const e = lit(email);
-  return [
+  const stale = cleanStale
+    ? [
+        // --ci: leaked setup-ci tokens (SIGKILL/OOM) must not count toward the cap, so they go BEFORE the insert.
+        // Safe because CI runs are serialized (workflow `concurrency: prod`): no concurrent run's live token is hit.
+        revokeCiSql(email, now),
+      ]
+    : [];
+  const [upsert, ...rest] = [
     `INSERT INTO users (id, email, name, role, created_at) VALUES (${lit(base58(16))}, ${e}, ${lit(name)}, 'owner', ${now}) ON CONFLICT(email) DO UPDATE SET role = 'owner'`,
-    `INSERT INTO tokens (id, user_id, label, token_hash, created_at) SELECT ${lit(tokenId)}, id, 'setup', ${lit(hash)}, ${now} FROM users WHERE email = ${e} AND (SELECT count(*) FROM tokens WHERE user_id = users.id AND revoked_at IS NULL) < ${MAX_ACTIVE}`,
-    `UPDATE tokens SET revoked_at = ${now} WHERE user_id = (SELECT id FROM users WHERE email = ${e}) AND label = 'setup' AND revoked_at IS NULL AND id <> ${lit(tokenId)} AND EXISTS (SELECT 1 FROM tokens WHERE id = ${lit(tokenId)})`,
+    `INSERT INTO tokens (id, user_id, label, token_hash, created_at) SELECT ${lit(tokenId)}, id, ${lit(label)}, ${lit(hash)}, ${now} FROM users WHERE email = ${e} AND (SELECT count(*) FROM tokens WHERE user_id = users.id AND revoked_at IS NULL) < ${MAX_ACTIVE}`,
+    `UPDATE tokens SET revoked_at = ${now} WHERE user_id = (SELECT id FROM users WHERE email = ${e}) AND label = ${lit(label)} AND revoked_at IS NULL AND id <> ${lit(tokenId)} AND EXISTS (SELECT 1 FROM tokens WHERE id = ${lit(tokenId)})`,
     `SELECT id FROM tokens WHERE id = ${lit(tokenId)} AND revoked_at IS NULL`,
   ];
+  return [upsert, ...stale, ...rest] as string[];
+}
+
+/** Revokes every live 'setup-ci' token of the owner. */
+export const revokeCiSql = (email: string, now: number) =>
+  `UPDATE tokens SET revoked_at = ${now} WHERE user_id = (SELECT id FROM users WHERE email = ${lit(email)}) AND label = 'setup-ci' AND revoked_at IS NULL`;
+
+/** --revoke-ci-tokens: returns how many rows were revoked. */
+export async function revokeCiTokens(ctx: Ctx): Promise<number> {
+  const res = await d1Raw(
+    ctx,
+    `${revokeCiSql(ctx.opts.ownerEmail, Date.now())};`,
+  );
+  return res[0]?.meta?.changes ?? 0;
 }
 export const ownerSql = (...a: Parameters<typeof ownerStatements>) =>
   `${ownerStatements(...a).join("; ")};`;
@@ -66,6 +89,14 @@ async function d1Raw(ctx: Ctx, sql: string): Promise<D1Result[]> {
 const d1 = async (ctx: Ctx, sql: string): Promise<unknown[]> =>
   (await d1Raw(ctx, sql)).flatMap((r) => r.results ?? []);
 
+/** --ci: revokes the run's own token row (hash-only; idempotent). */
+export async function revokeToken(ctx: Ctx, id: string) {
+  await d1Raw(
+    ctx,
+    `UPDATE tokens SET revoked_at = ${Date.now()} WHERE id = ${lit(id)} AND revoked_at IS NULL;`,
+  );
+}
+
 const live = (ctx: Ctx, id: string) =>
   d1(
     ctx,
@@ -80,6 +111,7 @@ export const ownerToken: Step = {
       ctx.notes.push("kept (--upgrade); pass --new-owner-token to mint one");
       return "done";
     }
+    if (ctx.opts.ci) return "todo";
     if (!state.ownerTokenId || !(await live(ctx, state.ownerTokenId)))
       return "todo";
     ctx.notes.push(
@@ -90,13 +122,22 @@ export const ownerToken: Step = {
   async apply(state, ctx) {
     const token = newPat();
     const id = base58(16);
+    const ci = ctx.opts.ci;
     const prev = state.ownerTokenId;
     // Recorded first, so a crash after the insert still leaves the row tracked.
-    state.ownerTokenId = id;
-    writeState(ctx.fs, ctx.root, state);
-    const uncertain = () => {
+    // Under --ci the id is tracked in ctx only (state is never written) and revoked at the end.
+    if (ci) ctx.ciTokenId = id;
+    else {
+      state.ownerTokenId = id;
+      writeState(ctx.fs, ctx.root, state);
+    }
+    const untrack = () => {
+      if (ci) return;
       state.ownerTokenId = prev;
       writeState(ctx.fs, ctx.root, state);
+    };
+    const uncertain = () => {
+      untrack();
       return {
         status: "action_required" as const,
         message: "owner token state uncertain; rerun with --new-owner-token",
@@ -105,15 +146,25 @@ export const ownerToken: Step = {
     const email = ctx.opts.ownerEmail;
     let res: D1Result[];
     try {
-      res = await d1Raw(ctx, ownerSql(email, id, tokenHash(token), Date.now()));
+      res = await d1Raw(
+        ctx,
+        ownerSql(
+          email,
+          id,
+          tokenHash(token),
+          Date.now(),
+          ci ? "setup-ci" : "setup",
+          ci,
+        ),
+      );
     } catch {
       return uncertain();
     }
-    if (res.length < 4) return uncertain();
-    const [, insert, revoke, verify] = res;
+    const o = ci ? 1 : 0; // --ci has one extra statement (stale cleanup) before the insert
+    if (res.length < 4 + o) return uncertain();
+    const [insert, revoke, verify] = [res[1 + o], res[2 + o], res[3 + o]];
     if (!insert?.meta?.changes) {
-      state.ownerTokenId = prev;
-      writeState(ctx.fs, ctx.root, state);
+      untrack();
       return {
         status: "action_required",
         message: `owner has ${MAX_ACTIVE} active tokens; revoke some in Settings, then rerun setup (an old setup token still counts toward the cap; revoke it in Settings)`,
@@ -125,8 +176,17 @@ export const ownerToken: Step = {
       );
     const revoked = revoke?.meta?.changes ?? 0;
     ctx.pat = token;
-    ctx.notes.push(`minted owner token ${id}; shown once, store it now`);
-    if (revoked > 0) ctx.notes.push(`revoked ${revoked} prior setup tokens`);
+    ctx.notes.push(
+      ci
+        ? "owner token minted for selftest (not printed; revoked at end of run)"
+        : `minted owner token ${id}; shown once, store it now`,
+    );
+    const stale = ci ? (res[1]?.meta?.changes ?? 0) : 0;
+    if (stale > 0) ctx.notes.push(`revoked ${stale} stale setup-ci tokens`);
+    if (revoked > 0)
+      ctx.notes.push(
+        `revoked ${revoked} prior ${ci ? "setup-ci" : "setup"} tokens`,
+      );
     try {
       const dem = await d1Raw(ctx, demoteStatements(email).join("; ") + ";");
       for (const o of (dem[0]?.results ?? []) as { email?: string }[])
@@ -135,6 +195,10 @@ export const ownerToken: Step = {
       ctx.notes.push(
         "could not demote the previous owner; rerun with --new-owner-token",
       );
+    }
+    if (ci) {
+      ctx.data = { tokenId: id };
+      return undefined;
     }
     ctx.data = { tokenId: id, token };
     ctx.human = `  token: ${token}`;

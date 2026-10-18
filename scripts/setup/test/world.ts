@@ -62,6 +62,10 @@ type World = {
   /** The token INSERT fails, or silently writes nothing. */
   d1Fails?: boolean;
   dropTokenInsert?: boolean;
+  /** tools/list answers by throwing this (a client library echoing URL and headers). */
+  mcpThrows?: (token: string) => string;
+  /** Called with each MCP method the app host sees. */
+  onMcp?: (method: string) => void;
   /** Any statement matching this fails (earlier statements keep their effects). */
   failOn?: RegExp;
   /** The first d1 command answers with one result fewer than statements. */
@@ -147,6 +151,7 @@ export function world(w: World = {}) {
   let secrets = w.secrets && [...w.secrets];
   let deployedConfig: string | undefined;
   let published = 0;
+  const pubs: { id: string; title: string }[] = [];
   const deleted = [...(w.deletedArtifacts ?? [])];
   /** Every mutation, in order. `values` holds every secret value seen. */
   const ops: string[] = [];
@@ -159,6 +164,8 @@ export function world(w: World = {}) {
   /** App-host and Access requests, e.g. "GET /healthz", "mcp tools/list". */
   const hits: string[] = [];
   const mcpCalls: Obj[] = [];
+  /** Every bearer token the app host saw (how tests learn a never-printed PAT). */
+  const bearers = new Set<string>();
   const sqls: string[] = [];
   const db = {
     users: [...(w.seed?.users ?? [])] as {
@@ -238,16 +245,39 @@ export function world(w: World = {}) {
         user.role = "owner";
       } else if (
         is(
-          /^UPDATE tokens SET revoked_at = (\d+) WHERE user_id = \(SELECT id FROM users WHERE email = '((?:[^']|'')*)'\) AND label = 'setup' AND revoked_at IS NULL AND id <> '(\w+)' AND EXISTS \(SELECT 1 FROM tokens WHERE id = '\w+'\)$/,
+          /^UPDATE tokens SET revoked_at = (\d+) WHERE user_id = \(SELECT id FROM users WHERE email = '((?:[^']|'')*)'\) AND label = 'setup-ci' AND revoked_at IS NULL$/,
         )
       ) {
-        const [, at, em, keep] = m;
+        const uid = db.users.find(
+          (x) => x.email === unq(m[2]).toLowerCase(),
+        )?.id;
+        for (const x of db.tokens)
+          if (x.user_id === uid && x.label === "setup-ci" && !x.revoked_at) {
+            x.revoked_at = Number(m[1]);
+            changes++;
+          }
+      } else if (
+        is(
+          /^UPDATE tokens SET revoked_at = (\d+) WHERE id = '(\w+)' AND revoked_at IS NULL$/,
+        )
+      ) {
+        for (const x of db.tokens)
+          if (x.id === m[2] && !x.revoked_at) {
+            x.revoked_at = Number(m[1]);
+            changes++;
+          }
+      } else if (
+        is(
+          /^UPDATE tokens SET revoked_at = (\d+) WHERE user_id = \(SELECT id FROM users WHERE email = '((?:[^']|'')*)'\) AND label = '(setup(?:-ci)?)' AND revoked_at IS NULL AND id <> '(\w+)' AND EXISTS \(SELECT 1 FROM tokens WHERE id = '\w+'\)$/,
+        )
+      ) {
+        const [, at, em, lbl, keep] = m;
         const uid = db.users.find((x) => x.email === unq(em).toLowerCase())?.id;
         for (const x of db.tokens)
           if (
             db.tokens.some((t) => t.id === keep) &&
             x.user_id === uid &&
-            x.label === "setup" &&
+            x.label === lbl &&
             !x.revoked_at &&
             x.id !== keep
           ) {
@@ -256,10 +286,10 @@ export function world(w: World = {}) {
           }
       } else if (
         is(
-          /^INSERT INTO tokens \(id, user_id, label, token_hash, created_at\) SELECT '(\w+)', id, 'setup', '([0-9a-f]{64})', \d+ FROM users WHERE email = '((?:[^']|'')*)' AND \(SELECT count\(\*\) FROM tokens WHERE user_id = users\.id AND revoked_at IS NULL\) < (\d+)$/,
+          /^INSERT INTO tokens \(id, user_id, label, token_hash, created_at\) SELECT '(\w+)', id, '(setup(?:-ci)?)', '([0-9a-f]{64})', \d+ FROM users WHERE email = '((?:[^']|'')*)' AND \(SELECT count\(\*\) FROM tokens WHERE user_id = users\.id AND revoked_at IS NULL\) < (\d+)$/,
         )
       ) {
-        const [, id, hash, em, cap] = m;
+        const [, id, label, hash, em, cap] = m;
         const user = db.users.find((x) => x.email === unq(em).toLowerCase());
         const active = db.tokens.filter(
           (x) => x.user_id === user?.id && !x.revoked_at,
@@ -270,7 +300,7 @@ export function world(w: World = {}) {
             db.tokens.push({
               id,
               user_id: user.id,
-              label: "setup",
+              label,
               token_hash: hash,
             });
         }
@@ -367,11 +397,15 @@ export function world(w: World = {}) {
         }
         if (u.pathname === "/mcp") {
           const tok = auth?.replace(/^Bearer /, "") ?? "";
+          if (tok) bearers.add(tok);
           if (
             !db.tokens.some((t) => t.token_hash === sha(tok) && !t.revoked_at)
           )
             return Response.json({ error: "unauthorized" }, { status: 401 });
           hits.push(`mcp ${body.method}`);
+          w.onMcp?.(body.method);
+          if (w.mcpThrows && body.method === "tools/list")
+            throw new Error(w.mcpThrows(tok));
           const reply = (result: unknown, sse = false) => {
             const msg = JSON.stringify({ jsonrpc: "2.0", id: body.id, result });
             return sse
@@ -394,10 +428,16 @@ export function world(w: World = {}) {
               tools: [
                 ...(w.noPublishTool ? [] : [{ name: "publish_artifact" }]),
                 { name: "get_artifact" },
+                { name: "list_artifacts" },
               ],
             });
           if (body.method === "tools/call") {
             mcpCalls.push(body.params);
+            if (body.params.name === "list_artifacts")
+              return reply(
+                { structuredContent: { items: pubs, nextCursor: null } },
+                true,
+              );
             const prev = body.params.arguments.id;
             const err = (text: string) =>
               reply({ isError: true, content: [{ type: "text", text }] }, true);
@@ -405,6 +445,8 @@ export function world(w: World = {}) {
             if (prev && deleted.includes(prev))
               return err("not_found: Artifact not found");
             const id = prev ?? `art${++published}`;
+            if (!pubs.some((x) => x.id === id))
+              pubs.push({ id, title: body.params.arguments.title });
             return reply(
               {
                 content: [{ type: "text", text: "Published" }],
@@ -424,6 +466,7 @@ export function world(w: World = {}) {
         if (cu) {
           hits.push("GET content-url");
           const tok = auth?.replace(/^Bearer /, "") ?? "";
+          if (tok) bearers.add(tok);
           if (
             !db.tokens.some((t) => t.token_hash === sha(tok) && !t.revoked_at)
           )
@@ -559,11 +602,21 @@ export function world(w: World = {}) {
       return envelope(null, 404, [{ message: "no route" }]);
     },
   });
+  /** Every exec result's stdout and stderr, for leak scans. */
+  const execOut: string[] = [];
+  const innerExec = c.deps.exec;
+  c.deps.exec = async (...a) => {
+    const r = await innerExec(...a);
+    execOut.push(r.stdout, r.stderr);
+    return r;
+  };
   return {
     ...c,
+    execOut,
     argv,
     hits,
     mcpCalls,
+    bearers,
     deleted,
     sqls,
     db,
