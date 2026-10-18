@@ -1,0 +1,25 @@
+import { AUTH } from "@oa/shared";
+import { Banner } from "@oa/ui";
+import { EdgePanel } from "./Edge";
+
+export function SignIn({ failed = false }: { failed?: boolean }) {
+  return (
+    <EdgePanel>
+      <h1>Sign in to Open Artifacts</h1>
+      {failed && (
+        <Banner tone="danger" title="Sign-in didn't finish.">
+          The login link expired or was cancelled. Try again.
+        </Banner>
+      )}
+      <div className="oa-actions">
+        <a className="oa-btn oa-primary" href={AUTH.login}>
+          Continue with Cloudflare Access
+        </a>
+      </div>
+      <p className="oa-note">
+        You'll confirm your email with a one-time PIN or your organization's
+        login.
+      </p>
+    </EdgePanel>
+  );
+}

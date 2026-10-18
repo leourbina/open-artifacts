@@ -1,4 +1,6 @@
+import { QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
+import { makeQueryClient } from "../src/api/queryClient";
 import { router } from "../src/router";
 
 // What the /search page receives for a URL query string: the router's own
@@ -31,7 +33,13 @@ describe("router rendering", () => {
     });
     await r.load();
     expect(
-      renderToString(createElement(RouterProvider, { router: r })),
-    ).toContain("Not found");
+      renderToString(
+        createElement(
+          QueryClientProvider,
+          { client: makeQueryClient() },
+          createElement(RouterProvider, { router: r }),
+        ),
+      ),
+    ).toContain("Page not found");
   });
 });
