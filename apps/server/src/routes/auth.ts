@@ -3,6 +3,7 @@ import {
   buildAuthorizeRedirect,
   clearOidcCookie,
   handleCallback,
+  logOidcFail,
   safeNext,
 } from "../auth/oidc.js";
 import {
@@ -38,7 +39,10 @@ export function mountAuth(app: AppType): void {
     try {
       const { email, name, next } = await handleCallback(c.env, c.req.raw);
       const user = await upsertOnLogin(c.env, email, name);
-      if (!user) return redirect(PAGES.noAccess, [clear]);
+      if (!user) {
+        logOidcFail("no_access");
+        return redirect(PAGES.noAccess, [clear]);
+      }
       const sess = sessionCookie(await signSession(c.env, user.id), c.env);
       return redirect(next, [clear, sess]);
     } catch (e) {

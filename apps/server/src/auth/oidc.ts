@@ -105,7 +105,30 @@ export async function buildAuthorizeRedirect(
   };
 }
 
-const fail = (): never => {
+const tag = (v: unknown) =>
+  typeof v === "string"
+    ? v
+        .toLowerCase()
+        .replace(/[^a-z_]/g, "")
+        .slice(0, 64)
+    : undefined;
+
+/**
+ * Structured failure log. Callers pass only a fixed stage and sanitized
+ * enum-like extras: never tokens, codes, emails, state values or secrets.
+ */
+export function logOidcFail(
+  stage: string,
+  extra: Record<string, string | undefined> = {},
+): void {
+  console.warn(JSON.stringify({ evt: "oidc_fail", stage, ...extra }));
+}
+
+const fail = (
+  stage: string,
+  extra?: Record<string, string | undefined>,
+): never => {
+  logOidcFail(stage, extra);
   throw new ApiError("unauthorized", "Login failed");
 };
 
@@ -123,14 +146,15 @@ function readCookie(req: Request, name: string): string | undefined {
 async function readOidcState(
   secret: string,
   value: string | undefined,
-): Promise<OidcState | null> {
-  if (!value || value.length > MAX_COOKIE_LEN) return null;
+): Promise<OidcState | "no_state_cookie" | "state_bad_sig" | "state_expired"> {
+  if (!value) return "no_state_cookie";
+  if (value.length > MAX_COOKIE_LEN) return "state_bad_sig";
   const parts = value.split(".");
-  if (parts.length !== 2) return null;
+  if (parts.length !== 2) return "state_bad_sig";
   const [p, sig] = parts as [string, string];
-  if (!(await hmacVerify(secret, p, sig))) return null;
+  if (!(await hmacVerify(secret, p, sig))) return "state_bad_sig";
   const raw = b64urlDecode(p);
-  if (!raw) return null;
+  if (!raw) return "state_bad_sig";
   try {
     const o = JSON.parse(new TextDecoder().decode(raw)) as Partial<OidcState>;
     if (
@@ -140,14 +164,55 @@ async function readOidcState(
       typeof o.verifier !== "string" ||
       typeof o.next !== "string" ||
       typeof o.exp !== "number" ||
-      !Number.isFinite(o.exp) ||
-      o.exp <= Date.now()
+      !Number.isFinite(o.exp)
     )
-      return null;
+      return "state_bad_sig";
+    if (o.exp <= Date.now()) return "state_expired";
     return o as OidcState;
   } catch {
-    return null;
+    return "state_bad_sig";
   }
+}
+
+const desc = (v: unknown) =>
+  typeof v === "string"
+    ? // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control chars is the point
+      v.replace(/[\u0000-\u001f\u007f-\u009f]/g, "").slice(0, 200)
+    : undefined;
+
+/**
+ * IdP error/error_description from a failed token response (never the body
+ * otherwise). Access answers token errors with a 302 to
+ * redirect_uri?error=…&error_description=…; others use a JSON body.
+ */
+async function tokenErrorInfo(
+  res: Response,
+): Promise<{ error?: string; description?: string }> {
+  try {
+    if (res.status >= 300 && res.status < 400) {
+      await res.body?.cancel();
+      const loc = res.headers.get("location");
+      if (!loc) return {};
+      const p = new URL(loc, "https://invalid.local").searchParams;
+      return {
+        error: tag(p.get("error")),
+        description: desc(p.get("error_description")),
+      };
+    }
+    if (res.status >= 400 && res.status < 500) {
+      const text = await res.text();
+      if (text.length > 16_384) return {};
+      const j = JSON.parse(text) as {
+        error?: unknown;
+        error_description?: unknown;
+      } | null;
+      return { error: tag(j?.error), description: desc(j?.error_description) };
+    }
+    await res.body?.cancel();
+  } catch {
+    // non-JSON or malformed: stage alone is logged
+  }
+  return {};
 }
 
 /** Constant-time string equality via HMAC verify. */
@@ -173,11 +238,13 @@ export async function handleCallback(
   const secret = requireSecret(env);
   const q = new URL(req.url).searchParams;
   const st = await readOidcState(secret, readCookie(req, OIDC_COOKIE));
-  if (!st) return fail();
+  if (typeof st === "string") return fail(st);
   const state = q.get("state") ?? "";
-  if (!(await safeEqual(secret, state, st.state))) return fail();
+  if (!(await safeEqual(secret, state, st.state)))
+    return fail("state_mismatch");
+  if (q.has("error")) return fail("idp_error", { error: tag(q.get("error")) });
   const code = q.get("code");
-  if (q.has("error") || !code) return fail();
+  if (!code) return fail("no_code");
 
   const issuer = accessIssuer(env);
   let idToken: unknown;
@@ -198,16 +265,20 @@ export async function handleCallback(
       }),
       redirect: "manual",
     });
-    if (!res.ok) {
-      await res.body?.cancel();
-      return fail();
+    if (!res.ok)
+      return fail(`token_http_${res.status}`, await tokenErrorInfo(res));
+    let body: unknown;
+    try {
+      body = await res.json();
+    } catch {
+      return fail("token_bad_json");
     }
-    idToken = ((await res.json()) as { id_token?: unknown } | null)?.id_token;
+    idToken = (body as { id_token?: unknown } | null)?.id_token;
   } catch (e) {
     if (e instanceof ApiError) throw e;
-    return fail();
+    return fail("token_fetch");
   }
-  if (typeof idToken !== "string") return fail();
+  if (typeof idToken !== "string") return fail("no_id_token");
 
   let claims: Record<string, unknown>;
   try {
@@ -218,8 +289,15 @@ export async function handleCallback(
       clockTolerance: CLOCK_TOLERANCE_S,
       requiredClaims: ["exp", "nonce"],
     }));
-  } catch {
-    return fail();
+  } catch (e) {
+    const err = e as { code?: unknown; claim?: unknown };
+    return fail("jwt_verify", {
+      code:
+        typeof err?.code === "string"
+          ? err.code.replace(/[^A-Z_]/g, "").slice(0, 64)
+          : undefined,
+      claim: tag(err?.claim),
+    });
   }
   // Access sets aud to the client id; reject multi-audience tokens outright.
   const aud = claims.aud;
@@ -227,15 +305,15 @@ export async function handleCallback(
     Array.isArray(aud) &&
     (aud.length !== 1 || aud[0] !== env.ACCESS_CLIENT_ID)
   )
-    return fail();
+    return fail("aud");
   if (
     typeof claims.nonce !== "string" ||
     !(await safeEqual(secret, claims.nonce, st.nonce))
   )
-    return fail();
+    return fail("nonce");
   const email = claims.email;
-  if (typeof email !== "string" || !email.includes("@")) return fail();
-  if (claims.email_verified === false) return fail();
+  if (typeof email !== "string" || !email.includes("@")) return fail("email");
+  if (claims.email_verified === false) return fail("email_unverified");
   const name =
     typeof claims.name === "string" && claims.name.trim()
       ? claims.name.trim().slice(0, 200)
