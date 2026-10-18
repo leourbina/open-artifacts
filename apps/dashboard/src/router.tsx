@@ -14,6 +14,7 @@ import type { Scope } from "./library/useLibraryQuery";
 import { NoAccess } from "./pages/NoAccess";
 import { NotFound } from "./pages/NotFound";
 import { SignIn } from "./pages/SignIn";
+import { Agents } from "./settings/Agents";
 import { Members } from "./settings/Members";
 import { Gate, SettingsLayout } from "./settings/SettingsLayout";
 import { Diff } from "./viewer/Diff";
@@ -133,7 +134,7 @@ const routeTree = root.addChildren([
   route("/a/$id/diff/$from/$to", DiffRoute),
   settings.addChildren([
     gated("/settings/members", ADMINS, "/settings/agents", Members),
-    gated("/settings/agents", [...ADMINS, "member"], "/", page("Agents")),
+    gated("/settings/agents", [...ADMINS, "member"], "/", Agents),
     gated("/settings/instance", ADMINS, "/settings/agents", page("Instance")),
   ]),
   usage,
