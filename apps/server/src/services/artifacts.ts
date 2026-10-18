@@ -34,7 +34,7 @@ import { ApiError, appOrigin } from "../http/errors.js";
 import { ArtifactRuntime } from "../runtime/artifact-runtime.js";
 import { type ManifestEntry, materialize, planFiles } from "./manifest.js";
 import { getSettings } from "./members.js";
-import { indexVersion } from "./search.js";
+import { ftsFilter, indexVersion, syncTitleStmt } from "./search.js";
 
 type Ctx = Pick<ExecutionContext, "waitUntil">;
 const CAPS = { db: false, viewer: false, storage: false };
@@ -352,7 +352,7 @@ export function allocateVersion(
 
 // ---------------------------------------------------------------- summaries
 
-function toSummary(
+export function toSummary(
   env: Env,
   a: ArtifactRow,
   owner: UserRef,
@@ -381,7 +381,7 @@ function toSummary(
 }
 
 /** Anonymous callers never see member emails. */
-function redact(ref: UserRef, caller: Caller): UserRef {
+export function redact(ref: UserRef, caller: Caller): UserRef {
   return caller.kind === "user" ? ref : { ...ref, email: null };
 }
 
@@ -449,10 +449,6 @@ export function decodeCursor(s: string): Cursor {
 const ISO_DATE =
   /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2}))?$/;
 
-/** LIKE stopgap until B8's FTS; short to bound the scan cost. */
-const MAX_Q = 40;
-const likeEscape = (s: string) => `%${s.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
-
 /**
  * The list SELECT (exported for the EXPLAIN test). The visibility filter is
  * listFilterSql, whose top-level `deleted_at is null` lets SQLite use the
@@ -479,15 +475,8 @@ export function listQuery(env: Env, caller: Caller, q: ListQuery) {
     if (Number.isNaN(t)) throw bad("Invalid updatedSince", "updatedSince");
     conds.push(gte(artifacts.updatedAt, t));
   }
-  const text = q.q?.trim();
-  if (text && text.length > MAX_Q)
-    throw bad(`q exceeds ${MAX_Q} characters`, "q");
-  if (text) {
-    const p = likeEscape(text);
-    conds.push(
-      sql`(${artifacts.title} like ${p} escape '\\' or ${artifacts.description} like ${p} escape '\\')`,
-    );
-  }
+  // Full-text over title/description/body (same sanitizer as search).
+  if (q.q?.trim()) conds.push(ftsFilter(q.q));
   if (q.cursor !== undefined) {
     const c = decodeCursor(q.cursor);
     conds.push(
@@ -711,11 +700,12 @@ export async function patch(
     set("allow_anonymous_writes = ?", p.allowAnonymousWrites ? 1 : 0);
   if (sets.length) {
     set("updated_at = ?", Date.now());
-    await env.DB.prepare(
+    const upd = env.DB.prepare(
       `update artifacts set ${sets.join(", ")} where id = ? and deleted_at is null`,
-    )
-      .bind(...vals, id)
-      .run();
+    ).bind(...vals, id);
+    if (p.title !== undefined || p.description !== undefined)
+      await env.DB.batch([upd, syncTitleStmt(env, id)]);
+    else await upd.run();
   }
   return getSummary(env, asUser(user), id);
 }

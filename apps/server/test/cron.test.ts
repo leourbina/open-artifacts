@@ -25,15 +25,10 @@ const mk = async (title: string, daysAgo: number) => {
     null,
   );
   await env.FILES.put(`thumbs/${r.id}.webp`, new Uint8Array([1]));
-  await env.DB.batch([
-    env.DB.prepare("update artifacts set deleted_at = ? where id = ?").bind(
-      Date.now() - daysAgo * DAY,
-      r.id,
-    ),
-    env.DB.prepare(
-      "insert into artifact_search (rowid, artifact_id, title, description, body) select rowid, id, title, '', '' from artifacts where id = ?",
-    ).bind(r.id),
-  ]);
+  // Publish left an FTS row (B8); purge must remove it.
+  await env.DB.prepare("update artifacts set deleted_at = ? where id = ?")
+    .bind(Date.now() - daysAgo * DAY, r.id)
+    .run();
   return r.id;
 };
 const count = async (sql: string, id: string) =>

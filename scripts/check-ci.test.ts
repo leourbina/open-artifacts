@@ -82,6 +82,19 @@ describe("deploy-staging.yml", () => {
     expect(step).toContain("wrangler.staging.jsonc");
     expect(step).toContain("--env staging");
   });
+  it("clears conflicting secrets after preflight and before deploy", () => {
+    const p = idx("deploy", "check-staging-secrets");
+    const c = idx("deploy", "conflicting-secrets");
+    expect(c).toBeGreaterThan(p);
+    expect(c).toBeLessThan(idx("deploy", "wrangler deploy"));
+    const step = runs("deploy")[c] as string;
+    expect(step).toContain("set -o pipefail");
+    expect(step).toContain("wrangler secret list");
+    expect(step).toContain(
+      'wrangler secret delete "$name" -c wrangler.staging.jsonc --env staging',
+    );
+    expect(step).toContain("echo y |");
+  });
   it("ensures dashboard dist exists before wrangler deploy", () => {
     const e = idx("deploy", "mkdir -p apps/dashboard/dist");
     expect(e).toBeGreaterThan(idx("deploy", "pnpm build"));
@@ -176,6 +189,12 @@ describe("landing-preview.yml", () => {
     const prev = steps.find((s) => s.id === "preview");
     expect(prev.run).toContain("jq -er");
     expect(prev.run).not.toContain("|| true");
+  });
+  it("hides the wrangler banner and extracts JSON from stdout", () => {
+    const prev = steps.find((s) => s.id === "preview");
+    expect(prev.env.WRANGLER_HIDE_BANNER).toBe("true");
+    expect(prev.run).toContain("sed -n '/^{/,$p'");
+    expect(prev.run).toContain("cat preview.json");
   });
   it("scopes the Cloudflare token to the preview step only", () => {
     expect(w.jobs.preview.env).toBeUndefined();

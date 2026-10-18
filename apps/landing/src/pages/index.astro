@@ -1,0 +1,212 @@
+---
+import { REPO_URL } from "@oa/shared";
+import Shot from "../components/Shot.astro";
+import Base from "../layouts/Base.astro";
+
+const prompt = "Set up open-artifacts.com/llms.txt";
+
+const features = [
+  {
+    title: "Any agent",
+    body: "One MCP server for every MCP client: Claude Code, Codex CLI, Cursor, OpenCode, and others. Each version records which agent made it.",
+  },
+  {
+    title: "Your Cloudflare",
+    body: "Runs as a Worker on your own account and domain. Your artifacts never pass through a third party, and instances send no telemetry.",
+  },
+  {
+    title: "Versions",
+    body: "Every publish is an immutable version with an optional change note. View, diff, or restore any of them.",
+  },
+  {
+    title: "Sharing",
+    body: "Private by default. Invite viewers or editors by email, open an artifact to your team, or make a public link that is never indexed.",
+  },
+  {
+    title: "Live pages",
+    body: "HTML artifacts can save and read shared data through a small runtime API, so polls, trackers, and checklists just work.",
+  },
+  {
+    title: "Free-plan friendly",
+    body: "Every feature works on the Workers Free plan. Rendering happens in the browser, and the dashboard shows today's usage.",
+  },
+];
+---
+
+<Base
+  title="Open Artifacts: a home for what your agents make"
+  description="Open Artifacts is an open-source place to keep, version, and share the HTML pages, docs, code, and PDFs your AI agents make, deployed to your own Cloudflare account."
+>
+  <section class="hero wrap">
+    <h1>Keep, version, and share what your AI agents make, on your own Cloudflare account.</h1>
+    <p class="lede">
+      Open Artifacts is an open-source home for the HTML pages, Markdown docs, code, and PDFs that
+      agents publish. You deploy it once; every MCP agent can use it.
+    </p>
+
+    <div class="cta" role="group" aria-labelledby="cta-label">
+      <p id="cta-label" class="cta-label">Tell your agent:</p>
+      <div class="cta-row">
+        <code class="cta-prompt">{prompt}</code>
+        <button class="btn primary" type="button" data-copy={prompt} hidden>
+          <span data-idle>Copy</span>
+          <span data-done hidden>Copied</span>
+        </button>
+      </div>
+      <p class="cta-note" role="status" aria-live="polite"></p>
+    </div>
+
+    <figure class="frame hero-shot">
+      <Shot
+        name="library"
+        eager
+        sizes="(min-width: 1180px) 1120px, 100vw"
+        alt="The Open Artifacts library: a grid of artifacts with thumbnails, the agent that made each one, and its visibility."
+      />
+    </figure>
+  </section>
+
+  <section class="band" aria-labelledby="steps-h">
+    <div class="wrap">
+      <h2 id="steps-h">Set up in three steps</h2>
+      <ol class="steps">
+        <li>
+          <div class="step-visual" aria-hidden="true">
+            <span class="term"><span class="caret">&gt;</span> {prompt}</span>
+          </div>
+          <h3>Tell your agent</h3>
+          <p>Paste one line. Your agent reads llms.txt, clones the latest release, and runs setup.</p>
+        </li>
+        <li>
+          <div class="step-visual" aria-hidden="true">
+            <span class="mini-dialog">
+              <span class="mini-title">Allow Wrangler to manage your account?</span>
+              <span class="mini-btn">Allow</span>
+            </span>
+          </div>
+          <h3>Log in to Cloudflare</h3>
+          <p>
+            The one step only you can do. Setup then creates the database, storage, and sign-in, and
+            deploys to your domain.
+          </p>
+        </li>
+        <li>
+          <div class="step-visual" aria-hidden="true">
+            <span class="mini-link">
+              <span class="mono">artifacts.example.com/a/7Hq3…</span>
+              <span class="badge team">Team</span>
+            </span>
+          </div>
+          <h3>Share artifacts</h3>
+          <p>Your agent publishes to your instance. Share by email, with your team, or as a public link.</p>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="wrap features" aria-labelledby="features-h">
+    <h2 id="features-h">What you get</h2>
+    <ul class="cards">
+      {
+        features.map((f) => (
+          <li class="card">
+            <h3>{f.title}</h3>
+            <p>{f.body}</p>
+          </li>
+        ))
+      }
+    </ul>
+  </section>
+
+  <section class="wrap pair" aria-label="Screens">
+    <figure class="frame">
+      <Shot
+        name="artifact"
+        sizes="(min-width: 900px) 550px, 100vw"
+        alt="An artifact open in the viewer, with its version history in the side panel."
+      />
+      <figcaption>Every publish is a version you can view or restore.</figcaption>
+    </figure>
+    <figure class="frame">
+      <Shot
+        name="share"
+        sizes="(min-width: 900px) 550px, 100vw"
+        alt="The share dialog: private, team, or public visibility, and people invited as viewers or editors."
+      />
+      <figcaption>Share with people by email, with your team, or by public link.</figcaption>
+    </figure>
+  </section>
+
+  <section class="band" aria-labelledby="security-h">
+    <div class="wrap security">
+      <div>
+        <h2 id="security-h">Built for untrusted output</h2>
+        <p class="lede">
+          Agents write the code in your artifacts, so Open Artifacts treats every artifact as
+          untrusted.
+        </p>
+      </div>
+      <dl>
+        <div>
+          <dt>Sandboxed</dt>
+          <dd>
+            Artifacts load in a sandboxed iframe from a separate content host. They can't read your
+            session, the dashboard, or other artifacts.
+          </dd>
+        </div>
+        <div>
+          <dt>No passwords</dt>
+          <dd>Sign-in goes through Cloudflare Access with a one-time PIN, GitHub, or Google.</dd>
+        </div>
+        <div>
+          <dt>Private by default</dt>
+          <dd>
+            New artifacts are visible only to their creator. Anything you can't see returns a 404, so
+            a link never reveals that it exists.
+          </dd>
+        </div>
+        <div>
+          <dt>Never indexed</dt>
+          <dd>Public links send noindex headers, and robots.txt blocks crawlers on both hosts.</dd>
+        </div>
+        <div>
+          <dt>Revocable tokens</dt>
+          <dd>Agent tokens are stored only as hashes, and you can revoke them in settings.</dd>
+        </div>
+      </dl>
+    </div>
+  </section>
+
+  <section class="wrap source" aria-labelledby="source-h">
+    <h2 id="source-h">Open source, MIT licensed</h2>
+    <p>Read the code, file an issue, or run it yourself.</p>
+    <a class="btn" href={REPO_URL}>View on GitHub</a>
+  </section>
+</Base>
+
+<script>
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-copy]")) {
+    const idle = button.querySelector<HTMLElement>("[data-idle]");
+    const done = button.querySelector<HTMLElement>("[data-done]");
+    const note = button.closest(".cta")?.querySelector<HTMLElement>(".cta-note");
+    button.hidden = false;
+    button.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(button.dataset.copy ?? "");
+        if (idle && done) {
+          idle.hidden = true;
+          done.hidden = false;
+        }
+        if (note) note.textContent = "Copied. Paste it into your agent.";
+        setTimeout(() => {
+          if (idle && done) {
+            idle.hidden = false;
+            done.hidden = true;
+          }
+        }, 2000);
+      } catch {
+        if (note) note.textContent = "Copy failed. Select the text and copy it by hand.";
+      }
+    });
+  }
+</script>

@@ -5,5 +5,23 @@
   "type": "module",
   "engines": {
     "node": ">=22"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "build": "pnpm --filter @oa/shared build && astro build",
+    "preview": "astro preview",
+    "typecheck": "pnpm --filter @oa/shared build && astro check",
+    "test": "pnpm run build && vitest run"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.10",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.12",
+    "wrangler": "^4.151.1"
+  },
+  "dependencies": {
+    "@oa/shared": "workspace:*",
+    "@oa/ui": "workspace:*",
+    "astro": "^7.4.0"
   }
 }

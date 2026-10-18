@@ -33,7 +33,7 @@ function stripComments(src: string): string {
   return out;
 }
 
-const stripJsonc = (src: string) =>
+export const stripJsonc = (src: string) =>
   stripComments(src).replace(/,(\s*[}\]])/g, "$1");
 
 const BINDING =

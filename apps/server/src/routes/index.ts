@@ -4,7 +4,9 @@ import { mountArtifacts } from "./artifacts.js";
 import { mountAuth } from "./auth.js";
 import { mountMe } from "./me.js";
 import { mountMembers } from "./members.js";
+import { mountSearch } from "./search.js";
 import { mountSettings } from "./settings.js";
+import { mountShares } from "./shares.js";
 import { mountUploads } from "./uploads.js";
 
 export type AppType = Hono<AppEnv>;
@@ -18,4 +20,6 @@ export function mountRoutes(app: AppType): void {
   mountSettings(app);
   mountArtifacts(app);
   mountUploads(app);
+  mountShares(app);
+  mountSearch(app);
 }

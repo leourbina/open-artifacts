@@ -81,6 +81,7 @@ describe("wrangler.staging.jsonc env.staging", () => {
       CONTENT_HOST: "staging-content.open-artifacts.com",
       OWNER_EMAIL: "me@leourbina.com",
       ACCESS_TEAM_DOMAIN: "leourbina.cloudflareaccess.com",
+      CF_ACCOUNT_ID: "26ac346086d4405f7a976d48747a2a75",
     });
     expect(ACCESS_CLIENT_ID).toMatch(/^[0-9a-f]{64}$/);
   });
