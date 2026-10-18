@@ -24,3 +24,49 @@ export async function login(
     });
   return { cookie: `oa_session=${await signSession(env, userId)}`, userId };
 }
+
+const ctx = { waitUntil() {}, passThroughOnException() {} } as never;
+
+/** Calls the app with a session cookie (and the CSRF header) or anonymously. */
+export function api(
+  app: {
+    fetch: (
+      r: Request,
+      e: typeof env,
+      c: never,
+    ) => Response | Promise<Response>;
+  },
+  path: string,
+  auth: string | null,
+  init: {
+    method?: string;
+    body?: unknown;
+    headers?: Record<string, string>;
+  } = {},
+): Promise<Response> {
+  const headers: Record<string, string> = {
+    "x-oa-request": "1",
+    ...init.headers,
+  };
+  if (auth?.startsWith("oa_pat_")) headers.authorization = `Bearer ${auth}`;
+  else if (auth) headers.cookie = auth;
+  if (init.body !== undefined) headers["content-type"] = "application/json";
+  return Promise.resolve(
+    app.fetch(
+      new Request(`http://app.localhost${path}`, {
+        method: init.method ?? "GET",
+        headers,
+        body: init.body === undefined ? undefined : JSON.stringify(init.body),
+      }),
+      env,
+      ctx,
+    ),
+  );
+}
+
+export const errOf = async (r: Response) =>
+  (
+    (await r.json()) as {
+      error: { code: string; message: string; details?: unknown };
+    }
+  ).error;
