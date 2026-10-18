@@ -1,7 +1,7 @@
 import type { ArtifactSummary } from "@oa/shared";
 import { Button, Dialog, displayName, Input, Textarea, toast } from "@oa/ui";
 import { useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiClientError } from "../../api/client";
 import {
   useDeleteArtifact,
@@ -33,13 +33,27 @@ export function Details({ artifact }: { artifact: ArtifactSummary }) {
   const [title, setTitle] = useState(artifact.title);
   const [desc, setDesc] = useState(artifact.description ?? "");
   const [confirm, setConfirm] = useState(false);
+  // Follow the server while a field is untouched (a rename elsewhere, a refetch).
+  const synced = useRef({
+    title: artifact.title,
+    desc: artifact.description ?? "",
+  });
+  useEffect(() => {
+    const next = artifact.description ?? "";
+    setTitle((d) => (d === synced.current.title ? artifact.title : d));
+    setDesc((d) => (d === synced.current.desc ? next : d));
+    synced.current = { title: artifact.title, desc: next };
+  }, [artifact.title, artifact.description]);
   const t = title.trim();
   const valid = t.length >= 1 && t.length <= 200 && desc.length <= 2000;
   const dirty = t !== artifact.title || desc !== (artifact.description ?? "");
 
   const save = () =>
     patch.mutate(
-      { title: t, description: desc },
+      {
+        ...(t !== artifact.title && { title: t }),
+        ...(desc !== (artifact.description ?? "") && { description: desc }),
+      },
       {
         onError: (e) => {
           setTitle(artifact.title);

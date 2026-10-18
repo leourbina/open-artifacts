@@ -3,7 +3,7 @@ import { Button, toast } from "@oa/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { api } from "../api/client";
+import { ApiClientError, api } from "../api/client";
 import { qk } from "../api/queries";
 
 type Undo = { id: number; title: string; artifactId: string };
@@ -58,8 +58,12 @@ export function UndoToast() {
         qc.invalidateQueries({ queryKey: qk.artifact(u.artifactId) }),
       ]);
       void navigate({ to: viewerPath(u.artifactId) as string });
-    } catch {
-      toast({ title: "Couldn't undo the delete", tone: "danger" });
+    } catch (e) {
+      toast({
+        title:
+          e instanceof ApiClientError ? e.message : "Couldn't undo the delete",
+        tone: "danger",
+      });
     } finally {
       setBusy(false);
     }

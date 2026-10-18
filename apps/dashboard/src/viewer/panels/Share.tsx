@@ -11,6 +11,7 @@ import {
   Button,
   Checkbox,
   Dialog,
+  displayName,
   Input,
   SegmentedControl,
   Select,
@@ -69,20 +70,36 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
   const put = usePutShare(id);
   const del = useDeleteShare(id);
   const [confirmPublic, setConfirmPublic] = useState(false);
+  // The control only stages a choice; Save visibility commits it.
+  // Tagged with the visibility it was staged from, so a server change drops it.
+  const [stage, setStage] = useState<{
+    from: Visibility;
+    to: Visibility;
+  } | null>(null);
+  const setPending = (to: Visibility | null) =>
+    setStage(to && { from: artifact.visibility, to });
+  const staged =
+    stage?.from === artifact.visibility ? stage.to : artifact.visibility;
+  const changed = staged !== artifact.visibility;
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<ShareRole>("viewer");
   const [invalid, setInvalid] = useState(false);
 
   const save = (p: ArtifactPatch) =>
     patch.mutate(p, { onError: (e) => fail(e, "Couldn't save") });
-  const setVisibility = (v: Visibility) => {
-    if (v === artifact.visibility) return;
-    if (v === "public") return setConfirmPublic(true);
-    save({
-      visibility: v,
-      ...(artifact.allowAnonymousWrites && { allowAnonymousWrites: false }),
-    });
-  };
+  const commitVisibility = (v: Visibility) =>
+    patch.mutate(
+      {
+        visibility: v,
+        ...(artifact.allowAnonymousWrites && { allowAnonymousWrites: false }),
+      },
+      {
+        onError: (e) => {
+          setPending(null);
+          fail(e, "Couldn't save");
+        },
+      },
+    );
   const setCap = (k: (typeof CAPS)[number][0], on: boolean) =>
     save({
       capabilities: { [k]: on },
@@ -102,11 +119,16 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
       },
     );
   };
-  const copy = () =>
-    void navigator.clipboard?.writeText(location.origin + viewerPath(id)).then(
-      () => toast({ title: "Link copied", tone: "success" }),
-      () => {},
-    );
+  // location.origin is the app host, which is where viewerPath lives.
+  const link = location.origin + viewerPath(id);
+  const copy = () => {
+    const failed = () =>
+      toast({ title: "Couldn't copy", description: link, tone: "danger" });
+    if (!navigator.clipboard) return failed();
+    navigator.clipboard
+      .writeText(link)
+      .then(() => toast({ title: "Link copied", tone: "success" }), failed);
+  };
 
   return (
     <div className="oa-share">
@@ -116,13 +138,35 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
           <SegmentedControl
             aria-label="Visibility"
             options={VIS}
-            value={artifact.visibility}
-            onChange={setVisibility}
+            value={staged}
+            onChange={(v) => !patch.isPending && setPending(v)}
           />
         ) : (
           <VisibilityBadge visibility={artifact.visibility} />
         )}
-        <p className="oa-muted">{NOTE[artifact.visibility]}</p>
+        {owner && changed && (
+          <div className="oa-invite">
+            <Button
+              variant="primary"
+              loading={patch.isPending}
+              onClick={() =>
+                staged === "public"
+                  ? setConfirmPublic(true)
+                  : commitVisibility(staged)
+              }
+            >
+              Save visibility
+            </Button>
+            <Button
+              variant="ghost"
+              disabled={patch.isPending}
+              onClick={() => setPending(null)}
+            >
+              Cancel
+            </Button>
+          </div>
+        )}
+        <p className="oa-muted">{NOTE[staged]}</p>
       </section>
 
       {owner && (
@@ -166,7 +210,7 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
         <ul className="oa-people">
           <li>
             <Avatar name={artifact.owner.name} email={artifact.owner.email} />
-            <span>{artifact.owner.name ?? artifact.owner.email}</span>
+            <span>{displayName(artifact.owner)}</span>
             <span className="oa-muted">Owner</span>
           </li>
           {(shares.data ?? []).map((s) => (
@@ -240,14 +284,20 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
         description="Anyone with the link can view. It won't appear in search engines."
         footer={
           <>
-            <Button variant="ghost" onClick={() => setConfirmPublic(false)}>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setConfirmPublic(false);
+                setPending(null);
+              }}
+            >
               Cancel
             </Button>
             <Button
               variant="primary"
               onClick={() => {
                 setConfirmPublic(false);
-                save({ visibility: "public" });
+                commitVisibility("public");
               }}
             >
               Make public

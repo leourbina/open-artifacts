@@ -1,9 +1,15 @@
 import { R, viewerPath } from "@oa/shared";
 import { fixtures } from "@oa/shared/mocks";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { describe, expect, it, vi } from "vitest";
-import { installHarness, mount, seen, server } from "./harness";
+import { installHarness, mount, seen, server, wait } from "./harness";
 
 vi.mock("../src/viewer/bridge", () => ({
   createBridge: () => ({
@@ -43,11 +49,16 @@ describe("share panel", () => {
     mount(panel(OWNED));
     const group = await screen.findByRole("radiogroup", { name: "Visibility" });
     fireEvent.click(within(group).getByRole("radio", { name: "Public" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save visibility" }));
     await screen.findByText(
       "Anyone with the link can view. It won't appear in search engines.",
       { selector: '[role="dialog"] *' },
     );
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Cancel",
+      }),
+    );
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(bodies).toEqual([]);
     expect(
@@ -133,6 +144,7 @@ describe("share panel", () => {
     mount(panel(OWNED));
     const group = await screen.findByRole("radiogroup", { name: "Visibility" });
     fireEvent.click(within(group).getByRole("radio", { name: "Team" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save visibility" }));
     await screen.findByText("Boom");
     expect(
       within(group).getByRole("radio", { name: "Private" }),
@@ -199,5 +211,170 @@ describe("details panel", () => {
     expect(writes().some((u) => u.pathname === R.restoreDeleted(OWNED))).toBe(
       true,
     );
+  });
+});
+
+describe("share panel review fixes", () => {
+  it("arrowing Private to Public with the keyboard and cancelling sends no PATCH", async () => {
+    const bodies = patches();
+    mount(panel(OWNED));
+    const group = await screen.findByRole("radiogroup", { name: "Visibility" });
+    const priv = within(group).getByRole("radio", { name: "Private" });
+    priv.focus();
+    fireEvent.keyDown(priv, { key: "ArrowRight" });
+    fireEvent.keyDown(within(group).getByRole("radio", { name: "Team" }), {
+      key: "ArrowRight",
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    await wait(50);
+    expect(bodies).toEqual([]);
+    expect(
+      within(group).getByRole("radio", { name: "Private" }),
+    ).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("confirming Make public sends only the visibility", async () => {
+    const bodies = patches();
+    mount(panel(OWNED));
+    const group = await screen.findByRole("radiogroup", { name: "Visibility" });
+    fireEvent.click(within(group).getByRole("radio", { name: "Public" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save visibility" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Make public" }));
+    await waitFor(() => expect(bodies).toEqual([{ visibility: "public" }]));
+  });
+
+  it("a denied or missing clipboard toasts Couldn't copy with the link", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: () => Promise.reject(new Error("denied")) },
+      configurable: true,
+    });
+    mount(panel(OWNED));
+    fireEvent.click(await screen.findByRole("button", { name: "Copy link" }));
+    await screen.findByText("Couldn't copy");
+    await screen.findByText(`${location.origin}${viewerPath(OWNED)}`);
+  });
+
+  it("shows the owner by display name", async () => {
+    mount(panel(EDITOR));
+    await screen.findByText("Bob Builder");
+  });
+});
+
+describe("details review fixes", () => {
+  it("saving the description after an inline rename keeps the new title", async () => {
+    const bodies = patches();
+    mount(panel(OWNED, "details"));
+    await screen.findByRole("textbox", { name: "Title" });
+    fireEvent.click(screen.getByTitle("Rename"));
+    const inline = await waitFor(
+      () => document.querySelector("input.oa-vt-input") as HTMLInputElement,
+    );
+    fireEvent.change(inline, { target: { value: "Renamed" } });
+    fireEvent.keyDown(inline, { key: "Enter" });
+    await waitFor(() => expect(bodies).toEqual([{ title: "Renamed" }]));
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue(
+        "Renamed",
+      ),
+    );
+    fireEvent.change(screen.getByRole("textbox", { name: "Description" }), {
+      target: { value: "About" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    expect(bodies[1]).toEqual({ description: "About" });
+  });
+
+  it("a failed save toasts the error and restores the fields", async () => {
+    server.use(
+      http.patch("*/api/v1/artifacts/:id", () =>
+        HttpResponse.json(
+          { error: { code: "internal", message: "Nope" } },
+          { status: 500 },
+        ),
+      ),
+    );
+    mount(panel(EDITOR, "details"));
+    const title = await screen.findByRole("textbox", { name: "Title" });
+    const before = (title as HTMLInputElement).value;
+    fireEvent.change(title, { target: { value: "Other" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("Nope");
+    expect(title).toHaveValue(before);
+  });
+});
+
+describe("undo toast", () => {
+  const toastEl = () => document.querySelector(".oa-undo") as HTMLElement;
+  const del = async () => {
+    const router = mount(panel(OWNED, "details"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Delete artifact" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+    await waitFor(() => expect(toastEl()).not.toBeNull());
+  };
+  // Hover then leave restarts the dismiss timer under the fake clock.
+  const restart = () => {
+    fireEvent.mouseEnter(toastEl());
+    fireEvent.mouseLeave(toastEl());
+  };
+
+  it("dismisses itself after about 8 seconds", async () => {
+    await del();
+    vi.useFakeTimers();
+    try {
+      restart();
+      await act(() => vi.advanceTimersByTimeAsync(7900));
+      expect(toastEl()).not.toBeNull();
+      await act(() => vi.advanceTimersByTimeAsync(200));
+      expect(toastEl()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("pauses while hovered", async () => {
+    await del();
+    vi.useFakeTimers();
+    try {
+      restart();
+      fireEvent.mouseEnter(toastEl());
+      await act(() => vi.advanceTimersByTimeAsync(20_000));
+      expect(toastEl()).not.toBeNull();
+      fireEvent.mouseLeave(toastEl());
+      await act(() => vi.advanceTimersByTimeAsync(8100));
+      expect(toastEl()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not dismiss while the undo request is in flight, and shows its error", async () => {
+    let release = () => {};
+    server.use(
+      http.post("*/api/v1/artifacts/:id/undelete", async () => {
+        await new Promise<void>((r) => {
+          release = r;
+        });
+        return HttpResponse.json(
+          { error: { code: "internal", message: "Too late" } },
+          { status: 500 },
+        );
+      }),
+    );
+    await del();
+    vi.useFakeTimers();
+    try {
+      restart();
+      fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+      await act(() => vi.advanceTimersByTimeAsync(20_000));
+      expect(toastEl()).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+    release();
+    await screen.findByText("Too late");
   });
 });
