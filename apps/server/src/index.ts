@@ -1,3 +1,12 @@
+// Placeholder so the ARTIFACT_RUNTIME binding deploys; B1 replaces it.
+export class ArtifactRuntime {
+  // biome-ignore lint/complexity/noUselessConstructor: placeholder signature
+  constructor(_s: DurableObjectState, _e: unknown) {}
+  fetch(): Response {
+    return new Response(null, { status: 501 });
+  }
+}
+
 const NOINDEX = { "X-Robots-Tag": "noindex, nofollow" };
 
 const json = (body: unknown, status = 200): Response =>
@@ -27,4 +36,6 @@ export default {
     }
     return json({ error: { code: "not_found", message: "Not found" } }, 404);
   },
+  // No-op until B1 wires the daily cron (17 3 * * *).
+  scheduled(): void {},
 };

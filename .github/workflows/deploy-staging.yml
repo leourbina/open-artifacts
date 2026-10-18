@@ -22,6 +22,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      - run: mkdir -p apps/dashboard/dist && [ -f apps/dashboard/dist/index.html ] || echo '<!doctype html><title>Open Artifacts</title>' > apps/dashboard/dist/index.html
       - run: pnpm --filter @oa/server exec wrangler d1 migrations apply open-artifacts-staging --remote -c wrangler.staging.jsonc --env staging
       - run: pnpm --filter @oa/server exec wrangler deploy -c wrangler.staging.jsonc --env staging
   smoke:
@@ -46,6 +47,12 @@ jobs:
       - name: robots
         run: |
           headers=$(curl -fsS -D - -o robots.body --retry 20 --retry-delay 5 --retry-max-time 180 --retry-all-errors https://staging.open-artifacts.com/robots.txt)
+          body=$(cat robots.body)
+          grep -iq '^x-robots-tag: noindex, nofollow' <<< "$headers"
+          grep -q 'Disallow: /' <<< "$body"
+      - name: robots (content host)
+        run: |
+          headers=$(curl -fsS -D - -o robots.body --retry 20 --retry-delay 5 --retry-max-time 180 --retry-all-errors https://staging-content.open-artifacts.com/robots.txt)
           body=$(cat robots.body)
           grep -iq '^x-robots-tag: noindex, nofollow' <<< "$headers"
           grep -q 'Disallow: /' <<< "$body"
