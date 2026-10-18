@@ -214,3 +214,21 @@ describe("ops-staging-access.yml", () => {
     expect(raw).toContain("secrets.CLOUDFLARE_ACCOUNT_ID");
   });
 });
+
+describe("ops-staging-access.yml hardening", () => {
+  const w = wf("ops-staging-access.yml");
+  it("keeps the Cloudflare token out of job-level env", () => {
+    expect(w.jobs.access.env?.CLOUDFLARE_API_TOKEN).toBeUndefined();
+    expect(w.jobs.access.env?.CLOUDFLARE_ACCOUNT_ID).toBeUndefined();
+    // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
+    const prov = w.jobs.access.steps.find((s: any) =>
+      (s.run ?? "").includes("scripts/ops/staging-access.ts"),
+    );
+    expect(Object.keys(prov.env)).toEqual(
+      expect.arrayContaining(["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"]),
+    );
+  });
+  it("only runs on main", () => {
+    expect(w.jobs.access.if).toBe("github.ref == 'refs/heads/main'");
+  });
+});

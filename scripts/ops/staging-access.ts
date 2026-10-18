@@ -3,7 +3,7 @@
 // Never log secret values: every secret goes through out.mask() first and is
 // passed to wrangler on stdin only.
 import { execFileSync } from "node:child_process";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -30,6 +30,7 @@ export type Options = {
   accountId: string;
   teamName: string;
   forceRotate: boolean;
+  configTeamDomain?: string;
   api: Api;
   wrangler: Wrangler;
   generate: () => string;
@@ -51,6 +52,7 @@ async function listAll(api: Api, path: string): Promise<Obj[]> {
 }
 
 async function teamDomain(o: Options): Promise<string> {
+  let why = "empty auth_domain";
   try {
     const org = await o.api(
       "GET",
@@ -58,11 +60,11 @@ async function teamDomain(o: Options): Promise<string> {
     );
     if (typeof org?.auth_domain === "string" && org.auth_domain)
       return org.auth_domain;
-  } catch {
-    // fall through to the team_name input
+  } catch (e) {
+    why = e instanceof Error ? e.message : String(e);
   }
   o.out.log(
-    `organizations lookup empty or failed; using team_name=${o.teamName}`,
+    `organizations lookup fell back (${why}); using team_name=${o.teamName}`,
   );
   return `${o.teamName}.cloudflareaccess.com`;
 }
@@ -85,106 +87,113 @@ async function ensurePolicy(o: Options): Promise<string> {
   return p.id;
 }
 
-const READ_ONLY = ["id", "uid", "aud", "created_at", "updated_at", "domain"];
+const ALL = [
+  "ACCESS_CLIENT_SECRET",
+  "SESSION_SECRET",
+  "CONTENT_SIGNING_KEY",
+  "CF_ACCOUNT_ID",
+];
 
-async function ensureApp(
-  o: Options,
-  policyId: string,
-): Promise<{ clientId: string; clientSecret?: string }> {
-  const base = `/accounts/${o.accountId}/access/apps`;
-  const app = (await listAll(o.api, base)).find((a) => a.name === APP_NAME);
+export async function run(o: Options) {
+  // ---- preflight: nothing below mutates the Access app ----
+  const domain = await teamDomain(o);
+  const existing = new Set(await o.wrangler.list());
+  const policyId = await ensurePolicy(o);
+  const appsPath = `/accounts/${o.accountId}/access/apps`;
+  const app = (await listAll(o.api, appsPath)).find((a) => a.name === APP_NAME);
+
   if (app) {
     o.out.log(`app ${APP_NAME}: exists (${app.id})`);
     const links: Obj[] = app.policies ?? [];
     if (!links.some((p) => p.id === policyId)) {
-      const body: Obj = { ...app };
-      for (const k of READ_ONLY) delete body[k];
-      body.saas_app = { ...app.saas_app };
-      delete body.saas_app.client_secret;
-      delete body.saas_app.created_at;
-      delete body.saas_app.updated_at;
-      body.policies = [
-        ...links.map((p) => ({ id: p.id, precedence: p.precedence })),
-        { id: policyId, precedence: links.length + 1 },
-      ];
-      await o.api("PUT", `${base}/${app.id}`, body);
-      o.out.log(`app ${APP_NAME}: linked policy ${POLICY_NAME}`);
+      throw new Error(
+        `Access app ${APP_NAME} exists but is not linked to policy ${POLICY_NAME}. Either attach ${POLICY_NAME} to the app in the dashboard (Zero Trust > Access > Applications > ${APP_NAME} > Policies), or delete the app and re-run this workflow.`,
+      );
     }
-    return { clientId: app.saas_app?.client_id };
+    if (!app.saas_app?.client_id)
+      throw new Error(`app ${APP_NAME} has no saas_app.client_id`);
+    if (!existing.has("ACCESS_CLIENT_SECRET")) {
+      throw new Error(
+        `ACCESS_CLIENT_SECRET is missing on the Worker and cannot be recovered: Access app ${APP_NAME} already exists, the API only returns its OIDC client_secret on creation and offers no rotate endpoint. Delete the Access app (Zero Trust > Access > Applications) and re-run this workflow, or copy the secret from the dashboard into \`wrangler secret put ACCESS_CLIENT_SECRET\`.`,
+      );
+    }
   }
-  const created = await o.api("POST", base, {
-    name: APP_NAME,
-    type: "saas",
-    policies: [{ id: policyId, precedence: 1 }],
-    saas_app: {
-      auth_type: "oidc",
-      redirect_uris: [REDIRECT_URI],
-      grant_types: ["authorization_code"],
-      scopes: ["openid", "email", "profile"],
-    },
-  });
-  const clientSecret: string | undefined = created.saas_app?.client_secret;
-  if (clientSecret) o.out.mask(clientSecret);
-  o.out.log(`app ${APP_NAME}: created (${created.id})`);
-  return { clientId: created.saas_app?.client_id, clientSecret };
-}
 
-export async function run(o: Options) {
-  const domain = await teamDomain(o);
-  const policyId = await ensurePolicy(o);
-  const { clientId, clientSecret } = await ensureApp(o, policyId);
-  if (!clientId) throw new Error(`app ${APP_NAME} has no saas_app.client_id`);
-
-  const existing = new Set(await o.wrangler.list());
-  const plan: [string, () => string][] = [];
-
-  if (clientSecret) {
-    // New app: its secret supersedes any stale Worker value.
-    plan.push(["ACCESS_CLIENT_SECRET", () => clientSecret]);
-  } else if (!existing.has("ACCESS_CLIENT_SECRET")) {
-    throw new Error(
-      `ACCESS_CLIENT_SECRET is missing on the Worker and cannot be recovered: Access app ${APP_NAME} already exists, the API only returns its OIDC client_secret on creation and offers no rotate endpoint. Delete the Access app (Zero Trust > Access > Applications) and re-run this workflow, or copy the secret from the dashboard into \`wrangler secret put ACCESS_CLIENT_SECRET\`.`,
-    );
-  }
+  const plan: [string, string][] = [];
   for (const name of ["SESSION_SECRET", "CONTENT_SIGNING_KEY"]) {
     if (o.forceRotate || !existing.has(name)) {
-      plan.push([
-        name,
-        () => {
-          const v = o.generate().trim();
-          if (v.length < 32)
-            throw new Error(
-              `${name}: generated value must be at least 32 chars`,
-            );
-          return v;
-        },
-      ]);
+      const v = o.generate().trim();
+      if (v.length < 32)
+        throw new Error(`${name}: generated value must be at least 32 chars`);
+      o.out.mask(v);
+      plan.push([name, v]);
     }
   }
-  if (!existing.has("CF_ACCOUNT_ID"))
-    plan.push(["CF_ACCOUNT_ID", () => o.accountId]);
+  if (!existing.has("CF_ACCOUNT_ID")) plan.push(["CF_ACCOUNT_ID", o.accountId]);
 
   const set: string[] = [];
-  for (const [name, value] of plan) {
-    const v = value();
+  const put = async (name: string, v: string) => {
     o.out.mask(v);
     await o.wrangler.put(name, v);
     o.out.log(`secret ${name}: set`);
     set.push(name);
+  };
+
+  let clientId: string;
+  if (app) {
+    clientId = app.saas_app.client_id;
+    for (const [n, v] of plan) await put(n, v);
+  } else {
+    const created = await o.api("POST", appsPath, {
+      name: APP_NAME,
+      type: "saas",
+      policies: [{ id: policyId, precedence: 1 }],
+      saas_app: {
+        auth_type: "oidc",
+        redirect_uris: [REDIRECT_URI],
+        grant_types: ["authorization_code_with_pkce"],
+        allow_pkce_without_client_secret: false,
+        scopes: ["openid", "email", "profile"],
+      },
+    });
+    const secret: unknown = created?.saas_app?.client_secret;
+    if (typeof secret === "string" && secret) o.out.mask(secret);
+    o.out.log(`app ${APP_NAME}: created (${created?.id})`);
+    try {
+      if (typeof secret !== "string" || !secret)
+        throw new Error(
+          `POST ${appsPath} response lacks saas_app.client_secret`,
+        );
+      const id: unknown = created.saas_app.client_id;
+      if (typeof id !== "string" || !id)
+        throw new Error(`POST ${appsPath} response lacks saas_app.client_id`);
+      clientId = id;
+      await put("ACCESS_CLIENT_SECRET", secret);
+      for (const [n, v] of plan) await put(n, v);
+    } catch (e) {
+      if (created?.id) {
+        o.out.log(`rolling back: deleting app ${APP_NAME} (${created.id})`);
+        await o.api("DELETE", `${appsPath}/${created.id}`);
+      }
+      throw e;
+    }
   }
-  const all = [
-    "ACCESS_CLIENT_SECRET",
-    "SESSION_SECRET",
-    "CONTENT_SIGNING_KEY",
-    "CF_ACCOUNT_ID",
-  ];
-  const skipped = all.filter((n) => !set.includes(n));
+
+  const skipped = ALL.filter((n) => !set.includes(n));
   for (const n of skipped) o.out.log(`secret ${n}: already set, skipped`);
 
+  const warn =
+    o.configTeamDomain && o.configTeamDomain !== domain
+      ? [
+          `> **Warning:** discovered team domain \`${domain}\` differs from ACCESS_TEAM_DOMAIN \`${o.configTeamDomain}\` in wrangler.staging.jsonc.`,
+          "",
+        ]
+      : [];
   o.out.summary(
     [
       "## Staging Access setup",
       "",
+      ...warn,
       "| Var | Value |",
       "|---|---|",
       `| ACCESS_CLIENT_ID | \`${clientId}\` |`,
@@ -199,6 +208,22 @@ export async function run(o: Options) {
     ].join("\n"),
   );
   return { clientId, teamDomain: domain, set, skipped };
+}
+
+export function parseSecretList(raw: string): string[] {
+  const i = raw.indexOf("[");
+  if (i < 0)
+    throw new Error(
+      "wrangler secret list returned no JSON array (check auth and that the Worker exists)",
+    );
+  return (JSON.parse(raw.slice(i)) as { name: string }[]).map((s) => s.name);
+}
+
+export function readConfigTeamDomain(file: string): string | undefined {
+  const m = readFileSync(file, "utf8").match(
+    /"ACCESS_TEAM_DOMAIN"\s*:\s*"([^"]*)"/,
+  );
+  return m?.[1] || undefined;
 }
 
 // ---- production wiring ----
@@ -281,6 +306,9 @@ async function main() {
     accountId: need("CLOUDFLARE_ACCOUNT_ID"),
     teamName: process.env.TEAM_NAME || "leourbina",
     forceRotate: process.env.FORCE_ROTATE === "true",
+    configTeamDomain: readConfigTeamDomain(
+      join(serverDir, "wrangler.staging.jsonc"),
+    ),
     api: cfApi(token),
     wrangler: cliWrangler,
     generate: () =>
