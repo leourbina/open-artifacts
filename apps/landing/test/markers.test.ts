@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { GATES, gatesFor } from "../src/lib/release";
 import { selectTools } from "../src/lib/tools";
 
 // Platform's release gate blocks the production deploy while dist/ contains
@@ -17,8 +18,10 @@ const META = '<meta name="oa-status" content="OA-UNRELEASED">';
 
 describe("release-gate markers", () => {
   it("puts the agent-file markers on their own lines at the top", () => {
-    const hasManifest = existsSync(manifest);
-    const top = hasManifest ? "" : `${B14}\nOA-UNRELEASED: B14 tool list\n\n`;
+    const ids = gatesFor("llms");
+    const top = ids.length
+      ? `${ids.map((id) => `<!-- ${GATES[id].todo} -->\n`).join("")}OA-UNRELEASED: ${ids.map((id) => GATES[id].label).join(", ")}\n\n`
+      : "";
     for (const file of ["llms.txt", "llms-full.txt"]) {
       expect(read(file).startsWith(`${top}# Open Artifacts\n`), file).toBe(
         true,
@@ -26,14 +29,18 @@ describe("release-gate markers", () => {
     }
   });
 
-  it("flags only the tool-list pages as unreleased, with one meta tag", () => {
-    const hasManifest = existsSync(manifest);
-    for (const page of ["index.html", "docs/mcp-tools/index.html"]) {
+  it("flags gated pages as unreleased with one meta tag, and no others", () => {
+    for (const [id, page] of [
+      ["index", "index.html"],
+      ["mcp-tools", "docs/mcp-tools/index.html"],
+      ["connect-agents", "docs/connect-agents/index.html"],
+      ["setup", "docs/setup/index.html"],
+      ["runtime-api", "docs/runtime-api/index.html"],
+    ]) {
       const head = read(page).split("</head>")[0];
-      expect(head.split(META).length - 1, page).toBe(hasManifest ? 0 : 1);
+      const want = gatesFor(id).length ? 1 : 0;
+      expect(head.split(META).length - 1, page).toBe(want);
     }
-    for (const page of ["docs/setup/index.html", "docs/security/index.html"])
-      expect(read(page), page).not.toContain(META);
   });
 
   it("uses the fallback only when there is no manifest", () => {

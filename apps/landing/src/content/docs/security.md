@@ -53,3 +53,7 @@ Public links are for sharing, not search. Both hosts send `X-Robots-Tag: noindex
 ## No telemetry
 
 A deployed instance sends nothing to the Open Artifacts project or anyone else.
+
+## Fonts
+
+The dashboard and the Markdown renderer load the Geist fonts from Google Fonts, on both hosts. Each viewer's browser fetches them from `fonts.googleapis.com` and `fonts.gstatic.com`, so Google sees the viewer's IP address. To avoid this, block those two hosts in your network or browser; pages then fall back to system fonts and work the same.
