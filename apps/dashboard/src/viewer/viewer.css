@@ -58,6 +58,7 @@
   width: min(480px, 60vw);
 }
 .oa-vbody {
+  position: relative;
   display: flex;
   flex: 1;
   min-height: 0;
@@ -214,5 +215,34 @@
   height: 1px;
   overflow: hidden;
   clip-path: inset(50%);
+  white-space: nowrap;
+}
+.oa-vpanel:focus {
+  outline: none;
+}
+@media (max-width: 959.98px) {
+  .oa-vpanel {
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+    width: auto;
+    border-left: 0;
+  }
+}
+.oa-dfiles li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.oa-dfiles li button {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  font: var(--oa-text-sm) var(--oa-font-mono);
+}
+.oa-dfiles li .oa-muted {
+  margin-left: auto;
   white-space: nowrap;
 }

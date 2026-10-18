@@ -278,7 +278,7 @@ function Compare({
                 onClick={() => setPicked(p)}
               >
                 {p}
-              </button>{" "}
+              </button>
               <span className="oa-muted">{LABEL[s]}</span>
             </li>
           );

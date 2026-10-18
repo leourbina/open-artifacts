@@ -1,5 +1,6 @@
 import type { ArtifactSummary } from "@oa/shared";
 import { Tabs } from "@oa/ui";
+import { useEffect, useRef } from "react";
 import { Versions } from "./Versions";
 
 export const PANEL_TABS = ["versions", "share", "details"] as const;
@@ -18,8 +19,27 @@ export function SidePanel({
   onTab: (t: PanelTab) => void;
   onClose: () => void;
 }) {
+  const ref = useRef<HTMLElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  // Focus moves in on open and back to whatever opened it on close.
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    ref.current?.focus();
+    return () => {
+      if (opener?.isConnected) opener.focus();
+    };
+  }, []);
   return (
-    <aside className="oa-vpanel" aria-label="Side panel">
+    <aside
+      ref={ref}
+      tabIndex={-1}
+      className="oa-vpanel"
+      aria-label="Side panel"
+      onKeyDown={(e) => {
+        if (e.key === "Escape" && !e.defaultPrevented) onClose();
+      }}
+    >
       <button
         type="button"
         className="oa-btn oa-vpanel-close"

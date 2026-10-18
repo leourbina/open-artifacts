@@ -309,3 +309,18 @@ describe("versions and diff details", () => {
     expect(diffRows("a\nb\n", "")?.map((r) => r.kind)).toEqual(["del", "del"]);
   });
 });
+
+describe("panel focus", () => {
+  it("moves focus into the panel and back to the toggle on close", async () => {
+    mount(viewerPath(OWNED));
+    const toggle = await screen.findByRole("button", { name: "Versions" });
+    toggle.focus();
+    fireEvent.click(toggle);
+    const aside = await screen.findByRole("complementary", {
+      name: "Side panel",
+    });
+    await waitFor(() => expect(aside).toHaveFocus());
+    fireEvent.click(screen.getByRole("button", { name: "Close panel" }));
+    await waitFor(() => expect(toggle).toHaveFocus());
+  });
+});
