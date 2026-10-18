@@ -21,20 +21,31 @@ export const CONTENT_CSP =
 
 type SecurityOpts = { frameDeny?: boolean; csp?: string };
 
-/** A copy of `res` with the standard security headers (headers may be immutable). */
+/** `res` with the standard security headers; a copy when its headers are immutable. */
 export function withSecurityHeaders(
   res: Response,
   opts: SecurityOpts = {},
 ): Response {
   if (res.status === 101) return res;
-  const out = new Response(res.body, res);
-  const h = out.headers;
+  // Most responses (c.json, new Response) have mutable headers: set them in
+  // place. Immutable ones (fetch(), Response.redirect()) throw on the first
+  // set, before any change, and are re-wrapped.
+  try {
+    setSecurityHeaders(res.headers, opts);
+    return res;
+  } catch {
+    const out = new Response(res.body, res);
+    setSecurityHeaders(out.headers, opts);
+    return out;
+  }
+}
+
+function setSecurityHeaders(h: Headers, opts: SecurityOpts): void {
   h.set("X-Robots-Tag", "noindex, nofollow");
   h.set("X-Content-Type-Options", "nosniff");
   h.set("Referrer-Policy", "strict-origin-when-cross-origin");
   if (opts.frameDeny) h.set("X-Frame-Options", "DENY");
   if (opts.csp) h.set("Content-Security-Policy", opts.csp);
-  return out;
 }
 
 export const securityHeaders =

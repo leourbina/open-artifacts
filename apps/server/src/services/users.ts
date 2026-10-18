@@ -3,11 +3,14 @@ import { eq } from "drizzle-orm";
 import { getDb } from "../db/client.js";
 import { normEmail } from "../db/email.js";
 import { shares, users } from "../db/schema.js";
+import { stmt } from "../db/stmt.js";
 import type { Env } from "../env.js";
 
 type UserRow = typeof users.$inferSelect;
 
-export function toMember(r: UserRow): Member {
+export function toMember(
+  r: Pick<UserRow, "id" | "email" | "name" | "role" | "lastSeenAt">,
+): Member {
   return {
     id: r.id,
     email: normEmail(r.email) ?? r.email,
@@ -96,9 +99,13 @@ export async function upsertWithRole(
   return toMember(await upsert(env, e, null, role, true));
 }
 
+const USER_BY_ID =
+  "select id, email, name, role, last_seen_at as lastSeenAt from users where id = ? limit 1";
+
+/** Every authenticated request: one prepared D1 statement, no ORM mapping. */
 export async function getUser(env: Env, id: string): Promise<Member | null> {
-  const row = (
-    await getDb(env).select().from(users).where(eq(users.id, id)).limit(1)
-  )[0];
+  const row = await stmt(env.DB, USER_BY_ID)
+    .bind(id)
+    .first<Pick<UserRow, "id" | "email" | "name" | "role" | "lastSeenAt">>();
   return row ? toMember(row) : null;
 }

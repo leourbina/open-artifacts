@@ -58,7 +58,7 @@ describe("extractText bounds", () => {
   });
 
   it(`reads and extracts at most the first ${INDEX_INPUT_BYTES} bytes`, async () => {
-    expect(INDEX_INPUT_BYTES).toBe(128 * 1024);
+    expect(INDEX_INPUT_BYTES).toBe(96 * 1024);
     // Markdown is raw: exactly the first INDEX_INPUT_BYTES bytes, whatever the chunking.
     const md = "abcdefgh".repeat(40 * 1024); // 320 KB
     for (const size of [1000, 64 * 1024, 100 * 1024, 512 * 1024])
@@ -66,7 +66,7 @@ describe("extractText bounds", () => {
         md.slice(0, INDEX_INPUT_BYTES),
       );
     // HTML: text past the cap is never indexed, even when the output cap isn't reached.
-    const html = `<p>head</p>${"<i></i>".repeat(INDEX_INPUT_BYTES / 7)}<p>past</p>`;
+    const html = `<p>head</p>${" ".repeat(INDEX_INPUT_BYTES)}<p>past</p>`;
     const t = await extractText("html", chunked(html));
     expect(t).toBe("head");
     // The stream is cancelled at the cap: no more than one chunk past it is pulled.
@@ -87,5 +87,12 @@ describe("extractText bounds", () => {
     expect(pulled).toBeLessThanOrEqual(
       INDEX_INPUT_BYTES + 2 * chunk.byteLength,
     );
+  });
+
+  it("streamed html equals the one-shot result for any chunking", async () => {
+    const html = `<p>a \n\t b</p>${"<div> x&nbsp; &amp;\n <i>y</i>  </div>\n".repeat(400)}<p> z </p>`;
+    const want = await extractText("html", html);
+    for (const size of [1, 2, 5, 13, 64, 1024, 64 * 1024])
+      expect(await extractText("html", chunked(html, size))).toBe(want);
   });
 });

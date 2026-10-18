@@ -3,7 +3,6 @@ import {
   LIMITS,
   type Page,
   type SearchHit,
-  SearchHitSchema,
   SNIPPET_MARK,
 } from "@oa/shared";
 import { and, eq, type SQL, sql } from "drizzle-orm";
@@ -230,7 +229,7 @@ class HtmlText {
  * Indexing reads and extracts at most this many leading bytes of an entry
  * (the DO alarm's CPU budget); the rest of the document is not indexed.
  */
-export const INDEX_INPUT_BYTES = 128 * 1024;
+export const INDEX_INPUT_BYTES = 96 * 1024;
 
 /**
  * Indexable text of an entry, at most LIMITS.searchBodyChars, with SNIPPET_MARK
@@ -532,8 +531,10 @@ export async function search(
   const page = rows.slice(0, limit);
   const next = offset + limit;
   return {
-    items: page.map((r) =>
-      SearchHitSchema.parse({
+    // Built in SearchHitSchema's key order (summary fields, then snippet);
+    // validated by the tests, not per hit in production.
+    items: page.map(
+      (r): SearchHit => ({
         ...toSummary(
           env,
           r.a,

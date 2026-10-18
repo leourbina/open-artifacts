@@ -30,6 +30,7 @@ import {
 } from "../services/artifacts.js";
 import { planFiles, RESERVED_KEYS } from "../services/manifest.js";
 import { putExtractedText } from "../services/search.js";
+import { utf8Decoder } from "../util/text.js";
 import type { AppType } from "./index.js";
 
 // Base64 inflates inline bytes by 4/3; allow some JSON overhead on top. A
@@ -54,7 +55,7 @@ async function publishInput(
   const buf = await readCapped(c, MAX_BODY, INLINE_TOO_LARGE_MESSAGE);
   let raw: unknown;
   try {
-    raw = JSON.parse(new TextDecoder().decode(buf));
+    raw = JSON.parse(utf8Decoder.decode(buf));
   } catch {
     throw new ApiError("bad_request", "Invalid JSON body");
   }
@@ -140,7 +141,7 @@ export function mountArtifacts(app: AppType): void {
     const buf = await readCapped(c, MAX_PATCH);
     let raw: unknown;
     try {
-      raw = JSON.parse(new TextDecoder().decode(buf));
+      raw = JSON.parse(utf8Decoder.decode(buf));
     } catch {
       throw new ApiError("bad_request", "Invalid JSON body");
     }
@@ -252,7 +253,7 @@ export function mountArtifacts(app: AppType): void {
       { kind: "user", user },
       id,
       v,
-      new TextDecoder().decode(buf),
+      utf8Decoder.decode(buf),
     );
     return c.body(null, 204);
   });

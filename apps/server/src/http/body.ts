@@ -1,4 +1,5 @@
 import type { Context } from "hono";
+import { utf8Decoder } from "../util/text.js";
 import { ApiError } from "./errors.js";
 
 type Parser<T> = {
@@ -107,7 +108,7 @@ export async function cappedJson<T>(
   const buf = await readCapped(c, max);
   let raw: unknown;
   try {
-    raw = JSON.parse(new TextDecoder().decode(buf));
+    raw = JSON.parse(utf8Decoder.decode(buf));
   } catch {
     throw new ApiError("bad_request", "Invalid JSON body");
   }
