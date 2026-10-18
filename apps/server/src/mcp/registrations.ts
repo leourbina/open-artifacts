@@ -17,44 +17,52 @@ const GRANTED_MARKER_DAYS = 90;
 const utcDay = (now: number) => new Date(now).toISOString().slice(0, 10);
 
 /**
- * Counts one registration attempt for today (atomic UPSERT…RETURNING; the row
- * resets on a new day). False once today's count is past the cap.
+ * Read-only check of today's registration count (rejected attempts write
+ * nothing to D1). False once today's successful registrations reach the cap.
  */
-export async function countRegistration(
+export async function registrationAllowed(
   env: Env,
   now = Date.now(),
 ): Promise<boolean> {
-  const row = await env.DB.prepare(
-    `insert into counters (key, n, day) values (?1, 1, ?2)
-     on conflict (key) do update set
-       n = case when counters.day = excluded.day then counters.n + 1 else 1 end,
-       day = excluded.day
-     returning n`,
-  )
-    .bind(DAY_KEY, utcDay(now))
-    .first<{ n: number }>();
-  return (row?.n ?? 0) <= MAX_REGISTRATIONS_PER_DAY;
+  const row = await env.DB.prepare("select n, day from counters where key = ?")
+    .bind(DAY_KEY)
+    .first<{ n: number; day: string }>();
+  return !row || row.day !== utcDay(now) || row.n < MAX_REGISTRATIONS_PER_DAY;
 }
 
-/** Remembers a newly registered client (from the 201 response) as not yet granted. */
+/**
+ * After a 201 registration: counts it toward today's cap (UPSERT; the row
+ * resets on a new day) and remembers the client as not yet granted.
+ */
 export async function trackRegisteredClient(
   env: Env,
   res: Response,
   now = Date.now(),
 ): Promise<void> {
   if (res.status !== 201) return;
+  const day = utcDay(now);
+  const count = env.DB.prepare(
+    `insert into counters (key, n, day) values (?1, 1, ?2)
+     on conflict (key) do update set
+       n = case when counters.day = excluded.day then counters.n + 1 else 1 end,
+       day = excluded.day`,
+  ).bind(DAY_KEY, day);
   let id: unknown;
   try {
     id = ((await res.clone().json()) as { client_id?: unknown }).client_id;
   } catch {
+    id = undefined;
+  }
+  if (typeof id !== "string" || !id || id.length > 256) {
+    await count.run();
     return;
   }
-  if (typeof id !== "string" || !id || id.length > 256) return;
-  await env.DB.prepare(
-    "insert into counters (key, n, day) values (?, 0, ?) on conflict (key) do nothing",
-  )
-    .bind(CLIENT_KEY + id, utcDay(now))
-    .run();
+  await env.DB.batch([
+    count,
+    env.DB.prepare(
+      "insert into counters (key, n, day) values (?, 0, ?) on conflict (key) do nothing",
+    ).bind(CLIENT_KEY + id, day),
+  ]);
 }
 
 /** Marks a client as having completed a grant, so the sweep keeps it. */

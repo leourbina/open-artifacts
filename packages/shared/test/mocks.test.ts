@@ -872,6 +872,48 @@ describe("anonymous callers on authed routes", () => {
       expect(r.status).toBe(401);
       expect((await json(r)).error.code).toBe("unauthorized");
     });
+  it("anonymous data writes on a public allowAnonymousWrites artifact succeed (B13)", async () => {
+    fresh();
+    expect(poll.visibility).toBe("public");
+    expect(poll.allowAnonymousWrites).toBe(true);
+    const put = await call(
+      "PUT",
+      R.dataDoc(poll.id, "votes", "anon1"),
+      { v: 1 },
+      anon,
+    );
+    expect(put.status).toBe(200);
+    expect((await json(put)).updatedBy).toBe("anon");
+    const patch = await call(
+      "PATCH",
+      R.dataDoc(poll.id, "votes", "anon1"),
+      { w: 2 },
+      anon,
+    );
+    expect(patch.status).toBe(200);
+    expect((await json(patch)).data).toEqual({ v: 1, w: 2 });
+    expect(
+      (
+        await call(
+          "DELETE",
+          R.dataDoc(poll.id, "votes", "anon1"),
+          undefined,
+          anon,
+        )
+      ).status,
+    ).toBe(204);
+    // Not allowed: a public artifact without allowAnonymousWrites, and storage.
+    const other = by(
+      (a) => a.visibility === "public" && !a.allowAnonymousWrites,
+    );
+    expect(
+      (await call("PUT", R.dataDoc(other.id, "c", "d"), { v: 1 }, anon)).status,
+    ).toBe(401);
+    expect(
+      (await call("PUT", R.storageKey(poll.id, "k"), { value: 1 }, anon))
+        .status,
+    ).toBe(401);
+  });
   it("Bearer counts as authed; public artifact reads stay anonymous", async () => {
     fresh();
     const b = { ...anon, authorization: "Bearer x" };

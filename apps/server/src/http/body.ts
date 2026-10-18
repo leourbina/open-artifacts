@@ -52,6 +52,20 @@ export async function readCapped(c: Context, max: number): Promise<Uint8Array> {
   return readStreamCapped(c.req.raw.body, max);
 }
 
+/**
+ * readCapped over a plain Request (consumes its body; pass a clone to keep it).
+ * Always a running cap, with or without Content-Length.
+ */
+export async function readCappedRequest(
+  req: Pick<Request, "headers" | "body">,
+  max: number,
+): Promise<Uint8Array> {
+  if (Number(req.headers.get("content-length") ?? 0) > max)
+    throw tooLargeError(max);
+  if (!req.body) return new Uint8Array(0);
+  return readStreamCapped(req.body, max);
+}
+
 async function readStreamCapped(
   body: ReadableStream<Uint8Array>,
   max: number,

@@ -16,6 +16,9 @@ export const OAUTH = {
   register: "/oauth/register",
 } as const;
 
+/** OAuth access-token lifetime (24 h; the provider default is 1 h). */
+export const ACCESS_TOKEN_TTL_S = 86_400;
+
 export type ProviderOptions = OAuthProviderOptions<Env>;
 type Handler = ProviderOptions["defaultHandler"];
 
@@ -32,6 +35,9 @@ export function providerOptions(
     authorizeEndpoint: OAUTH.authorize,
     tokenEndpoint: OAUTH.token,
     clientRegistrationEndpoint: OAUTH.register,
+    // Each refresh costs 2 KV writes (Free plan: 1000/day): long-lived access
+    // tokens keep agents from refreshing hourly.
+    accessTokenTTL: ACCESS_TOKEN_TTL_S,
     resourceMetadata: {
       resource,
       authorization_servers: [new URL(resource).origin],

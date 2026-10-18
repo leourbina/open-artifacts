@@ -28,7 +28,8 @@ const VERSION_NUM = /^[1-9]\d{0,8}$/;
 const SIGNED = /^\/c\/([^/]+)\/([^/]+)\/v([^/]+)\/(.*)$/s;
 const PUBLIC = /^\/p\/([^/]+)\/v([^/]+)\/(.*)$/s;
 const CACHE_SIGNED = "private, max-age=300";
-const CACHE_PUBLIC = "public, max-age=60";
+/** Revalidated on every use: a public→private switch must take effect at once. */
+const CACHE_PUBLIC = "public, max-age=0, must-revalidate";
 const IMMUTABLE = "public, max-age=31536000, immutable";
 const JS = "text/javascript; charset=utf-8";
 

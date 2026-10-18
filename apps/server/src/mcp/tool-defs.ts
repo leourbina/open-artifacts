@@ -74,17 +74,17 @@ export const TOOL_DEFS = [
   {
     name: "artifact_data_set",
     description:
-      "Create or replace a document in an artifact's live-page data collection. Requires editor access.",
+      "Create or replace a document in an artifact's live-page data collection. Anyone who can view the artifact may write (as on the page itself).",
   },
   {
     name: "artifact_data_update",
     description:
-      "Merge top-level fields into a document in an artifact's live-page data collection. Requires editor access.",
+      "Merge top-level fields into a document in an artifact's live-page data collection. Anyone who can view the artifact may write (as on the page itself).",
   },
   {
     name: "artifact_data_delete",
     description:
-      "Delete a document from an artifact's live-page data collection. Requires editor access.",
+      "Delete a document from an artifact's live-page data collection. Anyone who can view the artifact may write (as on the page itself).",
   },
 ] as const;
 

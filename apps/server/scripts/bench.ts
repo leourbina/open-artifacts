@@ -62,6 +62,8 @@ export type Scenario = {
   prepare: () => Promise<() => Promise<unknown>>;
   /** Cold: no warmup and no forced gc (the first requests count). */
   cold?: boolean;
+  /** Reported, never failed (no brief budget yet). */
+  info?: boolean;
 };
 export type Result = {
   name: string;
@@ -75,6 +77,7 @@ export type Result = {
   otherP95: number;
   subrequests: number;
   pass: boolean;
+  info: boolean;
 };
 
 installGlobals();
@@ -318,7 +321,7 @@ export function scenarios(c: Ctx): Scenario[] {
   const mcpBody = enc.encode(
     JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
   );
-  const mcpReq = () =>
+  const mcpReq = (body: Uint8Array = mcpBody) =>
     new Request(`${APP}/mcp`, {
       method: "POST",
       headers: {
@@ -327,8 +330,25 @@ export function scenarios(c: Ctx): Scenario[] {
         accept: "application/json, text/event-stream",
         "mcp-protocol-version": "2025-06-18",
       },
-      body: mcpBody,
+      body: body as BodyInit,
     });
+  /** A tools/call request; the step fails on a tool error. */
+  const mcpTool = (name: string, args: Record<string, unknown>) => {
+    const req = mcpReq(
+      enc.encode(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name, arguments: args },
+        }),
+      ),
+    );
+    return async () => {
+      const t = await (await ok(await call(env, req), name)).text();
+      if (t.includes('"isError":true')) throw new Error(`${name}: ${t}`);
+    };
+  };
 
   return [
     // First, so nothing has run extractText on this shape yet.
@@ -470,6 +490,33 @@ export function scenarios(c: Ctx): Scenario[] {
             throw new Error("tools/list: no tools");
         };
       },
+    },
+    // ---- MCP tool calls (informational: no brief budget yet)
+    {
+      name: "MCP artifact_data_set (1 KB doc)",
+      budgetMs: 6,
+      bucket: "worker",
+      info: true,
+      prepare: async () => {
+        tick(ids.db);
+        return mcpTool("artifact_data_set", {
+          id: ids.db,
+          collection: "todos",
+          docId: `m${docN++ % 50}`,
+          data: JSON.parse(new TextDecoder().decode(doc1k)),
+        });
+      },
+    },
+    {
+      name: "MCP publish_artifact (50 KB markdown)",
+      budgetMs: 8,
+      bucket: "worker",
+      info: true,
+      prepare: async () =>
+        mcpTool(
+          "publish_artifact",
+          JSON.parse(md50) as Record<string, unknown>,
+        ),
     },
     // ---- ledger-deferred scenarios (budget: the 10 ms request limit)
     {
@@ -629,7 +676,9 @@ export function seedDo(c: Ctx) {
   const bytes = (
     ns
       .instance(c.ids.query)
-      .state.db.prepare("select v from meta where k = 'c:big'")
+      .state.db.prepare(
+        `select json_extract(cols, '$."big"') as v from totals where id = 1`,
+      )
       .get() as { v: number }
   ).v;
   // Fan-out: 200 hibernated sockets on the collection.
@@ -688,7 +737,8 @@ export function summarize(s: Scenario, xs: Sample[]): Result {
     max: Math.max(...mine),
     otherP95: p(other, 0.95),
     subrequests: last ? last.d1Queries + last.r2Ops + last.doCalls : 0,
-    pass: p95 <= limitMs,
+    pass: s.info === true || p95 <= limitMs,
+    info: s.info === true,
   };
 }
 
@@ -696,7 +746,7 @@ export function table(rs: Result[]): string {
   const f = (n: number) => n.toFixed(2);
   const rows = rs.map(
     (r) =>
-      `| ${r.name} | ${r.bucket} | ${f(r.p50)} | ${f(r.p95)} | ${f(r.max)} | ${f(r.otherP95)} | ${r.subrequests} | ${r.budgetMs} (${f(r.limitMs)}) | ${r.pass ? "pass" : "FAIL"} |`,
+      `| ${r.name} | ${r.bucket} | ${f(r.p50)} | ${f(r.p95)} | ${f(r.max)} | ${f(r.otherP95)} | ${r.subrequests} | ${r.budgetMs} (${f(r.limitMs)}) | ${r.info ? "info" : r.pass ? "pass" : "FAIL"} |`,
   );
   return [
     `CPU clock: ${CLOCK}; ${RUNS} runs after ${WARMUP} warmup (cold rows: none); gc: ${gc ? "forced, except cold rows" : "off"}`,

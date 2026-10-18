@@ -17,7 +17,7 @@ import { cappedJson, readCapped } from "../http/body.js";
 import { ApiError, appOrigin } from "../http/errors.js";
 import type { AppEnv } from "../http/middleware.js";
 import type { AppType } from "../routes/index.js";
-import { ACTOR_HEADER, runtimeCall, runtimeStub } from "./do.js";
+import { ACTOR_HEADER, publicActor, runtimeCall, runtimeStub } from "./do.js";
 
 // Literals so Hono infers params; must equal R.data* / R.storage* in @oa/shared.
 const ART = "/api/v1/artifacts/:id";
@@ -109,7 +109,7 @@ async function anonLimit(c: C, key: string, what: string): Promise<void> {
  * - storage: signed-in only (401), actor "u:{id}" (the storage owner).
  * - data writes: signed-in "u:{id}"; anonymous only with allowAnonymousWrites
  *   (else 401), after RL_ANON "ip:{key}" (429; 503 if unbound outside dev),
- *   as "ip:{key}" (ipKey: IPv4, or the IPv6 /64).
+ *   as "ip:{key}" (ipKey: IPv4, or the IPv6 /64); stored/returned updatedBy is "anon".
  * - subscribe: signed-in "u:{id}"; anonymous "ip:{key}" after RL_ANON "sub:ip:{key}".
  * - data reads: anyone with view access (actor unused).
  */
@@ -210,7 +210,7 @@ export function mountRuntime(app: AppType): void {
       id,
       data: null,
       updatedAt,
-      updatedBy: g.actor,
+      updatedBy: publicActor(g.actor),
     }).split('"data":null');
     return new Response(
       concat(enc.encode(`${head}"data":`), body, enc.encode(tail ?? "")),

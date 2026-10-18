@@ -7,6 +7,7 @@ import { AUTH, type Member, type OAuthClient, R } from "@oa/shared";
 import type { Context } from "hono";
 import { requireUser, TEAM_ROLES } from "../auth/authz.js";
 import type { Env } from "../env.js";
+import { readCappedRequest } from "../http/body.js";
 import { ApiError, errorJson } from "../http/errors.js";
 import type { AppEnv } from "../http/middleware.js";
 import type { AppType } from "../routes/index.js";
@@ -22,8 +23,8 @@ import {
   providerOptions,
 } from "./oauth-api.js";
 import {
-  countRegistration,
   markClientGranted,
+  registrationAllowed,
   trackRegisteredClient,
 } from "./registrations.js";
 import {
@@ -43,6 +44,11 @@ export type GrantProps = { userId: string; clientName: string };
 const MAX_CLIENT_NAME = 64;
 /** Client registrations per IP (IPv6: per /64) per window of RL_ANON. */
 const REGISTER_KEY = "reg:ip:";
+/** Token requests (refresh storms: 2 KV writes each) per client_id per RL_ANON window. */
+const TOKEN_KEY = "tok:";
+/** Consent page renders (beginConsent: a KV write) per user per RL_ANON window. */
+const CONSENT_KEY = "consent:u:";
+const MAX_TOKEN_BODY = 16 * 1024;
 const CSRF_TTL_S = 600;
 const MAX_FORM_BYTES = 8 * 1024;
 const MAX_GRANTS_LISTED = 100;
@@ -134,14 +140,80 @@ async function registrationLimited(
         { "retry-after": "60" },
       );
   }
-  // Instance-wide daily cap (D1): one IP at 30/min would still drain KV writes.
-  if (!(await countRegistration(env)))
+  // Instance-wide daily cap (D1, read only: rejected attempts write nothing).
+  if (!(await registrationAllowed(env)))
     return errorJson(
       429,
       "rate_limited",
       "registration limit reached; try tomorrow",
     );
   return null;
+}
+
+/** The token request's client_id: form body, else HTTP Basic username. */
+async function tokenClientId(req: Request): Promise<string | null> {
+  try {
+    // Capped read of a clone (with or without content-length); oversize → no id.
+    const body = await readCappedRequest(req.clone(), MAX_TOKEN_BODY);
+    const id = new URLSearchParams(new TextDecoder().decode(body)).get(
+      "client_id",
+    );
+    if (id) return id.slice(0, 256);
+  } catch {
+    // oversize or unreadable body: fall back to Basic, then the IP key
+  }
+  const basic = /^Basic ([A-Za-z0-9+/=]+)$/i.exec(
+    req.headers.get("authorization") ?? "",
+  );
+  if (basic?.[1]) {
+    try {
+      const user = atob(basic[1]).split(":")[0];
+      if (user) return decodeURIComponent(user).slice(0, 256);
+    } catch {
+      // malformed: the provider rejects it
+    }
+  }
+  return null;
+}
+
+/** OAuth-style JSON error for the token endpoint (RFC 6749 §5.2 shape). */
+const tokenError = (status: number, error: string, description: string) =>
+  new Response(JSON.stringify({ error, error_description: description }), {
+    status,
+    headers: {
+      "content-type": "application/json",
+      "cache-control": "no-store",
+      ...(status === 429 ? { "retry-after": "60" } : {}),
+    },
+  });
+
+/**
+ * /oauth/token: each refresh_token grant is 2 KV writes (Free plan: 1000/day),
+ * so one client's refresh loop could exhaust OAuth for everyone. RL_ANON per
+ * client_id (`tok:<client_id>`; without one, per IP); fails closed outside dev.
+ */
+async function tokenLimited(req: Request, env: Env): Promise<Response | null> {
+  if (req.method !== "POST" || new URL(req.url).pathname !== OAUTH.token)
+    return null;
+  const rl = env.RL_ANON as RateLimit | undefined;
+  if (!rl) {
+    if (env.ENVIRONMENT === "dev") return null;
+    return tokenError(
+      503,
+      "temporarily_unavailable",
+      "Token endpoint is unavailable",
+    );
+  }
+  const client = await tokenClientId(req);
+  const key = client
+    ? TOKEN_KEY + client
+    : `${TOKEN_KEY}ip:${ipKey(req.headers.get("cf-connecting-ip") ?? "") ?? "unknown"}`;
+  if ((await rl.limit({ key })).success) return null;
+  return tokenError(
+    429,
+    "temporarily_unavailable",
+    "Too many token requests; try again in a minute",
+  );
 }
 
 /** Everything on the app host except PAT-authenticated /mcp. */
@@ -151,7 +223,8 @@ export async function serveAppHost(
   ctx: ExecutionContext,
   app: ProviderOptions["defaultHandler"],
 ): Promise<Response> {
-  const limited = await registrationLimited(req, env);
+  const limited =
+    (await registrationLimited(req, env)) ?? (await tokenLimited(req, env));
   if (limited) return limited;
   const res = await oauthProvider(env, app).fetch(req, env, ctx);
   if (req.method === "POST" && new URL(req.url).pathname === OAUTH.register)
@@ -252,6 +325,14 @@ async function showConsent(c: Context<AppEnv>): Promise<Response> {
       headers: { location: login, "cache-control": "no-store" },
     });
   if (!TEAM_ROLES.includes(user.role)) return membersOnly();
+  // beginConsent writes KV: cap renders per user (RL_ANON, when bound).
+  const rl = c.env.RL_ANON as RateLimit | undefined;
+  if (rl && !(await rl.limit({ key: CONSENT_KEY + user.id })).success)
+    return messagePage(
+      "Too many requests",
+      "Wait a minute, then start connecting again from your agent.",
+      429,
+    );
   const oauth = oauthApi(c.env);
   try {
     const request = await oauth.parseAuthRequest(c.req.raw);

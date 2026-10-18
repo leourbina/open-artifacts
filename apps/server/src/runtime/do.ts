@@ -47,6 +47,12 @@ export async function runtimeCall<T>(fn: () => Promise<T>): Promise<T> {
 const enc = new TextEncoder();
 /** "u:{userId}" | "ip:{ip}" | "agent:{userId}", printable ASCII only (no NUL/surrogate collisions). */
 const ACTOR_RE = /^(u|ip|agent):[\x21-\x7e]{1,250}$/;
+/**
+ * The updatedBy stored and returned for a write: anonymous writers are "anon"
+ * (their "ip:" actor is only the internal rate-limit key, never shown to viewers).
+ */
+export const publicActor = (actor: string): string =>
+  actor.startsWith("ip:") ? "anon" : actor;
 /** Fixed per-row overhead counted toward LIMITS.artifactDataBytes. */
 const ROW_OVERHEAD = 64;
 /** Broadcasts inline the doc only up to this many bytes; larger docs go out as data:null. */
@@ -55,17 +61,29 @@ const BROADCAST_INLINE_BYTES = 16 * 1024;
 const MAX_SOCKETS = 200;
 /** Sockets per actor (X-OA-Actor on the upgrade request); fetch returns 429 past it. */
 const MAX_SOCKETS_PER_ACTOR = 20;
+/** Max socket lifetime: a revocation the server missed can't outlive a signed URL. */
+const SOCKET_TTL_MS = LIMITS.signedUrlTtlSec * 1000;
+/** The alarm also closes sockets this close to their TTL, batching alarms (≤1/min). */
+const SOCKET_TTL_SLACK_MS = 60_000;
 /** Header carrying the subscriber's actor from the route to fetch. */
 export const ACTOR_HEADER = "X-OA-Actor";
 /**
  * where/orderBy queries scan and json-decode every doc in the collection, so they are
- * refused once its tracked byte total (meta "c:<collection>") exceeds this. A ~50 MB scan
+ * refused once its tracked byte total (totals.cols[collection]) exceeds this. A ~50 MB scan
  * costs hundreds of ms of CPU; 2 MiB stays near the 10 ms budget. Plain list is unaffected.
  */
 const MAX_QUERY_COLLECTION_BYTES = 2 * 1024 * 1024;
+/** JSON path of a collection's byte total in totals.cols. */
+const colPath = (collection: string) => `$."${collection}"`;
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 500;
 const MINUTE_MS = 60_000;
+const DAY_MS = 86_400_000;
+/**
+ * Data/storage writes per artifact per UTC day (DO Free: 100k rows written/day,
+ * ≤3 rows per write), tracked in the single totals row.
+ */
+export const DAILY_WRITES = 10_000;
 const MAX_CURSOR = 4096;
 
 function dataName(v: unknown, what: string): string {
@@ -199,16 +217,15 @@ create table if not exists storage (
   viewer text not null, key text not null, data text not null, size integer not null,
   updated_at text not null, primary key (viewer, key)
 ) without rowid;
-create table if not exists writes (
-  actor text not null, minute integer not null, n integer not null,
-  primary key (actor, minute)
-) without rowid;
-create index if not exists writes_minute on writes (minute);
-create table if not exists meta (k text primary key, v integer not null) without rowid;
-insert or ignore into meta (k, v) values ('bytes', 0);
+create table if not exists totals (
+  id integer primary key check (id = 1), bytes integer not null,
+  day integer not null, writes integer not null, cols text not null
+);
 `;
 
 type SqlParam = string | number | null;
+/** Per-socket attachment: connect time (ms). */
+type SocketMeta = { t: number };
 
 /**
  * Per-artifact live-page data (spec §6.7): shared docs, per-viewer storage, and a
@@ -221,55 +238,90 @@ export class ArtifactRuntime extends DurableObject<Env> {
   /** Clock; overridable in tests. */
   now: () => number = () => Date.now();
 
+  /**
+   * Creates the schema (and migrates pre-M2 tables) outside any transaction:
+   * called before every transactionSync, since a rollback there would undo the
+   * DDL while `ready` stays true.
+   */
+  private ensureSchema(): void {
+    void this.sql;
+  }
+
   private get sql(): SqlStorage {
     if (!this.ready) {
-      this.ctx.storage.sql.exec(SCHEMA);
+      const sql = this.ctx.storage.sql;
+      // Pre-M2 DOs: a meta (k, v) table ('bytes', 'c:<name>') and a writes table.
+      const legacy =
+        sql
+          .exec(
+            "select 1 from sqlite_master where type = 'table' and name = 'meta'",
+          )
+          .toArray().length > 0;
+      sql.exec(SCHEMA);
+      if (legacy)
+        sql.exec(`insert or ignore into totals (id, bytes, day, writes, cols)
+          select 1, coalesce((select v from meta where k = 'bytes'), 0), 0, 0,
+            coalesce((select json_group_object(substr(k, 3), v) from meta where k like 'c:%'), '{}');
+          drop table meta; drop table if exists writes;`);
+      sql.exec(
+        "insert or ignore into totals (id, bytes, day, writes, cols) values (1, 0, 0, 0, '{}')",
+      );
       this.ready = true;
     }
     return this.ctx.storage.sql;
   }
 
-  /** Total stored bytes (docs + storage), as tracked in meta. */
+  /** Total stored bytes (docs + storage), as tracked in the totals row. */
   totalBytes(): number {
     return this.sql
-      .exec<{ v: number }>("select v from meta where k = 'bytes'")
-      .one().v;
+      .exec<{ bytes: number }>("select bytes from totals where id = 1")
+      .one().bytes;
   }
+
+  /** Writes per actor in the current minute; in memory (reset on eviction), never in SQLite. */
+  private rate = new Map<string, number>();
+  private rateMinute = -1;
 
   /** Counts one write for `actor` this minute; throws rate_limited past the cap. */
   private countWrite(actor: string): void {
     const minute = Math.floor(this.now() / MINUTE_MS);
+    if (minute !== this.rateMinute) {
+      this.rate.clear();
+      this.rateMinute = minute;
+    }
+    const n = (this.rate.get(actor) ?? 0) + 1;
+    this.rate.set(actor, n);
     const cap = actor.startsWith("ip:")
       ? LIMITS.anonWritesPerMinPerIp
       : LIMITS.viewerWritesPerMin;
-    const { n } = this.sql
-      .exec<{ n: number }>(
-        "insert into writes (actor, minute, n) values (?, ?, 1) on conflict (actor, minute) do update set n = n + 1 returning n",
-        actor,
-        minute,
-      )
-      .one();
     if (n > cap) fail("rate_limited", "too many writes; try again in a minute");
-    // Opportunistic prune: first write of a new minute for this actor.
-    if (n === 1) this.sql.exec("delete from writes where minute < ?", minute);
   }
 
-  /** Adjusts the artifact total and, for docs, the collection total (meta "c:<name>"). */
-  private addBytes(delta: number, collection?: string): void {
-    if (delta === 0) return;
-    if (collection !== undefined)
-      this.sql.exec(
-        "insert into meta (k, v) values (?, ?) on conflict (k) do update set v = v + excluded.v",
-        `c:${collection}`,
+  /**
+   * One write's bookkeeping, inside the write's transaction, as ONE row: the
+   * totals row holds the artifact's bytes, today's write count (429 past
+   * DAILY_WRITES) and per-collection bytes (`cols`, JSON). With the doc row and
+   * its index entry that is ≤3 rows written per data write.
+   */
+  private bump(delta: number, collection?: string): void {
+    const day = Math.floor(this.now() / DAY_MS);
+    const col = collection !== undefined && delta !== 0;
+    // Collection names are [A-Za-z0-9_-]: safe inside a quoted JSON path.
+    const { bytes, writes } = this.sql
+      .exec<{ bytes: number; writes: number }>(
+        `update totals set bytes = bytes + ?,
+           writes = case when day = ? then writes + 1 else 1 end, day = ?
+           ${col ? ", cols = json_set(cols, ?, coalesce(json_extract(cols, ?), 0) + ?)" : ""}
+         where id = 1 returning bytes, writes`,
         delta,
-      );
-    const { v } = this.sql
-      .exec<{ v: number }>(
-        "update meta set v = v + ? where k = 'bytes' returning v",
-        delta,
+        day,
+        day,
+        ...(col ? [colPath(collection), colPath(collection), delta] : []),
       )
       .one();
-    if (delta > 0 && v > LIMITS.artifactDataBytes)
+    if (writes > DAILY_WRITES)
+      fail("rate_limited", "daily write limit reached");
+    if (delta > 0 && bytes > LIMITS.artifactDataBytes)
       fail("too_large", "artifact data exceeds 50 MB");
   }
 
@@ -329,11 +381,13 @@ export class ArtifactRuntime extends DurableObject<Env> {
     bytes: number,
     actor: string,
   ): string {
+    const by = publicActor(actor);
     const size =
-      bytes + collection.length + id.length + actor.length + ROW_OVERHEAD;
+      bytes + collection.length + id.length + by.length + ROW_OVERHEAD;
     const updatedAt = this.iso();
+    this.countWrite(actor);
+    this.ensureSchema();
     this.ctx.storage.transactionSync(() => {
-      this.countWrite(actor);
       const old = this.sql
         .exec<{ size: number }>(
           "select size from docs where collection = ? and id = ?",
@@ -341,7 +395,7 @@ export class ArtifactRuntime extends DurableObject<Env> {
           id,
         )
         .toArray()[0];
-      this.addBytes(size - (old?.size ?? 0), collection);
+      this.bump(size - (old?.size ?? 0), collection);
       this.sql.exec(
         "insert into docs (collection, id, data, size, updated_at, updated_by) values (?, ?, ?, ?, ?, ?) on conflict (collection, id) do update set data = excluded.data, size = excluded.size, updated_at = excluded.updated_at, updated_by = excluded.updated_by",
         collection,
@@ -349,11 +403,11 @@ export class ArtifactRuntime extends DurableObject<Env> {
         json,
         size,
         updatedAt,
-        actor,
+        by,
       );
     });
     this.broadcastDoc(
-      { id, data: null, updatedAt, updatedBy: actor },
+      { id, data: null, updatedAt, updatedBy: by },
       json,
       collection,
     );
@@ -369,7 +423,10 @@ export class ArtifactRuntime extends DurableObject<Env> {
     const { json, bytes } = serialize(data);
     const updatedAt = this.writeJson(collection, id, json, bytes, actor);
     // The caller's value (already a structured-clone copy) is returned as-is: no re-parse.
-    return { doc: { id, data, updatedAt, updatedBy: actor }, json };
+    return {
+      doc: { id, data, updatedAt, updatedBy: publicActor(actor) },
+      json,
+    };
   }
 
   /**
@@ -441,10 +498,12 @@ export class ArtifactRuntime extends DurableObject<Env> {
     if (cur && (cur.o !== (orderBy ?? "") || cur.d !== order))
       fail("bad_request", "cursor does not match query");
     if (where || orderBy) {
-      const bytes =
-        this.sql
-          .exec<{ v: number }>("select v from meta where k = ?", `c:${c}`)
-          .toArray()[0]?.v ?? 0;
+      const bytes = this.sql
+        .exec<{ v: number }>(
+          "select coalesce(json_extract(cols, ?), 0) as v from totals where id = 1",
+          colPath(c),
+        )
+        .one().v;
       if (bytes > MAX_QUERY_COLLECTION_BYTES)
         fail("bad_request", "collection too large to query; use list");
     }
@@ -605,8 +664,9 @@ export class ArtifactRuntime extends DurableObject<Env> {
     const i = dataName(id, "id");
     const a = actorOf(actor);
     let existed = false;
+    this.countWrite(a);
+    this.ensureSchema();
     this.ctx.storage.transactionSync(() => {
-      this.countWrite(a);
       const old = this.sql
         .exec<{ size: number }>(
           "delete from docs where collection = ? and id = ? returning size",
@@ -614,10 +674,8 @@ export class ArtifactRuntime extends DurableObject<Env> {
           i,
         )
         .toArray()[0];
-      if (old) {
-        existed = true;
-        this.addBytes(-old.size, c);
-      }
+      existed = old !== undefined;
+      this.bump(-(old?.size ?? 0), c);
     });
     if (existed)
       this.broadcast(
@@ -689,8 +747,9 @@ export class ArtifactRuntime extends DurableObject<Env> {
     const { json, bytes } = serialize(value);
     const size = bytes + v.length + k.length + ROW_OVERHEAD;
     const updatedAt = this.iso();
+    this.countWrite(v);
+    this.ensureSchema();
     this.ctx.storage.transactionSync(() => {
-      this.countWrite(v);
       const old = this.sql
         .exec<{ size: number }>(
           "select size from storage where viewer = ? and key = ?",
@@ -698,7 +757,7 @@ export class ArtifactRuntime extends DurableObject<Env> {
           k,
         )
         .toArray()[0];
-      this.addBytes(size - (old?.size ?? 0));
+      this.bump(size - (old?.size ?? 0));
       this.sql.exec(
         "insert into storage (viewer, key, data, size, updated_at) values (?, ?, ?, ?, ?) on conflict (viewer, key) do update set data = excluded.data, size = excluded.size, updated_at = excluded.updated_at",
         v,
@@ -714,8 +773,9 @@ export class ArtifactRuntime extends DurableObject<Env> {
   storageDelete(viewer: string, key: string): void {
     const v = actorOf(viewer, "viewer");
     const k = storageKey(key);
+    this.countWrite(v);
+    this.ensureSchema();
     this.ctx.storage.transactionSync(() => {
-      this.countWrite(v);
       const old = this.sql
         .exec<{ size: number }>(
           "delete from storage where viewer = ? and key = ? returning size",
@@ -723,7 +783,7 @@ export class ArtifactRuntime extends DurableObject<Env> {
           k,
         )
         .toArray()[0];
-      if (old) this.addBytes(-old.size);
+      this.bump(-(old?.size ?? 0));
     });
   }
 
@@ -775,7 +835,33 @@ export class ArtifactRuntime extends DurableObject<Env> {
     }
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1], tags);
+    const t = this.now();
+    pair[1].serializeAttachment({ t } satisfies SocketMeta);
+    if ((await this.ctx.storage.getAlarm()) === null)
+      await this.ctx.storage.setAlarm(t + SOCKET_TTL_MS);
     return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+
+  /**
+   * Socket lifetime: closes sockets older than LIMITS.signedUrlTtlSec (minus a
+   * 60 s batching slack) with 4408 "reconnect"; the client reconnects through
+   * the shell, which re-checks access. Re-arms for the oldest remaining socket.
+   */
+  override async alarm(): Promise<void> {
+    const now = this.now();
+    let next = Number.POSITIVE_INFINITY;
+    for (const ws of this.ctx.getWebSockets()) {
+      const t = (ws.deserializeAttachment() as SocketMeta | null)?.t ?? 0;
+      if (now - t >= SOCKET_TTL_MS - SOCKET_TTL_SLACK_MS) {
+        try {
+          ws.close(4408, "reconnect");
+        } catch {
+          // already closed
+        }
+      } else next = Math.min(next, t + SOCKET_TTL_MS);
+    }
+    if (next !== Number.POSITIVE_INFINITY)
+      await this.ctx.storage.setAlarm(next);
   }
 
   /** Subscribe-only feed: any client message closes the socket (1008 policy violation). */
