@@ -60,7 +60,7 @@ describe.skipIf(!base || !pat)("staging smoke: search", () => {
       await new Promise((res) => setTimeout(res, 2_000));
     }
     expect(found, `not found in 60 s; last search response: ${last}`).toBe(
-      true
+      true,
     );
     const anon = await fetch(`${base}${R.search}?q=${word}`);
     expect(anon.status).toBe(401);

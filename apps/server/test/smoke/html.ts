@@ -59,7 +59,7 @@ describe.skipIf(!base || !pat)("staging smoke: html publish", () => {
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("OA smoke");
     expect(res.headers.get("content-security-policy") ?? "").toContain(
-      "sandbox allow-scripts"
+      "sandbox allow-scripts",
     );
     expect(res.headers.get("set-cookie")).toBeNull();
 

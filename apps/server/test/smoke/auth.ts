@@ -11,7 +11,7 @@ describe.skipIf(!base)("staging smoke: auth", () => {
     if (team) expect(loc.hostname).toBe(team);
     else expect(loc.hostname).toMatch(/\.cloudflareaccess\.com$/);
     expect(loc.pathname).toMatch(
-      /^\/cdn-cgi\/access\/sso\/oidc\/.+\/authorization$/
+      /^\/cdn-cgi\/access\/sso\/oidc\/.+\/authorization$/,
     );
     expect(loc.searchParams.get("code_challenge_method")).toBe("S256");
   });

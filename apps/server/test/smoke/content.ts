@@ -54,7 +54,7 @@ describe.skipIf(!base || !pat)("staging smoke: content host", () => {
 
     const expired = url.replace(
       /\/c\/(\d+)\./,
-      (_, exp: string) => `/c/${Number(exp) - 3600}.`
+      (_, exp: string) => `/c/${Number(exp) - 3600}.`,
     );
     const gone = await fetch(expired, { redirect: "manual" });
     expect(gone.status).toBe(404);
