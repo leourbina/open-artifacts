@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { FORMATS } from "./formats.js";
 import { isId } from "./ids.js";
-import { LIMITS } from "./limits.js";
+import { INLINE_TOO_LARGE_MESSAGE, LIMITS } from "./limits.js";
 import { findCaseCollision, normalizePath } from "./paths.js";
 import { utf8Exceeds } from "./utf8.js";
 
@@ -59,22 +59,24 @@ export const InlineFileSchema = z.union([
 ]);
 export type InlineFile = z.infer<typeof InlineFileSchema>;
 
-export const PublishInputSchema = z
-  .strictObject({
-    id: z.string().optional(),
-    title: z.string().trim().min(1).max(200).optional(),
-    description: z.string().max(2000).optional(),
-    format: FormatSchema.optional(),
-    content: z.string().optional(),
-    files: z.record(z.string(), InlineFileSchema).optional(),
-    entry: z.string().optional(),
-    language: z.string().optional(),
-    message: z.string().max(500).optional(),
-    visibility: VisibilitySchema.optional(),
-    capabilities: CapabilitiesPatchSchema.optional(),
-    allowAnonymousWrites: z.boolean().optional(),
-  })
-  .superRefine((v, ctx) => {
+const PublishShape = z.strictObject({
+  id: z.string().optional(),
+  title: z.string().trim().min(1).max(200).optional(),
+  description: z.string().max(2000).optional(),
+  format: FormatSchema.optional(),
+  content: z.string().optional(),
+  files: z.record(z.string(), InlineFileSchema).optional(),
+  entry: z.string().optional(),
+  language: z.string().optional(),
+  message: z.string().max(500).optional(),
+  visibility: VisibilitySchema.optional(),
+  capabilities: CapabilitiesPatchSchema.optional(),
+  allowAnonymousWrites: z.boolean().optional(),
+});
+
+const refinePublish =
+  (inlineCheck: boolean) =>
+  (v: z.infer<typeof PublishShape>, ctx: z.RefinementCtx) => {
     const issue = (message: string, path: (string | number)[]) =>
       ctx.addIssue({ code: "custom", message, path });
     const hasContent = v.content !== undefined;
@@ -92,8 +94,12 @@ export const PublishInputSchema = z
     if (hasContent && v.format === undefined && v.entry === undefined) {
       issue("content requires format or entry", ["format"]);
     }
-    if (v.content !== undefined && utf8Exceeds(v.content, LIMITS.inlineBytes)) {
-      issue(`content exceeds ${LIMITS.inlineBytes} bytes`, ["content"]);
+    if (
+      inlineCheck &&
+      v.content !== undefined &&
+      utf8Exceeds(v.content, LIMITS.inlineBytes)
+    ) {
+      issue(INLINE_TOO_LARGE_MESSAGE, ["content"]);
     }
     const normalized = new Map<string, string>();
     if (v.files !== undefined) {
@@ -129,7 +135,17 @@ export const PublishInputSchema = z
         issue(`entry "${v.entry}" is not a key of files`, ["entry"]);
       }
     }
-  });
+  };
+
+export const PublishInputSchema = PublishShape.superRefine(refinePublish(true));
+/**
+ * PublishInputSchema without the inline-size check, for the MCP tool: the SDK
+ * turns schema failures into InvalidParams, so oversize content is left to
+ * the server's planFiles (413 too_large, INLINE_TOO_LARGE_MESSAGE).
+ */
+export const PublishToolInputSchema = PublishShape.superRefine(
+  refinePublish(false),
+);
 export type PublishInput = z.infer<typeof PublishInputSchema>;
 
 export const PublishResultSchema = z.object({

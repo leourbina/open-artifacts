@@ -31,25 +31,30 @@ function declaredLength(c: Context, max: number): number | null {
   return n <= max ? n : null;
 }
 
-const tooLargeError = (max: number) =>
-  new ApiError("too_large", `Request body exceeds ${max} bytes`);
+const tooLargeError = (max: number, message?: string) =>
+  new ApiError("too_large", message ?? `Request body exceeds ${max} bytes`);
 
 /**
  * Reads the body with a running cap: 413 as soon as `max` is exceeded.
  * With a Content-Length ≤ max (the HTTP framing bounds the body to it) the
  * body is read natively in one call; otherwise chunk by chunk. A JS read loop
  * over a 2 MB body costs ~3 ms CPU on workerd (one promise per chunk).
+ * `message` replaces the default 413 text.
  */
-export async function readCapped(c: Context, max: number): Promise<Uint8Array> {
+export async function readCapped(
+  c: Context,
+  max: number,
+  message?: string,
+): Promise<Uint8Array> {
   if (Number(c.req.header("content-length") ?? 0) > max)
-    throw tooLargeError(max);
+    throw tooLargeError(max, message);
   if (!c.req.raw.body) return new Uint8Array(0);
   if (declaredLength(c, max) !== null) {
     const out = new Uint8Array(await c.req.raw.arrayBuffer());
-    if (out.byteLength > max) throw tooLargeError(max);
+    if (out.byteLength > max) throw tooLargeError(max, message);
     return out;
   }
-  return readStreamCapped(c.req.raw.body, max);
+  return readStreamCapped(c.req.raw.body, max, message);
 }
 
 /**
@@ -69,6 +74,7 @@ export async function readCappedRequest(
 async function readStreamCapped(
   body: ReadableStream<Uint8Array>,
   max: number,
+  message?: string,
 ): Promise<Uint8Array> {
   const reader = body.getReader();
   const chunks: Uint8Array[] = [];
@@ -79,7 +85,7 @@ async function readStreamCapped(
     size += value.byteLength;
     if (size > max) {
       await reader.cancel().catch(() => {});
-      throw tooLargeError(max);
+      throw tooLargeError(max, message);
     }
     chunks.push(value);
   }

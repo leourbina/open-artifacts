@@ -7,10 +7,12 @@ import {
   CapabilitiesPatchSchema,
   DataQuerySchema,
   ERROR_CODES,
+  INLINE_TOO_LARGE_MESSAGE,
   LIMITS,
   ListQuerySchema,
   PageSchema,
   PublishInputSchema,
+  PublishToolInputSchema,
   R,
   STATUS_FOR,
   viewerPath,
@@ -178,6 +180,24 @@ describe("fix round 1: PublishInput refinements", () => {
         content: "é".repeat(LIMITS.inlineBytes / 2),
       }).success,
     ).toBe(true);
+  });
+  it("C3: 256 KB inline limit, upload hint; the MCP schema leaves it to the server", () => {
+    expect(LIMITS.inlineBytes).toBe(256 * 1024);
+    expect(INLINE_TOO_LARGE_MESSAGE).toBe(
+      "Inline content is limited to 256 KB. Use create_upload for larger files, then publish with {uploadId}.",
+    );
+    const big = {
+      ...base,
+      format: "html",
+      content: "x".repeat(LIMITS.inlineBytes + 1),
+    };
+    const r = parse(big);
+    expect(r.success).toBe(false);
+    expect(r.error?.issues.map((i) => i.message)).toContain(
+      INLINE_TOO_LARGE_MESSAGE,
+    );
+    expect(PublishToolInputSchema.safeParse(big).success).toBe(true);
+    expect(PublishToolInputSchema.safeParse({ ...base }).success).toBe(false);
   });
 });
 

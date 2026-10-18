@@ -120,8 +120,8 @@ beforeAll(async () => {
 });
 
 describe("publish", () => {
-  it("1.9 MB inline base64: one R2 put per file, bounded D1 calls, no DO", async () => {
-    const bytes = new Uint8Array(Math.floor(1.9 * 1024 * 1024)).fill(7);
+  it("250 KB inline base64: one R2 put per file, bounded D1 calls, no DO", async () => {
+    const bytes = new Uint8Array(250 * 1024).fill(7);
     const { env: e, n } = counted();
     await publish(e, {
       title: "inline",

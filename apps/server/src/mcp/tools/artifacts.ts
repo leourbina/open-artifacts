@@ -6,7 +6,7 @@ import {
   type GetArtifactResult,
   IdInputSchema,
   ListQuerySchema,
-  PublishInputSchema,
+  PublishToolInputSchema,
   RestoreVersionInputSchema,
   SearchQuerySchema,
   SetVisibilityInputSchema,
@@ -67,7 +67,7 @@ export function registerArtifactTools(server: McpServer, t: ToolEnv): void {
     "publish_artifact",
     {
       description: describeTool("publish_artifact"),
-      inputSchema: PublishInputSchema,
+      inputSchema: PublishToolInputSchema,
     },
     (input) =>
       guard(async () => {

@@ -185,10 +185,13 @@ export class R2Shim {
   >();
   async put(
     key: string,
-    value: Uint8Array | ArrayBuffer | string,
+    value: Uint8Array | ArrayBuffer | string | ReadableStream,
     opts?: { httpMetadata?: { contentType?: string } },
   ) {
     meter.r2Ops++;
+    // Upload PUTs stream (bench setup only).
+    if (value instanceof ReadableStream)
+      value = new Uint8Array(await new Response(value).arrayBuffer());
     const bytes =
       typeof value === "string"
         ? new TextEncoder().encode(value)

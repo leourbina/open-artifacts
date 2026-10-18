@@ -1,6 +1,7 @@
 import {
   type AgentRef,
   ArtifactPatchSchema,
+  INLINE_TOO_LARGE_MESSAGE,
   isId,
   LIMITS,
   ListQuerySchema,
@@ -31,7 +32,8 @@ import { planFiles, RESERVED_KEYS } from "../services/manifest.js";
 import { putExtractedText } from "../services/search.js";
 import type { AppType } from "./index.js";
 
-// Base64 inflates inline bytes by 4/3; allow some JSON overhead on top.
+// Base64 inflates inline bytes by 4/3; allow some JSON overhead on top. A
+// body past it can only be oversize inline content: 413 with the upload hint.
 const MAX_BODY = Math.ceil((LIMITS.inlineBytes * 4) / 3) + 256 * 1024;
 const ARTIFACT = "/api/v1/artifacts/:id";
 const VERSIONS = `${ARTIFACT}/versions`;
@@ -44,7 +46,7 @@ async function publishInput(
   c: Context<AppEnv>,
   id?: string,
 ): Promise<PublishInput> {
-  const buf = await readCapped(c, MAX_BODY);
+  const buf = await readCapped(c, MAX_BODY, INLINE_TOO_LARGE_MESSAGE);
   let raw: unknown;
   try {
     raw = JSON.parse(new TextDecoder().decode(buf));

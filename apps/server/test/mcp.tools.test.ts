@@ -1,6 +1,11 @@
 import { env } from "cloudflare:workers";
 import type { Client } from "@modelcontextprotocol/client";
-import { newId, QUOTA_MESSAGE } from "@oa/shared";
+import {
+  INLINE_TOO_LARGE_MESSAGE,
+  LIMITS,
+  newId,
+  QUOTA_MESSAGE,
+} from "@oa/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPat } from "../src/auth/pat.js";
 import { getDb } from "../src/db/client.js";
@@ -9,6 +14,7 @@ import { TOOL_DEFS } from "../src/mcp/tool-defs.js";
 import manifest from "../src/mcp/tool-manifest.json";
 import { login } from "./helpers.js";
 import {
+  APP,
   callWorker,
   connect,
   E,
@@ -162,8 +168,30 @@ describe("MCP tools over PAT", () => {
   });
 
   it("get_artifact: text over 1 MB gets a downloadUrl, no inline content", async () => {
+    // Over the 256 KB inline limit: create_upload, PUT, publish by uploadId.
     const big = "a".repeat(1024 * 1024 + 10);
-    const pub = await publishMd(client, big);
+    const up = sc<{ uploadId: string; artifactId: string; url: string }>(
+      await tool(client, "create_upload", {
+        path: "README.md",
+        size: big.length,
+      }),
+    );
+    const u = new URL(up.url);
+    const put = await callWorker(
+      new Request(`${APP}${u.pathname}${u.search}`, {
+        method: "PUT",
+        body: big,
+        headers: { "content-length": String(big.length) },
+      }),
+    );
+    expect(put.status).toBe(204);
+    const pub = sc<{ id: string }>(
+      await tool(client, "publish_artifact", {
+        id: up.artifactId,
+        title: `md ${tag}`,
+        files: { "README.md": { uploadId: up.uploadId } },
+      }),
+    );
     const got = sc<{ content?: string; downloadUrl?: string }>(
       await tool(client, "get_artifact", { id: pub.id }),
     );
@@ -186,6 +214,22 @@ describe("MCP tools over PAT", () => {
     const r2 = await tool(client, "restore_version", { id: newId() });
     expect(r2.isError).toBe(true);
     expect(textOf(r2)).toMatch(/version/);
+  });
+
+  it("C3: inline content over 256 KB → too_large with the upload hint", async () => {
+    const r = await tool(client, "publish_artifact", {
+      title: "big",
+      format: "html",
+      content: "x".repeat(LIMITS.inlineBytes + 1),
+    });
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).toBe(`too_large: ${INLINE_TOO_LARGE_MESSAGE}`);
+    const half = "x".repeat(LIMITS.inlineBytes / 2);
+    const f = await tool(client, "publish_artifact", {
+      title: "big",
+      files: { "a.txt": half, "b.txt": half, "c.txt": "y" },
+    });
+    expect(textOf(f)).toBe(`too_large: ${INLINE_TOO_LARGE_MESSAGE}`);
   });
 
   it("no access is not_found, never forbidden", async () => {
@@ -433,7 +477,7 @@ describe("MCP request limits and roles (PAT)", () => {
   });
 
   it("a body under the cap is read once and still served (2025-era POST)", async () => {
-    const r = await post(publishBody(1_900_000));
+    const r = await post(publishBody(200_000));
     expect(r.status).toBe(200);
     expect(await r.text()).toContain("Published");
   });
