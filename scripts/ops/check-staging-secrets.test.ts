@@ -13,16 +13,20 @@ const wrangler = readFileSync(
 );
 const list = (...names: string[]) =>
   names.map((name) => ({ name, type: "secret_text" }));
-const ALL = [
-  "ACCESS_CLIENT_SECRET",
-  "SESSION_SECRET",
-  "CONTENT_SIGNING_KEY",
-  "CF_ACCOUNT_ID",
-];
+const ALL = ["ACCESS_CLIENT_SECRET", "SESSION_SECRET", "CONTENT_SIGNING_KEY"];
 
 describe("requiredSecrets", () => {
   it("derives non-optional, non-var string fields of Env", () => {
     expect(requiredSecrets(envTs, wrangler).sort()).toEqual([...ALL].sort());
+  });
+});
+
+describe("CF_ACCOUNT_ID is a var", () => {
+  it("is not required as a secret", () => {
+    expect(requiredSecrets(envTs, wrangler)).not.toContain("CF_ACCOUNT_ID");
+    expect(missingSecrets(envTs, wrangler, list(...ALL))).not.toContain(
+      "CF_ACCOUNT_ID",
+    );
   });
 });
 
@@ -92,11 +96,7 @@ describe("requiredSecrets parser (fixtures)", () => {
 describe("missingSecrets", () => {
   it("names every missing required secret", () => {
     expect(
-      missingSecrets(
-        envTs,
-        wrangler,
-        list("ACCESS_CLIENT_SECRET", "CF_ACCOUNT_ID"),
-      ),
+      missingSecrets(envTs, wrangler, list("ACCESS_CLIENT_SECRET")),
     ).toEqual(["SESSION_SECRET", "CONTENT_SIGNING_KEY"]);
   });
   it("is ok when all are present", () => {
@@ -118,10 +118,10 @@ describe("cli", () => {
       cwd: root,
     });
   it("exits non-zero naming missing secrets (names only)", () => {
-    const r = run(JSON.stringify(list("CF_ACCOUNT_ID")));
+    const r = run(JSON.stringify(list("SESSION_SECRET")));
     expect(r.status).not.toBe(0);
     expect(r.stdout + r.stderr).toContain(
-      "::error::missing Worker secrets: ACCESS_CLIENT_SECRET, SESSION_SECRET, CONTENT_SIGNING_KEY",
+      "::error::missing Worker secrets: ACCESS_CLIENT_SECRET, CONTENT_SIGNING_KEY",
     );
   });
   it("exits zero when complete", () => {

@@ -147,12 +147,7 @@ const policyPuts = (calls: Call[]) =>
   calls.filter(
     (c) => c.method === "PUT" && c.path.includes("/access/policies/"),
   );
-const ALL = [
-  "ACCESS_CLIENT_SECRET",
-  "SESSION_SECRET",
-  "CONTENT_SIGNING_KEY",
-  "CF_ACCOUNT_ID",
-];
+const ALL = ["ACCESS_CLIENT_SECRET", "SESSION_SECRET", "CONTENT_SIGNING_KEY"];
 const posts = (calls: Call[]) =>
   calls.filter((c) => c.method === "POST" && c.path.endsWith("/access/apps"));
 
@@ -179,7 +174,7 @@ describe("staging-access", () => {
     });
     expect(r.clientId).toBe("cid-new");
     expect(h.puts.ACCESS_CLIENT_SECRET).toBe(CLIENT_SECRET);
-    expect(h.puts.CF_ACCOUNT_ID).toBe(ACCOUNT);
+    expect(h.puts.CF_ACCOUNT_ID).toBeUndefined();
     expect(h.puts.SESSION_SECRET).toBe(GEN[0]);
     expect(h.puts.CONTENT_SIGNING_KEY).toBe(GEN[1]);
     expect(h.masked).toEqual(expect.arrayContaining([CLIENT_SECRET, ...GEN]));
@@ -500,10 +495,7 @@ describe("staging-access", () => {
       "SESSION_SECRET",
     ]);
     const r = await h.go();
-    expect(Object.keys(h.puts).sort()).toEqual([
-      "CF_ACCOUNT_ID",
-      "CONTENT_SIGNING_KEY",
-    ]);
+    expect(Object.keys(h.puts)).toEqual(["CONTENT_SIGNING_KEY"]);
     expect(r.skipped.sort()).toEqual([
       "ACCESS_CLIENT_SECRET",
       "SESSION_SECRET",

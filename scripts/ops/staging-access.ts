@@ -135,12 +135,7 @@ async function ensurePolicy(o: Options): Promise<string> {
   return p.id;
 }
 
-const ALL = [
-  "ACCESS_CLIENT_SECRET",
-  "SESSION_SECRET",
-  "CONTENT_SIGNING_KEY",
-  "CF_ACCOUNT_ID",
-];
+const ALL = ["ACCESS_CLIENT_SECRET", "SESSION_SECRET", "CONTENT_SIGNING_KEY"];
 
 export async function run(o: Options) {
   // ---- preflight: nothing below mutates the Access app ----
@@ -177,7 +172,6 @@ export async function run(o: Options) {
       plan.push([name, v]);
     }
   }
-  if (!existing.has("CF_ACCOUNT_ID")) plan.push(["CF_ACCOUNT_ID", o.accountId]);
 
   const set: string[] = [];
   const put = async (name: string, v: string) => {
