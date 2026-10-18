@@ -1,6 +1,6 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "../src/http/errors.js";
 import {
   type ArtifactRuntime,
@@ -16,6 +16,36 @@ const inDo = <R>(
   s: RuntimeStub,
   cb: (i: ArtifactRuntime, st: DurableObjectState) => R | Promise<R>,
 ) => runInDurableObject(s as unknown as DurableObjectStub<ArtifactRuntime>, cb);
+/** Runs `fn` inside the DO and sums SQLite rows read by every statement it executes. */
+const rowsReadBy = <R>(s: RuntimeStub, fn: (i: ArtifactRuntime) => R) =>
+  inDo(s, (i, st) => {
+    const sql = st.storage.sql;
+    const own = Object.getOwnPropertyDescriptor(sql, "exec");
+    const exec = sql.exec.bind(sql);
+    const cursors: { rowsRead: number }[] = [];
+    Object.defineProperty(sql, "exec", {
+      configurable: true,
+      writable: true,
+      value: (...a: Parameters<typeof exec>) => {
+        const c = exec(...a);
+        cursors.push(c);
+        return c;
+      },
+    });
+    let result: R | undefined;
+    let error: string | null = null;
+    try {
+      result = fn(i);
+    } catch (e) {
+      error = (e as Error).message;
+    } finally {
+      if (own) Object.defineProperty(sql, "exec", own);
+      else delete (sql as { exec?: unknown }).exec;
+    }
+    const rows = cursors.reduce((n, c) => n + c.rowsRead, 0);
+    return { rows, result, error, statements: cursors.length };
+  });
+
 async function codeOf(p: Promise<unknown>): Promise<string> {
   try {
     await runtimeCall(() => p);
@@ -142,7 +172,7 @@ describe("B12 adversarial", () => {
       ]),
     ).not.toBe("open");
   });
-  it("fan-out: sockets capped at 200; 1 MB doc to 200 sockets stays near the 10 ms budget", async () => {
+  it("fan-out: sockets capped at 200; 1 MB docs fan out as small data:null frames", async () => {
     const s = stubFor();
     const msgs: string[] = [];
     for (let k = 0; k < 200; k++) {
@@ -158,18 +188,29 @@ describe("B12 adversarial", () => {
       headers: { Upgrade: "websocket" },
     });
     expect(over.status).toBe(429);
+    expect(await inDo(s, (_i, st) => st.getWebSockets("v").length)).toBe(200);
     const t0 = Date.now();
     await s.set("v", "a", "x".repeat(1024 * 1024 - 2), "u:1");
-    const t1 = Date.now();
     await s.set("v", "b", "x".repeat(1024 * 1024 - 2), "u:1");
-    expect(Math.min(t1 - t0, Date.now() - t1)).toBeLessThan(50);
-    await new Promise((r) => setTimeout(r, 50));
-    // Over 16 KB: the broadcast carries data:null (subscribers refetch).
-    expect(JSON.parse(msgs[0]!).docs[0]).toMatchObject({
-      id: "a",
-      data: null,
-      updatedBy: "u:1",
-    });
+    await s.set("v", "small", { ok: 1 }, "u:1");
+    // Loose guard only; the bounds that matter are the frame sizes below.
+    expect(Date.now() - t0).toBeLessThan(250);
+    await vi.waitFor(() => expect(msgs).toHaveLength(3));
+    const frames = msgs.map((m) => JSON.parse(m));
+    // Over 16 KB: the broadcast carries data:null (subscribers refetch), so each of the
+    // 200 sockets gets a tiny frame instead of 1 MB.
+    for (const [k, id] of [
+      [0, "a"],
+      [1, "b"],
+    ] as const) {
+      expect(frames[k].docs[0]).toMatchObject({
+        id,
+        data: null,
+        updatedBy: "u:1",
+      });
+      expect(msgs[k]!.length).toBeLessThan(512);
+    }
+    expect(frames[2].docs[0]).toMatchObject({ id: "small", data: { ok: 1 } });
   }, 60_000);
 });
 const LIMITS_DOC = 1024 * 1024;
@@ -212,7 +253,13 @@ describe("B12 adversarial scan", () => {
     expect(await codeOf(s.query("v", { where: { choice: "B" } }))).toBe(
       "bad_request",
     );
-    expect(Date.now() - t0).toBeLessThan(50);
+    expect(Date.now() - t0).toBeLessThan(250);
+    // Refused from the meta row alone: no doc rows are scanned.
+    const probe = await rowsReadBy(s, (i) =>
+      i.query("v", { where: { choice: "B" } }),
+    );
+    expect(probe.error).toMatch(/^oa:bad_request:collection too large/);
+    expect(probe.rows).toBeLessThanOrEqual(1);
     expect(await codeOf(s.query("v", { orderBy: "choice" }))).toBe(
       "bad_request",
     );
@@ -235,10 +282,17 @@ describe("B12 adversarial scan", () => {
     expect(tracked).toBeGreaterThan(2 * 1024 * 1024 - 30_000);
     const t0 = Date.now();
     const r = await s.query("v", { where: { choice: "B" } });
-    const ms = Date.now() - t0;
-    // Locally ~4 ms for ~2.08 MB (83 x 25 KB docs).
-    expect(ms).toBeLessThan(50);
+    // Loose guard only (locally ~4 ms); the scan bound is the rows-read check below.
+    expect(Date.now() - t0).toBeLessThan(250);
     expect(r.items.map((d) => d.id)).toEqual(["d7"]);
+    // The scan touches only this collection's 83 rows (+ the meta row), never "w".
+    const probe = await rowsReadBy(s, (i) =>
+      i.query("v", { where: { choice: "B" } }),
+    );
+    expect(probe.error).toBeNull();
+    expect(probe.result?.items.map((d) => d.id)).toEqual(["d7"]);
+    expect(probe.rows).toBeGreaterThanOrEqual(83);
+    expect(probe.rows).toBeLessThanOrEqual(83 + 2);
     const o = await s.query("v", {
       orderBy: "choice",
       order: "desc",
