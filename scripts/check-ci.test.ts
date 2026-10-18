@@ -550,11 +550,24 @@ describe("prod and staging tokens never cross", () => {
       const g = steps.find((s) => /stable/i.test(s.name ?? ""));
       expect(g?.run).toContain("releases/latest");
     });
+    it("has an always() revoke step using only the PROD token", () => {
+      const r = steps.find((s) => s.run?.includes("--revoke-ci-tokens")) as any;
+      expect(r).toBeDefined();
+      expect(r.if).toBe("always()");
+      expect(r["continue-on-error"]).toBe(false);
+      expect(r["timeout-minutes"]).toBe(3);
+      expect(r.env.CLOUDFLARE_API_TOKEN).toBe(
+        "${{ secrets.PROD_CLOUDFLARE_API_TOKEN }}",
+      );
+      expect(JSON.stringify(r.env)).not.toMatch(
+        /secrets\.CLOUDFLARE_API_TOKEN/,
+      );
+    });
     it("scopes tokens to the setup step and uses --ci", () => {
       const withTok = steps.filter((s) =>
         JSON.stringify(s.env ?? {}).includes("secrets."),
       );
-      expect(withTok).toHaveLength(1);
+      expect(withTok).toHaveLength(2);
       expect(withTok[0]?.env).toHaveProperty("OA_ACCESS_TOKEN");
       expect(w.env ?? {}).not.toHaveProperty("OA_ACCESS_TOKEN");
       expect(text).not.toMatch(/secrets\.CLOUDFLARE_API_TOKEN/);
