@@ -35,7 +35,7 @@ The agent follows the steps below. The only thing you do yourself is approve the
 5. **Run setup.** Use the user's hostnames and email:
 
    ```sh
-   pnpm -s oa:setup --json --app-host artifacts.example.com --content-host artifacts-content.example.com --owner-email you@example.com
+   pnpm -s oa:setup --json --app-host artifacts.example.com --content-host artifacts-content.example.com --owner-email you@example.com --name open-artifacts
    ```
 
    `-s` keeps pnpm's own output off stdout, so every line is JSON. With `--json`, setup never prompts. Setup prints one JSON object per line, `{"step", "status", "message", "data"}`, where `status` is `ok`, `skipped`, `action_required`, or `error`. It stops at the first `action_required` or `error`. Then go by the exit code:
@@ -60,7 +60,7 @@ Setup takes each value from its flag first, then from `.openartifacts/state.json
 
 | Flag | Meaning |
 |---|---|
-| `--name` | Name of the Worker, its resources, and the Access app. Defaults to `open-artifacts`. It's also the server name in the MCP snippets. |
+| `--name` | Name of the Worker, its resources, and the Access app. It's also the server name in the MCP snippets. Without saved state, it's required with `--json`, `--yes`, `--upgrade`, or `--check`; only an interactive run defaults it to `open-artifacts`. |
 | `--app-host` | The app hostname, for example `artifacts.example.com`. |
 | `--content-host` | The artifact content hostname, for example `artifacts-content.example.com`. |
 | `--owner-email` | The owner's email. That person becomes the owner and gets the owner token. |
@@ -68,16 +68,17 @@ Setup takes each value from its flag first, then from `.openartifacts/state.json
 | `--yes` | Never prompt. Missing values are errors, and the optional `ANALYTICS_TOKEN` is skipped. Optional with `--json`. |
 | `--upgrade` | Upgrade an existing install: only `deploy` and `selftest` do work. See [Upgrade](/docs/upgrade/). |
 | `--new-owner-token` | Mint a new owner token, and revoke the one setup minted before. |
-| `--check` | Read-only: run every step's check, rebuild state from Cloudflare by `--name`, and report each step as done or todo. Writes nothing (no state file, no Cloudflare changes). |
-| `--strict` | With `--check`, exit 2 when any step is still todo, so CI can use it as a preflight gate. |
+| `--check` | Read-only. Runs each step's check without doing the work, and reports it as `done` or `todo`. Without saved state, it rebuilds the state from Cloudflare by `--name` and reports it on a last `state` line. It changes nothing on Cloudflare and writes no files. |
+| `--strict` | Only with `--check`: exit `2` when any step is `todo`, for example to gate CI. |
 | `--json` | Print one JSON object per line instead of text, and never prompt: a missing value is an `action_required` line naming the flag to pass. The optional `ANALYTICS_TOKEN` is skipped. |
 
 | Environment variable | Meaning |
 |---|---|
 | `OA_ACCESS_TOKEN` | A Cloudflare API token for Access, needed on the first run when the `wrangler login` token can't manage Access, and again to change the app host or account. |
 | `CLOUDFLARE_ACCOUNT_ID` | The default for `--account-id`. |
+| `OA_TEAM_DOMAIN` | The Zero Trust team domain (`<team>.cloudflareaccess.com`), used when rebuilding state if the token can't read the Access organization. Setup verifies it before use. |
 
-Exit codes: `0` when every step is done, `2` when a step needs the user or a missing flag (`action_required`), and `1` on an error.
+Exit codes: `0` when every step is done, `2` when a step needs the user or a missing flag (`action_required`), and `1` on an error. With `--check`, `0` means the checks ran; `--strict` makes a `todo` step exit `2`.
 
 ## What setup does
 
