@@ -15,9 +15,15 @@ import {
   ShareSchema,
   TokenSchema,
   UsageSchema,
+  VERSIONS_PAGE_SIZE,
   VersionInfoSchema,
 } from "@oa/shared";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { z } from "zod";
 import { api } from "./client";
 
@@ -67,6 +73,18 @@ export const useVersions = (id: string, opts?: { enabled?: boolean }) =>
     queryKey: qk.versions(id),
     queryFn: ({ signal }) =>
       api.get(R.versions(id), z.array(VersionInfoSchema), signal),
+  });
+/** Timeline pages, newest first; each next page is `before` the last version seen. */
+export const useVersionPages = (id: string) =>
+  useInfiniteQuery({
+    queryKey: [...qk.versions(id), "pages"] as const,
+    initialPageParam: undefined as number | undefined,
+    queryFn: ({ pageParam, signal }) =>
+      api.get(R.versions(id, pageParam), z.array(VersionInfoSchema), signal),
+    getNextPageParam: (last) =>
+      last.length < VERSIONS_PAGE_SIZE
+        ? undefined
+        : last[last.length - 1]?.version,
   });
 /** Info for one version, however old: the first item of the page just below `v + 1`. */
 export const useVersionInfo = (id: string, v: number, enabled = true) =>
@@ -137,6 +155,12 @@ export const usePublishVersion = (id: string) =>
   useInvalidating(
     (input: PublishInput) =>
       api.send("POST", R.versions(id), input, PublishResultSchema),
+    () => [...artifactKeys(id)(), qk.versions(id)],
+  );
+export const useRestoreVersion = (id: string) =>
+  useInvalidating(
+    (v: number) =>
+      api.send("POST", R.restoreVersion(id, v), undefined, PublishResultSchema),
     () => [...artifactKeys(id)(), qk.versions(id)],
   );
 export const usePatchArtifact = (id: string) =>

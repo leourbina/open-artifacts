@@ -67,6 +67,17 @@ export const api = {
   ): Promise<T> {
     return parse(await request(path, { method: "GET", signal }), schema);
   },
+  /** Raw body as text (for file contents), with its content type. */
+  async getText(
+    path: string,
+    signal?: AbortSignal,
+  ): Promise<{ text: string; contentType: string }> {
+    const res = await request(path, { method: "GET", signal });
+    return {
+      text: await res.text(),
+      contentType: res.headers.get("content-type") ?? "",
+    };
+  },
   async send<T = void>(
     method: "POST" | "PUT" | "PATCH" | "DELETE",
     path: string,
