@@ -29,7 +29,7 @@ const at = (p: string) => ORIGIN + p;
 const server = setupServer();
 
 beforeAll(() => {
-  server.listen({ onUnhandledFrame: "error" });
+  server.listen({ onUnhandledRequest: "error" });
   // Node's fetch needs absolute URLs; the client uses same-origin paths.
   const realFetch = globalThis.fetch;
   vi.stubGlobal("fetch", (u: RequestInfo | URL, init?: RequestInit) =>
