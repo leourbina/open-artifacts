@@ -99,6 +99,17 @@ test("library → detail: card, thumbnail and deep links", async ({
     await expectDetail(page, a.id, a.title, a.heading);
     await page.goto(`/a/${a.id}/v/1`);
     await expectDetail(page, a.id, a.title, a.heading);
+
+    // List view: the row's timestamp, away from the title.
+    await page.goto("/?view=list");
+    const time = await page
+      .locator("article.lib-row")
+      .filter({ hasText: a.title })
+      .locator("time")
+      .boundingBox();
+    if (!time) throw new Error("row time has no box");
+    await page.mouse.click(time.x + time.width / 2, time.y + time.height / 2);
+    await expectDetail(page, a.id, a.title, a.heading);
   }
 
   // Phone width: no horizontal page scroll; title bar and frame on screen.
