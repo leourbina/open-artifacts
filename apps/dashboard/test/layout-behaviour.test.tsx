@@ -204,4 +204,23 @@ describe("layout behaviour", () => {
     await act(() => client.invalidateQueries({ queryKey: qk.me }));
     await waitFor(() => expect(screen.queryByText(QUOTA_MESSAGE)).toBeNull());
   });
+
+  it("a 500 on /me refetch keeps the authed shell (no error panel)", async () => {
+    let fail = false;
+    const { client } = mount(
+      async () =>
+        fail
+          ? json({ error: { code: "internal", message: "x" } }, 500)
+          : meAs("member"),
+      "/",
+    );
+    await screen.findAllByRole("link", { name: "Team" });
+    fail = true;
+    await act(() => client.invalidateQueries({ queryKey: qk.me }));
+    expect(client.getQueryState(qk.me)?.status).toBe("error");
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(
+      screen.getAllByRole("link", { name: "Team" }).length,
+    ).toBeGreaterThan(0);
+  });
 });
