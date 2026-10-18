@@ -1,0 +1,10 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "open-artifacts-landing",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": true,
+  "preview_urls": true,
+  "assets": { "directory": "./dist" },
+  "routes": [{ "pattern": "open-artifacts.com", "custom_domain": true }],
+  "previews": {}
+}

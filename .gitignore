@@ -12,3 +12,4 @@ apps/server/wrangler.jsonc
 .dev.vars*
 coverage/
 .claude/
+.astro/
