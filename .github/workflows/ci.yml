@@ -68,10 +68,42 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+  # No secrets: the real suite runs a local `wrangler dev` (ENVIRONMENT=dev in a
+  # generated temp config), never staging.
   e2e:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - run: echo "e2e is a no-op until FE12 (Playwright)"
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - id: pw
+        run: bash scripts/ci/e2e.sh version
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.playwright }}
+      - id: install
+        run: bash scripts/ci/e2e.sh install
+      - run: bash scripts/ci/e2e.sh hosts
+      - name: Mock suite
+        run: bash scripts/ci/e2e.sh mock
+      # Runs even when the mock suite failed (not when the browsers didn't install).
+      - name: Real-server suite (local wrangler dev)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: bash scripts/ci/e2e.sh real
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            apps/dashboard/playwright-report
+            apps/dashboard/test-results
+          retention-days: 14
   # Not a required check: skipped unless a release-config file changed.
   release-dry-run:
     if: ${{ github.event_name == 'pull_request' }}

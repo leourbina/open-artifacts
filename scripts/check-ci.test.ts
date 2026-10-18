@@ -83,6 +83,47 @@ describe("ci.yml", () => {
     expect(step.run).toContain("command -v shellcheck");
     expect(step.run).toContain(".github/workflows/*.yml");
   });
+  it("e2e job runs both Playwright suites locally, with cached browsers", () => {
+    const job = w.jobs.e2e;
+    expect(job["timeout-minutes"]).toBeGreaterThan(0);
+    expect(job["timeout-minutes"]).toBeLessThanOrEqual(20);
+    // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
+    const steps: any[] = job.steps;
+    const runs = steps.map((s) => s.run ?? "");
+    const at = (needle: string) => runs.findIndex((r) => r.includes(needle));
+    const order = [
+      "pnpm install --frozen-lockfile",
+      "e2e.sh version",
+      "e2e.sh install",
+      "e2e.sh hosts",
+      "e2e.sh mock",
+      "e2e.sh real",
+    ].map(at);
+    expect(order.every((i) => i > -1)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    // A mock failure must not skip the real suite; a failed browser install must.
+    expect(steps[order[2] as number].id).toBe("install");
+    expect(steps[order[5] as number].if).toMatch(
+      /^\$\{\{ !cancelled\(\) && steps\.install\.outcome == 'success' \}\}$/,
+    );
+    const cache = steps.find((s) =>
+      (s.uses ?? "").startsWith("actions/cache@"),
+    );
+    expect(cache.with.path).toBe("~/.cache/ms-playwright");
+    expect(cache.with.key).toContain("steps.pw.outputs.playwright");
+    const upload = steps.find((s) =>
+      (s.uses ?? "").startsWith("actions/upload-artifact@"),
+    );
+    expect(upload.if).toBe("failure()");
+    expect(upload.with.path).toContain("apps/dashboard/playwright-report");
+    // Local wrangler dev only: no secrets, nothing pointing at staging.
+    const s = JSON.stringify(job);
+    expect(s).not.toContain("secrets.");
+    expect(s).not.toContain("staging");
+    expect(ci("e2e.sh")).toContain(
+      "playwright install --with-deps chromium webkit",
+    );
+  });
   it("uses node from .nvmrc with pnpm cache", () => {
     const raw = read(".github/workflows/ci.yml");
     expect(raw).toContain("node-version-file: .nvmrc");
