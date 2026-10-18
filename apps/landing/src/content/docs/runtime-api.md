@@ -39,10 +39,24 @@ An artifact declares what it uses when it's published, for example `capabilities
 
 Each document is `{ id, data, updatedAt, updatedBy }`, with your value in `data`.
 
+Each `subscribe` callback gets `{ docs, deleted }`: the documents that changed and the ids of those deleted. If the live connection drops and reconnects, changes may have been missed, so the callback gets `{ docs: [], deleted: [], resync: true }` instead. On `resync`, refetch with `list()` or `query()`.
+
 ```js
 const votes = openArtifacts.db.collection("votes");
+const all = new Map();
+const refetch = async () => {
+  all.clear();
+  for (const doc of (await votes.list()).items) all.set(doc.id, doc);
+  render([...all.values()]);
+};
+votes.subscribe((e) => {
+  if (e.resync) return refetch();
+  for (const doc of e.docs) all.set(doc.id, doc);
+  for (const id of e.deleted) all.delete(id);
+  render([...all.values()]);
+});
+await refetch();
 await votes.set(crypto.randomUUID(), { option: "Lisbon" });
-votes.subscribe(async () => render((await votes.list()).items));
 ```
 
 ## The viewer: `viewer`

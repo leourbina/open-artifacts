@@ -20,6 +20,9 @@ describe("mcp-tools docs", () => {
     ])
       expect(large).toContain(word);
     expect(doc).toMatch(/search_artifacts[^.]*few seconds/);
+    expect(doc).toContain("search matches the previous version's text");
+    // The 413 message isn't quoted: {LIMIT_INLINE} carries the number.
+    expect(doc).not.toMatch(/Inline content is limited to/);
   });
 
   it("documents every PublishInputSchema field, and no others", () => {
