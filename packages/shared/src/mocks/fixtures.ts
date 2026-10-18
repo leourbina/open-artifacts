@@ -82,6 +82,14 @@ const ver = (
   })),
   language,
   textIndexed: contentType !== "application/pdf",
+  format:
+    contentType === "text/html"
+      ? "html"
+      : contentType === "text/markdown"
+        ? "markdown"
+        : contentType === "application/pdf"
+          ? "pdf"
+          : "code",
 });
 
 const members: Member[] = [
