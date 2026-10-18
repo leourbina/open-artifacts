@@ -106,6 +106,7 @@ describe("adversarial: theme.css", () => {
   });
 
   // Chrome classes are top-level; outside their container they get no tokens.
+  // .oa-error is the renderer's own fail() message and carries its own tokens.
   it("scopes every selector under .oa-doc, .oa-code or .oa-pdf", () => {
     const selectors = [...flat.matchAll(/(?:^|[};])\s*([^@{};][^{};]*)\{/g)]
       .flatMap((m) => splitTop(m[1] as string))
@@ -113,7 +114,7 @@ describe("adversarial: theme.css", () => {
       .filter((s) => s && !s.startsWith("@") && !/^(from|to|\d+%)$/.test(s));
     const leaks = selectors.filter(
       (s) =>
-        !/^(:root|\.oa-(doc|code|pdf)(?![\w-])|:is\(\.oa-|\[data-theme)/.test(
+        !/^(:root|\.oa-(doc|code|pdf|error)(?![\w-])|:is\(\.oa-|\[data-theme)/.test(
           s,
         ),
     );
