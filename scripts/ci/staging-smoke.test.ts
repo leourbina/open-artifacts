@@ -70,6 +70,17 @@ describe("staging-smoke.sh", () => {
     expect(r.code).toBe(1);
     expect(r.out).toContain("Location does not start with");
   });
+  it("login fails with an error line on a 302 without Location", () => {
+    const r = smoke("login", "HTTP/2 302\r\ncontent-length: 0\r\n\r\n", "");
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("Location does not start with");
+  });
+  it("healthz and robots failures print an error line", () => {
+    expect(smoke("healthz", "", "nope").out).toContain("::error::");
+    expect(smoke("robots", "HTTP/2 200\r\n\r\n", "x").out).toContain(
+      "::error::",
+    );
+  });
   it("login fails on a non-302", () => {
     expect(smoke("login", "HTTP/2 200\r\n\r\n", "").code).toBe(1);
   });

@@ -47,7 +47,8 @@ jobs:
         with:
           ref: ${{ needs.release-please.outputs.tag_name || inputs.tag }}
       - id: gate
-        run: bash scripts/ci/landing-gate.sh
+        run: |
+          if [ -f apps/landing/wrangler.jsonc ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; fi
       - if: steps.gate.outputs.present == 'true'
         uses: pnpm/action-setup@v4
       - if: steps.gate.outputs.present == 'true'

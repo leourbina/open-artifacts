@@ -328,6 +328,10 @@ describe("release-please", () => {
     expect(ci("release-pr-dispatch.sh")).toContain("gh pr list");
     expect(step.env.BRANCH).toContain("release-please--branches--main");
   });
+  it("deploy-landing uses no scripts/ci files (older tags lack them)", () => {
+    const steps = wf("release-please.yml").jobs["deploy-landing"].steps;
+    expect(JSON.stringify(steps)).not.toContain("scripts/ci");
+  });
   it("gates landing deploy on a release-ready dist, between build and deploy", () => {
     const steps = wf("release-please.yml").jobs["deploy-landing"].steps;
     // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
