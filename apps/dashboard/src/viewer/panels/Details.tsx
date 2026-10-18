@@ -8,7 +8,7 @@ import {
   usePatchArtifact,
   useVersionInfo,
 } from "../../api/queries";
-import { offerUndo } from "../undoToast";
+import { useOfferUndo } from "../useOfferUndo";
 
 const fmtSize = (n: number) =>
   n < 1024
@@ -29,6 +29,7 @@ export function Details({ artifact }: { artifact: ArtifactSummary }) {
   const info = useVersionInfo(id, artifact.currentVersion).data;
   const patch = usePatchArtifact(id);
   const del = useDeleteArtifact(id);
+  const offerUndo = useOfferUndo();
   const navigate = useNavigate();
   const [title, setTitle] = useState(artifact.title);
   const [desc, setDesc] = useState(artifact.description ?? "");

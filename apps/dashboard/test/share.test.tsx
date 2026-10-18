@@ -312,7 +312,6 @@ describe("details review fixes", () => {
 });
 
 describe("undo toast", () => {
-  const toastEl = () => document.querySelector(".oa-undo") as HTMLElement;
   const del = async () => {
     const router = mount(panel(OWNED, "details"));
     fireEvent.click(
@@ -320,68 +319,28 @@ describe("undo toast", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/"));
-    await waitFor(() => expect(toastEl()).not.toBeNull());
-  };
-  // Hover then leave restarts the dismiss timer under the fake clock.
-  const restart = () => {
-    fireEvent.mouseEnter(toastEl());
-    fireEvent.mouseLeave(toastEl());
+    return router;
   };
 
-  it("dismisses itself after about 8 seconds", async () => {
-    await del();
-    vi.useFakeTimers();
-    try {
-      restart();
-      await act(() => vi.advanceTimersByTimeAsync(7900));
-      expect(toastEl()).not.toBeNull();
-      await act(() => vi.advanceTimersByTimeAsync(200));
-      expect(toastEl()).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
+  it("offers Undo, which restores and navigates back", async () => {
+    const router = await del();
+    fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
+    await waitFor(() =>
+      expect(router.state.location.pathname).toMatch(/^\/a\//),
+    );
   });
 
-  it("pauses while hovered", async () => {
-    await del();
-    vi.useFakeTimers();
-    try {
-      restart();
-      fireEvent.mouseEnter(toastEl());
-      await act(() => vi.advanceTimersByTimeAsync(20_000));
-      expect(toastEl()).not.toBeNull();
-      fireEvent.mouseLeave(toastEl());
-      await act(() => vi.advanceTimersByTimeAsync(8100));
-      expect(toastEl()).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not dismiss while the undo request is in flight, and shows its error", async () => {
-    let release = () => {};
+  it("toasts the error when undo fails", async () => {
     server.use(
-      http.post("*/api/v1/artifacts/:id/undelete", async () => {
-        await new Promise<void>((r) => {
-          release = r;
-        });
-        return HttpResponse.json(
+      http.post("*/api/v1/artifacts/:id/undelete", () =>
+        HttpResponse.json(
           { error: { code: "internal", message: "Too late" } },
           { status: 500 },
-        );
-      }),
+        ),
+      ),
     );
     await del();
-    vi.useFakeTimers();
-    try {
-      restart();
-      fireEvent.click(screen.getByRole("button", { name: "Undo" }));
-      await act(() => vi.advanceTimersByTimeAsync(20_000));
-      expect(toastEl()).not.toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
-    release();
+    fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
     await screen.findByText("Too late");
   });
 });

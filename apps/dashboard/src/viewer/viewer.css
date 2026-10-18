@@ -304,20 +304,6 @@
   padding: 0;
   list-style: none;
 }
-.oa-undo {
-  position: fixed;
-  right: 16px;
-  bottom: 16px;
-  z-index: 60;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
-  background: var(--oa-surface);
-  color: var(--oa-text);
-  border-radius: var(--oa-radius-md);
-  box-shadow: var(--oa-shadow-2);
-}
 .oa-share input,
 .oa-share textarea,
 .oa-details input,
