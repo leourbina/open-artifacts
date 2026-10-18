@@ -7,7 +7,10 @@
  * - Access: owner/editor may publish, patch and restore; only the owner may share, change
  *   visibility, delete or undelete. A caller without the needed access gets 404, never 403.
  * - CSRF (test convenience): a mutating request carrying a `cookie` header but no
- *   `X-OA-Request: 1` gets 403 csrf; requests with neither cookie nor header pass.
+ *   `X-OA-Request: 1` gets 403 csrf; Bearer requests are exempt.
+ * - Auth: a request with no cookie and no Bearer gets 401 on every authed route (all mutations
+ *   except signed-URL upload PUT, plus me/members/tokens/oauth-clients/settings/usage/list/search);
+ *   public-artifact reads stay anonymous-OK.
  * - quotaExceeded: every /api/v1 route answers 503 quota_exceeded.
  */
 import { delay, type HttpHandler, HttpResponse, http } from "msw";
@@ -307,6 +310,15 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
       if (latencyMs) await delay(latencyMs);
       if (quotaExceeded) return err("quota_exceeded", QUOTA_MESSAGE);
       const mutating = !["GET", "HEAD", "OPTIONS"].includes(request.method);
+      const path = new URL(request.url).pathname.replace(/^.*\/api\/v1/, "");
+      // Signed-URL uploads carry no session; public artifact reads are anonymous-OK.
+      const needsAuth = mutating
+        ? !/^\/uploads\/[^/]+$/.test(path)
+        : /^\/(me|members|tokens|oauth-clients|settings|usage|artifacts|search)\/?$/.test(
+            path,
+          );
+      if (needsAuth && isAnon(request))
+        return err("unauthorized", "Authentication required");
       if (
         mutating &&
         request.headers.has("cookie") &&

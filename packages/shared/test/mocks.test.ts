@@ -498,7 +498,7 @@ describe("misc rules", () => {
       (await json(await call("GET", R.contentUrl(guide.id)))).expiresAt,
     ).toBeTruthy();
   });
-  it("CSRF: cookie without header -> 403 csrf; neither passes", async () => {
+  it("CSRF: cookie without header -> 403 csrf; Bearer without header passes", async () => {
     fresh();
     const r = await call(
       "PATCH",
@@ -514,7 +514,7 @@ describe("misc rules", () => {
           "PATCH",
           R.artifact(ID),
           { title: "x" },
-          { "content-type": "application/json" },
+          { "content-type": "application/json", authorization: "Bearer x" },
         )
       ).status,
     ).toBe(200);
@@ -837,6 +837,49 @@ describe("contract C1", () => {
     expect(r.status).toBe(400);
     expect(
       (await call("PUT", R.storageKey(poll.id, "k2"), { value: 1 })).status,
+    ).toBe(200);
+  });
+});
+
+describe("anonymous callers on authed routes", () => {
+  const anon = { "content-type": "application/json" };
+  const rows: [string, string, string][] = [
+    ["GET", "me", R.me],
+    ["GET", "members", R.members],
+    ["GET", "tokens", R.tokens],
+    ["GET", "oauthClients", R.oauthClients],
+    ["GET", "settings", R.settings],
+    ["GET", "usage", R.usage],
+    ["GET", "artifacts", R.artifacts],
+    ["GET", "search", `${R.search}?q=q4`],
+    ["POST", "uploads", R.uploads],
+    ["POST", "artifacts", R.artifacts],
+    ["PATCH", "artifact", R.artifact(ID)],
+    ["DELETE", "artifact", R.artifact(ID)],
+    ["POST", "versions", R.versions(ID)],
+    ["PUT", "storageKey", R.storageKey(poll.id, "k")],
+  ];
+  for (const [method, name, path] of rows)
+    it(`${method} ${name} -> 401 without cookie or Bearer`, async () => {
+      fresh();
+      const r = await call(
+        method,
+        path,
+        method === "GET" ? undefined : {},
+        anon,
+      );
+      expect(r.status).toBe(401);
+      expect((await json(r)).error.code).toBe("unauthorized");
+    });
+  it("Bearer counts as authed; public artifact reads stay anonymous", async () => {
+    fresh();
+    const b = { ...anon, authorization: "Bearer x" };
+    expect((await call("GET", R.me, undefined, b)).status).toBe(200);
+    expect(
+      (await call("GET", R.artifact(pub.id), undefined, anon)).status,
+    ).toBe(200);
+    expect(
+      (await call("GET", R.versions(pub.id), undefined, anon)).status,
     ).toBe(200);
   });
 });
