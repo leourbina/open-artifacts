@@ -4,6 +4,7 @@
     ?page=no-access|sign-in|not-found|quota   (default no-access)
     ?theme=light|dark                          (default: system)
     ?role=owner|admin|member|guest             (quota: role-aware sidebar; default owner)
+    ?name=<instance name>                      (sign-in: known instance name; default "Open Artifacts" for anonymous visitors)
     ?state=default|loading|error               (sign-in: loading = redirecting, error = failed sign-in;
                                                 quota: loading = skeleton grid)
   The not-found page is also what an artifact the viewer can't access returns,
@@ -84,6 +85,7 @@ svg{display:block}
 /* Sign in */
 .signin{text-align:center}
 .inst{width:44px;height:44px;border-radius:10px;background:var(--oa-text);color:var(--oa-surface);display:grid;place-items:center;font-size:19px;font-weight:600;margin:0 auto 18px}
+.inst svg{width:24px;height:24px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .signin .host-line{font:400 var(--oa-text-xs) var(--oa-font-mono);color:var(--oa-text-muted);margin:0 0 24px}
 .signin .note{margin:16px 0 0;font-size:var(--oa-text-xs);color:var(--oa-text-muted)}
 .signin .banner{text-align:left;margin:0 0 16px}
@@ -235,8 +237,8 @@ kbd{font:500 11px var(--oa-font-mono);color:var(--oa-text-muted);background:var(
   <header class="edge-top"><a class="wordmark" href="#"><span class="logo"><svg viewBox="0 0 16 16"><use href="#i-logo"/></svg></span>Open Artifacts</a></header>
   <main class="edge-main">
     <section class="panel signin" aria-labelledby="si-title">
-      <div class="inst" aria-hidden="true">N</div>
-      <h1 id="si-title">Sign in to Northwind Eng</h1>
+      <div class="inst" id="si-mark" aria-hidden="true"><svg viewBox="0 0 16 16"><use href="#i-logo"/></svg></div>
+      <h1 id="si-title">Sign in to <span id="si-name">Open Artifacts</span></h1>
       <p class="host-line">artifacts.northwind.dev</p>
       <div class="banner danger" data-state="error" role="alert">
         <svg class="ic"><use href="#i-alert"/></svg>
@@ -324,6 +326,13 @@ const q = new URLSearchParams(location.search);
 const pages = ["no-access", "sign-in", "not-found", "quota"];
 const page = pages.includes(q.get("page")) ? q.get("page") : "no-access";
 const state = ["loading", "error"].includes(q.get("state")) ? q.get("state") : "default";
+
+// Sign-in: the instance name is optional. Anonymous visitors see "Open Artifacts" unless it's known (?name=).
+const instName = (q.get("name") || "").trim();
+if (instName) {
+  document.getElementById("si-name").textContent = instName;
+  document.getElementById("si-mark").textContent = instName[0].toUpperCase();
+}
 document.querySelector(`[data-page="${page}"]`).hidden = false;
 document.querySelectorAll("[data-state]").forEach((el) => {
   el.hidden = !el.dataset.state.split(" ").includes(state);
