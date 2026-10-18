@@ -6,7 +6,8 @@ export interface Env {
   OAUTH_KV: KVNamespace;
   ARTIFACT_RUNTIME: DurableObjectNamespace<ArtifactRuntime>;
   ASSETS: Fetcher;
-  RL_ANON: RateLimit;
+  /** Anonymous-write limiter (per IP); unbound in the test pool. */
+  RL_ANON?: RateLimit;
   // vars
   APP_HOST: string;
   CONTENT_HOST: string;

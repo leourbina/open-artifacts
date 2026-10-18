@@ -11,8 +11,10 @@ import {
   type ErrorCode,
   LIMITS,
   type Page,
+  type StorageEntry,
   type StorageKey,
   StorageKeyNameSchema,
+  StorageSetBodySchema,
 } from "@oa/shared";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
@@ -51,6 +53,10 @@ const ROW_OVERHEAD = 64;
 const BROADCAST_INLINE_BYTES = 16 * 1024;
 /** Hibernated sockets per DO; fetch returns 429 past it. */
 const MAX_SOCKETS = 200;
+/** Sockets per actor (X-OA-Actor on the upgrade request); fetch returns 429 past it. */
+const MAX_SOCKETS_PER_ACTOR = 20;
+/** Header carrying the subscriber's actor from the route to fetch. */
+export const ACTOR_HEADER = "X-OA-Actor";
 /**
  * where/orderBy queries scan and json-decode every doc in the collection, so they are
  * refused once its tracked byte total (meta "c:<collection>") exceeds this. A ~50 MB scan
@@ -102,6 +108,25 @@ function serialize(v: unknown): { json: string; bytes: number } {
   if (bytes > LIMITS.docBytes) fail("too_large", "document exceeds 1 MB");
   return { json, bytes };
 }
+
+/** A raw request body: UTF-8 bytes (preferred: no decode in the Worker) or text. */
+export type RawBody = ArrayBuffer | Uint8Array | string;
+
+function decodeBody(body: RawBody): string {
+  if (typeof body === "string") return body;
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(body);
+  } catch {
+    fail("bad_request", "body is not UTF-8");
+  }
+}
+
+/** DataDoc JSON with `data` spliced in from already-serialized text. */
+const docJson = (head: DataDoc, json: string): string =>
+  JSON.stringify({ ...head, data: null }).replace(
+    '"data":null',
+    () => `"data":${json}`,
+  );
 
 function encodeCursor(c: Record<string, string>): string {
   let bin = "";
@@ -296,13 +321,14 @@ export class ArtifactRuntime extends DurableObject<Env> {
     );
   }
 
-  private writeDoc(
+  /** Upserts pre-serialized doc JSON; returns updatedAt. Broadcasts. */
+  private writeJson(
     collection: string,
     id: string,
-    data: unknown,
+    json: string,
+    bytes: number,
     actor: string,
-  ): DataDoc {
-    const { json, bytes } = serialize(data);
+  ): string {
     const size =
       bytes + collection.length + id.length + actor.length + ROW_OVERHEAD;
     const updatedAt = this.iso();
@@ -326,10 +352,46 @@ export class ArtifactRuntime extends DurableObject<Env> {
         actor,
       );
     });
+    this.broadcastDoc(
+      { id, data: null, updatedAt, updatedBy: actor },
+      json,
+      collection,
+    );
+    return updatedAt;
+  }
+
+  private writeDoc(
+    collection: string,
+    id: string,
+    data: unknown,
+    actor: string,
+  ): { doc: DataDoc; json: string } {
+    const { json, bytes } = serialize(data);
+    const updatedAt = this.writeJson(collection, id, json, bytes, actor);
     // The caller's value (already a structured-clone copy) is returned as-is: no re-parse.
-    const doc: DataDoc = { id, data, updatedAt, updatedBy: actor };
-    this.broadcastDoc(doc, json, collection);
-    return doc;
+    return { doc: { id, data, updatedAt, updatedBy: actor }, json };
+  }
+
+  /**
+   * Validates raw JSON text with SQLite's json_valid (one C pass; RFC 8259;
+   * nesting capped at 1000) and returns it unchanged with its UTF-8 size.
+   * Too deep or malformed → bad_request; over LIMITS.docBytes → too_large.
+   */
+  private rawJson(body: RawBody): { json: string; bytes: number } {
+    const bytes =
+      typeof body === "string" ? enc.encode(body).length : body.byteLength;
+    if (bytes > LIMITS.docBytes) fail("too_large", "document exceeds 1 MB");
+    const json = decodeBody(body);
+    let ok = 0;
+    try {
+      ok = this.sql
+        .exec<{ ok: number }>("select json_valid(?) as ok", json)
+        .one().ok;
+    } catch {
+      ok = 0;
+    }
+    if (ok !== 1) fail("bad_request", "invalid JSON");
+    return { json, bytes };
   }
 
   get(collection: string, id: string): DataDoc | null {
@@ -470,7 +532,25 @@ export class ArtifactRuntime extends DurableObject<Env> {
       dataName(id, "id"),
       data,
       actorOf(actor),
-    );
+    ).doc;
+  }
+
+  /**
+   * set() from the raw request body (UTF-8 bytes or text): validated here,
+   * never parsed in the Worker, and stored as sent. Returns updatedAt; the
+   * caller already holds the rest of the DataDoc (id, body, actor).
+   */
+  setRaw(
+    collection: string,
+    id: string,
+    body: RawBody,
+    actor: string,
+  ): { updatedAt: string } {
+    const c = dataName(collection, "collection");
+    const i = dataName(id, "id");
+    const a = actorOf(actor);
+    const { json, bytes } = this.rawJson(body);
+    return { updatedAt: this.writeJson(c, i, json, bytes, a) };
   }
 
   /** Shallow merge into the doc (non-object docs are replaced); a missing doc is created. */
@@ -480,6 +560,32 @@ export class ArtifactRuntime extends DurableObject<Env> {
     patch: Record<string, unknown>,
     actor: string,
   ): DataDoc {
+    return this.merge(collection, id, patch, actor).doc;
+  }
+
+  /** update() from the raw request body; returns the DataDoc as JSON text. */
+  updateRaw(
+    collection: string,
+    id: string,
+    body: RawBody,
+    actor: string,
+  ): string {
+    const { json } = this.rawJson(body);
+    const { doc, json: data } = this.merge(
+      collection,
+      id,
+      JSON.parse(json) as Record<string, unknown>,
+      actor,
+    );
+    return docJson({ ...doc, data: null }, data);
+  }
+
+  private merge(
+    collection: string,
+    id: string,
+    patch: Record<string, unknown>,
+    actor: string,
+  ): { doc: DataDoc; json: string } {
     const c = dataName(collection, "collection");
     const i = dataName(id, "id");
     const a = actorOf(actor);
@@ -540,8 +646,44 @@ export class ArtifactRuntime extends DurableObject<Env> {
     return row ? JSON.parse(row.data) : null;
   }
 
+  /** The viewer's entry with its timestamp, or null (a stored null is an entry). */
+  storageEntry(viewer: string, key: string): StorageEntry | null {
+    const v = actorOf(viewer, "viewer");
+    const k = storageKey(key);
+    const row = this.sql
+      .exec<{ data: string; updated_at: string }>(
+        "select data, updated_at from storage where viewer = ? and key = ?",
+        v,
+        k,
+      )
+      .toArray()[0];
+    return row
+      ? { key: k, value: JSON.parse(row.data), updatedAt: row.updated_at }
+      : null;
+  }
+
   /** Per-viewer value; counts against the viewer's write rate and the artifact's byte total. */
-  storageSet(viewer: string, key: string, value: unknown): void {
+  storageSet(viewer: string, key: string, value: unknown): StorageEntry {
+    return this.storageWrite(viewer, key, value).entry;
+  }
+
+  /** storageSet() from the raw StorageSetBody; returns the StorageEntry as JSON text. */
+  storageSetRaw(viewer: string, key: string, body: RawBody): string {
+    const { json } = this.rawJson(body);
+    const r = StorageSetBodySchema.safeParse(JSON.parse(json));
+    if (!r.success) fail("bad_request", "invalid body");
+    const { entry, json: value } = this.storageWrite(viewer, key, r.data.value);
+    return JSON.stringify({ ...entry, value: null }).replace(
+      '"value":null',
+      () => `"value":${value}`,
+    );
+  }
+
+  private storageWrite(
+    viewer: string,
+    key: string,
+    value: unknown,
+  ): { entry: StorageEntry; json: string } {
     const v = actorOf(viewer, "viewer");
     const k = storageKey(key);
     const { json, bytes } = serialize(value);
@@ -566,6 +708,7 @@ export class ArtifactRuntime extends DurableObject<Env> {
         updatedAt,
       );
     });
+    return { entry: { key: k, value, updatedAt }, json };
   }
 
   storageDelete(viewer: string, key: string): void {
@@ -619,8 +762,19 @@ export class ArtifactRuntime extends DurableObject<Env> {
     if (!r.success) return new Response("Invalid collection", { status: 400 });
     if (this.ctx.getWebSockets().length >= MAX_SOCKETS)
       return new Response("Too many subscribers", { status: 429 });
+    // Optional per-actor cap (the route passes the authorized actor).
+    const tags = [r.data];
+    const actor = req.headers.get(ACTOR_HEADER);
+    if (actor !== null) {
+      if (!ACTOR_RE.test(actor))
+        return new Response("Invalid actor", { status: 400 });
+      const tag = `a:${actor}`;
+      if (this.ctx.getWebSockets(tag).length >= MAX_SOCKETS_PER_ACTOR)
+        return new Response("Too many subscriptions", { status: 429 });
+      tags.push(tag);
+    }
     const pair = new WebSocketPair();
-    this.ctx.acceptWebSocket(pair[1], [r.data]);
+    this.ctx.acceptWebSocket(pair[1], tags);
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
@@ -639,6 +793,23 @@ export class ArtifactRuntime extends DurableObject<Env> {
     } catch {
       // already closed
     }
+  }
+
+  /**
+   * Closes every subscriber socket with 4403 (access may have changed: share
+   * revoked, visibility changed, artifact deleted). Clients reconnect through
+   * the shell, which re-checks access.
+   */
+  closeSockets(reason: string): number {
+    const all = this.ctx.getWebSockets();
+    for (const ws of all) {
+      try {
+        ws.close(4403, reason.slice(0, 120));
+      } catch {
+        // already closed
+      }
+    }
+    return all.length;
   }
 
   /** Wipes all data (called by purge). The schema is recreated lazily on next use. */
@@ -664,7 +835,12 @@ type RpcMethods =
   | "update"
   | "delete"
   | "storageGet"
+  | "storageEntry"
   | "storageSet"
+  | "setRaw"
+  | "updateRaw"
+  | "storageSetRaw"
+  | "closeSockets"
   | "storageDelete"
   | "storageList"
   | "destroy";

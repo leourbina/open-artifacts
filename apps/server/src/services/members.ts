@@ -21,6 +21,7 @@ import {
 } from "../db/schema.js";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
+import { closeRuntimeSockets, MAX_CLOSE } from "../runtime/revoke.js";
 import { toMember } from "./users.js";
 
 export async function listMembers(env: Env): Promise<Member[]> {
@@ -84,7 +85,11 @@ export async function patchMember(
  * deleted (tokens.user_id has no cascade, so revoked rows would block the
  * delete). Shares addressed to their email are kept.
  */
-export async function removeMember(env: Env, id: string): Promise<void> {
+export async function removeMember(
+  env: Env,
+  id: string,
+  ctx?: Pick<ExecutionContext, "waitUntil">,
+): Promise<void> {
   const row = await getRow(env, id);
   if (row.role === "owner")
     throw new ApiError("bad_request", "The owner cannot be removed");
@@ -114,6 +119,18 @@ export async function removeMember(env: Env, id: string): Promise<void> {
     db.delete(tokens).where(eq(tokens.userId, id)),
     db.delete(users).where(eq(users.id, id)),
   ]);
+  // Live sockets the member opened via shares stay open otherwise (best effort, capped).
+  const shared = await db
+    .select({ id: shares.artifactId })
+    .from(shares)
+    .where(eq(shares.email, row.email))
+    .limit(MAX_CLOSE);
+  await closeRuntimeSockets(
+    env,
+    shared.map((r) => r.id),
+    "member removed",
+    ctx,
+  );
 }
 
 const DEFAULT_SETTINGS: Settings = {

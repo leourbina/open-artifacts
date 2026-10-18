@@ -1,5 +1,5 @@
 import type { Member } from "@oa/shared";
-import type { MiddlewareHandler } from "hono";
+import type { Context, MiddlewareHandler } from "hono";
 import { getCookie } from "hono/cookie";
 import { verifyPat } from "../auth/pat.js";
 import { readSession, sessionCookieName } from "../auth/session.js";
@@ -103,4 +103,13 @@ export const sameOrigin = (): MiddlewareHandler<AppEnv> => async (c, next) => {
   )
     return toErrorResponse(new ApiError("csrf", "Cross-site request"));
   await next();
+};
+
+/** c.executionCtx, or undefined where there is none (direct app.fetch in tests). */
+export const execCtx = (c: Context<AppEnv>) => {
+  try {
+    return c.executionCtx;
+  } catch {
+    return undefined;
+  }
 };

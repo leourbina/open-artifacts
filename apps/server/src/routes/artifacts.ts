@@ -11,8 +11,9 @@ import {
 import type { Context } from "hono";
 import { caller, requireAccess, requireUser } from "../auth/authz.js";
 import { publicPrefix, signContent } from "../content/signing.js";
+import { readCapped } from "../http/body.js";
 import { ApiError, contentOrigin } from "../http/errors.js";
-import type { AppEnv } from "../http/middleware.js";
+import { type AppEnv, execCtx } from "../http/middleware.js";
 import {
   getSummary,
   list,
@@ -37,44 +38,12 @@ const VERSION_FILE = `${VERSIONS}/:v/files/*`;
 const MAX_PATCH = 64 * 1024;
 const VERSION_NUM = /^[1-9]\d{0,8}$/;
 
-/** Reads the body with a running cap: 413 as soon as `max` is exceeded. */
-async function readCapped(
-  c: Context<AppEnv>,
-  max = MAX_BODY,
-): Promise<Uint8Array> {
-  const tooLarge = () =>
-    new ApiError("too_large", `Request body exceeds ${max} bytes`);
-  if (Number(c.req.header("content-length") ?? 0) > max) throw tooLarge();
-  const body = c.req.raw.body;
-  if (!body) return new Uint8Array(0);
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > max) {
-      await reader.cancel().catch(() => {});
-      throw tooLarge();
-    }
-    chunks.push(value);
-  }
-  const out = new Uint8Array(size);
-  let off = 0;
-  for (const ch of chunks) {
-    out.set(ch, off);
-    off += ch.byteLength;
-  }
-  return out;
-}
-
 /** Parses PublishInput; schema failures re-run planFiles for a precise {path, reason}. */
 async function publishInput(
   c: Context<AppEnv>,
   id?: string,
 ): Promise<PublishInput> {
-  const buf = await readCapped(c);
+  const buf = await readCapped(c, MAX_BODY);
   let raw: unknown;
   try {
     raw = JSON.parse(new TextDecoder().decode(buf));
@@ -106,14 +75,6 @@ const agentOf = (c: Context<AppEnv>): AgentRef | null =>
   c.var.tokenId && c.var.tokenLabel
     ? { name: c.var.tokenLabel, version: null }
     : null;
-
-const execCtx = (c: Context<AppEnv>) => {
-  try {
-    return c.executionCtx;
-  } catch {
-    return undefined;
-  }
-};
 
 const notFound = () => new ApiError("not_found", "Not found");
 
@@ -178,12 +139,12 @@ export function mountArtifacts(app: AppType): void {
     const p = ArtifactPatchSchema.safeParse(raw);
     if (!p.success)
       throw new ApiError("bad_request", "Invalid request body", p.error.issues);
-    return c.json(await patch(c.env, user, id, p.data));
+    return c.json(await patch(c.env, user, id, p.data, execCtx(c)));
   });
 
   app.delete(ARTIFACT, async (c) => {
     const user = requireUser(c);
-    await softDelete(c.env, user, idParam(c));
+    await softDelete(c.env, user, idParam(c), execCtx(c));
     return c.body(null, 204);
   });
 

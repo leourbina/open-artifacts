@@ -44,7 +44,7 @@ type ViteEntry = {
 type Oa = {
   /** The render entry (src/index.ts in /_oa/manifest.json), with its CSS. */
   render: { js: string; css: string[] } | null;
-  /** `<script src="/_oa/…">` for the runtime, or null until B13 ships it. */
+  /** `<script src="/_oa/…">` for the runtime (packages/runtime), or null when not deployed. */
   runtimeTag: string | null;
   /** Files reachable from either manifest's entry: the only servable /_oa paths. */
   files: Set<string>;
@@ -112,7 +112,6 @@ function loadOa(env: Env): Promise<Oa> {
     p = (async () => {
       const [render, runtime] = await Promise.all([
         readManifest(env, "/_oa/manifest.json"),
-        // TODO(B13): runtime.manifest.json ships with packages/runtime/dist.
         readManifest(env, "/_oa/runtime.manifest.json"),
       ]);
       const files = new Set<string>();
@@ -217,7 +216,11 @@ const esc = (s: string) =>
     .replace(/>/g, "&gt;")
     .replace(/'/g, "&#39;");
 
-/** Static renderer page for markdown/code/pdf; only escaped metadata inline. */
+/**
+ * Static renderer page for markdown/code/pdf; only escaped metadata inline.
+ * The runtime follows the oa-format meta: it reads it at startup and leaves
+ * hello and thumb.request to the renderer on these pages.
+ */
 function renderPage(
   oa: Oa,
   entry: string,
@@ -230,12 +233,12 @@ function renderPage(
     .map((f) => `<link rel="stylesheet" href="/_oa/${esc(f)}">\n`)
     .join("");
   return `<!doctype html>
-<html><head>${oa.runtimeTag ?? ""}<meta charset="utf-8">
+<html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="oa-entry" content="${esc(entry)}">
 <meta name="oa-format" content="${esc(format)}">
 <meta name="oa-language" content="${esc(language ?? "")}">
-${css}<script type="module" src="/_oa/${esc(r.js)}"></script>
+${oa.runtimeTag ?? ""}${css}<script type="module" src="/_oa/${esc(r.js)}"></script>
 </head><body></body></html>
 `;
 }
