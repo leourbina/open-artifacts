@@ -64,6 +64,10 @@ export const artifacts = sqliteTable(
     createdAt: integer("created_at").notNull(),
     updatedAt: integer("updated_at").notNull(),
     deletedAt: integer("deleted_at"),
+    /** Failed purge runs so far; each failure defers the next try (cron backoff). */
+    purgeAttempts: integer("purge_attempts").notNull().default(0),
+    /** Not retried by the purge cron before this time (ms); null = due. */
+    purgeAfter: integer("purge_after"),
   },
   (t) => [
     index("artifacts_owner_updated_idx").on(t.ownerId, t.updatedAt),
