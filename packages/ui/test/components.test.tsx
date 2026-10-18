@@ -9,9 +9,18 @@ import {
   avatarHue,
   Badge,
   Button,
+  Card,
+  Checkbox,
+  FormatIcon,
   IconButton,
+  Input,
   Kbd,
+  SegmentedControl,
+  Select,
+  Skeleton,
   Spinner,
+  Switch,
+  Textarea,
   Tooltip,
   VisibilityBadge,
 } from "../src/index";
@@ -25,6 +34,35 @@ const cases: Record<string, ReactElement> = {
   Button: <Button variant="primary">Save</Button>,
   ButtonLoading: <Button loading>Save</Button>,
   IconButton: <IconButton label="More" icon={icon} />,
+  Input: <Input aria-label="Title" />,
+  Textarea: <Textarea aria-label="Notes" />,
+  Select: (
+    <Select
+      aria-label="Role"
+      options={[
+        { value: "viewer", label: "Viewer" },
+        { value: "editor", label: "Editor" },
+      ]}
+      value="viewer"
+      onChange={noop}
+    />
+  ),
+  Switch: <Switch label="Notify" />,
+  Checkbox: <Checkbox label="Agree" />,
+  SegmentedControl: (
+    <SegmentedControl
+      aria-label="View"
+      options={[
+        { value: "grid", label: "Grid" },
+        { value: "list", label: "List" },
+      ]}
+      value="grid"
+      onChange={noop}
+    />
+  ),
+  Skeleton: <Skeleton width={120} height={12} />,
+  Card: <Card>Body</Card>,
+  FormatIcon: <FormatIcon format="markdown" />,
   Badge: <Badge tone="accent">New</Badge>,
   Avatar: <Avatar name="Ada Lovelace" email="ada@example.com" />,
   Kbd: <Kbd>⌘K</Kbd>,
@@ -58,6 +96,36 @@ describe("Tooltip a11y", () => {
       rules: { region: { enabled: false } },
     });
     expect(result.violations.map((v) => v.id)).toEqual([]);
+  });
+});
+
+describe("Switch and Checkbox labelling", () => {
+  it("console.errors when unlabelled", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(noop);
+    render(<Switch />);
+    render(<Checkbox />);
+    expect(spy.mock.calls.flat().join(" ")).toMatch(/Switch needs.*/);
+    expect(spy.mock.calls.flat().join(" ")).toMatch(/Checkbox needs.*/);
+    spy.mockClear();
+    render(<Switch aria-label="On" />);
+    render(<Checkbox label="Agree" />);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+});
+
+describe("FormatIcon", () => {
+  it("uses human labels and supports decorative", () => {
+    const { getByRole, container } = render(
+      <>
+        <FormatIcon format="pdf" />
+        <FormatIcon format="html" decorative />
+      </>,
+    );
+    expect(getByRole("img", { name: "PDF" })).toBeTruthy();
+    expect(container.querySelectorAll('svg[aria-hidden="true"]')).toHaveLength(
+      1,
+    );
   });
 });
 
