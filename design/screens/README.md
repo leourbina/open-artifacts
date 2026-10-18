@@ -34,7 +34,7 @@ A screen a role can't reach renders the `edge-pages.html?page=not-found` 404 in 
 
 | File | Screen | Extra params | Notes |
 |---|---|---|---|
-| `library.html` | Library | `layout=grid\|list`, `overlay=none\|drop\|filter\|drawer` | Scope tabs, filters, search, drop-zone overlay |
+| `library.html` | Library | `layout=grid\|list`, `overlay=none\|drop\|filter\|drawer`, `state=hover\|focus\|active` | Scope tabs, filters, search, drop-zone overlay. Cards and rows are fully clickable (the title link is stretched over them). `state=hover\|focus\|active` forces that interaction state on the first card, or the first row with `layout=list` |
 | `artifact-view.html` | Artifact view | `tab=versions\|share\|details`, `panel=open\|closed`, `menu=none\|version\|more` | Title bar, version picker, side panel, raw-open |
 | `version-diff.html` | Version diff | `menu=none\|a\|b` | Source diff plus rendered previews side by side |
 | `public-viewer.html` | Anonymous public viewer | none | Minimal chrome, no sign-in |

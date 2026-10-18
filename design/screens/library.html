@@ -181,7 +181,6 @@ textarea.control{height:auto;min-height:72px;padding:6px var(--oa-space-2);resiz
 
 .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
 .grid .card{display:flex;flex-direction:column;cursor:pointer;text-align:left;text-decoration:none;color:inherit}
-.grid .card:hover{box-shadow:var(--oa-shadow-2)}
 .thumb{height:138px;background:var(--oa-surface-2);border-bottom:1px solid var(--oa-divider);position:relative;overflow:hidden;padding:14px 16px 0}
 .thumb .pg{background:var(--oa-surface);border-radius:4px 4px 0 0;box-shadow:0 0 0 1px var(--oa-divider);height:100%;padding:12px 12px 0;overflow:hidden}
 .card .body{padding:10px 12px 11px;display:flex;flex-direction:column;gap:7px;min-width:0}
@@ -233,13 +232,29 @@ textarea.control{height:auto;min-height:72px;padding:6px var(--oa-space-2);resiz
 .grid.list .list-head span:last-child{text-align:right}
 .grid.list .card{height:40px;border-radius:0;box-shadow:none;border-bottom:1px solid var(--oa-divider)}
 .grid.list .card:last-child{border-bottom:0}
-.grid.list .card:hover{background:var(--oa-surface-2);box-shadow:none}
 .grid.list .thumb{display:none}
 .grid.list .body,.grid.list .sub{display:contents}
 .grid.list .own .name{display:inline;color:var(--oa-text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .grid.list .agent{color:var(--oa-text-2)}
 .grid.list .vis-cell{justify-self:start}
 .grid.list .when{text-align:right;color:var(--oa-text-muted);font-size:var(--oa-text-xs)}
+
+/* Card and row interaction states. The title link is stretched over the whole card or row.
+   ?state=hover|focus|active forces a state on the first card via .is-hover / .is-focus / .is-active. */
+.grid .card{position:relative;transition:box-shadow var(--oa-duration-fast) var(--oa-ease),transform var(--oa-duration-fast) var(--oa-ease),background var(--oa-duration-fast) var(--oa-ease)}
+.card .ttl-link{display:flex;align-items:center;gap:7px;min-width:0;color:inherit;text-decoration:none}
+.card .ttl-link::after{content:"";position:absolute;inset:0}
+.card .ttl-link:focus-visible{outline:none}
+.card .own,.card .pop{position:relative;z-index:1}
+/* shadow-2 carries the border-strong ring, since cards draw their border as a shadow */
+.grid:not(.list) .card:hover,.grid:not(.list) .card.is-hover,
+.grid:not(.list) .card:has(a:focus-visible),.grid:not(.list) .card.is-focus{box-shadow:var(--oa-shadow-2);transform:translateY(-1px)}
+.grid .card:has(a:focus-visible),.grid .card.is-focus{outline:2px solid var(--oa-focus);outline-offset:2px}
+.grid:not(.list) .card:active,.grid:not(.list) .card.is-active{transform:translateY(0);box-shadow:var(--oa-shadow-1);background:var(--oa-surface-2)}
+.grid.list .card:hover,.grid.list .card.is-hover{background:var(--oa-surface-2)}
+.grid.list .card:has(a:focus-visible),.grid.list .card.is-focus{outline-offset:-2px}
+.grid.list .card:active,.grid.list .card.is-active{background:var(--oa-sunken)}
+@media (prefers-reduced-motion:reduce){.grid .card{transition:none !important;transform:none !important}}
 
 /* skeleton cards */
 .skc .thumb{background:var(--oa-surface-2)}
@@ -478,7 +493,7 @@ textarea.control{height:auto;min-height:72px;padding:6px var(--oa-space-2);resiz
   </div>
 </div>
 
-<script>window.OA_PARAMS = { layout: ['grid', 'list'], overlay: ['none', 'drop', 'filter', 'drawer'], role: ['owner', 'admin', 'member', 'guest'] };</script>
+<script>window.OA_PARAMS = { state: ['default', 'empty', 'loading', 'error', 'hover', 'focus', 'active'], layout: ['grid', 'list'], overlay: ['none', 'drop', 'filter', 'drawer'], role: ['owner', 'admin', 'member', 'guest'] };</script>
 <script>
 /* Mockup plumbing: ?theme=light|dark, ?state=default|empty|loading|error, plus per-page params. */
 const OA = (() => {
@@ -506,7 +521,7 @@ const OA = (() => {
     /* data-when = state, data-role = workspace role, data-only = per-artifact access (as=); all must match. */
     const has = (list, v) => !list || list.split(' ').includes(v);
     document.querySelectorAll('[data-when],[data-role],[data-only]').forEach(el => {
-      el.toggleAttribute('hidden', !(has(el.dataset.when, S.state) && has(el.dataset.role, S.role) && has(el.dataset.only, S.as)));
+      el.toggleAttribute('hidden', !(has(el.dataset.when, ['hover', 'focus', 'active'].includes(S.state) ? 'default' : S.state) && has(el.dataset.role, S.role) && has(el.dataset.only, S.as)));
     });
     dev.querySelectorAll('button').forEach(b => b.setAttribute('aria-checked', String(eff[b.dataset.k] === b.dataset.v)));
     const u = new URL(location);
@@ -570,10 +585,10 @@ const items = [
 const icon = id => `<svg class="ic"><use href="#i-${id}"/></svg>`;
 const grid = document.getElementById('grid');
 grid.innerHTML = `<div class="list-head"><span>Title</span><span class="h-own">Owner</span><span class="h-agent">Agent</span><span class="h-vis">Visibility</span><span>Updated</span></div>` + items.map(it => `
-  <a class="card" href="${it.href||'#'}">
+  <article class="card">
     <div class="thumb" aria-hidden="true">${T[it.th]()}</div>
     <div class="body">
-      <div class="ttl">${icon(it.f)}<span>${it.t}</span><span class="sr">${FMT[it.f]}</span></div>
+      <div class="ttl"><a class="ttl-link" href="${it.href||'#'}">${icon(it.f)}<span>${it.t}</span><span class="sr">, ${FMT[it.f]}</span></a></div>
       <div class="sub">
         <span class="agent">${it.ag}</span>
         <span class="own"><span class="avatar" style="--hue:${it.o[2]}" title="${it.o[1]}">${it.o[0]}</span><span class="name">${it.o[1]}</span></span>
@@ -581,7 +596,7 @@ grid.innerHTML = `<div class="list-head"><span>Title</span><span class="h-own">O
         <span class="when">${it.w}</span>
       </div>
     </div>
-  </a>`).join('');
+  </article>`).join('');
 /* Grid mode keeps studio's order: owner avatar, agent, badge, time. */
 grid.querySelectorAll('.sub').forEach(s => s.prepend(s.querySelector('.own')));
 document.getElementById('grid-sk').innerHTML = Array.from({length:8}, (_, i) => `
@@ -610,6 +625,8 @@ drop.onclick = () => { OA.S.overlay = 'none'; OA.apply(); };
 document.getElementById('retry').onclick = e => { const b = e.currentTarget; b.innerHTML = '<span class="spinner"></span>Retrying'; setTimeout(() => { OA.S.state = 'default'; OA.apply(); b.innerHTML = '<svg class="ic sm"><use href="#i-retry"/></svg>Retry'; }, 900); };
 OA.on(S => {
   setLayout(S.layout);
+  const first = grid.querySelector('.card');
+  ['hover', 'focus', 'active'].forEach(k => first.classList.toggle('is-' + k, S.state === k));
   drop.hidden = S.overlay !== 'drop' || !canDrop();
   setDrawer(S.overlay === 'drawer');
   document.querySelectorAll('.menu').forEach(m => { m.hidden = true; });
