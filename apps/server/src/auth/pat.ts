@@ -29,7 +29,7 @@ export async function createPat(
 export async function verifyPat(
   env: Env,
   token: string,
-  ctx?: ExecutionContext,
+  ctx?: Pick<ExecutionContext, "waitUntil">,
 ): Promise<{ userId: string; tokenId: string; label: string } | null> {
   if (!isPat(token)) return null;
   const db = getDb(env);

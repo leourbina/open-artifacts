@@ -1,7 +1,6 @@
 import { Hono } from "hono";
-import type { Env } from "./env.js";
 import { ApiError, errorJson, toErrorResponse } from "./http/errors.js";
-import { securityHeaders } from "./http/middleware.js";
+import { type AppEnv, securityHeaders } from "./http/middleware.js";
 import { type AppType, mountRoutes } from "./routes/index.js";
 
 export const ROBOTS = "User-agent: *\nDisallow: /";
@@ -33,7 +32,7 @@ function normalizedPath(url: string): string | null {
 }
 
 export function createApp(mount: (app: AppType) => void = mountRoutes) {
-  const app = new Hono<{ Bindings: Env }>();
+  const app: AppType = new Hono<AppEnv>();
   app.use(securityHeaders({ frameDeny: true }));
   app.onError((e) => toErrorResponse(e));
   app.notFound(() => toErrorResponse(new ApiError("not_found", "Not found")));

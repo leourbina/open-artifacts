@@ -54,3 +54,8 @@ export function sessionCookie(value: string, env: Env): string {
   const secure = env.ENVIRONMENT === "dev" ? "" : " Secure;";
   return `oa_session=${value}; HttpOnly;${secure} SameSite=Lax; Path=/; Max-Age=${MAX_AGE_S}`;
 }
+
+export function clearSessionCookie(env: Pick<Env, "ENVIRONMENT">): string {
+  const secure = env.ENVIRONMENT === "dev" ? "" : " Secure;";
+  return `oa_session=; HttpOnly;${secure} SameSite=Lax; Path=/; Max-Age=0`;
+}

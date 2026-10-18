@@ -12,6 +12,7 @@ export async function login(
 ): Promise<{ cookie: string; userId: string }> {
   const userId = newId();
   const e = normEmail(email);
+  if (!e) throw new Error(`invalid test email: ${email}`);
   await getDb(env)
     .insert(users)
     .values({
