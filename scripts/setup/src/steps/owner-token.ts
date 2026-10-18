@@ -34,15 +34,37 @@ export function ownerStatements(
   hash: string,
   now: number,
   label = "setup",
+  cleanStale = false,
 ) {
   const name = email.split("@")[0] || email;
   const e = lit(email);
-  return [
+  const stale = cleanStale
+    ? [
+        // --ci: leaked setup-ci tokens (SIGKILL/OOM) must not count toward the cap, so they go BEFORE the insert.
+        // Safe because CI runs are serialized (workflow `concurrency: prod`): no concurrent run's live token is hit.
+        revokeCiSql(email, now),
+      ]
+    : [];
+  const [upsert, ...rest] = [
     `INSERT INTO users (id, email, name, role, created_at) VALUES (${lit(base58(16))}, ${e}, ${lit(name)}, 'owner', ${now}) ON CONFLICT(email) DO UPDATE SET role = 'owner'`,
     `INSERT INTO tokens (id, user_id, label, token_hash, created_at) SELECT ${lit(tokenId)}, id, ${lit(label)}, ${lit(hash)}, ${now} FROM users WHERE email = ${e} AND (SELECT count(*) FROM tokens WHERE user_id = users.id AND revoked_at IS NULL) < ${MAX_ACTIVE}`,
     `UPDATE tokens SET revoked_at = ${now} WHERE user_id = (SELECT id FROM users WHERE email = ${e}) AND label = ${lit(label)} AND revoked_at IS NULL AND id <> ${lit(tokenId)} AND EXISTS (SELECT 1 FROM tokens WHERE id = ${lit(tokenId)})`,
     `SELECT id FROM tokens WHERE id = ${lit(tokenId)} AND revoked_at IS NULL`,
   ];
+  return [upsert, ...stale, ...rest] as string[];
+}
+
+/** Revokes every live 'setup-ci' token of the owner. */
+export const revokeCiSql = (email: string, now: number) =>
+  `UPDATE tokens SET revoked_at = ${now} WHERE user_id = (SELECT id FROM users WHERE email = ${lit(email)}) AND label = 'setup-ci' AND revoked_at IS NULL`;
+
+/** --revoke-ci-tokens: returns how many rows were revoked. */
+export async function revokeCiTokens(ctx: Ctx): Promise<number> {
+  const res = await d1Raw(
+    ctx,
+    `${revokeCiSql(ctx.opts.ownerEmail, Date.now())};`,
+  );
+  return res[0]?.meta?.changes ?? 0;
 }
 export const ownerSql = (...a: Parameters<typeof ownerStatements>) =>
   `${ownerStatements(...a).join("; ")};`;
@@ -132,13 +154,15 @@ export const ownerToken: Step = {
           tokenHash(token),
           Date.now(),
           ci ? "setup-ci" : "setup",
+          ci,
         ),
       );
     } catch {
       return uncertain();
     }
-    if (res.length < 4) return uncertain();
-    const [, insert, revoke, verify] = res;
+    const o = ci ? 1 : 0; // --ci has one extra statement (stale cleanup) before the insert
+    if (res.length < 4 + o) return uncertain();
+    const [insert, revoke, verify] = [res[1 + o], res[2 + o], res[3 + o]];
     if (!insert?.meta?.changes) {
       untrack();
       return {
@@ -157,6 +181,8 @@ export const ownerToken: Step = {
         ? "owner token minted for selftest (not printed; revoked at end of run)"
         : `minted owner token ${id}; shown once, store it now`,
     );
+    const stale = ci ? (res[1]?.meta?.changes ?? 0) : 0;
+    if (stale > 0) ctx.notes.push(`revoked ${stale} stale setup-ci tokens`);
     if (revoked > 0)
       ctx.notes.push(
         `revoked ${revoked} prior ${ci ? "setup-ci" : "setup"} tokens`,

@@ -8,7 +8,11 @@ import { type Ctx, NeedInput, type Opts, type Step } from "./step.ts";
 import { access } from "./steps/access.ts";
 import { agentConfig } from "./steps/agent-config.ts";
 import { deploy } from "./steps/deploy.ts";
-import { ownerToken, revokeToken } from "./steps/owner-token.ts";
+import {
+  ownerToken,
+  revokeCiTokens,
+  revokeToken,
+} from "./steps/owner-token.ts";
 import { prereqs } from "./steps/prereqs.ts";
 import { resources } from "./steps/resources.ts";
 import { secrets } from "./steps/secrets.ts";
@@ -41,6 +45,7 @@ const ICON = {
   todo: "○",
 };
 
+const PAT_RE = /oa_pat_[1-9A-HJ-NP-Za-km-z]+/g;
 const HOST = /^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i;
 const EMAIL = /^[^\s@"\\]+@[a-z0-9.-]+\.[a-z]{2,}$/i;
 const NAME = /^[a-z0-9-]+$/;
@@ -76,6 +81,7 @@ async function resolve(argv: string[], deps: Deps, state: State) {
       "new-owner-token": { type: "boolean", default: false },
       json: { type: "boolean", default: false },
       ci: { type: "boolean", default: false },
+      "revoke-ci-tokens": { type: "boolean", default: false },
     },
   });
   const json = v.json || v.ci;
@@ -96,6 +102,8 @@ async function resolve(argv: string[], deps: Deps, state: State) {
     throw new Error(
       "--ci mints and revokes its own token; drop --new-owner-token",
     );
+  if (v["revoke-ci-tokens"] && !v.ci)
+    throw new Error("--revoke-ci-tokens needs --ci");
   if (v.strict && !v.check) throw new Error("--strict needs --check");
   // Without state, the name is what everything is found by: never guess it.
   if (!v.name && !state.name && (v.upgrade || v.check || v.yes || v.json))
@@ -116,8 +124,13 @@ async function resolve(argv: string[], deps: Deps, state: State) {
   }
   const opts: Opts = {
     name,
-    appHost: await need("--app-host", HOST, state.appHost),
-    contentHost: await need("--content-host", HOST, state.contentHost),
+    // The cleanup-only mode touches D1 by name: no hosts needed.
+    appHost: v["revoke-ci-tokens"]
+      ? (v["app-host"] ?? state.appHost ?? "")
+      : await need("--app-host", HOST, state.appHost),
+    contentHost: v["revoke-ci-tokens"]
+      ? (v["content-host"] ?? state.contentHost ?? "")
+      : await need("--content-host", HOST, state.contentHost),
     ownerEmail: valid(
       "--owner-email",
       normEmail(await need("--owner-email", /./, state.ownerEmail)),
@@ -133,6 +146,7 @@ async function resolve(argv: string[], deps: Deps, state: State) {
     interactive,
     json,
     ci: v.ci,
+    revokeCi: v["revoke-ci-tokens"],
   };
   return opts;
 }
@@ -205,7 +219,8 @@ export async function run(
   root: string,
   steps: Step[] = STEPS,
 ): Promise<number> {
-  const json = argv.includes("--json") || argv.includes("--ci");
+  const ci = argv.includes("--ci");
+  const json = argv.includes("--json") || ci;
   let human: string | undefined;
   const report = (l: Line) => {
     const extra = human
@@ -213,11 +228,11 @@ export async function run(
       : l.data
         ? ` ${JSON.stringify(l.data)}`
         : "";
-    deps.out(
-      json
-        ? JSON.stringify(l)
-        : `${ICON[l.status]} ${l.step}: ${l.message}${extra}`,
-    );
+    const text = json
+      ? JSON.stringify(l)
+      : `${ICON[l.status]} ${l.step}: ${l.message}${extra}`;
+    // --ci: belt and braces, a PAT echoed by a library error never reaches the output.
+    deps.out(ci ? text.replace(PAT_RE, "[redacted]") : text);
   };
   const rawFs = deps.fs ?? realFs;
   let fs = rawFs;
@@ -275,6 +290,25 @@ export async function run(
     const l: Line = { step: "", status, message: msg(fallback) };
     return data === undefined ? l : { ...l, data };
   };
+  if (opts.revokeCi && !opts.check) {
+    try {
+      const n = await revokeCiTokens(ctx);
+      report({
+        step: "revoke-ci-tokens",
+        status: "ok",
+        message: `revoked ${n} live setup-ci tokens`,
+        data: { revoked: n },
+      });
+      return 0;
+    } catch (e) {
+      report({
+        step: "revoke-ci-tokens",
+        status: "error",
+        message: `could not revoke setup-ci tokens: ${(e as Error).message}; revoke tokens labelled setup-ci in Settings → Tokens`,
+      });
+      return 1;
+    }
+  }
   if (opts.check) return checkOnly(steps, state, ctx, report);
   const runSteps = async (): Promise<number> => {
     for (const step of steps) {
@@ -309,32 +343,60 @@ export async function run(
     writeState(fs, root, state);
     return 0;
   };
-  let code = 1;
   let revokeFailed = false;
+  let revoking: Promise<void> | undefined;
+  /** Best-effort, guarded: runs at most once, from the end of the run or a signal. */
+  const revokeOnce = async () => {
+    if (!opts.ci) return;
+    if (!revoking && ctx.ciTokenId) {
+      const id = ctx.ciTokenId;
+      ctx.pat = ctx.ciTokenId = state.ownerTokenId = undefined;
+      revoking = (async () => {
+        try {
+          await revokeToken(ctx, id);
+          report({
+            step: "revoke-ci-token",
+            status: "ok",
+            message: `revoked CI owner token ${id}`,
+          });
+        } catch {
+          report({
+            step: "revoke-ci-token",
+            status: "error",
+            message: `could not revoke CI owner token ${id}; action_required: revoke it in Settings → Tokens`,
+            data: { tokenId: id },
+          });
+          revokeFailed = true;
+        }
+      })();
+    }
+    await revoking;
+  };
+  const unsub: (() => void)[] = [];
+  if (opts.ci) {
+    const on =
+      deps.onSignal ??
+      ((sig, h) => {
+        process.on(sig, h);
+        return () => void process.off(sig, h);
+      });
+    for (const [sig, c] of [
+      ["SIGTERM", 143],
+      ["SIGINT", 130],
+    ] as const)
+      unsub.push(
+        on(sig, () => {
+          human = undefined;
+          void revokeOnce().finally(() => (deps.exit ?? process.exit)(c));
+        }),
+      );
+  }
+  let code = 1;
   try {
     code = await runSteps();
   } finally {
-    if (opts.ci && ctx.ciTokenId) {
-      const id = ctx.ciTokenId;
-      ctx.pat = ctx.ciTokenId = state.ownerTokenId = undefined;
-      human = undefined;
-      try {
-        await revokeToken(ctx, id);
-        report({
-          step: "revoke-ci-token",
-          status: "ok",
-          message: `revoked CI owner token ${id}`,
-        });
-      } catch {
-        report({
-          step: "revoke-ci-token",
-          status: "error",
-          message: `could not revoke CI owner token ${id}; action_required: revoke it in Settings → Tokens`,
-          data: { tokenId: id },
-        });
-        revokeFailed = true;
-      }
-    }
+    await revokeOnce();
+    for (const u of unsub) u();
   }
   return revokeFailed && code === 0 ? 2 : code;
 }

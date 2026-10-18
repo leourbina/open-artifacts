@@ -19,6 +19,8 @@ export type Opts = {
   json: boolean;
   /** CI mode: implies --json; the owner token lives in memory only and is revoked at the end. */
   ci: boolean;
+  /** With --ci: revoke every live setup-ci token of the owner and exit. */
+  revokeCi: boolean;
 };
 export type Ctx = {
   deps: Deps;

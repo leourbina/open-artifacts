@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { run } from "../src/index.ts";
 import { ROOT, STATE } from "./fakes.ts";
 import { HOSTS, world } from "./world.ts";
@@ -20,6 +20,9 @@ function noPat(w: W) {
     ...w.prompts,
     ...w.sqls,
     ...w.values,
+    ...w.execOut,
+    JSON.stringify(w.deps.env),
+    JSON.stringify(process.env),
   ].join("\n");
   for (const pat of w.bearers) {
     expect(pat).toMatch(/^oa_pat_/);
@@ -87,10 +90,152 @@ describe("--ci", () => {
     expect(JSON.stringify(d)).not.toContain("owner-token step");
   });
 
-  it("human --ci output is json and leak-free too", async () => {
+  it("never prompts and prints only json lines with no PAT", async () => {
     const w = world();
     expect(await run(CI, w.deps, ROOT)).toBe(0);
     expect(w.prompts).toEqual([]);
+    for (const l of w.lines) expect(() => JSON.parse(l)).not.toThrow();
+    noPat(w);
+  });
+
+  it("a fetch error echoing URL and headers never leaks the PAT", async () => {
+    const w = world({
+      mcpThrows: (t) =>
+        `fetch failed: POST https://app.example.com/mcp headers={authorization: Bearer ${t}}`,
+    });
+    expect(await run(CI, w.deps, ROOT)).toBe(1);
+    const sel = line(w, "selftest");
+    expect(sel.status).toBe("error");
+    expect(sel.message).toContain("https://app.example.com/mcp");
+    expect(parsed(w).at(-1)).toMatchObject({
+      step: "revoke-ci-token",
+      status: "ok",
+    });
+    noPat(w);
+  });
+
+  it("SIGTERM mid-selftest revokes once, prints only the id, exits 143", async () => {
+    const handlers: Record<string, () => void> = {};
+    const exits: number[] = [];
+    const w = world({
+      onMcp: (m) => {
+        if (m === "tools/list") handlers.SIGTERM?.();
+      },
+    });
+    w.deps.onSignal = (sig, h) => {
+      handlers[sig] = h;
+      return () => delete handlers[sig];
+    };
+    w.deps.exit = (c) => void exits.push(c);
+    await run(CI, w.deps, ROOT);
+    await vi.waitFor(() => expect(exits).toEqual([143]));
+    expect(revokes(w)).toHaveLength(1);
+    expect(w.db.tokens[0].revoked_at).toBeGreaterThan(0);
+    const rev = parsed(w).filter((j) => j.step === "revoke-ci-token");
+    expect(rev).toHaveLength(1);
+    expect(rev[0].message).toContain(w.db.tokens[0].id);
+    expect(handlers).toEqual({});
+    noPat(w);
+  });
+
+  it("SIGINT exits 130", async () => {
+    const handlers: Record<string, () => void> = {};
+    const exits: number[] = [];
+    const w = world({
+      onMcp: (m) => m === "initialize" && handlers.SIGINT?.(),
+    });
+    w.deps.onSignal = (sig, h) => {
+      handlers[sig] = h;
+      return () => delete handlers[sig];
+    };
+    w.deps.exit = (c) => void exits.push(c);
+    await run(CI, w.deps, ROOT);
+    await vi.waitFor(() => expect(exits).toEqual([130]));
+  });
+
+  it("cleans leaked setup-ci tokens before the capped insert, then mints", async () => {
+    const tokens = [
+      ...Array.from({ length: 48 }, (_, i) => ({
+        id: `t${i}`,
+        user_id: "u1",
+        label: "laptop",
+        token_hash: `h${i}`,
+      })),
+      ...["leak1", "leak2"].map((id) => ({
+        id,
+        user_id: "u1",
+        label: "setup-ci",
+        token_hash: id,
+      })),
+    ];
+    const w = world({
+      seed: {
+        users: [{ id: "u1", email: "owner@example.com", role: "owner" }],
+        tokens,
+      },
+    });
+    expect(await run(CI, w.deps, ROOT)).toBe(0);
+    const t = (id: string) => w.db.tokens.find((x) => x.id === id);
+    expect(t("leak1").revoked_at).toBeGreaterThan(0);
+    expect(t("leak2").revoked_at).toBeGreaterThan(0);
+    expect(t("t0").revoked_at).toBeUndefined();
+    expect(line(w, "owner-token").message).toContain("2 stale setup-ci");
+    expect(line(w, "selftest").data.mcp).toBe("ok");
+  });
+
+  it("--revoke-ci-tokens revokes every live setup-ci token and exits", async () => {
+    const mk = (id: string, label: string, extra = {}) => ({
+      id,
+      user_id: "u1",
+      label,
+      token_hash: id,
+      ...extra,
+    });
+    const w = world({
+      seed: {
+        users: [{ id: "u1", email: "owner@example.com", role: "owner" }],
+        tokens: [
+          mk("a", "setup-ci"),
+          mk("b", "setup-ci"),
+          mk("c", "setup-ci", { revoked_at: 5 }),
+          mk("d", "setup"),
+          mk("e", "laptop"),
+        ],
+      },
+    });
+    const argv = [...CI, "--revoke-ci-tokens"];
+    expect(await run(argv, w.deps, ROOT)).toBe(0);
+    expect(parsed(w)).toEqual([
+      {
+        step: "revoke-ci-tokens",
+        status: "ok",
+        message: "revoked 2 live setup-ci tokens",
+        data: { revoked: 2 },
+      },
+    ]);
+    const live = w.db.tokens.filter((x) => !x.revoked_at).map((x) => x.id);
+    expect(live).toEqual(["d", "e"]);
+    expect(w.ops).toEqual([]);
+    expect(w.creates).toEqual([]);
+  });
+
+  it("--revoke-ci-tokens needs --ci and reports failure non-zero", async () => {
+    const w = world();
+    const no = HOSTS.filter((a) => a !== "--ci");
+    expect(await run([...no, "--revoke-ci-tokens"], w.deps, ROOT)).toBe(1);
+    expect(parsed(w)[0].message).toContain("--ci");
+    const f = world({ failOn: /^UPDATE tokens/ });
+    expect(await run([...CI, "--revoke-ci-tokens"], f.deps, ROOT)).toBe(1);
+    expect(parsed(f)[0]).toMatchObject({ status: "error" });
+  });
+
+  it("reuses the welcome artifact by title across stateless runs", async () => {
+    const w = world();
+    expect(await run(CI, w.deps, ROOT)).toBe(0);
+    w.lines.length = 0;
+    expect(await run(CI, w.deps, ROOT)).toBe(0);
+    const pubs = w.mcpCalls.filter((c) => c.name === "publish_artifact");
+    expect(pubs[1].arguments.id).toBe("art1");
   });
 
   it("without --name is an error", async () => {
