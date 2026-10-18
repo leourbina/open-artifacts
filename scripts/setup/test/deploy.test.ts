@@ -157,10 +157,10 @@ describe("deploy, owner-token, selftest, agent-config", () => {
       expect(s).toContain(`Bearer ${pat}`);
     }
     expect(cfg.snippets.claudeCode).toMatch(
-      /^claude mcp add --transport http open-artifacts https:\/\/app\.example\.com\/mcp --header "Authorization: Bearer oa_pat_/,
+      /^claude mcp add --transport http open-artifacts https:\/\/app\.example\.com\/mcp --header 'Authorization: Bearer oa_pat_/,
     );
     expect(cfg.snippets.codex).toContain("[mcp_servers.open-artifacts]");
-    expect(JSON.parse(cfg.snippets.cursor.replace(/^\/\/.*\n/, ""))).toEqual({
+    expect(JSON.parse(cfg.snippets.cursor)).toEqual({
       mcpServers: {
         "open-artifacts": {
           url: "https://app.example.com/mcp",
@@ -169,9 +169,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
       },
     });
     expect(
-      JSON.parse(cfg.snippets.opencode.replace(/^\/\/.*\n/, "")).mcp[
-        "open-artifacts"
-      ],
+      JSON.parse(cfg.snippets.opencode).mcp["open-artifacts"],
     ).toMatchObject({ type: "remote", url: "https://app.example.com/mcp" });
     expect(JSON.parse(cfg.snippets.json).mcpServers["open-artifacts"]).toEqual({
       type: "http",
