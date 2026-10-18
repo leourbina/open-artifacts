@@ -25,6 +25,7 @@ import {
   type Caller,
   listFilterSql,
   requireAccess,
+  TEAM_ROLES,
 } from "../auth/authz.js";
 import { getDb } from "../db/client.js";
 import { normEmail } from "../db/email.js";
@@ -649,6 +650,63 @@ export async function readThumbnail(
   const body = a.hasThumbnail ? await env.FILES.get(`thumbs/${id}.webp`) : null;
   if (!body) throw notFound();
   return body;
+}
+
+const isWebp = (b: Uint8Array) =>
+  b.length >= 12 &&
+  String.fromCharCode(...b.subarray(0, 4)) === "RIFF" &&
+  String.fromCharCode(...b.subarray(8, 12)) === "WEBP";
+
+/**
+ * Editor+ always. A viewer may set only the FIRST thumbnail, and only via a
+ * share or a team role on a team artifact (never public visibility alone).
+ * The first-thumbnail slot is claimed atomically before the R2 put.
+ */
+export async function putThumbnail(
+  env: Env,
+  user: Member,
+  id: string,
+  bytes: Uint8Array,
+): Promise<void> {
+  const r = await accessLevel(env, asUser(user), id);
+  if (!r) throw notFound();
+  const editor = r.level !== "viewer";
+  if (!editor) {
+    const email = normEmail(user.email);
+    const shared = email
+      ? await env.DB.prepare(
+          "select 1 x from shares where artifact_id = ? and email = ?",
+        )
+          .bind(id, email)
+          .first()
+      : null;
+    const team =
+      r.artifact.visibility === "team" && TEAM_ROLES.includes(user.role);
+    if (!shared && !team) throw notFound();
+  }
+  if (!isWebp(bytes)) throw new ApiError("bad_request", "Body must be WebP");
+  const key = `thumbs/${id}.webp`;
+  if (editor) {
+    await env.FILES.put(key, bytes);
+    await env.DB.prepare("update artifacts set has_thumbnail = 1 where id = ?")
+      .bind(id)
+      .run();
+    return;
+  }
+  const claimed = await env.DB.prepare(
+    "update artifacts set has_thumbnail = 1 where id = ? and has_thumbnail = 0 and deleted_at is null returning id",
+  )
+    .bind(id)
+    .first();
+  if (!claimed) throw notFound();
+  try {
+    await env.FILES.put(key, bytes);
+  } catch (e) {
+    await env.DB.prepare("update artifacts set has_thumbnail = 0 where id = ?")
+      .bind(id)
+      .run();
+    throw e;
+  }
 }
 
 /**
