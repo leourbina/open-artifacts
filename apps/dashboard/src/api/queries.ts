@@ -13,6 +13,7 @@ import {
   PublishResultSchema,
   R,
   SearchHitSchema,
+  type SettingsPatch,
   SettingsSchema,
   type ShareInput,
   ShareSchema,
@@ -267,3 +268,14 @@ export const useRemoveMember = () =>
     (list, id) => list.filter((m) => m.id !== id),
     "Couldn't remove the member.",
   );
+
+export const useUpdateSettings = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (patch: SettingsPatch) =>
+      api.send("PATCH", R.settings, patch, SettingsSchema),
+    onError: (e: unknown) => failToast(e, "Couldn't save settings"),
+    // Refetch rather than trust the response: untouched fields resync too.
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.settings }),
+  });
+};
