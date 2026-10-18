@@ -12,7 +12,7 @@ import { createApp } from "../src/app.js";
 import { publish } from "../src/services/artifacts.js";
 import { extractText } from "../src/services/search.js";
 import { getUser } from "../src/services/users.js";
-import { api, login } from "./helpers.js";
+import { api, fetchAndWait, login } from "./helpers.js";
 
 const app = createApp();
 const tag = newId().slice(0, 6).toLowerCase().replace(/\d/g, "q");
@@ -125,7 +125,8 @@ describe("B8 breaker", () => {
       } as never,
       null,
     );
-    const put = await app.fetch(
+    const put = await fetchAndWait(
+      app,
       new Request(`http://app.localhost${R.versionText(a.id, 1)}`, {
         method: "PUT",
         headers: {
@@ -135,8 +136,6 @@ describe("B8 breaker", () => {
         },
         body: `\u0002pforge${tag}\u0003 text`,
       }),
-      env,
-      { waitUntil() {}, passThroughOnException() {} } as never,
     );
     expect(put.status).toBe(204);
     const row = await env.DB.prepare(
@@ -154,14 +153,13 @@ describe("B8 breaker", () => {
   });
 
   it("PUT versionText: anonymous → 401", async () => {
-    const r = await app.fetch(
+    const r = await fetchAndWait(
+      app,
       new Request(`http://app.localhost${R.versionText("x".repeat(16), 1)}`, {
         method: "PUT",
         headers: { "content-type": "text/plain", "x-oa-request": "1" },
         body: "x",
       }),
-      env,
-      { waitUntil() {}, passThroughOnException() {} } as never,
     );
     expect(r.status).toBe(401);
   });

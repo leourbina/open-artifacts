@@ -31,7 +31,7 @@ import { normEmail } from "../db/email.js";
 import { artifacts, shares, users } from "../db/schema.js";
 import type { Env } from "../env.js";
 import { ApiError, appOrigin } from "../http/errors.js";
-import { ArtifactRuntime } from "../runtime/artifact-runtime.js";
+import { runtimeStub } from "../runtime/do.js";
 import { type ManifestEntry, materialize, planFiles } from "./manifest.js";
 import { getSettings } from "./members.js";
 import { ftsFilter, indexVersion, syncTitleStmt } from "./search.js";
@@ -862,16 +862,5 @@ async function purgeOne(
 }
 
 async function destroyRuntime(env: Env, id: string): Promise<void> {
-  // TODO(B12): ArtifactRuntime.destroy() must wipe DO storage. RPC stubs expose
-  // every name as a callable, so probe the class instead; drop this guard once
-  // B12 lands the method.
-  if (
-    typeof (ArtifactRuntime.prototype as { destroy?: unknown }).destroy !==
-    "function"
-  )
-    return;
-  const stub = env.ARTIFACT_RUNTIME.get(
-    env.ARTIFACT_RUNTIME.idFromName(id),
-  ) as unknown as { destroy: () => Promise<void> };
-  await stub.destroy();
+  await runtimeStub(env, id).destroy();
 }

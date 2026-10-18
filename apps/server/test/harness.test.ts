@@ -7,5 +7,5 @@ it("binds D1, R2, KV and the DO", async () => {
     expect(e[k]).toBeDefined();
   const ns = e.ARTIFACT_RUNTIME as DurableObjectNamespace;
   const res = await ns.get(ns.idFromName("x")).fetch("http://do/");
-  expect(res.status).toBe(501);
+  expect(res.status).toBe(426);
 });

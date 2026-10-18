@@ -1,3 +1,7 @@
+import {
+  createExecutionContext,
+  waitOnExecutionContext,
+} from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { newId, type Role } from "@oa/shared";
 import { signSession } from "../src/auth/session.js";
@@ -25,17 +29,29 @@ export async function login(
   return { cookie: `oa_session=${await signSession(env, userId)}`, userId };
 }
 
-const ctx = { waitUntil() {}, passThroughOnException() {} } as never;
+type Fetcher = {
+  fetch: (r: Request, e: typeof env, c: never) => Response | Promise<Response>;
+};
+
+/**
+ * Calls `app` with a real ExecutionContext and awaits its waitUntil work
+ * (e.g. search indexing after publish) before returning, so tests never race
+ * background tasks.
+ */
+export async function fetchAndWait(
+  app: Fetcher,
+  req: Request,
+  e: unknown = env,
+): Promise<Response> {
+  const ctx = createExecutionContext();
+  const r = await app.fetch(req, e as typeof env, ctx as never);
+  await waitOnExecutionContext(ctx);
+  return r;
+}
 
 /** Calls the app with a session cookie (and the CSRF header) or anonymously. */
 export function api(
-  app: {
-    fetch: (
-      r: Request,
-      e: typeof env,
-      c: never,
-    ) => Response | Promise<Response>;
-  },
+  app: Fetcher,
   path: string,
   auth: string | null,
   init: {
@@ -51,16 +67,13 @@ export function api(
   if (auth?.startsWith("oa_pat_")) headers.authorization = `Bearer ${auth}`;
   else if (auth) headers.cookie = auth;
   if (init.body !== undefined) headers["content-type"] = "application/json";
-  return Promise.resolve(
-    app.fetch(
-      new Request(`http://app.localhost${path}`, {
-        method: init.method ?? "GET",
-        headers,
-        body: init.body === undefined ? undefined : JSON.stringify(init.body),
-      }),
-      env,
-      ctx,
-    ),
+  return fetchAndWait(
+    app,
+    new Request(`http://app.localhost${path}`, {
+      method: init.method ?? "GET",
+      headers,
+      body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    }),
   );
 }
 
