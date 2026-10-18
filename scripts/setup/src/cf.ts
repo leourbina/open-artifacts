@@ -73,6 +73,8 @@ export function realDeps(): Deps {
         const child = execFile(cmd, args, { env }, (err, stdout, stderr) =>
           resolve({ code: err ? Number(err.code) || 1 : 0, stdout, stderr }),
         );
+        // EPIPE is expected when the child exits without reading stdin; the exit code comes from the callback.
+        child.stdin?.on("error", () => {});
         child.stdin?.end(opts?.input ?? "");
       }),
   };

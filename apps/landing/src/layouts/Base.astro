@@ -2,6 +2,13 @@
 import { REPO_URL } from "@oa/shared";
 import tokensCss from "@oa/ui/tokens.css?raw";
 import "../styles/site.css";
+import Todo from "../components/Todo.astro";
+import {
+  d6Active,
+  FALLBACKS,
+  type FallbackId,
+  UNRELEASED,
+} from "../lib/release";
 
 // Inline the Studio tokens without their font @import, which would block rendering.
 // The same Google Fonts stylesheet loads below without blocking.
@@ -12,9 +19,15 @@ const tokens = tokensCss.replace(fontImport, "");
 interface Props {
   title: string;
   description: string;
+  /** Release-gate fallbacks this page depends on, besides the D6 wordmark. */
+  fallbacks?: FallbackId[];
 }
 
-const { title, description } = Astro.props;
+const { title, description, fallbacks = [] } = Astro.props;
+const active: FallbackId[] = [
+  ...(d6Active ? ["D6" as const] : []),
+  ...fallbacks,
+];
 const canonical = new URL(Astro.url.pathname, Astro.site);
 ---
 
@@ -24,6 +37,8 @@ const canonical = new URL(Astro.url.pathname, Astro.site);
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
+    {active.length > 0 && <meta name="oa-status" content={UNRELEASED} />}
+    {active.map((id) => <Todo text={FALLBACKS[id].todo} />)}
     <meta name="description" content={description} />
     <link rel="canonical" href={canonical} />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
@@ -43,7 +58,7 @@ const canonical = new URL(Astro.url.pathname, Astro.site);
     <a class="skip" href="#main">Skip to content</a>
     <header class="site-head">
       <div class="wrap head-row">
-        {/* TODO(D6): import the logo from @oa/ui/brand once D6 merges; text wordmark until then. */}
+        {/* Import the logo from @oa/ui/brand once D6 merges (see d6Active). */}
         <a class="wordmark" href="/">
           <img src="/favicon.svg" alt="" width="18" height="18" />
           Open Artifacts

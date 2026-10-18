@@ -2,6 +2,7 @@
 import { render } from "astro:content";
 import Base from "../../layouts/Base.astro";
 import { type Doc, docs } from "../../lib/llms";
+import { type FallbackId, toolListFallbacks } from "../../lib/release";
 
 export async function getStaticPaths() {
   const all = await docs();
@@ -15,9 +16,13 @@ interface Props {
 
 const { doc, all } = Astro.props;
 const { Content } = await render(doc);
+const fallbacks: FallbackId[] = [
+  ...(doc.data.fallback ? [doc.data.fallback] : []),
+  ...(doc.id === "mcp-tools" ? toolListFallbacks : []),
+];
 ---
 
-<Base title={`${doc.data.title} | Open Artifacts docs`} description={doc.data.description}>
+<Base fallbacks={fallbacks} title={`${doc.data.title} | Open Artifacts docs`} description={doc.data.description}>
   <div class="wrap docs">
     <nav class="docs-nav" aria-label="Docs">
       <ul>
