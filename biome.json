@@ -7,6 +7,8 @@
       "**",
       "!**/node_modules",
       "!**/dist",
+      "!**/test-results",
+      "!**/mockServiceWorker.js",
       "!.superpowers",
       "!docs",
       "!logs",

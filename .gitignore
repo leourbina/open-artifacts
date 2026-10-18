@@ -14,3 +14,5 @@ apps/server/wrangler.jsonc
 coverage/
 .claude/
 .astro/
+test-results/
+playwright-report/

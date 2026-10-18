@@ -1,3 +1,4 @@
+import { rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
@@ -5,7 +6,19 @@ import { defineConfig } from "vitest/config";
 const target = "http://app.localhost:8787";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    {
+      // The MSW worker lives in public/ for dev; keep it out of production output.
+      name: "oa-drop-mock-worker",
+      apply: "build",
+      closeBundle() {
+        rmSync(new URL("./dist/mockServiceWorker.js", import.meta.url), {
+          force: true,
+        });
+      },
+    },
+  ],
   resolve: {
     // Resolve the workspace contract from source so no prior shared build is needed.
     alias: [
