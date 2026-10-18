@@ -13,6 +13,7 @@ import { createApp } from "../src/app.js";
 import { patch, publish } from "../src/services/artifacts.js";
 import {
   extractText,
+  INDEX_INPUT_BYTES,
   indexVersionOrThrow,
   sanitizeQuery,
 } from "../src/services/search.js";
@@ -116,10 +117,11 @@ describe("extractText", () => {
     expect((await extractText("code", big)).length).toBe(
       LIMITS.searchBodyChars,
     );
+    // A stream (what indexing reads) also stops at INDEX_INPUT_BYTES.
     expect(
       (await extractText("markdown", new Response(big).body as ReadableStream))
         .length,
-    ).toBe(LIMITS.searchBodyChars);
+    ).toBe(Math.min(LIMITS.searchBodyChars, INDEX_INPUT_BYTES));
   });
 
   it("indexes a 200k-char HTML entry (timing)", async () => {
@@ -256,6 +258,17 @@ describe("search", () => {
     expect((await hits(o, `first${tag}`)).items).toEqual([]);
     expect((await hits(o, `second${tag}`)).items).toHaveLength(1);
     await indexVersionOrThrow(env, "nonexistent00000", 1); // gone: a no-op
+  });
+
+  it(`indexes only the first ${INDEX_INPUT_BYTES} bytes of an entry`, async () => {
+    const pad = " lorem".repeat(Math.ceil(INDEX_INPUT_BYTES / 6));
+    await pub(o, {
+      title: "capped",
+      format: "markdown",
+      content: `early${tag}${pad} late${tag}`,
+    });
+    expect((await hits(o, `early${tag}`)).items).toHaveLength(1);
+    expect((await hits(o, `late${tag}`)).items).toEqual([]);
   });
 });
 
