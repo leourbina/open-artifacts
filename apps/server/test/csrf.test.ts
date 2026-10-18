@@ -3,6 +3,7 @@ import { AUTH, newId, R } from "@oa/shared";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { createPat } from "../src/auth/pat.js";
+import { sessionCookieName } from "../src/auth/session.js";
 import { login } from "./helpers.js";
 
 const app = createApp();
@@ -55,7 +56,7 @@ describe("csrf", () => {
     // Even an unauthenticated (bogus) cookie is checked before routing.
     const bogus = await call(R.members, {
       method: "POST",
-      headers: { cookie: "oa_session=junk" },
+      headers: { cookie: `${sessionCookieName(env)}=junk` },
     });
     expect(await errCode(bogus)).toBe("csrf");
   });

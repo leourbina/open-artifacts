@@ -4,7 +4,7 @@ import {
 } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { newId, type Role } from "@oa/shared";
-import { signSession } from "../src/auth/session.js";
+import { sessionCookieName, signSession } from "../src/auth/session.js";
 import { getDb } from "../src/db/client.js";
 import { normEmail } from "../src/db/email.js";
 import { users } from "../src/db/schema.js";
@@ -26,7 +26,10 @@ export async function login(
       role,
       createdAt: Date.now(),
     });
-  return { cookie: `oa_session=${await signSession(env, userId)}`, userId };
+  return {
+    cookie: `${sessionCookieName(env)}=${await signSession(env, userId)}`,
+    userId,
+  };
 }
 
 type Fetcher = {
