@@ -127,11 +127,13 @@ export async function run(
       }
       const r = await step.apply(state, ctx);
       if (r) {
+        ctx.notes.length = 0;
         report({ step: step.name, ...r });
         return 2;
       }
       report({ step: step.name, status: "ok", message: msg("done") });
     } catch (e) {
+      ctx.notes.length = 0;
       const message = (e as Error).message;
       report({ step: step.name, status: "error", message });
       return (e as { exitCode?: number }).exitCode ?? 1;

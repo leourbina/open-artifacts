@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { realDeps } from "../src/cf.ts";
 import { run, STEPS } from "../src/index.ts";
-import type { Step } from "../src/step.ts";
+import type { Ctx, Step } from "../src/step.ts";
 import { ROOT } from "./fakes.ts";
 import { app, HOSTS, POLICY, STAGING, world } from "./world.ts";
 
@@ -389,5 +389,76 @@ describe("B16-2 review fixes", () => {
     });
     expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
     expect(w.ops).toEqual([]);
+  });
+
+  it("a second SIGINT exits 130 at once with a names-only orphan warning", async () => {
+    const exit = vi
+      .spyOn(process, "exit")
+      .mockImplementation((() => undefined) as never);
+    const err = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    try {
+      const w = world();
+      const exec = w.deps.exec;
+      w.deps.exec = async (cmd, args, o) => {
+        if (args.includes("put")) {
+          process.emit("SIGINT");
+          process.emit("SIGINT");
+        }
+        return exec(cmd, args, o);
+      };
+      await run(HOSTS, w.deps, ROOT);
+      expect(exit).toHaveBeenCalledWith(130);
+      const warned = err.mock.calls.map((c) => String(c[0])).join("");
+      expect(warned).toContain("pendingAccessAppId");
+      expect(warned).toContain("app-open-artifacts");
+      expect(warned).not.toContain("CLIENT-SECRET-xyz");
+    } finally {
+      exit.mockRestore();
+      err.mockRestore();
+    }
+  });
+
+  it("a pending app whose redirect_uris lack the callback is not deleted", async () => {
+    const odd = app("open-artifacts");
+    odd.saas_app.redirect_uris = [
+      "https://elsewhere.example.com/auth/callback",
+    ];
+    const w = world({
+      policies: [POLICY],
+      apps: [odd],
+      secrets: [],
+      state: { pendingAccessAppId: odd.id },
+    });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(2);
+    expect(w.ops).toEqual([]);
+  });
+
+  it("clears leftover notes when a step ends in action_required or error", async () => {
+    let seen: Ctx | undefined;
+    const noisy = (
+      end: () => Promise<
+        undefined | { status: "action_required"; message: string }
+      >,
+    ): Step => ({
+      name: "noisy",
+      check: async (_s, ctx) => {
+        seen = ctx;
+        ctx.notes.push("stale");
+        return "todo";
+      },
+      apply: end,
+    });
+    for (const end of [
+      async () => ({ status: "action_required" as const, message: "x" }),
+      async () => {
+        throw new Error("boom");
+      },
+    ]) {
+      const w = world();
+      await run(HOSTS, w.deps, ROOT, [noisy(end)]);
+      expect(seen?.notes).toEqual([]);
+    }
   });
 });

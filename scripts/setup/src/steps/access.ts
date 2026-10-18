@@ -121,7 +121,15 @@ async function create(
   domain: string,
 ) {
   let interrupted = false;
+  // First Ctrl-C: let the rollback run. Second: exit now, naming what may be orphaned.
   const onSigint = () => {
+    if (interrupted) {
+      const id = state.pendingAccessAppId ?? "unknown (POST in flight)";
+      process.stderr.write(
+        `\nSecond interrupt: exiting. Access app ${ctx.opts.name} (${id}) may be orphaned; pendingAccessAppId in .openartifacts/state.json lets the next run delete and recreate it.\n`,
+      );
+      process.exit(130);
+    }
     interrupted = true;
   };
   process.on("SIGINT", onSigint);
@@ -214,7 +222,8 @@ export const access: Step = {
     if (
       app &&
       app.id === state.pendingAccessAppId &&
-      !l.have.has(ACCESS_SECRET)
+      !l.have.has(ACCESS_SECRET) &&
+      app.saas_app?.redirect_uris?.includes(callback(ctx))
     ) {
       // Ours, from an interrupted run, and its secret is lost: recreate it.
       await ctx.accessApi("DELETE", `${l.a}/apps/${app.id}`);
