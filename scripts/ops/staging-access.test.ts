@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   APP_NAME,
   type Api,
+  cliWrangler,
   OWNER_EMAIL,
   POLICY_NAME,
   parseSecretList,
@@ -25,6 +26,7 @@ type ApiOpts = {
   org?: unknown;
   orgFails?: boolean;
   created?: unknown;
+  deleteFails?: boolean;
 };
 
 function fakeApi(opts: ApiOpts) {
@@ -52,8 +54,13 @@ function fakeApi(opts: ApiOpts) {
           saas_app: { client_id: "cid-new", client_secret: CLIENT_SECRET },
         }
       );
-    if (p === `/accounts/${ACCOUNT}/access/apps/app-new` && method === "DELETE")
+    if (
+      p === `/accounts/${ACCOUNT}/access/apps/app-new` &&
+      method === "DELETE"
+    ) {
+      if (opts.deleteFails) throw new Error("DELETE app boom");
       return { id: "app-new" };
+    }
     throw new Error(`unexpected ${method} ${path}`);
   };
   return { api, calls };
@@ -194,6 +201,18 @@ describe("staging-access", () => {
           c.path === `/accounts/${ACCOUNT}/access/apps/app-new`,
       ),
     ).toBe(true);
+  });
+
+  it("rethrows the original error and logs both when rollback DELETE fails", async () => {
+    const h = harness({ deleteFails: true }, [], {
+      putFails: "ACCESS_CLIENT_SECRET",
+    });
+    await expect(h.go()).rejects.toThrow(/put ACCESS_CLIENT_SECRET boom/);
+    expect(h.logs.join("\n")).toContain(
+      "rollback DELETE failed: DELETE app boom; original error: put ACCESS_CLIENT_SECRET boom",
+    );
+    for (const s of [CLIENT_SECRET, ...GEN])
+      expect(h.logs.join("\n")).not.toContain(s);
   });
 
   it("does not POST when wrangler.list fails", async () => {
@@ -360,6 +379,9 @@ describe("staging-access", () => {
 });
 
 describe("parseSecretList", () => {
+  it("is used by cliWrangler.list", () => {
+    expect(cliWrangler.list.toString()).toContain("parseSecretList");
+  });
   it("parses JSON after a banner", () => {
     expect(
       parseSecretList('banner\n[{"name":"A","type":"secret_text"}]'),

@@ -173,7 +173,15 @@ export async function run(o: Options) {
     } catch (e) {
       if (created?.id) {
         o.out.log(`rolling back: deleting app ${APP_NAME} (${created.id})`);
-        await o.api("DELETE", `${appsPath}/${created.id}`);
+        try {
+          await o.api("DELETE", `${appsPath}/${created.id}`);
+        } catch (d) {
+          const msg = (x: unknown) =>
+            x instanceof Error ? x.message : String(x);
+          o.out.log(
+            `rollback DELETE failed: ${msg(d)}; original error: ${msg(e)}`,
+          );
+        }
       }
       throw e;
     }
@@ -276,10 +284,7 @@ export const cliWrangler: Wrangler = {
         stdio: ["ignore", "pipe", "inherit"],
       },
     );
-    const parsed = JSON.parse(raw.slice(raw.indexOf("["))) as {
-      name: string;
-    }[];
-    return parsed.map((s) => s.name);
+    return parseSecretList(raw);
   },
   put: async (name, value) => {
     execFileSync(
