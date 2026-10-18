@@ -75,8 +75,26 @@
     transform: rotate(360deg);
   }
 }
+@keyframes pulse {
+  to {
+    opacity: 0.5;
+  }
+}
+.skeleton {
+  display: block;
+  border-radius: var(--oa-radius-sm);
+  background: var(--oa-sunken);
+  animation: pulse 1.4s var(--oa-ease) infinite alternate;
+}
+.card {
+  background: var(--oa-surface);
+  border-radius: var(--oa-radius-lg);
+  box-shadow: var(--oa-shadow-1);
+  overflow: hidden;
+}
 @media (prefers-reduced-motion: reduce) {
-  .spinner {
+  .spinner,
+  .skeleton {
     animation-duration: 2.4s;
   }
 }
