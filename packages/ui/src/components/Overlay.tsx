@@ -135,12 +135,27 @@ export function Tabs({
           </T.Trigger>
         ))}
       </T.List>
-      {tabs.map((t, i) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: ids may repeat
-        <T.Content key={i} value={String(i)} className={s.panel}>
-          {t.content}
-        </T.Content>
-      ))}
+      {/* Tabs used as nav (no content) keep the panel for aria-controls but
+          drop it from the tab order and the layout. */}
+      {tabs.map((t, i) => {
+        const empty = rendersNothing(t.content);
+        return (
+          <T.Content
+            // biome-ignore lint/suspicious/noArrayIndexKey: ids may repeat
+            key={i}
+            value={String(i)}
+            className={empty ? s.emptyPanel : s.panel}
+            {...(empty ? { tabIndex: -1 } : {})}
+          >
+            {t.content}
+          </T.Content>
+        );
+      })}
     </T.Root>
   );
+}
+
+/** React renders nothing for null, undefined, booleans and the empty string. */
+function rendersNothing(node: ReactNode): boolean {
+  return node == null || typeof node === "boolean" || node === "";
 }

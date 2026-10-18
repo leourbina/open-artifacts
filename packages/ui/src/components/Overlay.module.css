@@ -111,3 +111,7 @@
   padding-top: var(--oa-space-4);
   outline: none;
 }
+.emptyPanel {
+  padding: 0;
+  outline: none;
+}
