@@ -14,8 +14,9 @@ const setupMd = readFileSync(join(dist, "docs/setup.md"), "utf8");
 
 // The documented invocation, e.g. `pnpm oa:setup` or `pnpm -s oa:setup`.
 const invocation = (
-  llms.match(/(pnpm(?: -[a-z-]+)* oa:setup) --json --yes --app-host/)?.[1] ??
-  "pnpm oa:setup"
+  llms.match(
+    /(pnpm(?: -[a-z-]+)* oa:setup) --json(?: --yes)? --app-host/,
+  )?.[1] ?? "pnpm oa:setup"
 ).split(" ");
 
 describe("B16 setup docs adversarial", () => {
@@ -24,11 +25,11 @@ describe("B16 setup docs adversarial", () => {
   // An invalid --name fails in arg parsing, before any Cloudflare call.
   it("the documented command prints only JSON lines on stdout", () => {
     const [cmd, ...pre] = invocation;
-    const r = spawnSync(
-      cmd,
-      [...pre, "--json", "--yes", "--name", "Bad_Name"],
-      { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    );
+    const r = spawnSync(cmd, [...pre, "--json", "--name", "Bad_Name"], {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     const lines = r.stdout.split("\n").filter((l) => l.trim());
     expect(lines.length).toBeGreaterThan(0);
     for (const l of lines) expect(() => JSON.parse(l), l).not.toThrow();
@@ -63,13 +64,20 @@ describe("B16 setup docs adversarial", () => {
     expect(r.status).toBe(2);
   }, 60_000);
 
-  // The access step re-checks Access on every non-upgrade run; with only the
-  // wrangler token that 403s and returns action_required again. Reruns the
-  // docs suggest (--new-owner-token, "rerun setup without --upgrade") need
-  // OA_ACCESS_TOKEN again, but the docs say it's for "that run only".
-  it("setup docs say later runs need OA_ACCESS_TOKEN again", () => {
+  // Since #70, a run without OA_ACCESS_TOKEN skips re-checking Access when
+  // the app host and account match the saved state. The token is needed on
+  // the first run and to change either, and nowhere else.
+  it("setup docs say when OA_ACCESS_TOKEN is needed again", () => {
     expect(setupMd).toMatch(
-      /OA_ACCESS_TOKEN[^.]*(every|each|later|subsequent) (run|rerun)/i,
+      /OA_ACCESS_TOKEN[^.]*first run[^.]*(app host|account)/i,
     );
+    expect(setupMd).not.toMatch(
+      /OA_ACCESS_TOKEN[^.]*(every|each) (later )?(run|rerun)/i,
+    );
+  });
+
+  // --json never prompts: a missing input is action_required naming the flag.
+  it("setup docs tell the agent to pass the flag an action_required names", () => {
+    expect(setupMd).toMatch(/\*\*2:\*\*[^\n]*pass a flag[^\n]*run again/);
   });
 });
