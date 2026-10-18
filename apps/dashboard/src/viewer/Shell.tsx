@@ -1,9 +1,10 @@
 import { type ArtifactSummary, viewerPath } from "@oa/shared";
 import { Button, toast } from "@oa/ui";
+import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { ApiClientError } from "../api/client";
-import { useArtifact, useVersionInfo } from "../api/queries";
+import { qk, useArtifact, useVersionInfo } from "../api/queries";
 import { useLoginRedirect } from "../auth/redirect";
 import { useMe } from "../auth/useMe";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
@@ -14,6 +15,7 @@ import { Crumbs } from "./Crumbs";
 import { SANDBOX, safeContentUrl } from "./frame";
 import { isPanelTab, type PanelTab, SidePanel } from "./panels/SidePanel";
 import { TitleBar } from "./TitleBar";
+import { useArtifactSideEffects } from "./useArtifactSideEffects";
 import { useContentUrl } from "./useContentUrl";
 import { useTheme } from "./useTheme";
 import "./viewer.css";
@@ -98,6 +100,14 @@ function Viewer({
   formatRef.current = vformat;
   const latest = useRef({ artifact, viewer, theme });
   latest.current = { artifact, viewer, theme };
+  const qc = useQueryClient();
+  const fx = useArtifactSideEffects(
+    artifact,
+    version,
+    () => bridge.current?.requestThumbnail() ?? false,
+  );
+  const fxRef = useRef(fx);
+  fxRef.current = fx;
 
   useEffect(() => {
     if (!el) return;
@@ -106,16 +116,19 @@ function Viewer({
       ...latest.current,
       version,
       formatOf: () => formatRef.current,
-      // TODO(FE11): wire thumbnail upload and PDF text extraction.
-      onPdfText: () => {},
-      onThumb: () => {},
+      onHello: () => fxRef.current.onHello(),
+      onPdfText: (t) => fxRef.current.onPdfText(t),
+      onThumb: (b) => fxRef.current.onThumb(b),
+      // The refetch 404s if access is gone, which the shell then handles.
+      onAccessLost: () =>
+        void qc.invalidateQueries({ queryKey: qk.artifact(artifact.id) }),
     });
     bridge.current = b;
     return () => {
       b.dispose();
       bridge.current = null;
     };
-  }, [el, version]);
+  }, [el, version, qc, artifact.id]);
 
   useEffect(() => bridge.current?.setTheme(theme), [theme]);
 
