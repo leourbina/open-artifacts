@@ -5,12 +5,24 @@ import {
   type RouterHistory,
 } from "@tanstack/react-router";
 import { AppLayout } from "./layout/AppLayout";
+import { SearchPage } from "./library/Search";
 import { NoAccess } from "./pages/NoAccess";
 import { NotFound } from "./pages/NotFound";
 import { SignIn } from "./pages/SignIn";
 
 // Placeholders; later tasks replace each with the real page.
 const page = (title: string) => () => <h1>{title}</h1>;
+
+// Query values stay strings: `?q=007` must not become the number 7.
+const parseSearch = (qs: string) =>
+  Object.fromEntries(new URLSearchParams(qs.replace(/^\?/, "")));
+const stringifySearch = (o: Record<string, unknown>) => {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(o))
+    if (v != null && v !== "") p.set(k, String(v));
+  const s = p.toString();
+  return s ? `?${s}` : "";
+};
 
 const root = createRootRoute({
   component: AppLayout,
@@ -28,7 +40,7 @@ const search = createRoute({
   validateSearch: (s: Record<string, unknown>) => ({
     q: s.q == null ? "" : String(s.q),
   }),
-  component: page("Search"),
+  component: SearchPage,
 });
 
 const routeTree = root.addChildren([
@@ -52,7 +64,7 @@ const routeTree = root.addChildren([
 ]);
 
 export const createAppRouter = (history?: RouterHistory) =>
-  createRouter({ routeTree, history });
+  createRouter({ routeTree, history, parseSearch, stringifySearch });
 
 export const router = createAppRouter();
 
