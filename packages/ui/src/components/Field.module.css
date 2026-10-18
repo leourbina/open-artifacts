@@ -4,7 +4,8 @@
   padding: 0 var(--oa-space-2);
   background: var(--oa-surface);
   color: var(--oa-text);
-  border: 1px solid var(--oa-border);
+  /* Control boundaries need 3:1 (WCAG 1.4.11); --oa-border is for cards. */
+  border: 1px solid var(--oa-border-strong);
   border-radius: var(--oa-radius-md);
   font: 400 var(--oa-text-sm) / 1.45 var(--oa-font-sans);
 }
@@ -12,7 +13,7 @@
   color: var(--oa-text-muted);
 }
 .control:hover:not(:disabled) {
-  border-color: var(--oa-border-strong);
+  border-color: var(--oa-text-muted);
 }
 .control:focus-visible,
 .switch:focus-visible,
@@ -90,7 +91,9 @@
   padding: 0;
   border: 1px solid var(--oa-border-strong);
   border-radius: 999px;
-  background: var(--oa-sunken);
+  /* Unchecked: surface track, border-strong outline (3:1 on bg), and a
+     text-muted thumb (>= 3:1 on the track). */
+  background: var(--oa-surface);
   cursor: pointer;
   transition: background var(--oa-duration-fast) var(--oa-ease);
 }
@@ -104,7 +107,7 @@
   height: 10px;
   margin-left: 2px;
   border-radius: 50%;
-  background: var(--oa-border-strong);
+  background: var(--oa-text-muted);
   transition: transform var(--oa-duration-fast) var(--oa-ease);
 }
 .switch[data-state="checked"] .thumb {
@@ -135,7 +138,7 @@
   gap: 2px;
   padding: 2px;
   background: var(--oa-surface-2);
-  border: 1px solid var(--oa-border);
+  border: 1px solid var(--oa-border-strong);
   border-radius: var(--oa-radius-md);
 }
 .segItem {
@@ -154,5 +157,6 @@
 .segItem[aria-checked="true"] {
   background: var(--oa-surface);
   color: var(--oa-text);
-  box-shadow: var(--oa-shadow-1);
+  /* surface vs surface-2 is ~1.1:1, so the selected item gets a 3:1 edge. */
+  box-shadow: inset 0 0 0 1px var(--oa-border-strong);
 }
