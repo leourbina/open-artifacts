@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { core, envelope, ROOT, STATE } from "./fakes.ts";
 
 const TEMPLATE = "apps/server/wrangler.template.jsonc";
+const WELCOME = "scripts/setup/welcome.md";
 const realRoot = join(import.meta.dirname, "../../..");
 
 // Recorded shape of `wrangler whoami --json`.
@@ -52,6 +54,21 @@ type World = {
   state?: Obj;
   /** Omit result_info from list pages (paging must stop on a short page). */
   noResultInfo?: boolean;
+  /** /healthz answers 503 this many times first (propagation). */
+  healthFails?: number;
+  /** tools/list omits publish_artifact. */
+  noPublishTool?: boolean;
+  /** The token INSERT fails, or silently writes nothing. */
+  d1Fails?: boolean;
+  dropTokenInsert?: boolean;
+  /** The signed content URL serves this body instead of the published content. */
+  contentBody?: string;
+  /** The signed content URL answers with this status. */
+  contentStatus?: number;
+  /** Artifact ids that no longer exist (publish with that id → not_found). */
+  deletedArtifacts?: string[];
+  /** Every publish fails with this tool error text. */
+  publishError?: string;
 };
 // biome-ignore lint/suspicious/noExplicitAny: loose API fixtures
 type Obj = any;
@@ -108,19 +125,76 @@ export function world(w: World = {}) {
   const policies: Obj[] = [...(w.policies ?? [])];
   const apps: Obj[] = [...(w.apps ?? [])];
   let secrets = w.secrets && [...w.secrets];
+  let deployedConfig: string | undefined;
+  let published = 0;
+  const deleted = [...(w.deletedArtifacts ?? [])];
   /** Every mutation, in order. `values` holds every secret value seen. */
   const ops: string[] = [];
   const values: string[] = [];
   const creates: string[] = [];
   const auths: string[] = [];
   const zoneQueries: string[] = [];
+  /** Every exec argv and env, for leak scans. */
+  const argv: string[] = [];
+  /** App-host and Access requests, e.g. "GET /healthz", "mcp tools/list". */
+  const hits: string[] = [];
+  const mcpCalls: Obj[] = [];
+  const sqls: string[] = [];
+  const db = {
+    users: [] as { id: string; email: string; role: string }[],
+    tokens: [] as Obj[],
+  };
+  let healthFails = w.healthFails ?? 0;
+  const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+  const d1 = (sql: string) => {
+    sqls.push(sql);
+    if (w.d1Fails && sql.includes("INSERT")) throw new Error("D1 down");
+    const sel = sql.match(/^SELECT id FROM tokens WHERE id = '([^']*)'/);
+    if (sel) return db.tokens.filter((t) => t.id === sel[1] && !t.revoked_at);
+    const u = sql.match(
+      /INSERT INTO users \(id, email, name, role, created_at\) VALUES \('(\w+)', '((?:[^']|'')*)'/,
+    );
+    const t = sql.match(
+      /INSERT INTO tokens \(id, user_id, label, token_hash, created_at\) SELECT '(\w+)', id, '[^']*', '([0-9a-f]{64})'/,
+    );
+    if (!u || !t) throw new Error(`fake d1: unexpected SQL ${sql}`);
+    const email = u[2].replaceAll("''", "'");
+    let user = db.users.find((x) => x.email === email.toLowerCase());
+    if (!user) {
+      user = { id: u[1], email: email.toLowerCase(), role: "owner" };
+      db.users.push(user);
+    }
+    user.role = "owner";
+    const rev = sql.match(
+      /UPDATE tokens SET revoked_at = (\d+) WHERE id = '(\w+)' AND revoked_at IS NULL;/,
+    );
+    for (const x of db.tokens)
+      if (rev && x.id === rev[2] && !x.revoked_at)
+        x.revoked_at = Number(rev[1]);
+    if (!w.dropTokenInsert)
+      db.tokens.push({ id: t[1], user_id: user.id, token_hash: t[2] });
+    ops.push("d1 owner+token");
+    return [];
+  };
   const c = core({
     answers: w.answers,
     files: {
       [join(ROOT, TEMPLATE)]: readFileSync(join(realRoot, TEMPLATE), "utf8"),
+      [join(ROOT, WELCOME)]: readFileSync(join(realRoot, WELCOME), "utf8"),
+      [join(ROOT, "package.json")]:
+        '{ "name": "open-artifacts", "version": "0.1.0" }',
       ...(w.state ? { [STATE]: JSON.stringify(w.state) } : {}),
     },
     exec: async (cmd, args, opts) => {
+      argv.push(`${cmd} ${args.join(" ")} ${JSON.stringify(opts ?? {})}`);
+      if (
+        cmd === "pnpm" &&
+        !args.includes("wrangler") &&
+        args.at(-1) === "build"
+      ) {
+        ops.push("build");
+        return { code: 0, stdout: "built", stderr: "" };
+      }
       if (cmd === "pnpm" && args[0] === "--version")
         return { code: 0, stdout: "10.11.1\n", stderr: "" };
       const a = args.slice(args.indexOf("wrangler") + 1).join(" ");
@@ -129,10 +203,15 @@ export function world(w: World = {}) {
         a.match(/^(d1 create|r2 bucket create|kv namespace create) (.+)$/) ??
         [];
       const put = a.match(/^secret put (\w+) --name [\w-]+$/);
+      const del = a.match(/^secret delete (\w+) --name [\w-]+$/);
+      const exe = a.match(
+        /^d1 execute ([\w-]+) --remote --json --command (.+)$/s,
+      );
+      const mig = a.match(/^d1 migrations apply ([\w-]+) --remote$/);
       if (a.startsWith("secret list ")) {
         if (!secrets)
           return { code: 1, stdout: "", stderr: 'Worker "x" not found.' };
-        stdout = JSON.stringify(secrets.map((name) => ({ name })));
+        stdout = `wrangler 4.151.1 [x]\n${JSON.stringify(secrets.map((name) => ({ name })))}`;
       } else if (put) {
         values.push(opts?.input ?? "");
         if (put[1] === w.putFails)
@@ -143,6 +222,19 @@ export function world(w: World = {}) {
           };
         ops.push(`put ${put[1]}`);
         secrets = [...(secrets ?? []), put[1]];
+      } else if (del) {
+        ops.push(`delete secret ${del[1]}`);
+        secrets = secrets?.filter((n) => n !== del[1]);
+      } else if (exe) {
+        try {
+          stdout = `wrangler 4.151.1 (update available [4.152])\n${JSON.stringify([{ results: d1(exe[2]), success: true }])}`;
+        } catch (e) {
+          return { code: 1, stdout: "", stderr: (e as Error).message };
+        }
+      } else if (mig) ops.push(`migrate ${mig[1]}`);
+      else if (a === "deploy") {
+        ops.push("deploy");
+        deployedConfig = c.files.get(join(ROOT, "apps/server/wrangler.jsonc"));
       } else if (a === "whoami --json") stdout = WHOAMI(acct.accounts);
       else if (a === "auth token --json")
         stdout = '{"type":"oauth","token":"t"}';
@@ -161,6 +253,97 @@ export function world(w: World = {}) {
       const auth = new Headers(init?.headers).get("authorization");
       const body = init?.body ? JSON.parse(String(init.body)) : undefined;
       const q = (k: string) => u.searchParams.get(k);
+      if (u.host === "app.example.com") {
+        if (u.pathname === "/healthz") {
+          hits.push("GET /healthz");
+          if (healthFails-- > 0)
+            return new Response("starting", { status: 503 });
+          return Response.json({ ok: true });
+        }
+        if (u.pathname === "/mcp") {
+          const tok = auth?.replace(/^Bearer /, "") ?? "";
+          if (
+            !db.tokens.some((t) => t.token_hash === sha(tok) && !t.revoked_at)
+          )
+            return Response.json({ error: "unauthorized" }, { status: 401 });
+          hits.push(`mcp ${body.method}`);
+          const reply = (result: unknown, sse = false) => {
+            const msg = JSON.stringify({ jsonrpc: "2.0", id: body.id, result });
+            return sse
+              ? new Response(`event: message\ndata: ${msg}\n\n`, {
+                  headers: { "content-type": "text/event-stream" },
+                })
+              : new Response(msg, {
+                  headers: {
+                    "content-type": "application/json",
+                    "mcp-session-id": "s1",
+                  },
+                });
+          };
+          if (body.method === "initialize")
+            return reply({ protocolVersion: "2025-06-18", capabilities: {} });
+          if (body.method === "notifications/initialized")
+            return new Response(null, { status: 202 });
+          if (body.method === "tools/list")
+            return reply({
+              tools: [
+                ...(w.noPublishTool ? [] : [{ name: "publish_artifact" }]),
+                { name: "get_artifact" },
+              ],
+            });
+          if (body.method === "tools/call") {
+            mcpCalls.push(body.params);
+            const prev = body.params.arguments.id;
+            const err = (text: string) =>
+              reply({ isError: true, content: [{ type: "text", text }] }, true);
+            if (w.publishError) return err(w.publishError);
+            if (prev && deleted.includes(prev))
+              return err("not_found: Artifact not found");
+            const id = prev ?? `art${++published}`;
+            return reply(
+              {
+                content: [{ type: "text", text: "Published" }],
+                structuredContent: {
+                  id,
+                  version: 1,
+                  url: `https://app.example.com/a/${id}`,
+                },
+              },
+              true,
+            );
+          }
+        }
+        const cu = u.pathname.match(
+          /^\/api\/v1\/artifacts\/(\w+)\/content-url$/,
+        );
+        if (cu) {
+          hits.push("GET content-url");
+          const tok = auth?.replace(/^Bearer /, "") ?? "";
+          if (
+            !db.tokens.some((t) => t.token_hash === sha(tok) && !t.revoked_at)
+          )
+            return Response.json({ error: "unauthorized" }, { status: 401 });
+          return Response.json({
+            url: `https://a.b.usercontent.example.com/s/sig/${cu[1]}/1/__view`,
+            expiresAt: "2026-10-18T00:00:00.000Z",
+          });
+        }
+        return new Response("nf", { status: 404 });
+      }
+      if (u.host === "a.b.usercontent.example.com") {
+        hits.push(`GET content ${auth ? "with auth" : "no auth"}`);
+        const last = mcpCalls.at(-1)?.arguments?.content ?? "";
+        return new Response(
+          w.contentStatus
+            ? "denied"
+            : (w.contentBody ?? `<html><body>${last}</body></html>`),
+          { status: w.contentStatus ?? 200 },
+        );
+      }
+      if (u.host === "team.cloudflareaccess.com") {
+        hits.push(`GET ${u.pathname}`);
+        return Response.json({ issuer: "https://team.cloudflareaccess.com" });
+      }
       const p = u.pathname.replace("/client/v4", "");
       auths.push(`${p} ${auth}`);
       const r2 = p.match(/\/r2\/buckets\/([^/]+)$/);
@@ -235,6 +418,13 @@ export function world(w: World = {}) {
   });
   return {
     ...c,
+    argv,
+    hits,
+    mcpCalls,
+    deleted,
+    sqls,
+    db,
+    deployed: () => deployedConfig,
     auths,
     creates,
     zoneQueries,

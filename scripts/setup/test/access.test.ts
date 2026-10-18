@@ -15,6 +15,8 @@ const SECRETS = [
   "CONTENT_SIGNING_KEY",
 ];
 const CONFIG = `${ROOT}/apps/server/wrangler.jsonc`;
+/** The B16-2 scope: prereqs, resources, access, secrets. */
+const B16_2 = STEPS.slice(0, 4);
 
 /** Every secret value the fake saw must be absent from output, json, state and files. */
 function noLeak(w: W, extra: string[] = []) {
@@ -38,7 +40,7 @@ function noLeak(w: W, extra: string[] = []) {
 describe("access + secrets", () => {
   it("first run creates everything in order and fills the config", async () => {
     const w = world();
-    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    expect(await run(HOSTS, w.deps, ROOT, B16_2)).toBe(0);
     expect(w.ops).toEqual([
       "POST policies",
       "POST apps",
@@ -79,14 +81,14 @@ describe("access + secrets", () => {
 
   it("a rerun is all skipped; --upgrade skips even with policy drift", async () => {
     const w = world();
-    await run(HOSTS, w.deps, ROOT);
+    await run(HOSTS, w.deps, ROOT, B16_2);
     w.lines.length = 0;
     w.ops.length = 0;
-    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    expect(await run(HOSTS, w.deps, ROOT, B16_2)).toBe(0);
     expect(statuses(w).every((s) => s.endsWith(":skipped"))).toBe(true);
     w.policies[0].include = [{ email: { email: "x@example.com" } }];
     w.lines.length = 0;
-    expect(await run([...HOSTS, "--upgrade"], w.deps, ROOT)).toBe(0);
+    expect(await run([...HOSTS, "--upgrade"], w.deps, ROOT, B16_2)).toBe(0);
     expect(statuses(w).every((s) => s.endsWith(":skipped"))).toBe(true);
     expect(w.ops).toEqual([]);
   });
@@ -190,7 +192,12 @@ describe("access + secrets", () => {
       secrets,
     });
     expect(
-      await run([...HOSTS, "--name", "open-artifacts-staging"], w.deps, ROOT),
+      await run(
+        [...HOSTS, "--name", "open-artifacts-staging"],
+        w.deps,
+        ROOT,
+        B16_2,
+      ),
     ).toBe(0);
     expect(statuses(w)).toEqual([
       "prereqs:skipped",
@@ -206,7 +213,7 @@ describe("access + secrets", () => {
 
   it("ANALYTICS_TOKEN is prompted interactively and optional", async () => {
     const w = world({ answers: ["ANALYTICS-val"] });
-    expect(await run(interactive, w.deps, ROOT)).toBe(0);
+    expect(await run(interactive, w.deps, ROOT, B16_2)).toBe(0);
     expect(w.ops.at(-1)).toBe("put ANALYTICS_TOKEN");
     noLeak(w);
   });
@@ -387,7 +394,7 @@ describe("B16-2 review fixes", () => {
       secrets: SECRETS,
       noResultInfo: true,
     });
-    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    expect(await run(HOSTS, w.deps, ROOT, B16_2)).toBe(0);
     expect(w.ops).toEqual([]);
   });
 
