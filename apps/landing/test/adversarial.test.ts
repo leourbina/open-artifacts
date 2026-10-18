@@ -62,7 +62,6 @@ describe("D7 adversarial", () => {
   it("no internal TODO comments in the built HTML", () => {
     const allowed = new Set([
       "<!-- TODO(B14): fallback tool list -->",
-      "<!-- TODO(B16): setup flags unverified -->",
       "<!-- TODO(D6): text wordmark -->",
     ]);
     for (const f of htmlFiles(dist)) {
