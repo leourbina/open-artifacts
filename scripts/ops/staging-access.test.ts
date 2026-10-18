@@ -3,7 +3,7 @@ import {
   APP_NAME,
   type Api,
   cliWrangler,
-  OWNER_EMAIL,
+  LEGACY_POLICY_NAME,
   POLICY_NAME,
   parseSecretList,
   REDIRECT_URI,
@@ -43,6 +43,11 @@ function fakeApi(opts: ApiOpts) {
       return opts.policies ?? [];
     if (p === `/accounts/${ACCOUNT}/access/policies` && method === "POST")
       return { id: "pol-new", name: POLICY_NAME };
+    if (
+      p.startsWith(`/accounts/${ACCOUNT}/access/policies/`) &&
+      method === "PUT"
+    )
+      return { ...(body as object), id: p.split("/").pop() };
     if (p === `/accounts/${ACCOUNT}/access/apps` && method === "GET")
       return opts.apps ?? [];
     if (p === `/accounts/${ACCOUNT}/access/apps` && method === "POST")
@@ -124,7 +129,20 @@ const existingApp = {
   policies: [{ id: "pol-1", precedence: 1 }],
   saas_app: { auth_type: "oidc", client_id: "cid-existing" },
 };
-const existingPolicy = { id: "pol-1", name: POLICY_NAME };
+const SPEC = {
+  name: POLICY_NAME,
+  decision: "allow",
+  include: [{ everyone: {} }],
+  exclude: [],
+  require: [],
+};
+const existingPolicy = { id: "pol-1", ...SPEC };
+const appPuts = (calls: Call[]) =>
+  calls.filter((c) => c.method === "PUT" && c.path.includes("/access/apps"));
+const policyPuts = (calls: Call[]) =>
+  calls.filter(
+    (c) => c.method === "PUT" && c.path.includes("/access/policies/"),
+  );
 const ALL = [
   "ACCESS_CLIENT_SECRET",
   "SESSION_SECRET",
@@ -141,11 +159,8 @@ describe("staging-access", () => {
     const pol = h.calls.find(
       (c) => c.method === "POST" && c.path.endsWith("/access/policies"),
     );
-    expect(pol?.body).toEqual({
-      name: POLICY_NAME,
-      decision: "allow",
-      include: [{ email: { email: OWNER_EMAIL } }],
-    });
+    expect(pol?.body).toEqual(SPEC);
+    expect(h.logs).toContain(`policy ${POLICY_NAME}: created (pol-new)`);
     expect(posts(h.calls)[0]?.body).toEqual({
       name: APP_NAME,
       type: "saas",
@@ -264,6 +279,114 @@ describe("staging-access", () => {
     expect(h.puts).toEqual({});
     expect(r.clientId).toBe("cid-existing");
     expect(r.skipped.sort()).toEqual([...ALL].sort());
+  });
+
+  it("policy name is the spec name", () => {
+    expect(POLICY_NAME).toBe("Open Artifacts \u2013 everyone");
+    expect(LEGACY_POLICY_NAME).toBe("open-artifacts-staging-owner");
+  });
+
+  it("renames the legacy owner policy to everyone in place", async () => {
+    const legacy = {
+      id: "pol-1",
+      name: LEGACY_POLICY_NAME,
+      decision: "allow",
+      include: [{ email: { email: "me@leourbina.com" } }],
+      exclude: [],
+      require: [],
+    };
+    const h = harness({ apps: [existingApp], policies: [legacy] }, ALL);
+    await h.go();
+    expect(policyPuts(h.calls)).toEqual([
+      {
+        method: "PUT",
+        path: `/accounts/${ACCOUNT}/access/policies/pol-1`,
+        body: SPEC,
+      },
+    ]);
+    expect(h.calls.some((c) => c.method === "POST")).toBe(false);
+    expect(h.logs).toContain(`policy ${POLICY_NAME}: reconciled (pol-1)`);
+    expect(appPuts(h.calls)).toEqual([]);
+  });
+
+  it("fixes a drifted include on the everyone policy", async () => {
+    const drifted = {
+      ...existingPolicy,
+      include: [{ email: { email: "x@y.z" } }],
+    };
+    const h = harness({ apps: [existingApp], policies: [drifted] }, ALL);
+    await h.go();
+    expect(policyPuts(h.calls).map((c) => c.body)).toEqual([SPEC]);
+    expect(h.logs).toContain(`policy ${POLICY_NAME}: reconciled (pol-1)`);
+  });
+
+  it("fixes a drifted decision or require", async () => {
+    for (const d of [
+      { ...existingPolicy, decision: "deny" },
+      { ...existingPolicy, require: [{ email: { email: "x@y.z" } }] },
+    ]) {
+      const h = harness({ apps: [existingApp], policies: [d] }, ALL);
+      await h.go();
+      expect(policyPuts(h.calls).length).toBe(1);
+    }
+  });
+
+  it("prefers the new name when both exist and leaves legacy alone", async () => {
+    const h = harness(
+      {
+        apps: [existingApp],
+        policies: [
+          { id: "pol-legacy", name: LEGACY_POLICY_NAME },
+          existingPolicy,
+        ],
+      },
+      ALL,
+    );
+    await h.go();
+    expect(policyPuts(h.calls)).toEqual([]);
+  });
+
+  it("is unchanged when the everyone policy is correct (absent exclude/require ok)", async () => {
+    const h = harness(
+      {
+        apps: [existingApp],
+        policies: [
+          {
+            id: "pol-1",
+            name: POLICY_NAME,
+            decision: "allow",
+            include: [{ everyone: {} }],
+          },
+        ],
+      },
+      ALL,
+    );
+    await h.go();
+    expect(h.calls.filter((c) => c.method !== "GET")).toEqual([]);
+    expect(h.logs).toContain(`policy ${POLICY_NAME}: unchanged (pol-1)`);
+  });
+
+  it("never PUTs the app in any policy scenario", async () => {
+    for (const policies of [
+      [],
+      [
+        {
+          id: "pol-1",
+          name: LEGACY_POLICY_NAME,
+          decision: "allow",
+          include: [],
+        },
+      ],
+      [{ ...existingPolicy, include: [] }],
+      [existingPolicy],
+    ]) {
+      const h = harness({ apps: [existingApp], policies }, ALL);
+      await h.go().catch(() => {});
+      expect(appPuts(h.calls)).toEqual([]);
+    }
+    const fresh = harness({}, []);
+    await fresh.go();
+    expect(appPuts(fresh.calls)).toEqual([]);
   });
 
   it("fails clearly when an existing app lacks the owner policy, without PUT", async () => {

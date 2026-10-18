@@ -8,8 +8,16 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const APP_NAME = "open-artifacts-staging";
-export const POLICY_NAME = "open-artifacts-staging-owner";
-export const OWNER_EMAIL = "me@leourbina.com";
+// Spec 6.5: Access lets everyone authenticate; the app does authorization.
+export const POLICY_NAME = "Open Artifacts \u2013 everyone";
+export const LEGACY_POLICY_NAME = "open-artifacts-staging-owner";
+const POLICY_BODY = {
+  name: POLICY_NAME,
+  decision: "allow",
+  include: [{ everyone: {} }],
+  exclude: [],
+  require: [],
+};
 export const REDIRECT_URI = "https://staging.open-artifacts.com/auth/callback";
 
 export type Api = (
@@ -69,20 +77,37 @@ async function teamDomain(o: Options): Promise<string> {
   return `${o.teamName}.cloudflareaccess.com`;
 }
 
+const empty = (x: unknown) =>
+  x === undefined || x === null || (Array.isArray(x) && x.length === 0);
+
+function policyMatches(p: Obj): boolean {
+  return (
+    p.name === POLICY_NAME &&
+    p.decision === POLICY_BODY.decision &&
+    JSON.stringify(p.include ?? []) === JSON.stringify(POLICY_BODY.include) &&
+    empty(p.exclude) &&
+    empty(p.require)
+  );
+}
+
+// Reusable policies are small, so PUT (full replace) is safe here; the app is
+// never PUT. Renaming the legacy policy keeps its id, so app links stay valid.
 async function ensurePolicy(o: Options): Promise<string> {
   const base = `/accounts/${o.accountId}/access/policies`;
-  const found = (await listAll(o.api, base)).find(
-    (p) => p.name === POLICY_NAME,
-  );
+  const all = await listAll(o.api, base);
+  const found =
+    all.find((p) => p.name === POLICY_NAME) ??
+    all.find((p) => p.name === LEGACY_POLICY_NAME);
   if (found) {
-    o.out.log(`policy ${POLICY_NAME}: exists (${found.id})`);
+    if (policyMatches(found)) {
+      o.out.log(`policy ${POLICY_NAME}: unchanged (${found.id})`);
+    } else {
+      await o.api("PUT", `${base}/${found.id}`, POLICY_BODY);
+      o.out.log(`policy ${POLICY_NAME}: reconciled (${found.id})`);
+    }
     return found.id;
   }
-  const p = await o.api("POST", base, {
-    name: POLICY_NAME,
-    decision: "allow",
-    include: [{ email: { email: OWNER_EMAIL } }],
-  });
+  const p = await o.api("POST", base, POLICY_BODY);
   o.out.log(`policy ${POLICY_NAME}: created (${p.id})`);
   return p.id;
 }
