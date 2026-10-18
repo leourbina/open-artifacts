@@ -104,14 +104,17 @@ async function wranglerToken(wrangler: Wrangler): Promise<string> {
   return token;
 }
 
+type Envelope<T> = {
+  success?: boolean;
+  result?: T;
+  result_info?: { total_pages?: number };
+  errors?: { message: string }[];
+};
+
 /** Cloudflare v4 client. Token: CLOUDFLARE_API_TOKEN, else `wrangler auth token`. */
 export function makeApi(deps: Deps, wrangler: Wrangler) {
   let token = deps.env.CLOUDFLARE_API_TOKEN;
-  return async <T>(
-    method: string,
-    path: string,
-    body?: unknown,
-  ): Promise<T> => {
+  const call = async <T>(method: string, path: string, body?: unknown) => {
     token ??= await wranglerToken(wrangler);
     const res = await deps.fetch(`${API}${path}`, {
       method,
@@ -121,11 +124,7 @@ export function makeApi(deps: Deps, wrangler: Wrangler) {
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-    const json = (await res.json().catch(() => ({}))) as {
-      success?: boolean;
-      result?: T;
-      errors?: { message: string }[];
-    };
+    const json = (await res.json().catch(() => ({}))) as Envelope<T>;
     if (!res.ok || !json.success) {
       const msg =
         json.errors?.map((e) => e.message).join("; ") || res.statusText;
@@ -134,7 +133,24 @@ export function makeApi(deps: Deps, wrangler: Wrangler) {
         { status: res.status },
       );
     }
-    return json.result as T;
+    return json;
   };
+  const api = async <T>(method: string, path: string, body?: unknown) =>
+    (await call<T>(method, path, body)).result as T;
+  /** GETs every page of a paged list (`per_page=100`, `page` up to `total_pages`). */
+  const all = async <T>(path: string): Promise<T[]> => {
+    const out: T[] = [];
+    const sep = path.includes("?") ? "&" : "?";
+    for (let page = 1, total = 1; page <= total; page++) {
+      const env = await call<T[]>(
+        "GET",
+        `${path}${sep}per_page=100&page=${page}`,
+      );
+      out.push(...(env.result ?? []));
+      total = env.result_info?.total_pages ?? 1;
+    }
+    return out;
+  };
+  return Object.assign(api, { all });
 }
 export type Api = ReturnType<typeof makeApi>;
