@@ -38,3 +38,18 @@ Put the new ids into `wrangler.staging.jsonc`, then deploy once.
 ## Repo settings
 
 Enable Settings > Actions > General > "Allow GitHub Actions to create and approve pull requests" (needed by release-please). Release PRs made with `GITHUB_TOKEN` don't trigger CI, so `release-please.yml` dispatches `ci.yml` on the release branch via `workflow_dispatch`.
+
+## B4 Access setup
+
+`ops-staging-access.yml` (manual only) runs `scripts/ops/staging-access.ts`. It is idempotent: a re-run creates and changes nothing that already exists.
+
+```sh
+gh workflow run ops-staging-access.yml                       # defaults: team_name=leourbina, force_rotate=false
+gh workflow run ops-staging-access.yml -f force_rotate=true  # regenerate SESSION_SECRET + CONTENT_SIGNING_KEY
+```
+
+It reads the team domain from the Access organization (falls back to `<team_name>.cloudflareaccess.com`), ensures the reusable allow policy `open-artifacts-staging-owner` (email `me@leourbina.com`), ensures the Access for SaaS OIDC app `open-artifacts-staging` (redirect `https://staging.open-artifacts.com/auth/callback`, scopes openid/email/profile, grant `authorization_code`), and sets the missing Worker secrets `ACCESS_CLIENT_SECRET`, `SESSION_SECRET`, `CONTENT_SIGNING_KEY`, `CF_ACCOUNT_ID`.
+
+The OIDC client secret is only returned when the app is created, and there's no API to rotate it. If the app exists but `ACCESS_CLIENT_SECRET` is missing on the Worker, the run fails. To recover, delete the Access app and re-run.
+
+**Afterwards:** copy `ACCESS_CLIENT_ID` from the job summary into `env.staging.vars.ACCESS_CLIENT_ID` in `apps/server/wrangler.staging.jsonc` and commit it. Deploys overwrite vars, so it has to live in the config.

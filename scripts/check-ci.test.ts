@@ -193,3 +193,24 @@ describe("package.json engines", () => {
     }
   });
 });
+
+describe("ops-staging-access.yml", () => {
+  const w = wf("ops-staging-access.yml");
+  const raw = read(".github/workflows/ops-staging-access.yml");
+  it("is workflow_dispatch only", () => {
+    expect(triggers(w)).toEqual(["workflow_dispatch"]);
+    expect(Object.keys(w.on.workflow_dispatch.inputs).sort()).toEqual([
+      "force_rotate",
+      "team_name",
+    ]);
+  });
+  it("never enables shell tracing", () => {
+    expect(raw).not.toMatch(/set\s+-[a-wyz]*x/);
+    expect(raw).not.toMatch(/set\s+-o\s+xtrace/);
+  });
+  it("runs the tested script with Cloudflare secrets", () => {
+    expect(raw).toContain("scripts/ops/staging-access.ts");
+    expect(raw).toContain("secrets.CLOUDFLARE_API_TOKEN");
+    expect(raw).toContain("secrets.CLOUDFLARE_ACCOUNT_ID");
+  });
+});
