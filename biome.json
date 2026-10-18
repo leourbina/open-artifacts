@@ -11,7 +11,21 @@
       "!docs",
       "!logs",
       "!**/.wrangler",
+      "!**/.astro",
       "!pnpm-lock.yaml"
     ]
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["**/*.astro"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "noUnusedVariables": "off",
+            "noUnusedImports": "off"
+          }
+        }
+      }
+    }
+  ]
 }
