@@ -13,6 +13,7 @@ import {
   PublishResultSchema,
   R,
   SearchHitSchema,
+  type SettingsPatch,
   SettingsSchema,
   type ShareInput,
   ShareSchema,
@@ -151,10 +152,21 @@ export const useSettings = () =>
     queryKey: qk.settings,
     queryFn: ({ signal }) => api.get(R.settings, SettingsSchema, signal),
   });
+/** Keeps only the metrics this build knows, so one new server metric never blanks the page. */
+const LenientUsageSchema = z.preprocess((raw) => {
+  if (typeof raw !== "object" || raw === null) return raw;
+  const { metrics } = raw as { metrics?: unknown };
+  if (!Array.isArray(metrics)) return raw;
+  const known = UsageSchema.shape.metrics.element;
+  return {
+    ...raw,
+    metrics: metrics.filter((m) => known.safeParse(m).success),
+  };
+}, UsageSchema);
 export const useUsage = () =>
   useQuery({
     queryKey: qk.usage,
-    queryFn: ({ signal }) => api.get(R.usage, UsageSchema, signal),
+    queryFn: ({ signal }) => api.get(R.usage, LenientUsageSchema, signal),
   });
 
 /** Run `fn` then invalidate every key `keys()` returns. */
@@ -267,3 +279,18 @@ export const useRemoveMember = () =>
     (list, id) => list.filter((m) => m.id !== id),
     "Couldn't remove the member.",
   );
+
+export const useUpdateSettings = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (patch: SettingsPatch) =>
+      api.send("PATCH", R.settings, patch, SettingsSchema),
+    onError: (e: unknown) => failToast(e, "Couldn't save settings"),
+    // Refetch rather than trust the response: untouched fields resync too.
+    onSettled: () =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: qk.settings }),
+        qc.invalidateQueries({ queryKey: qk.me }), // the sidebar shows the name
+      ]),
+  });
+};
