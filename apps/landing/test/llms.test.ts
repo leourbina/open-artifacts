@@ -50,24 +50,42 @@ describe("llms.txt", () => {
     expect(llms).toContain('git clone --depth 1 --branch "$TAG" "$REPO"');
   });
 
-  it("picks the latest release tag, with or without a prefix", () => {
-    // The pipeline after `git ls-remote`, shared by setup and upgrade.
-    const pipe = llms.match(/"\$REPO" '\*v\*'([\s\S]*?)\)\n/)?.[1] ?? "";
-    expect(pipe).toContain("sort -rV");
-    expect(llms.split(`origin '*v*'${pipe})`).length - 1).toBe(1);
-    const latest = (...tags: string[]) =>
-      execFileSync("sh", [
-        "-c",
-        `printf '%s\\n' ${tags.map((t) => `'x refs/tags/${t}'`).join(" ")}${pipe}`,
-      ])
+  // GitHub's /releases/latest excludes pre-releases (and drafts) server-side,
+  // so a pre-release like v0.1.0 is never installed. No fallback by design.
+  it("installs the latest stable release, or stops", () => {
+    const api = `${REPO_URL.replace("https://github.com/", "https://api.github.com/repos/")}/releases/latest`;
+    const lines = llms.match(/^ *TAG=\$\(curl -fsSL \S+ \| .*\)$/gm) ?? [];
+    expect(lines).toHaveLength(2); // setup and update
+    expect(new Set(lines.map((l) => l.trim())).size).toBe(1);
+    expect(lines[0]).toContain(`curl -fsSL ${api} | `);
+    expect(llms).not.toContain("ls-remote");
+    expect(llms).not.toContain("jq");
+    expect(
+      llms.split("Open Artifacts has no stable release yet; check back later.")
+        .length - 1,
+    ).toBe(2);
+
+    // Run the docs' exact pipeline, minus curl, on stubbed response bodies.
+    const sed = lines[0]?.match(/\| (sed .*)\)$/)?.[1] ?? "";
+    const tagOf = (body: string) =>
+      execFileSync("sh", ["-c", `printf '%s' "$BODY" | ${sed}`], {
+        env: { ...process.env, BODY: body },
+      })
         .toString()
         .trim();
-    expect(latest("v0.2.0", "open-artifacts-v0.2.0")).toMatch(
-      /^(open-artifacts-)?v0\.2\.0$/,
+    const release = JSON.stringify(
+      {
+        url: "https://api.github.com/x",
+        tag_name: "v0.2.0",
+        name: "v0.2.0",
+        prerelease: false,
+      },
+      null,
+      2,
     );
-    expect(
-      latest("v0.2.0", "open-artifacts-v0.10.0", "v0.9.1", "v1.0.0-rc.1", "x"),
-    ).toBe("open-artifacts-v0.10.0");
+    expect(tagOf(release)).toBe("v0.2.0");
+    expect(tagOf("")).toBe("");
+    expect(tagOf('{"message":"Not Found","status":"404"}')).toBe("");
   });
 
   it("has no link that 404s in the built site", () => {

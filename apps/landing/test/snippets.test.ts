@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { snippets } from "../../../scripts/setup/src/steps/agent-config.ts";
 
 // Agents and people paste these snippets verbatim, so they must be valid as-is.
 const docs = fileURLToPath(new URL("../src/content/docs/", import.meta.url));
@@ -24,9 +25,43 @@ describe("doc snippets", () => {
     }
   });
 
-  it("single-quotes Authorization headers so the shell can't expand the token", () => {
+  // A literal token in a command or config leaks through shell history or
+  // git: a double-quoted header may only carry $OA_TOKEN, and no snippet
+  // holds an oa_pat_ value.
+  it("never puts a literal token in a snippet", () => {
     for (const { f, text } of pages) {
-      expect(text, f).not.toMatch(/--header\s+"Authorization/);
+      for (const [h] of text.matchAll(/--header\s+"[^"]*"/g))
+        expect(h, f).toContain("$OA_TOKEN");
+      for (const [, body] of text.matchAll(/```[a-z]*\n([\s\S]*?)```/g))
+        expect(body, f).not.toContain("oa_pat_");
     }
+  });
+});
+
+// connect-agents must show exactly what setup's agent-config step prints.
+describe("connect-agents matches scripts/setup agent-config", () => {
+  const s = snippets("open-artifacts", "https://artifacts.example.com/mcp");
+  const doc = pages.find((p) => p.f === "connect-agents.md")?.text ?? "";
+  const section = (title: string) =>
+    doc.split(`## ${title}\n`)[1]?.split("\n## ")[0] ?? "";
+  const block = (title: string, lang: string) =>
+    section(title).match(new RegExp(`\`\`\`${lang}\\n([\\s\\S]*?)\`\`\``))?.[1];
+
+  it("Claude Code", () => {
+    const sh = block("Claude Code", "sh")
+      ?.replace(/ \\\n\s*/g, " ")
+      .trim();
+    expect(sh).toBe(s.claudeCode);
+  });
+  it("Codex CLI", () => {
+    expect(block("Codex CLI", "toml")?.trim()).toBe(s.codex);
+  });
+  it("Cursor, OpenCode and generic JSON", () => {
+    for (const [title, want] of [
+      ["Cursor", JSON.parse(s.cursor)],
+      ["OpenCode", JSON.parse(s.opencode)],
+      ["Other clients", JSON.parse(s.json)],
+    ] as const)
+      expect(JSON.parse(block(title, "json") ?? "null"), title).toEqual(want);
   });
 });
