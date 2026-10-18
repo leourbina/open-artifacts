@@ -274,8 +274,8 @@ type Alloc = {
   now: number;
   agent: AgentRef | null;
   userId: string;
-  /** Set on publish; omitted on restore, which keeps the artifact's format. */
-  format?: Format;
+  /** The new version's format; also becomes the artifact's format. */
+  format: Format;
   entry: string;
   /** JSON of ManifestEntry[] */
   manifest: string;
@@ -311,12 +311,7 @@ export function allocateVersion(
     a.agent?.name ?? null,
     a.agent?.version ?? null,
   ];
-  const extra: [string, unknown][] = [
-    ...(a.format === undefined
-      ? []
-      : [["format", a.format] as [string, unknown]]),
-    ...(a.extra ?? []),
-  ];
+  const extra: [string, unknown][] = [["format", a.format], ...(a.extra ?? [])];
   for (const [col, v] of extra) {
     sets.push(`${col} = ?`);
     vals.push(v);
@@ -331,8 +326,8 @@ export function allocateVersion(
     db
       .prepare(
         `insert into versions (artifact_id, version, entry, manifest, language, message,
-           agent_name, agent_version, created_by, created_at)
-         select id, current_version, ?, ?, ?, ?, ?, ?, ?, ? from artifacts
+           agent_name, agent_version, created_by, created_at, format)
+         select id, current_version, ?, ?, ?, ?, ?, ?, ?, ?, ? from artifacts
          where id = ? and deleted_at is null${guard}`,
       )
       .bind(
@@ -344,6 +339,7 @@ export function allocateVersion(
         a.agent?.version ?? null,
         a.userId,
         a.now,
+        a.format,
         a.id,
         ...guardArgs,
       ),
@@ -549,13 +545,20 @@ type VersionRow = {
   created_by: string;
   created_at: number;
   text_indexed: number;
+  format: Format;
   email: string;
   name: string | null;
 };
 
+/** A versions page stops once its manifests' cumulative length passes this. */
+export const VERSIONS_PAGE_BYTES = 1024 * 1024;
+
 /**
- * Viewer+; newest first, at most VERSIONS_PAGE_SIZE, keyset `version < before`
- * (bounds the manifests parsed per request).
+ * Viewer+; newest first, keyset `version < before`: at most VERSIONS_PAGE_SIZE,
+ * and only while the cumulative manifest length stays within
+ * VERSIONS_PAGE_BYTES (always at least one), so pages may be short. Sizes are
+ * summed in SQL so oversized manifests are never read. A version's format
+ * falls back to the artifact's for rows written before migration 0002.
  */
 export async function listVersions(
   env: Env,
@@ -565,12 +568,29 @@ export async function listVersions(
 ): Promise<VersionInfo[]> {
   await requireAccess(env, caller, id, "viewer");
   const { results } = await env.DB.prepare(
-    `select v.version, v.entry, v.manifest, v.language, v.message, v.agent_name,
-       v.agent_version, v.created_by, v.created_at, v.text_indexed, u.email, u.name
-     from versions v join users u on u.id = v.created_by
-     where v.artifact_id = ? and v.version < ? order by v.version desc limit ?`,
+    `with page as (
+       select version, length(manifest) as len from versions
+       where artifact_id = ?1 and version < ?2 order by version desc limit ?3
+     ), cut as (
+       select version, row_number() over w as rn, sum(len) over w as total
+       from page window w as (order by version desc)
+     )
+     select v.version, v.entry, v.manifest, v.language, v.message, v.agent_name,
+       v.agent_version, v.created_by, v.created_at, v.text_indexed,
+       coalesce(v.format, a.format) as format, u.email, u.name
+     from cut
+     join versions v on v.artifact_id = ?1 and v.version = cut.version
+     join artifacts a on a.id = v.artifact_id
+     join users u on u.id = v.created_by
+     where cut.rn = 1 or cut.total <= ?4
+     order by v.version desc`,
   )
-    .bind(id, before ?? Number.MAX_SAFE_INTEGER, VERSIONS_PAGE_SIZE)
+    .bind(
+      id,
+      before ?? Number.MAX_SAFE_INTEGER,
+      VERSIONS_PAGE_SIZE,
+      VERSIONS_PAGE_BYTES,
+    )
     .all<VersionRow>();
   return results.map((v) => ({
     version: v.version,
@@ -590,6 +610,7 @@ export async function listVersions(
     ),
     language: v.language,
     textIndexed: v.text_indexed === 1,
+    format: v.format,
   }));
 }
 
@@ -630,8 +651,9 @@ export async function readThumbnail(
 }
 
 /**
- * Editor+. Copies version `v`'s manifest/entry/language as a new version
- * ("Restored v{v}") via allocateVersion; restored versions share R2 keys.
+ * Editor+. Copies version `v`'s manifest/entry/language/format as a new
+ * version ("Restored v{v}") via allocateVersion, which also sets the
+ * artifact's format to it; restored versions share R2 keys.
  */
 export async function restoreVersion(
   env: Env,
@@ -643,10 +665,17 @@ export async function restoreVersion(
 ): Promise<PublishResult> {
   await requireAccess(env, asUser(user), id, "editor");
   const src = await env.DB.prepare(
-    "select entry, manifest, language from versions where artifact_id = ? and version = ?",
+    `select v.entry, v.manifest, v.language, coalesce(v.format, a.format) as format
+     from versions v join artifacts a on a.id = v.artifact_id
+     where v.artifact_id = ? and v.version = ?`,
   )
     .bind(id, v)
-    .first<{ entry: string; manifest: string; language: string | null }>();
+    .first<{
+      entry: string;
+      manifest: string;
+      language: string | null;
+      format: Format;
+    }>();
   if (!src) throw notFound();
   const res = await env.DB.batch<{ current_version: number }>(
     allocateVersion(env.DB, {
@@ -654,6 +683,7 @@ export async function restoreVersion(
       now: Date.now(),
       agent,
       userId: user.id,
+      format: src.format,
       entry: src.entry,
       manifest: src.manifest,
       language: src.language,

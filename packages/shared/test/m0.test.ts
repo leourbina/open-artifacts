@@ -313,6 +313,7 @@ describe("MCP inputs", () => {
       files: [],
       language: null,
       textIndexed: false,
+      format: "html",
     };
     expect(
       S.GetArtifactResultSchema.safeParse({

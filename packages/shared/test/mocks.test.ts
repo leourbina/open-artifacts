@@ -593,6 +593,7 @@ describe("round 2", () => {
     expect(top.message).toBe("Restored v1");
     expect(top.files).toEqual(src.files);
     expect(top.entry).toBe(src.entry);
+    expect(top.format).toBe(src.format);
     expect(
       await text(
         await call("GET", R.versionFile(art.id, top.version, "index.html")),
