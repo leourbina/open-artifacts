@@ -19,18 +19,29 @@ export type AppEnv = { Bindings: Env; Variables: AppVariables };
 export const CONTENT_CSP =
   "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads";
 
+type SecurityOpts = { frameDeny?: boolean; csp?: string };
+
+/** A copy of `res` with the standard security headers (headers may be immutable). */
+export function withSecurityHeaders(
+  res: Response,
+  opts: SecurityOpts = {},
+): Response {
+  const out = new Response(res.body, res);
+  const h = out.headers;
+  h.set("X-Robots-Tag", "noindex, nofollow");
+  h.set("X-Content-Type-Options", "nosniff");
+  h.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  if (opts.frameDeny) h.set("X-Frame-Options", "DENY");
+  if (opts.csp) h.set("Content-Security-Policy", opts.csp);
+  return out;
+}
+
 export const securityHeaders =
-  (opts: { frameDeny?: boolean; csp?: string } = {}): MiddlewareHandler =>
+  (opts: SecurityOpts = {}): MiddlewareHandler =>
   async (c, next) => {
     await next();
     // Responses from fetch()/Response.redirect() have immutable headers: re-wrap.
-    c.res = new Response(c.res.body, c.res);
-    const h = c.res.headers;
-    h.set("X-Robots-Tag", "noindex, nofollow");
-    h.set("X-Content-Type-Options", "nosniff");
-    h.set("Referrer-Policy", "strict-origin-when-cross-origin");
-    if (opts.frameDeny) h.set("X-Frame-Options", "DENY");
-    if (opts.csp) h.set("Content-Security-Policy", opts.csp);
+    c.res = withSecurityHeaders(c.res, opts);
   };
 
 const BEARER = /^\s*Bearer(?:\s+(.*?))?\s*$/i;
