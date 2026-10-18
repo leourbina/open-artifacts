@@ -10,11 +10,13 @@
     "dev": "astro dev",
     "build": "pnpm --filter @oa/shared build && astro build",
     "preview": "astro preview",
-    "typecheck": "pnpm --filter @oa/shared build && astro check"
+    "typecheck": "pnpm --filter @oa/shared build && astro check",
+    "test": "pnpm run build && vitest run"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.10",
     "typescript": "^5.9.3",
+    "vitest": "^4.1.12",
     "wrangler": "^4.151.1"
   },
   "dependencies": {
