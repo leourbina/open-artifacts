@@ -61,8 +61,9 @@ export const useArtifact = (id: string) =>
     queryFn: ({ signal }) =>
       api.get(R.artifact(id), ArtifactSummarySchema, signal),
   });
-export const useVersions = (id: string) =>
+export const useVersions = (id: string, opts?: { enabled?: boolean }) =>
   useQuery({
+    enabled: opts?.enabled ?? true,
     queryKey: qk.versions(id),
     queryFn: ({ signal }) =>
       api.get(R.versions(id), z.array(VersionInfoSchema), signal),

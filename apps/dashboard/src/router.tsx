@@ -4,6 +4,7 @@ import {
   createRoute,
   createRouter,
   type RouterHistory,
+  useParams,
 } from "@tanstack/react-router";
 import { AppLayout } from "./layout/AppLayout";
 import { Library } from "./library/Library";
@@ -12,6 +13,7 @@ import type { Scope } from "./library/useLibraryQuery";
 import { NoAccess } from "./pages/NoAccess";
 import { NotFound } from "./pages/NotFound";
 import { SignIn } from "./pages/SignIn";
+import { Shell } from "./viewer/Shell";
 
 // Placeholders; later tasks replace each with the real page.
 const page = (title: string) => () => <h1>{title}</h1>;
@@ -51,6 +53,13 @@ const library = (path: string, scope: Scope) =>
     component: () => <Library scope={scope} />,
   });
 
+function ViewerRoute() {
+  const { id, v } = useParams({ strict: false }) as { id: string; v?: string };
+  const n = v === undefined ? undefined : Number(v);
+  if (n !== undefined && !Number.isInteger(n)) return <NotFound />;
+  return <Shell id={id} v={n} />;
+}
+
 const search = createRoute({
   getParentRoute: () => root,
   path: "/search",
@@ -66,8 +75,8 @@ const routeTree = root.addChildren([
   library("/shared", "shared"),
   library("/team", "team"),
   search,
-  route("/a/$id", page("Viewer")),
-  route("/a/$id/v/$v", page("Viewer")),
+  route("/a/$id", ViewerRoute),
+  route("/a/$id/v/$v", ViewerRoute),
   route("/a/$id/diff/$from/$to", page("Diff")),
   route("/settings/members", page("Members")),
   route("/settings/agents", page("Agents")),

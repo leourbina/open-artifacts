@@ -69,9 +69,9 @@ describe("layout behaviour", () => {
 
   // TanStack Router matches case-insensitively, so /A/x renders the viewer, yet
   // the anonymous exemption is a case-sensitive startsWith("/a/").
-  it("anonymous at /A/x (renders viewer) is not redirected", async () => {
+  it("anonymous at /A/x (renders the viewer route) is not redirected", async () => {
     const { redirect } = mount(async () => unauth(), "/A/x");
-    await screen.findByRole("heading", { name: "Viewer" });
+    await screen.findByRole("heading", { name: "Page not found" });
     await settle();
     expect(redirect).not.toHaveBeenCalled();
   });

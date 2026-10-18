@@ -78,7 +78,7 @@ describe("AppLayout", () => {
 
   it("anonymous at /a/x does not redirect", async () => {
     const redirect = await mount("anonymous", "/a/x");
-    await screen.findByRole("heading", { name: "Viewer" });
+    await screen.findByRole("heading", { name: "Page not found" });
     expect(redirect).not.toHaveBeenCalled();
   });
 
