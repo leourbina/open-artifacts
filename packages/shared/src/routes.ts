@@ -56,7 +56,7 @@ export const R = {
    * (C3), usually within a few seconds (longer while retrying). Until then a
    * new or undeleted artifact matches on title/description only, and a new
    * version still matches the previous version's body. Title/description
-   * changes (PATCH) apply immediately. Only the first 128 KB of a document
+   * changes (PATCH) apply immediately. Only the first 96 KB of a document
    * (its entry file) is indexed: text past that never matches.
    */
   search: "/api/v1/search",
