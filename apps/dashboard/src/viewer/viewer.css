@@ -1,0 +1,75 @@
+.oa-viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--oa-bg);
+}
+.oa-vt {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--oa-divider);
+  background: var(--oa-surface);
+}
+.oa-vt-group,
+.oa-vt-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.oa-vt-actions {
+  margin-left: auto;
+}
+.oa-vt-title {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--oa-text-lg);
+  font-weight: 600;
+}
+.oa-vt-edit,
+.oa-vt-input {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+}
+.oa-vt-edit:hover,
+.oa-vt-edit:focus-visible {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+.oa-vt-edit:focus-visible {
+  outline: 2px solid var(--oa-focus, currentColor);
+  outline-offset: 2px;
+  border-radius: var(--oa-radius-sm, 4px);
+}
+.oa-vt-edit {
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: text;
+}
+.oa-vt-input {
+  width: min(480px, 60vw);
+}
+.oa-vbody {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.oa-vframe {
+  flex: 1;
+  border: 0;
+  background: #fff;
+}
+.oa-vpanel {
+  width: 320px;
+  padding: 16px;
+  border-left: 1px solid var(--oa-divider);
+  background: var(--oa-surface);
+}

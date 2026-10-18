@@ -76,10 +76,13 @@ describe("AppLayout", () => {
     );
   });
 
-  it("anonymous at /a/x does not redirect", async () => {
+  it("anonymous at /a/x is not bounced by the layout", async () => {
     const redirect = await mount("anonymous", "/a/x");
-    await screen.findByRole("heading", { name: "Viewer" });
-    expect(redirect).not.toHaveBeenCalled();
+    // The layout lets /a/* through; the viewer itself sends the anonymous visitor to login.
+    await waitFor(() =>
+      expect(redirect).toHaveBeenCalledWith("/auth/login?next=%2Fa%2Fx"),
+    );
+    expect(redirect).toHaveBeenCalledTimes(1);
   });
 
   it("shows the quota banner with QUOTA_MESSAGE", async () => {

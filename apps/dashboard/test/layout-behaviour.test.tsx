@@ -69,11 +69,11 @@ describe("layout behaviour", () => {
 
   // TanStack Router matches case-insensitively, so /A/x renders the viewer, yet
   // the anonymous exemption is a case-sensitive startsWith("/a/").
-  it("anonymous at /A/x (renders viewer) is not redirected", async () => {
+  it("anonymous at /A/x (renders the viewer route) is not redirected", async () => {
     const { redirect } = mount(async () => unauth(), "/A/x");
-    await screen.findByRole("heading", { name: "Viewer" });
     await settle();
-    expect(redirect).not.toHaveBeenCalled();
+    // Only the viewer's own login redirect (to the lowercase path); the layout adds none.
+    expect(redirect.mock.calls).toEqual([["/auth/login?next=%2Fa%2Fx"]]);
   });
 
   // Session expires while the app is open: /me refetch 401s but stale data wins.
