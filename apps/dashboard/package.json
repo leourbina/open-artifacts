@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "node -e \"require('fs').mkdirSync('dist',{recursive:true});require('fs').writeFileSync('dist/index.html','<!doctype html><title>Open Artifacts</title>')\"",
     "dev": "echo \"@oa/dashboard dev: placeholder\""
   },
   "engines": {
