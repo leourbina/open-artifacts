@@ -1,0 +1,130 @@
+/*
+ * Open Artifacts design tokens (Studio direction, design/DIRECTION.md).
+ * Fonts load from Google Fonts only; the system stack is the fallback.
+ * Colors must stay in sync with ./index.ts (enforced by test/sync.test.ts).
+ */
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap");
+
+:root {
+  color-scheme: light;
+
+  --oa-bg: #eef0f3;
+  --oa-chrome: #f5f6f8;
+  --oa-surface: #ffffff;
+  --oa-surface-2: #f6f7f9;
+  --oa-sunken: #eceef1;
+  --oa-divider: #e0e3e8;
+  --oa-border: #bec4cd;
+  --oa-border-strong: #848b95;
+  --oa-text: #15181c;
+  --oa-text-2: #454c56;
+  --oa-text-muted: #5f6670;
+  --oa-accent: #2350d0;
+  --oa-accent-fg: #1d45b8;
+  --oa-accent-soft: #e7edfc;
+  --oa-accent-text: #ffffff;
+  --oa-focus: #2350d0;
+  --oa-success: #157a3a;
+  --oa-success-fg: #157a3a;
+  --oa-success-soft: #e3f3e8;
+  --oa-danger: #be2f1c;
+  --oa-danger-soft: #fbe7e3;
+  --oa-warning: #8a5a00;
+  --oa-warning-soft: #fbf0d9;
+
+  --oa-font-sans:
+    "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --oa-font-serif: var(--oa-font-sans);
+  --oa-font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --oa-text-xs: 12px;
+  --oa-text-sm: 13px;
+  --oa-text-md: 14px;
+  --oa-text-lg: 16px;
+  --oa-text-xl: 20px;
+  --oa-text-2xl: 24px;
+
+  --oa-radius-sm: 4px;
+  --oa-radius-md: 6px;
+  --oa-radius-lg: 8px;
+  --oa-space-1: 4px;
+  --oa-space-2: 8px;
+  --oa-space-3: 12px;
+  --oa-space-4: 16px;
+  --oa-space-5: 20px;
+  --oa-space-6: 24px;
+  --oa-space-7: 28px;
+  --oa-space-8: 32px;
+
+  --oa-shadow-1: 0 1px 0 rgba(20, 24, 30, 0.04), 0 0 0 1px var(--oa-border);
+  --oa-shadow-2:
+    0 0 0 1px var(--oa-border-strong), 0 4px 14px rgba(20, 24, 30, 0.06);
+  --oa-duration-fast: 120ms;
+  --oa-duration: 200ms;
+  --oa-ease: cubic-bezier(0.2, 0, 0, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --oa-bg: #131518;
+    --oa-chrome: #17191d;
+    --oa-surface: #1c1f23;
+    --oa-surface-2: #212429;
+    --oa-sunken: #181a1e;
+    --oa-divider: #2c3037;
+    --oa-border: #3b414a;
+    --oa-border-strong: #676e78;
+    --oa-text: #e9ebee;
+    --oa-text-2: #b7bdc6;
+    --oa-text-muted: #9097a1;
+    --oa-accent: #7f9cff;
+    --oa-accent-fg: #a3b8ff;
+    --oa-accent-soft: #1f2a4a;
+    --oa-accent-text: #131518;
+    --oa-focus: #7f9cff;
+    --oa-success: #5bc77f;
+    --oa-success-fg: #6fd08f;
+    --oa-success-soft: #173022;
+    --oa-danger: #ff7f6b;
+    --oa-danger-soft: #3a1e1a;
+    --oa-warning: #e7b44f;
+    --oa-warning-soft: #352914;
+
+    --oa-shadow-1: 0 0 0 1px var(--oa-border);
+    --oa-shadow-2:
+      0 0 0 1px var(--oa-border-strong), 0 4px 14px rgba(0, 0, 0, 0.4);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --oa-bg: #131518;
+  --oa-chrome: #17191d;
+  --oa-surface: #1c1f23;
+  --oa-surface-2: #212429;
+  --oa-sunken: #181a1e;
+  --oa-divider: #2c3037;
+  --oa-border: #3b414a;
+  --oa-border-strong: #676e78;
+  --oa-text: #e9ebee;
+  --oa-text-2: #b7bdc6;
+  --oa-text-muted: #9097a1;
+  --oa-accent: #7f9cff;
+  --oa-accent-fg: #a3b8ff;
+  --oa-accent-soft: #1f2a4a;
+  --oa-accent-text: #131518;
+  --oa-focus: #7f9cff;
+  --oa-success: #5bc77f;
+  --oa-success-fg: #6fd08f;
+  --oa-success-soft: #173022;
+  --oa-danger: #ff7f6b;
+  --oa-danger-soft: #3a1e1a;
+  --oa-warning: #e7b44f;
+  --oa-warning-soft: #352914;
+
+  --oa-shadow-1: 0 0 0 1px var(--oa-border);
+  --oa-shadow-2:
+    0 0 0 1px var(--oa-border-strong), 0 4px 14px rgba(0, 0, 0, 0.4);
+}

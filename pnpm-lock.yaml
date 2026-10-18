@@ -56,7 +56,17 @@ importers:
         specifier: ^4.6.7
         version: 4.6.7
 
-  packages/ui: {}
+  packages/ui:
+    devDependencies:
+      '@types/node':
+        specifier: ^20.19.43
+        version: 20.19.43
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@20.19.43)(vite@8.3.4(@types/node@20.19.43)(esbuild@0.28.2)(yaml@2.9.1))
 
   scripts/setup: {}
 
