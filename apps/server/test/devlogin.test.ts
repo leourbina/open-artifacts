@@ -1,18 +1,19 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
-import { readSession } from "../src/auth/session.js";
+import { readSession, sessionCookieName } from "../src/auth/session.js";
 import type { Env } from "../src/env.js";
 
 const app = createApp();
+const SESSION = sessionCookieName(env);
 const ctx = { waitUntil() {}, passThroughOnException() {} } as never;
 const call = (path: string, e: Env = env) =>
   app.fetch(new Request(`http://app.localhost${path}`), e, ctx);
 const sessionOf = (r: Response) =>
   r.headers
     .getSetCookie()
-    .find((c) => c.startsWith("oa_session="))
-    ?.slice("oa_session=".length)
+    .find((c) => c.startsWith(`${SESSION}=`))
+    ?.slice(`${SESSION}=`.length)
     .split(";")[0];
 
 describe("GET /auth/dev-login", () => {

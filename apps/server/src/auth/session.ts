@@ -50,12 +50,29 @@ export async function readSession(
   }
 }
 
-export function sessionCookie(value: string, env: Env): string {
-  const secure = env.ENVIRONMENT === "dev" ? "" : " Secure;";
-  return `oa_session=${value}; HttpOnly;${secure} SameSite=Lax; Path=/; Max-Age=${MAX_AGE_S}`;
+/**
+ * The session cookie name. Outside dev it is `__Host-` prefixed: browsers only
+ * store such a cookie when this exact host sets it with Secure, Path=/ and no
+ * Domain, so a sibling or parent-domain host cannot plant or overwrite a
+ * session (cookie tossing / session fixation). Dev over http uses the plain
+ * name. Every read, write and clear goes through this.
+ */
+export function sessionCookieName(env: Pick<Env, "ENVIRONMENT">): string {
+  return env.ENVIRONMENT === "dev" ? "oa_session" : "__Host-oa_session";
+}
+
+const attrs = (env: Pick<Env, "ENVIRONMENT">) =>
+  env.ENVIRONMENT === "dev"
+    ? "HttpOnly; SameSite=Lax; Path=/"
+    : "HttpOnly; Secure; SameSite=Lax; Path=/";
+
+export function sessionCookie(
+  value: string,
+  env: Pick<Env, "ENVIRONMENT">,
+): string {
+  return `${sessionCookieName(env)}=${value}; ${attrs(env)}; Max-Age=${MAX_AGE_S}`;
 }
 
 export function clearSessionCookie(env: Pick<Env, "ENVIRONMENT">): string {
-  const secure = env.ENVIRONMENT === "dev" ? "" : " Secure;";
-  return `oa_session=; HttpOnly;${secure} SameSite=Lax; Path=/; Max-Age=0`;
+  return `${sessionCookieName(env)}=; ${attrs(env)}; Max-Age=0`;
 }

@@ -2,7 +2,7 @@ import type { Member } from "@oa/shared";
 import type { MiddlewareHandler } from "hono";
 import { getCookie } from "hono/cookie";
 import { verifyPat } from "../auth/pat.js";
-import { readSession } from "../auth/session.js";
+import { readSession, sessionCookieName } from "../auth/session.js";
 import type { Env } from "../env.js";
 import { getUser } from "../services/users.js";
 import { ApiError, appOrigin, toErrorResponse } from "./errors.js";
@@ -39,7 +39,7 @@ const BEARER = /^\s*Bearer(?:\s+(.*?))?\s*$/i;
  * Sets c.var.user (Member | null), tokenLabel, tokenId.
  * An `Authorization: Bearer …` header is authoritative: a valid PAT sets the
  * user, anything else yields null with no cookie fallback. Any other (or no)
- * Authorization header falls through to the oa_session cookie. The user row is
+ * Authorization header falls through to the session cookie (sessionCookieName). The user row is
  * loaded on every request, so deleted users resolve to null.
  */
 export const session = (): MiddlewareHandler<AppEnv> => async (c, next) => {
@@ -62,18 +62,17 @@ export const session = (): MiddlewareHandler<AppEnv> => async (c, next) => {
       c.set("tokenId", pat.tokenId);
     }
   } else {
-    const s = await readSession(c.env, getCookie(c, "oa_session"));
+    const s = await readSession(c.env, getCookie(c, sessionCookieName(c.env)));
     if (s) c.set("user", await getUser(c.env, s.uid));
   }
   await next();
 };
 
-export const SESSION_COOKIE = "oa_session";
 export const CSRF_HEADER = "X-OA-Request";
 
 /**
  * Mutating requests (anything but GET/HEAD) that authenticate by session cookie
- * (no `Authorization: Bearer`, and an oa_session cookie present) must send
+ * (no `Authorization: Bearer`, and a sessionCookieName(env) cookie present) must send
  * `X-OA-Request: 1`, else 403 csrf. Bearer/PAT requests are exempt. Mount on
  * `/api/v1/*` and `/auth/logout`.
  */
@@ -81,7 +80,7 @@ export const csrf = (): MiddlewareHandler<AppEnv> => async (c, next) => {
   const m = c.req.method;
   if (m !== "GET" && m !== "HEAD") {
     const bearer = BEARER.test(c.req.header("authorization") ?? "");
-    const cookie = getCookie(c, SESSION_COOKIE) !== undefined;
+    const cookie = getCookie(c, sessionCookieName(c.env)) !== undefined;
     if (!bearer && cookie && c.req.header(CSRF_HEADER) !== "1")
       return toErrorResponse(
         new ApiError("csrf", `Missing ${CSRF_HEADER}: 1 header`),
