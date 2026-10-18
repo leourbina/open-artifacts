@@ -1,0 +1,72 @@
+# Changelog
+
+## 0.1.0 (2026-10-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* **server:** __Host- session cookie ([#82](https://github.com/leourbina/open-artifacts/issues/82))
+* **shared:** nullable UserRef.email, paged versions, StorageSetBody (contract C1) ([#42](https://github.com/leourbina/open-artifacts/issues/42))
+
+### Features
+
+* **brand:** logo and favicons (D6) ([dcefb8c](https://github.com/leourbina/open-artifacts/commit/dcefb8cdc491e3329c3c63da21392cbc6e7afd06))
+* **dashboard:** app scaffold, API client, routing (FE1) ([#26](https://github.com/leourbina/open-artifacts/issues/26)) ([3f5e2eb](https://github.com/leourbina/open-artifacts/commit/3f5e2eb19af6acff01d1870ffc53871f82eccb07))
+* **dashboard:** auth state, layout, edge pages, quota banner (FE2) ([#37](https://github.com/leourbina/open-artifacts/issues/37)) ([b77dec6](https://github.com/leourbina/open-artifacts/commit/b77dec6e5482ed580d6cb22c591eccf589c095a4))
+* **dashboard:** drag-and-drop upload (FE7) ([#87](https://github.com/leourbina/open-artifacts/issues/87)) ([72f6c6d](https://github.com/leourbina/open-artifacts/commit/72f6c6da914a2d421dad901c3c8c70bff034270d))
+* **dashboard:** library list, grid, scopes, filters (FE3-2) ([#53](https://github.com/leourbina/open-artifacts/issues/53)) ([85a3a13](https://github.com/leourbina/open-artifacts/commit/85a3a13efc9641a6591322471cd4180cdbd2e086))
+* **dashboard:** postMessage bridge and signed content URLs (FE4-1) ([#56](https://github.com/leourbina/open-artifacts/issues/56)) ([6777048](https://github.com/leourbina/open-artifacts/commit/677704840c12264a03563eeb95efa8d19d5bbf80))
+* **dashboard:** search box, search results, snippet highlighting (FE3-1) ([#52](https://github.com/leourbina/open-artifacts/issues/52)) ([6402041](https://github.com/leourbina/open-artifacts/commit/6402041206b3491d28fd620ce691167bba78840d))
+* **dashboard:** settings members (FE8) ([#88](https://github.com/leourbina/open-artifacts/issues/88)) ([920cecc](https://github.com/leourbina/open-artifacts/commit/920cecc9668ddc7b01a113c62f49e4f9a70a59d6))
+* **dashboard:** share panel and details (FE6) ([#86](https://github.com/leourbina/open-artifacts/issues/86)) ([74715d9](https://github.com/leourbina/open-artifacts/commit/74715d97a7f8057df23a47c1ece2a73832f59495))
+* **dashboard:** versions panel and diff (FE5) ([#65](https://github.com/leourbina/open-artifacts/issues/65)) ([d8f40e6](https://github.com/leourbina/open-artifacts/commit/d8f40e6a2375baaa3a2dd2a0e6f9947fd0003f53))
+* **dashboard:** viewer shell and title bar (FE4-2) ([#61](https://github.com/leourbina/open-artifacts/issues/61)) ([4a7ed61](https://github.com/leourbina/open-artifacts/commit/4a7ed612de82b2499a598f8ef6bb7532433f9fcb))
+* **landing:** D6 logo (D7) ([5417ad2](https://github.com/leourbina/open-artifacts/commit/5417ad2fcc4c740001b96aa768619bff971e05c0))
+* **landing:** docs and llms.txt (D7) ([20f945c](https://github.com/leourbina/open-artifacts/commit/20f945c89ed4736499c337bb654f2a30ba4d9d68))
+* **landing:** site and landing page (D7) ([f012c71](https://github.com/leourbina/open-artifacts/commit/f012c71c193bc577eda6dd473b847278a2300c04))
+* **render:** markdown, code and pdf renderers (B11) ([#69](https://github.com/leourbina/open-artifacts/issues/69)) ([63283d9](https://github.com/leourbina/open-artifacts/commit/63283d9a5c25302043731954448e43e0e34bb9b5))
+* **render:** reading themes (D5) ([ba34a2a](https://github.com/leourbina/open-artifacts/commit/ba34a2a07a1f5119aef12e8519ce5e0925154525))
+* **runtime:** data routes, subscribe, anon rate limit, SDK (B13) ([#89](https://github.com/leourbina/open-artifacts/issues/89)) ([ecd9be2](https://github.com/leourbina/open-artifacts/commit/ecd9be230b32fa17071aba2e948ec78283a10480))
+* **server:** Access OIDC login, dev login, users (B4) ([#31](https://github.com/leourbina/open-artifacts/issues/31)) ([93fb1e9](https://github.com/leourbina/open-artifacts/commit/93fb1e91bee9f2cf41d7842175ddb577fa419d3f))
+* **server:** artifact read, list, versions, restore, purge (B7) ([#45](https://github.com/leourbina/open-artifacts/issues/45)) ([2a1b71b](https://github.com/leourbina/open-artifacts/commit/2a1b71bffece9341e994b74b3167dffa6e9fca51))
+* **server:** artifact sharing (B9) ([#55](https://github.com/leourbina/open-artifacts/issues/55)) ([27d901e](https://github.com/leourbina/open-artifacts/commit/27d901e7b87bcb88a6d8cb377f52b58c136392e6))
+* **server:** ArtifactRuntime durable object (B12) ([#80](https://github.com/leourbina/open-artifacts/issues/80)) ([f10228b](https://github.com/leourbina/open-artifacts/commit/f10228b2310440e25410f8096cb00c3be5ef536d))
+* **server:** authorization, members, settings, CSRF (B5) ([#34](https://github.com/leourbina/open-artifacts/issues/34)) ([6ecb939](https://github.com/leourbina/open-artifacts/commit/6ecb93915d324d2273ecdd5684e5921b3be5ba06))
+* **server:** content host, signed paths, sandbox, runtime injection (B10) ([#64](https://github.com/leourbina/open-artifacts/issues/64)) ([78bcc7c](https://github.com/leourbina/open-artifacts/commit/78bcc7cd7d5aaa707f87452493eb52e33d98e7ce))
+* **server:** crypto utils, sessions, PATs (B3) ([#29](https://github.com/leourbina/open-artifacts/issues/29)) ([47877de](https://github.com/leourbina/open-artifacts/commit/47877de4039c45d2985983384003e0dc3923f138))
+* **server:** D1 schema and migrations (B2) ([#27](https://github.com/leourbina/open-artifacts/issues/27)) ([8ec76f6](https://github.com/leourbina/open-artifacts/commit/8ec76f6081ad543521c128e39fe5fafb566c1746))
+* **server:** full-text search and text extraction (B8) ([#57](https://github.com/leourbina/open-artifacts/issues/57)) ([7e2d00a](https://github.com/leourbina/open-artifacts/commit/7e2d00a44add21845c1fc02b5739531688639d1d))
+* **server:** race-safe publish, manifests, uploads (B6) ([#36](https://github.com/leourbina/open-artifacts/issues/36)) ([b7f68ea](https://github.com/leourbina/open-artifacts/commit/b7f68ea2f553d0b9fc324b3d5ab2e340bb4b9cac))
+* **server:** tokens, OG shell, thumbnails, usage (B15) ([#93](https://github.com/leourbina/open-artifacts/issues/93)) ([3959b27](https://github.com/leourbina/open-artifacts/commit/3959b27ee1520852e925ef2512c9705e8e4091cf))
+* **server:** worker skeleton, env, errors, security headers (B1) ([#25](https://github.com/leourbina/open-artifacts/issues/25)) ([8f8fa5f](https://github.com/leourbina/open-artifacts/commit/8f8fa5fa8a69435d672c71893053073d6ff302c9))
+* **setup:** access and secrets steps (B16-2) ([#59](https://github.com/leourbina/open-artifacts/issues/59)) ([cf8f7e3](https://github.com/leourbina/open-artifacts/commit/cf8f7e3977abd65f985b788b7c7f810e78933150))
+* **setup:** CLI framework, state, Cloudflare client (B16-1a) ([#50](https://github.com/leourbina/open-artifacts/issues/50)) ([24e25f9](https://github.com/leourbina/open-artifacts/commit/24e25f91ba8dba06109215a56863c032b7c201f3))
+* **setup:** deploy, owner token, selftest, agent config (B16-3) ([#67](https://github.com/leourbina/open-artifacts/issues/67)) ([401a7e2](https://github.com/leourbina/open-artifacts/commit/401a7e2f3d8068455936282b6e86a69ebb19f5e6))
+* **setup:** non-interactive --json, welcomeUrl, Access re-run skip (B16 follow-up) ([#70](https://github.com/leourbina/open-artifacts/issues/70)) ([47cb8d1](https://github.com/leourbina/open-artifacts/commit/47cb8d10fdd5b98f4684eba7eb0b8698f2ce47f9))
+* **setup:** prereqs and resources steps (B16-1b) ([#51](https://github.com/leourbina/open-artifacts/issues/51)) ([7acb22e](https://github.com/leourbina/open-artifacts/commit/7acb22e9ed345f5ad25fbe89d37a1d6371fba3af))
+* **shared:** API contract, ids, paths, protocol (F2) ([#7](https://github.com/leourbina/open-artifacts/issues/7)) ([2755a13](https://github.com/leourbina/open-artifacts/commit/2755a1367e804902daa93eb50082312b4556ee38))
+* **shared:** nullable UserRef.email, paged versions, StorageSetBody (contract C1) ([#42](https://github.com/leourbina/open-artifacts/issues/42)) ([f903193](https://github.com/leourbina/open-artifacts/commit/f9031933d30e9d1bc0325d8eb325b2fd0243b901))
+* **ui:** banner, empty state, app shell, nav item (D3) ([8f24a90](https://github.com/leourbina/open-artifacts/commit/8f24a9042fec35bcd8019df5f59672437f3e5ae3))
+* **ui:** core components, part 1 (D3) ([1a32cdd](https://github.com/leourbina/open-artifacts/commit/1a32cdd1704426dc2de4bb31401a7129b5be0f98))
+* **ui:** core components, part 1b (D3) ([ebcf425](https://github.com/leourbina/open-artifacts/commit/ebcf425efdf36c90c69da1b97af44b9d59f6fc5f))
+* **ui:** design tokens (D2) ([c653074](https://github.com/leourbina/open-artifacts/commit/c653074c4093fffed0a0fb06adb2a6282a97c33d))
+* **ui:** nullable email in Avatar and displayName ([9c724fd](https://github.com/leourbina/open-artifacts/commit/9c724fdaacd3b2cd22ff909fec51957434547755))
+* **ui:** overlays — dialog, menu, tabs, toast (D3) ([83d05b8](https://github.com/leourbina/open-artifacts/commit/83d05b89f3f0db2fe88fbaa500cafe0dbf8dc77f))
+* **ui:** toast action ([60d2a4b](https://github.com/leourbina/open-artifacts/commit/60d2a4bb72c341afe38192cc1f75e48639978114))
+
+
+### Bug Fixes
+
+* **dashboard:** M1 review — session expiry, signed URL freshness, a11y ([#85](https://github.com/leourbina/open-artifacts/issues/85)) ([3146350](https://github.com/leourbina/open-artifacts/commit/3146350d5c8de24a7e7e8f03ec3f317e737516d8))
+* harden workspace scaffold checks and tool versions ([f79a5fe](https://github.com/leourbina/open-artifacts/commit/f79a5fe5a32dabe03f4498a0da88c987d6be9ee0))
+* **landing:** fail typecheck when astro check silently skips ([038eafa](https://github.com/leourbina/open-artifacts/commit/038eafadd9855365cb2d7120c6f9e253c19a9e75))
+* **landing:** single-quote MCP auth header in docs ([a226e51](https://github.com/leourbina/open-artifacts/commit/a226e51b30c7f4a6f8961136f93cbb3c079661d8))
+* **server:** __Host- session cookie ([#82](https://github.com/leourbina/open-artifacts/issues/82)) ([bf06eaa](https://github.com/leourbina/open-artifacts/commit/bf06eaaaa39ed3e7428054d42b7e1be6e8b91e64))
+* **server:** build @oa/shared before staging smoke ([#39](https://github.com/leourbina/open-artifacts/issues/39)) ([1d76593](https://github.com/leourbina/open-artifacts/commit/1d76593b11a29b6f0674728789f658837ece9840))
+* **server:** per-version format, bounded version lists, path edge cases (M1) ([#74](https://github.com/leourbina/open-artifacts/issues/74)) ([6ac0d3b](https://github.com/leourbina/open-artifacts/commit/6ac0d3b2741ec47cdee3ab3b3e95839717f6e932))
+* **server:** resilient OIDC state (TTL, per-attempt cookie, retry) ([#78](https://github.com/leourbina/open-artifacts/issues/78)) ([ea35373](https://github.com/leourbina/open-artifacts/commit/ea35373896c874632742d007a3902dc9d18b1bd5))
+* **setup:** ignore EPIPE when a child exits before reading stdin ([#63](https://github.com/leourbina/open-artifacts/issues/63)) ([7dd5d92](https://github.com/leourbina/open-artifacts/commit/7dd5d92af1d5bd9cc14a14d0a71869292648a5ab))
+* **setup:** valid JSON snippets and single-quoted header in agent-config ([#92](https://github.com/leourbina/open-artifacts/issues/92)) ([1a64eed](https://github.com/leourbina/open-artifacts/commit/1a64eed875329aff03f79ccf151835da47b2bcb9))
+* **shared:** mocks 401 anonymous on authed routes (C1 follow-up) ([#47](https://github.com/leourbina/open-artifacts/issues/47)) ([6119700](https://github.com/leourbina/open-artifacts/commit/611970066b3cf49c4c7605806f8e0c0f88fffd91))
+* staging Access policy allows everyone (spec 6.5) ([#35](https://github.com/leourbina/open-artifacts/issues/35)) ([8c9c7aa](https://github.com/leourbina/open-artifacts/commit/8c9c7aabbfe06cf2eed27359d3af2673779ecde5))
+* **ui:** tabs without content add no tab stop ([bbe9da7](https://github.com/leourbina/open-artifacts/commit/bbe9da75b4f4c4f3ee17a3641c7a279d9821771d))
