@@ -1,5 +1,5 @@
 import { AUTH } from "@oa/shared";
-import { Hono } from "hono";
+import { type Context, Hono, type MiddlewareHandler } from "hono";
 import { ApiError, errorJson, toErrorResponse } from "./http/errors.js";
 import {
   type AppEnv,
@@ -46,6 +46,15 @@ const SESSION_PATHS = [
   "/mcp/*",
 ] as const;
 
+// PUT R.upload(id) is authorized by its signature: no session, no CSRF.
+const SIGNED_UPLOAD = /^\/api\/v1\/uploads\/[^/]+$/;
+const isSignedUpload = (c: Context<AppEnv>) =>
+  c.req.method === "PUT" && SIGNED_UPLOAD.test(c.req.path);
+const unlessSigned =
+  (mw: MiddlewareHandler<AppEnv>): MiddlewareHandler<AppEnv> =>
+  (c, next) =>
+    isSignedUpload(c) ? next() : mw(c, next);
+
 export function createApp(mount: (app: AppType) => void = mountRoutes) {
   const app: AppType = new Hono<AppEnv>();
   app.use(securityHeaders({ frameDeny: true }));
@@ -61,9 +70,9 @@ export function createApp(mount: (app: AppType) => void = mountRoutes) {
 
   // c.var.user (Bearer PAT wins over the cookie) for Worker routes only, so
   // SPA/asset requests never touch D1. Elsewhere caller() sees anonymous.
-  for (const p of SESSION_PATHS) app.use(p, session());
+  for (const p of SESSION_PATHS) app.use(p, unlessSigned(session()));
   // Cookie-authenticated mutations need X-OA-Request: 1 (PATs exempt).
-  app.use("/api/v1/*", csrf());
+  app.use("/api/v1/*", unlessSigned(csrf()));
   app.use(AUTH.logout, sameOrigin(), csrf());
 
   mount(app);

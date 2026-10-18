@@ -5,5 +5,20 @@
   "type": "module",
   "engines": {
     "node": ">=22"
+  },
+  "exports": {
+    "./theme.css": "./src/theme.css",
+    "./shiki-themes": "./src/shiki-themes.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "jsdom": "^29.1.1",
+    "shiki": "^4.5.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.12"
   }
 }
