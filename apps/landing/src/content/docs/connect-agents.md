@@ -21,7 +21,7 @@ Setup's `agent-config` step prints each snippet below with your URL and the owne
 
 ```sh
 claude mcp add --transport http open-artifacts https://artifacts.example.com/mcp \
-  --header "Authorization: Bearer oa_pat_..."
+  --header 'Authorization: Bearer oa_pat_...'
 ```
 
 ## Codex CLI
