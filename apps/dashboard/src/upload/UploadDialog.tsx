@@ -46,7 +46,14 @@ export function UploadDialog({
   const needsEntry = auto === undefined;
   const invalid = (!artifact && !title.trim()) || (needsEntry && !entry);
 
-  useEffect(() => () => abort.current?.abort(), []);
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+      abort.current?.abort();
+    };
+  }, []);
 
   const cancel = () => {
     abort.current?.abort();
@@ -67,6 +74,7 @@ export function UploadDialog({
         qc.invalidateQueries({ queryKey: ["search"] }),
         qc.invalidateQueries({ queryKey: qk.artifact(r.id) }),
       ]);
+      if (!alive.current) return;
       toast({
         title: artifact ? `Published v${r.version}` : "Artifact created",
       });
@@ -74,6 +82,7 @@ export function UploadDialog({
       void navigate({ to: viewerPath(r.id, r.version) as never });
     } catch (e) {
       if ((e as { name?: string }).name === "AbortError") return;
+      if (!alive.current) return;
       setProgress(null);
       setError(
         e instanceof UploadValidationError || e instanceof ApiClientError

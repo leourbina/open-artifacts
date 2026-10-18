@@ -107,20 +107,26 @@ export const api = {
       const abort = () => new DOMException("Aborted", "AbortError");
       if (signal?.aborted) return reject(abort());
       const xhr = new XMLHttpRequest();
-      signal?.addEventListener("abort", () => {
+      const onAbort = () => {
         xhr.abort();
         reject(abort());
-      });
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      const done = () => signal?.removeEventListener("abort", onAbort);
       xhr.open("PUT", url);
       xhr.setRequestHeader("Content-Type", contentType);
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) onProgress?.(e.loaded / e.total);
       };
-      xhr.onload = () =>
-        xhr.status >= 200 && xhr.status < 300
-          ? resolve()
-          : reject(toError(xhr.responseText, xhr.status));
-      xhr.onerror = () => reject(internal("Upload failed", 0));
+      xhr.onload = () => {
+        done();
+        if (xhr.status >= 200 && xhr.status < 300) resolve();
+        else reject(toError(xhr.responseText, xhr.status));
+      };
+      xhr.onerror = () => {
+        done();
+        reject(internal("Upload failed", 0));
+      };
       xhr.send(body);
     });
   },

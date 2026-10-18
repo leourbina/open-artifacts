@@ -33,6 +33,10 @@ async function walk(entry: FileSystemEntry, out: File[]): Promise<void> {
   }
 }
 
+/** Without entries a dropped folder shows up as an extension-less, typeless 4 KB-multiple "file". */
+const looksLikeDir = (f: File) =>
+  f.type === "" && !f.name.includes(".") && f.size % 4096 === 0;
+
 const byPath = (a: File, b: File) =>
   (a.webkitRelativePath || a.name).localeCompare(
     b.webkitRelativePath || b.name,
@@ -41,8 +45,10 @@ const byPath = (a: File, b: File) =>
 /** Files from a drop, recursing into dropped folders. Call synchronously from the drop event. */
 export async function filesFromDrop(dt: DataTransfer): Promise<File[]> {
   const items = [...dt.items].filter((i) => i.kind === "file");
-  if (items.length > 0 && !items[0]?.webkitGetAsEntry)
-    return filterIgnored([...dt.files]).sort(byPath);
+  if (items.length === 0 || !items[0]?.webkitGetAsEntry)
+    return filterIgnored([...dt.files].filter((f) => !looksLikeDir(f))).sort(
+      byPath,
+    );
   // Entries must be taken before the first await; the DataTransfer empties after the event.
   const picked = items.map((i) => ({
     entry: i.webkitGetAsEntry?.() ?? null,

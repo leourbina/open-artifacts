@@ -57,15 +57,23 @@ export function DropZone({
     if (!enabled) return;
     let depth = 0; // dragenter/leave fire per child element, so count them
     const root = document.documentElement;
+    let stuck: ReturnType<typeof setTimeout> | undefined;
     const reset = () => {
+      clearTimeout(stuck);
       depth = 0;
       setDragging(false);
       root.classList.remove("oa-file-drag");
+    };
+    // dragover fires continuously during a drag; silence means the drag ended unseen.
+    const arm = () => {
+      clearTimeout(stuck);
+      stuck = setTimeout(reset, 400);
     };
     const enter = (e: DragEvent) => {
       if (!hasFiles(e)) return;
       e.preventDefault();
       depth++;
+      arm();
       setDragging(true);
       root.classList.add("oa-file-drag");
     };
@@ -74,8 +82,12 @@ export function DropZone({
       if (--depth <= 0) reset();
     };
     const over = (e: DragEvent) => {
-      if (hasFiles(e)) e.preventDefault();
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      if (depth > 0) arm();
     };
+    // Pointer events never fire mid-drag, so one means the overlay is stale.
+    const stale = () => depth > 0 && reset();
     const drop = (e: DragEvent) => {
       if (!hasFiles(e) || !e.dataTransfer) return;
       e.preventDefault();
@@ -90,12 +102,16 @@ export function DropZone({
     window.addEventListener("dragover", over);
     window.addEventListener("drop", drop);
     window.addEventListener("keydown", key);
+    window.addEventListener("pointerdown", stale);
+    window.addEventListener("mousemove", stale);
     return () => {
       window.removeEventListener("dragenter", enter);
       window.removeEventListener("dragleave", leave);
       window.removeEventListener("dragover", over);
       window.removeEventListener("drop", drop);
       window.removeEventListener("keydown", key);
+      window.removeEventListener("pointerdown", stale);
+      window.removeEventListener("mousemove", stale);
       reset();
     };
   }, [enabled, start]);

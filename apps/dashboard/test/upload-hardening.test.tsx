@@ -1,6 +1,13 @@
 import { readFileSync } from "node:fs";
-import { contentTypeFor } from "@oa/shared";
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { contentTypeFor, viewerPath } from "@oa/shared";
+import { fixtures } from "@oa/shared/mocks";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../src/api/client";
 import {
@@ -8,6 +15,14 @@ import {
   uploadArtifact,
 } from "../src/upload/uploadPipeline";
 import { installHarness, mount, seen, server } from "./harness";
+
+vi.mock("../src/viewer/bridge", () => ({
+  createBridge: () => ({
+    dispose: vi.fn(),
+    requestThumbnail: vi.fn(),
+    setTheme: vi.fn(),
+  }),
+}));
 
 installHarness();
 
@@ -173,7 +188,7 @@ describe("drag over the viewer", () => {
     expect(document.documentElement).not.toHaveClass("oa-file-drag");
   });
 
-  it("ignores a drop while an upload dialog is open", async () => {
+  it("ignores a drop while an upload dialog is open, with a toast", async () => {
     mount("/");
     const input = (await screen.findByTestId(
       "upload-files",
@@ -182,13 +197,77 @@ describe("drag over the viewer", () => {
       target: { files: [new File(["x"], "index.html")] },
     });
     await screen.findByLabelText("Title");
+    const file = new File(["y"], "other.md");
     act(() => {
       const e = new Event("drop", { bubbles: true, cancelable: true });
       Object.defineProperty(e, "dataTransfer", {
-        value: { types: ["Files"], items: [], files: [] },
+        value: { types: ["Files"], items: [], files: [file] },
       });
       window.dispatchEvent(e);
     });
-    expect(await screen.findByText("1 file selected")).toBeVisible();
+    expect(
+      await screen.findByText("Finish the current upload first"),
+    ).toBeVisible();
+    expect(screen.getByText("1 file selected")).toBeVisible();
+  });
+
+  it("shows a toast for a drop with no usable files", async () => {
+    mount("/");
+    await screen.findByTestId("upload-files");
+    act(() => {
+      const e = new Event("drop", { bubbles: true, cancelable: true });
+      Object.defineProperty(e, "dataTransfer", {
+        value: {
+          types: ["Files"],
+          items: [],
+          files: [new File(["x"], ".DS_Store")],
+        },
+      });
+      window.dispatchEvent(e);
+    });
+    expect(await screen.findByText("No files to upload")).toBeVisible();
+  });
+
+  it("clears a stuck overlay after 400 ms without dragover, or on pointer activity", async () => {
+    vi.useFakeTimers();
+    try {
+      mount("/");
+      await vi.waitFor(() =>
+        expect(screen.getByTestId("upload-files")).toBeTruthy(),
+      );
+      const enter = () =>
+        act(() => {
+          const e = new Event("dragenter", { bubbles: true, cancelable: true });
+          Object.defineProperty(e, "dataTransfer", {
+            value: { types: ["Files"] },
+          });
+          window.dispatchEvent(e);
+        });
+      enter();
+      expect(document.documentElement).toHaveClass("oa-file-drag");
+      act(() => void vi.advanceTimersByTime(401));
+      expect(document.documentElement).not.toHaveClass("oa-file-drag");
+      expect(screen.queryByText(/Drop files/)).toBeNull();
+      enter();
+      fireEvent.mouseMove(window);
+      expect(screen.queryByText(/Drop files/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("viewer upload button", () => {
+  const find = (t: string) =>
+    (fixtures.artifacts.find((a) => a.title === t) as { id: string }).id;
+  it("shows for an editor and not for a viewer", async () => {
+    mount(viewerPath(find("Shared draft")));
+    expect(
+      await screen.findByRole("button", { name: "Upload version" }),
+    ).toBeVisible();
+    cleanup();
+    mount(viewerPath(find("Onboarding guide")));
+    await screen.findByRole("button", { name: /^Version:/ });
+    expect(screen.queryByRole("button", { name: "Upload version" })).toBeNull();
   });
 });
