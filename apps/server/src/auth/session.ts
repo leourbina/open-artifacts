@@ -6,6 +6,7 @@ import {
   hmacSign,
   hmacVerify,
 } from "../util/crypto.js";
+import { utf8Decoder, utf8Encoder } from "../util/text.js";
 
 export type Session = { uid: string; exp: number };
 
@@ -21,7 +22,7 @@ export async function signSession(
     throw new Error("SESSION_SECRET must be at least 32 characters");
   if (!isId(uid)) throw new Error("invalid uid");
   const payload: Session = { uid, exp: now + MAX_AGE_S * 1000 };
-  const p = b64urlEncode(new TextEncoder().encode(JSON.stringify(payload)));
+  const p = b64urlEncode(utf8Encoder.encode(JSON.stringify(payload)));
   return `${p}.${await hmacSign(env.SESSION_SECRET, p)}`;
 }
 
@@ -38,9 +39,7 @@ export async function readSession(
     if (!(await hmacVerify(env.SESSION_SECRET, p, sig))) return null;
     const raw = b64urlDecode(p);
     if (!raw) return null;
-    const s = JSON.parse(
-      new TextDecoder().decode(raw),
-    ) as Partial<Session> | null;
+    const s = JSON.parse(utf8Decoder.decode(raw)) as Partial<Session> | null;
     if (!s || typeof s.uid !== "string" || !isId(s.uid)) return null;
     if (typeof s.exp !== "number" || !Number.isFinite(s.exp) || s.exp <= now)
       return null;
