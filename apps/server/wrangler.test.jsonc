@@ -1,0 +1,20 @@
+{
+  "name": "oa-server-test",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "oa-test",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [{ "binding": "BLOBS", "bucket_name": "oa-blobs-test" }],
+  "kv_namespaces": [{ "binding": "KV", "id": "oa-kv-test" }],
+  "durable_objects": {
+    "bindings": [{ "name": "RUNTIME", "class_name": "ArtifactRuntime" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ArtifactRuntime"] }]
+}

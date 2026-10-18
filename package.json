@@ -8,9 +8,9 @@
   },
   "scripts": {
     "build": "pnpm -r --if-present build",
-    "test": "vitest run && pnpm -r --if-present test",
+    "test": "pnpm --filter @oa/shared build && vitest run && pnpm -r --if-present test",
     "lint": "biome check .",
-    "typecheck": "tsc --noEmit -p tsconfig.json && pnpm -r --if-present typecheck",
+    "typecheck": "pnpm --filter @oa/shared build && tsc --noEmit -p tsconfig.json && pnpm -r --if-present typecheck",
     "dev": "pnpm --parallel --filter @oa/server --filter @oa/dashboard --if-present dev",
     "oa:setup": "pnpm --filter @oa/setup start"
   },
