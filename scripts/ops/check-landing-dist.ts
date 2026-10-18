@@ -15,7 +15,7 @@ const TEXT_EXT = new Set([
   ".mjs",
   ".css",
 ]);
-const TOKENS = ["TODO", "{{"];
+const TOKENS = ["TODO", "{{", "OA-UNRELEASED"];
 const MAX_LINES = 20;
 
 function* walk(dir: string): Generator<string> {
@@ -64,7 +64,7 @@ function main(): number {
     console.log(`... and ${hits.length - MAX_LINES} more`);
   const files = new Set(hits.map((h) => h.file)).size;
   console.log(
-    `::error::Landing deploy skipped: ${hits.length} TODO/{{ hit(s) in ${files} file(s). The release is already created; fix the landing, then re-run this workflow via workflow_dispatch with the tag.`,
+    `::error::Landing deploy skipped: ${hits.length} ${TOKENS.join(" / ")} hit(s) in ${files} file(s). The release is already created; fix the landing, then re-run this workflow via workflow_dispatch with the tag.`,
   );
   return 1;
 }

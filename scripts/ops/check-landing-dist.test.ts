@@ -44,6 +44,14 @@ describe("check-landing-dist", () => {
     expect(r.code).toBe(1);
     expect(r.out).toContain('found "{{"');
   });
+  it("fails on OA-UNRELEASED marker and names it", () => {
+    put("docs/setup.html", "<p>OA-UNRELEASED</p>");
+    const r = run();
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('found "OA-UNRELEASED"');
+    expect(r.out).toContain("OA-UNRELEASED");
+    expect(r.out).toMatch(/::error::Landing deploy skipped:.*OA-UNRELEASED/);
+  });
   it("passes on a clean dir", () => {
     put("index.html", "<p>hi</p>");
     put("llms.txt", "setup");
