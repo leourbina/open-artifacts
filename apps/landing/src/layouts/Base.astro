@@ -5,7 +5,7 @@ import logoDark from "@oa/ui/brand/logo-dark.svg";
 import tokensCss from "@oa/ui/tokens.css?raw";
 import "../styles/site.css";
 import Todo from "../components/Todo.astro";
-import { FALLBACKS, type FallbackId, UNRELEASED } from "../lib/release";
+import { GATES, type GateId, UNRELEASED } from "../lib/release";
 
 // Inline the Studio tokens without their font @import, which would block rendering.
 // The same Google Fonts stylesheet loads below without blocking.
@@ -17,7 +17,7 @@ interface Props {
   title: string;
   description: string;
   /** Release-gate fallbacks this page depends on. */
-  fallbacks?: FallbackId[];
+  fallbacks?: GateId[];
 }
 
 const { title, description, fallbacks = [] } = Astro.props;
@@ -33,7 +33,7 @@ const ogImage = new URL("/og.png", Astro.site);
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
     {active.length > 0 && <meta name="oa-status" content={UNRELEASED} />}
-    {active.map((id) => <Todo text={FALLBACKS[id].todo} />)}
+    {active.map((id) => <Todo text={GATES[id].todo} />)}
     <meta name="description" content={description} />
     <link rel="canonical" href={canonical} />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />

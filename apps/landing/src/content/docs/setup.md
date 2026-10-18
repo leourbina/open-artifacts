@@ -20,18 +20,16 @@ The agent follows the steps below. The only thing you do yourself is approve the
 ## Steps
 
 1. **Check the prerequisites.** Run `node --version`, `pnpm --version`, and `git --version`. If anything is missing, or the user has no Cloudflare account or no domain on Cloudflare, explain what it is and how to get it, then wait.
-2. **Clone the latest release.** Open Artifacts installs from the latest tagged release, not `main`. Release tags look like `vX.Y.Z`:
+2. **Clone the latest release.** Open Artifacts installs from the latest stable GitHub release, not `main` and not a pre-release. Release tags look like `vX.Y.Z`:
 
    ```sh
    REPO={REPO_URL}
-   TAG=$(git ls-remote --tags --refs --sort=-v:refname "$REPO" '*v*' \
-     | sed -n 's#.*refs/tags/##p' \
-     | grep -E '(^|-)v[0-9]+\.[0-9]+\.[0-9]+$' \
-     | sed -E 's/^(.*-)?v([0-9.]+)$/\2 &/' | sort -rV | head -n1 | cut -d' ' -f2)
+   TAG=$(curl -fsSL {LATEST_RELEASE_API} | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
    git clone --depth 1 --branch "$TAG" "$REPO" open-artifacts
    cd open-artifacts
    ```
 
+   If `TAG` comes back empty or `curl` fails, stop and tell the user: "Open Artifacts has no stable release yet; check back later."
 3. **Install dependencies:** `pnpm install`.
 4. **Ask the user to log in to Cloudflare.** Ask them to run `npx wrangler login` and approve access in the browser. On a remote machine or in a container, use `npx wrangler login --device` instead. This is the one step a person has to do.
 5. **Run setup.** Use the user's hostnames and email:
@@ -46,8 +44,14 @@ The agent follows the steps below. The only thing you do yourself is approve the
    - **2:** the last line is `action_required`. If its `message` asks you to pass a flag, such as `--account-id` when the login can reach several accounts, add that flag and run again; ask the user for the value if you don't know it. Otherwise relay the `message` to the user verbatim, with `data.url` if it has one, wait until they say it's done, and run the same command again. Setup saves its progress in `.openartifacts/state.json` and picks up where it stopped.
    - **1:** the last line is `error`. Show the user its `message` and stop.
 
-   If the `access` step asks for an Access API token, the user creates one at its `data.url` and gives it to you. Run the same command again with it in the environment, `OA_ACCESS_TOKEN=<token> pnpm -s oa:setup --json …`. Setup never saves it. Once Access is set up, runs without the token skip re-checking Access, as long as the app host and Cloudflare account stay the same. The token is needed again only to change the app host or account, or to re-check Access.
-6. **Connect yourself.** The `owner-token` line's `data.token` is the owner's personal access token (`oa_pat_…`). It's printed only once, by the run that mints it, so keep it. The `agent-config` line's `data.url` is the MCP URL, and its `data.snippets` holds ready-made MCP configs with the token filled in: `claudeCode`, `codex`, `cursor`, `opencode`, and a generic `json`. Add the one for *this* agent to your MCP config. If the snippets show `<YOUR_TOKEN>`, the token was minted by an earlier run: use the token from that run, or run setup again with `--new-owner-token`, which mints a new one and revokes the old one. See [Connect agents](/docs/connect-agents/) for each client's config format.
+   If the `access` step asks for an Access API token, the user creates one at its `data.url`. Ask them to run this in the terminal where setup runs and paste the token, which isn't shown or saved in shell history:
+
+   ```sh
+   read -rs OA_ACCESS_TOKEN; export OA_ACCESS_TOKEN
+   ```
+
+   Then run the same command again. Never put the token on a command line, where shell history keeps it. Setup never saves it. Once Access is set up, runs without the token skip re-checking Access, as long as the app host and Cloudflare account stay the same. The token is needed again only to change the app host or account, or to re-check Access.
+6. **Connect yourself.** The `owner-token` line's `data.token` is the owner's personal access token (`oa_pat_…`). It's shown only once, by the run that mints it, so keep it. The `agent-config` line's `data.url` is the MCP URL, and its `data.snippets` holds MCP configs for `claudeCode`, `codex`, `cursor`, `opencode`, and a generic `json`. They don't contain the token: most read it from the `OA_TOKEN` environment variable, and `json` has a `<YOUR_TOKEN>` placeholder to replace, in a file kept out of git. Add the one for *this* agent to your MCP config, and make the token available as `OA_TOKEN` to its client. If you've lost the token, run setup again with `--new-owner-token`, which mints a new one and revokes the old one. Connect agents shows each client's config format.
 7. **Open the Welcome page.** Setup publishes a Welcome artifact to test the connection. Give the user its link, `data.welcomeUrl` on the `selftest` and `agent-config` lines, so they can sign in and see it. Only a run that mints the owner token publishes it; if there's no `welcomeUrl`, give the user `https://<app-host>/` instead.
 
 ## Setup flags

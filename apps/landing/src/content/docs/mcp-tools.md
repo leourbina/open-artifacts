@@ -8,19 +8,24 @@ Tool inputs are JSON Schema. Each tool returns plain text plus structured output
 
 ## Publishing
 
-`publish_artifact` creates an artifact, or publishes a new version when you pass `id`.
+`publish_artifact` creates an artifact, or publishes a new version when you pass `id`. Pass exactly one of `content` or `files`.
 
 | Field | Notes |
 |---|---|
-| `title` | Required. |
-| `description` | Optional. |
-| `format` | `html`, `markdown`, `code`, or `pdf`. Inferred if omitted. |
-| `content` | A single file as a string. |
-| `files` | Instead of `content`: a map of path to content, with binary files in base64. For an HTML page with its CSS, JS, and images. |
-| `entry` | Optional. The file to open first in a multi-file artifact. |
-| `language` | Optional, for `code`. |
-| `message` | Optional change note for this version. |
-| `visibility` | Optional: `private` (the default), `team`, or `public`. |
+| `id` | The artifact to publish a new version of. Leave it out to create one, or pass an id reserved by `create_upload`. |
+| `title` | Required when creating (no `id`). Up to 200 characters. |
+| `description` | Optional. Up to 2,000 characters. |
+| `format` | `html`, `markdown`, `code`, or `pdf`. With `content`, pass `format` or `entry`; when it's left out, it's taken from the entry file's extension (`.html`, `.md`, and `.pdf`; anything else is `code`). |
+| `content` | A single file as a string. Needs `format` or `entry`. |
+| `files` | Instead of `content`: a map of path to file, for an HTML page with its CSS, JS, and images. Each file is a string, `{ "base64": "…" }` for binary, or `{ "uploadId": "…" }` from `create_upload`. |
+| `entry` | The file to open first. With `files`, it defaults to `index.html`, then `README.md`, then the first file. |
+| `language` | Optional, for `code`. Taken from the entry file's extension when it's left out. |
+| `message` | Optional change note for this version. Up to 500 characters. |
+| `visibility` | `private`, `team`, or `public`. A new artifact without it gets the instance's default visibility, which is `private` unless an admin changed it. |
+| `capabilities` | The [runtime API](/docs/runtime-api/) features the page may use: `{ "db": true, "viewer": true, "storage": true }`. Each defaults to `false`. |
+| `allowAnonymousWrites` | Let anonymous viewers of a public artifact write shared data. Defaults to `false`. |
+
+Only the artifact's creator can change `visibility`, `capabilities`, or `allowAnonymousWrites` when publishing a new version; editors can publish the rest.
 
 It returns the artifact's `id`, the new `version`, and its view URL.
 
