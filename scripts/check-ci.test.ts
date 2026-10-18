@@ -12,20 +12,60 @@ const wf = (name: string): any => parse(read(`.github/workflows/${name}`));
 // `on` is a plain key in YAML 1.2 (yaml package), so no boolean coercion.
 const triggers = (w: { on: Record<string, unknown> }) => Object.keys(w.on);
 
+/*
+ * Invariants instead of pinned values (what changed and why):
+ * - ci.yml triggers/jobs: exact lists -> "contains at least" (extra triggers
+ *   or jobs, e.g. an audit job, must not break the suite). The five required
+ *   check names stay mandatory.
+ * - deploy-staging.yml: exact job list / trigger list -> contains; smoke
+ *   `needs` must include deploy. Curl `--retry N --retry-delay N
+ *   --retry-max-time N` numbers are tuning knobs -> matched by shape.
+ * - landing-preview.yml: exact paths/types lists -> contains.
+ * - release-please.yml: exact trigger list / permissions -> contains / at
+ *   least write on these scopes; action pinned `@v4` -> any `@vN`.
+ * - release-please-config: `bump-minor-pre-major` is policy, only its type
+ *   is checked. Manifest version: semver validity + equal to or ahead of the
+ *   latest local v* git tag (skipped when no tags exist).
+ * - package.json engines: exact ">=22" -> any ">=N" with N >= 22.
+ * - ops-staging-access inputs: exact -> contains.
+ * Kept as contracts: required check names, release-type node,
+ * include-component-in-tag false, initial-version 0.1.0, dispatch-only ops
+ * workflow, shared "staging" concurrency, secret names/scoping, no tracing,
+ * redirect/robots/CSP-style smoke assertions.
+ */
+const semver = (v: string) =>
+  v.split(".").map(Number) as [number, number, number];
+const cmp = (a: string, b: string) => {
+  const [x, y] = [semver(a), semver(b)];
+  for (let i = 0; i < 3; i++)
+    if (x[i] !== y[i]) return (x[i] as number) - (y[i] as number);
+  return 0;
+};
+const latestTag = (): string | undefined => {
+  const tags = execFileSync("git", ["tag", "--list", "v*"], {
+    cwd: root,
+    encoding: "utf8",
+  })
+    .split("\n")
+    .filter((t) => /^v\d+\.\d+\.\d+$/.test(t))
+    .map((t) => t.slice(1))
+    .sort(cmp);
+  return tags.at(-1);
+};
+const RETRY = /--retry \d+ --retry-delay \d+ --retry-max-time \d+/;
+
 describe("ci.yml", () => {
   const w = wf("ci.yml");
   it("triggers on pull_request and push to main", () => {
-    expect(triggers(w).sort()).toEqual([
-      "pull_request",
-      "push",
-      "workflow_dispatch",
-    ]);
-    expect(w.on.push.branches).toEqual(["main"]);
+    expect(triggers(w)).toEqual(
+      expect.arrayContaining(["pull_request", "push", "workflow_dispatch"]),
+    );
+    expect(w.on.push.branches).toContain("main");
     expect("workflow_dispatch" in w.on).toBe(true);
   });
-  it("defines exactly the five required jobs", () => {
-    expect(Object.keys(w.jobs).sort()).toEqual(
-      ["build", "e2e", "lint", "test", "typecheck"].sort(),
+  it("defines at least the five required jobs", () => {
+    expect(Object.keys(w.jobs)).toEqual(
+      expect.arrayContaining(["build", "e2e", "lint", "test", "typecheck"]),
     );
   });
   it("uses node from .nvmrc with pnpm cache", () => {
@@ -44,16 +84,18 @@ describe("deploy-staging.yml", () => {
   const idx = (id: string, needle: string) =>
     runs(id).findIndex((r) => r.includes(needle));
   it("triggers on push to main with serialized staging concurrency", () => {
-    expect(triggers(w)).toEqual(["push"]);
-    expect(w.on.push.branches).toEqual(["main"]);
+    expect(triggers(w)).toContain("push");
+    expect(w.on.push.branches).toContain("main");
     expect(w.concurrency).toEqual({
       group: "staging",
       "cancel-in-progress": false,
     });
   });
   it("has deploy then smoke jobs", () => {
-    expect(Object.keys(w.jobs)).toEqual(["deploy", "smoke"]);
-    expect(w.jobs.smoke.needs).toEqual(["deploy"]);
+    expect(Object.keys(w.jobs)).toEqual(
+      expect.arrayContaining(["deploy", "smoke"]),
+    );
+    expect([w.jobs.smoke.needs].flat()).toContain("deploy");
   });
   it("deploy steps run build -> migrate -> deploy in order", () => {
     const b = idx("deploy", "pnpm build");
@@ -104,7 +146,7 @@ describe("deploy-staging.yml", () => {
   it("smoke asserts /auth/login redirects to Cloudflare Access", () => {
     const all = runs("smoke").join("\n");
     expect(all).toContain("staging.open-artifacts.com/auth/login");
-    expect(all).toContain("--retry 20 --retry-delay 5 --retry-max-time 180");
+    expect(all).toMatch(RETRY);
     expect(all).not.toMatch(/\s-[a-zA-Z]*L\b|--location/);
     expect(all).toContain("302");
     expect(all).toContain(
@@ -136,7 +178,7 @@ describe("deploy-staging.yml", () => {
   it("smoke checks healthz, robots and runs the smoke suite", () => {
     const all = runs("smoke").join("\n");
     expect(all).toContain("staging.open-artifacts.com/healthz");
-    expect(all).toContain("--retry 20 --retry-delay 5 --retry-max-time 180");
+    expect(all).toMatch(RETRY);
     expect(all).not.toMatch(/\|\s*grep/);
     expect(all).toContain("/robots.txt");
     expect(all).toContain("noindex, nofollow");
@@ -159,13 +201,10 @@ describe("landing-preview.yml", () => {
   const steps = w.jobs.preview.steps as any[];
   it("triggers on PRs touching apps/landing, incl. closed", () => {
     expect(triggers(w)).toEqual(["pull_request"]);
-    expect(w.on.pull_request.paths).toEqual(["apps/landing/**"]);
-    expect(w.on.pull_request.types).toEqual([
-      "opened",
-      "synchronize",
-      "reopened",
-      "closed",
-    ]);
+    expect(w.on.pull_request.paths).toContain("apps/landing/**");
+    expect(w.on.pull_request.types).toEqual(
+      expect.arrayContaining(["opened", "synchronize", "reopened", "closed"]),
+    );
   });
   it("skips fork PRs and closed events in the preview job", () => {
     expect(w.jobs.preview.if).toContain(sameRepo);
@@ -227,15 +266,17 @@ describe("landing-preview.yml", () => {
 describe("release-please", () => {
   it("workflow triggers on push to main with write permissions", () => {
     const w = wf("release-please.yml");
-    expect(triggers(w).sort()).toEqual(["push", "workflow_dispatch"]);
-    expect(w.on.push.branches).toEqual(["main"]);
-    expect(w.permissions).toEqual({
+    expect(triggers(w)).toEqual(
+      expect.arrayContaining(["push", "workflow_dispatch"]),
+    );
+    expect(w.on.push.branches).toContain("main");
+    expect(w.permissions).toMatchObject({
       actions: "write",
       contents: "write",
       "pull-requests": "write",
     });
-    expect(read(".github/workflows/release-please.yml")).toContain(
-      "googleapis/release-please-action@v4",
+    expect(read(".github/workflows/release-please.yml")).toMatch(
+      /googleapis\/release-please-action@v\d+/,
     );
   });
   it("dispatches CI on the release branch and deploys the tag", () => {
@@ -275,10 +316,16 @@ describe("release-please", () => {
   it("config is release-type node, manifest has a single semver at '.'", () => {
     const c = JSON.parse(read("release-please-config.json"));
     expect(c.packages["."]["release-type"]).toBe("node");
-    expect(c.packages["."]["bump-minor-pre-major"]).toBe(true);
+    expect(typeof c.packages["."]["bump-minor-pre-major"]).toBe("boolean");
     const m = JSON.parse(read(".release-please-manifest.json"));
     expect(Object.keys(m)).toEqual(["."]);
     expect(m["."]).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+  it("manifest version is the latest v* tag or ahead of it", () => {
+    const tag = latestTag();
+    if (!tag) return; // no tags locally (e.g. shallow clone): nothing to compare
+    const m = JSON.parse(read(".release-please-manifest.json"));
+    expect(cmp(m["."], tag)).toBeGreaterThanOrEqual(0);
   });
   it("first release is 0.1.0 via initial-version", () => {
     const c = JSON.parse(read("release-please-config.json"));
@@ -307,7 +354,9 @@ describe("package.json engines", () => {
       .filter(Boolean);
     expect(files.length).toBeGreaterThan(0);
     for (const f of files) {
-      expect([f, JSON.parse(read(f)).engines?.node]).toEqual([f, ">=22"]);
+      const node: string | undefined = JSON.parse(read(f)).engines?.node;
+      const major = Number(/^>=\s*(\d+)/.exec(node ?? "")?.[1]);
+      expect([f, major >= 22]).toEqual([f, true]);
     }
   });
 });
@@ -317,10 +366,9 @@ describe("ops-staging-access.yml", () => {
   const raw = read(".github/workflows/ops-staging-access.yml");
   it("is workflow_dispatch only", () => {
     expect(triggers(w)).toEqual(["workflow_dispatch"]);
-    expect(Object.keys(w.on.workflow_dispatch.inputs).sort()).toEqual([
-      "force_rotate",
-      "team_name",
-    ]);
+    expect(Object.keys(w.on.workflow_dispatch.inputs)).toEqual(
+      expect.arrayContaining(["force_rotate", "team_name"]),
+    );
   });
   it("never enables shell tracing", () => {
     expect(raw).not.toMatch(/set\s+-[a-wyz]*x/);

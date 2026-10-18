@@ -17,7 +17,10 @@ const ALL = ["ACCESS_CLIENT_SECRET", "SESSION_SECRET", "CONTENT_SIGNING_KEY"];
 
 describe("requiredSecrets", () => {
   it("derives non-optional, non-var string fields of Env", () => {
-    expect(requiredSecrets(envTs, wrangler).sort()).toEqual([...ALL].sort());
+    // Superset: new required secrets may be added to Env over time.
+    expect(requiredSecrets(envTs, wrangler)).toEqual(
+      expect.arrayContaining(ALL),
+    );
   });
 });
 

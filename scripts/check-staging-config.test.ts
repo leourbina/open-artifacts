@@ -18,13 +18,37 @@ const strip = (s: string) =>
 const cfg: any = JSON.parse(strip(raw));
 const env = cfg.env.staging;
 
+/*
+ * Invariants instead of pinned values (what changed and why):
+ * - D1 database_id / KV id / CF_ACCOUNT_ID / OWNER_EMAIL / team domain /
+ *   ACCESS_CLIENT_ID: concrete ids change when resources are recreated ->
+ *   matched by shape (uuid / 32 hex / email / hostname).
+ * - Bindings (d1, r2, kv, durable objects, ratelimits, migrations): found by
+ *   binding name instead of array index / exact list, so new bindings can be
+ *   added. Binding names stay pinned.
+ * - assets: toMatchObject; binding + run_worker_first:true pinned, directory
+ *   and not_found_handling free to change.
+ * - ratelimit namespace_id/limit/period: tuning -> positive integers.
+ * - vars: exact object -> required keys + pinned ENVIRONMENT/hosts, plus an
+ *   explicit "no secret-looking var names" check so the former
+ *   exact-equality no-secrets guarantee is not weakened.
+ * Kept as contracts: name, routes/hosts, workers_dev/preview_urls off,
+ * nodejs_compat, binding names, ENVIRONMENT=production, run_worker_first,
+ * the cron.
+ */
+const by = <T>(xs: T[], key: string, v: string): T | undefined =>
+  // biome-ignore lint/suspicious/noExplicitAny: untyped
+  xs.find((x: any) => x[key] === v);
+
 describe("wrangler.staging.jsonc env.staging", () => {
   it("keeps name and custom domains", () => {
     expect(env.name).toBe("open-artifacts-staging");
-    expect(env.routes.map((r: { pattern: string }) => r.pattern)).toEqual([
-      "staging.open-artifacts.com",
-      "staging-content.open-artifacts.com",
-    ]);
+    expect(env.routes.map((r: { pattern: string }) => r.pattern)).toEqual(
+      expect.arrayContaining([
+        "staging.open-artifacts.com",
+        "staging-content.open-artifacts.com",
+      ]),
+    );
   });
   it("keeps workers.dev and preview URLs off", () => {
     expect(env.workers_dev).toBe(false);
@@ -36,57 +60,63 @@ describe("wrangler.staging.jsonc env.staging", () => {
     );
   });
   it("binds D1 DB, R2 FILES, KV OAUTH_KV", () => {
-    expect(env.d1_databases[0].binding).toBe("DB");
-    expect(env.d1_databases[0].database_id).toBe(
-      "5155e2d4-d9bf-4900-b4ab-1febd480377a",
-    );
-    expect(env.r2_buckets[0]).toMatchObject({
-      binding: "FILES",
+    expect(by(env.d1_databases, "binding", "DB")).toMatchObject({
+      database_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+    });
+    expect(by(env.r2_buckets, "binding", "FILES")).toMatchObject({
       bucket_name: "open-artifacts-staging",
     });
-    expect(env.kv_namespaces[0]).toMatchObject({
-      binding: "OAUTH_KV",
-      id: "886a49c875024e8ab5262928d75f85b7",
+    expect(by(env.kv_namespaces, "binding", "OAUTH_KV")).toMatchObject({
+      id: expect.stringMatching(/^[0-9a-f]{32}$/),
     });
   });
   it("binds the ArtifactRuntime durable object with sqlite migration", () => {
-    expect(env.durable_objects.bindings).toEqual([
-      { name: "ARTIFACT_RUNTIME", class_name: "ArtifactRuntime" },
-    ]);
-    expect(env.migrations).toEqual([
-      { tag: "v1", new_sqlite_classes: ["ArtifactRuntime"] },
-    ]);
+    expect(env.durable_objects.bindings).toEqual(
+      expect.arrayContaining([
+        { name: "ARTIFACT_RUNTIME", class_name: "ArtifactRuntime" },
+      ]),
+    );
+    // biome-ignore lint/suspicious/noExplicitAny: untyped
+    const sqlite = env.migrations.flatMap(
+      (m: any) => m.new_sqlite_classes ?? [],
+    );
+    expect(sqlite).toContain("ArtifactRuntime");
   });
   it("binds ASSETS with run_worker_first true", () => {
-    expect(env.assets).toEqual({
+    expect(env.assets).toMatchObject({
       binding: "ASSETS",
-      directory: "./dist-assets",
-      not_found_handling: "single-page-application",
       run_worker_first: true,
     });
   });
   it("binds RL_ANON ratelimit", () => {
-    expect(env.ratelimits).toEqual([
-      {
-        name: "RL_ANON",
-        namespace_id: "1001",
-        simple: { limit: 30, period: 60 },
-      },
-    ]);
+    const rl = by(env.ratelimits, "name", "RL_ANON") as {
+      namespace_id: string;
+      simple: { limit: number; period: number };
+    };
+    expect(rl).toBeDefined();
+    expect(rl.namespace_id).toMatch(/^\d+$/);
+    expect(rl.simple.limit).toBeGreaterThan(0);
+    expect(rl.simple.period).toBeGreaterThan(0);
   });
   it("has the daily cron", () => {
-    expect(env.triggers.crons).toEqual(["17 3 * * *"]);
+    expect(env.triggers.crons).toContain("17 3 * * *");
   });
   it("has the expected vars and no secrets", () => {
     const { ACCESS_CLIENT_ID, ...vars } = env.vars;
-    expect(vars).toEqual({
+    expect(vars).toMatchObject({
       ENVIRONMENT: "production",
       APP_HOST: "staging.open-artifacts.com",
       CONTENT_HOST: "staging-content.open-artifacts.com",
-      OWNER_EMAIL: "me@leourbina.com",
-      ACCESS_TEAM_DOMAIN: "leourbina.cloudflareaccess.com",
-      CF_ACCOUNT_ID: "26ac346086d4405f7a976d48747a2a75",
+      OWNER_EMAIL: expect.stringMatching(/^[^@\s]+@[^@\s]+$/),
+      ACCESS_TEAM_DOMAIN: expect.stringMatching(/\.cloudflareaccess\.com$/),
+      CF_ACCOUNT_ID: expect.stringMatching(/^[0-9a-f]{32}$/),
     });
+    // Only ACCESS_CLIENT_ID (a public id) may look credential-like.
+    expect(
+      Object.keys(vars).filter((k) =>
+        /SECRET|TOKEN|PASSWORD|PRIVATE|SIGNING/.test(k),
+      ),
+    ).toEqual([]);
     expect(ACCESS_CLIENT_ID).toMatch(/^[0-9a-f]{64}$/);
   });
 });
