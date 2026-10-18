@@ -32,6 +32,7 @@ import { artifacts, shares, users } from "../db/schema.js";
 import type { Env } from "../env.js";
 import { ApiError, appOrigin } from "../http/errors.js";
 import { runtimeStub } from "../runtime/do.js";
+import { closeRuntimeSockets } from "../runtime/revoke.js";
 import { type ManifestEntry, materialize, planFiles } from "./manifest.js";
 import { getSettings } from "./members.js";
 import { ftsFilter, indexVersion, syncTitleStmt } from "./search.js";
@@ -704,6 +705,7 @@ export async function patch(
   user: Member,
   id: string,
   p: ArtifactPatch,
+  ctx?: Ctx,
 ): Promise<ArtifactSummary> {
   const a = await requireAccess(env, asUser(user), id, "editor");
   const sharing =
@@ -737,6 +739,11 @@ export async function patch(
       await env.DB.batch([upd, syncTitleStmt(env, id)]);
     else await upd.run();
   }
+  if (
+    (p.visibility !== undefined && p.visibility !== a.visibility) ||
+    p.capabilities !== undefined
+  )
+    await closeRuntimeSockets(env, [id], "access changed", ctx);
   return getSummary(env, asUser(user), id);
 }
 
@@ -745,6 +752,7 @@ export async function softDelete(
   env: Env,
   user: Member,
   id: string,
+  ctx?: Ctx,
 ): Promise<void> {
   await requireAccess(env, asUser(user), id, "owner");
   await env.DB.batch([
@@ -755,6 +763,7 @@ export async function softDelete(
       "update artifacts set deleted_at = ? where id = ? and deleted_at is null",
     ).bind(Date.now(), id),
   ]);
+  await closeRuntimeSockets(env, [id], "artifact deleted", ctx);
 }
 
 /** Owner only, within LIMITS.softDeleteDays; re-indexes the current version. */

@@ -1,5 +1,6 @@
 import type { Hono } from "hono";
 import type { AppEnv } from "../http/middleware.js";
+import { mountRuntime } from "../runtime/routes.js";
 import { mountArtifacts } from "./artifacts.js";
 import { mountAuth } from "./auth.js";
 import { mountMe } from "./me.js";
@@ -22,4 +23,5 @@ export function mountRoutes(app: AppType): void {
   mountUploads(app);
   mountShares(app);
   mountSearch(app);
+  mountRuntime(app);
 }
