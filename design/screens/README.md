@@ -18,7 +18,17 @@ Each screen is designed for 1280 px and 390 px wide, with no horizontal page scr
 
 **Header.** `library.html` and the quota page (`edge-pages.html?page=quota`) use a search box plus Upload in the top bar. The other app screens use breadcrumbs. This is intentional. Every app screen shares the same sidebar (wordmark, workspace button, Library/Usage/Settings, connected agents), which becomes a drawer below 960 px.
 
-**Role preview.** `as=creator|editor|viewer` (default `creator`) previews the screen for a non-creator. It works on `share-dialog.html` and `artifact-view.html`.
+**Instance role.** `role=owner|admin|member|guest` (default `owner`) sets who is signed in. It works on `share-dialog.html`, `settings.html`, `usage.html` and the quota page in `edge-pages.html` (d4-a adds it to library and artifact-view).
+
+| Role | Sidebar | Settings | Usage |
+|---|---|---|---|
+| `owner`, `admin` | Library, Usage, Settings, agents | Members, Agents, Instance (OAuth clients and tokens are always the signed-in user's own) | Yes |
+| `member` | Library, Settings, agents | Agents only: MCP URL, snippets, their own OAuth clients and tokens | 404 |
+| `guest` | "Shared with me" only | 404 | 404 |
+
+A screen a role can't reach renders the `edge-pages.html?page=not-found` 404 in place. The role doesn't change the share dialog's creator rules; use `as=` for those.
+
+**Artifact role preview.** `as=creator|editor|viewer` (default `creator`) previews the screen for a non-creator. It works on `share-dialog.html` and `artifact-view.html`.
 
 ## Screens
 

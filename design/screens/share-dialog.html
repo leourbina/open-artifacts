@@ -169,6 +169,24 @@ kbd,.kbd{font:500 11px var(--oa-font-mono);color:var(--oa-text-muted);background
 .codeblock .k{color:var(--oa-accent-fg)}
 code{font:400 12px var(--oa-font-mono);background:var(--oa-surface-2);border:1px solid var(--oa-divider);border-radius:var(--oa-radius-sm);padding:0 4px}
 
+/* 404 for roles that can't reach a screen (mirrors edge-pages not-found) */
+.nf{min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:0 16px}
+.nf-top{width:100%;max-width:960px;display:flex;align-items:center;gap:8px;height:56px}
+.nf-host{margin-left:auto;color:var(--oa-text-muted);font-size:var(--oa-text-xs);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.nf-main{flex:1;width:100%;display:flex;align-items:center;justify-content:center;padding:24px 0 96px}
+.nf-panel{width:100%;max-width:420px;background:var(--oa-surface);border-radius:var(--oa-radius-lg);box-shadow:var(--oa-shadow-1);padding:32px}
+.nf-panel .emptyIcon{margin-bottom:20px}
+.nf-panel .emptyIcon .ic{width:20px;height:20px}
+.nf-eyebrow{font:500 var(--oa-text-xs)/1 var(--oa-font-mono);color:var(--oa-text-muted);margin:0 0 10px}
+.nf-panel h1{margin:0 0 8px;font-size:var(--oa-text-xl);line-height:1.25;font-weight:600;letter-spacing:-.02em}
+.nf-panel p{margin:0 0 12px;color:var(--oa-text-2)}
+.nf-who{display:flex;align-items:center;gap:10px;margin:20px 0 0;padding:10px 12px;border-radius:var(--oa-radius-md);background:var(--oa-surface-2);box-shadow:0 0 0 1px var(--oa-divider)}
+.nf-who div{min-width:0;line-height:1.3}
+.nf-who small{display:block;color:var(--oa-text-muted);font-size:var(--oa-text-xs)}
+.nf-who b{display:block;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nf-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:24px}
+@media (max-width:560px){.nf-panel{padding:24px 20px}.nf-host{display:none}}
+
 /* Mockup switcher */
 .dev{position:fixed;right:14px;bottom:14px;z-index:70;display:flex;flex-wrap:wrap;justify-content:flex-end;gap:6px;max-width:calc(100vw - 28px);padding:5px;background:var(--oa-surface);border-radius:var(--oa-radius-lg);box-shadow:var(--oa-shadow-2)}
 @media (max-width:959.98px){.dev{left:8px;right:8px;bottom:8px;max-width:none;justify-content:center;gap:4px}.dev .segItem{padding:0 6px}}
@@ -262,6 +280,8 @@ code{font:400 12px var(--oa-font-mono);background:var(--oa-surface-2);border:1px
     <symbol id="i-plug" viewBox="0 0 16 16"><path d="M5.5 2v3M10.5 2v3M3.5 5h9v2.5a4.5 4.5 0 0 1-9 0zM8 12v2.5"/></symbol>
     <symbol id="i-users" viewBox="0 0 16 16"><circle cx="6" cy="6" r="2.5"/><path d="M1.5 13.5c.5-2.5 2.3-3.8 4.5-3.8s4 1.3 4.5 3.8M11 3.8a2.3 2.3 0 0 1 0 4.4M12.5 10c1.2.6 1.8 1.8 2 3.5"/></symbol>
     <symbol id="i-logo" viewBox="0 0 16 16"><path d="M3 3.5h6.5L13 7v5.5H3z"/><path d="M6 9.5h4"/></symbol>
+    <symbol id="i-compass" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="m10.5 5.5-1.6 3.4-3.4 1.6 1.6-3.4z"/></symbol>
+    <symbol id="i-swap" viewBox="0 0 16 16"><path d="M3 5.5h10M10.5 3 13 5.5 10.5 8M13 10.5H3M5.5 8 3 10.5 5.5 13"/></symbol>
   </defs>
 </svg>
 
@@ -271,11 +291,11 @@ code{font:400 12px var(--oa-font-mono);background:var(--oa-surface-2);border:1px
     <div class="drawer-head"><a class="wordmark" href="library.html"><span class="logo"><svg viewBox="0 0 16 16"><use href="#i-logo"/></svg></span>Open Artifacts</a><button class="btn ghost icon" data-drawer-close aria-label="Close menu"><svg class="ic"><use href="#i-x"/></svg></button></div>
     <button class="ws"><span class="sq">N</span><span class="wsn">Northwind Eng</span><svg class="ic sm"><use href="#i-down"/></svg></button>
     <nav class="nav">
-      <a href="library.html" data-nav="library" aria-current="page"><svg class="ic"><use href="#i-lib"/></svg>Library<span class="ct">214</span></a>
-      <a href="usage.html" data-nav="usage"><svg class="ic"><use href="#i-gauge"/></svg>Usage</a>
-      <a href="settings.html" data-nav="settings"><svg class="ic"><use href="#i-gear"/></svg>Settings</a>
+      <a href="library.html" data-nav="library" aria-current="page"><svg class="ic"><use href="#i-lib"/></svg><span data-lib-label>Library</span><span class="ct" data-lib-count>214</span></a>
+      <a href="usage.html" data-nav="usage" data-roles="owner admin"><svg class="ic"><use href="#i-gauge"/></svg>Usage</a>
+      <a href="settings.html" data-nav="settings" data-roles="owner admin member"><svg class="ic"><use href="#i-gear"/></svg>Settings</a>
     </nav>
-    <nav class="nav">
+    <nav class="nav" data-roles="owner admin member">
       <h4>Connected agents</h4>
       <a href="#"><span class="dot"></span>Claude Code<span class="ct">92</span></a>
       <a href="#"><span class="dot"></span>Codex CLI<span class="ct">41</span></a>
@@ -283,7 +303,7 @@ code{font:400 12px var(--oa-font-mono);background:var(--oa-surface-2);border:1px
       <a href="#"><span class="dot"></span>OpenCode<span class="ct">19</span></a>
       <a href="#"><span class="dot"></span>ChatGPT<span class="ct">24</span></a>
     </nav>
-    <div class="foot"><span class="avatar lg" style="--hue:215">MC</span><div><b>Maya Chen</b><small>maya@northwind.dev</small></div></div>
+    <div class="foot"><span class="avatar lg" data-me-avatar style="--hue:215">MC</span><div><b data-me-name>Maya Chen</b><small data-me-email>maya@northwind.dev</small></div></div>
   </aside>
   <div class="scrim" data-drawer-close hidden></div>
   <div class="column">
@@ -423,15 +443,47 @@ window.OA_MOCK = { extra: [
   const sys = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   const theme = ['light', 'dark'].includes(q.get('theme')) ? q.get('theme') : sys;
   const state = pick('state', states);
+  const ROLES = ['owner', 'admin', 'member', 'guest'];
+  const role = pick('role', ROLES);
+  root.dataset.role = role;
   if (q.has('theme')) root.dataset.theme = theme; else delete root.dataset.theme;
   root.dataset.state = state;
   const extra = {};
   (cfg.extra || []).forEach((g) => (extra[g.key] = pick(g.key, g.opts.map((o) => o[0]))));
-  window.OA = { q, theme, state, extra };
+  // Who is signed in, per ?role=
+  const ME = {
+    owner: { name: 'Maya Chen', email: 'maya@northwind.dev', ini: 'MC', hue: 215 },
+    admin: { name: 'Sam Ruiz', email: 'sam@northwind.dev', ini: 'SR', hue: 160 },
+    member: { name: 'Dana Okafor', email: 'dana@northwind.dev', ini: 'DO', hue: 28 },
+    guest: { name: 'Jordan Lee', email: 'jordan@lumenpay.com', ini: 'JL', hue: 20 },
+  }[role];
+  window.OA = { q, theme, state, extra, role, me: ME };
+
+  // [data-roles="owner admin"] shows only for those roles.
+  document.querySelectorAll('[data-roles]').forEach((el) => {
+    if (!el.dataset.roles.split(' ').includes(role)) el.hidden = true;
+  });
+  document.querySelectorAll('[data-me-name]').forEach((el) => (el.textContent = ME.name));
+  document.querySelectorAll('[data-me-email]').forEach((el) => (el.textContent = ME.email));
+  document.querySelectorAll('[data-me-avatar]').forEach((el) => { el.textContent = ME.ini; el.style.setProperty('--hue', ME.hue); });
+  if (role === 'guest') {
+    document.querySelectorAll('[data-lib-label]').forEach((el) => (el.textContent = 'Shared with me'));
+    document.querySelectorAll('[data-lib-count]').forEach((el) => (el.textContent = '8'));
+    document.querySelectorAll('.side .foot [data-me-email]').forEach((el) => (el.textContent += ' · Guest'));
+  }
+
+  // Screens this role can't reach render the 404 instead (cfg.roles lists who can).
+  const nf = document.getElementById('nf');
+  OA.blocked = !!(cfg.roles && !cfg.roles.includes(role));
+  if (OA.blocked && nf) {
+    document.querySelectorAll('body > :not(#nf):not(svg):not(script)').forEach((el) => (el.hidden = true));
+    nf.hidden = false;
+    document.title = 'Not found · Open Artifacts';
+  }
 
   // [data-when="default empty"] shows only in those states.
   document.querySelectorAll('[data-when]').forEach((el) => {
-    el.hidden = !el.dataset.when.split(' ').includes(state);
+    if (!el.dataset.when.split(' ').includes(state)) el.hidden = true;
   });
 
   // Switcher
@@ -445,7 +497,8 @@ window.OA_MOCK = { extra: [
   dev.setAttribute('role', 'group');
   dev.setAttribute('aria-label', 'Mockup controls');
   dev.innerHTML =
-    (cfg.extra || []).map((g) => seg(g.key, g.opts, extra[g.key], g.key)).join('') +
+    seg('role', ROLES.map((r) => [r, r[0].toUpperCase() + r.slice(1)]), role, 'Role') +
+    (OA.blocked ? '' : (cfg.extra || []).map((g) => seg(g.key, g.opts, extra[g.key], g.key)).join('')) +
     seg('state', states.map((s) => [s, s === 'not-configured' ? 'Not set up' : s[0].toUpperCase() + s.slice(1)]), state, 'State') +
     seg('theme', [['light', 'Light', 'sun'], ['dark', 'Dark', 'moon']], theme, 'Theme');
   dev.addEventListener('click', (e) => { const b = e.target.closest('[data-k]'); if (b) go(b.dataset.k, b.dataset.v); });
@@ -505,7 +558,18 @@ document.getElementById('visSeg').addEventListener('seg', (e) => setVis(e.detail
 setVis(OA.state === 'empty' ? 'private' : OA.extra.vis);
 if (OA.state === 'loading') document.getElementById('copyLink').disabled = true;
 
-// ?as=editor|viewer: everything but Copy link is read-only.
+// ?as=editor|viewer: everything but Copy link is read-only. Guests are never the creator.
+if (OA.role === 'guest') {
+  OA.extra.as = 'viewer';
+  document.querySelectorAll('.dev [data-k="as"]').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.v === 'viewer')));
+  // The guest is the viewer row.
+  const row = document.querySelector('[data-as="viewer"]');
+  row.querySelector('.avatar').textContent = 'JL';
+  row.querySelector('.avatar').style.setProperty('--hue', 20);
+  row.querySelector('.who b span').textContent = 'Jordan Lee';
+  row.querySelector('.who small').textContent = 'jordan@lumenpay.com';
+  row.querySelector('select').setAttribute('aria-label', 'Role for Jordan Lee');
+}
 if (OA.extra.as !== 'creator' && ['default', 'empty'].includes(OA.state)) {
   document.querySelectorAll('.share .segItem, .share .invite input, .share .invite select, .share .invite button, .person select, .person .btn').forEach((el) => (el.disabled = true));
   document.querySelectorAll('.person .btn').forEach((el) => (el.hidden = true));
