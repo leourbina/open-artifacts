@@ -5,6 +5,7 @@ import { contentApp } from "./content/app.js";
 import { scheduled } from "./cron.js";
 import type { Env } from "./env.js";
 import { withSecurityHeaders } from "./http/middleware.js";
+import { serveAppHost } from "./mcp/oauth.js";
 import {
   capMcpBody,
   createServer,
@@ -56,11 +57,12 @@ export default {
       url.pathname === MCP_PATH
         ? PAT_BEARER.exec(req.headers.get("authorization") ?? "")
         : null;
-    if (pat?.[1])
-      return withSecurityHeaders(await mcpWithPat(req, env, ctx, pat[1]), {
-        frameDeny: true,
-      });
-    return app.fetch(req, env, ctx);
+    // PATs at /mcp; everything else through the OAuth provider: OAuth bearer
+    // at /mcp, its token/register/metadata endpoints, then the app.
+    const res = pat?.[1]
+      ? await mcpWithPat(req, env, ctx, pat[1])
+      : await serveAppHost(req, env, ctx, app);
+    return withSecurityHeaders(res, { frameDeny: true });
   },
   scheduled,
 } satisfies ExportedHandler<Env>;
