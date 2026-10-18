@@ -16,7 +16,11 @@ export type Ctx = {
   root: string;
   opts: Opts;
   api: Api;
+  /** Access API client: OA_ACCESS_TOKEN, else the wrangler token. */
+  accessApi: Api;
   wrangler: Wrangler;
+  /** Notes appended to the current step's reported message. */
+  notes: string[];
 };
 export type ActionRequired = {
   status: "action_required";

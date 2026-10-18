@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
+import { Writable } from "node:stream";
 
 export type ExecResult = { code: number; stdout: string; stderr: string };
 export type Exec = (
@@ -16,7 +17,8 @@ export type Fs = {
 export type Deps = {
   exec: Exec;
   fetch: typeof fetch;
-  prompt: (question: string) => Promise<string>;
+  /** `secret: true` must not echo what is typed. */
+  prompt: (question: string, opts?: { secret?: boolean }) => Promise<string>;
   out: (line: string) => void;
   env: Record<string, string | undefined>;
   fs?: Fs;
@@ -41,20 +43,31 @@ export function realDeps(): Deps {
     env: process.env,
     fetch: globalThis.fetch,
     out: (l) => console.log(l),
-    prompt: async (q) => {
+    prompt: async (q, opts) => {
+      let muted = false;
+      const output = new Writable({
+        write: (chunk, _enc, cb) => {
+          if (!muted) process.stderr.write(chunk);
+          cb();
+        },
+      });
       const rl = createInterface({
         input: process.stdin,
-        output: process.stderr,
+        output,
+        terminal: true,
       });
       try {
-        return (await rl.question(`${q} `)).trim();
+        const answer = rl.question(`${q} `);
+        muted = Boolean(opts?.secret);
+        return (await answer).trim();
       } finally {
         rl.close();
+        if (opts?.secret) process.stderr.write("\n");
       }
     },
     exec: (cmd, args, opts) =>
       new Promise((resolve) => {
-        const env = { ...process.env, ...opts?.env };
+        const env = { ...childEnv(process.env), ...opts?.env };
         const child = execFile(cmd, args, { env }, (err, stdout, stderr) =>
           resolve({ code: err ? Number(err.code) || 1 : 0, stdout, stderr }),
         );
@@ -63,13 +76,27 @@ export function realDeps(): Deps {
   };
 }
 
-/** Runs the server package's pinned wrangler; throws on a non-zero exit. */
+/** Parent env minus what children must never see: the Access token, wrangler log knobs. */
+export const childEnv = (env: NodeJS.ProcessEnv) =>
+  Object.fromEntries(
+    Object.entries(env).filter(
+      ([k]) => k !== "OA_ACCESS_TOKEN" && !k.startsWith("WRANGLER_LOG"),
+    ),
+  );
+
+/**
+ * Runs the server package's pinned wrangler; throws on a non-zero exit.
+ * `sensitive` keeps stdout (which may hold a token or secret) out of errors.
+ */
 export function makeWrangler(
   deps: Deps,
   root: string,
   accountId: () => string | undefined,
 ) {
-  return async (args: string[], input?: string): Promise<string> => {
+  return async (
+    args: string[],
+    o: { input?: string; sensitive?: boolean } = {},
+  ): Promise<string> => {
     const id = accountId();
     const env = id ? { CLOUDFLARE_ACCOUNT_ID: id } : undefined;
     const pnpmArgs = [
@@ -79,11 +106,11 @@ export function makeWrangler(
       "wrangler",
       ...args,
     ];
-    const r = await deps.exec("pnpm", pnpmArgs, { env, input });
-    if (r.code !== 0)
-      throw new Error(
-        `wrangler ${args.join(" ")} failed: ${(r.stderr || r.stdout).trim()}`,
-      );
+    const r = await deps.exec("pnpm", pnpmArgs, { env, input: o.input });
+    if (r.code !== 0) {
+      const detail = o.sensitive ? r.stderr : r.stderr || r.stdout;
+      throw new Error(`wrangler ${args.join(" ")} failed: ${detail.trim()}`);
+    }
     return r.stdout;
   };
 }
@@ -92,7 +119,7 @@ export type Wrangler = ReturnType<typeof makeWrangler>;
 const API = "https://api.cloudflare.com/client/v4";
 
 async function wranglerToken(wrangler: Wrangler): Promise<string> {
-  const out = await wrangler(["auth", "token", "--json"]);
+  const out = await wrangler(["auth", "token", "--json"], { sensitive: true });
   let token: unknown;
   try {
     token = JSON.parse(out).token;
@@ -112,8 +139,8 @@ type Envelope<T> = {
 };
 
 /** Cloudflare v4 client. Token: CLOUDFLARE_API_TOKEN, else `wrangler auth token`. */
-export function makeApi(deps: Deps, wrangler: Wrangler) {
-  let token = deps.env.CLOUDFLARE_API_TOKEN;
+export function makeApi(deps: Deps, wrangler: Wrangler, initial?: string) {
+  let token = initial || deps.env.CLOUDFLARE_API_TOKEN;
   const call = async <T>(method: string, path: string, body?: unknown) => {
     token ??= await wranglerToken(wrangler);
     const res = await deps.fetch(`${API}${path}`, {
@@ -137,17 +164,19 @@ export function makeApi(deps: Deps, wrangler: Wrangler) {
   };
   const api = async <T>(method: string, path: string, body?: unknown) =>
     (await call<T>(method, path, body)).result as T;
-  /** GETs every page of a paged list (`per_page=100`, `page` up to `total_pages`). */
+  /** GETs a paged list: stops on a short page or at `total_pages`. */
   const all = async <T>(path: string): Promise<T[]> => {
     const out: T[] = [];
     const sep = path.includes("?") ? "&" : "?";
-    for (let page = 1, total = 1; page <= total; page++) {
+    for (let page = 1; page <= 1000; page++) {
       const env = await call<T[]>(
         "GET",
         `${path}${sep}per_page=100&page=${page}`,
       );
-      out.push(...(env.result ?? []));
-      total = env.result_info?.total_pages ?? 1;
+      const batch = env.result ?? [];
+      out.push(...batch);
+      const total = env.result_info?.total_pages;
+      if (batch.length < 100 || (total !== undefined && page >= total)) break;
     }
     return out;
   };
