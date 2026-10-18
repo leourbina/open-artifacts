@@ -38,6 +38,7 @@ function repoVersion(ctx: Ctx): string {
 
 export const deploy: Step = {
   name: "deploy",
+  always: true,
   check: async () => "todo",
   async apply(state, ctx) {
     const vars = renderedVars(ctx);

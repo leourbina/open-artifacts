@@ -4,6 +4,7 @@ import type { Deps, Exec } from "../src/cf.ts";
 export const ROOT = "/repo";
 export const STATE = join(ROOT, ".openartifacts/state.json");
 export const FLAGS = [
+  ...["--name", "open-artifacts"],
   ...["--app-host", "app.example.com", "--content-host", "c.example.com"],
   ...["--owner-email", "o@example.com", "--yes", "--json"],
 ];

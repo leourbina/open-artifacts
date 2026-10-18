@@ -365,14 +365,15 @@ describe("B16-2 review fixes", () => {
     expect(parsed(w).at(-1).message).toMatch(/SaaS OIDC/);
   });
 
-  it("warns when the app's redirect_uris lack the app host callback", async () => {
+  it("an app whose redirect_uris lack the app host callback is action_required", async () => {
     const odd = app("open-artifacts");
     odd.saas_app.redirect_uris = [
       "https://elsewhere.example.com/auth/callback",
     ];
     const w = world({ policies: [POLICY], apps: [odd], secrets: SECRETS });
-    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(2);
     const line = parsed(w).find((j) => j.step === "access");
+    expect(line.status).toBe("action_required");
     expect(line.message).toContain("https://app.example.com/auth/callback");
   });
 

@@ -11,6 +11,8 @@ export type Opts = {
   upgrade: boolean;
   /** Read-only: run every check(), never apply, write nothing. */
   check: boolean;
+  /** With --check: exit 2 when a step (other than an `always` one) is todo. */
+  strict: boolean;
   newOwnerToken: boolean;
   /** False under --yes or --json: never prompt. */
   interactive: boolean;
@@ -34,6 +36,8 @@ export type Ctx = {
   pat?: string;
   /** The welcome artifact's view URL, when selftest published it this run. */
   welcomeUrl?: string;
+  /** No saved state: it is being rebuilt from Cloudflare by name. */
+  noState?: boolean;
   /** Saved state as loaded, before this run's flags were applied. */
   prev?: { name?: string; appHost?: string; accountId?: string };
 };
@@ -47,6 +51,8 @@ export type ActionRequired = {
 };
 export type Step = {
   name: string;
+  /** Runs on every setup (deploy, selftest): its todo is not drift, --strict ignores it. */
+  always?: boolean;
   check: (state: State, ctx: Ctx) => Promise<"done" | "todo">;
   apply: (state: State, ctx: Ctx) => Promise<ActionRequired | undefined>;
 };

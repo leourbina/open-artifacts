@@ -15,8 +15,8 @@ export const names = (name: string) => ({
 async function find(ctx: Ctx, accountId: string) {
   const n = names(ctx.opts.name);
   const a = `/accounts/${accountId}`;
-  const d1 = await ctx.api<{ uuid: string; name: string }[]>(
-    "GET",
+  // ?name= is a fuzzy filter: page through every match for the exact name.
+  const d1 = await ctx.api.all<{ uuid: string; name: string }>(
     `${a}/d1/database?name=${encodeURIComponent(n.d1)}`,
   );
   const r2 = await ctx

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { run } from "../src/index.ts";
+import { execReadOnly, wranglerReadOnly } from "../src/readonly.ts";
 import type { Step } from "../src/step.ts";
 import { ROOT, STATE } from "./fakes.ts";
 import { app, HOSTS, POLICY, world } from "./world.ts";
@@ -18,6 +19,14 @@ const UPGRADE = [...HOSTS, "--upgrade"];
 const CHECK = [...HOSTS.filter((a) => a !== "--yes"), "--check"];
 
 /** A cloud side that a full setup already built, with no local state file. */
+const VARS = {
+  ENVIRONMENT: "production",
+  APP_HOST: "app.example.com",
+  CONTENT_HOST: "a.b.usercontent.example.com",
+  OWNER_EMAIL: "owner@example.com",
+  ACCESS_TEAM_DOMAIN: "team.cloudflareaccess.com",
+  ACCESS_CLIENT_ID: "cid-open-artifacts",
+};
 const cloud = (o: Parameters<typeof world>[0] = {}) =>
   world({
     d1: [{ uuid: "d1-live", name: "open-artifacts" }],
@@ -26,6 +35,7 @@ const cloud = (o: Parameters<typeof world>[0] = {}) =>
     policies: [POLICY],
     apps: [app("open-artifacts")],
     secrets: SECRETS,
+    worker: VARS,
     ...o,
   });
 
@@ -127,7 +137,11 @@ describe("team domain: app field, then organizations, then OA_TEAM_DOMAIN", () =
       ...app("open-artifacts"),
       domain: "team2.cloudflareaccess.com/cdn-cgi/access/sso/oidc/cid",
     };
-    const w = cloud({ apps: [withDomain], org: "forbidden" });
+    const w = cloud({
+      apps: [withDomain],
+      org: "forbidden",
+      worker: { ...VARS, ACCESS_TEAM_DOMAIN: "team2.cloudflareaccess.com" },
+    });
     expect(await run(UPGRADE, w.deps, ROOT)).toBe(0);
     expect(w.state().teamDomain).toBe("team2.cloudflareaccess.com");
     expect(orgCalls(w)).toEqual([]);
@@ -141,18 +155,22 @@ describe("team domain: app field, then organizations, then OA_TEAM_DOMAIN", () =
   });
 
   it("on an organizations 403, OA_TEAM_DOMAIN", async () => {
-    const w = cloud({ org: "forbidden" });
-    w.deps.env.OA_TEAM_DOMAIN = "envteam.cloudflareaccess.com";
+    const w = cloud({
+      org: "forbidden",
+      worker: { ...VARS, ACCESS_TEAM_DOMAIN: "envteam.cloudflareaccess.com" },
+    });
+    w.deps.env.OA_TEAM_DOMAIN = "EnvTeam.cloudflareaccess.com";
     expect(await run(UPGRADE, w.deps, ROOT)).toBe(0);
     expect(w.state().teamDomain).toBe("envteam.cloudflareaccess.com");
   });
 
-  it("OA_TEAM_DOMAIN never stands in when no app is visible (an unscoped token lists none)", async () => {
+  it("under --check, OA_TEAM_DOMAIN never stands in when no app is visible (an unscoped token lists none)", async () => {
     const w = cloud({ apps: [], org: "forbidden" });
     w.deps.env.OA_TEAM_DOMAIN = "envteam.cloudflareaccess.com";
-    expect(await run(HOSTS, w.deps, ROOT)).toBe(2);
-    expect(w.ops).toEqual([]);
-    expect(line(w, "access")).toMatchObject({ status: "action_required" });
+    const violations = strict(w);
+    expect(await run(CHECK, w.deps, ROOT)).toBe(0);
+    expect(violations).toEqual([]);
+    expect(line(w, "access").status).toBe("todo");
     expect(line(w, "access").message).toContain("OA_ACCESS_TOKEN");
   });
 
@@ -275,5 +293,304 @@ describe("--check is read-only", () => {
     expect(w.lines.find((l) => l.includes("deploy"))).toMatch(
       /^○ deploy: todo/,
     );
+  });
+});
+
+describe("B16-5 review fixes", () => {
+  const ar = (w: W, step: string) => {
+    expect(line(w, step)).toMatchObject({ status: "action_required" });
+    return line(w, step).message as string;
+  };
+
+  it("no state: --upgrade, --check, --yes or --json each need an explicit --name", async () => {
+    const bare = HOSTS.filter(
+      (a, i) => a !== "--name" && HOSTS[i - 1] !== "--name",
+    );
+    const base = bare.filter((a) => a !== "--yes" && a !== "--json");
+    for (const flag of ["--upgrade", "--check", "--yes", "--json"]) {
+      const w = cloud();
+      const argv = [...base, flag, ...(flag === "--json" ? [] : ["--json"])];
+      expect(await run(argv, w.deps, ROOT)).toBe(2);
+      expect(ar(w, "args")).toContain("--name");
+      expect(w.creates).toEqual([]);
+    }
+    // Saved state supplies the name.
+    const w = cloud({ state: { name: "open-artifacts" } });
+    w.deps.env.OA_ACCESS_TOKEN = "oa";
+    expect(await run([...bare, "--upgrade"], w.deps, ROOT)).toBe(0);
+  });
+
+  it("an app lacking the callback in redirect_uris is action_required (upgrade and full)", async () => {
+    const bad = app("open-artifacts");
+    bad.saas_app.redirect_uris = ["https://old.example.com/auth/callback"];
+    for (const argv of [UPGRADE, HOSTS]) {
+      const w = cloud({ apps: [bad] });
+      expect(await run(argv, w.deps, ROOT)).toBe(2);
+      expect(ar(w, "access")).toContain("redirect_uris");
+      expect(w.ops).toEqual([]);
+    }
+  });
+
+  it("no state: live Worker vars must match the flags and rebuilt values, names only", async () => {
+    const w = cloud({
+      worker: {
+        ...VARS,
+        APP_HOST: "old.example.com",
+        ACCESS_CLIENT_ID: "cid-old",
+      },
+    });
+    expect(await run(UPGRADE, w.deps, ROOT)).toBe(2);
+    const msg = ar(w, "access");
+    expect(msg).toContain("APP_HOST");
+    expect(msg).toContain("ACCESS_CLIENT_ID");
+    expect(msg).not.toContain("CONTENT_HOST");
+    expect(msg).not.toContain("old.example.com");
+    expect(msg).not.toContain("cid-old");
+    expect(w.ops).toEqual([]);
+    const c = cloud({ worker: { ...VARS, OWNER_EMAIL: "x@example.com" } });
+    expect(await run(CHECK, c.deps, ROOT)).toBe(2);
+    expect(ar(c, "access")).toContain("OWNER_EMAIL");
+    // The Worker doesn't exist yet: a fresh install skips the comparison.
+    const fresh = world();
+    expect(await run(HOSTS, fresh.deps, ROOT)).toBe(0);
+  });
+
+  it("OA_TEAM_DOMAIN must be <team>.cloudflareaccess.com", async () => {
+    const w = cloud({ org: "forbidden" });
+    w.deps.env.OA_TEAM_DOMAIN = "evil.example.com";
+    expect(await run(UPGRADE, w.deps, ROOT)).toBe(1);
+    expect(line(w, "access").message).toContain("OA_TEAM_DOMAIN");
+    expect(w.state().teamDomain).toBeUndefined();
+  });
+
+  it("OA_TEAM_DOMAIN whose OIDC issuer differs is refused", async () => {
+    const w = cloud({
+      org: "forbidden",
+      issuer:
+        "https://evil.cloudflareaccess.com/cdn-cgi/access/sso/oidc/cid-open-artifacts",
+    });
+    w.deps.env.OA_TEAM_DOMAIN = "team.cloudflareaccess.com";
+    expect(await run(UPGRADE, w.deps, ROOT)).toBe(2);
+    expect(ar(w, "access")).toContain("issuer");
+    expect(w.state().teamDomain).toBeUndefined();
+  });
+
+  it("fresh install, no apps visible, verified OA_TEAM_DOMAIN: proceeds and creates", async () => {
+    const w = world({ org: "forbidden" });
+    w.deps.env.OA_TEAM_DOMAIN = "team.cloudflareaccess.com";
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    expect(w.ops).toContain("POST apps");
+    expect(w.state()).toMatchObject({
+      teamDomain: "team.cloudflareaccess.com",
+      accessClientId: "cid-new",
+    });
+  });
+
+  it("fresh install with OA_TEAM_DOMAIN: a POST 403 is action_required", async () => {
+    const w = world({ org: "forbidden", appsPostForbidden: true });
+    w.deps.env.OA_TEAM_DOMAIN = "team.cloudflareaccess.com";
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(2);
+    expect(ar(w, "access")).toContain("OA_ACCESS_TOKEN");
+    expect(w.apps).toEqual([]);
+  });
+
+  it("fresh install with OA_TEAM_DOMAIN: an issuer mismatch after the POST rolls back", async () => {
+    const w = world({
+      org: "forbidden",
+      issuer: "https://evil.cloudflareaccess.com/x",
+    });
+    w.deps.env.OA_TEAM_DOMAIN = "team.cloudflareaccess.com";
+    expect(await run(HOSTS, w.deps, ROOT)).not.toBe(0);
+    expect(w.apps).toEqual([]);
+    expect(w.ops).toContain("DELETE apps/app-open-artifacts");
+    expect(w.ops).not.toContain("put ACCESS_CLIENT_SECRET");
+  });
+
+  it("fresh install without OA_TEAM_DOMAIN names Organizations Read and OA_TEAM_DOMAIN", async () => {
+    const w = world({ org: "forbidden" });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(2);
+    const msg = ar(w, "access");
+    expect(msg).toContain("Organizations Read");
+    expect(msg).toContain("OA_TEAM_DOMAIN");
+  });
+
+  it("empty apps under --upgrade stays action_required even with OA_TEAM_DOMAIN", async () => {
+    const w = cloud({ apps: [], org: "forbidden" });
+    w.deps.env.OA_TEAM_DOMAIN = "team.cloudflareaccess.com";
+    expect(await run(UPGRADE, w.deps, ROOT)).toBe(2);
+    expect(ar(w, "access")).toContain("OA_ACCESS_TOKEN");
+    expect(w.ops).toEqual([]);
+  });
+
+  it("several Access apps with the name are action_required, listing ids", async () => {
+    const two = [
+      app("open-artifacts"),
+      { ...app("open-artifacts"), id: "app-dup" },
+    ];
+    for (const argv of [UPGRADE, HOSTS, CHECK]) {
+      const w = cloud({ apps: two });
+      expect(await run(argv, w.deps, ROOT)).toBe(2);
+      const msg = ar(w, "access");
+      expect(msg).toContain("app-open-artifacts");
+      expect(msg).toContain("app-dup");
+      expect(w.ops).toEqual([]);
+    }
+  });
+
+  it("the D1 lookup pages past the first page", async () => {
+    const others = Array.from({ length: 120 }, (_, i) => ({
+      uuid: `o${i}`,
+      name: `open-artifacts-x${i}`,
+    }));
+    const w = cloud({
+      d1: [...others, { uuid: "d1-live", name: "open-artifacts" }],
+    });
+    w.deps.env.OA_ACCESS_TOKEN = "oa";
+    expect(await run(UPGRADE, w.deps, ROOT)).toBe(0);
+    expect(w.state().d1Id).toBe("d1-live");
+  });
+
+  it("--check refuses direct deps.fetch writes and deps.exec outside the allowlist", async () => {
+    const steps: Step[] = [
+      {
+        name: "post",
+        check: async (_s, ctx) => {
+          await ctx.deps.fetch("https://api.cloudflare.com/client/v4/x", {
+            method: "POST",
+          });
+          return "done";
+        },
+        apply: async () => undefined,
+      },
+      {
+        name: "build",
+        check: async (_s, ctx) => {
+          await ctx.deps.exec("pnpm", ["--dir", ROOT, "build"]);
+          return "done";
+        },
+        apply: async () => undefined,
+      },
+    ];
+    for (const step of steps) {
+      const w = world();
+      const violations = strict(w);
+      expect(await run(CHECK, w.deps, ROOT, [step])).toBe(1);
+      expect(violations).toEqual([]);
+      expect(w.lines.at(-1)).toContain("--check is read-only");
+    }
+  });
+
+  it("the wrangler allowlist rejects bypass strings", () => {
+    const d1 = (...rest: string[]) => ["d1", "execute", "db", ...rest];
+    const ok = [
+      ["whoami", "--json"],
+      ["auth", "token", "--json"],
+      ["secret", "list", "--name", "w", "--format", "json"],
+      d1(
+        "--remote",
+        "--json",
+        "--command",
+        "SELECT id FROM tokens WHERE id = 'x';",
+      ),
+    ];
+    const bad = [
+      d1("--remote", "--json", "--command", "SELECT 1; DROP TABLE users;"),
+      d1("--remote", "--json", "--command", "DELETE FROM tokens;"),
+      d1(
+        "--remote",
+        "--json",
+        "--command",
+        " select 1; update users set role='owner'",
+      ),
+      d1("--json", "--command", "SELECT 1;"),
+      d1("--remote", "--json", "--file", "x.sql"),
+      d1("--remote", "--json", "--command", "SELECT 1;", "--file", "x.sql"),
+      d1("--remote", "--json", "--command=DELETE FROM tokens"),
+      d1("--remote", "--json", "--file=x.sql", "--command", "SELECT 1;"),
+      d1(
+        "--remote",
+        "--json",
+        "--command",
+        "SELECT 1;",
+        "--command",
+        "DELETE FROM t;",
+      ),
+      d1(
+        "--remote",
+        "--json",
+        "--command",
+        "WITH x AS (SELECT 1) DELETE FROM t;",
+      ),
+      ["d1", "create", "x"],
+      ["d1", "migrations", "apply", "db", "--remote"],
+      ["secret", "put", "X", "--name", "w"],
+      ["secret", "delete", "X", "--name", "w"],
+      [
+        "secret",
+        "list",
+        "--name",
+        "w",
+        "--format",
+        "json",
+        "--config",
+        "evil.toml",
+      ],
+      ["deploy"],
+      ["kv", "namespace", "create", "x"],
+      ["whoami", "--json", "&&", "deploy"],
+    ];
+    for (const a of ok) expect(wranglerReadOnly(a)).toBe(true);
+    for (const a of bad) expect([a, wranglerReadOnly(a)]).toEqual([a, false]);
+    const w = (args: string[]) => [
+      "--dir",
+      "/r/apps/server",
+      "exec",
+      "wrangler",
+      ...args,
+    ];
+    expect(execReadOnly("pnpm", ["--version"])).toBe(true);
+    expect(execReadOnly("pnpm", w(["whoami", "--json"]))).toBe(true);
+    expect(execReadOnly("pnpm", w(["deploy"]))).toBe(false);
+    expect(
+      execReadOnly("pnpm", [
+        "--dir",
+        "/r",
+        "--filter",
+        "@oa/server...",
+        "build",
+      ]),
+    ).toBe(false);
+    expect(execReadOnly("sh", ["-c", "wrangler whoami"])).toBe(false);
+  });
+
+  it("--strict with --check exits 2 when a step is todo", async () => {
+    const step = (r: "done" | "todo"): Step => ({
+      name: r,
+      check: async () => r,
+      apply: async () => undefined,
+    });
+    const strictArgv = [...CHECK, "--strict"];
+    const a = world();
+    expect(await run(strictArgv, a.deps, ROOT, [step("done")])).toBe(0);
+    const b = world();
+    expect(
+      await run(strictArgv, b.deps, ROOT, [step("done"), step("todo")]),
+    ).toBe(2);
+    expect(parsed(b).at(-1).step).toBe("state");
+    const c = world();
+    expect(await run(CHECK, c.deps, ROOT, [step("todo")])).toBe(0);
+    const d = world();
+    expect(
+      await run([...HOSTS, "--strict"], d.deps, ROOT, [step("todo")]),
+    ).toBe(1);
+  });
+
+  it("--strict ignores the steps that run on every setup (deploy, selftest)", async () => {
+    const w = cloud();
+    w.deps.env.OA_ACCESS_TOKEN = "oa";
+    expect(await run([...CHECK, "--upgrade", "--strict"], w.deps, ROOT)).toBe(
+      0,
+    );
+    expect(line(w, "deploy").status).toBe("todo");
   });
 });

@@ -1,15 +1,8 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import {
-  type Api,
-  type Deps,
-  makeApi,
-  makeWrangler,
-  realDeps,
-  realFs,
-  type Wrangler,
-} from "./cf.ts";
+import { type Deps, makeApi, makeWrangler, realDeps, realFs } from "./cf.ts";
+import { readOnlyDeps } from "./readonly.ts";
 import { readState, type State, writeState } from "./state.ts";
 import { type Ctx, NeedInput, type Opts, type Step } from "./step.ts";
 import { access } from "./steps/access.ts";
@@ -79,6 +72,7 @@ async function resolve(argv: string[], deps: Deps, state: State) {
       yes: { type: "boolean", default: false },
       upgrade: { type: "boolean", default: false },
       check: { type: "boolean", default: false },
+      strict: { type: "boolean", default: false },
       "new-owner-token": { type: "boolean", default: false },
       json: { type: "boolean", default: false },
     },
@@ -95,6 +89,12 @@ async function resolve(argv: string[], deps: Deps, state: State) {
     if (v.json) throw new NeedInput(`pass ${flag} (--json never prompts)`);
     throw new Error(`missing ${flag} (required with --yes)`);
   };
+  if (v.strict && !v.check) throw new Error("--strict needs --check");
+  // Without state, the name is what everything is found by: never guess it.
+  if (!v.name && !state.name && (v.upgrade || v.check || v.yes || v.json))
+    throw new NeedInput(
+      "pass --name (no saved state; with --upgrade, --check, --yes or --json the install name is never defaulted)",
+    );
   const name = valid("--name", v.name ?? state.name ?? "open-artifacts", NAME);
   if (state.name && name !== state.name) {
     const q = `State is for --name ${state.name}; switch to ${name}? [y/N]`;
@@ -121,39 +121,12 @@ async function resolve(argv: string[], deps: Deps, state: State) {
     yes: v.yes,
     upgrade: v.upgrade,
     check: v.check,
+    strict: v.strict,
     newOwnerToken: v["new-owner-token"],
     interactive,
     json: v.json,
   };
   return opts;
-}
-
-/** Wrangler subcommands --check may run: all read-only. */
-const READ_ONLY = [
-  (a: string[]) => a[0] === "whoami",
-  (a: string[]) => a[0] === "auth" && a[1] === "token",
-  (a: string[]) => a[0] === "secret" && a[1] === "list",
-  (a: string[]) =>
-    a[0] === "d1" &&
-    a[1] === "execute" &&
-    /^\s*SELECT\b[^;]*;?\s*$/i.test(a[a.indexOf("--command") + 1] ?? ""),
-];
-const refuse = (what: string) =>
-  new Error(`--check is read-only: refused ${what}`);
-
-function readOnlyWrangler(w: Wrangler): Wrangler {
-  return (args, o) =>
-    READ_ONLY.some((ok) => ok(args))
-      ? w(args, o)
-      : Promise.reject(refuse(`wrangler ${args.slice(0, 3).join(" ")}`));
-}
-
-function readOnlyApi(api: Api): Api {
-  const get = <T>(method: string, path: string, body?: unknown) =>
-    method === "GET"
-      ? api<T>(method, path, body)
-      : Promise.reject(refuse(`${method} ${path}`));
-  return Object.assign(get, { all: api.all });
 }
 
 /** State fields --check reports: ids and hosts, never secrets. */
@@ -179,10 +152,12 @@ async function checkOnly(
   ctx: Ctx,
   report: (l: Line) => void,
 ): Promise<number> {
+  let todo = false;
   for (const step of steps) {
     ctx.data = ctx.human = undefined;
     try {
       const r = await step.check(state, ctx);
+      if (r === "todo" && !step.always) todo = true;
       const notes = ctx.notes.splice(0).join("; ");
       report({
         step: step.name,
@@ -211,7 +186,7 @@ async function checkOnly(
     message: "rebuilt from Cloudflare (not written)",
     data,
   });
-  return 0;
+  return ctx.opts.strict && todo ? 2 : 0;
 }
 
 /** Runs setup; resolves to the exit code (0 ok, 2 action_required, 1 error). */
@@ -254,16 +229,15 @@ export async function run(
     accountId: state.accountId,
   };
   Object.assign(state, { name, appHost, contentHost, ownerEmail });
-  let wrangler = makeWrangler(deps, root, () => state.accountId);
-  let api = makeApi(deps, wrangler);
-  let accessApi = makeApi(deps, wrangler, deps.env.OA_ACCESS_TOKEN);
-  if (opts.check) {
-    wrangler = readOnlyWrangler(wrangler);
-    api = readOnlyApi(api);
-    accessApi = readOnlyApi(accessApi);
-  }
+  const noState = !prev.name;
+  // --check: fetch is GET-only and exec runs only read-only wrangler, for every client.
+  if (opts.check) deps = readOnlyDeps(deps);
+  const wrangler = makeWrangler(deps, root, () => state.accountId);
+  const api = makeApi(deps, wrangler);
+  const accessApi = makeApi(deps, wrangler, deps.env.OA_ACCESS_TOKEN);
   const ctx: Ctx = {
     deps,
+    noState,
     // --check writes nothing: no state, no rendered config.
     fs: opts.check ? { read: fs.read, write: () => {} } : fs,
     root,
