@@ -83,7 +83,19 @@ export function ftsFilter(q: string): SQL {
 
 /** Elements whose content is never indexed, and how each skip ends. */
 const SKIP_OPEN = /<!--|<(script|style|noscript|template)\b/gi;
-/** Tags (complete only: a partial tag at a chunk end is carried). */
+/** Each skipped element's terminator (global: matched from an index). */
+const CLOSE: Record<string, RegExp> = {
+  script: /<\/script\s*>/gi,
+  style: /<\/style\s*>/gi,
+  noscript: /<\/noscript\s*>/gi,
+  template: /<\/template\s*>/gi,
+};
+const COMMENT = Symbol("comment");
+/**
+ * Comments/skipped elements per entry, at most: past this, reading stops
+ * (each costs a few regex steps; 100k tiny comments cost ~18 ms, 10k ~1.5 ms).
+ */
+export const MAX_SKIPS = 10_000;
 /**
  * Runs of tags (and the whitespace between) collapse in one match. `[^<>]`
  * keeps it linear on `<a<a<a…` with no `>`.
@@ -100,17 +112,32 @@ const ENTITIES: Record<string, string> = {
   apos: "'",
   nbsp: " ",
 };
+/** Entities decoded per entry, at most; the rest stay raw (search quality only). */
+export const MAX_ENTITIES = 16_000;
+const ENTITY = /&(#x[0-9a-f]+|#\d+|[a-z]+);/gi;
+function decodeEntity(m: string, e: string): string {
+  if (e[0] === "#") {
+    const n =
+      e[1] === "x" || e[1] === "X"
+        ? Number.parseInt(e.slice(2), 16)
+        : Number(e.slice(1));
+    return n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : m;
+  }
+  return ENTITIES[e.toLowerCase()] ?? m;
+}
+/** At most MAX_ENTITIES decodes: an entity-dense page cost ~9 ms in one replace. */
 function decodeEntities(s: string): string {
-  return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e: string) => {
-    if (e[0] === "#") {
-      const n =
-        e[1] === "x" || e[1] === "X"
-          ? Number.parseInt(e.slice(2), 16)
-          : Number(e.slice(1));
-      return n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : m;
-    }
-    return ENTITIES[e.toLowerCase()] ?? m;
-  });
+  if (s.indexOf("&") < 0) return s;
+  let out = "";
+  let pos = 0;
+  ENTITY.lastIndex = 0;
+  for (let n = 0; n < MAX_ENTITIES; n++) {
+    const m = ENTITY.exec(s);
+    if (!m) break;
+    out += s.slice(pos, m.index) + decodeEntity(m[0], m[1] as string);
+    pos = ENTITY.lastIndex;
+  }
+  return out + s.slice(pos);
 }
 
 /**
@@ -120,6 +147,14 @@ function decodeEntities(s: string): string {
 const stripTags = (s: string) => (s.indexOf("<") < 0 ? s : s.replace(TAG, " "));
 
 /**
+ * Whitespace runs → one space. Matches only runs that change (2+ chars, or
+ * one non-space char): stripped markup is mostly single spaces, and
+ * replacing each of those with itself cost ~3× the rest of extraction.
+ */
+const WS = /\s{2,}|[^\S ]/g;
+const collapse = (s: string) => s.replace(WS, " ");
+
+/**
  * Streaming HTML → text. State survives chunk boundaries: inside a comment or
  * a skipped element, input is discarded until its close (only a short tail is
  * kept, to catch a close split across chunks), so no length of skipped content
@@ -127,28 +162,41 @@ const stripTags = (s: string) => (s.indexOf("<") < 0 ? s : s.replace(TAG, " "));
  */
 class HtmlText {
   /** The terminator being skipped to (`-->` or `</script`…), or null. */
-  private close: RegExp | null = null;
+  private close: RegExp | typeof COMMENT | null = null;
   private carry = "";
+  /** Comments and skipped elements opened so far (each costs a few regex steps). */
+  private skips = 0;
+  /** MAX_SKIPS reached: the rest of the input is ignored. */
+  exhausted = false;
 
-  /** Feeds a chunk; returns the text it yields. */
+  /** Feeds a chunk; returns the text it yields. Index-based: no re-slicing per element. */
   push(chunk: string, final: boolean): string {
-    let buf = this.carry + chunk;
+    if (this.exhausted) return "";
+    const buf = this.carry + chunk;
     this.carry = "";
     let out = "";
+    let pos = 0;
     for (;;) {
       if (this.close) {
-        this.close.lastIndex = 0;
-        const m = this.close.exec(buf);
-        if (!m) {
+        let end: number;
+        if (this.close === COMMENT) {
+          const e = buf.indexOf("-->", pos);
+          end = e < 0 ? -1 : e + 3;
+        } else {
+          this.close.lastIndex = pos;
+          const m = this.close.exec(buf);
+          end = m ? m.index + m[0].length : -1;
+        }
+        if (end < 0) {
           // Keep a tail that could start a split terminator.
-          if (!final) this.carry = buf.slice(-16);
+          if (!final) this.carry = buf.slice(Math.max(pos, buf.length - 16));
           return out;
         }
-        buf = buf.slice(m.index + m[0].length);
+        pos = end;
         this.close = null;
         out += " ";
       }
-      SKIP_OPEN.lastIndex = 0;
+      SKIP_OPEN.lastIndex = pos;
       const o = SKIP_OPEN.exec(buf);
       if (!o) {
         let end = buf.length;
@@ -156,24 +204,24 @@ class HtmlText {
           // A partial tag (or partial `<!--`/`<script`) at the end waits.
           const lt = buf.lastIndexOf("<");
           if (
-            lt >= 0 &&
+            lt >= pos &&
             buf.indexOf(">", lt) < 0 &&
             buf.length - lt <= MAX_CARRY
           )
             end = lt;
         }
         this.carry = buf.slice(end);
-        return out + stripTags(buf.slice(0, end));
+        return out + stripTags(buf.slice(pos, end));
       }
-      out += stripTags(buf.slice(0, o.index));
+      if (o.index > pos) out += stripTags(buf.slice(pos, o.index));
+      if (++this.skips > MAX_SKIPS) {
+        // Budget spent: drop the rest of the document.
+        this.exhausted = true;
+        return out;
+      }
       const name = o[1];
-      if (name) {
-        this.close = new RegExp(`</${name}\\s*>`, "i");
-        buf = buf.slice(o.index + o[0].length);
-      } else {
-        this.close = /-->/;
-        buf = buf.slice(o.index + 4);
-      }
+      this.close = name ? (CLOSE[name.toLowerCase()] ?? COMMENT) : COMMENT;
+      pos = o.index + o[0].length;
     }
   }
 }
@@ -186,8 +234,10 @@ const INPUT_BUDGET = LIMITS.inlineBytes;
  * characters stripped. html: markup stripped, script/style/noscript/template
  * and comment content dropped, entities decoded, whitespace collapsed;
  * markdown/code: raw; pdf: "" (the viewer extracts and PUTs it).
- * A stream is read until the output reaches the cap or INPUT_BUDGET bytes
- * have been read (it stops before a read likely to cross it), then cancelled.
+ * A stream is read until the output reaches the cap, INPUT_BUDGET bytes
+ * have been read (it stops before a read likely to cross it) or MAX_SKIPS
+ * comments/skipped elements were opened, then cancelled; at most
+ * MAX_ENTITIES entities are decoded. These bound the CPU per entry (B17).
  *
  * html is regex/indexOf based, not HTMLRewriter: a text handler costs one
  * JS↔native crossing per text chunk, measured at ~500 ms for a 200k-char
@@ -204,10 +254,7 @@ export async function extractText(
   }
   const html = format === "html";
   const finish = (s: string) =>
-    stripMarks(html ? decodeEntities(s).replace(/\s+/g, " ").trim() : s).slice(
-      0,
-      cap,
-    );
+    stripMarks(html ? collapse(decodeEntities(s)).trim() : s).slice(0, cap);
   if (typeof body === "string")
     return finish(html ? new HtmlText().push(body, true) : body);
   const h = new HtmlText();
@@ -219,6 +266,7 @@ export async function extractText(
   for (;;) {
     const stop =
       bytes + last >= INPUT_BUDGET ||
+      h.exhausted ||
       // Entities only shrink text, so the cap on undecoded text is safe.
       out.length >= (html ? cap * 1.25 : cap);
     const r = stop ? { done: true as const } : await reader.read();
@@ -232,7 +280,7 @@ export async function extractText(
       last = v.byteLength;
       chunk = dec.decode(v, { stream: true });
     }
-    out += html ? h.push(chunk, r.done).replace(/\s+/g, " ") : chunk;
+    out += html ? collapse(h.push(chunk, r.done)) : chunk;
     if (r.done) break;
   }
   return finish(out);

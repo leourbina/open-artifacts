@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { snippets } from "../src/steps/agent-config.ts";
+import { NOTES, snippets } from "../src/steps/agent-config.ts";
 
 const URL = "https://app.example.com/mcp";
 
@@ -33,5 +33,16 @@ describe("agent-config snippets", () => {
     expect(JSON.parse(s.json).mcpServers["open-artifacts"].headers).toEqual({
       Authorization: "Bearer <YOUR_TOKEN>",
     });
+  });
+  it("codex snippet contains no PAT", () => {
+    expect(s.codex).not.toMatch(/oa_pat_/);
+  });
+  it("opencode JSON sets oauth: false and notes the empty-string behavior", () => {
+    expect(JSON.parse(s.opencode).mcp["open-artifacts"].oauth).toBe(false);
+    expect(NOTES.opencode).toContain("empty string");
+  });
+  it("claude snippet ends with unset OA_TOKEN and notes the stored header", () => {
+    expect(s.claudeCode.trimEnd().endsWith("unset OA_TOKEN")).toBe(true);
+    expect(NOTES.claudeCode).toContain("its own config");
   });
 });

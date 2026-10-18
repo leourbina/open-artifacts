@@ -156,7 +156,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     }
     expect(JSON.stringify(cfg)).not.toContain(pat);
     expect(cfg.snippets.claudeCode).toMatch(
-      /^read -rs OA_TOKEN\nclaude mcp add --transport http open-artifacts https:\/\/app\.example\.com\/mcp --header "Authorization: Bearer \$OA_TOKEN"$/,
+      /^read -rs OA_TOKEN\nclaude mcp add --transport http open-artifacts https:\/\/app\.example\.com\/mcp --header "Authorization: Bearer \$OA_TOKEN"\nunset OA_TOKEN$/,
     );
     expect(cfg.snippets.codex).toContain("[mcp_servers.open-artifacts]");
     expect(JSON.parse(cfg.snippets.cursor)).toEqual({
@@ -376,6 +376,9 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     expect(cfg).toContain("read -rs OA_TOKEN");
     expect(cfg).toContain("owner-token step");
     expect(cfg).not.toContain(pat);
+    expect(cfg).toContain("bearer_token_env_var");
+    for (const l of w.lines.filter((x) => !x.startsWith("✓ owner-token")))
+      expect(l).not.toContain(pat);
     patContained(w, pat);
   });
 

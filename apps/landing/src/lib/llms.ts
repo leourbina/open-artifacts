@@ -1,10 +1,5 @@
 import { type CollectionEntry, getCollection } from "astro:content";
-import {
-  FALLBACKS,
-  type FallbackId,
-  toolListFallbacks,
-  UNRELEASED,
-} from "./release";
+import { GATES, gatesFor, UNRELEASED } from "./release";
 import { tools } from "./tools";
 
 export const SITE = "https://open-artifacts.com";
@@ -45,10 +40,10 @@ export function docMarkdown(doc: Doc): string {
 // Release-gate markers for the stand-ins the agent files depend on: one TODO
 // comment line each, then one OA-UNRELEASED line listing them all.
 export async function markerLines(): Promise<string> {
-  const active: FallbackId[] = [...toolListFallbacks];
+  const active = gatesFor("llms");
   if (active.length === 0) return "";
-  const todos = active.map((id) => `<!-- ${FALLBACKS[id].todo} -->\n`).join("");
-  const labels = active.map((id) => FALLBACKS[id].label).join(", ");
+  const todos = active.map((id) => `<!-- ${GATES[id].todo} -->\n`).join("");
+  const labels = active.map((id) => GATES[id].label).join(", ");
   return `${todos}${UNRELEASED}: ${labels}\n\n`;
 }
 

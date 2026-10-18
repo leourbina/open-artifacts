@@ -9,20 +9,26 @@ Every instance serves one MCP server at `https://<your-app-host>/mcp` over Strea
 - **OAuth.** Clients that support MCP OAuth need only the URL. They register themselves, and you sign in through your instance's login page.
 - **Personal access token.** For clients and scripts without OAuth, create a token in the dashboard under **Settings → Agents** and send it as `Authorization: Bearer oa_pat_…`. Tokens can be revoked at any time.
 
-Setup's `agent-config` step prints each snippet below with your URL and the owner token filled in, and the dashboard's **Settings → Agents** page shows them too. The examples use `artifacts.example.com` and the default server name, `open-artifacts`; setup names the server after its `--name` flag.
+Setup's `agent-config` step prints each snippet below with your URL filled in, and the dashboard's **Settings → Agents** page shows them too. The examples use `artifacts.example.com` and the default server name, `open-artifacts`; setup names the server after its `--name` flag.
+
+The snippets never contain the token itself; a token typed into a command or committed in a config file can leak through shell history or git. Codex CLI, Cursor, and OpenCode read it from the `OA_TOKEN` environment variable when they start, so export it, without echoing, in the shell that launches the client: `read -rs OA_TOKEN; export OA_TOKEN`. The setup run that mints the owner token shows it once, in the `owner-token` step.
 
 ## Steps
 
 1. **Pick the auth method.** Use OAuth if this agent's client supports MCP OAuth. Otherwise ask the user to create a personal access token in the dashboard under **Settings → Agents**. Don't run setup with `--new-owner-token` for this: it revokes the token the first agent uses.
-2. **Add the server** to this agent's MCP config, using the snippet for its client in [Connect agents](/docs/connect-agents/). Name the server `open-artifacts`.
+2. **Add the server** to this agent's MCP config, using the snippet for its client from the Connect agents doc. Name the server after setup's `--name`, which defaults to `open-artifacts`.
 3. **Check the connection** by calling `list_artifacts`.
 
 ## Claude Code
 
 ```sh
+read -rs OA_TOKEN
 claude mcp add --transport http open-artifacts https://artifacts.example.com/mcp \
-  --header 'Authorization: Bearer oa_pat_...'
+  --header "Authorization: Bearer $OA_TOKEN"
+unset OA_TOKEN
 ```
+
+`read -rs` takes the pasted token without showing it, so it stays out of the screen and shell history; the double quotes let the shell fill in `$OA_TOKEN`, and `unset` clears it afterwards.
 
 ## Codex CLI
 
@@ -31,7 +37,7 @@ In `~/.codex/config.toml`:
 ```toml
 [mcp_servers.open-artifacts]
 url = "https://artifacts.example.com/mcp"
-http_headers = { Authorization = "Bearer oa_pat_..." }
+bearer_token_env_var = "OA_TOKEN"
 ```
 
 ## Cursor
@@ -43,7 +49,7 @@ In `.cursor/mcp.json` in the project, or `~/.cursor/mcp.json` for every project:
   "mcpServers": {
     "open-artifacts": {
       "url": "https://artifacts.example.com/mcp",
-      "headers": { "Authorization": "Bearer oa_pat_..." }
+      "headers": { "Authorization": "Bearer ${env:OA_TOKEN}" }
     }
   }
 }
@@ -61,7 +67,8 @@ In `opencode.json`:
       "type": "remote",
       "url": "https://artifacts.example.com/mcp",
       "enabled": true,
-      "headers": { "Authorization": "Bearer oa_pat_..." }
+      "oauth": false,
+      "headers": { "Authorization": "Bearer {env:OA_TOKEN}" }
     }
   }
 }
@@ -69,7 +76,7 @@ In `opencode.json`:
 
 ## Other clients
 
-Give the client the URL `https://artifacts.example.com/mcp`. If it supports OAuth, that's all it needs. Otherwise add the header `Authorization: Bearer oa_pat_...`. Many clients accept this JSON, which setup prints as `json`:
+Give the client the URL `https://artifacts.example.com/mcp`. If it supports OAuth, that's all it needs. Otherwise add the header `Authorization: Bearer <YOUR_TOKEN>`. Many clients accept this JSON, which setup prints as `json`. Replace `<YOUR_TOKEN>` with the token, and keep the file out of git:
 
 ```json
 {
@@ -77,7 +84,7 @@ Give the client the URL `https://artifacts.example.com/mcp`. If it supports OAut
     "open-artifacts": {
       "type": "http",
       "url": "https://artifacts.example.com/mcp",
-      "headers": { "Authorization": "Bearer oa_pat_..." }
+      "headers": { "Authorization": "Bearer <YOUR_TOKEN>" }
     }
   }
 }

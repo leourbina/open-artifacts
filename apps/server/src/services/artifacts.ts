@@ -818,7 +818,7 @@ export async function softDelete(
       "delete from artifact_search where rowid = (select rowid from artifacts where id = ?)",
     ).bind(id),
     env.DB.prepare(
-      "update artifacts set deleted_at = ? where id = ? and deleted_at is null",
+      "update artifacts set deleted_at = ?, purge_attempts = 0, purge_after = null where id = ? and deleted_at is null",
     ).bind(Date.now(), id),
   ]);
   await closeRuntimeSockets(env, [id], "artifact deleted", ctx);
@@ -858,6 +858,10 @@ const PURGE_BATCH = 50;
 const PURGE_R2_DELETES = 600;
 /** R2 keys listed per run: bounds cron CPU. */
 const PURGE_KEYS_LISTED = 5000;
+/** Delay before retrying a failed purge: 1, 2, 4 … days, at most 32 (the cron is daily). */
+export const purgeBackoff = (attempts: number) =>
+  // A minute of slack so the next daily run, a little early, still picks it up.
+  2 ** Math.min(Math.max(attempts, 1) - 1, 5) * DAY - 60_000;
 type PurgeBudget = { deletes: number; listed: number };
 const canPurge = (b: PurgeBudget) => b.deletes > 0 && b.listed > 0;
 
@@ -871,24 +875,37 @@ const canPurge = (b: PurgeBudget) => b.deletes > 0 && b.listed > 0;
  */
 export async function purgeDeleted(env: Env, now: number): Promise<number> {
   const cutoff = now - LIMITS.softDeleteDays * DAY;
+  // Artifacts whose purge failed wait out their backoff and then queue behind
+  // never-failed ones, so permanently failing ones can't fill every run's window.
   const { results } = await env.DB.prepare(
-    `select id, rowid as rid from artifacts
-     where deleted_at is not null and deleted_at < ? order by deleted_at limit ?`,
+    `select id, rowid as rid, purge_attempts as attempts from artifacts
+     where deleted_at is not null and deleted_at < ?
+       and (purge_after is null or purge_after <= ?)
+     order by purge_attempts, deleted_at limit ?`,
   )
-    .bind(cutoff, PURGE_BATCH)
-    .all<{ id: string; rid: number }>();
+    .bind(cutoff, now, PURGE_BATCH)
+    .all<{ id: string; rid: number; attempts: number }>();
   const budget: PurgeBudget = {
     deletes: PURGE_R2_DELETES,
     listed: PURGE_KEYS_LISTED,
   };
   let purged = 0;
-  for (const { id, rid } of results) {
+  for (const { id, rid, attempts } of results) {
     if (!canPurge(budget)) break;
     try {
       if (await purgeOne(env, id, rid, cutoff, budget)) purged++;
     } catch (e) {
-      // One bad artifact must not block the rest; it is retried next run.
+      // One bad artifact must not block the rest; it is retried after a backoff.
       console.error("purge failed", id, e);
+      // Structured, for Workers Logs alerting: this one keeps failing.
+      if (attempts + 1 >= 3)
+        console.warn({ evt: "purge_failing", id, attempts: attempts + 1 });
+      await env.DB.prepare(
+        "update artifacts set purge_attempts = purge_attempts + 1, purge_after = ? where id = ?",
+      )
+        .bind(now + purgeBackoff(attempts + 1), id)
+        .run()
+        .catch(() => {});
     }
   }
   return purged;

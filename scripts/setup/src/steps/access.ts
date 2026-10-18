@@ -28,9 +28,7 @@ const perms = [
   { key: "access_acct", type: "read" }, // Access: Organizations Read
   { key: "dns", type: "read" }, // Zone: DNS Read
 ];
-export const TOKEN_URL = `https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=${encodeURIComponent(
-  JSON.stringify(perms),
-)}&accountId=*&zoneId=all&name=${encodeURIComponent("Open Artifacts setup")}`;
+export const TOKEN_URL = `https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=${encodeURIComponent(JSON.stringify(perms))}&accountId=*&zoneId=all&name=${encodeURIComponent("Open Artifacts setup")}`;
 const ZERO_TRUST = "https://one.dash.cloudflare.com/";
 
 // biome-ignore lint/suspicious/noExplicitAny: untyped API objects
@@ -240,7 +238,7 @@ async function record(
 async function lookupWithToken(ctx: Ctx, accountId: string) {
   const how = ctx.opts.interactive
     ? "run `read -rs OA_ACCESS_TOKEN; export OA_ACCESS_TOKEN`, or rerun interactively and paste it (kept in memory only)"
-    : "run `read -rs OA_ACCESS_TOKEN; export OA_ACCESS_TOKEN` (non-interactive/--json)";
+    : "the user must run `read -rs OA_ACCESS_TOKEN; export OA_ACCESS_TOKEN` in the shell that launches setup (an agent cannot answer a hidden prompt) (non-interactive/--json)";
   const create = `Create one (Access: Apps and Policies Edit; Access: Organizations Read; Zone: DNS Read), then ${how}`;
   const lower = `${create[0].toLowerCase()}${create.slice(1)}`;
   const deny = (e: unknown) => {
@@ -370,7 +368,7 @@ export const access: Step = {
       ctx.notes.push(
         ctx.opts.upgrade
           ? "verified from state only (--upgrade); rerun without --upgrade to reconcile Access"
-          : "Access not re-verified: run `read -rs OA_ACCESS_TOKEN; export OA_ACCESS_TOKEN` to re-check",
+          : "Access not re-verified: the user must run `read -rs OA_ACCESS_TOKEN; export OA_ACCESS_TOKEN` in the shell that launches setup (an agent cannot answer a hidden prompt) to re-check",
       );
       return "done";
     }

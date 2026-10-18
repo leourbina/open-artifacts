@@ -6,6 +6,18 @@ order: 4
 
 An HTML artifact can keep data with `window.openArtifacts`. Polls, trackers, and checklists all work this way. The data belongs to the artifact, not a version, so a new version sees the same data.
 
+## Ready and theme
+
+`openArtifacts.ready` is a promise that resolves once the viewer shell has connected; wait for it before your first call. In the raw view, with no shell, it resolves at once.
+
+`openArtifacts.theme` is `"light"` or `"dark"`. It starts from the viewer's system setting and follows the shell's theme once it connects. `onTheme(callback)` calls back whenever it changes and returns a function that stops listening.
+
+```js
+await openArtifacts.ready;
+document.documentElement.dataset.theme = openArtifacts.theme;
+openArtifacts.onTheme((t) => (document.documentElement.dataset.theme = t));
+```
+
 ## Capabilities
 
 An artifact declares what it uses when it's published, for example `capabilities: { db: true, viewer: true }`. Calls to anything it didn't declare are rejected.
@@ -20,14 +32,17 @@ An artifact declares what it uses when it's published, for example `capabilities
 
 `db.collection(name)` returns a collection with:
 
-- `get(id)`, `list()`, and `query(filter)` to read
+- `get(id)` to read one document, or `null`
+- `list({ cursor, limit })` and `query(filter)` to read many. Each returns a page, `{ items, nextCursor }`; pass `nextCursor` back as `cursor` for the next page.
 - `set(id, doc)`, `update(id, patch)`, and `delete(id)` to write
-- `subscribe(callback)` for live updates when anyone changes the collection
+- `subscribe(callback)` for live updates when anyone changes the collection. It returns a function that unsubscribes.
+
+Each document is `{ id, data, updatedAt, updatedBy }`, with your value in `data`.
 
 ```js
 const votes = openArtifacts.db.collection("votes");
 await votes.set(crypto.randomUUID(), { option: "Lisbon" });
-votes.subscribe(async () => render(await votes.list()));
+votes.subscribe(async () => render((await votes.list()).items));
 ```
 
 ## The viewer: `viewer`
@@ -36,7 +51,7 @@ votes.subscribe(async () => render(await votes.list()));
 
 ## Per-viewer data: `storage`
 
-`storage` keeps documents keyed to the current viewer, such as which boxes they ticked, with `get`, `set`, `delete`, and `list`.
+`storage` keeps documents keyed to the current viewer, such as which boxes they ticked, with `get(key)`, `set(key, value)`, `delete(key)`, and `list()`, which returns the viewer's keys.
 
 ## Who can write
 
