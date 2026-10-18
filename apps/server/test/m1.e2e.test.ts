@@ -3,8 +3,8 @@ import { newId } from "@oa/shared";
 import { describe, expect, it } from "vitest";
 import worker from "../src/index.js";
 import { fakeAssets } from "./assets-stub.js";
+import { fetchAndWait } from "./helpers.js";
 
-const ctx = { waitUntil() {}, passThroughOnException() {} } as never;
 const assets = fakeAssets().fetcher;
 const E = (over: Record<string, unknown> = {}) =>
   ({ ...(env as object), ASSETS: assets, ...over }) as never;
@@ -18,10 +18,11 @@ async function call(
   if (init.cookie) h.set("cookie", init.cookie);
   if (init.method && init.method !== "GET") h.set("x-oa-request", "1");
   if (typeof init.body === "string") h.set("content-type", "application/json");
-  return worker.fetch(
-    new Request(url, { ...init, headers: h }) as never,
+  // Awaits waitUntil work (search indexing) so later searches never race it.
+  return fetchAndWait(
+    worker as never,
+    new Request(url, { ...init, headers: h }),
     e,
-    ctx,
   );
 }
 const APP = "http://app.localhost";
