@@ -38,6 +38,7 @@
   gap: 8px;
 }
 .lib-card {
+  position: relative;
   background: var(--oa-surface);
   border-radius: var(--oa-radius-lg);
   box-shadow: var(--oa-shadow-1);
@@ -59,6 +60,24 @@
 .lib-card a:hover,
 .lib-row a:hover {
   text-decoration: underline;
+}
+/* The title link covers the whole card or row, so the thumbnail and the rest
+   open it too. It is the only control in either today; another one added later
+   needs `position: relative` to sit above it. */
+.lib-card a::after,
+.lib-row a::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+.lib-card a:focus-visible,
+.lib-row a:focus-visible {
+  outline: 2px solid var(--oa-focus);
+  outline-offset: 2px;
+}
+.lib-card:has(a:hover),
+.lib-row:has(a:hover) {
+  box-shadow: var(--oa-shadow-2);
 }
 .lib-thumb {
   aspect-ratio: 16 / 10;
@@ -106,6 +125,7 @@
   font-size: var(--oa-text-xs);
 }
 .lib-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
