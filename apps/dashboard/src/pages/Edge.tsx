@@ -1,0 +1,27 @@
+import { Avatar } from "@oa/ui";
+import type { ReactNode } from "react";
+import { useMe } from "../auth/useMe";
+
+/** Centered card shared by the edge pages. */
+export function EdgePanel({ children }: { children: ReactNode }) {
+  return (
+    <div className="oa-edge">
+      <section className="oa-panel">{children}</section>
+    </div>
+  );
+}
+
+export function SignedInAs() {
+  const state = useMe();
+  if (state.status !== "authed") return null;
+  const { email, name } = state.me.user;
+  return (
+    <div className="oa-who">
+      <Avatar name={name ?? undefined} email={email} size={32} />
+      <div>
+        <small>Signed in as</small>
+        <b>{email}</b>
+      </div>
+    </div>
+  );
+}

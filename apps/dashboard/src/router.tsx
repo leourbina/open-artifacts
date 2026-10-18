@@ -2,15 +2,18 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
-  Outlet,
+  type RouterHistory,
 } from "@tanstack/react-router";
+import { AppLayout } from "./layout/AppLayout";
+import { NoAccess } from "./pages/NoAccess";
 import { NotFound } from "./pages/NotFound";
+import { SignIn } from "./pages/SignIn";
 
 // Placeholders; later tasks replace each with the real page.
 const page = (title: string) => () => <h1>{title}</h1>;
 
 const root = createRootRoute({
-  component: Outlet,
+  component: AppLayout,
   notFoundComponent: NotFound,
 });
 const route = (path: string, component: () => React.ReactNode) =>
@@ -41,11 +44,17 @@ const routeTree = root.addChildren([
   route("/settings/agents", page("Agents")),
   route("/settings/instance", page("Instance")),
   route("/settings/usage", page("Usage")),
-  route("/no-access", NotFound),
+  route("/no-access", NoAccess),
+  route("/sign-in", () => (
+    <SignIn failed={new URLSearchParams(location.search).has("error")} />
+  )),
   route("*", NotFound),
 ]);
 
-export const router = createRouter({ routeTree });
+export const createAppRouter = (history?: RouterHistory) =>
+  createRouter({ routeTree, history });
+
+export const router = createAppRouter();
 
 declare module "@tanstack/react-router" {
   interface Register {
