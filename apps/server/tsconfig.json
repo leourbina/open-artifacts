@@ -7,5 +7,5 @@
       "@cloudflare/vitest-plugin/types"
     ]
   },
-  "include": ["src", "test"]
+  "include": ["src", "test", "scripts/bench*.ts", "scripts/bench-stubs"]
 }
