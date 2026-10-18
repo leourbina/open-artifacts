@@ -302,63 +302,83 @@ const CURRENT =
   "exists (select 1 from artifacts where id = ? and current_version = ? and deleted_at is null)";
 
 /**
- * Replaces the artifact's FTS row (by rowid) with version `version`'s text, if
- * it is still current; non-pdf versions are marked text_indexed. A pdf keeps
- * body text a viewer already contributed for this version. Never throws: it
- * runs in waitUntil after publish/restore/undelete.
+ * Search indexing is asynchronous (C3): publish, restore and undelete call
+ * enqueueIndex, and the artifact's DO runs indexVersionOrThrow from its alarm.
+ * Until then the FTS row matches on title/description only (seedSearchStmt
+ * gives a new or undeleted artifact a row with an empty body; a new version
+ * keeps the previous version's body).
  */
-export async function indexVersion(
-  env: Env,
+
+/**
+ * Replaces the artifact's FTS row (by rowid) with version `version`'s text, if
+ * it is still current (live, not superseded): otherwise a no-op. Non-pdf
+ * versions are marked text_indexed. A pdf keeps body text a viewer already
+ * contributed for this version. Throws on D1/R2/extraction errors (the DO
+ * alarm retries).
+ */
+export async function indexVersionOrThrow(
+  env: Pick<Env, "DB" | "FILES">,
   artifactId: string,
   version: number,
 ): Promise<void> {
-  try {
-    const row = await env.DB.prepare(
-      `select a.rowid as rid, coalesce(v.format, a.format) as format, a.current_version as cv,
-              v.entry, v.manifest, v.text_indexed
-       from artifacts a join versions v on v.artifact_id = a.id and v.version = ?
-       where a.id = ? and a.deleted_at is null`,
-    )
-      .bind(version, artifactId)
-      .first<IndexRow>();
-    if (!row || row.cv !== version) return;
-    let body = "";
-    const pdf = row.format === "pdf";
-    if (pdf) {
-      if (row.text_indexed === 1) {
-        const old = await env.DB.prepare(
-          "select body from artifact_search where rowid = ?",
-        )
-          .bind(row.rid)
-          .first<{ body: string | null }>();
-        body = old?.body ?? "";
-      }
-    } else {
-      const entry = (JSON.parse(row.manifest) as ManifestEntry[]).find(
-        (e) => e.path === row.entry,
-      );
-      const obj = entry ? await env.FILES.get(entry.key) : null;
-      if (obj) body = await extractText(row.format, obj.body);
+  const row = await env.DB.prepare(
+    `select a.rowid as rid, coalesce(v.format, a.format) as format, a.current_version as cv,
+            v.entry, v.manifest, v.text_indexed
+     from artifacts a join versions v on v.artifact_id = a.id and v.version = ?
+     where a.id = ? and a.deleted_at is null`,
+  )
+    .bind(version, artifactId)
+    .first<IndexRow>();
+  if (!row || row.cv !== version) return;
+  let body = "";
+  const pdf = row.format === "pdf";
+  if (pdf) {
+    if (row.text_indexed === 1) {
+      const old = await env.DB.prepare(
+        "select body from artifact_search where rowid = ?",
+      )
+        .bind(row.rid)
+        .first<{ body: string | null }>();
+      body = old?.body ?? "";
     }
-    const guard = [artifactId, version] as const;
-    await env.DB.batch([
-      env.DB.prepare(
-        `delete from artifact_search where rowid = ? and ${CURRENT}`,
-      ).bind(row.rid, ...guard),
-      env.DB.prepare(
-        `insert into artifact_search (rowid, artifact_id, title, description, body)
-         select rowid, id, ${UNMARKED}, ? from artifacts
-         where id = ? and current_version = ? and deleted_at is null`,
-      ).bind(body, ...guard),
-      // pdf: text_indexed stays 1 only if its contributed text survived.
-      env.DB.prepare(
-        `update versions set text_indexed = ? where artifact_id = ? and version = ? and ${CURRENT}`,
-      ).bind(pdf ? (body ? 1 : 0) : 1, ...guard, ...guard),
-    ]);
-  } catch (e) {
-    console.error("indexVersion failed", artifactId, version, e);
+  } else {
+    const entry = (JSON.parse(row.manifest) as ManifestEntry[]).find(
+      (e) => e.path === row.entry,
+    );
+    const obj = entry ? await env.FILES.get(entry.key) : null;
+    if (obj) body = await extractText(row.format, obj.body);
   }
+  const guard = [artifactId, version] as const;
+  await env.DB.batch([
+    env.DB.prepare(
+      `delete from artifact_search where rowid = ? and ${CURRENT}`,
+    ).bind(row.rid, ...guard),
+    env.DB.prepare(
+      `insert into artifact_search (rowid, artifact_id, title, description, body)
+       select rowid, id, ${UNMARKED}, ? from artifacts
+       where id = ? and current_version = ? and deleted_at is null`,
+    ).bind(body, ...guard),
+    // pdf: text_indexed stays 1 only if its contributed text survived.
+    env.DB.prepare(
+      `update versions set text_indexed = ? where artifact_id = ? and version = ? and ${CURRENT}`,
+    ).bind(pdf ? (body ? 1 : 0) : 1, ...guard, ...guard),
+  ]);
 }
+
+/**
+ * Gives a live artifact without an FTS row one with title/description and an
+ * empty body (searchable by title before its body is indexed). A no-op when a
+ * row exists; joins the publish/undelete batch.
+ */
+export const seedSearchStmt = (db: D1Database, id: string) =>
+  db
+    .prepare(
+      `insert into artifact_search (rowid, artifact_id, title, description, body)
+       select rowid, id, ${UNMARKED}, '' from artifacts a
+       where id = ? and deleted_at is null
+         and not exists (select 1 from artifact_search s where s.rowid = a.rowid)`,
+    )
+    .bind(id);
 
 /** Keeps the FTS title/description in step with a PATCH (body unchanged). */
 export const syncTitleStmt = (env: Env, id: string) =>

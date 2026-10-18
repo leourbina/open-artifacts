@@ -1,5 +1,6 @@
 import {
   createExecutionContext,
+  runDurableObjectAlarm,
   waitOnExecutionContext,
 } from "cloudflare:test";
 import { env } from "cloudflare:workers";
@@ -8,6 +9,7 @@ import { sessionCookieName, signSession } from "../src/auth/session.js";
 import { getDb } from "../src/db/client.js";
 import { normEmail } from "../src/db/email.js";
 import { users } from "../src/db/schema.js";
+import { runtimeStub } from "../src/runtime/do.js";
 
 /** Inserts the user and mints a session cookie for them. */
 export async function login(
@@ -86,3 +88,12 @@ export const errOf = async (r: Response) =>
       error: { code: string; message: string; details?: unknown };
     }
   ).error;
+
+/**
+ * Fires the artifact DO's alarm now (C3: search indexing runs there), so
+ * tests index deterministically, without sleeps. True if an alarm was set.
+ */
+export const runIndex = (id: string, e: { ARTIFACT_RUNTIME: unknown } = env) =>
+  runDurableObjectAlarm(
+    runtimeStub(e as never, id) as unknown as DurableObjectStub,
+  );

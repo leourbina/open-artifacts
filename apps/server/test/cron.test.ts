@@ -98,6 +98,7 @@ describe("purgeDeleted", () => {
       "fulfilled",
       "fulfilled",
       "fulfilled",
+      "fulfilled", // C3: reindexStale
     ]);
     expect(
       await count("select count(*) n from artifacts where id = ?", gone),

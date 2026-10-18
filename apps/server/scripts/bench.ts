@@ -34,6 +34,7 @@ import {
   installGlobals,
   KVShim,
   meter,
+  meterDo,
   R2Shim,
 } from "./bench-env.js";
 
@@ -411,7 +412,7 @@ export function scenarios(c: Ctx): Scenario[] {
       },
     },
     {
-      name: "publish 250 KB inline base64 (html entry, + search indexing)",
+      name: "publish 250 KB inline base64 (html entry, indexing enqueued)",
       budgetMs: 9,
       bucket: "worker",
       prepare: async () => {
@@ -426,12 +427,40 @@ export function scenarios(c: Ctx): Scenario[] {
       ] as const
     ).map(
       ([shape, body]): Scenario => ({
-        name: `publish 250 KB inline html, ${shape} (+ search indexing)`,
+        name: `publish 250 KB inline html, ${shape} (indexing enqueued)`,
         budgetMs: 9,
         bucket: "worker",
         prepare: async () => {
           const req = apiReq(token, "/api/v1/artifacts", "POST", body);
           return () => call(env, req).then((r) => ok(r, `publish ${shape}`));
+        },
+      }),
+    ),
+    // C3: the same 250 KB html bodies, indexed by the DO alarm (its own invocation).
+    ...(
+      [
+        ["plain", html19b],
+        ["script-dense", scriptDense],
+        ["entity-dense", entityDense],
+      ] as const
+    ).map(
+      ([shape, body]): Scenario => ({
+        name: `DO alarm: index 250 KB html, ${shape}`,
+        budgetMs: 10,
+        bucket: "do",
+        info: true,
+        prepare: async () => {
+          const r = await ok(
+            await call(env, apiReq(token, "/api/v1/artifacts", "POST", body)),
+            `publish ${shape}`,
+          );
+          const { id } = (await r.json()) as { id: string };
+          const obj = env.ARTIFACT_RUNTIME.instance(id)
+            .obj as unknown as ArtifactRuntime;
+          return async () => {
+            await meterDo(() => obj.alarm());
+            if (obj.pendingIndex()) throw new Error("alarm did not index");
+          };
         },
       }),
     ),
