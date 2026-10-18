@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { run } from "../src/index.ts";
+import { realDeps } from "../src/cf.ts";
+import { run, STEPS } from "../src/index.ts";
+import type { Step } from "../src/step.ts";
 import { ROOT } from "./fakes.ts";
 import { app, HOSTS, POLICY, STAGING, world } from "./world.ts";
 
@@ -16,10 +18,20 @@ const CONFIG = `${ROOT}/apps/server/wrangler.jsonc`;
 
 /** Every secret value the fake saw must be absent from output, json, state and files. */
 function noLeak(w: W, extra: string[] = []) {
-  const haystack = [...w.lines, ...w.prompts, ...w.files.values()].join("\n");
+  const decoded = w.lines.map((l) => {
+    const j = JSON.parse(l);
+    return `${j.message} ${JSON.stringify(j.data ?? "")}`;
+  });
+  const haystack = [
+    ...w.lines,
+    ...decoded,
+    ...w.prompts,
+    ...w.files.values(),
+  ].join("\n");
   for (const v of [...w.values, ...extra]) {
     expect(v.length).toBeGreaterThan(0);
     expect(haystack).not.toContain(v);
+    expect(haystack).not.toContain(JSON.stringify(v).slice(1, -1));
   }
 }
 
@@ -90,10 +102,10 @@ describe("access + secrets", () => {
     expect(w.ops).toEqual([]);
   });
 
-  it("prompts for CF_API_TOKEN without echo and keeps it in memory only", async () => {
+  it("prompts for OA_ACCESS_TOKEN without echo and keeps it in memory only", async () => {
     const w = world({ org: "forbidden", answers: ["USER-TOKEN-abc", ""] });
     expect(await run(interactive, w.deps, ROOT)).toBe(0);
-    expect(w.prompts[0]).toMatch(/^\[secret\] .*CF_API_TOKEN/);
+    expect(w.prompts[0]).toMatch(/^\[secret\] .*OA_ACCESS_TOKEN/);
     expect(w.ops).toContain("POST apps");
     noLeak(w, ["USER-TOKEN-abc"]);
   });
@@ -197,5 +209,185 @@ describe("access + secrets", () => {
     expect(await run(interactive, w.deps, ROOT)).toBe(0);
     expect(w.ops.at(-1)).toBe("put ANALYTICS_TOKEN");
     noLeak(w);
+  });
+});
+
+describe("B16-2 review fixes", () => {
+  const probe: Step = {
+    name: "probe",
+    check: async (_s, ctx) => {
+      await ctx.api("GET", "/zones?name=probe");
+      return "done";
+    },
+    apply: async () => undefined,
+  };
+  const bearer = (w: W, path: string) =>
+    w.auths.filter((a) => a.startsWith(path)).map((a) => a.split(" ").at(-1));
+
+  it("Access calls use OA_ACCESS_TOKEN; ctx.api keeps the wrangler token", async () => {
+    const w = world({ org: "forbidden" });
+    w.deps.env.OA_ACCESS_TOKEN = "oa-tok";
+    expect(await run(HOSTS, w.deps, ROOT, [...STEPS, probe])).toBe(0);
+    expect(new Set(bearer(w, "/accounts/acc1/access"))).toEqual(
+      new Set(["oa-tok"]),
+    );
+    expect(bearer(w, "/zones")).toContain("t");
+    expect(bearer(w, "/zones").at(-1)).toBe("t");
+  });
+
+  it("a pasted token stays on the Access client only", async () => {
+    const w = world({ org: "forbidden", answers: ["USER-TOKEN-abc", ""] });
+    expect(await run(interactive, w.deps, ROOT, [...STEPS, probe])).toBe(0);
+    expect(bearer(w, "/zones").at(-1)).toBe("t");
+  });
+
+  it("the 403 message names OA_ACCESS_TOKEN", async () => {
+    const w = world({ org: "forbidden" });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(2);
+    expect(parsed(w).at(-1).message).toContain("OA_ACCESS_TOKEN");
+  });
+
+  it("the wrangler child env drops OA_ACCESS_TOKEN and WRANGLER_LOG*", async () => {
+    process.env.OA_ACCESS_TOKEN = "oa-secret";
+    process.env.WRANGLER_LOG = "debug";
+    try {
+      const { stdout } = await realDeps().exec("env", [], { env: { X: "1" } });
+      expect(stdout).toContain("X=1");
+      expect(stdout).not.toContain("OA_ACCESS_TOKEN");
+      expect(stdout).not.toContain("WRANGLER_LOG");
+    } finally {
+      delete process.env.OA_ACCESS_TOKEN;
+      delete process.env.WRANGLER_LOG;
+    }
+  });
+
+  it("SIGINT between POST and put rolls back, then exits 130", async () => {
+    const before = process.listenerCount("SIGINT");
+    const w = world();
+    const exec = w.deps.exec;
+    w.deps.exec = async (cmd, args, o) => {
+      if (args.includes("put")) process.emit("SIGINT");
+      return exec(cmd, args, o);
+    };
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(130);
+    expect(w.ops).toContain("DELETE apps/app-open-artifacts");
+    expect(process.listenerCount("SIGINT")).toBe(before);
+  });
+
+  it("records pendingAccessAppId after the POST and clears it after recording", async () => {
+    const w = world({ putFails: "ACCESS_CLIENT_SECRET", deleteFails: true });
+    await run(HOSTS, w.deps, ROOT);
+    expect(w.state().pendingAccessAppId).toBe("app-open-artifacts");
+    const ok = world();
+    await run(HOSTS, ok.deps, ROOT);
+    expect(ok.state().pendingAccessAppId).toBeUndefined();
+  });
+
+  it("a pending app lacking the Worker secret is deleted and recreated", async () => {
+    const w = world({
+      policies: [POLICY],
+      apps: [app("open-artifacts")],
+      secrets: [],
+      state: { pendingAccessAppId: "app-open-artifacts" },
+    });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    expect(w.ops.slice(0, 3)).toEqual([
+      "DELETE apps/app-open-artifacts",
+      "POST apps",
+      "put ACCESS_CLIENT_SECRET",
+    ]);
+    expect(w.state().pendingAccessAppId).toBeUndefined();
+  });
+
+  it("never puts CF_ACCOUNT_ID as a secret", async () => {
+    const w = world();
+    await run(HOSTS, w.deps, ROOT);
+    expect(w.ops.join()).not.toContain("CF_ACCOUNT_ID");
+  });
+
+  it("a 404 from organizations is the Zero Trust action_required", async () => {
+    const w = world({ org: "404" });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(2);
+    expect(parsed(w).at(-1).message).toContain(
+      "https://one.dash.cloudflare.com/",
+    );
+  });
+
+  it("failed put errors carry no secret, raw or JSON-escaped", async () => {
+    const tricky = 'an"al\\ytics';
+    const w = world({ answers: [tricky], putFails: "ANALYTICS_TOKEN" });
+    expect(await run(interactive, w.deps, ROOT)).toBe(1);
+    expect(parsed(w).at(-1).message).toContain(
+      "secret put ANALYTICS_TOKEN failed",
+    );
+    noLeak(w, [tricky]);
+  });
+
+  it("an auth token failure never echoes wrangler stdout", async () => {
+    const w = world();
+    const exec = w.deps.exec;
+    w.deps.exec = async (cmd, args, o) =>
+      args.includes("auth")
+        ? { code: 1, stdout: '{"token":"LEAKED"}', stderr: "" }
+        : exec(cmd, args, o);
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(1);
+    expect(w.lines.join("\n")).not.toContain("LEAKED");
+  });
+
+  it("does not touch the policy when an existing app needs action", async () => {
+    const drifted = {
+      ...POLICY,
+      include: [{ email: { email: "x@example.com" } }],
+    };
+    const w = world({
+      policies: [drifted],
+      apps: [app("open-artifacts")],
+      secrets: [],
+    });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(2);
+    expect(w.ops).toEqual([]);
+  });
+
+  it("an existing non-SaaS-OIDC app is action_required", async () => {
+    const w = world({
+      policies: [POLICY],
+      apps: [{ ...app("open-artifacts"), type: "self_hosted" }],
+      secrets: SECRETS,
+    });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(2);
+    expect(parsed(w).at(-1).message).toMatch(/SaaS OIDC/);
+  });
+
+  it("warns when the app's redirect_uris lack the app host callback", async () => {
+    const odd = app("open-artifacts");
+    odd.saas_app.redirect_uris = [
+      "https://elsewhere.example.com/auth/callback",
+    ];
+    const w = world({ policies: [POLICY], apps: [odd], secrets: SECRETS });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    const line = parsed(w).find((j) => j.step === "access");
+    expect(line.message).toContain("https://app.example.com/auth/callback");
+  });
+
+  it("--upgrade notes that access was verified from state only", async () => {
+    const w = world();
+    await run(HOSTS, w.deps, ROOT);
+    w.lines.length = 0;
+    await run([...HOSTS, "--upgrade"], w.deps, ROOT);
+    expect(parsed(w).find((j) => j.step === "access").message).toMatch(
+      /state only/,
+    );
+  });
+
+  it("pages until a short page when result_info is absent", async () => {
+    const filler = Array.from({ length: 150 }, (_, i) => app(`other-${i}`));
+    const w = world({
+      policies: [POLICY],
+      apps: [...filler, app("open-artifacts")],
+      secrets: SECRETS,
+      noResultInfo: true,
+    });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    expect(w.ops).toEqual([]);
   });
 });

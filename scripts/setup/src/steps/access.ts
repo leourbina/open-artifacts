@@ -1,4 +1,5 @@
-import type { State } from "../state.ts";
+import { makeApi } from "../cf.ts";
+import { type State, writeState } from "../state.ts";
 import type { ActionRequired, Ctx, Step } from "../step.ts";
 import { writeConfig } from "./resources.ts";
 import { ACCESS_SECRET, listSecrets, putSecret } from "./secrets.ts";
@@ -45,17 +46,23 @@ const policyMatches = (p: Obj) =>
   !p.approval_required &&
   !p.isolation_required &&
   !p.purpose_justification_required;
+const callback = (ctx: Ctx) => `https://${ctx.opts.appHost}/auth/callback`;
+const linked = (app: Obj, policyId?: string) =>
+  Boolean(policyId) && app.policies?.some((p: Obj) => p.id === policyId);
 
 async function lookup(ctx: Ctx, accountId: string) {
   const a = `/accounts/${accountId}/access`;
-  const org = await ctx.api<{ auth_domain?: string } | null>(
-    "GET",
-    `${a}/organizations`,
-  );
-  const policy = (await ctx.api.all<Obj>(`${a}/policies`)).find(
+  // A 404 or a null result both mean "no Zero Trust organization".
+  const org = await ctx
+    .accessApi<{ auth_domain?: string } | null>("GET", `${a}/organizations`)
+    .catch((e) => {
+      if (status(e) === 404) return null;
+      throw e;
+    });
+  const policy = (await ctx.accessApi.all<Obj>(`${a}/policies`)).find(
     (p) => p.name === POLICY_NAME,
   );
-  const app = (await ctx.api.all<Obj>(`${a}/apps`)).find(
+  const app = (await ctx.accessApi.all<Obj>(`${a}/apps`)).find(
     (x) => x.name === ctx.opts.name,
   );
   return {
@@ -73,13 +80,18 @@ function record(state: State, ctx: Ctx, teamDomain: string, app: Obj) {
     accessAppId: app.id,
     accessClientId: app.saas_app.client_id,
   });
+  delete state.pendingAccessAppId;
   writeConfig(state, ctx);
+  if (!app.saas_app.redirect_uris?.includes(callback(ctx)))
+    ctx.notes.push(
+      `warning: Access app ${app.name} redirect_uris lack ${callback(ctx)}; add it in the dashboard`,
+    );
 }
 
-/** Org lookup with the wrangler token; on 403, ask for a scoped token (memory only). */
+/** Lookup with OA_ACCESS_TOKEN or the wrangler token; on 403, ask once (memory only). */
 async function lookupWithToken(ctx: Ctx, accountId: string) {
   const denied = AR(
-    "The wrangler login token cannot read Access. Create a token (Access: Apps and Policies Edit; Access: Organizations Read; Zone: DNS Read), then rerun interactively and paste it, or set CLOUDFLARE_API_TOKEN.",
+    "This token cannot read Access. Create one (Access: Apps and Policies Edit; Access: Organizations Read; Zone: DNS Read) and set OA_ACCESS_TOKEN, or rerun interactively and paste it (kept in memory only).",
     { url: TOKEN_URL },
   );
   try {
@@ -87,16 +99,70 @@ async function lookupWithToken(ctx: Ctx, accountId: string) {
   } catch (e) {
     if (status(e) !== 403) throw e;
     if (ctx.opts.yes) return denied;
-    const q = `Paste a CF_API_TOKEN (input hidden; create one at ${TOKEN_URL}):`;
+    const q = `Paste an OA_ACCESS_TOKEN (input hidden; create one at ${TOKEN_URL}):`;
     const token = await ctx.deps.prompt(q, { secret: true });
     if (!token) return denied;
-    ctx.api.setToken(token);
+    ctx.accessApi = makeApi(ctx.deps, ctx.wrangler, token);
     try {
       return await lookup(ctx, accountId);
     } catch (e2) {
       if (status(e2) === 403) return denied;
       throw e2;
     }
+  }
+}
+
+/** POST the app and put its client secret as one interruption-safe unit. */
+async function create(
+  state: State,
+  ctx: Ctx,
+  a: string,
+  policyId: string,
+  domain: string,
+) {
+  let interrupted = false;
+  const onSigint = () => {
+    interrupted = true;
+  };
+  process.on("SIGINT", onSigint);
+  try {
+    const created = await ctx.accessApi<Obj>("POST", `${a}/apps`, {
+      name: ctx.opts.name,
+      type: "saas",
+      policies: [{ id: policyId, precedence: 1 }],
+      saas_app: {
+        auth_type: "oidc",
+        redirect_uris: [callback(ctx)],
+        grant_types: ["authorization_code_with_pkce"],
+        allow_pkce_without_client_secret: false,
+        scopes: ["openid", "email", "profile"],
+      },
+    });
+    state.pendingAccessAppId = created.id;
+    writeState(ctx.fs, ctx.root, state);
+    try {
+      const secret = created?.saas_app?.client_secret;
+      if (typeof secret !== "string" || !secret || !created.saas_app.client_id)
+        throw new Error(
+          "create response lacks saas_app.client_secret or client_id",
+        );
+      await putSecret(ctx, ACCESS_SECRET, secret);
+      if (interrupted)
+        throw new Error("interrupted (SIGINT); Access app rolled back");
+      record(state, ctx, domain, created);
+    } catch (e) {
+      // The client secret is unrecoverable once lost: undo the create.
+      await ctx.accessApi("DELETE", `${a}/apps/${created.id}`).then(
+        () => delete state.pendingAccessAppId,
+        () => {
+          (e as Error).message +=
+            `; rollback failed: DELETE of Access app ${created.id} also failed, delete it in Zero Trust > Access > Applications`;
+        },
+      );
+      throw interrupted ? Object.assign(e as Error, { exitCode: 130 }) : e;
+    }
+  } finally {
+    process.off("SIGINT", onSigint);
   }
 }
 
@@ -108,19 +174,26 @@ export const access: Step = {
       state.accessAppId &&
       state.accessClientId &&
       state.teamDomain
-    )
-      return (await listSecrets(ctx)).has(ACCESS_SECRET) ? "done" : "todo";
+    ) {
+      if (!(await listSecrets(ctx)).has(ACCESS_SECRET)) return "todo";
+      ctx.notes.push(
+        "verified from state only (--upgrade); rerun without --upgrade to reconcile Access",
+      );
+      return "done";
+    }
     const l = await lookup(ctx, state.accountId ?? "").catch((e) => {
       if (status(e) === 403) return undefined;
       throw e;
     });
-    const linked = l?.app?.policies?.some((p: Obj) => p.id === l.policy?.id);
     if (
       !l?.domain ||
       !l.policy ||
       !policyMatches(l.policy) ||
-      !linked ||
-      !l.app.saas_app?.client_id ||
+      !l.app ||
+      l.app.type !== "saas" ||
+      l.app.saas_app?.auth_type !== "oidc" ||
+      !linked(l.app, l.policy.id) ||
+      !l.app.saas_app.client_id ||
       !l.have.has(ACCESS_SECRET)
     )
       return "todo";
@@ -128,7 +201,7 @@ export const access: Step = {
     return "done";
   },
   async apply(state, ctx) {
-    // Preflight: nothing here touches the app until every check has passed.
+    // Preflight: nothing is written until every check below has passed.
     const l = await lookupWithToken(ctx, state.accountId ?? "");
     if ("status" in l) return l;
     if (!l.domain)
@@ -136,30 +209,29 @@ export const access: Step = {
         `No Zero Trust organization on this account: open ${ZERO_TRUST}, enable Zero Trust (free), then rerun.`,
         { url: ZERO_TRUST },
       );
-    let policyId: string = l.policy?.id;
-    if (!l.policy)
-      policyId = (await ctx.api<Obj>("POST", `${l.a}/policies`, POLICY_BODY))
-        .id;
-    else if (!policyMatches(l.policy)) {
-      const kept = Object.fromEntries(
-        CARRY_OVER.filter((k) => l.policy[k] !== undefined).map((k) => [
-          k,
-          l.policy[k],
-        ]),
-      );
-      await ctx.api("PUT", `${l.a}/policies/${policyId}`, {
-        ...kept,
-        ...POLICY_BODY,
-      });
-    }
     const where = `Zero Trust > Access > Applications > ${ctx.opts.name}`;
-    if (l.app) {
+    let app = l.app;
+    if (
+      app &&
+      app.id === state.pendingAccessAppId &&
+      !l.have.has(ACCESS_SECRET)
+    ) {
+      // Ours, from an interrupted run, and its secret is lost: recreate it.
+      await ctx.accessApi("DELETE", `${l.a}/apps/${app.id}`);
+      delete state.pendingAccessAppId;
+      app = undefined;
+    }
+    if (app) {
       // Never PUT an existing app: a full replace would drop dashboard edits.
-      if (!l.app.policies?.some((p: Obj) => p.id === policyId))
+      if (app.type !== "saas" || app.saas_app?.auth_type !== "oidc")
+        return AR(
+          `Access app ${ctx.opts.name} exists but is not a SaaS OIDC app. Rename or delete it (${where}), then rerun.`,
+        );
+      if (!linked(app, l.policy?.id))
         return AR(
           `Access app ${ctx.opts.name} is not linked to policy "${POLICY_NAME}". Attach it in ${where} > Policies, or delete the app, then rerun.`,
         );
-      if (!l.app.saas_app?.client_id)
+      if (!app.saas_app.client_id)
         throw new Error(
           `Access app ${ctx.opts.name} has no saas_app.client_id`,
         );
@@ -167,37 +239,27 @@ export const access: Step = {
         return AR(
           `${ACCESS_SECRET} is missing on the Worker and can't be recovered: the API returns the client secret only on create. Delete the Access app (${where}), then rerun.`,
         );
-      record(state, ctx, l.domain, l.app);
-      return undefined;
     }
-    const created = await ctx.api<Obj>("POST", `${l.a}/apps`, {
-      name: ctx.opts.name,
-      type: "saas",
-      policies: [{ id: policyId, precedence: 1 }],
-      saas_app: {
-        auth_type: "oidc",
-        redirect_uris: [`https://${ctx.opts.appHost}/auth/callback`],
-        grant_types: ["authorization_code_with_pkce"],
-        allow_pkce_without_client_secret: false,
-        scopes: ["openid", "email", "profile"],
-      },
-    });
-    try {
-      const secret = created?.saas_app?.client_secret;
-      if (typeof secret !== "string" || !secret || !created.saas_app.client_id)
-        throw new Error(
-          "create response lacks saas_app.client_secret or client_id",
-        );
-      await putSecret(ctx, ACCESS_SECRET, secret);
-      record(state, ctx, l.domain, created);
-    } catch (e) {
-      // The client secret is unrecoverable once lost: undo the create.
-      await ctx.api("DELETE", `${l.a}/apps/${created.id}`).catch(() => {
-        (e as Error).message +=
-          `; rollback failed: DELETE of Access app ${created.id} also failed, delete it in ${where}`;
+    // The policy is written only once the existing-app checks have passed.
+    let policyId: string = l.policy?.id;
+    if (!l.policy)
+      policyId = (
+        await ctx.accessApi<Obj>("POST", `${l.a}/policies`, POLICY_BODY)
+      ).id;
+    else if (!policyMatches(l.policy)) {
+      const kept = Object.fromEntries(
+        CARRY_OVER.filter((k) => l.policy[k] !== undefined).map((k) => [
+          k,
+          l.policy[k],
+        ]),
+      );
+      await ctx.accessApi("PUT", `${l.a}/policies/${policyId}`, {
+        ...kept,
+        ...POLICY_BODY,
       });
-      throw e;
     }
+    if (app) record(state, ctx, l.domain, app);
+    else await create(state, ctx, l.a, policyId, l.domain);
     return undefined;
   },
 };

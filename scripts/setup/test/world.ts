@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { core, envelope, ROOT } from "./fakes.ts";
+import { core, envelope, ROOT, STATE } from "./fakes.ts";
 
 const TEMPLATE = "apps/server/wrangler.template.jsonc";
 const realRoot = join(import.meta.dirname, "../../..");
@@ -41,13 +41,17 @@ type World = {
   kv?: { id: string; title: string }[];
   answers?: string[];
   /** Access organization: 403s for the wrangler token, or none at all. */
-  org?: "forbidden" | "none";
+  org?: "forbidden" | "none" | "404";
   policies?: Obj[];
   apps?: Obj[];
   /** Worker secret names; undefined means the Worker does not exist yet. */
   secrets?: string[];
   putFails?: string;
   deleteFails?: boolean;
+  /** Preloaded .openartifacts/state.json. */
+  state?: Obj;
+  /** Omit result_info from list pages (paging must stop on a short page). */
+  noResultInfo?: boolean;
 };
 // biome-ignore lint/suspicious/noExplicitAny: loose API fixtures
 type Obj = any;
@@ -64,16 +68,30 @@ export const app = (name: string, policies = [{ id: "pol1" }]) => ({
   id: `app-${name}`,
   name,
   policies,
-  saas_app: { client_id: `cid-${name}` },
+  type: "saas",
+  saas_app: {
+    auth_type: "oidc",
+    client_id: `cid-${name}`,
+    redirect_uris: ["https://app.example.com/auth/callback"],
+  },
 });
-const paged = (items: Obj[], q: (k: string) => string | null) => {
+const paged = (
+  items: Obj[],
+  q: (k: string) => string | null,
+  noInfo?: boolean,
+) => {
   const per = Math.min(100, Number(q("per_page") ?? 20)); // API max
   const page = Number(q("page") ?? 1);
   const total_pages = Math.max(1, Math.ceil(items.length / per));
   const result = items.slice((page - 1) * per, page * per);
   const info = { page, per_page: per, total_pages };
   return new Response(
-    JSON.stringify({ success: true, errors: [], result, result_info: info }),
+    JSON.stringify({
+      success: true,
+      errors: [],
+      result,
+      ...(noInfo ? {} : { result_info: info }),
+    }),
   );
 };
 
@@ -94,11 +112,13 @@ export function world(w: World = {}) {
   const ops: string[] = [];
   const values: string[] = [];
   const creates: string[] = [];
+  const auths: string[] = [];
   const zoneQueries: string[] = [];
   const c = core({
     answers: w.answers,
     files: {
       [join(ROOT, TEMPLATE)]: readFileSync(join(realRoot, TEMPLATE), "utf8"),
+      ...(w.state ? { [STATE]: JSON.stringify(w.state) } : {}),
     },
     exec: async (cmd, args, opts) => {
       if (cmd === "pnpm" && args[0] === "--version")
@@ -116,7 +136,11 @@ export function world(w: World = {}) {
       } else if (put) {
         values.push(opts?.input ?? "");
         if (put[1] === w.putFails)
-          return { code: 1, stdout: "", stderr: "put failed" };
+          return {
+            code: 1,
+            stdout: opts?.input ?? "",
+            stderr: `put failed: ${JSON.stringify(opts?.input)}`,
+          };
         ops.push(`put ${put[1]}`);
         secrets = [...(secrets ?? []), put[1]];
       } else if (a === "whoami --json") stdout = WHOAMI(acct.accounts);
@@ -138,6 +162,7 @@ export function world(w: World = {}) {
       const body = init?.body ? JSON.parse(String(init.body)) : undefined;
       const q = (k: string) => u.searchParams.get(k);
       const p = u.pathname.replace("/client/v4", "");
+      auths.push(`${p} ${auth}`);
       const r2 = p.match(/\/r2\/buckets\/([^/]+)$/);
       const acc = p.match(/\/access\/(organizations|policies|apps)\/?(.*)$/);
       if (acc?.[1] === "organizations") {
@@ -145,6 +170,8 @@ export function world(w: World = {}) {
           return envelope(null, 403, [
             { code: 10000, message: "Authentication error" },
           ]);
+        if (w.org === "404")
+          return envelope(null, 404, [{ code: 7003, message: "not found" }]);
         return envelope(
           w.org === "none"
             ? null
@@ -152,7 +179,7 @@ export function world(w: World = {}) {
         );
       }
       if (acc && m === "GET")
-        return paged(acc[1] === "apps" ? apps : policies, q);
+        return paged(acc[1] === "apps" ? apps : policies, q, w.noResultInfo);
       if (acc) ops.push(`${m} ${acc[1]}${acc[2] ? `/${acc[2]}` : ""}`);
       if (acc?.[1] === "policies" && m === "POST") {
         policies.push({ ...body, id: "pol1" });
@@ -206,7 +233,17 @@ export function world(w: World = {}) {
       return envelope(null, 404, [{ message: "no route" }]);
     },
   });
-  return { ...c, creates, zoneQueries, acct, ops, values, policies, apps };
+  return {
+    ...c,
+    auths,
+    creates,
+    zoneQueries,
+    acct,
+    ops,
+    values,
+    policies,
+    apps,
+  };
 }
 
 export const HOSTS = [

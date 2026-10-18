@@ -35,9 +35,15 @@ export async function listSecrets(ctx: Ctx): Promise<Set<string>> {
  */
 export async function putSecret(ctx: Ctx, name: string, value: string) {
   try {
-    await ctx.wrangler(["secret", "put", name, "--name", ctx.opts.name], value);
+    await ctx.wrangler(["secret", "put", name, "--name", ctx.opts.name], {
+      input: value,
+      sensitive: true,
+    });
   } catch (e) {
-    const msg = (e as Error).message.replaceAll(value, "[redacted]");
+    const escaped = JSON.stringify(value).slice(1, -1);
+    const msg = (e as Error).message
+      .replaceAll(value, "[redacted]")
+      .replaceAll(escaped, "[redacted]");
     throw new Error(`secret put ${name} failed: ${msg}`);
   }
 }

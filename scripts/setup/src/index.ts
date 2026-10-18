@@ -103,11 +103,26 @@ export async function run(
   Object.assign(state, { name, appHost, contentHost, ownerEmail });
   const wrangler = makeWrangler(deps, root, () => state.accountId);
   const api = makeApi(deps, wrangler);
-  const ctx: Ctx = { deps, fs, root, opts, wrangler, api };
+  const accessApi = makeApi(deps, wrangler, deps.env.OA_ACCESS_TOKEN);
+  const ctx: Ctx = {
+    deps,
+    fs,
+    root,
+    opts,
+    wrangler,
+    api,
+    accessApi,
+    notes: [],
+  };
+  const msg = (fallback: string) => ctx.notes.splice(0).join("; ") || fallback;
   for (const step of steps) {
     try {
       if ((await step.check(state, ctx)) === "done") {
-        report({ step: step.name, status: "skipped", message: "already done" });
+        report({
+          step: step.name,
+          status: "skipped",
+          message: msg("already done"),
+        });
         continue;
       }
       const r = await step.apply(state, ctx);
@@ -115,11 +130,11 @@ export async function run(
         report({ step: step.name, ...r });
         return 2;
       }
-      report({ step: step.name, status: "ok", message: "done" });
+      report({ step: step.name, status: "ok", message: msg("done") });
     } catch (e) {
       const message = (e as Error).message;
       report({ step: step.name, status: "error", message });
-      return 1;
+      return (e as { exitCode?: number }).exitCode ?? 1;
     } finally {
       writeState(fs, root, state);
     }
