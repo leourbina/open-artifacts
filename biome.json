@@ -12,6 +12,7 @@
       "!logs",
       "!**/.wrangler",
       "!**/.astro",
+      "!**/dist-assets",
       "!pnpm-lock.yaml"
     ]
   },
