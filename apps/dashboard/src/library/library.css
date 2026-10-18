@@ -147,8 +147,14 @@
 .lib-thumb img[data-ready] {
   opacity: 1;
 }
+/* Hidden once the image has faded in over it. */
+.lib-thumb:has(img[data-ready]) .lib-fallback {
+  visibility: hidden;
+  transition: visibility 0s linear var(--oa-duration);
+}
 @media (prefers-reduced-motion: reduce) {
-  .lib-thumb img {
+  .lib-thumb img,
+  .lib-thumb:has(img[data-ready]) .lib-fallback {
     transition: none;
   }
 }

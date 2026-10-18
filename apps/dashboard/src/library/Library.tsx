@@ -1,7 +1,7 @@
 import type { Format } from "@oa/shared";
 import { Button, EmptyState, Skeleton, Tabs } from "@oa/ui";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { useRef } from "react";
+import { useMemo, useRef } from "react";
 import { useMe } from "../auth/useMe";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { DropZone } from "../upload/DropZone";
@@ -88,7 +88,8 @@ export function Library({ scope }: { scope: Scope }) {
   const set = (patch: object) => go(PATH[scope], { ...s, ...patch });
 
   const q = useLibraryQuery({ scope, format: s.format, agent: s.agent });
-  const items = uniqueItems(q.data?.pages);
+  const pages = q.data?.pages;
+  const items = useMemo(() => uniqueItems(pages), [pages]);
   useBackgroundThumbnails(items);
   // Remember agents seen so far so others stay selectable while one is filtered.
   const seenAgents = useRef(new Set<string>());

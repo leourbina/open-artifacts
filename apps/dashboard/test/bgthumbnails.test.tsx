@@ -20,6 +20,11 @@ vi.mock("../src/api/client", async (orig) => {
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
 
 type Hook = typeof import("../src/library/useBackgroundThumbnails");
+const CHROME_UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
+const SAFARI_UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15";
+let ua = CHROME_UA;
 type Fx = typeof import("../src/viewer/useArtifactSideEffects");
 let hook: Hook["useBackgroundThumbnails"];
 let thumbAsked: Fx["thumbAsked"];
@@ -89,6 +94,13 @@ const webp = (bytes: number) => {
 };
 
 beforeEach(async () => {
+  ua = CHROME_UA;
+  Object.defineProperty(navigator, "userAgent", {
+    configurable: true,
+    get: () => ua,
+  });
+  localStorage.clear();
+  sessionStorage.clear();
   vi.useFakeTimers();
   vi.resetModules();
   ({ useBackgroundThumbnails: hook } = await import(
@@ -110,6 +122,8 @@ beforeEach(async () => {
 afterEach(() => {
   vi.useRealTimers();
   Reflect.deleteProperty(navigator, "connection");
+  Reflect.deleteProperty(navigator, "userAgent");
+  document.body.innerHTML = "";
 });
 
 describe("background thumbnails", () => {
@@ -147,6 +161,8 @@ describe("background thumbnails", () => {
     const f = fs[0];
     expect(f.getAttribute("sandbox")).toBe("allow-scripts");
     expect(f.getAttribute("referrerpolicy")).toBe("no-referrer");
+    expect(f.getAttribute("allow")).toBe("");
+    expect(f.hasAttribute("inert")).toBe(true);
     expect(f.getAttribute("aria-hidden")).toBe("true");
     expect(f.tabIndex).toBe(-1);
     expect(f.src).toBe(contentUrl(a.id).url);
@@ -334,6 +350,189 @@ describe("background thumbnails", () => {
     await settle();
     expect(contentCalls()).toHaveLength(1);
     expect(frames()).toHaveLength(0);
+  });
+});
+
+describe("background thumbnails: hardening", () => {
+  const journal = () =>
+    JSON.parse(localStorage.getItem("oa.bgthumb.journal") ?? "{}");
+
+  it("does not start while the user is typing, and starts once they stop", async () => {
+    document.body.innerHTML = '<input id="search"><button id="b">b</button>';
+    const search = document.getElementById("search") as HTMLInputElement;
+    search.focus();
+    const a = art();
+    run([a]);
+    await settle();
+    expect(contentCalls()).toHaveLength(0);
+    await act(async () => {
+      (document.getElementById("b") as HTMLButtonElement).focus();
+      vi.advanceTimersByTime(0);
+    });
+    await settle();
+    expect(contentCalls()).toEqual([R.contentUrl(a.id)]);
+  });
+
+  it("kills the attempt and gives focus back when the hidden frame takes focus", async () => {
+    document.body.innerHTML = '<input id="search">';
+    const search = document.getElementById("search") as HTMLInputElement;
+    const a = art();
+    const b = art();
+    run([a, b]);
+    await settle();
+    const [f] = frames();
+    // The user starts typing while the frame loads.
+    search.focus();
+    // What Chromium does when the frame calls input.focus(): the frame becomes
+    // the active element and the library window blurs.
+    f.focus();
+    window.dispatchEvent(new FocusEvent("blur"));
+    await act(async () => vi.advanceTimersByTime(0));
+    expect(f.isConnected).toBe(false);
+    expect(document.activeElement).toBe(search);
+    // Failed in the background, but the viewer may still try.
+    expect(thumbAsked.has(a.id)).toBe(false);
+    // Not retried; nothing else starts while the user types.
+    await settle();
+    expect(contentCalls()).toEqual([R.contentUrl(a.id)]);
+  });
+
+  it("remembers a started attempt across a reload, so a frame that hangs or crashes the tab is not retried", async () => {
+    const a = art();
+    run([a]);
+    await settle();
+    expect(contentCalls()).toEqual([R.contentUrl(a.id)]);
+    expect(journal()[a.id]).toEqual(expect.any(Number));
+    // Reload: module state is gone, only storage survives.
+    getMock.mockClear();
+    vi.resetModules();
+    const { useBackgroundThumbnails } = await import(
+      "../src/library/useBackgroundThumbnails"
+    );
+    renderHook(() => useBackgroundThumbnails([a]), { wrapper });
+    await settle();
+    expect(contentCalls()).toEqual([]);
+  });
+
+  it("forgets a journal entry after 24 h", async () => {
+    const a = art();
+    localStorage.setItem(
+      "oa.bgthumb.journal",
+      JSON.stringify({ [a.id]: Date.now() - 24 * 60 * 60 * 1000 - 1 }),
+    );
+    run([a]);
+    await settle();
+    expect(contentCalls()).toEqual([R.contentUrl(a.id)]);
+  });
+
+  it("clears the journal entry on success", async () => {
+    const a = art();
+    run([a]);
+    await settle();
+    const [f] = frames();
+    spyFrame(f);
+    fromFrame(f, HELLO);
+    fromFrame(f, { oa: 1, type: "thumb.ready", dataUrl: webp(64) });
+    await settle();
+    expect(journal()[a.id]).toBeUndefined();
+    expect(thumbAsked.has(a.id)).toBe(true);
+  });
+
+  it("a timed-out attempt stays journaled but no longer blocks the viewer", async () => {
+    const a = art();
+    run([a]);
+    await settle();
+    await act(async () => vi.advanceTimersByTime(10_000));
+    expect(journal()[a.id]).toEqual(expect.any(Number));
+    expect(thumbAsked.has(a.id)).toBe(false);
+  });
+
+  it("aborts the content URL request when it gives up", async () => {
+    let signal: AbortSignal | undefined;
+    getMock.mockImplementation((_p: string, _s: unknown, sig: AbortSignal) => {
+      signal = sig;
+      return new Promise(() => {});
+    });
+    const h = run([art()]);
+    await settle();
+    expect(signal?.aborted).toBe(false);
+    h.unmount();
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it("keeps the 12-attempt cap across a reload", async () => {
+    sessionStorage.setItem("oa.bgthumb.attempts", "12");
+    run([art()]);
+    await settle();
+    expect(contentCalls()).toHaveLength(0);
+  });
+
+  it("stops the in-flight attempt when the tab is hidden, without counting it", async () => {
+    sessionStorage.setItem("oa.bgthumb.attempts", "11");
+    const a = art();
+    run([a]);
+    await settle();
+    expect(frames()).toHaveLength(1);
+    visibility = "hidden";
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(frames()).toHaveLength(0);
+    expect(journal()[a.id]).toBeUndefined();
+    expect(sessionStorage.getItem("oa.bgthumb.attempts")).toBe("11");
+    // Retried once visible again.
+    visibility = "visible";
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await settle();
+    expect(contentCalls()).toEqual([R.contentUrl(a.id), R.contentUrl(a.id)]);
+  });
+
+  it("never runs on WebKit", async () => {
+    ua = SAFARI_UA;
+    run([art()]);
+    await settle();
+    expect(contentCalls()).toHaveLength(0);
+  });
+});
+
+describe("isWebKit", () => {
+  let isWebKit: Hook["isWebKit"];
+  beforeEach(async () => {
+    ({ isWebKit } = await import("../src/library/useBackgroundThumbnails"));
+  });
+  it.each([
+    ["Safari on macOS", SAFARI_UA, 0, true],
+    [
+      "Safari on iPhone",
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+      5,
+      true,
+    ],
+    [
+      "Chrome on iOS",
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/140.0 Mobile/15E148 Safari/604.1",
+      5,
+      true,
+    ],
+    ["iPadOS desktop mode", SAFARI_UA, 5, true],
+    ["Chrome on macOS", CHROME_UA, 0, false],
+    [
+      "Chrome on Android",
+      "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36",
+      5,
+      false,
+    ],
+    ["Edge", `${CHROME_UA} Edg/140.0.0.0`, 0, false],
+    [
+      "Firefox",
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.0; rv:140.0) Gecko/20100101 Firefox/140.0",
+      0,
+      false,
+    ],
+  ])("%s", (_name, agent, touch, expected) => {
+    expect(isWebKit(agent, touch)).toBe(expected);
   });
 });
 

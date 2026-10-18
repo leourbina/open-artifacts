@@ -11,6 +11,9 @@ function watch(page: Page) {
   });
   page.on("pageerror", (e) => problems.push(`pageerror: ${e.message}`));
   page.on("requestfailed", (r) => {
+    // Cancelled on purpose (navigation, unmount, a superseded query).
+    const err = r.failure()?.errorText;
+    if (err === "net::ERR_ABORTED" || err === "cancelled") return;
     if (new URL(r.url()).pathname.startsWith("/api/"))
       problems.push(`failed: ${r.method()} ${r.url()}`);
   });
