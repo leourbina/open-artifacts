@@ -1,0 +1,70 @@
+---
+import { REPO_URL } from "@oa/shared";
+import tokensCss from "@oa/ui/tokens.css?raw";
+import "../styles/site.css";
+
+// Inline the Studio tokens without their font @import, which would block rendering.
+// The same Google Fonts stylesheet loads below without blocking.
+const fontImport = /^@import url\("([^"]+)"\);\n/m;
+const fontsHref = tokensCss.match(fontImport)?.[1];
+const tokens = tokensCss.replace(fontImport, "");
+
+interface Props {
+  title: string;
+  description: string;
+}
+
+const { title, description } = Astro.props;
+const canonical = new URL(Astro.url.pathname, Astro.site);
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    {fontsHref && <link rel="stylesheet" href={fontsHref} media="print" onload="this.media='all'" />}
+    {fontsHref && <noscript><link rel="stylesheet" href={fontsHref} /></noscript>}
+    <style is:inline set:html={tokens} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={canonical} />
+    <meta name="theme-color" content="#eef0f3" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#131518" media="(prefers-color-scheme: dark)" />
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="site-head">
+      <div class="wrap head-row">
+        {/* TODO(D6): import the logo from @oa/ui/brand once D6 merges; text wordmark until then. */}
+        <a class="wordmark" href="/">
+          <img src="/favicon.svg" alt="" width="18" height="18" />
+          Open Artifacts
+        </a>
+        <nav aria-label="Site">
+          <a href="/llms.txt">llms.txt</a>
+          <a href={REPO_URL}>GitHub</a>
+        </nav>
+      </div>
+    </header>
+    <main id="main">
+      <slot />
+    </main>
+    <footer class="site-foot">
+      <div class="wrap foot-row">
+        <p>Open Artifacts is MIT licensed and runs on your own Cloudflare account.</p>
+        <nav aria-label="Footer">
+          <a href="/llms.txt">llms.txt</a>
+          <a href={REPO_URL}>Source on GitHub</a>
+        </nav>
+      </div>
+    </footer>
+  </body>
+</html>
