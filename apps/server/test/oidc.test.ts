@@ -30,6 +30,8 @@ let jwk: Record<string, unknown>;
 type CodeEntry = { challenge: string; claims: JWTPayload; key?: CryptoKey };
 const codes = new Map<string, CodeEntry>();
 let tokenStatus = 200;
+let tokenRaw: string | null = null;
+let tokenResp: (() => Response) | null = null;
 let tokenCalls: { body: URLSearchParams }[] = [];
 
 const issuer = new Hono();
@@ -37,8 +39,13 @@ issuer.get("/jwks", (c) => c.json({ keys: [jwk] }));
 issuer.post("/token", async (c) => {
   const body = new URLSearchParams(await c.req.text());
   tokenCalls.push({ body });
+  if (tokenResp) return tokenResp();
   if (tokenStatus !== 200)
     return c.text("upstream-secret-detail", tokenStatus as 500);
+  if (tokenRaw !== null)
+    return new Response(tokenRaw, {
+      headers: { "content-type": "application/json" },
+    });
   const entry = codes.get(body.get("code") ?? "");
   if (!entry) return c.json({ error: "invalid_grant" }, 400);
   const digest = await crypto.subtle.digest(
@@ -69,6 +76,8 @@ beforeAll(async () => {
 
 beforeEach(() => {
   tokenStatus = 200;
+  tokenRaw = null;
+  tokenResp = null;
   tokenCalls = [];
   const realFetch = globalThis.fetch;
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
@@ -472,5 +481,157 @@ describe("session middleware", () => {
     const { cookie, userId } = await login("gone@x.com");
     await env.DB.prepare("delete from users where id = ?").bind(userId).run();
     expect((await get({ cookie })).user).toBeNull();
+  });
+});
+
+describe("callback failure logging", () => {
+  type Log = { evt: string; stage: string; [k: string]: unknown };
+  let warn: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+  const logs = (): Log[] =>
+    warn.mock.calls.map((a: unknown[]) => JSON.parse(String(a[0])) as Log);
+  const raw = () =>
+    warn.mock.calls.map((a: unknown[]) => a.join(" ")).join("\n");
+
+  const EMAIL = "secret-person@leak.example";
+  async function run(
+    expectStage: string,
+    setup: (
+      b: Awaited<ReturnType<typeof begin>>,
+    ) => Promise<Response> | Response,
+    claims: JWTPayload = { email: EMAIL },
+  ) {
+    const b = await begin(claims);
+    warn.mockClear();
+    const r = await setup(b);
+    const l = logs().filter((x) => x.evt === "oidc_fail");
+    expect(l.map((x) => x.stage)).toEqual([expectStage]);
+    const text = raw();
+    for (const secret of [
+      EMAIL,
+      "leak.example",
+      b.code,
+      b.state,
+      b.nonce,
+      b.oidc ?? "",
+      env.ACCESS_CLIENT_SECRET,
+      env.SESSION_SECRET,
+      "upstream-secret-detail",
+      "eyJ",
+    ])
+      expect(text).not.toContain(secret);
+    return { r, l: l[0] as Log };
+  }
+
+  it("no_state_cookie", async () => {
+    await run("no_state_cookie", (b) => callback(b, undefined));
+  });
+  it("state_bad_sig", async () => {
+    await run("state_bad_sig", (b) => callback(b, `${b.oidc}x`));
+  });
+  it("state_expired", async () => {
+    await run("state_expired", async (b) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(Date.now() + 11 * 60 * 1000);
+      try {
+        return await callback(b, b.oidc);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+  it("state_mismatch", async () => {
+    await run("state_mismatch", (b) =>
+      callback({ ...b, state: `${b.state}x` }, b.oidc),
+    );
+  });
+  it("idp_error with sanitized error", async () => {
+    const { l } = await run("idp_error", (b) =>
+      call(
+        `/auth/callback?error=${encodeURIComponent("Access_Denied<script>")}&state=${encodeURIComponent(b.state)}`,
+        { headers: { cookie: `oa_oidc=${b.oidc}` } },
+      ),
+    );
+    expect(l.error).toMatch(/^access_denied[a-z_]{0,51}$/);
+  });
+  it("token_http_<status>", async () => {
+    tokenStatus = 502;
+    const { r } = await run("token_http_502", (b) => callback(b, b.oidc));
+    expect(r.status).toBe(401);
+    expect(await r.text()).not.toContain("upstream");
+  });
+  it("token 302 (Access error redirect) logs error + description", async () => {
+    tokenResp = () =>
+      new Response(null, {
+        status: 302,
+        headers: {
+          location: `${APP}/auth/callback?error=invalid_client&error_description=${encodeURIComponent(`Client auth failed\u0000\n${"x".repeat(300)}`)}`,
+        },
+      });
+    const { l, r } = await run("token_http_302", (b) => callback(b, b.oidc));
+    expect(r.status).toBe(401);
+    expect(l.error).toBe("invalid_client");
+    expect(String(l.description)).toMatch(/^Client auth failedx+$/);
+    expect(String(l.description).length).toBe(200);
+    expect(await r.text()).not.toContain("invalid_client");
+  });
+  it("token 4xx JSON body logs error + description", async () => {
+    tokenResp = () =>
+      Response.json(
+        { error: "invalid_grant", error_description: "Code expired" },
+        { status: 400 },
+      );
+    const { l } = await run("token_http_400", (b) => callback(b, b.oidc));
+    expect(l.error).toBe("invalid_grant");
+    expect(l.description).toBe("Code expired");
+  });
+  it("token_bad_json", async () => {
+    tokenRaw = "not json";
+    await run("token_bad_json", (b) => callback(b, b.oidc));
+  });
+  it("no_id_token", async () => {
+    tokenRaw = JSON.stringify({ access_token: "at" });
+    await run("no_id_token", (b) => callback(b, b.oidc));
+  });
+  it("jwt_verify with code and claim", async () => {
+    const { l } = await run("jwt_verify", (b) => callback(b, b.oidc), {
+      email: EMAIL,
+      aud: "other-client",
+    });
+    expect(l.code).toBe("ERR_JWT_CLAIM_VALIDATION_FAILED");
+    expect(l.claim).toBe("aud");
+    const { l: l2 } = await run("jwt_verify", (b) => callback(b, b.oidc), {
+      email: EMAIL,
+      exp: Math.floor(Date.now() / 1000) - 600,
+    });
+    expect(l2.code).toBe("ERR_JWT_EXPIRED");
+    expect(l2.claim).toBe("exp");
+  });
+  it("aud (multi-audience)", async () => {
+    await run("aud", (b) => callback(b, b.oidc), {
+      email: EMAIL,
+      aud: [env.ACCESS_CLIENT_ID, "other"],
+    });
+  });
+  it("nonce", async () => {
+    await run("nonce", (b) => callback(b, b.oidc), {
+      email: EMAIL,
+      nonce: "wrong",
+    });
+  });
+  it("email", async () => {
+    await run("email", (b) => callback(b, b.oidc), {});
+  });
+  it("email_unverified", async () => {
+    await run("email_unverified", (b) => callback(b, b.oidc), {
+      email: EMAIL,
+      email_verified: false,
+    });
+  });
+  it("no_access", async () => {
+    const { r } = await run("no_access", (b) => callback(b, b.oidc));
+    expect(r.headers.get("location")).toBe("/no-access");
   });
 });
