@@ -155,3 +155,100 @@ describe("access rerun without OA_ACCESS_TOKEN", () => {
     expect(step(fresh, "access").status).toBe("action_required");
   });
 });
+
+describe("B16-4 review fixes", () => {
+  const step = (w: W, s: string) => parsed(w).find((j) => j.step === s);
+
+  it("a changed --app-host takes the full Access path, not the skip", async () => {
+    const w = world();
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    const copied = world({
+      org: "forbidden",
+      state: w.state(),
+      secrets: [
+        "ACCESS_CLIENT_SECRET",
+        "SESSION_SECRET",
+        "CONTENT_SIGNING_KEY",
+      ],
+    });
+    const argv = HOSTS.map((a) =>
+      a === "app.example.com" ? "app2.example.com" : a,
+    );
+    expect(await run(argv, copied.deps, ROOT)).toBe(2);
+    expect(step(copied, "access").status).toBe("action_required");
+    expect(copied.auths.some((a) => a.includes("/access/"))).toBe(true);
+  });
+
+  it("a changed account takes the full Access path, not the skip", async () => {
+    const w = world();
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    const copied = world({
+      org: "forbidden",
+      accounts: ["acc1", "acc2"],
+      state: { ...w.state(), accountId: "acc1" },
+      secrets: [
+        "ACCESS_CLIENT_SECRET",
+        "SESSION_SECRET",
+        "CONTENT_SIGNING_KEY",
+      ],
+    });
+    const argv = [...HOSTS, "--account-id", "acc2"];
+    expect(await run(argv, copied.deps, ROOT)).toBe(2);
+    expect(step(copied, "access").status).toBe("action_required");
+  });
+
+  it("welcomeUrl must be an app-host /a/ URL; search and hash are stripped", async () => {
+    for (const bad of [
+      "https://a.b.usercontent.example.com/s/sig/art1/1/__view",
+      "https://app.example.com/c/art1",
+      "http://app.example.com/a/art1",
+    ]) {
+      const w = world({ viewUrl: bad });
+      expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+      expect(w.lines.join("\n")).not.toContain(bad);
+      expect(step(w, "selftest").data.welcomeUrl).toBeUndefined();
+      expect(step(w, "selftest").message).toContain("welcome URL ignored");
+      expect(step(w, "agent-config").data.welcomeUrl).toBeUndefined();
+    }
+    const w = world({ viewUrl: "https://app.example.com/a/art1?t=x#h" });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    expect(step(w, "selftest").data.welcomeUrl).toBe(
+      "https://app.example.com/a/art1",
+    );
+    expect(w.lines.join("\n")).not.toContain("t=x");
+  });
+
+  it("--json --yes together never prompts", async () => {
+    const sites = [
+      { w: world({ accounts: ["acc1", "acc2"] }), argv: HOSTS },
+      { w: world({ org: "forbidden" }), argv: HOSTS },
+      {
+        w: world({ state: { name: "open-artifacts" } }),
+        argv: [...HOSTS, "--name", "other"],
+      },
+      {
+        w: world(),
+        argv: HOSTS.filter(
+          (a, i) => a !== "--app-host" && HOSTS[i - 1] !== "--app-host",
+        ),
+      },
+    ];
+    for (const { w, argv } of sites) {
+      expect(argv).toEqual(expect.arrayContaining(["--json", "--yes"]));
+      expect(await run(argv, w.deps, ROOT)).toBe(2);
+      expect(w.prompts).toEqual([]);
+      expect(last(w).status).toBe("action_required");
+    }
+    const ok = world();
+    expect(await run(HOSTS, ok.deps, ROOT)).toBe(0);
+    expect(ok.prompts).toEqual([]);
+  });
+
+  it("the non-interactive 403 message says to set OA_ACCESS_TOKEN", async () => {
+    const w = world({ org: "forbidden" });
+    expect(await run(JSON_ONLY, w.deps, ROOT)).toBe(2);
+    expect(last(w).message).toContain(
+      "set OA_ACCESS_TOKEN (non-interactive/--json)",
+    );
+  });
+});

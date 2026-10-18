@@ -32,6 +32,8 @@ export type Ctx = {
   pat?: string;
   /** The welcome artifact's view URL, when selftest published it this run. */
   welcomeUrl?: string;
+  /** Saved state as loaded, before this run's flags were applied. */
+  prev?: { name?: string; appHost?: string; accountId?: string };
 };
 
 /** Missing input where prompting isn't allowed (--json): reported as action_required, exit 2. */

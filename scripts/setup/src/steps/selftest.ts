@@ -129,6 +129,21 @@ async function content(ctx: Ctx, token: string, id: string): Promise<string> {
   return shown;
 }
 
+/** The publish result's view URL, only as an app-host `/a/…` link without search or hash. */
+function viewUrl(ctx: Ctx, raw?: string): string | undefined {
+  let u: URL | undefined;
+  try {
+    u = raw ? new URL(raw) : undefined;
+  } catch {}
+  if (
+    u?.origin === `https://${ctx.opts.appHost}` &&
+    u.pathname.startsWith("/a/")
+  )
+    return u.origin + u.pathname;
+  ctx.notes.push("welcome URL ignored (not an app-host /a/ link)");
+  return undefined;
+}
+
 export const selftest: Step = {
   name: "selftest",
   check: async () => "todo",
@@ -149,11 +164,16 @@ export const selftest: Step = {
       ctx.pat,
       state.welcomeArtifactId,
     );
-    ctx.welcomeUrl = welcomeUrl;
+    ctx.welcomeUrl = viewUrl(ctx, welcomeUrl);
     state.welcomeArtifactId = artifactId;
     const shown = await content(ctx, ctx.pat, artifactId);
     ctx.notes.push(`healthz, OIDC discovery, MCP publish, content ok`);
-    ctx.data = { mcp: "ok", artifactId, content: shown, welcomeUrl };
+    ctx.data = {
+      mcp: "ok",
+      artifactId,
+      content: shown,
+      welcomeUrl: ctx.welcomeUrl,
+    };
     return undefined;
   },
 };

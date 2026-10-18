@@ -144,6 +144,11 @@ export async function run(
     return ar ? 2 : 1;
   }
   const { name, appHost, contentHost, ownerEmail } = opts;
+  const prev = {
+    name: state.name,
+    appHost: state.appHost,
+    accountId: state.accountId,
+  };
   Object.assign(state, { name, appHost, contentHost, ownerEmail });
   const wrangler = makeWrangler(deps, root, () => state.accountId);
   const api = makeApi(deps, wrangler);
@@ -157,6 +162,7 @@ export async function run(
     api,
     accessApi,
     notes: [],
+    prev,
   };
   const msg = (fallback: string) => ctx.notes.splice(0).join("; ") || fallback;
   /** Moves the step's data (and human text) out of ctx onto its line. */

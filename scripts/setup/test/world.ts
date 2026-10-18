@@ -69,6 +69,8 @@ type World = {
   deletedArtifacts?: string[];
   /** Every publish fails with this tool error text. */
   publishError?: string;
+  /** The publish result's view url, overriding the default. */
+  viewUrl?: string;
 };
 // biome-ignore lint/suspicious/noExplicitAny: loose API fixtures
 type Obj = any;
@@ -306,7 +308,7 @@ export function world(w: World = {}) {
                 structuredContent: {
                   id,
                   version: 1,
-                  url: `https://app.example.com/a/${id}`,
+                  url: w.viewUrl ?? `https://app.example.com/a/${id}`,
                 },
               },
               true,

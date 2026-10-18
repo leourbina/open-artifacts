@@ -90,8 +90,11 @@ function record(state: State, ctx: Ctx, teamDomain: string, app: Obj) {
 
 /** Lookup with OA_ACCESS_TOKEN or the wrangler token; on 403, ask once (memory only). */
 async function lookupWithToken(ctx: Ctx, accountId: string) {
+  const how = ctx.opts.interactive
+    ? "set OA_ACCESS_TOKEN, or rerun interactively and paste it (kept in memory only)"
+    : "set OA_ACCESS_TOKEN (non-interactive/--json)";
   const denied = AR(
-    "This token cannot read Access. Create one (Access: Apps and Policies Edit; Access: Organizations Read; Zone: DNS Read) and set OA_ACCESS_TOKEN, or rerun interactively and paste it (kept in memory only).",
+    `This token cannot read Access. Create one (Access: Apps and Policies Edit; Access: Organizations Read; Zone: DNS Read), then ${how}.`,
     { url: TOKEN_URL },
   );
   try {
@@ -179,8 +182,13 @@ export const access: Step = {
   async check(state, ctx) {
     // From state alone under --upgrade, or when no OA_ACCESS_TOKEN can re-check.
     const noToken = !ctx.deps.env.OA_ACCESS_TOKEN;
+    // Only for the same install: a changed host or account needs the full path.
+    const same =
+      ctx.prev?.appHost === ctx.opts.appHost &&
+      ctx.prev?.accountId === state.accountId;
     if (
       (ctx.opts.upgrade || noToken) &&
+      same &&
       state.accessAppId &&
       state.accessClientId &&
       state.teamDomain
