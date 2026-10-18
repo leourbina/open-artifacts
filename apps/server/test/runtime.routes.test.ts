@@ -1,6 +1,8 @@
+import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
   DataDocSchema,
+  LIMITS,
   type Member,
   newId,
   PageSchema,
@@ -10,6 +12,7 @@ import {
 } from "@oa/shared";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
+import { type ArtifactRuntime, runtimeStub } from "../src/runtime/do.js";
 import { ipKey } from "../src/runtime/routes.js";
 import { publish } from "../src/services/artifacts.js";
 import { getUser } from "../src/services/users.js";
@@ -50,6 +53,17 @@ const pub = async (extra: Record<string, unknown> = {}) =>
   ).id;
 
 const ctx = { waitUntil() {}, passThroughOnException() {} } as never;
+
+/** Runs `cb` inside the artifact's runtime DO (e.g. to pin its clock). */
+const inDo = (id: string, cb: (i: ArtifactRuntime) => void) =>
+  runInDurableObject(
+    runtimeStub(env, id) as unknown as DurableObjectStub<ArtifactRuntime>,
+    cb,
+  );
+let ipSeq = 0;
+/** A TEST-NET-2 address unique to this run and call. */
+const uniqueIp = () =>
+  `198.51.${Math.floor(Math.random() * 256)}.${(++ipSeq % 254) + 1}`;
 type Limiter = { limit(o: { key: string }): Promise<{ success: boolean }> };
 
 /** Anonymous request from `ip` (none when null), with an optional RL_ANON stub. */
@@ -213,33 +227,38 @@ describe("anonymous access", () => {
 
   it("allowAnonymousWrites: ip:{ip} actor; the 31st write per minute → 429", async () => {
     const id = await pub({ visibility: "public", allowAnonymousWrites: true });
-    const ip = "198.51.100.31";
+    // Deterministic: the DO's minute window is pinned (no rollover mid-test),
+    // and the RL_ANON stub counts per key for this test only (no wall clock).
+    await inDo(id, (i) => {
+      i.now = () => Date.UTC(2026, 0, 1, 12, 0, 30);
+    });
+    const counts = new Map<string, number>();
+    const rl: Limiter = {
+      async limit({ key }) {
+        const n = (counts.get(key) ?? 0) + 1;
+        counts.set(key, n);
+        return { success: n <= LIMITS.anonWritesPerMinPerIp };
+      },
+    };
+    const ip = uniqueIp();
+    const write = (doc: string, from: string, limiter?: Limiter) =>
+      anon(R.dataDoc(id, "c", doc), { method: "PUT", body: 1 }, from, limiter);
     for (let i = 0; i < 30; i++) {
-      const r = await anon(
-        R.dataDoc(id, "c", `d${i}`),
-        { method: "PUT", body: i },
-        ip,
-      );
+      const r = await write(`d${i}`, ip, rl);
       expect(r.status).toBe(200);
       if (i === 0)
         expect(((await r.json()) as { updatedBy: string }).updatedBy).toBe(
           `ip:${ip}`,
         );
     }
-    const r = await anon(
-      R.dataDoc(id, "c", "x"),
-      { method: "PUT", body: 1 },
-      ip,
-    );
+    const r = await write("x", ip, rl);
     expect(r.status).toBe(429);
     expect((await errOf(r)).code).toBe("rate_limited");
+    // Without RL_ANON the DO's own per-actor counter enforces the same cap.
+    const r2 = await write("y", ip);
+    expect(r2.status).toBe(429);
     // Another IP is unaffected.
-    const o = await anon(
-      R.dataDoc(id, "c", "x"),
-      { method: "PUT", body: 1 },
-      "198.51.100.32",
-    );
-    expect(o.status).toBe(200);
+    expect((await write("x", uniqueIp(), rl)).status).toBe(200);
   });
 
   it("RL_ANON rejection → 429, keyed ip:{ip}; missing IP → 429", async () => {
