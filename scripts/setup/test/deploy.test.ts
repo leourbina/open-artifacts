@@ -211,8 +211,8 @@ describe("deploy, owner-token, selftest, agent-config", () => {
       revoked_at: expect.any(Number),
     });
     expect(w.db.tokens[1].revoked_at).toBeUndefined();
-    expect(w.sqls.at(-2)).toMatch(
-      /^UPDATE tokens SET revoked_at = \d+ WHERE id = '\w+' AND revoked_at IS NULL; INSERT/,
+    expect(w.sqls.at(-1)).toMatch(
+      /UPDATE tokens SET revoked_at = \d+ WHERE user_id/,
     );
     expect(w.hits).toContain("mcp tools/call");
     // M5: the welcome artifact is updated in place, not duplicated.
@@ -234,7 +234,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
       ),
     );
     expect(w.ops).toEqual(["build", "migrate open-artifacts", "deploy"]);
-    expect(w.sqls).toHaveLength(2); // the first run's insert and re-SELECT only
+    expect(w.sqls).toHaveLength(1); // the first run's single command only
     w.lines.length = 0;
     const argv = [...HOSTS, "--upgrade", "--new-owner-token"];
     expect(await run(argv, w.deps, ROOT)).toBe(0);
@@ -317,7 +317,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     const w = world();
     expect(await run(argv, w.deps, ROOT)).toBe(0);
     expect(w.state().ownerEmail).toBe("owner@example.com");
-    expect(w.sqls.at(-2)).toContain("'owner@example.com'");
+    expect(w.sqls.at(-1)).toContain("'owner@example.com'");
     const bad = world();
     const nonAscii = HOSTS.map((a) =>
       a === "owner@example.com" ? "o\u212a@example.com" : a,
@@ -404,5 +404,121 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     expect(sql).toContain("'o''brien@example.com'");
     expect(sql).not.toMatch(/oa_pat_/);
     expect(sql).toContain("ON CONFLICT(email) DO UPDATE SET role = 'owner'");
+  });
+});
+
+describe("B16-6 owner token hardening", () => {
+  const NEW = "o@example.com";
+  const seeded = (over: Record<string, unknown> = {}) =>
+    world({
+      seed: {
+        users: [{ id: "u1", email: "owner@example.com", role: "owner" }],
+        tokens: [
+          { id: "old1", user_id: "u1", label: "setup", token_hash: "h1" },
+          { id: "old2", user_id: "u1", label: "setup", token_hash: "h2" },
+          { id: "keep", user_id: "u1", label: "laptop", token_hash: "h3" },
+          {
+            id: "gone",
+            user_id: "u1",
+            label: "setup",
+            token_hash: "h4",
+            revoked_at: 5,
+          },
+        ],
+      },
+      ...over,
+    });
+  const live = (w: W) =>
+    w.db.tokens.filter((t) => !t.revoked_at).map((t) => t.id);
+
+  it("a re-mint with lost state revokes prior setup tokens (and only those)", async () => {
+    const w = seeded();
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    expect(live(w)).toEqual(["keep", w.state().ownerTokenId]);
+    expect(w.db.tokens.find((t) => t.id === "gone").revoked_at).toBe(5);
+  });
+
+  it("--new-owner-token revokes prior setup tokens too", async () => {
+    const w = await installed();
+    w.db.tokens.push({
+      id: "x",
+      user_id: w.db.users[0].id,
+      label: "setup",
+      token_hash: "hx",
+    });
+    expect(await run([...HOSTS, "--new-owner-token"], w.deps, ROOT)).toBe(0);
+    expect(live(w)).toEqual([w.state().ownerTokenId]);
+  });
+
+  it("a cap hit is action_required and revokes nothing", async () => {
+    const many = Array.from({ length: 48 }, (_, i) => ({
+      id: `t${i}`,
+      user_id: "u1",
+      label: "api",
+      token_hash: `h${i}`,
+    }));
+    const w = world({
+      seed: {
+        users: [{ id: "u1", email: "owner@example.com", role: "owner" }],
+        tokens: [
+          { id: "old1", user_id: "u1", label: "setup", token_hash: "h1" },
+          { id: "old2", user_id: "u1", label: "setup", token_hash: "h2" },
+          ...many,
+        ],
+      },
+    });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(2);
+    expect(line(w, "owner-token")).toMatchObject({
+      status: "action_required",
+      message: expect.stringMatching(/50 active tokens.*Settings/),
+    });
+    expect(live(w)).toHaveLength(50);
+    expect(live(w)).toContain("old1");
+    expect(w.state().ownerTokenId).toBeUndefined();
+    expect(w.lines.join("\n")).not.toMatch(/oa_pat_/);
+  });
+
+  it("a failed insert leaves the old setup tokens live", async () => {
+    const w = seeded({ d1Fails: true });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(1);
+    expect(live(w)).toEqual(expect.arrayContaining(["old1", "old2", "keep"]));
+  });
+
+  it("an owner change demotes the previous owner to admin and says so", async () => {
+    const w = world({
+      seed: { users: [{ id: "u0", email: "old@example.com", role: "owner" }] },
+    });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    expect(w.db.users.find((u) => u.id === "u0")?.role).toBe("admin");
+    expect(w.db.users.find((u) => u.email === "owner@example.com")?.role).toBe(
+      "owner",
+    );
+    expect(line(w, "owner-token").message).toContain(
+      "previous owner old@example.com demoted to admin",
+    );
+  });
+
+  it("the same owner is not demoted", async () => {
+    const w = seeded();
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    expect(w.db.users.map((u) => u.role)).toEqual(["owner"]);
+    expect(line(w, "owner-token").message).not.toMatch(/demoted/);
+  });
+
+  it("sends one command, ordered demote, upsert, capped insert, revoke, verify", async () => {
+    const w = seeded();
+    await run(HOSTS, w.deps, ROOT);
+    expect(w.sqls).toHaveLength(1);
+    const at = (re: RegExp) => w.sqls[0].search(re);
+    const order = [
+      /SET role = 'admin'/,
+      /ON CONFLICT\(email\)/,
+      /\) < 50/,
+      /SET revoked_at/,
+      /SELECT id FROM tokens WHERE id/,
+    ].map(at);
+    expect(order.every((i) => i >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(NEW).toBeTruthy();
   });
 });

@@ -62,6 +62,11 @@ type World = {
   /** The token INSERT fails, or silently writes nothing. */
   d1Fails?: boolean;
   dropTokenInsert?: boolean;
+  /** Preloaded users and tokens (token user_id refers to a seeded user id). */
+  seed?: {
+    users?: { id: string; email: string; role: string }[];
+    tokens?: Obj[];
+  };
   /** The signed content URL serves this body instead of the published content. */
   contentBody?: string;
   /** The signed content URL answers with this status. */
@@ -152,41 +157,114 @@ export function world(w: World = {}) {
   const mcpCalls: Obj[] = [];
   const sqls: string[] = [];
   const db = {
-    users: [] as { id: string; email: string; role: string }[],
-    tokens: [] as Obj[],
+    users: [...(w.seed?.users ?? [])] as {
+      id: string;
+      email: string;
+      role: string;
+    }[],
+    tokens: [...(w.seed?.tokens ?? [])] as Obj[],
   };
   let healthFails = w.healthFails ?? 0;
   let discoveryFails = w.discoveryFails ?? 0;
   const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+  const unq = (x: string) => x.replaceAll("''", "'");
+  /** Runs each statement in order (a failure keeps earlier effects, as D1 does without a transaction). */
   const d1 = (sql: string) => {
     sqls.push(sql);
-    if (w.d1Fails && sql.includes("INSERT")) throw new Error("D1 down");
-    const sel = sql.match(/^SELECT id FROM tokens WHERE id = '([^']*)'/);
-    if (sel) return db.tokens.filter((t) => t.id === sel[1] && !t.revoked_at);
-    const u = sql.match(
-      /INSERT INTO users \(id, email, name, role, created_at\) VALUES \('(\w+)', '((?:[^']|'')*)'/,
-    );
-    const t = sql.match(
-      /INSERT INTO tokens \(id, user_id, label, token_hash, created_at\) SELECT '(\w+)', id, '[^']*', '([0-9a-f]{64})'/,
-    );
-    if (!u || !t) throw new Error(`fake d1: unexpected SQL ${sql}`);
-    const email = u[2].replaceAll("''", "'");
-    let user = db.users.find((x) => x.email === email.toLowerCase());
-    if (!user) {
-      user = { id: u[1], email: email.toLowerCase(), role: "owner" };
-      db.users.push(user);
+    const out: {
+      results: unknown[];
+      success: boolean;
+      meta: { changes: number };
+    }[] = [];
+    for (const st of sql.split(/;\s+(?=SELECT|UPDATE|INSERT)/)) {
+      let results: unknown[] = [];
+      let changes = 0;
+      let m: string[] = [];
+      const is = (re: RegExp) => {
+        m = st.match(re) ?? [];
+        return m.length > 0;
+      };
+      if (w.d1Fails && st.includes("INSERT INTO tokens"))
+        throw new Error("D1 down");
+      if (is(/^SELECT id FROM tokens WHERE id = '([^']*)'/)) {
+        const id = m[1];
+        results = db.tokens.filter((t) => t.id === id && !t.revoked_at);
+      } else if (
+        is(
+          /^SELECT email FROM users WHERE role = 'owner' AND email <> '((?:[^']|'')*)'/,
+        )
+      ) {
+        const me = unq(m[1]).toLowerCase();
+        results = db.users
+          .filter((u) => u.role === "owner" && u.email !== me)
+          .map((u) => ({ email: u.email }));
+      } else if (
+        is(
+          /^UPDATE users SET role = 'admin' WHERE role = 'owner' AND email <> '((?:[^']|'')*)'/,
+        )
+      ) {
+        const me = unq(m[1]).toLowerCase();
+        for (const u of db.users)
+          if (u.role === "owner" && u.email !== me) {
+            u.role = "admin";
+            changes++;
+          }
+      } else if (
+        is(
+          /^INSERT INTO users \(id, email, name, role, created_at\) VALUES \('(\w+)', '((?:[^']|'')*)'/,
+        )
+      ) {
+        const email = unq(m[2]).toLowerCase();
+        const user = db.users.find((x) => x.email === email) ?? {
+          id: m[1],
+          email,
+          role: "owner",
+        };
+        if (!db.users.includes(user)) db.users.push(user);
+        user.role = "owner";
+      } else if (
+        is(
+          /^UPDATE tokens SET revoked_at = (\d+) WHERE user_id = \(SELECT id FROM users WHERE email = '((?:[^']|'')*)'\) AND label = 'setup' AND revoked_at IS NULL AND id <> '(\w+)' AND EXISTS \(SELECT 1 FROM tokens WHERE id = '\w+'\)$/,
+        )
+      ) {
+        const [, at, em, keep] = m;
+        const uid = db.users.find((x) => x.email === unq(em).toLowerCase())?.id;
+        for (const x of db.tokens)
+          if (
+            db.tokens.some((t) => t.id === keep) &&
+            x.user_id === uid &&
+            x.label === "setup" &&
+            !x.revoked_at &&
+            x.id !== keep
+          ) {
+            x.revoked_at = Number(at);
+            changes++;
+          }
+      } else if (
+        is(
+          /^INSERT INTO tokens \(id, user_id, label, token_hash, created_at\) SELECT '(\w+)', id, 'setup', '([0-9a-f]{64})', \d+ FROM users WHERE email = '((?:[^']|'')*)' AND \(SELECT count\(\*\) FROM tokens WHERE user_id = users\.id AND revoked_at IS NULL\) < (\d+)$/,
+        )
+      ) {
+        const [, id, hash, em, cap] = m;
+        const user = db.users.find((x) => x.email === unq(em).toLowerCase());
+        const active = db.tokens.filter(
+          (x) => x.user_id === user?.id && !x.revoked_at,
+        ).length;
+        if (user && active < Number(cap)) {
+          changes = 1;
+          if (!w.dropTokenInsert)
+            db.tokens.push({
+              id,
+              user_id: user.id,
+              label: "setup",
+              token_hash: hash,
+            });
+        }
+      } else throw new Error(`fake d1: unexpected SQL ${st}`);
+      out.push({ results, success: true, meta: { changes } });
     }
-    user.role = "owner";
-    const rev = sql.match(
-      /UPDATE tokens SET revoked_at = (\d+) WHERE id = '(\w+)' AND revoked_at IS NULL;/,
-    );
-    for (const x of db.tokens)
-      if (rev && x.id === rev[2] && !x.revoked_at)
-        x.revoked_at = Number(rev[1]);
-    if (!w.dropTokenInsert)
-      db.tokens.push({ id: t[1], user_id: user.id, token_hash: t[2] });
-    ops.push("d1 owner+token");
-    return [];
+    if (sql.includes("INSERT INTO tokens")) ops.push("d1 owner+token");
+    return out;
   };
   const c = core({
     answers: w.answers,
@@ -239,7 +317,7 @@ export function world(w: World = {}) {
         secrets = secrets?.filter((n) => n !== del[1]);
       } else if (exe) {
         try {
-          stdout = `wrangler 4.151.1 (update available [4.152])\n${JSON.stringify([{ results: d1(exe[2]), success: true }])}`;
+          stdout = `wrangler 4.151.1 (update available [4.152])\n${JSON.stringify(d1(exe[2]))}`;
         } catch (e) {
           return { code: 1, stdout: "", stderr: (e as Error).message };
         }
