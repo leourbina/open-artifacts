@@ -97,6 +97,14 @@ Anything shown to the user goes to them as visually rich HTML in the visual comp
 
 ---
 
+### Task I3b: Production instance at artifacts.leourbina.com (owner: OpenArtifacts Platform)
+
+- [ ] **Step 1:** At the first stable release (after B14), install production by following llms.txt from that tag:
+  `pnpm oa:setup --name open-artifacts-prod --app-host artifacts.leourbina.com --content-host artifacts-content.leourbina.com --owner-email me@leourbina.com --json`.
+  Relay each `action_required` to the user as a blocker.
+- [ ] **Step 2:** Add a `deploy-prod` job to `release-please.yml` that runs only for stable releases and calls `oa:setup --upgrade --name open-artifacts-prod --json`, with the same secrets preflight and smoke as staging. A test asserts that it never runs for pre-releases or on pushes to main.
+- [ ] **Step 3:** Verify: owner login on `artifacts.leourbina.com`, a publish from a real agent over MCP, and the B17 CPU budgets on production.
+
 ### Task I4: M3 release via release-please (merged by the Platform lead; no human gate)
 
 Earlier releases go out the same way at M1 (expected 0.1.0) and M2. Use Steps 1–3 below for those as well.

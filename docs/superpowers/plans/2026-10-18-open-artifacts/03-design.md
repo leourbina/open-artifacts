@@ -202,6 +202,11 @@ NavItem({ href; icon?; label: ReactNode; count?: number; active?: boolean } & An
 
 ---
 
+### Task D7b: Landing page, 3 options (user decision)
+
+- [ ] Present **3 conceptually different** landing-page options for open-artifacts.com, all within Studio and the D6 mark, all with the one CTA. Show them side by side in the visual companion at desktop and mobile width, in light and dark. File a blocker for the user's pick.
+- [ ] Build the picked option. It stays behind the release gate.
+
 ### Task D7: Landing site, docs, and llms.txt (`apps/landing`, open-artifacts.com)
 
 **Files:**
