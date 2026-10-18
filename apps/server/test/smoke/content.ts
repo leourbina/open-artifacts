@@ -1,8 +1,25 @@
 import { ContentUrlSchema, PublishResultSchema, R } from "@oa/shared";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 
 const base = process.env.STAGING_URL;
 const pat = process.env.STAGING_OWNER_PAT;
+
+// Best-effort cleanup: private artifacts created by this file, soft-deleted afterwards.
+const created: string[] = [];
+afterAll(async () => {
+  for (const id of created) {
+    try {
+      const d = await fetch(`${base}${R.artifact(id)}`, {
+        method: "DELETE",
+        headers: { authorization: `Bearer ${pat}` },
+      });
+      if (d.status !== 204)
+        console.warn(`smoke cleanup: DELETE ${id} -> ${d.status}`);
+    } catch (e) {
+      console.warn(`smoke cleanup: DELETE ${id} failed`, e);
+    }
+  }
+});
 const CSP_SANDBOX =
   "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; frame-ancestors ";
 
@@ -20,6 +37,7 @@ describe.skipIf(!base || !pat)("staging smoke: content host", () => {
     });
     expect(r.status).toBe(201);
     const { id } = PublishResultSchema.parse(await r.json());
+    created.push(id);
 
     const cu = await fetch(`${base}${R.contentUrl(id)}`, { headers: auth });
     expect(cu.status).toBe(200);

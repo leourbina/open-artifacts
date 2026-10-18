@@ -4,10 +4,27 @@ import {
   R,
   SearchHitSchema,
 } from "@oa/shared";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 
 const base = process.env.STAGING_URL;
 const pat = process.env.STAGING_OWNER_PAT;
+
+// Best-effort cleanup: private artifacts created by this file, soft-deleted afterwards.
+const created: string[] = [];
+afterAll(async () => {
+  for (const id of created) {
+    try {
+      const d = await fetch(`${base}${R.artifact(id)}`, {
+        method: "DELETE",
+        headers: { authorization: `Bearer ${pat}` },
+      });
+      if (d.status !== 204)
+        console.warn(`smoke cleanup: DELETE ${id} -> ${d.status}`);
+    } catch (e) {
+      console.warn(`smoke cleanup: DELETE ${id} failed`, e);
+    }
+  }
+});
 
 describe.skipIf(!base || !pat)("staging smoke: search", () => {
   it("publishes, then finds it by a body word (indexing runs in the DO alarm)", async () => {
@@ -26,6 +43,7 @@ describe.skipIf(!base || !pat)("staging smoke: search", () => {
     });
     expect(r.status).toBe(201);
     const { id } = PublishResultSchema.parse(await r.json());
+    created.push(id);
     // C3: the body is indexed asynchronously by the artifact DO's alarm.
     let found = false;
     let last = "";
