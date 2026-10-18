@@ -16,7 +16,16 @@ export { RuntimeError } from "./bridge.js";
 
 export type Theme = "light" | "dark";
 export type Viewer = { email: string; name: string | null };
-export type ChangeEvent = { docs: DataDoc[]; deleted: string[] };
+/**
+ * A subscribe() delivery. `resync: true` (with empty docs/deleted) means the
+ * live connection was re-established and changes may have been missed:
+ * refetch your data when resync is true.
+ */
+export type ChangeEvent = {
+  docs: DataDoc[];
+  deleted: string[];
+  resync?: true;
+};
 
 export interface Collection {
   get(id: string): Promise<DataDoc | null>;
@@ -25,6 +34,7 @@ export interface Collection {
   set(id: string, data: unknown): Promise<DataDoc>;
   update(id: string, patch: Record<string, unknown>): Promise<DataDoc>;
   delete(id: string): Promise<void>;
+  /** Live changes; refetch your data when `e.resync` is true (after a reconnect). */
   subscribe(cb: (e: ChangeEvent) => void): () => void;
 }
 
@@ -138,7 +148,7 @@ export function createRuntime(opts: RuntimeOptions = {}): OpenArtifacts {
 
   /** Docs broadcast with data:null (over 16 KB) are refetched before delivery. */
   async function deliver(
-    m: Extract<ShellToArtifact, { type: "event" }>,
+    m: Extract<ShellToArtifact, { event: "db.change" }>,
   ): Promise<void> {
     const deleted = [...m.deleted];
     const docs: DataDoc[] = [];
@@ -153,11 +163,15 @@ export function createRuntime(opts: RuntimeOptions = {}): OpenArtifacts {
       if (fresh) docs.push(fresh);
       else deleted.push(d.id);
     }
-    for (const cb of [...(subs.get(m.collection) ?? [])]) {
+    emit(m.collection, { docs, deleted });
+  }
+
+  function emit(collection: string, e: ChangeEvent): void {
+    for (const cb of [...(subs.get(collection) ?? [])]) {
       try {
-        cb({ docs, deleted });
-      } catch (e) {
-        console.error(e);
+        cb(e);
+      } catch (err) {
+        console.error(err);
       }
     }
   }
@@ -179,10 +193,15 @@ export function createRuntime(opts: RuntimeOptions = {}): OpenArtifacts {
     } else if (m.type === "theme") setTheme(m.theme);
     else if (m.type === "thumb.request") {
       if (kind === "html") void snapshot();
-    } else if (m.type === "event" && m.event === "db.change") {
+    } else if (m.type === "event") {
       if (!subs.has(m.collection)) return;
       const prev = queues.get(m.collection) ?? Promise.resolve();
-      queues.set(m.collection, prev.then(() => deliver(m)).catch(ignore));
+      // Queued behind pending deliveries so a resync is never overtaken by older changes.
+      const next =
+        m.event === "db.resync"
+          ? () => emit(m.collection, { docs: [], deleted: [], resync: true })
+          : () => deliver(m);
+      queues.set(m.collection, prev.then(next).catch(ignore));
     }
   });
 

@@ -111,6 +111,21 @@ describe("parseShellMessage", () => {
   });
 });
 
+describe("C4: db.resync event", () => {
+  const ev = { oa: 1, type: "event", event: "db.resync", collection: "votes" };
+  it("parses a strict db.resync", () => {
+    expect(parseShellMessage(ev)).toEqual(ev);
+  });
+  it("rejects extra keys, a bad collection, or db.change fields", () => {
+    expect(parseShellMessage({ ...ev, x: 1 })).toBeNull();
+    expect(parseShellMessage({ ...ev, docs: [], deleted: [] })).toBeNull();
+    expect(parseShellMessage({ ...ev, collection: "a b" })).toBeNull();
+    expect(parseShellMessage({ ...ev, collection: "" })).toBeNull();
+    const { collection: _c, ...noCol } = ev;
+    expect(parseShellMessage(noCol)).toBeNull();
+  });
+});
+
 describe("METHOD_CAPABILITY", () => {
   it("covers every method", () => {
     expect(Object.keys(METHOD_CAPABILITY).sort()).toEqual(

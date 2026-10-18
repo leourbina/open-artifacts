@@ -117,6 +117,16 @@ export const ShellToArtifactSchema = z.union([
     docs: z.array(DataDocSchema),
     deleted: z.array(z.string()),
   }),
+  /**
+   * The shell's socket for `collection` reconnected: changes may have been
+   * missed, so subscribers should refetch.
+   */
+  z.strictObject({
+    oa: z.literal(1),
+    type: z.literal("event"),
+    event: z.literal("db.resync"),
+    collection: DataNameSchema,
+  }),
   z.strictObject({ oa: z.literal(1), type: z.literal("thumb.request") }),
   z.strictObject({ oa: z.literal(1), type: z.literal("theme"), theme: Theme }),
 ]);
