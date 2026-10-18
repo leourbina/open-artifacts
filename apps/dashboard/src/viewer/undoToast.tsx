@@ -15,17 +15,18 @@ const set = (u: Undo | null) => {
   for (const l of listeners) l(u);
 };
 
+// TODO(oa/ui toast action): replace with toast({ action }) once @oa/ui supports it.
 /** Offers Undo for a just-deleted artifact. @oa/ui toasts carry no action, so this has its own. */
 export const offerUndo = (artifactId: string, title: string) => {
   const id = next++;
   set({ id, title, artifactId });
-  setTimeout(() => current?.id === id && set(null), 10_000);
 };
 
 /** Mounted next to the app's Toaster. */
 export function UndoToast() {
   const [u, setU] = useState(current);
   const [busy, setBusy] = useState(false);
+  const [paused, setPaused] = useState(false);
   const qc = useQueryClient();
   const navigate = useNavigate();
   useEffect(() => {
@@ -34,6 +35,13 @@ export function UndoToast() {
       listeners.delete(setU);
     };
   }, []);
+  const uid = u?.id;
+  // Auto-dismiss after 8 s; hovering or focusing the toast pauses (and restarts) the timer.
+  useEffect(() => {
+    if (uid === undefined || paused || busy) return;
+    const t = setTimeout(() => current?.id === uid && set(null), 8000);
+    return () => clearTimeout(t);
+  }, [uid, paused, busy]);
   if (!u) return null;
   const undo = async () => {
     setBusy(true);
@@ -57,7 +65,14 @@ export function UndoToast() {
     }
   };
   return (
-    <div className="oa-undo" role="status">
+    <div
+      className="oa-undo"
+      role="status"
+      onMouseEnter={() => setPaused(true)}
+      onMouseLeave={() => setPaused(false)}
+      onFocus={() => setPaused(true)}
+      onBlur={() => setPaused(false)}
+    >
       <span>Deleted “{u.title}”</span>
       <Button size="sm" loading={busy} onClick={() => void undo()}>
         Undo
