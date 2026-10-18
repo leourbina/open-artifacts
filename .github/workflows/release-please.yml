@@ -33,11 +33,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           BRANCH: release-please--branches--main--components--open-artifacts
-        run: |
-          open=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state open --json headRefName --jq length)
-          if [ "$open" -gt 0 ]; then
-            gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
-          fi
+        run: bash scripts/ci/release-pr-dispatch.sh
   deploy-landing:
     needs: [release-please]
     # always(): on workflow_dispatch the release-please job is skipped.
@@ -51,8 +47,7 @@ jobs:
         with:
           ref: ${{ needs.release-please.outputs.tag_name || inputs.tag }}
       - id: gate
-        run: |
-          if [ -f apps/landing/wrangler.jsonc ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; fi
+        run: bash scripts/ci/landing-gate.sh
       - if: steps.gate.outputs.present == 'true'
         uses: pnpm/action-setup@v4
       - if: steps.gate.outputs.present == 'true'

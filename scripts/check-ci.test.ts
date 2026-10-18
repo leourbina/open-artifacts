@@ -52,7 +52,8 @@ const latestTag = (): string | undefined => {
     .sort(cmp);
   return tags.at(-1);
 };
-const RETRY = /--retry \d+ --retry-delay \d+ --retry-max-time \d+/;
+const ci = (n: string) => read(`scripts/ci/${n}`);
+const RETRY_FLAGS = /--retry \d+ --retry-delay \d+ --retry-max-time \d+/;
 
 describe("ci.yml", () => {
   const w = wf("ci.yml");
@@ -126,24 +127,27 @@ describe("deploy-staging.yml", () => {
     }
   });
   it("preflights required Worker secrets before migrate and deploy", () => {
-    const p = idx("deploy", "check-staging-secrets");
+    const p = idx("deploy", "staging-preflight.sh");
     expect(p).toBeGreaterThan(idx("deploy", "pnpm build"));
     expect(p).toBeLessThan(idx("deploy", "d1 migrations apply"));
     expect(p).toBeLessThan(idx("deploy", "wrangler deploy"));
-    const step = runs("deploy")[p] as string;
+    expect(runs("deploy")[p]).toContain("scripts/ci/staging-preflight.sh");
+    const step = ci("staging-preflight.sh");
+    expect(step).toContain("check-staging-secrets");
     expect(step).toContain("wrangler secret list");
     expect(step).toContain("--format json");
-    expect(step).toContain("set -o pipefail");
+    expect(step).toContain("set -euo pipefail");
     expect(step).toContain("wrangler.staging.jsonc");
     expect(step).toContain("--env staging");
   });
   it("clears conflicting secrets after preflight and before deploy", () => {
-    const p = idx("deploy", "check-staging-secrets");
-    const c = idx("deploy", "conflicting-secrets");
+    const p = idx("deploy", "staging-preflight.sh");
+    const c = idx("deploy", "staging-clear-conflicts.sh");
     expect(c).toBeGreaterThan(p);
     expect(c).toBeLessThan(idx("deploy", "wrangler deploy"));
-    const step = runs("deploy")[c] as string;
-    expect(step).toContain("set -o pipefail");
+    const step = ci("staging-clear-conflicts.sh");
+    expect(step).toContain("conflicting-secrets");
+    expect(step).toContain("set -euo pipefail");
     expect(step).toContain("wrangler secret list");
     expect(step).toContain(
       'wrangler secret delete "$name" -c wrangler.staging.jsonc --env staging',
@@ -151,19 +155,22 @@ describe("deploy-staging.yml", () => {
     expect(step).toContain("echo y |");
   });
   it("ensures dashboard dist exists before wrangler deploy", () => {
-    const e = idx("deploy", "mkdir -p apps/dashboard/dist");
+    const e = idx("deploy", "ensure-dashboard-dist.sh");
     expect(e).toBeGreaterThan(idx("deploy", "pnpm build"));
     expect(e).toBeLessThan(idx("deploy", "wrangler deploy"));
-    expect(runs("deploy")[e]).toContain("apps/dashboard/dist/index.html");
+    expect(ci("ensure-dashboard-dist.sh")).toContain("index.html");
   });
   it("smoke asserts /auth/login redirects to Cloudflare Access", () => {
-    const all = runs("smoke").join("\n");
-    expect(all).toContain("staging.open-artifacts.com/auth/login");
-    expect(all).toMatch(RETRY);
+    const all = runs("smoke").join("\n") + ci("staging-smoke.sh");
+    expect(all).toContain(
+      "staging-smoke.sh login https://staging.open-artifacts.com",
+    );
+    expect(all).toContain("/auth/login");
+    expect(all).toMatch(RETRY_FLAGS);
     expect(all).not.toMatch(/\s-[a-zA-Z]*L\b|--location/);
     expect(all).toContain("302");
     expect(all).toContain(
-      `sed -n 's/.*"ACCESS_TEAM_DOMAIN": *"\\([^"]*\\)".*/\\1/p' apps/server/wrangler.staging.jsonc | head -1`,
+      `sed -n 's/.*"ACCESS_TEAM_DOMAIN": *"\\([^"]*\\)".*/\\1/p' "$config" | head -1`,
     );
     expect(all).toContain("tr -d '\\r'");
     expect(all).toContain("grep -i '^location:'");
@@ -175,7 +182,7 @@ describe("deploy-staging.yml", () => {
   });
   it("smoke checks robots on the content host", () => {
     const all = runs("smoke").join("\n");
-    expect(all).toContain("staging-content.open-artifacts.com/robots.txt");
+    expect(all).toContain("robots https://staging-content.open-artifacts.com");
   });
   it("migrate, deploy and smoke are never skippable or tolerated", () => {
     for (const id of ["deploy", "smoke"]) {
@@ -189,9 +196,9 @@ describe("deploy-staging.yml", () => {
     }
   });
   it("smoke checks healthz, robots and runs the smoke suite", () => {
-    const all = runs("smoke").join("\n");
-    expect(all).toContain("staging.open-artifacts.com/healthz");
-    expect(all).toMatch(RETRY);
+    const all = runs("smoke").join("\n") + ci("staging-smoke.sh");
+    expect(all).toContain("healthz https://staging.open-artifacts.com");
+    expect(all).toMatch(RETRY_FLAGS);
     expect(all).not.toMatch(/\|\s*grep/);
     expect(all).toContain("/robots.txt");
     expect(all).toContain("noindex, nofollow");
@@ -230,23 +237,28 @@ describe("landing-preview.yml", () => {
     );
   });
   it("uses wrangler preview, never versions upload", () => {
-    expect(raw).toContain("wrangler preview --name pr-");
-    expect(raw).toContain("--json");
+    const script = ci("landing-preview-url.sh");
+    expect(script).toContain('wrangler preview --name "pr-$pr"');
+    expect(script).toContain("--json");
     expect(raw).not.toContain("versions upload");
+    expect(script).not.toContain("versions upload");
   });
   it("gates early and fails without a URL", () => {
     expect(steps.some((s) => s.id === "gate")).toBe(true);
     const install = steps.find((s) => (s.run ?? "").includes("pnpm install"));
     expect(install.if).toContain("steps.gate.outputs.present");
     const prev = steps.find((s) => s.id === "preview");
-    expect(prev.run).toContain("jq -er");
+    expect(prev.run).toContain("scripts/ci/landing-preview-url.sh");
+    expect(ci("landing-preview-url.sh")).toContain("jq -er");
     expect(prev.run).not.toContain("|| true");
+    expect(ci("landing-preview-url.sh")).not.toContain("|| true");
   });
   it("hides the wrangler banner and extracts JSON from stdout", () => {
     const prev = steps.find((s) => s.id === "preview");
     expect(prev.env.WRANGLER_HIDE_BANNER).toBe("true");
-    expect(prev.run).toContain("sed -n '/^{/,$p'");
-    expect(prev.run).toContain("cat preview.json");
+    const script = ci("landing-preview-url.sh");
+    expect(script).toContain("sed -n '/^{/,$p'");
+    expect(script).toContain("cat preview.json");
   });
   it("scopes the Cloudflare token to the preview step only", () => {
     expect(w.jobs.preview.env).toBeUndefined();
@@ -294,8 +306,9 @@ describe("release-please", () => {
   });
   it("dispatches CI on the release branch and deploys the tag", () => {
     const raw = read(".github/workflows/release-please.yml");
-    expect(raw).toContain("gh workflow run ci.yml");
-    expect(raw).toContain("headRefName");
+    expect(raw).toContain("scripts/ci/release-pr-dispatch.sh");
+    expect(ci("release-pr-dispatch.sh")).toContain("gh workflow run ci.yml");
+    expect(ci("release-pr-dispatch.sh")).toContain("headRefName");
     // biome-ignore lint/suspicious/noTemplateCurlyInString: literal workflow expression
     expect(raw).toContain("needs.release-please.outputs.tag_name");
     const gate = wf("release-please.yml").jobs["deploy-landing"].steps;
@@ -305,14 +318,14 @@ describe("release-please", () => {
     const steps = wf("release-please.yml").jobs["release-please"].steps;
     // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
     const step = steps.find((s: any) =>
-      (s.run ?? "").includes("gh workflow run ci.yml"),
+      (s.run ?? "").includes("release-pr-dispatch.sh"),
     );
     expect(step).toBeDefined();
     expect(String(step.if ?? "")).not.toBe(
       "steps.rp.outputs.prs_created == 'true'",
     );
     expect(String(step.if ?? "")).toContain("release_created");
-    expect(step.run).toContain("gh pr list");
+    expect(ci("release-pr-dispatch.sh")).toContain("gh pr list");
     expect(step.env.BRANCH).toContain("release-please--branches--main");
   });
   it("gates landing deploy on a release-ready dist, between build and deploy", () => {
