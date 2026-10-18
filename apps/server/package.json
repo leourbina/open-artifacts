@@ -1,0 +1,9 @@
+{
+  "name": "@oa/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "echo \"@oa/server dev: placeholder\""
+  }
+}

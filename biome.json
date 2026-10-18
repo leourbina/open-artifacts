@@ -1,0 +1,17 @@
+{
+  "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2 },
+  "linter": { "enabled": true, "rules": { "preset": "none" } },
+  "javascript": { "formatter": { "quoteStyle": "double" } },
+  "files": {
+    "includes": [
+      "**",
+      "!**/node_modules",
+      "!**/dist",
+      "!.superpowers",
+      "!docs",
+      "!logs",
+      "!**/.wrangler",
+      "!pnpm-lock.yaml"
+    ]
+  }
+}

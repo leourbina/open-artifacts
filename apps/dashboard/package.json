@@ -1,0 +1,9 @@
+{
+  "name": "@oa/dashboard",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "echo \"@oa/dashboard dev: placeholder\""
+  }
+}
