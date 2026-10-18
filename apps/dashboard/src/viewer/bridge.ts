@@ -127,6 +127,9 @@ export function createBridge(opts: BridgeOptions) {
     ws.onopen = () => {
       s.attempt = 0;
       lostFired = false;
+      // Changes during a gap aren't replayed; tell the frame to refetch on every open.
+      if (s.ws === ws && s.refs > 0)
+        reply({ oa: 1, type: "event", event: "db.resync", collection: col });
     };
     ws.onmessage = (e) => {
       if (typeof e.data !== "string") return;
