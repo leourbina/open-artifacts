@@ -337,6 +337,39 @@ describe("ArtifactRuntime websocket", () => {
   }
   const tick = () => new Promise((r) => setTimeout(r, 50));
 
+  it("sockets older than signedUrlTtlSec close 4408 on the alarm; younger re-arm it", async () => {
+    const s = stubFor();
+    // Real-time based: an alarm in the past would fire on its own.
+    const t0 = Date.now();
+    await inDo(s, (i) => {
+      i.now = () => t0;
+    });
+    const old = await connect(s, "c");
+    const alarm = await inDo(s, (_i, st) => st.storage.getAlarm());
+    expect(alarm).toBe(t0 + LIMITS.signedUrlTtlSec * 1000);
+    await inDo(s, (i) => {
+      i.now = () => t0 + 300_000;
+    });
+    const young = await connect(s, "c");
+    const codes: Record<string, number> = {};
+    old.ws.addEventListener("close", (e) => {
+      codes.old = (e as CloseEvent).code;
+    });
+    young.ws.addEventListener("close", (e) => {
+      codes.young = (e as CloseEvent).code;
+    });
+    await inDo(s, async (i, st) => {
+      i.now = () => t0 + LIMITS.signedUrlTtlSec * 1000;
+      await i.alarm();
+      expect(await st.storage.getAlarm()).toBe(
+        t0 + 300_000 + LIMITS.signedUrlTtlSec * 1000,
+      );
+    });
+    await tick();
+    expect(codes).toEqual({ old: 4408 });
+    young.ws.close();
+  });
+
   it("broadcasts db.change to the collection only, including deletes", async () => {
     const s = stubFor();
     const a = await connect(s, "votes");

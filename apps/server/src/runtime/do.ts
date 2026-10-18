@@ -61,6 +61,10 @@ const BROADCAST_INLINE_BYTES = 16 * 1024;
 const MAX_SOCKETS = 200;
 /** Sockets per actor (X-OA-Actor on the upgrade request); fetch returns 429 past it. */
 const MAX_SOCKETS_PER_ACTOR = 20;
+/** Max socket lifetime: a revocation the server missed can't outlive a signed URL. */
+const SOCKET_TTL_MS = LIMITS.signedUrlTtlSec * 1000;
+/** The alarm also closes sockets this close to their TTL, batching alarms (≤1/min). */
+const SOCKET_TTL_SLACK_MS = 60_000;
 /** Header carrying the subscriber's actor from the route to fetch. */
 export const ACTOR_HEADER = "X-OA-Actor";
 /**
@@ -220,6 +224,8 @@ create table if not exists totals (
 `;
 
 type SqlParam = string | number | null;
+/** Per-socket attachment: connect time (ms). */
+type SocketMeta = { t: number };
 
 /**
  * Per-artifact live-page data (spec §6.7): shared docs, per-viewer storage, and a
@@ -829,7 +835,33 @@ export class ArtifactRuntime extends DurableObject<Env> {
     }
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1], tags);
+    const t = this.now();
+    pair[1].serializeAttachment({ t } satisfies SocketMeta);
+    if ((await this.ctx.storage.getAlarm()) === null)
+      await this.ctx.storage.setAlarm(t + SOCKET_TTL_MS);
     return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+
+  /**
+   * Socket lifetime: closes sockets older than LIMITS.signedUrlTtlSec (minus a
+   * 60 s batching slack) with 4408 "reconnect"; the client reconnects through
+   * the shell, which re-checks access. Re-arms for the oldest remaining socket.
+   */
+  override async alarm(): Promise<void> {
+    const now = this.now();
+    let next = Number.POSITIVE_INFINITY;
+    for (const ws of this.ctx.getWebSockets()) {
+      const t = (ws.deserializeAttachment() as SocketMeta | null)?.t ?? 0;
+      if (now - t >= SOCKET_TTL_MS - SOCKET_TTL_SLACK_MS) {
+        try {
+          ws.close(4408, "reconnect");
+        } catch {
+          // already closed
+        }
+      } else next = Math.min(next, t + SOCKET_TTL_MS);
+    }
+    if (next !== Number.POSITIVE_INFINITY)
+      await this.ctx.storage.setAlarm(next);
   }
 
   /** Subscribe-only feed: any client message closes the socket (1008 policy violation). */
