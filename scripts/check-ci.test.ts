@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -161,5 +162,20 @@ describe(".nvmrc", () => {
   it("pins Node >= 22 because wrangler 4 requires it", () => {
     const major = Number.parseInt(read(".nvmrc").trim().replace(/^v/, ""), 10);
     expect(major).toBeGreaterThanOrEqual(22);
+  });
+});
+
+describe("package.json engines", () => {
+  it("requires Node >=22 in every tracked package.json", () => {
+    const files = execFileSync("git", ["ls-files", "*package.json"], {
+      cwd: root,
+      encoding: "utf8",
+    })
+      .split("\n")
+      .filter(Boolean);
+    expect(files.length).toBeGreaterThan(0);
+    for (const f of files) {
+      expect([f, JSON.parse(read(f)).engines?.node]).toEqual([f, ">=22"]);
+    }
   });
 });
