@@ -85,3 +85,43 @@
     padding: 16px;
   }
 }
+.oa-settings .oa-stack {
+  display: grid;
+  gap: 16px;
+}
+.oa-settings .oa-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 18px;
+  min-height: 48px;
+}
+.oa-settings .oa-row b {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.oa-settings .oa-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 0 18px 12px;
+}
+.oa-code {
+  position: relative;
+  padding: 0 18px 12px;
+}
+.oa-code pre {
+  margin: 0;
+  padding: 12px;
+  overflow-x: auto;
+  border-radius: var(--oa-radius-md, 6px);
+  background: var(--oa-surface-2, rgba(127, 127, 127, 0.1));
+  font-size: var(--oa-text-xs);
+}
+.oa-code button {
+  position: absolute;
+  top: 6px;
+  right: 24px;
+}

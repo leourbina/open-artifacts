@@ -75,12 +75,16 @@ export const installHarness = () => {
   });
 };
 
+/** The QueryClient of the most recent `mount`. */
+export let lastClient: ReturnType<typeof makeQueryClient>;
+
 export const mount = (path: string) => {
+  lastClient = makeQueryClient();
   const router = createAppRouter(
     createMemoryHistory({ initialEntries: [path] }),
   );
   render(
-    <QueryClientProvider client={makeQueryClient()}>
+    <QueryClientProvider client={lastClient}>
       <RedirectProvider value={vi.fn()}>
         <RouterProvider router={router} />
       </RedirectProvider>

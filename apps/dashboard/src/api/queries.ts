@@ -134,6 +134,16 @@ export const useOAuthClients = () =>
     queryFn: ({ signal }) =>
       api.get(R.oauthClients, z.array(OAuthClientSchema), signal),
   });
+export const useRevokeToken = () =>
+  useInvalidating(
+    (id: string) => api.send("DELETE", R.token(id), undefined),
+    () => [qk.tokens],
+  );
+export const useRevokeOAuthClient = () =>
+  useInvalidating(
+    (grantId: string) => api.send("DELETE", R.oauthClient(grantId), undefined),
+    () => [qk.oauthClients],
+  );
 export const useSettings = () =>
   useQuery({
     queryKey: qk.settings,
