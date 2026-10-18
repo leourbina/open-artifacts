@@ -23,13 +23,13 @@ const triggers = (w: { on: Record<string, unknown> }) => Object.keys(w.on);
  * - landing-preview.yml: exact paths/types lists -> contains.
  * - release-please.yml: exact trigger list / permissions -> contains / at
  *   least write on these scopes; action pinned `@v4` -> any `@vN`.
- * - release-please-config: `bump-minor-pre-major` is policy, only its type
- *   is checked. Manifest version: semver validity + equal to or ahead of the
+ * - release-please-config: Manifest version: semver validity + equal to or ahead of the
  *   latest local v* git tag (skipped when no tags exist).
  * - package.json engines: exact ">=22" -> any ">=N" with N >= 22.
  * - ops-staging-access inputs: exact -> contains.
  * Kept as contracts: required check names, release-type node,
- * include-component-in-tag false, initial-version 0.1.0, dispatch-only ops
+ * include-component-in-tag false, initial-version 0.1.0,
+ * bump-minor-pre-major true (false would release 1.0.0), dispatch-only ops
  * workflow, shared "staging" concurrency, secret names/scoping, no tracing,
  * redirect/robots/CSP-style smoke assertions.
  */
@@ -316,7 +316,8 @@ describe("release-please", () => {
   it("config is release-type node, manifest has a single semver at '.'", () => {
     const c = JSON.parse(read("release-please-config.json"));
     expect(c.packages["."]["release-type"]).toBe("node");
-    expect(typeof c.packages["."]["bump-minor-pre-major"]).toBe("boolean");
+    // Must stay true: main has BREAKING CHANGES; false would release 1.0.0.
+    expect(c.packages["."]["bump-minor-pre-major"]).toBe(true);
     const m = JSON.parse(read(".release-please-manifest.json"));
     expect(Object.keys(m)).toEqual(["."]);
     expect(m["."]).toMatch(/^\d+\.\d+\.\d+$/);

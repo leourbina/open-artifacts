@@ -28,13 +28,13 @@ const env = cfg.env.staging;
  *   added. Binding names stay pinned.
  * - assets: toMatchObject; binding + run_worker_first:true pinned, directory
  *   and not_found_handling free to change.
- * - ratelimit namespace_id/limit/period: tuning -> positive integers.
+ * - ratelimit namespace_id: shape only (digits).
  * - vars: exact object -> required keys + pinned ENVIRONMENT/hosts, plus an
  *   explicit "no secret-looking var names" check so the former
  *   exact-equality no-secrets guarantee is not weakened.
  * Kept as contracts: name, routes/hosts, workers_dev/preview_urls off,
  * nodejs_compat, binding names, ENVIRONMENT=production, run_worker_first,
- * the cron.
+ * the cron, RL_ANON limit 30 / period 60 (spec: 30 writes/min/anon IP).
  */
 const by = <T>(xs: T[], key: string, v: string): T | undefined =>
   // biome-ignore lint/suspicious/noExplicitAny: untyped
@@ -95,8 +95,8 @@ describe("wrangler.staging.jsonc env.staging", () => {
     };
     expect(rl).toBeDefined();
     expect(rl.namespace_id).toMatch(/^\d+$/);
-    expect(rl.simple.limit).toBeGreaterThan(0);
-    expect(rl.simple.period).toBeGreaterThan(0);
+    // Spec: 30 writes per minute per anonymous IP.
+    expect(rl.simple).toEqual({ limit: 30, period: 60 });
   });
   it("has the daily cron", () => {
     expect(env.triggers.crons).toContain("17 3 * * *");
