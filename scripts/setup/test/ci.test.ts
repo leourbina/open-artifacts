@@ -22,6 +22,7 @@ function noPat(w: W) {
     ...w.values,
     ...w.execOut,
     JSON.stringify(w.deps.env),
+    JSON.stringify(process.env),
   ].join("\n");
   for (const pat of w.bearers) {
     expect(pat).toMatch(/^oa_pat_/);

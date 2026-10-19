@@ -68,7 +68,10 @@ export const realFs: Fs = {
   readToken: (p) => {
     let fd: number | undefined;
     try {
-      fd = openSync(p, constants.O_RDONLY | constants.O_NOFOLLOW);
+      fd = openSync(
+        p,
+        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      );
       const st = fstatSync(fd);
       return {
         text: st.isFile() ? readFileSync(fd, "utf8") : "",

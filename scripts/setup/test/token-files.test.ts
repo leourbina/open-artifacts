@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { HELP, run } from "../src/index.ts";
 import { tokens } from "../src/tokens.ts";
@@ -198,7 +199,7 @@ describe("token helper: hidden save line", () => {
     expect(list.map((t) => t.saveCommand)).toEqual(
       Object.entries(labels).map(
         ([n, label]) =>
-          `bash -c 'set -e; umask 077; d="$HOME/.open-artifacts"; mkdir -p "$d"; chmod 700 "$d"; read -rsp "${label} (hidden, then Enter): " T; echo; [ -n "$T" ] || { echo "nothing entered; not saved"; exit 1; }; printf "%s" "$T" > "$d/staging-${n}-token"; chmod 600 "$d/staging-${n}-token"; echo "saved to $d/staging-${n}-token"'`,
+          `bash -c 'set -e; umask 077; d="$HOME/.open-artifacts"; mkdir -p "$d"; chmod 700 "$d"; read -rsp "${label} (hidden, then Enter): " T; echo; [ -n "$T" ] || { echo "nothing entered; not saved"; exit 1; }; rm -f "$d/staging-${n}-token"; printf "%s" "$T" > "$d/staging-${n}-token"; chmod 600 "$d/staging-${n}-token"; echo "saved to $d/staging-${n}-token"'`,
       ),
     );
   });
@@ -387,5 +388,11 @@ describe("real token file reads", () => {
     expect(realFs.readToken?.(join(dir, "link"))?.isFile).toBe(false);
     expect(realFs.readToken?.(join(dir, "none"))).toBeNull();
     expect(realFs.readToken?.(dir)?.isFile).toBe(false);
+    // A FIFO must not hang the open.
+    const fifo = join(dir, "pipe");
+    execFileSync("mkfifo", [fifo]);
+    const t0 = Date.now();
+    expect(realFs.readToken?.(fifo)?.isFile).toBe(false);
+    expect(Date.now() - t0).toBeLessThan(1000);
   });
 });

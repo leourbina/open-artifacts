@@ -47,7 +47,7 @@ The agent follows the steps below. The only thing you do yourself is approve the
    If the `access` step asks for an Access API token, the user creates one at its `data.url`. Save it with this line in your own terminal (in Claude Code, type `! ` then the line). Never paste a token into the chat. If `read` fails, the shell can't hide input, so use a real terminal.
 
    ```sh
-   bash -c 'set -e; umask 077; d="$HOME/.open-artifacts"; mkdir -p "$d"; chmod 700 "$d"; read -rsp "Cloudflare Access token (hidden, then Enter): " T; echo; [ -n "$T" ] || { echo "nothing entered; not saved"; exit 1; }; printf "%s" "$T" > "$d/open-artifacts-access-token"; chmod 600 "$d/open-artifacts-access-token"; echo "saved to $d/open-artifacts-access-token"'
+   bash -c 'set -e; umask 077; d="$HOME/.open-artifacts"; mkdir -p "$d"; chmod 700 "$d"; read -rsp "Cloudflare Access token (hidden, then Enter): " T; echo; [ -n "$T" ] || { echo "nothing entered; not saved"; exit 1; }; rm -f "$d/open-artifacts-access-token"; printf "%s" "$T" > "$d/open-artifacts-access-token"; chmod 600 "$d/open-artifacts-access-token"; echo "saved to $d/open-artifacts-access-token"'
    ```
 
    Use your `--name` in place of `open-artifacts` in that line. `pnpm -s oa:setup --token-links --json` prints the exact line for every token as `saveCommand`. Then run the same setup command again. Setup reads the saved file, keeps the token only in memory, and never prints or saves it.

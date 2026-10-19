@@ -80,7 +80,7 @@ export const ENV_NAME = {
 
 /** The one line the user runs in their own terminal: reads the token hidden, saves it 0600. */
 export const saveCommand = (file: string, label: string) =>
-  `bash -c 'set -e; umask 077; d="$HOME/.open-artifacts"; mkdir -p "$d"; chmod 700 "$d"; read -rsp "${label} (hidden, then Enter): " T; echo; [ -n "$T" ] || { echo "nothing entered; not saved"; exit 1; }; printf "%s" "$T" > "$d/${file}-token"; chmod 600 "$d/${file}-token"; echo "saved to $d/${file}-token"'`;
+  `bash -c 'set -e; umask 077; d="$HOME/.open-artifacts"; mkdir -p "$d"; chmod 700 "$d"; read -rsp "${label} (hidden, then Enter): " T; echo; [ -n "$T" ] || { echo "nothing entered; not saved"; exit 1; }; rm -f "$d/${file}-token"; printf "%s" "$T" > "$d/${file}-token"; chmod 600 "$d/${file}-token"; echo "saved to $d/${file}-token"'`;
 
 export type TokenOpts = {
   /** Install name, the token name prefix; default open-artifacts. */
