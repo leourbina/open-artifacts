@@ -194,7 +194,7 @@ export function Members() {
         </Button>
       </div>
       {q.isError ? (
-        <p role="alert" className="oa-err" style={{ padding: "0 18px 16px" }}>
+        <p role="alert" className="oa-err">
           Couldn't load members.
         </p>
       ) : (

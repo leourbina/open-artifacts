@@ -1,3 +1,39 @@
+/* Tab panel content (hints, snippet) stacks with the card rhythm. */
+.oa-snippet {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--oa-space-2);
+}
+.oa-snippet p {
+  margin: 0;
+}
+/* The Copy button sits beside the code, never over it; no outer padding,
+   so the block fits whatever holds it (card, dialog). */
+.oa-code {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--oa-space-1);
+  min-width: 0;
+  border-radius: var(--oa-radius-md, 6px);
+  background: var(--oa-surface-2, rgba(127, 127, 127, 0.1));
+}
+.oa-code pre,
+.oa-code .oa-token {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  overflow-x: auto;
+  font-size: var(--oa-text-xs);
+}
+.oa-code .oa-token {
+  display: block;
+  word-break: break-all;
+}
+.oa-code button {
+  flex: none;
+  margin: 6px 6px 0 0;
+}
 .oa-settings {
   max-width: 880px;
   margin: 0 auto;
@@ -19,16 +55,36 @@
   color: var(--oa-text);
   border-bottom-color: var(--oa-accent, currentColor);
 }
+/* The card owns the inset and the vertical rhythm; children never pad
+   themselves horizontally, so bare components line up with the heading. */
 .oa-settings .oa-card {
+  --oa-card-pad: 18px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: var(--oa-space-3);
+  padding: var(--oa-card-pad);
   border: 1px solid var(--oa-divider);
   border-radius: var(--oa-radius-lg, 8px);
   background: var(--oa-surface);
+}
+.oa-settings .oa-card p {
+  margin: 0;
+}
+/* Full-width controls (width: 100%) must count their border and padding. */
+.oa-settings .oa-card :is(input, textarea) {
+  box-sizing: border-box;
+}
+/* Grid items stretch; a segmented control keeps its intrinsic width. */
+.oa-settings .oa-card > [role="radiogroup"] {
+  justify-self: start;
 }
 .oa-settings .oa-card-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 18px;
+  gap: var(--oa-space-3);
+  min-height: 30px;
 }
 .oa-settings .oa-card-head h2 {
   margin: 0;
@@ -44,7 +100,7 @@
   grid-template-columns: minmax(0, 1fr) 112px 104px 72px;
   align-items: center;
   gap: 10px;
-  padding: 8px 18px;
+  padding: 8px 0;
   min-height: 52px;
   border-top: 1px solid var(--oa-divider);
 }
@@ -53,6 +109,10 @@
   align-items: center;
   gap: 10px;
   min-width: 0;
+  /* Undo the edge pages' signed-in chip (styles.css .oa-who). */
+  margin: 0;
+  padding: 0;
+  background: none;
 }
 .oa-settings .oa-who small,
 .oa-settings .oa-seen {
@@ -94,7 +154,7 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 18px;
+  padding: 8px 0;
   min-height: 48px;
 }
 .oa-settings .oa-row b {
@@ -107,29 +167,17 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  padding: 0 18px 12px;
 }
-.oa-code {
-  position: relative;
-  padding: 0 18px 12px;
+/* One row: the input takes the slack, the button keeps its size. */
+.oa-settings .oa-url {
+  flex-wrap: nowrap;
 }
-.oa-code pre,
-.oa-code .oa-token {
-  margin: 0;
-  padding: 12px 72px 12px 12px;
-  overflow-x: auto;
-  border-radius: var(--oa-radius-md, 6px);
-  background: var(--oa-surface-2, rgba(127, 127, 127, 0.1));
-  font-size: var(--oa-text-xs);
+.oa-settings .oa-url input {
+  flex: 1;
+  min-width: 0;
 }
-.oa-code .oa-token {
-  display: block;
-  word-break: break-all;
-}
-.oa-code button {
-  position: absolute;
-  top: 6px;
-  right: 24px;
+.oa-settings .oa-url button {
+  flex: none;
 }
 .oa-settings .oa-card {
   min-width: 0;
@@ -137,13 +185,13 @@
 
 /* Instance */
 .oa-settings .oa-instance {
-  display: grid;
+  gap: var(--oa-space-4);
 }
 .oa-settings .oa-frow {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
   gap: 12px 24px;
-  padding: 16px 18px;
+  padding-bottom: var(--oa-space-4);
   border-bottom: 1px solid var(--oa-divider);
   align-items: start;
 }
@@ -162,7 +210,6 @@
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  padding: 12px 18px;
 }
 
 /* Usage */
@@ -190,12 +237,8 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
 }
-.oa-meter {
-  padding: 16px 18px;
-  display: flex;
-  flex-direction: column;
+.oa-settings .oa-meter {
   gap: 10px;
-  min-width: 0;
 }
 .oa-meter-head {
   display: flex;
@@ -257,18 +300,11 @@
 .oa-meter[data-tone="danger"] .oa-left {
   color: var(--oa-danger);
 }
-.oa-setup {
-  padding: 18px;
-  display: grid;
+.oa-settings .oa-setup {
   gap: 10px;
-  min-width: 0;
 }
-.oa-setup h2,
-.oa-setup p {
+.oa-setup h2 {
   margin: 0;
-}
-.oa-code-flush {
-  padding: 0;
 }
 @media (max-width: 600px) {
   .oa-settings {
@@ -277,9 +313,18 @@
   .oa-meters {
     grid-template-columns: minmax(0, 1fr);
   }
-  .oa-meter,
-  .oa-setup {
-    padding: 14px;
+  .oa-settings .oa-card {
+    --oa-card-pad: 14px;
+  }
+  /* Name on its own line; meta and actions wrap beneath it. */
+  .oa-settings .oa-row {
+    flex-wrap: wrap;
+  }
+  .oa-settings .oa-row b {
+    flex-basis: 100%;
+  }
+  .oa-settings .oa-row button {
+    margin-left: auto;
   }
   .oa-settings .oa-frow {
     grid-template-columns: minmax(0, 1fr);
@@ -294,15 +339,11 @@
 .oa-settings .oa-instance .oa-err {
   margin-top: 6px;
 }
-.oa-guide {
-  padding: 16px 18px;
-  display: grid;
+.oa-settings .oa-guide {
   gap: 8px;
   color: var(--oa-text-2);
-  min-width: 0;
 }
-.oa-guide h2,
-.oa-guide p {
+.oa-guide h2 {
   margin: 0;
 }
 .oa-guide h2 {

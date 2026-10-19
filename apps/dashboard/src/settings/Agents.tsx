@@ -67,14 +67,14 @@ function SnippetTabs({
         id: s.agent,
         label: s.agent,
         content: (
-          <>
+          <div className="oa-snippet">
             {s.hint && <p className="oa-seen">{s.hint}</p>}
             {s.file && <p className="oa-seen">{s.file}</p>}
             <Code
               code={s.code}
               label={s.language === "bash" ? "Copy command" : "Copy config"}
             />
-          </>
+          </div>
         ),
       }))}
     />
@@ -363,7 +363,7 @@ export function Agents() {
           <div className="oa-card-head">
             <h2 id="oa-mcp-h">MCP server</h2>
           </div>
-          <div className="oa-form">
+          <div className="oa-form oa-url">
             <Input readOnly aria-label="MCP server URL" value={mcpUrl} />
             <Button
               variant="secondary"

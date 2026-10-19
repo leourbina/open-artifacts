@@ -105,7 +105,7 @@ const copy = (text: string) => {
 
 function Cmd({ code, label }: { code: string; label: string }) {
   return (
-    <div className="oa-code oa-code-flush">
+    <div className="oa-code">
       <pre>
         <code>{code}</code>
       </pre>

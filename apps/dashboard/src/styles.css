@@ -7,6 +7,45 @@ body {
   color: var(--oa-text);
   font: 400 var(--oa-text-sm) / 1.45 var(--oa-font-sans);
 }
+/* Sidebar brand: inset like the nav rows' icons (.navItem pads
+   --oa-space-2), the mark one line tall. */
+.oa-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--oa-space-2);
+  min-width: 0;
+  padding: var(--oa-space-2) var(--oa-space-2) 0;
+  margin-bottom: var(--oa-space-3);
+}
+.oa-brand img {
+  flex: none;
+  width: 1lh;
+  height: 1lh;
+}
+.oa-brand strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.oa-brand-dark {
+  display: none;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .oa-brand-light {
+    display: none;
+  }
+  :root:not([data-theme="light"]) .oa-brand-dark {
+    display: block;
+  }
+}
+:root[data-theme="dark"] .oa-brand-light {
+  display: none;
+}
+:root[data-theme="dark"] .oa-brand-dark {
+  display: block;
+}
 .oa-edge {
   min-height: 70vh;
   display: flex;
