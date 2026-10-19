@@ -332,9 +332,11 @@ describe("fix round 3", () => {
       custom: false,
       updateAvailable: true,
       breaking: true,
-      url: "u",
+      notesUrl: "u",
       checkedAt: "t",
     };
+    expect(m.MeSchema.safeParse(me).success).toBe(true);
+    (inst.update as Record<string, unknown>).breaking = null;
     expect(m.MeSchema.safeParse(me).success).toBe(true);
   });
 });

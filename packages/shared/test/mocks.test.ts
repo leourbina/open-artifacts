@@ -328,7 +328,8 @@ describe("update option", () => {
       custom: false,
       updateAvailable: true,
       breaking: false,
-      url: "https://github.com/open-artifacts-ai/open-artifacts/releases/tag/v0.4.0",
+      notesUrl:
+        "https://github.com/open-artifacts-ai/open-artifacts/releases/tag/v0.4.0",
       checkedAt: "2026-10-20T00:00:00.000Z",
     };
     fresh({ update });

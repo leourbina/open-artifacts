@@ -323,10 +323,12 @@ export const InstanceUpdateSchema = z.object({
   /** A -dev or other non-release build: no comparison, updateAvailable is false. */
   custom: z.boolean(),
   updateAvailable: z.boolean(),
-  /** The latest release's notes contain "BREAKING CHANGE". */
-  breaking: z.boolean(),
-  /** The release page on GitHub. */
-  url: z.string(),
+  /** Some release in (current, latestVersion] has "BREAKING CHANGE" in its
+   * notes; false when none or up to date; null when unknown (rate-limited
+   * fallback check, a range older than the last 100 releases, or custom). */
+  breaking: z.boolean().nullable(),
+  /** The latest release's notes on GitHub. */
+  notesUrl: z.string(),
   /** When the last good check ran (ISO). */
   checkedAt: z.string(),
 });
