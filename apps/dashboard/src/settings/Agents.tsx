@@ -55,14 +55,12 @@ function Code({ code, label }: { code: string; label: string }) {
 /** Agent picker over one variant's snippets. */
 function SnippetTabs({
   mcpUrl,
-  token,
   variant,
 }: {
   mcpUrl: string;
-  token?: string;
   variant: "oauth" | "token";
 }) {
-  const list = snippets(mcpUrl, token).filter((s) => s.variant === variant);
+  const list = snippets(mcpUrl).filter((s) => s.variant === variant);
   return (
     <Tabs
       tabs={list.map((s) => ({
@@ -70,6 +68,7 @@ function SnippetTabs({
         label: s.agent,
         content: (
           <>
+            {s.hint && <p className="oa-seen">{s.hint}</p>}
             {s.file && <p className="oa-seen">{s.file}</p>}
             <Code
               code={s.code}
@@ -251,13 +250,24 @@ function CreateDialog({ onClose }: { onClose: () => void }) {
       {created ? (
         <div className="oa-form">
           <p role="alert">You won't see this again.</p>
-          <Code code={created.token} label="Copy token" />
+          <div className="oa-code">
+            <code className="oa-token">{created.token}</code>
+            <Button
+              variant="ghost"
+              aria-label="Copy token"
+              onClick={() => copyText(created.token, "Copied")}
+            >
+              Copy
+            </Button>
+          </div>
           {mcpUrl && (
-            <SnippetTabs
-              mcpUrl={mcpUrl}
-              token={created.token}
-              variant="token"
-            />
+            <>
+              <p className="oa-seen">
+                Snippets read the token from OA_TOKEN. In your shell, run{" "}
+                <code>read -rs OA_TOKEN; export OA_TOKEN</code> and paste it.
+              </p>
+              <SnippetTabs mcpUrl={mcpUrl} variant="token" />
+            </>
           )}
         </div>
       ) : (
