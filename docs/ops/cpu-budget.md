@@ -26,25 +26,34 @@ measures each of those directly.
 
 ### Latest measurements
 
-Staging p95 is `cpuTime` from `wrangler tail` (the latest runs below and in
-#223). Code CPU is the `test:cpu` row (Node proxy, p95, median of 5).
+Staging p95 is `cpuTime` from Platform's Free-like run: `PLAN=free`,
+thumbnails off, n=12 per route, requests 2 s / 3 s apart. Code CPU is the
+`test:cpu` row (Node proxy, p95, median of 5). "-" means that column has no
+matching row.
 
-| Route | Staging p95 (ms) | Code CPU p95 (ms) |
+| Route | Staging p95 ms (2 s / 3 s) | Code CPU p95 ms |
 |---|---|---|
-| `GET /healthz` | 1 | 0.29 |
-| `GET /api/v1/me` | 4 | 0.56 |
-| `GET /api/v1/artifacts?limit=25` | 10 | 1.18 |
-| search | 10 | 1.26 |
-| inline publish 128 KB escape-heavy | n/a | 0.99 |
-| upload create | n/a | 0.48 |
-| upload PUT 250 KB | n/a | 0.36 |
-| publish `{ uploadId }` 250 KB html | n/a | 0.52 |
-| data doc write 256 KB (Worker / DO) | n/a | 0.88 / 0.51 |
-| index alarm 64 KB html (DO) | 12 | 0.53 |
+| `GET /healthz` | - (1 in the earlier isolated run) | 0.29 |
+| `GET /api/v1/me` | - (4 in the earlier isolated run) | 0.56 |
+| `GET /api/v1/artifacts?limit=25` | 11 / 10 | 1.18 |
+| search | 12 / 6 | 1.26 |
+| publish 1 KB (control) | **17 / 12** | - |
+| inline publish 120 KB typical html | 10 / 8 | - |
+| inline publish 128 KB escape-heavy | - | 0.99 |
+| upload create (reserve) | 10 / 6 | 0.48 |
+| upload PUT | 8 / 5 | 0.36 |
+| publish `{ uploadId }` | 17 / 5 | 0.52 |
+| data doc write 256 KB (Worker / DO) | - | 0.88 / 0.51 |
+| index alarm (DO) | 12 / 12 | 0.53 (64 KB html) |
 
-Wherever both columns have a number, staging is 3–23× the code CPU: the
-gap is the runtime overhead above. "n/a" means no staging p95 for that route
-at the current limits yet; Platform's Free run fills it in.
+The 1 KB publish control is the worst staging row while doing almost no
+work, and where both columns have a number staging is 10–30× the code CPU:
+that gap is runtime overhead, not our code.
+
+Kills: none in this run (72 alarms ok, 192 requests 2xx). Staging is a
+**Paid** account, though, so a request over 10 ms isn't killed there and the
+run can't show kills. It is inconclusive for half 1 of the bar. **The decisive
+run, with `limits.cpu_ms = 10`, is pending (Platform).**
 
 ## Decision (2026-10-19), superseded
 
