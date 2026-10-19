@@ -3,7 +3,9 @@
 //   import "@oa/ui/tokens.css";
 //   import "@oa/ui/shadcn.css";
 
+export { BrandMark, SidebarBrand } from "./brand";
 export { type DataTheme, useDataTheme } from "./hooks/use-data-theme";
+export { useIsMobile } from "./hooks/use-mobile";
 export { cn } from "./lib/utils";
 export {
   AlertDialog,
@@ -83,6 +85,42 @@ export {
   SelectValue,
 } from "./ui/select";
 export { Separator } from "./ui/separator";
+export {
+  Sheet,
+  SheetClose,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "./ui/sheet";
+export {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupAction,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInput,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuAction,
+  SidebarMenuBadge,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarMenuSkeleton,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
+  SidebarProvider,
+  SidebarRail,
+  SidebarSeparator,
+  SidebarTrigger,
+  useSidebar,
+} from "./ui/sidebar";
 export { Skeleton } from "./ui/skeleton";
 export { Toaster } from "./ui/sonner";
 export {

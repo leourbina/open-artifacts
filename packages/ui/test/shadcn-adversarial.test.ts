@@ -51,8 +51,9 @@ describe("shadcn foundation: adversarial", () => {
 
   it("theme.css colors are only var(--oa-*) references", () => {
     expect(theme).not.toMatch(/hsla?\(|oklch\(|rgba?\(|#[0-9a-f]{3,8}\b/i);
+    // Plain px is the size scale (spacing, text, containers), not a color.
     for (const [, value] of theme.matchAll(/--[\w-]+:\s*([^;]+);/g))
-      if (!/^var\(--/.test(value) && !/calc|color-mix/.test(value))
+      if (!/^var\(--|^\d+px$/.test(value) && !/calc|color-mix/.test(value))
         throw new Error(`non-token value: ${value}`);
   });
 
