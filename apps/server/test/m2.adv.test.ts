@@ -6,7 +6,15 @@ import { createPat } from "../src/auth/pat.js";
 import { type ArtifactRuntime, runtimeStub } from "../src/runtime/do.js";
 import { removeMember } from "../src/services/members.js";
 import { login } from "./helpers.js";
-import { APP, callWorker, connect, E, nextIp, tool } from "./mcp-helpers.js";
+import {
+  APP,
+  callWorker,
+  connect,
+  E,
+  limiter,
+  nextIp,
+  tool,
+} from "./mcp-helpers.js";
 
 const tag = newId().slice(0, 6).toLowerCase();
 const CONTENT = "https://content.localhost";
@@ -230,7 +238,7 @@ describe("M2 whole-track adversarial", () => {
         return typeof v === "function" ? v.bind(t) : v;
       },
     });
-    const e = E({ OAUTH_KV: counting });
+    const e = E({ OAUTH_KV: counting, RL_ANON: limiter().RL_ANON });
     const o = await oauth(`o3-${tag}@x.com`, e);
     let rt = o.refresh_token;
     puts = 0;
@@ -263,20 +271,6 @@ describe("M2 whole-track adversarial", () => {
     expect(puts).toBeLessThanOrEqual(2 * ok);
   });
 
-  /** RL_ANON stub: `max` per key, recording every key charged. */
-  const limiter = (max: number) => {
-    const counts = new Map<string, number>();
-    return {
-      counts,
-      RL_ANON: {
-        async limit({ key }: { key: string }) {
-          const n = (counts.get(key) ?? 0) + 1;
-          counts.set(key, n);
-          return { success: n <= max };
-        },
-      },
-    };
-  };
   const token = (params: Record<string, string>, ip: string, e: unknown) =>
     w(
       new Request(`${APP}/oauth/token`, {

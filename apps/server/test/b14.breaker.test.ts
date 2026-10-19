@@ -7,6 +7,8 @@ import {
   APP,
   callWorker,
   connect,
+  E,
+  limiter,
   MCP_URL,
   nextIp,
   textOf,
@@ -184,6 +186,7 @@ describe("B14 breaker", () => {
   });
 
   it("F2 /oauth/register is rate-limited per IP (KV write quota)", async () => {
+    const e = E({ RL_ANON: limiter().RL_ANON });
     let limited = false;
     for (let i = 0; i < 40 && !limited; i++) {
       const r = await callWorker(
@@ -199,6 +202,7 @@ describe("B14 breaker", () => {
             token_endpoint_auth_method: "none",
           }),
         }),
+        e,
       );
       limited = r.status === 429;
     }
