@@ -129,6 +129,8 @@ type World = {
   healthzBody?: string;
   /** The live deployment splits traffic 50/50 across two versions. */
   splitDeployment?: boolean;
+  /** Extra bindings on the live Worker's settings (send_email, browser, secret_text with a text canary). */
+  workerBindings?: { type: string; name: string; text?: string }[];
   /** GET deployments answers 403 (a token without Workers Scripts Read). */
   deploymentsForbidden?: boolean;
   /** GET deployments answers 500. */
@@ -760,6 +762,7 @@ export function world(w: World = {}) {
             text,
           })),
           ...(secrets ?? []).map((name) => ({ type: "secret_text", name })),
+          ...(w.workerBindings ?? []),
           ...(w.dropSendEmail ? [] : (full?.send_email ?? [])).map(
             (b: { name: string }) => ({ type: "send_email", name: b.name }),
           ),

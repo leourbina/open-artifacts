@@ -1,6 +1,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { type Deployed, fromWorker } from "./by-name.ts";
 import { type Deps, makeApi, makeWrangler, realDeps, realFs } from "./cf.ts";
 import { readOnlyDeps } from "./readonly.ts";
 import { rollbackCommand } from "./rollback.ts";
@@ -68,7 +69,12 @@ function normEmail(raw: string) {
   return e;
 }
 
-async function resolve(argv: string[], deps: Deps, state: State) {
+async function resolve(
+  argv: string[],
+  deps: Deps,
+  state: State,
+  deployed?: Deployed,
+) {
   const { values: v } = parseArgs({
     args: argv,
     strict: true,
@@ -107,11 +113,17 @@ async function resolve(argv: string[], deps: Deps, state: State) {
   const json = v.json || v.ci;
   const interactive = !v.yes && !json;
   // Precedence: flag, then saved state, then an interactive prompt.
-  const need = async (flag: string, re: RegExp, saved?: string) => {
+  const need = async (
+    flag: string,
+    re: RegExp,
+    saved?: string,
+    live?: string,
+  ) => {
     const q = `${flag.slice(2).replace("-", " ")}:`;
     const val =
       (v[flag.slice(2) as keyof typeof v] as string | undefined) ??
       saved ??
+      live ??
       (interactive ? await deps.prompt(q) : undefined);
     if (val) return valid(flag, val, re);
     if (json) throw new NeedInput(`pass ${flag} (--json never prompts)`);
@@ -158,17 +170,32 @@ async function resolve(argv: string[], deps: Deps, state: State) {
     // The cleanup-only mode touches D1 by name: no hosts needed.
     appHost: v["revoke-ci-tokens"]
       ? (v["app-host"] ?? state.appHost ?? "")
-      : await need("--app-host", HOST, state.appHost),
+      : await need("--app-host", HOST, state.appHost, deployed?.appHost),
     contentHost: v["revoke-ci-tokens"]
       ? (v["content-host"] ?? state.contentHost ?? "")
-      : await need("--content-host", HOST, state.contentHost),
+      : await need(
+          "--content-host",
+          HOST,
+          state.contentHost,
+          deployed?.contentHost,
+        ),
     ownerEmail: valid(
       "--owner-email",
-      normEmail(await need("--owner-email", /./, state.ownerEmail)),
+      normEmail(
+        await need(
+          "--owner-email",
+          /./,
+          state.ownerEmail,
+          deployed?.ownerEmail,
+        ),
+      ),
       EMAIL,
     ),
     accountId:
-      v["account-id"] ?? state.accountId ?? deps.env.CLOUDFLARE_ACCOUNT_ID,
+      v["account-id"] ??
+      state.accountId ??
+      deployed?.accountId ??
+      deps.env.CLOUDFLARE_ACCOUNT_ID,
     // Flag, then saved state; undefined is decided (asked) in prereqs once the plan is known.
     teamChoice: v.team ? true : v.solo ? false : state.team,
     teamFlag: v.team,
@@ -270,6 +297,7 @@ async function checkOnly(
   const data = Object.fromEntries(
     REPORTED.filter((k) => state[k] !== undefined).map((k) => [k, state[k]]),
   );
+  if (ctx.sources) Object.assign(data, { sources: ctx.sources });
   report({
     step: "state",
     status: "ok",
@@ -286,6 +314,11 @@ export const HELP = `Usage: pnpm oa:setup [options]
                 version, else saved state). Without it setup stops with action_required
                 before the D1 migrations. D1 is not rolled back. --check reports
                 {repoVersion, liveVersion, downgrade} on the deploy line.
+  --upgrade     With no saved state it needs only --name (plus --account-id when the
+                login has several accounts): hosts, owner, plan, team, email domain and
+                thumbnails are read from the deployed Worker's plain-text vars and
+                bindings (never secrets). Flags win, with a note when they differ; the
+                state line and --check report data.sources (worker|flag) per value.
   --browser | --no-browser  Server-side thumbnails: the BROWSER binding (Browser Run)
                 and SERVER_THUMBNAILS=on. Paid only: on when the plan reads paid, off
                 on free; on unknown, saved state decides. --browser forces it on
@@ -360,9 +393,11 @@ export async function run(
   let fs = rawFs;
   let opts: Opts;
   let state: State;
+  let deployed: Deployed | undefined;
   try {
     state = readState(fs, root);
-    opts = await resolve(argv, deps, state);
+    deployed = await fromWorker(argv, deps, root, state);
+    opts = await resolve(argv, deps, state, deployed);
   } catch (e) {
     const ar = e instanceof NeedInput;
     const status = ar ? "action_required" : "error";
@@ -405,7 +440,8 @@ export async function run(
     wrangler,
     api,
     accessApi,
-    notes: [],
+    notes: [...(deployed?.notes ?? [])],
+    sources: deployed?.sources,
     prev,
   };
   const msg = (fallback: string) => ctx.notes.splice(0).join("; ") || fallback;
@@ -481,9 +517,12 @@ export async function run(
         step: "state",
         status: "ok",
         message: opts.ci ? "final (not written: --ci)" : "final",
-        data: Object.fromEntries(
-          keys.filter((k) => state[k] !== undefined).map((k) => [k, state[k]]),
-        ),
+        data: Object.fromEntries([
+          ...keys
+            .filter((k) => state[k] !== undefined)
+            .map((k) => [k, state[k]]),
+          ...(ctx.sources ? [["sources", ctx.sources]] : []),
+        ]),
       });
     }
     return 0;
