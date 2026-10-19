@@ -100,6 +100,9 @@ jobs:
       - name: Real-server suite (local wrangler dev)
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: bash scripts/ci/e2e.sh real
+      - name: UI real-browser checks (axe contrast, focus)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: bash scripts/ci/e2e.sh ui
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
