@@ -1,8 +1,22 @@
 import { AUTH, type Me } from "@oa/shared";
-import { AppShell, Avatar, Button, Menu, NavItem, Toaster } from "@oa/ui";
+import { Avatar, Button, Menu, Toaster } from "@oa/ui";
+import {
+  Sidebar as ShSidebar,
+  SidebarBrand,
+  SidebarContent,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarTrigger,
+  useSidebar,
+} from "@oa/ui/shadcn";
 import { useQueryClient } from "@tanstack/react-query";
 import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
-import { type ReactNode, useEffect } from "react";
+import { type MouseEvent, type ReactNode, useEffect } from "react";
 import { ApiClientError } from "../api/client";
 import { qk } from "../api/queries";
 import { useRedirect } from "../auth/redirect";
@@ -100,13 +114,41 @@ export function AppLayout() {
     );
   const me = state.status === "authed" ? state.me : null;
   return (
-    <AppShell nav={<Sidebar me={me} path={path} />} header={<TopBar me={me} />}>
-      <QuotaBanner />
-      <CpuBanner role={me?.user.role} />
-      <Outlet />
+    <SidebarProvider>
+      <ContentScrollReset path={path} />
+      <a
+        href="#oa-main"
+        className="sr-only z-[60] rounded-sm bg-[var(--oa-surface)] px-[var(--oa-space-2)] py-[var(--oa-space-1)] text-[var(--oa-text)] shadow-[var(--oa-shadow-2)] focus:not-sr-only focus:fixed focus:top-[var(--oa-space-2)] focus:left-[var(--oa-space-2)]"
+      >
+        Skip to content
+      </a>
+      <Sidebar me={me} path={path} />
+      {/* The inset panel (Design's sidebar B), SidebarInset's box as a div so
+          the header stays the banner, outside <main>. From 768px it floats
+          8px in from the chrome (0 on the sidebar side unless collapsed),
+          viewport-tall, and its content (not the panel) scrolls under the
+          header. Below 768px it is full-bleed and the page scrolls. */}
+      <div className="relative flex w-full min-w-0 flex-1 flex-col bg-[var(--oa-bg)] md:m-[var(--oa-space-2)] md:ml-0 md:h-[calc(100svh-2*var(--oa-space-2))] md:rounded-[var(--oa-radius-lg)] md:border md:border-solid md:border-[var(--oa-border)] md:peer-data-[state=collapsed]:ml-[var(--oa-space-2)]">
+        <header className="sticky top-0 z-[5] box-border flex h-12 flex-none items-center gap-[10px] border-0 border-b border-solid border-[var(--oa-divider)] bg-[var(--oa-bg)] px-[var(--oa-space-5)] max-md:px-[var(--oa-space-3)] md:static md:rounded-t-[calc(var(--oa-radius-lg)-1px)]">
+          <SidebarTrigger aria-label="Toggle navigation" />
+          <TopBar me={me} />
+        </header>
+        {/* Focusable (not tabbable) so the keyboard can scroll it. */}
+        <main
+          id="oa-main"
+          tabIndex={-1}
+          className="min-w-0 flex-1 outline-none md:min-h-0 md:overflow-auto md:rounded-b-[calc(var(--oa-radius-lg)-1px)] md:[scrollbar-gutter:stable]"
+        >
+          <QuotaBanner />
+          <CpuBanner role={me?.user.role} />
+          <div className="oa-page">
+            <Outlet />
+          </div>
+        </main>
+      </div>
       {me && <DisplayNamePrompt key={me.user.id} me={me} />}
       <Toaster />
-    </AppShell>
+    </SidebarProvider>
   );
 }
 
@@ -142,28 +184,55 @@ function LoadError({ quota }: { quota: boolean }) {
   );
 }
 
+/** From 768px the panel's content scrolls, not the window, so a new page
+    starts at its top. */
+function ContentScrollReset({ path }: { path: string }) {
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs per page
+  useEffect(() => {
+    const main = document.getElementById("oa-main");
+    if (main) main.scrollTop = 0;
+  }, [path]);
+  return null;
+}
+
+/** A router link that also closes the phone sheet. */
+const useGo = () => {
+  const navigate = useNavigate();
+  const { setOpenMobile } = useSidebar();
+  return (e: MouseEvent, to: string) => {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)
+      return;
+    e.preventDefault();
+    setOpenMobile(false);
+    void navigate({ to });
+  };
+};
+
 function Link({
   to,
   active,
-  ...rest
+  icon,
+  label,
 }: {
   to: string;
   active: boolean;
   icon: ReactNode;
   label: string;
 }) {
-  const navigate = useNavigate();
+  const go = useGo();
   return (
-    <NavItem
-      href={to}
-      active={active}
-      onClick={(e) => {
-        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey) return;
-        e.preventDefault();
-        void navigate({ to });
-      }}
-      {...rest}
-    />
+    <SidebarMenuItem>
+      <SidebarMenuButton asChild isActive={active}>
+        <a
+          href={to}
+          aria-current={active ? "page" : undefined}
+          onClick={(e) => go(e, to)}
+        >
+          {icon}
+          <span>{label}</span>
+        </a>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
   );
 }
 
@@ -171,49 +240,85 @@ function Sidebar({ me, path }: { me: Me | null; path: string }) {
   const role = me?.user.role;
   const guest = role === "guest";
   const on = (p: string) => path === p || path.startsWith(`${p}/`);
+  const go = useGo();
+  const home = guest ? "/shared" : "/";
   return (
-    <>
-      <strong>{me?.instance.name || "Open Artifacts"}</strong>
-      {guest ? (
-        <Link
-          to="/shared"
-          active={on("/shared")}
-          icon={I.share}
-          label="Shared with me"
+    <ShSidebar variant="inset">
+      <SidebarHeader
+        className="h-12 justify-center gap-0 p-0 in-data-[mobile=true]:mx-2 in-data-[mobile=true]:mt-2"
+        onClick={(e) => {
+          if ((e.target as Element).closest("a")) go(e, home);
+        }}
+      >
+        <SidebarBrand
+          href={home}
+          name={me?.instance.name || "Open Artifacts"}
         />
-      ) : (
-        <>
-          <Link to="/" active={path === "/"} icon={I.lib} label="Library" />
-          {me && (
-            <Link
-              to="/shared"
-              active={on("/shared")}
-              icon={I.share}
-              label="Shared with me"
-            />
-          )}
-          {me && (
-            <Link to="/team" active={on("/team")} icon={I.team} label="Team" />
-          )}
-          {(role === "owner" || role === "admin") && (
-            <Link
-              to="/settings/usage"
-              active={on("/settings/usage")}
-              icon={I.usage}
-              label="Usage"
-            />
-          )}
-          {me && (
-            <Link
-              to="/settings/members"
-              active={path.startsWith("/settings") && !on("/settings/usage")}
-              icon={I.gear}
-              label="Settings"
-            />
-          )}
-        </>
-      )}
-    </>
+      </SidebarHeader>
+      {/* The phone sheet has no inset container, so it takes the desktop's
+          8px itself. */}
+      <SidebarContent className="in-data-[mobile=true]:px-2">
+        <nav aria-label="Primary">
+          <SidebarGroup>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {guest ? (
+                  <Link
+                    to="/shared"
+                    active={on("/shared")}
+                    icon={I.share}
+                    label="Shared with me"
+                  />
+                ) : (
+                  <>
+                    <Link
+                      to="/"
+                      active={path === "/"}
+                      icon={I.lib}
+                      label="Library"
+                    />
+                    {me && (
+                      <Link
+                        to="/shared"
+                        active={on("/shared")}
+                        icon={I.share}
+                        label="Shared with me"
+                      />
+                    )}
+                    {me && (
+                      <Link
+                        to="/team"
+                        active={on("/team")}
+                        icon={I.team}
+                        label="Team"
+                      />
+                    )}
+                    {(role === "owner" || role === "admin") && (
+                      <Link
+                        to="/settings/usage"
+                        active={on("/settings/usage")}
+                        icon={I.usage}
+                        label="Usage"
+                      />
+                    )}
+                    {me && (
+                      <Link
+                        to="/settings/members"
+                        active={
+                          path.startsWith("/settings") && !on("/settings/usage")
+                        }
+                        icon={I.gear}
+                        label="Settings"
+                      />
+                    )}
+                  </>
+                )}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        </nav>
+      </SidebarContent>
+    </ShSidebar>
   );
 }
 

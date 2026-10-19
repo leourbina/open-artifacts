@@ -37,8 +37,10 @@ const mount = async (who: Who, path = "/") => {
       </RedirectProvider>
     </QueryClientProvider>,
   );
+  lastRouter = router;
   return redirect;
 };
+let lastRouter: ReturnType<typeof createAppRouter> | undefined;
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -83,6 +85,16 @@ describe("AppLayout", () => {
       expect(redirect).toHaveBeenCalledWith("/auth/login?next=%2Fa%2Fx"),
     );
     expect(redirect).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts each page at the top of the scrolling content", async () => {
+    await mount("member");
+    await screen.findAllByRole("link", { name: "Team" });
+    const main = document.getElementById("oa-main") as HTMLElement;
+    main.scrollTop = 150;
+    expect(main.scrollTop).toBe(150);
+    await lastRouter?.navigate({ to: "/team" as string });
+    await waitFor(() => expect(main.scrollTop).toBe(0));
   });
 
   it("shows the quota banner with QUOTA_MESSAGE", async () => {

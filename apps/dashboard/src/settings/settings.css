@@ -1,7 +1,6 @@
 .oa-settings {
   max-width: 880px;
   margin: 0 auto;
-  padding: 24px;
 }
 .oa-settings .oa-settings-tabs {
   display: flex;
@@ -78,11 +77,6 @@
 @media (max-width: 640px) {
   .oa-settings .oa-member {
     grid-template-columns: minmax(0, 1fr) 112px;
-  }
-}
-@media (max-width: 600px) {
-  .oa-settings {
-    padding: 16px;
   }
 }
 .oa-settings .oa-stack {
@@ -283,9 +277,6 @@
   padding: 0;
 }
 @media (max-width: 600px) {
-  .oa-settings {
-    padding-inline: 16px;
-  }
   .oa-meters {
     grid-template-columns: minmax(0, 1fr);
   }
