@@ -137,6 +137,14 @@ export async function decide(
       message:
         "Thumbnails need Cloudflare's Workers Paid plan, so on the free plan they won't work even with --browser.",
     });
+  const planVar: "free" | "paid" =
+    o.planFlag ??
+    (plan === "paid" || o.yesPaid
+      ? "paid"
+      : plan === "unknown" && o.upgrade && state.planVar
+        ? state.planVar
+        : "free");
+  o.planVar = planVar;
   o.team = Boolean(team);
   o.email = email;
   o.browser = browser;

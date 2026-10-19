@@ -93,6 +93,7 @@ async function resolve(argv: string[], deps: Deps, state: State) {
       "email-domain": { type: "string" },
       "yes-email-domain": { type: "boolean", default: false },
       "yes-paid": { type: "boolean", default: false },
+      plan: { type: "string" },
       // Handled before resolve() by tokenCommand (src/token-page.ts).
       "token-links": { type: "boolean", default: false },
       "token-page": { type: "boolean", default: false },
@@ -125,6 +126,10 @@ async function resolve(argv: string[], deps: Deps, state: State) {
   if (v.repo !== undefined || v["no-open"])
     throw new Error(
       "--repo and --no-open only go with --token-links or --token-page",
+    );
+  if (v.plan !== undefined && v.plan !== "paid" && v.plan !== "free")
+    throw new Error(
+      `invalid --plan: ${JSON.stringify(v.plan)} (expected paid or free)`,
     );
   if (v.solo && v.team) throw new Error("--solo and --team conflict; pass one");
   if (v.browser && v["no-browser"])
@@ -171,6 +176,8 @@ async function resolve(argv: string[], deps: Deps, state: State) {
     email: false,
     yesEmailDomain: v["yes-email-domain"],
     yesPaid: v["yes-paid"],
+    planFlag: v.plan,
+    planVar: "free",
     yes: v.yes || v.ci,
     upgrade: v.upgrade,
     check: v.check,
@@ -215,6 +222,7 @@ const REPORTED = [
   "ownerTokenId",
   "browser",
   "plan",
+  "planVar",
   "team",
   "email",
   "emailDomain",
@@ -284,6 +292,11 @@ export const HELP = `Usage: pnpm oa:setup [options]
   --yes-paid    Confirm Workers Paid when setup reads the plan as free or unknown
                 (prereqs reads it; without Billing Read it is unknown).
                 Saved in state: plan, team, email, emailDomain (--check/--json report them).
+  --plan paid|free  The PLAN var the Worker serves (/healthz reports it). Default:
+                paid when the plan reads paid or --yes-paid, else free; an unknown
+                plan on --upgrade keeps the saved value. A deploy never turns a
+                live paid PLAN into free without --plan free. Reported as
+                prereqs data.planVar (data.plan is the detected plan).
   --token-links [--json]  Print each Cloudflare token setup needs (deploy, access,
                 analytics) with its permissions and a link that pre-fills the
                 dashboard form; account and zone come from --account-id/--app-host
@@ -438,7 +451,14 @@ export async function run(
     }
     writeState(fs, root, state);
     if (json) {
-      const keys = ["plan", "team", "email", "emailDomain", "browser"] as const;
+      const keys = [
+        "plan",
+        "planVar",
+        "team",
+        "email",
+        "emailDomain",
+        "browser",
+      ] as const;
       report({
         step: "state",
         status: "ok",

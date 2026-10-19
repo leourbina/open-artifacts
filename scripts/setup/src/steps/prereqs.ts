@@ -220,6 +220,7 @@ export const prereqs: Step = {
     ctx.notes.push(...issues.map(issueNote));
     ctx.data = {
       plan,
+      planVar: ctx.opts.planVar,
       warnings: warns,
       ...(issues.length ? { tokens: issues } : {}),
     };
