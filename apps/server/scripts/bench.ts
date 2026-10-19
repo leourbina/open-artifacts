@@ -130,10 +130,10 @@ export function makeEnv(): Env & {
   return env as never;
 }
 
-type BenchEnv = ReturnType<typeof makeEnv>;
+export type BenchEnv = ReturnType<typeof makeEnv>;
 
 /** Worker fetch with waitUntil settled; the body is always consumed. */
-async function call(env: BenchEnv, req: Request): Promise<Response> {
+export async function call(env: BenchEnv, req: Request): Promise<Response> {
   const { ctx, settle } = execCtx();
   const res = await worker.fetch(req as never, env, ctx as never);
   const body = new Uint8Array(await res.arrayBuffer());
@@ -145,7 +145,7 @@ async function call(env: BenchEnv, req: Request): Promise<Response> {
 }
 
 const enc = new TextEncoder();
-function apiReq(
+export function apiReq(
   token: string,
   path: string,
   method = "GET",
@@ -163,7 +163,7 @@ function apiReq(
   });
 }
 
-async function ok(r: Response, what: string): Promise<Response> {
+export async function ok(r: Response, what: string): Promise<Response> {
   if (r.status >= 300)
     throw new Error(`${what}: ${r.status} ${await r.clone().text()}`);
   return r;
@@ -183,7 +183,7 @@ const prose = (bytes: number, seed = 0) => {
   }
   return s.slice(0, bytes);
 };
-const htmlDoc = (bytes: number) => {
+export const htmlDoc = (bytes: number) => {
   const head =
     "<!doctype html><html><head><meta charset=utf-8><title>Bench</title></head><body>";
   let body = "";
