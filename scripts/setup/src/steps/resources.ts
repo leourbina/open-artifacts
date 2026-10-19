@@ -58,13 +58,25 @@ export const stripComments = (text: string) =>
 export function renderConfig(
   template: string,
   vars: Record<string, string | undefined>,
+  browser = true,
 ): string {
-  const text = template.replace(/\{\{(\w+)\}\}/g, (_, k: string) => {
-    const val = vars[k];
-    if (val === undefined)
-      throw new Error(`no value for template placeholder {{${k}}}`);
-    return JSON.stringify(val).slice(1, -1);
-  });
+  // The marker line is dropped (off) or kept without its comment (on).
+  const text = template
+    .split("\n")
+    .flatMap((l) =>
+      l.includes("// @browser")
+        ? browser
+          ? [l.replace(/\s*\/\/ @browser.*$/, "")]
+          : []
+        : [l],
+    )
+    .join("\n")
+    .replace(/\{\{(\w+)\}\}/g, (_, k: string) => {
+      const val = vars[k];
+      if (val === undefined)
+        throw new Error(`no value for template placeholder {{${k}}}`);
+      return JSON.stringify(val).slice(1, -1);
+    });
   JSON.parse(stripComments(text));
   if (!text.includes('"ENVIRONMENT": "production"'))
     throw new Error('rendered config must contain "ENVIRONMENT": "production"');
@@ -96,7 +108,7 @@ function sync(state: State, ctx: Ctx, found: Awaited<ReturnType<typeof find>>) {
 export function writeConfig(state: State, ctx: Ctx) {
   const template = ctx.fs.read(join(ctx.root, TEMPLATE));
   if (template === null) throw new Error(`missing ${TEMPLATE}`);
-  const text = renderConfig(template, configVars(state, ctx));
+  const text = renderConfig(template, configVars(state, ctx), ctx.opts.browser);
   if (ctx.fs.read(join(ctx.root, CONFIG)) !== text)
     ctx.fs.write(join(ctx.root, CONFIG), text);
 }
