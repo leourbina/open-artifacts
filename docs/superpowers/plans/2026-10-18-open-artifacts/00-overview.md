@@ -129,7 +129,7 @@ Every task's requirements include this section implicitly.
 
 **Workers Free plan budgets:**
 - Every Worker request path must stay under **10 ms of CPU** and **50 external subrequests**.
-- No request path may parse or base64-decode more than **256 KB** inline (C3). Larger data streams to R2.
+- No request path may parse or base64-decode more than **128 KB** inline (C3; 256 KB before be/inline-128k). Larger data streams to R2.
 - `tests/cpu-budget/` in `apps/server` asserts this for publish, read, content serving, and runtime calls (task B17).
 
 **Security:**
@@ -149,7 +149,7 @@ Every task's requirements include this section implicitly.
 | Roles | `owner` \| `admin` \| `member` \| `guest` |
 | Share roles | `viewer` \| `editor` |
 | Formats | `html` \| `markdown` \| `code` \| `pdf` |
-| Upload limits | 25 MB per file, 100 MB per publish, 256 KB inline per JSON/MCP publish |
+| Upload limits | 25 MB per file, 100 MB per publish, 128 KB inline per JSON/MCP publish |
 | Live-page limits | 1 MB per doc, 50 MB per artifact database, 100 writes per minute per viewer, 30 writes per minute per anonymous IP |
 | Soft delete | Recoverable for 30 days, then purged by the daily cron |
 | Signed content URL lifetime | 10 minutes |

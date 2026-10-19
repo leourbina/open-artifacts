@@ -1,4 +1,5 @@
 // Server instructions, also served as the resource RUNTIME_DOC_URI. Vendor-neutral.
+import { LIMITS } from "@oa/shared";
 
 export const RUNTIME_DOC_URI = "openartifacts://docs/runtime";
 
@@ -20,7 +21,7 @@ Publishing
 - Add a short message describing the change. Visibility defaults to private.
 
 Large files
-- Inline content (content, text files and base64 together) is limited to 256 KB per call; over it, publish_artifact fails with too_large. For anything larger (up to 25 MB per file), upload each large file:
+- Inline content (content, text files and base64 together) is limited to ${LIMITS.inlineBytes / 1024} KB per call (≤${LIMITS.inlineBytes / 1024} KB inline, else create_upload); over it, publish_artifact fails with too_large. For anything larger (up to 25 MB per file), upload each large file:
   1. create_upload { path, size, contentType, artifactId? } returns { uploadId, artifactId, url }. Omit artifactId for a new artifact and reuse the returned artifactId for every other file.
   2. PUT the raw bytes to url (valid 1 hour).
   3. publish_artifact { id: artifactId, title, entry, files: { "<path>": { "uploadId": "<uploadId>" }, ... } }; small files can stay inline next to uploaded ones.

@@ -4,7 +4,7 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { ApiError } from "../src/http/errors.js";
 import { planFiles } from "../src/services/manifest.js";
-import { api, errOf, login } from "./helpers.js";
+import { api, errOf, fetchAndWait, login } from "./helpers.js";
 
 const app = createApp();
 let owner: { cookie: string; userId: string };
@@ -96,8 +96,7 @@ describe("publish path validation (Review Focus #2)", () => {
     expect(r.status).toBe(400);
   });
 
-  it("256 KB + 1 byte inline content → 413 with the upload hint", async () => {
-    expect(LIMITS.inlineBytes).toBe(256 * 1024);
+  it(`${LIMITS.inlineBytes / 1024} KB + 1 byte inline content → 413 with the upload hint`, async () => {
     const r = await post({
       title: "t",
       format: "markdown",
@@ -106,9 +105,62 @@ describe("publish path validation (Review Focus #2)", () => {
     expect(r.status).toBe(413);
     const e = await errOf(r);
     expect(e.code).toBe("too_large");
+    const kb = LIMITS.inlineBytes / 1024;
     expect(e.message).toBe(
-      "Inline content is limited to 256 KB. Use create_upload for larger files, then publish with {uploadId}.",
+      `Inline content is limited to ${kb} KB per publish. For larger files: create_upload({ path, size, contentType }), PUT the bytes to the returned url, then publish_artifact({ id: artifactId, title, files: { "<path>": { uploadId } } }).`,
     );
+  });
+
+  /** A POST whose body stream counts its reads; `length` sets Content-Length. */
+  const streamed = (total: number, length: boolean, chunk = 16 * 1024) => {
+    const state = { pulls: 0, sent: 0 };
+    const piece = new TextEncoder().encode("x".repeat(chunk));
+    const body = new ReadableStream<Uint8Array>(
+      {
+        pull(c) {
+          state.pulls++;
+          if (state.sent >= total) return c.close();
+          state.sent += chunk;
+          c.enqueue(piece);
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    const res = fetchAndWait(
+      app,
+      new Request(`http://app.localhost${R.artifacts}`, {
+        method: "POST",
+        headers: {
+          cookie: owner.cookie,
+          "x-oa-request": "1",
+          "content-type": "application/json",
+          ...(length ? { "content-length": String(total) } : {}),
+        },
+        body,
+        duplex: "half",
+      } as RequestInit),
+    );
+    return { res, state };
+  };
+  // The REST body cap: JSON escaping at most doubles inline text, plus 64 KB.
+  const CAP = 2 * LIMITS.inlineBytes + 64 * 1024;
+
+  it("Content-Length over the body cap → 413 before any of the body is read", async () => {
+    const { res, state } = streamed(CAP + 1, true);
+    const r = await res;
+    expect(r.status).toBe(413);
+    expect((await errOf(r)).message).toBe(INLINE_TOO_LARGE_MESSAGE);
+    expect(state.pulls).toBe(0);
+  });
+
+  it("no Content-Length: the read stops at the body cap, never buffering the rest", async () => {
+    const total = 4 * 1024 * 1024;
+    const { res, state } = streamed(total, false);
+    const r = await res;
+    expect(r.status).toBe(413);
+    expect((await errOf(r)).message).toBe(INLINE_TOO_LARGE_MESSAGE);
+    expect(state.sent).toBeLessThanOrEqual(CAP + 2 * 16 * 1024);
+    expect(state.sent).toBeLessThan(total);
   });
 
   it("a body past the inline-derived cap → 413 with the upload hint", async () => {
@@ -121,7 +173,7 @@ describe("publish path validation (Review Focus #2)", () => {
     expect((await errOf(r)).message).toBe(INLINE_TOO_LARGE_MESSAGE);
   });
 
-  it("inline files summing past 256 KB → 413", async () => {
+  it("inline files summing past LIMITS.inlineBytes → 413", async () => {
     const half = "x".repeat(LIMITS.inlineBytes / 2);
     const r = await post({
       title: "t",
@@ -133,7 +185,7 @@ describe("publish path validation (Review Focus #2)", () => {
     expect(e.message).toBe(INLINE_TOO_LARGE_MESSAGE);
   });
 
-  it("base64 decoding to 256 KB + 1 → 413", async () => {
+  it("base64 decoding to LIMITS.inlineBytes + 1 → 413", async () => {
     const bytes = new Uint8Array(LIMITS.inlineBytes + 1);
     let s = "";
     for (let i = 0; i < bytes.length; i += 0x8000)

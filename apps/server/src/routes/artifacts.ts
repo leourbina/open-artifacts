@@ -33,9 +33,12 @@ import { putExtractedText } from "../services/search.js";
 import { utf8Decoder } from "../util/text.js";
 import type { AppType } from "./index.js";
 
-// Base64 inflates inline bytes by 4/3; allow some JSON overhead on top. A
-// body past it can only be oversize inline content: 413 with the upload hint.
-const MAX_BODY = Math.ceil((LIMITS.inlineBytes * 4) / 3) + 256 * 1024;
+// JSON escaping at most doubles inline text (`"` and `\`; base64 is 4/3), plus
+// 64 KB for the rest of the body. A body past it can only be oversize inline
+// content: 413 with the upload hint, from Content-Length before it is read or
+// parsed, so an oversize burst costs no JSON.parse. (Text of control
+// characters, escaped 6×, can be refused under the limit; uploads take it.)
+const MAX_BODY = 2 * LIMITS.inlineBytes + 64 * 1024;
 const ARTIFACT = "/api/v1/artifacts/:id";
 const VERSIONS = `${ARTIFACT}/versions`;
 const VERSION_FILE = `${VERSIONS}/:v/files/*`;

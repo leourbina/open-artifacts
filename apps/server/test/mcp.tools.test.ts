@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPat } from "../src/auth/pat.js";
 import { getDb } from "../src/db/client.js";
 import { shares } from "../src/db/schema.js";
+import { INSTRUCTIONS } from "../src/mcp/instructions.js";
 import { TOOL_DEFS } from "../src/mcp/tool-defs.js";
 import manifest from "../src/mcp/tool-manifest.json";
 import { login } from "./helpers.js";
@@ -168,7 +169,7 @@ describe("MCP tools over PAT", () => {
   });
 
   it("get_artifact: text over 1 MB gets a downloadUrl, no inline content", async () => {
-    // Over the 256 KB inline limit: create_upload, PUT, publish by uploadId.
+    // Over LIMITS.inlineBytes: create_upload, PUT, publish by uploadId.
     const big = "a".repeat(1024 * 1024 + 10);
     const up = sc<{ uploadId: string; artifactId: string; url: string }>(
       await tool(client, "create_upload", {
@@ -216,7 +217,7 @@ describe("MCP tools over PAT", () => {
     expect(textOf(r2)).toMatch(/version/);
   });
 
-  it("C3: inline content over 256 KB → too_large with the upload hint", async () => {
+  it(`C3: inline content over ${LIMITS.inlineBytes / 1024} KB → too_large steering to create_upload then publish({uploadId})`, async () => {
     const r = await tool(client, "publish_artifact", {
       title: "big",
       format: "html",
@@ -224,6 +225,10 @@ describe("MCP tools over PAT", () => {
     });
     expect(r.isError).toBe(true);
     expect(textOf(r)).toBe(`too_large: ${INLINE_TOO_LARGE_MESSAGE}`);
+    const kb = LIMITS.inlineBytes / 1024;
+    expect(textOf(r)).toBe(
+      `too_large: Inline content is limited to ${kb} KB per publish. For larger files: create_upload({ path, size, contentType }), PUT the bytes to the returned url, then publish_artifact({ id: artifactId, title, files: { "<path>": { uploadId } } }).`,
+    );
     const half = "x".repeat(LIMITS.inlineBytes / 2);
     const f = await tool(client, "publish_artifact", {
       title: "big",
@@ -477,7 +482,7 @@ describe("MCP request limits and roles (PAT)", () => {
   });
 
   it("a body under the cap is read once and still served (2025-era POST)", async () => {
-    const r = await post(publishBody(200_000));
+    const r = await post(publishBody(LIMITS.inlineBytes - 8 * 1024));
     expect(r.status).toBe(200);
     expect(await r.text()).toContain("Published");
   });
@@ -529,5 +534,17 @@ describe("tool manifest", () => {
       TOOL_DEFS.map(({ name, description }) => ({ name, description })),
     );
     expect(manifest.map((t) => t.name).sort()).toEqual([...TOOLS].sort());
+  });
+
+  it("tool descriptions and instructions state the current inline limit", () => {
+    const kb = `${LIMITS.inlineBytes / 1024} KB`;
+    const text = (n: string) =>
+      TOOL_DEFS.find((t) => t.name === n)?.description ?? "";
+    expect(text("publish_artifact")).toContain(`≤${kb} inline`);
+    expect(text("publish_artifact")).toContain("else create_upload");
+    expect(text("create_upload")).toContain(`over the ${kb} inline limit`);
+    expect(INSTRUCTIONS).toContain(`limited to ${kb} per call`);
+    expect(INSTRUCTIONS).toContain(`≤${kb} inline, else create_upload`);
+    expect(JSON.stringify(TOOL_DEFS) + INSTRUCTIONS).not.toMatch(/\b256 KB\b/);
   });
 });

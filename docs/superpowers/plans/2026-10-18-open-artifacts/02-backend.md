@@ -311,7 +311,7 @@ export async function publish(env: Env, user: Member, input: PublishInput, agent
     - case-only duplicates → 400
     - an entry that's missing → 400
     - 1,001 files → 400
-    - 256 KB + 1 byte inline → 413 `too_large`
+    - 128 KB + 1 byte inline → 413 `too_large` (256 KB before be/inline-128k)
   - `publish.concurrency.test.ts`: `Promise.all` of 5 publishes to one artifact → versions `{2,3,4,5,6}`, `current_version === 6`, and 5 rows in `versions`.
   - `uploads.test.ts`:
     - `create_upload` → PUT 3 bytes with the right length → publish with `{ uploadId }` → the manifest reuses the key.
@@ -607,7 +607,7 @@ interface Collection {
 - **Results:**
   - Every result is `{ content: [{ type: "text", text: <one-line human summary + URL> }], structuredContent: <schema output> }`.
   - An `ApiError` becomes `{ isError: true, content: [{ type: "text", text: "<code>: <message>" }] }`. Quota errors use `QUOTA_MESSAGE` verbatim.
-- **Server `instructions`:** a 60-line guide. It explains the formats, multi-file publishing, `create_upload` for anything over 256 KB, how to declare capabilities, and the `window.openArtifacts` API with a 10-line poll example. The same text is exposed as the resource `openartifacts://docs/runtime`.
+- **Server `instructions`:** a 60-line guide. It explains the formats, multi-file publishing, `create_upload` for anything over 128 KB (256 KB before be/inline-128k), how to declare capabilities, and the `window.openArtifacts` API with a 10-line poll example. The same text is exposed as the resource `openartifacts://docs/runtime`.
 - **Routing in `index.ts`** (app host):
   - `path === "/mcp"` with `Authorization: Bearer oa_pat_…` → `verifyPat`. On failure → 401 JSON. On success → `createMcpHandler(() => createServer({ env, user, agent: { name: patLabel, version: null } })).fetch(req, { authInfo })`.
   - Everything else goes to `new OAuthProvider({ apiRoute: "/mcp", apiHandler: { fetch: (req, env, ctx) => createMcpHandler(() => createServer({ env, user: lookup(ctx.props.userId), agent: { name: ctx.props.clientName, version: null } }))(req, env, ctx) }, defaultHandler: app, authorizeEndpoint: "/oauth/authorize", tokenEndpoint: "/oauth/token", clientRegistrationEndpoint: "/oauth/register" })`.

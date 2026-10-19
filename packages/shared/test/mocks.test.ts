@@ -604,7 +604,7 @@ describe("round 2", () => {
       await text(await call("GET", R.versionFile(art.id, 1, "index.html"))),
     );
   });
-  it("C3: inline content over 256 KB → 413 too_large with the upload hint", async () => {
+  it("C3: inline content over 128 KB → 413 too_large with the upload hint", async () => {
     fresh();
     const r = await call("POST", R.artifacts, {
       title: "big",
