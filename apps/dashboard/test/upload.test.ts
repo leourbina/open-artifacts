@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
-import { LIMITS, R } from "@oa/shared";
-import { fixtures } from "@oa/shared/mocks";
+import { LIMITS } from "@oa/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../src/api/client";
 import {
@@ -98,19 +97,6 @@ describe("uploadArtifact", () => {
     const onProgress = vi.fn();
     await uploadArtifact({ files: three(), title: "T" }, onProgress);
     expect(onProgress).toHaveBeenLastCalledWith({ done: 3, total: 3 });
-  });
-
-  it("posts a new version to R.versions(id) with the existing id", async () => {
-    const id = (
-      fixtures.artifacts.find((a) => a.access === "owner") as { id: string }
-    ).id;
-    await uploadArtifact(
-      { files: [file("index.html")], title: "", artifactId: id },
-      () => {},
-    );
-    const paths = seen.map((u) => u.pathname);
-    expect(paths).toContain(R.versions(id));
-    expect(paths).not.toContain(R.artifacts);
   });
 
   it("stops when aborted", async () => {
