@@ -27,6 +27,8 @@ import {
   usePutShare,
   useShares,
 } from "../../api/queries";
+import { emailEnabled } from "../../auth/emailEnabled";
+import { useMe } from "../../auth/useMe";
 import { CopyLink } from "../../layout/CopyLink";
 
 const VIS: { value: Visibility; label: string }[] = [
@@ -86,7 +88,12 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<ShareRole>("viewer");
   const [invalid, setInvalid] = useState(false);
-  const [shared, setShared] = useState<string | null>(null);
+  const [shared, setShared] = useState<{
+    email: string;
+    emailed: boolean;
+  } | null>(null);
+  const state = useMe();
+  const sends = emailEnabled(state.status === "authed" ? state.me : null);
 
   const save = (p: ArtifactPatch) =>
     patch.mutate(p, { onError: (e) => fail(e, "Couldn't save") });
@@ -117,9 +124,9 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
     put.mutate(
       { email: e, role },
       {
-        onSuccess: () => {
+        onSuccess: (r) => {
           setEmail("");
-          setShared(e);
+          setShared({ email: e, emailed: r.emailed });
         },
         onError: (x) => fail(x, "Couldn't share"),
       },
@@ -209,7 +216,9 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
           </form>
           {invalid && <p role="alert">Enter a valid email address.</p>}
           <p className="oa-muted">
-            No email is sent. Copy the link and share it yourself.
+            {sends
+              ? "We'll email them a link. You can also copy it and send it yourself."
+              : "No email is sent. Copy the link and share it yourself."}
           </p>
         </section>
       )}
@@ -219,7 +228,7 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
           <div className="oa-shared">
             <Banner
               tone="success"
-              title={`Shared with ${shared}`}
+              title={`Shared with ${shared.email}`}
               action={
                 <Button
                   variant="ghost"
@@ -231,10 +240,14 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
               }
             >
               <p>
-                {artifact.visibility === "public"
-                  ? "Send them this link. They can open it without signing in."
-                  : "Send them this link. They'll sign in with a one-time code sent to that address, then see the artifact."}
+                {shared.emailed
+                  ? "We emailed them a link. They'll sign in with a one-time code."
+                  : artifact.visibility === "public"
+                    ? "Send them this link. They can open it without signing in."
+                    : "Send them this link. They'll sign in with a one-time code sent to that address, then see the artifact."}
               </p>
+              {/* emailed:false with email on is not a failure here: members and
+                  re-shares are never emailed, so there's no "didn't send" line. */}
               <CopyLink link={link} label="Artifact link" />
             </Banner>
           </div>

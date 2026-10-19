@@ -54,6 +54,42 @@ async function startMocks() {
       }),
     );
   }
+  // ?mock=email: the instance sends invite/share emails; ?mock=email-fail: it
+  // does, but every send fails (the shared mocks always answer emailed:false).
+  const mail = params.get("mock");
+  const emailEnabled = mail === "email" || mail === "email-fail";
+  if (mail === "email")
+    extra.push(
+      http.post("*/api/v1/members", async ({ request }) => {
+        const { email, role } = (await request.json()) as {
+          email: string;
+          role: string;
+        };
+        return HttpResponse.json(
+          {
+            id: `u_${Date.now()}`,
+            email,
+            name: null,
+            role,
+            lastSeenAt: null,
+            emailed: true,
+          },
+          { status: 201 },
+        );
+      }),
+      http.put("*/api/v1/artifacts/:id/shares", async ({ request }) => {
+        const { email, role } = (await request.json()) as {
+          email: string;
+          role: string;
+        };
+        return HttpResponse.json({
+          email,
+          role,
+          createdAt: new Date().toISOString(),
+          emailed: true,
+        });
+      }),
+    );
   // ?mock=cpu: 4 CPU-limit hits today, and the first two library requests get a 1102 (the first may be aborted).
   if (params.get("mock") === "cpu") {
     let hits = 0;
@@ -89,7 +125,10 @@ async function startMocks() {
     req.headers.set("Authorization", "Bearer mock");
     return realFetch(req);
   };
-  await setupWorker(...extra, ...createHandlers({ quotaExceeded })).start({
+  await setupWorker(
+    ...extra,
+    ...createHandlers({ quotaExceeded, emailEnabled }),
+  ).start({
     onUnhandledRequest: "bypass",
   });
 }
