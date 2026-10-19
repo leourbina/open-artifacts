@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { newId } from "@oa/shared";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { scheduled } from "../src/cron.js";
 import worker from "../src/index.js";
 import { publish, purgeDeleted } from "../src/services/artifacts.js";
@@ -91,15 +91,21 @@ describe("purgeDeleted", () => {
       passThroughOnException() {},
     } as unknown as ExecutionContext;
     expect(worker.scheduled).toBe(scheduled);
+    // B3's release check: no real network from tests.
+    const f = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response("", { status: 429 }));
     await scheduled({} as ScheduledController, env, ctx);
     expect(waits).toHaveLength(1);
     const settled = (await waits[0]) as PromiseSettledResult<unknown>[];
+    f.mockRestore();
     expect(settled.map((s) => s.status)).toEqual([
       "fulfilled",
       "fulfilled",
       "fulfilled",
       "fulfilled", // C3: reindexStale
       "fulfilled", // sweepEmailCounters
+      "fulfilled", // checkLatestRelease (B3)
     ]);
     expect(
       await count("select count(*) n from artifacts where id = ?", gone),

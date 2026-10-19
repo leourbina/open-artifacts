@@ -314,6 +314,24 @@ export const SNIPPET_MARK = { open: "\u0002", close: "\u0003" } as const;
 export const ThemeSchema = z.enum(["light", "dark"]);
 export type Theme = z.infer<typeof ThemeSchema>;
 
+/** Latest stable release vs this instance (daily server check; owner and admins only). */
+export const InstanceUpdateSchema = z.object({
+  /** Latest stable release, X.Y.Z. */
+  latestVersion: z.string(),
+  /** This instance's version (/healthz `version`). */
+  current: z.string(),
+  /** A -dev or other non-release build: no comparison, updateAvailable is false. */
+  custom: z.boolean(),
+  updateAvailable: z.boolean(),
+  /** The latest release's notes contain "BREAKING CHANGE". */
+  breaking: z.boolean(),
+  /** The release page on GitHub. */
+  url: z.string(),
+  /** When the last good check ran (ISO). */
+  checkedAt: z.string(),
+});
+export type InstanceUpdate = z.infer<typeof InstanceUpdateSchema>;
+
 export const MeSchema = z.object({
   /** `user.name` is the effective name: displayName, else a real IdP name, else the email. */
   user: MemberSchema,
@@ -326,6 +344,8 @@ export const MeSchema = z.object({
     emailEnabled: z.boolean(),
     /** The instance's Workers plan (env PLAN), as /healthz reports it. */
     plan: z.enum(["free", "paid"]),
+    /** Null for members and guests, and before the first good check. Optional: older servers omit it. */
+    update: InstanceUpdateSchema.nullable().optional(),
   }),
   /** The name the user chose (PATCH R.me), or null. */
   displayName: z.string().nullable(),
