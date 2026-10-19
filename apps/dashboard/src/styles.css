@@ -155,6 +155,7 @@ body {
 /* Sign-in: split brand panel (stacks into a header strip at 860px). */
 .oa-split {
   min-height: 100vh;
+  font-size: 15px;
   display: grid;
   grid-template-columns: 1fr 1fr;
 }
@@ -228,6 +229,7 @@ body {
 }
 .oa-split-formbox .oa-split-sub {
   margin: 8px 0 28px;
+  font-size: 15px;
   color: var(--oa-text-2);
   overflow-wrap: anywhere;
 }
