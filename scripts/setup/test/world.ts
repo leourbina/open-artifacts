@@ -39,6 +39,8 @@ export const filler = (n: number) =>
 type World = {
   accounts?: string[];
   zones?: string[];
+  /** Zone id per zone name (default "z"). */
+  zoneIds?: Record<string, string>;
   /** GET /user/tokens/verify: token id per bearer value (default `id-<value>`). */
   tokenIds?: Record<string, string>;
   d1?: { uuid: string; name: string }[];
@@ -623,7 +625,8 @@ export function world(w: World = {}) {
         zoneQueries.push(u.search);
         const ok =
           q("status") === "active" && acct.zones.includes(q("name") ?? "");
-        return envelope(ok ? [{ id: "z", name: q("name") }] : []);
+        const id = w.zoneIds?.[q("name") ?? ""] ?? "z";
+        return envelope(ok ? [{ id, name: q("name") }] : []);
       }
       // DNS, billing and email are read-only here: a write is a bug.
       if (m !== "GET" && /\/dns_records|\/subscriptions|\/email/.test(p)) {

@@ -72,9 +72,10 @@ describe("token table", () => {
     expect(tokenUrl(tokenById("access").permissions)).not.toContain("label");
   });
   it("only tokens with zone permissions carry the zone id", () => {
-    const ids = { accountId: "a1", zoneId: "z1" };
+    const ids = { accountId: "a1", zones: [{ id: "z1", name: "example.com" }] };
     expect(linkFor(tokenById("deploy"), ids)).toContain("zoneId=z1");
-    expect(linkFor(tokenById("access"), ids)).toContain("zoneId=z1");
+    // Access needs no zone permission (no Access call touches DNS).
+    expect(linkFor(tokenById("access"), ids)).not.toContain("zoneId");
     expect(linkFor(tokenById("analytics"), ids)).not.toContain("zoneId");
   });
 });
@@ -122,7 +123,7 @@ describe("prereqs token report", () => {
       required: false,
     });
     expect(a.url).toBe(
-      linkFor(tokenById("analytics"), { accountId: "acc1", zoneId: "z" }),
+      linkFor(tokenById("analytics"), { accountId: "acc1", zones: [{ id: "z", name: "example.com" }] }),
     );
     expect(pre.message).toContain(a.url);
   });
@@ -160,7 +161,7 @@ describe("prereqs token report", () => {
     );
     const pre = w.lines.find((l) => l.includes("prereqs:")) ?? "";
     expect(pre).toContain(
-      linkFor(tokenById("analytics"), { accountId: "acc1", zoneId: "z" }),
+      linkFor(tokenById("analytics"), { accountId: "acc1", zones: [{ id: "z", name: "example.com" }] }),
     );
   });
 });
@@ -186,7 +187,7 @@ describe("--token-links", () => {
     expect(await run(["--token-links", "--json"], w.deps, ROOT)).toBe(0);
     const j = JSON.parse(w.lines.at(-1) as string);
     expect(j.data.tokens.map((t: { url: string }) => t.url)).toEqual(
-      withUrls(tokens({ name: "oa" }), { accountId: "acc1", zoneId: "z" }).map(
+      withUrls(tokens({ name: "oa" }), { accountId: "acc1", zones: [{ id: "z", name: "example.com" }] }).map(
         (t) => t.url,
       ),
     );
@@ -213,7 +214,7 @@ describe("--token-links", () => {
 
 describe("--token-page", () => {
   const template = readFileSync(TEMPLATE_PATH, "utf8");
-  const linked = withUrls(tokens(), { accountId: ACC, zoneId: "z1" });
+  const linked = withUrls(tokens(), { accountId: ACC, zones: [{ id: "z1", name: "example.com" }] });
   const html = renderTokenPage(linked, template);
   const count = (s: string, re: RegExp) => (s.match(re) ?? []).length;
 
