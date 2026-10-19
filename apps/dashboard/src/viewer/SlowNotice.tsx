@@ -1,5 +1,5 @@
-import { Button } from "@oa/ui";
-import { DismissButton, ExtIcon } from "../layout/CpuBanner";
+import { Banner, Button } from "@oa/ui";
+import { ExtIcon } from "../layout/CpuBanner";
 import { CPU_DOC, PLANS_URL } from "../layout/cpu";
 
 const svg = (d: string) => (
@@ -43,39 +43,46 @@ export function SlowNotice({
 }) {
   const upsell = cpu && reloads >= UPSELL_AFTER;
   return (
-    <div className="oa-vnotice" role="status">
-      {AlertIcon}
-      <div className="oa-vnotice-text">
-        {cpu ? (
-          <>
-            This artifact may have hit your instance's CPU limit. Reloading
-            usually works.
-            {upsell && " Workers Paid raises the limit."}{" "}
-            <a href={CPU_DOC} target="_blank" rel="noopener noreferrer">
-              Learn more<span className="oa-sr"> about the CPU limit</span>
-            </a>
-          </>
-        ) : (
-          "This artifact hasn't responded yet. If it looks wrong, reload it."
-        )}
-      </div>
-      <div className="oa-vnotice-acts">
-        {upsell && admin && (
-          <a
-            className="oa-btn oa-sm"
-            href={PLANS_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            See plans
-            {ExtIcon}
-          </a>
-        )}
-        <Button size="sm" icon={RetryIcon} onClick={onReload}>
-          Reload
-        </Button>
-        <DismissButton onClick={onDismiss} />
-      </div>
+    <div className="oa-vnotice">
+      <Banner
+        tone="info"
+        compact
+        icon={AlertIcon}
+        onDismiss={onDismiss}
+        action={
+          <span className="oa-vnotice-acts">
+            {upsell && admin && (
+              <a
+                className="oa-btn oa-sm"
+                href={PLANS_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                See plans
+                {ExtIcon}
+              </a>
+            )}
+            <Button size="sm" icon={RetryIcon} onClick={onReload}>
+              Reload
+            </Button>
+          </span>
+        }
+      >
+        <span className="oa-vnotice-text">
+          {cpu ? (
+            <>
+              This artifact may have hit your instance's CPU limit. Reloading
+              usually works.
+              {upsell && " Workers Paid raises the limit."}{" "}
+              <a href={CPU_DOC} target="_blank" rel="noopener noreferrer">
+                Learn more<span className="oa-sr"> about the CPU limit</span>
+              </a>
+            </>
+          ) : (
+            "This artifact hasn't responded yet. If it looks wrong, reload it."
+          )}
+        </span>
+      </Banner>
     </div>
   );
 }

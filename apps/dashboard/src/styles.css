@@ -109,6 +109,11 @@ body {
   align-items: flex-start;
   padding: 12px 12px 12px 16px;
 }
+.oa-cpu-banner .oa-cpu-ic {
+  display: block;
+  margin-top: 2px;
+  color: var(--oa-warning);
+}
 .oa-cpu-banner p {
   margin: 2px 0 0;
   color: var(--oa-text-2);

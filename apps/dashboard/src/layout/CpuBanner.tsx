@@ -1,5 +1,5 @@
 import type { Me } from "@oa/shared";
-import { Banner, IconButton } from "@oa/ui";
+import { Banner } from "@oa/ui";
 import { useState } from "react";
 import { CPU_DOC, PLANS_URL, useCpuSignals } from "./cpu";
 
@@ -13,20 +13,6 @@ const read = () => {
   }
 };
 
-const XIcon = (
-  <svg
-    viewBox="0 0 16 16"
-    width="14"
-    height="14"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.5"
-    strokeLinecap="round"
-    aria-hidden="true"
-  >
-    <path d="m4 4 8 8M12 4l-8 8" />
-  </svg>
-);
 export const ExtIcon = (
   <svg
     viewBox="0 0 16 16"
@@ -42,8 +28,21 @@ export const ExtIcon = (
     <path d="M9 2.5h4.5V7M13.5 2.5 7.5 8.5M11.5 9.5v4h-9v-9h4" />
   </svg>
 );
-export const DismissButton = ({ onClick }: { onClick: () => void }) => (
-  <IconButton label="Dismiss" icon={XIcon} size="sm" onClick={onClick} />
+const GaugeIcon = (
+  <svg
+    className="oa-cpu-ic"
+    viewBox="0 0 16 16"
+    width="16"
+    height="16"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.5"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M2.5 11.5a5.5 5.5 0 1 1 11 0M8 11.5l2.5-3.5" />
+  </svg>
 );
 
 /**
@@ -71,7 +70,8 @@ export function CpuBanner({ role }: { role: Me["user"]["role"] | undefined }) {
       <Banner
         tone="warning"
         title="Some requests hit Cloudflare's free CPU limit"
-        action={<DismissButton onClick={dismiss} />}
+        icon={GaugeIcon}
+        onDismiss={dismiss}
       >
         <p>
           {first} Retrying generally works. Workers Paid ($5 a month) raises the

@@ -45,7 +45,9 @@ const asRole = (role: "admin" | "member" | "guest") =>
       }),
     ),
   );
-const banner = () => screen.findByText(TITLE);
+// me, then usage: two round trips before the banner can show.
+const SLOW = { timeout: 5_000 };
+const banner = () => screen.findByText(TITLE, {}, SLOW);
 /** Waits for the library and the usage answer (owner), then asserts there is no banner. */
 const noBanner = async () => {
   await screen.findByRole("heading", { name: "Library" });
@@ -112,7 +114,9 @@ describe("CPU banner", () => {
     recordCpuLimit();
     usage(1);
     mount("/");
-    expect(await screen.findByText(/hit the limit 1 time today/)).toBeTruthy();
+    expect(
+      await screen.findByText(/hit the limit 1 time today/, {}, SLOW),
+    ).toBeTruthy();
   });
 
   it("a 1102 older than a few minutes no longer counts", async () => {
