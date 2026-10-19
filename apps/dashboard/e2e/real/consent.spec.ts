@@ -5,6 +5,9 @@ import { APP, expect, loginAs, test } from "./fixtures";
 
 const REDIRECT = "http://localhost:8977/callback";
 const PKCE = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URrbuALn64nMk0";
+/** A decision needs the provider's `__Host-…; Secure` consent cookie. */
+const DECISION_WEBKIT_SKIP =
+  "WebKit drops the provider's Secure consent cookie over http; chromium covers the decision";
 
 async function registerClient(client_name: string) {
   const res = await fetch(`${APP}/oauth/register`, {
@@ -36,7 +39,9 @@ const authorize = (client_id: string, redirect_uri: string, state = "st4te") =>
 
 test("member consents to a hostile-named client: sanitized render, approve redirects with code+state", async ({
   page,
+  browserName,
 }) => {
+  test.skip(browserName === "webkit", DECISION_WEBKIT_SKIP);
   const hostile = "<script>alert(1)</script>\u202eOpenArtifacts\u200bTrust";
   const { client_id } = await registerClient(hostile);
   await loginAs(page, "consent-member@e2e.test", "member");
@@ -68,7 +73,9 @@ test("member consents to a hostile-named client: sanitized render, approve redir
 
 test("deny redirects with error=access_denied and no code", async ({
   page,
+  browserName,
 }) => {
+  test.skip(browserName === "webkit", DECISION_WEBKIT_SKIP);
   const { client_id } = await registerClient("Deny Probe");
   await loginAs(page, "deny-member@e2e.test", "member");
   await page.goto(authorize(client_id, REDIRECT));
