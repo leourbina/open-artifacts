@@ -39,6 +39,8 @@
       "migrations": [
         { "tag": "v1", "new_sqlite_classes": ["ArtifactRuntime"] }
       ],
+      // Browser Run (server-side thumbnails). Workers edit suffices to deploy.
+      "browser": { "binding": "BROWSER" },
       "assets": {
         "binding": "ASSETS",
         "directory": "./dist-assets",
