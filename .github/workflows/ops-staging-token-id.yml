@@ -1,0 +1,15 @@
+name: Ops - staging token id
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  id:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Print staging token id (never the token)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: bash scripts/ops/staging-token-id.sh
