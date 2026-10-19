@@ -229,6 +229,7 @@ describe("--check is read-only", () => {
     expect(line(w, "state").data).toEqual({
       browser: false,
       plan: "unknown",
+      planVar: "free",
       team: false,
       email: false,
       name: "open-artifacts",

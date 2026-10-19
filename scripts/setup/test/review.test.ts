@@ -38,7 +38,7 @@ describe("F1: a deploy never silently drops a live binding", () => {
     expect(l.message).toContain("--no-email");
     expect(w.ops.filter((o) => o === "deploy")).toHaveLength(1);
     w.lines.length = 0;
-    const drop = [...CI, "--upgrade", "--solo", "--no-email"];
+    const drop = [...CI, "--upgrade", "--solo", "--no-email", "--plan", "paid"];
     expect(await run(drop, w.deps, ROOT)).toBe(0);
     expect(cfg(w)).not.toHaveProperty("send_email");
   });
@@ -56,9 +56,13 @@ describe("F1: a deploy never silently drops a live binding", () => {
     expect(l.message).toContain("BROWSER");
     expect(l.message).toContain("SERVER_THUMBNAILS");
     expect(l.message).toContain("--no-browser");
-    expect(await run([...up, "--browser"], w.deps, ROOT)).toBe(0);
+    expect(
+      await run([...up, "--browser", "--plan", "paid"], w.deps, ROOT),
+    ).toBe(0);
     expect(cfg(w).browser).toEqual({ binding: "BROWSER" });
-    expect(await run([...up, "--no-browser"], w.deps, ROOT)).toBe(0);
+    expect(
+      await run([...up, "--no-browser", "--plan", "paid"], w.deps, ROOT),
+    ).toBe(0);
     expect(cfg(w)).not.toHaveProperty("browser");
   });
 
@@ -80,7 +84,14 @@ describe("F2: saved email:true stands in only for an unknown plan", () => {
     expect(await run([...BASE, "--upgrade"], w.deps, ROOT)).toBe(1);
     expect(w.state()).toMatchObject({ plan: "free", email: false });
     // Free also turns thumbnails off: the live BROWSER needs --no-browser too.
-    const drop = [...BASE, "--upgrade", "--no-email", "--no-browser"];
+    const drop = [
+      ...BASE,
+      "--upgrade",
+      "--no-email",
+      "--no-browser",
+      "--plan",
+      "free",
+    ];
     expect(await run(drop, w.deps, ROOT)).toBe(0);
     expect(cfg(w)).not.toHaveProperty("send_email");
   });
@@ -261,7 +272,11 @@ describe("ruling 2: thumbnails are Paid-only", () => {
     expect(thumbs(w)).toEqual({ browser: true, var: "on" });
     w.setSubscriptions(FREE);
     expect(
-      await run([...HOSTS, "--upgrade", "--no-browser"], w.deps, ROOT),
+      await run(
+        [...HOSTS, "--upgrade", "--no-browser", "--plan", "free"],
+        w.deps,
+        ROOT,
+      ),
     ).toBe(0);
     expect(thumbs(w)).toEqual({ browser: false, var: undefined });
   });

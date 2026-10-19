@@ -36,6 +36,12 @@ export type Opts = {
   yesEmailDomain: boolean;
   /** --yes-paid: the account is on Workers Paid though setup read free or unknown. */
   yesPaid: boolean;
+  /** --plan paid|free: the PLAN var to render, overriding detection. */
+  planFlag?: "free" | "paid";
+  /** The PLAN var rendered into the Worker config, decided by prereqs. */
+  planVar: "free" | "paid";
+  /** The PLAN var saved by an earlier run, read before this run overwrites it. */
+  savedPlanVar?: "free" | "paid";
   /** False under --yes or --json: never prompt. */
   interactive: boolean;
   json: boolean;

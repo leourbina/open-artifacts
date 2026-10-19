@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import type { State } from "../state.ts";
 import type { Ctx, Step } from "../step.ts";
 import { deployedVars, workerBindings } from "../worker.ts";
 import { names, stripComments } from "./resources.ts";
@@ -71,6 +72,25 @@ async function drops(ctx: Ctx, accountId: string, cfg: Rendered) {
   return out;
 }
 
+/**
+ * A deploy never turns a live (or saved) paid PLAN into free unless asked with
+ * --plan free: an unreadable plan (stateless CI) must not downgrade prod.
+ */
+async function planGuard(
+  state: State,
+  ctx: Ctx,
+  vars: Record<string, string>,
+): Promise<string | undefined> {
+  if (vars.PLAN === "paid" || ctx.opts.planFlag === "free") return undefined;
+  let live: string | undefined;
+  try {
+    live = (await deployedVars(ctx, state.accountId ?? ""))?.get("PLAN");
+  } catch {}
+  if (live?.trim().toLowerCase() !== "paid" && ctx.opts.savedPlanVar !== "paid")
+    return undefined;
+  return `refusing to deploy: the Worker's PLAN is paid but this run would render ${JSON.stringify(vars.PLAN)} (plan ${ctx.opts.planVar}, from a plan setup could not confirm). Pass --plan paid to keep it, or --plan free to downgrade on purpose`;
+}
+
 /** The repo version: root package.json, else the release-please manifest. */
 function repoVersion(ctx: Ctx): string {
   const json = (p: string) =>
@@ -103,6 +123,8 @@ export const deploy: Step = {
       throw new Error(
         `refusing to deploy: the live Worker has bindings this config would drop: ${dropped.join("; ")}`,
       );
+    const guard = await planGuard(state, ctx, vars);
+    if (guard) return { status: "action_required", message: guard };
     const have = await listSecrets(ctx);
     const missing = REQUIRED.filter((n) => !have.has(n));
     if (missing.length)

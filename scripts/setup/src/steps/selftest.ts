@@ -181,7 +181,13 @@ export const selftest: Step = {
   check: async () => "todo",
   async apply(state, ctx) {
     const app = `https://${ctx.opts.appHost}`;
-    await until200(ctx, "healthz", `${app}/healthz`);
+    const hz = await until200(ctx, "healthz", `${app}/healthz`);
+    const served = ((await hz.json().catch(() => ({}))) as { plan?: unknown })
+      .plan;
+    if (served !== ctx.opts.planVar)
+      throw new Error(
+        `healthz reports plan ${JSON.stringify(served)} but setup rendered PLAN ${JSON.stringify(ctx.opts.planVar)}; the deployed Worker does not match, rerun setup (or pass --plan paid|free)`,
+      );
     const oidc = `https://${state.teamDomain}/cdn-cgi/access/sso/oidc/${state.accessClientId}/.well-known/openid-configuration`;
     await until200(ctx, "OIDC discovery", oidc);
     if (ctx.opts.email) {

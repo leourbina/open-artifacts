@@ -61,6 +61,8 @@ type World = {
   noResultInfo?: boolean;
   /** /healthz answers 503 this many times first (propagation). */
   healthFails?: number;
+  /** /healthz reports this plan instead of the deployed PLAN var. */
+  healthPlan?: string;
   /** tools/list omits publish_artifact. */
   noPublishTool?: boolean;
   /** The token INSERT fails, or silently writes nothing. */
@@ -432,7 +434,10 @@ export function world(w: World = {}) {
           hits.push("GET /healthz");
           if (healthFails-- > 0)
             return new Response("starting", { status: 503 });
-          return Response.json({ ok: true });
+          const live = deployedConfig
+            ? JSON.parse(stripComments(deployedConfig)).vars?.PLAN
+            : undefined;
+          return Response.json({ ok: true, plan: w.healthPlan ?? live });
         }
         if (u.pathname === "/mcp") {
           const tok = auth?.replace(/^Bearer /, "") ?? "";
