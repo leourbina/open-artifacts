@@ -5,6 +5,9 @@ export class ApiClientError extends Error {
   code: ErrorCode;
   status: number;
   details?: unknown;
+  /** Request that failed, when it came from `request`. */
+  method?: string;
+  path?: string;
   constructor(
     code: ErrorCode,
     message: string,
@@ -43,7 +46,10 @@ async function request(path: string, init: RequestInit): Promise<Response> {
     throw internal(e instanceof Error ? e.message : "Network error", 0);
   }
   if (res.ok) return res;
-  throw toError(await res.text().catch(() => ""), res.status);
+  const err = toError(await res.text().catch(() => ""), res.status);
+  err.method = init.method;
+  err.path = path;
+  throw err;
 }
 
 async function parse<T>(

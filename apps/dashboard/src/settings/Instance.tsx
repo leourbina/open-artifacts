@@ -75,7 +75,7 @@ export function Instance() {
       <div className="oa-frow">
         <div className="oa-flabel">
           <label htmlFor="oa-inst-name">Instance name</label>
-          <small>Shown in the sidebar and on the sign-in page.</small>
+          <small>Shown in the sidebar and page titles.</small>
         </div>
         <div>
           <Input

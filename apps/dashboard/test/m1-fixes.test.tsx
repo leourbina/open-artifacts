@@ -50,7 +50,7 @@ const mount = (path: string) => {
 const err = (code: string, status: number) => () =>
   HttpResponse.json({ error: { code, message: code } }, { status });
 const titled = (t: string) =>
-  waitFor(() => expect(document.title).toBe(`${t} · Open Artifacts`));
+  waitFor(() => expect(document.title).toBe(`${t} · Acme Artifacts`));
 
 describe("M1 document.title per route", () => {
   it("library", async () => {

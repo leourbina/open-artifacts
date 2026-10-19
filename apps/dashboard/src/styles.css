@@ -23,6 +23,7 @@ body {
   padding: 32px;
 }
 .oa-panel h1 {
+  overflow-wrap: anywhere;
   margin: 0 0 8px;
   font-size: var(--oa-text-xl);
   font-weight: 600;
