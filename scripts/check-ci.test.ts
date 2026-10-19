@@ -720,10 +720,14 @@ describe("prod and staging tokens never cross", () => {
       }
       const sh = readFileSync(join(root, "scripts/ci/prod-setup.sh"), "utf8");
       expect(sh).toContain(
-        "upgrade) mode_args=(--ci --upgrade --solo --browser)",
+        "upgrade) mode_args=(--ci --upgrade --solo --browser --plan paid)",
       );
-      expect(sh).toContain("install) mode_args=(--ci --solo --browser)");
-      expect(sh).toContain("--check --strict --upgrade --solo --browser");
+      expect(sh).toContain(
+        "install) mode_args=(--ci --solo --browser --plan paid)",
+      );
+      expect(sh).toContain(
+        "preflight) mode_args=(--check --strict --upgrade --solo --browser --plan paid)",
+      );
       expect(sh).toContain("--ci --revoke-ci-tokens");
     });
     it("passes ANALYTICS_TOKEN to the upgrade step only", () => {

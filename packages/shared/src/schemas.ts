@@ -315,6 +315,7 @@ export const ThemeSchema = z.enum(["light", "dark"]);
 export type Theme = z.infer<typeof ThemeSchema>;
 
 export const MeSchema = z.object({
+  /** `user.name` is the effective name: displayName, else a real IdP name, else the email. */
   user: MemberSchema,
   instance: z.object({
     name: z.string(),
@@ -322,8 +323,38 @@ export const MeSchema = z.object({
     appUrl: z.string(),
     mcpUrl: z.string(),
   }),
+  /** The name the user chose (PATCH R.me), or null. */
+  displayName: z.string().nullable(),
+  /** The IdP's name for the user when it is a real name (not the email's local part), else null. */
+  suggestedName: z.string().nullable(),
+  /** No chosen name and no usable IdP name: ask the user for one. */
+  needsDisplayName: z.boolean(),
 });
 export type Me = z.infer<typeof MeSchema>;
+
+/** C0/C1 controls (incl. CR/LF), bidi controls and zero-width characters. */
+const isUnsafeNameChar = (cp: number) =>
+  cp <= 0x1f ||
+  (cp >= 0x7f && cp <= 0x9f) ||
+  cp === 0x061c ||
+  (cp >= 0x200b && cp <= 0x200f) ||
+  (cp >= 0x202a && cp <= 0x202e) ||
+  (cp >= 0x2060 && cp <= 0x2069) ||
+  cp === 0xfeff;
+
+/** A user-chosen display name: trimmed, 1–80 characters, no control/bidi/zero-width characters. */
+export const DisplayNameSchema = z
+  .string()
+  .trim()
+  .min(1, "Name must not be blank")
+  .refine((s) => [...s].length <= 80, "Name must be at most 80 characters")
+  .refine(
+    (s) => ![...s].some((ch) => isUnsafeNameChar(ch.codePointAt(0) ?? 0)),
+    "Name contains invalid characters",
+  );
+
+export const MePatchSchema = z.strictObject({ displayName: DisplayNameSchema });
+export type MePatch = z.infer<typeof MePatchSchema>;
 
 export const TokenSchema = z.object({
   id: z.string(),

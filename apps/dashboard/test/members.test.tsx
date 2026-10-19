@@ -71,11 +71,11 @@ describe("members", () => {
   it("invite POSTs a trimmed, lowercased email", async () => {
     const posts = bodies("POST");
     mount("/settings/members");
-    fireEvent.click(await screen.findByRole("button", { name: "Invite" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add member" }));
     fireEvent.change(await screen.findByLabelText("Email"), {
       target: { value: "  New.Person@Example.COM " },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Send invite" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add member" }));
     await waitFor(() => expect(posts.length).toBe(1));
     expect(posts[0]).toEqual({
       url: R.members,
@@ -83,25 +83,46 @@ describe("members", () => {
     });
   });
 
+  it("after adding, shows the sign-in link to send instead of promising an email", async () => {
+    mount("/settings/members");
+    fireEvent.click(await screen.findByRole("button", { name: "Add member" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).not.toHaveTextContent(/sent to their email/);
+    fireEvent.change(within(dialog).getByLabelText("Email"), {
+      target: { value: "new@example.com" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add member" }));
+    expect(
+      await screen.findByRole("heading", {
+        name: "new@example.com can now sign in",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Sign-in link" })).toHaveValue(
+      location.origin,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
   it("rejects a non-ASCII email without POSTing", async () => {
     const posts = bodies("POST");
     mount("/settings/members");
-    fireEvent.click(await screen.findByRole("button", { name: "Invite" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add member" }));
     fireEvent.change(await screen.findByLabelText("Email"), {
       target: { value: "josé@example.com" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Send invite" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add member" }));
     expect(await screen.findByText(/valid.*email/i)).toBeTruthy();
     expect(posts.length).toBe(0);
   });
 
   it("shows the server's conflict error on invite", async () => {
     mount("/settings/members");
-    fireEvent.click(await screen.findByRole("button", { name: "Invite" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add member" }));
     fireEvent.change(await screen.findByLabelText("Email"), {
       target: { value: owner.email },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Send invite" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add member" }));
     expect(
       (await screen.findAllByText("Already a member")).length,
     ).toBeGreaterThan(0);
@@ -209,11 +230,11 @@ describe("members: failures and edge cases", () => {
 
   it("a failed invite toasts", async () => {
     mount("/settings/members");
-    fireEvent.click(await screen.findByRole("button", { name: "Invite" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add member" }));
     fireEvent.change(await screen.findByLabelText("Email"), {
       target: { value: owner.email },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Send invite" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add member" }));
     await waitFor(() =>
       expect(screen.getAllByText("Already a member").length).toBe(2),
     );
@@ -229,12 +250,12 @@ describe("members: failures and edge cases", () => {
       }),
     );
     mount("/settings/members");
-    fireEvent.click(await screen.findByRole("button", { name: "Invite" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add member" }));
     const input = await screen.findByLabelText("Email");
     fireEvent.change(input, { target: { value: "new@example.com" } });
     const form = input.closest("form") as HTMLFormElement;
     // jsdom submits a form's default button on Enter via its `form=` owner.
-    fireEvent.click(screen.getByRole("button", { name: "Send invite" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add member" }));
     await waitFor(() => expect(posts).toBe(1));
     fireEvent.submit(form);
     await wait(100);

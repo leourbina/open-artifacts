@@ -14,19 +14,27 @@ async function until200(
   url: string,
   init?: RequestInit,
   shown = url,
+  verify?: (res: Response) => Promise<string | undefined>,
 ) {
   const sleep =
     ctx.deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   for (let i = 0; ; i++) {
     let last: string;
+    let wrong = false;
     try {
       const res = await ctx.deps.fetch(url, init);
-      if (res.status === 200) return res;
-      last = `HTTP ${res.status}`;
+      if (res.status === 200) {
+        const bad = await verify?.(res.clone());
+        if (!bad) return res;
+        last = bad;
+        wrong = true;
+      } else last = `HTTP ${res.status}`;
     } catch (e) {
       last = (e as Error).message;
     }
     const delay = DELAYS[i];
+    if (delay === undefined && wrong)
+      throw new Error(`${label}: ${shown} answered 200 but ${last}`);
     if (delay === undefined)
       throw new Error(`${label}: ${shown} not 200 after ~60s (last: ${last})`);
     await sleep(delay * 1000);
@@ -181,7 +189,22 @@ export const selftest: Step = {
   check: async () => "todo",
   async apply(state, ctx) {
     const app = `https://${ctx.opts.appHost}`;
-    await until200(ctx, "healthz", `${app}/healthz`);
+    // The plan is checked inside the wait: the old version may still serve for a moment.
+    await until200(
+      ctx,
+      "healthz",
+      `${app}/healthz`,
+      undefined,
+      undefined,
+      async (r) => {
+        const served = (
+          (await r.json().catch(() => ({}))) as { plan?: unknown }
+        ).plan;
+        return served === ctx.opts.planVar
+          ? undefined
+          : `plan ${JSON.stringify(served)} but setup rendered PLAN ${JSON.stringify(ctx.opts.planVar)}; the deployed Worker does not match, rerun setup (or pass --plan paid|free)`;
+      },
+    );
     const oidc = `https://${state.teamDomain}/cdn-cgi/access/sso/oidc/${state.accessClientId}/.well-known/openid-configuration`;
     await until200(ctx, "OIDC discovery", oidc);
     if (ctx.opts.email) {

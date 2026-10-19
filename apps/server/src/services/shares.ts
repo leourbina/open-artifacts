@@ -121,7 +121,11 @@ async function emailShare(
           format: artifact.format as Format,
           role,
         }),
-      { kind: "share", artifactId: artifact.id },
+      {
+        kind: "share",
+        artifactId: artifact.id,
+        replyTo: normEmail(user.email) ?? undefined,
+      },
     );
   } catch {
     return false;

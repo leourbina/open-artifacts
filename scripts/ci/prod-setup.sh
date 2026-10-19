@@ -8,12 +8,12 @@ set -uo pipefail
 summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
 mode="${1:-}"
 # Prod is Workers Paid, but stateless CI reads the plan as unknown and --json
-# never guesses team: thumbnails (--browser) and solo are explicit. Email for
-# prod comes later, in its own change.
+# never guesses team or the PLAN var: thumbnails (--browser), solo and
+# --plan paid are explicit. Email for prod comes later, in its own change.
 case "$mode" in
-  install) mode_args=(--ci --solo --browser) ;;
-  preflight) mode_args=(--check --strict --upgrade --solo --browser) ;; # read-only; fails if absent or drifted
-  upgrade) mode_args=(--ci --upgrade --solo --browser) ;;
+  install) mode_args=(--ci --solo --browser --plan paid) ;;
+  preflight) mode_args=(--check --strict --upgrade --solo --browser --plan paid) ;; # read-only; fails if absent or drifted
+  upgrade) mode_args=(--ci --upgrade --solo --browser --plan paid) ;;
   cleanup) mode_args=(--ci --revoke-ci-tokens) ;;
   *) echo "usage: $0 <install|preflight|upgrade|cleanup>" >&2; exit 2 ;;
 esac

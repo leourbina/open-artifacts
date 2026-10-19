@@ -70,6 +70,7 @@ const publish = { title: "T", format: "markdown", content: "hi" };
 type Row = [string, string, string, unknown, number, z.ZodType | null];
 const rows: Row[] = [
   ["me", "GET", R.me, undefined, 200, MeSchema],
+  ["me", "PATCH", R.me, { displayName: "  Ada  " }, 200, MeSchema],
   [
     "artifacts",
     "GET",

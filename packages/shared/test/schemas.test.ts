@@ -6,6 +6,7 @@ import {
   ArtifactPatchSchema,
   CapabilitiesPatchSchema,
   DataQuerySchema,
+  DisplayNameSchema,
   dataDocLimit,
   dataDocTooLargeMessage,
   ERROR_CODES,
@@ -308,6 +309,9 @@ describe("fix round 3", () => {
         appUrl: "a",
         mcpUrl: "b",
       },
+      displayName: null,
+      suggestedName: null,
+      needsDisplayName: true,
     };
     expect(m.MeSchema.safeParse(me).success).toBe(false);
     me.instance.defaultVisibility = "team";
@@ -416,5 +420,38 @@ describe("plan-aware limits", () => {
     expect(m).toContain(
       "Data docs on this instance are limited to 256 KB; clients that escape non-ASCII as \\u inflate the request, so send UTF-8 or use the REST data API. Workers Paid allows 1 MB.",
     );
+  });
+});
+
+describe("DisplayNameSchema", () => {
+  const ok = (v: unknown) => DisplayNameSchema.safeParse(v).success;
+  it("trims and accepts 1–80 characters", () => {
+    expect(DisplayNameSchema.parse("  Ada Lovelace ")).toBe("Ada Lovelace");
+    expect(ok("x".repeat(80))).toBe(true);
+    expect(ok("😀".repeat(80))).toBe(true);
+    expect(ok("José Núñez")).toBe(true);
+  });
+  it("rejects blank, too long, controls, CR/LF, bidi and zero-width", () => {
+    for (const v of [
+      "",
+      "   ",
+      "x".repeat(81),
+      "a\nb",
+      "a\rb",
+      "a\tb",
+      "a\u0007b",
+      "a\u0085b",
+      "a\u202eb",
+      "a\u2066b",
+      "a\u200eb",
+      "a\u061cb",
+      "a\u200bb",
+      "a\u200db",
+      "a\u2060b",
+      "a\ufeffb",
+      42,
+      null,
+    ])
+      expect(ok(v), JSON.stringify(v)).toBe(false);
   });
 });

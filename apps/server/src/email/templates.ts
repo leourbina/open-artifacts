@@ -4,6 +4,7 @@
 // HTML-escaped for the .html part, so nothing can inject headers or markup.
 import type { Format, ShareRole } from "@oa/shared";
 import { escapeHtml } from "../mcp/template.js";
+import { effectiveName } from "../services/users.js";
 import {
   INVITE_HTML,
   INVITE_TXT,
@@ -27,14 +28,27 @@ export function oneLine(s: string, max: number): string {
 }
 
 /**
- * Who sent the invite/share: the display name (trimmed) if set, else the full
- * email address. A name equal to the email's local part is the sign-in
- * default, not a chosen name, so it also falls back to the full address.
+ * Who sent the invite/share: the member's effective name (see effectiveName),
+ * never the bare email local part; else the full email address.
  */
 export function senderName(m: { name: string | null; email: string }): string {
-  const name = (m.name ?? "").trim();
-  const local = m.email.slice(0, m.email.lastIndexOf("@"));
-  return name && name !== local ? name : m.email;
+  return effectiveName({
+    displayName: null,
+    name: m.name ?? "",
+    email: m.email,
+  });
+}
+
+const PRODUCT = "Open Artifacts";
+const PITCH =
+  "a place where any AI agent publishes pages, docs, code and PDFs for your team.";
+
+/** The intro sentence; never "Open Artifacts runs Open Artifacts". */
+export function introLine(instanceName: string): string {
+  const name = oneLine(instanceName, NAME_MAX);
+  return name.toLowerCase() === PRODUCT.toLowerCase()
+    ? `${PRODUCT} is ${PITCH}`
+    : `${name} runs ${PRODUCT}, ${PITCH}`;
 }
 
 const SUBJECT_MAX = 150;
@@ -104,6 +118,7 @@ function common(p: Common) {
     values: {
       inviterName: oneLine(p.inviter, NAME_MAX),
       instanceName: oneLine(p.instance, NAME_MAX),
+      introLine: introLine(p.instance),
       recipientEmail: oneLine(p.recipient, 320),
       appHost: url.host,
       logoUrl: linkOn(origin, "/email/logo@2x.png"),

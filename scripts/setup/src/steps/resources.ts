@@ -60,6 +60,7 @@ export function renderConfig(
   vars: Record<string, string | undefined>,
   browser = true,
   email = false,
+  plan: "free" | "paid" = "free",
 ): string {
   // The template stays strict JSON (e2e fixtures JSON.parse it), so the
   // browser and email lines are matched by their keys and dropped when off.
@@ -70,6 +71,7 @@ export function renderConfig(
     .filter((l) => browser || !/^\s*"(browser|SERVER_THUMBNAILS)":/.test(l))
     .filter((l) => email || !/^\s*"(send_email|EMAIL_FROM)":/.test(l))
     .join("\n")
+    .replace(/^(\s*"PLAN":\s*)"[^"\n]*"/m, `$1"${plan}"`)
     .replace(/\{\{(\w+)\}\}/g, (_, k: string) => {
       const val = vars[k];
       if (val === undefined)
@@ -77,6 +79,8 @@ export function renderConfig(
       return JSON.stringify(val).slice(1, -1);
     });
   JSON.parse(stripComments(text));
+  if (!text.includes(`"PLAN": "${plan}"`))
+    throw new Error(`rendered config must contain "PLAN": "${plan}"`);
   if (!text.includes('"ENVIRONMENT": "production"'))
     throw new Error('rendered config must contain "ENVIRONMENT": "production"');
   return text;
@@ -104,16 +108,22 @@ function sync(state: State, ctx: Ctx, found: Awaited<ReturnType<typeof find>>) {
   writeConfig(state, ctx);
 }
 
-/** Renders `apps/server/wrangler.jsonc` from the template and current state. */
-export function writeConfig(state: State, ctx: Ctx) {
+/** The config text the template and current state render to (nothing written). */
+export function renderedConfig(state: State, ctx: Ctx): string {
   const template = ctx.fs.read(join(ctx.root, TEMPLATE));
   if (template === null) throw new Error(`missing ${TEMPLATE}`);
-  const text = renderConfig(
+  return renderConfig(
     template,
     configVars(state, ctx),
     ctx.opts.browser,
     ctx.opts.email,
+    ctx.opts.planVar,
   );
+}
+
+/** Renders `apps/server/wrangler.jsonc` from the template and current state. */
+export function writeConfig(state: State, ctx: Ctx) {
+  const text = renderedConfig(state, ctx);
   if (ctx.fs.read(join(ctx.root, CONFIG)) !== text)
     ctx.fs.write(join(ctx.root, CONFIG), text);
 }

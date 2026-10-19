@@ -96,7 +96,7 @@ describe("prereqs + resources", () => {
   it("renderConfig escapes values, allows comments, and asserts production", () => {
     const vars = { OWNER_EMAIL: 'a"b\\c' };
     const tpl =
-      '{\n  // c "x"\n  "vars": { "OWNER_EMAIL": "{{OWNER_EMAIL}}", "ENVIRONMENT": "production" } /* end */\n}';
+      '{\n  // c "x"\n  "vars": { "OWNER_EMAIL": "{{OWNER_EMAIL}}", "PLAN": "free", "ENVIRONMENT": "production" } /* end */\n}';
     const out = renderConfig(tpl, vars).replace(/\/\/.*|\/\*.*\*\//g, "");
     expect(JSON.parse(out).vars.OWNER_EMAIL).toBe('a"b\\c');
     expect(() => renderConfig(tpl.replace("production", "dev"), vars)).toThrow(

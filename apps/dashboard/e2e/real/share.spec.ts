@@ -27,9 +27,15 @@ test("owner shares with Bob as viewer; Bob sees it in Shared; revoked, Bob gets 
   await expect(page.getByRole("combobox", { name: "Invite role" })).toHaveText(
     "Viewer",
   );
-  await page.getByRole("button", { name: "Invite" }).click();
+  await page.getByRole("button", { name: "Add", exact: true }).click();
   const remove = page.getByRole("button", { name: `Remove ${BOB}` });
   await expect(remove).toBeVisible();
+  // #167: no email is sent, so the owner gets the link to pass on.
+  await expect(page.getByText(`Shared with ${BOB}`)).toBeVisible();
+  const link = await page
+    .getByRole("textbox", { name: "Artifact link" })
+    .inputValue();
+  expect(link).toBe(`${new URL(page.url()).origin}/a/${id}`);
 
   const bobCtx = await browser.newContext({ baseURL: APP });
   const bob = await bobCtx.newPage();
@@ -40,7 +46,7 @@ test("owner shares with Bob as viewer; Bob sees it in Shared; revoked, Bob gets 
   ).toBeVisible();
 
   // Bob can open it while shared, so the 404 below is the revocation's doing.
-  await bob.goto(`/a/${id}`);
+  await bob.goto(link);
   await expect(
     artifactFrame(bob).getByRole("heading", { name: "The plan" }),
   ).toBeVisible();

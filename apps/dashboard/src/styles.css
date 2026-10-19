@@ -139,3 +139,14 @@ body {
     padding: 12px 16px 0;
   }
 }
+.oa-copylink {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.oa-copylink input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--oa-font-mono, ui-monospace, monospace);
+  font-size: var(--oa-text-xs);
+}

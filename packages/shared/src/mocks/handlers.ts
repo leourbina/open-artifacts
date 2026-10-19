@@ -38,6 +38,7 @@ import {
   type Member,
   MemberInviteSchema,
   MemberPatchSchema,
+  MePatchSchema,
   PublishInputSchema,
   SettingsPatchSchema,
   type Share,
@@ -357,6 +358,14 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
   return [
     ...pre,
     http.get("*/api/v1/me", () => HttpResponse.json(me)),
+    http.patch("*/api/v1/me", async ({ request }) => {
+      const r = await body(request, MePatchSchema);
+      if (r.error) return r.error;
+      me.displayName = r.data.displayName;
+      me.needsDisplayName = false;
+      me.user.name = r.data.displayName;
+      return HttpResponse.json(me);
+    }),
     http.get("*/api/v1/artifacts", ({ request }) => {
       if (isAnon(request))
         return err("unauthorized", "Authentication required");

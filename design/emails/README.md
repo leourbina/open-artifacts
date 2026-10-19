@@ -12,7 +12,8 @@ Transactional emails in the Studio direction (see `../DIRECTION.md`). Each one h
 | Placeholder | Used in | Meaning |
 |---|---|---|
 | `{{inviterName}}` | both | Display name of the member who added or shared, falling back to their email |
-| `{{instanceName}}` | both | The instance's display name; also the invite CTA label, `Open {{instanceName}}` (the share CTA is `Open the artifact`) |
+| `{{instanceName}}` | both | The instance's display name; also the invite CTA label, `Go to {{instanceName}}` (the share CTA is `Open the artifact`) |
+| `{{introLine}}` | invite | The intro sentence, computed by the server. When `instanceName` is not `Open Artifacts`: `{{instanceName}} runs Open Artifacts, a place where any AI agent publishes pages, docs, code and PDFs for your team.` Otherwise: `Open Artifacts is a place where any AI agent publishes pages, docs, code and PDFs for your team.` Escape it like any other value |
 | `{{recipientEmail}}` | both | The address this email goes to, where the one-time code will be sent |
 | `{{appHost}}` | both | The instance's host, such as `artifacts.example.com` (no scheme) |
 | `{{logoUrl}}` | both (HTML) | Absolute HTTPS URL of `logo@2x.png` served by the instance |

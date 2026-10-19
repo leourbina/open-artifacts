@@ -26,7 +26,8 @@ const FROM = "noreply@mail.example.com";
 const today = () => new Date().toISOString().slice(0, 10);
 
 type Sent = {
-  from: string;
+  from: string | { email: string; name: string };
+  replyTo?: string;
   to: string;
   subject: string;
   text: string;
@@ -94,7 +95,7 @@ describe("invite email", () => {
     expect(m.sent).toHaveLength(1);
     const s = m.sent[0] as Sent;
     expect(s.to).toBe(email);
-    expect(s.from).toBe(FROM);
+    expect(s.from).toEqual({ email: FROM, name: "Open Artifacts" });
     expect(s.text).toContain("https://app.localhost/sign-in");
     expect(s.html).toContain('href="https://app.localhost/sign-in"');
     expect(s.subject).toContain("added you to");
@@ -576,5 +577,72 @@ describe("sender name in emails", () => {
       expect(s.text.startsWith("Ada Lovelace ")).toBe(true);
       expect(s.html).toContain(">Ada Lovelace ");
     }
+  });
+});
+
+describe("deliverability headers (#213)", () => {
+  it("From is the product name on EMAIL_FROM; Reply-To is the inviter or sharer", async () => {
+    const email = fresh();
+    const o = await login(email, "owner");
+    const m = mailer();
+    const e = { ...m, EMAIL_FROM: FROM };
+    await invite(e, o.cookie);
+    const owner = await getUser(env, o.userId);
+    if (!owner) throw new Error("no user");
+    const { id } = await publish(
+      env,
+      owner,
+      {
+        title: "T",
+        visibility: "private",
+        format: "markdown",
+        content: "x",
+      } as never,
+      null,
+      undefined,
+      "create",
+    );
+    await call(e, R.shares(id), o.cookie, "PUT", {
+      email: fresh(),
+      role: "viewer",
+    });
+    expect(m.sent).toHaveLength(2);
+    for (const s of m.sent) {
+      expect(s.from).toEqual({ email: FROM, name: "Open Artifacts" });
+      expect(s.replyTo).toBe(email);
+      expect(s.text.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("Reply-To is omitted unless it is one plain address", async () => {
+    const m = mailer();
+    const e = { ...(env as object), ...m, EMAIL_FROM: FROM } as never;
+    const content = () => ({ subject: "s", text: "t", html: "h" });
+    await sendEmail(e, "u-rt1", "a@x.com", content, {
+      kind: "invite",
+      replyTo: "x@y.com, evil@z.com",
+    });
+    await sendEmail(e, "u-rt2", "b@x.com", content, {
+      kind: "invite",
+      replyTo: "ok@y.com",
+    });
+    expect(m.sent.map((s) => s.replyTo)).toEqual([undefined, "ok@y.com"]);
+    expect("replyTo" in (m.sent[0] as object)).toBe(false);
+  });
+
+  it("a non-plain EMAIL_FROM is passed through as configured", async () => {
+    const m = mailer();
+    const from = "Ops <noreply@mail.example.com>";
+    const e = { ...(env as object), ...m, EMAIL_FROM: from } as never;
+    await sendEmail(
+      e,
+      "u-rt3",
+      "c@x.com",
+      () => ({ subject: "s", text: "t", html: "h" }),
+      {
+        kind: "invite",
+      },
+    );
+    expect(m.sent[0]?.from).toBe(from);
   });
 });

@@ -26,6 +26,8 @@ export type State = {
   browser?: boolean;
   /** Workers plan read by prereqs: free, paid, or unknown (unreadable). */
   plan?: "free" | "paid" | "unknown";
+  /** The PLAN var last rendered into the Worker config (what /healthz reports). */
+  planVar?: "free" | "paid";
   /** "Just you, or a team?": team turns the email step on. Absent means solo. */
   team?: boolean;
   /** send_email binding on/off; off for solo, --no-email, or a Free fallback. */
