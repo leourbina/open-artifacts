@@ -1,5 +1,7 @@
 import { AUTH, type Me } from "@oa/shared";
-import { AppShell, Avatar, Button, Menu, NavItem, Toaster } from "@oa/ui";
+import { AppShell, Avatar, Button, Menu, Toaster } from "@oa/ui";
+import { brand } from "@oa/ui/brand";
+import { Button as ShButton } from "@oa/ui/shadcn";
 import { useQueryClient } from "@tanstack/react-query";
 import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { type ReactNode, useEffect } from "react";
@@ -25,6 +27,7 @@ const icon = (d: string) => (
     strokeLinecap="round"
     strokeLinejoin="round"
     aria-hidden="true"
+    className="size-[16px]"
   >
     <path d={d} />
   </svg>
@@ -145,7 +148,8 @@ function LoadError({ quota }: { quota: boolean }) {
 function Link({
   to,
   active,
-  ...rest
+  icon,
+  label,
 }: {
   to: string;
   active: boolean;
@@ -154,18 +158,26 @@ function Link({
 }) {
   const navigate = useNavigate();
   return (
-    <NavItem
-      href={to}
-      active={active}
-      onClick={(e) => {
-        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey) return;
-        e.preventDefault();
-        void navigate({ to });
-      }}
-      {...rest}
-    />
+    <ShButton asChild variant="ghost" className={NAV_ITEM}>
+      <a
+        href={to}
+        aria-current={active ? "page" : undefined}
+        onClick={(e) => {
+          if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey) return;
+          e.preventDefault();
+          void navigate({ to });
+        }}
+      >
+        {icon}
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+      </a>
+    </ShButton>
   );
 }
+
+/** Every row the same height and insets; the active row is a fill, no box. */
+const NAV_ITEM =
+  "h-[30px] w-full justify-start gap-[10px] px-[var(--oa-space-2)] has-[>svg]:px-[var(--oa-space-2)] text-[length:var(--oa-text-sm)] font-normal text-[var(--oa-text-2)] no-underline hover:bg-sidebar-accent/60 hover:text-foreground dark:hover:bg-sidebar-accent/60 aria-[current=page]:bg-sidebar-accent aria-[current=page]:font-medium aria-[current=page]:text-foreground";
 
 function Sidebar({ me, path }: { me: Me | null; path: string }) {
   const role = me?.user.role;
@@ -173,46 +185,58 @@ function Sidebar({ me, path }: { me: Me | null; path: string }) {
   const on = (p: string) => path === p || path.startsWith(`${p}/`);
   return (
     <>
-      <strong>{me?.instance.name || "Open Artifacts"}</strong>
-      {guest ? (
-        <Link
-          to="/shared"
-          active={on("/shared")}
-          icon={I.share}
-          label="Shared with me"
-        />
-      ) : (
-        <>
-          <Link to="/" active={path === "/"} icon={I.lib} label="Library" />
-          {me && (
-            <Link
-              to="/shared"
-              active={on("/shared")}
-              icon={I.share}
-              label="Shared with me"
-            />
-          )}
-          {me && (
-            <Link to="/team" active={on("/team")} icon={I.team} label="Team" />
-          )}
-          {(role === "owner" || role === "admin") && (
-            <Link
-              to="/settings/usage"
-              active={on("/settings/usage")}
-              icon={I.usage}
-              label="Usage"
-            />
-          )}
-          {me && (
-            <Link
-              to="/settings/members"
-              active={path.startsWith("/settings") && !on("/settings/usage")}
-              icon={I.gear}
-              label="Settings"
-            />
-          )}
-        </>
-      )}
+      {/* Both marks render; the theme shows one. The name labels the block. */}
+      <div className="oa-brand">
+        <img className="dark:hidden" src={brand.markLight} alt="" />
+        <img className="hidden dark:block" src={brand.markDark} alt="" />
+        <strong>{me?.instance.name || "Open Artifacts"}</strong>
+      </div>
+      <div className="flex flex-col gap-[2px]">
+        {guest ? (
+          <Link
+            to="/shared"
+            active={on("/shared")}
+            icon={I.share}
+            label="Shared with me"
+          />
+        ) : (
+          <>
+            <Link to="/" active={path === "/"} icon={I.lib} label="Library" />
+            {me && (
+              <Link
+                to="/shared"
+                active={on("/shared")}
+                icon={I.share}
+                label="Shared with me"
+              />
+            )}
+            {me && (
+              <Link
+                to="/team"
+                active={on("/team")}
+                icon={I.team}
+                label="Team"
+              />
+            )}
+            {(role === "owner" || role === "admin") && (
+              <Link
+                to="/settings/usage"
+                active={on("/settings/usage")}
+                icon={I.usage}
+                label="Usage"
+              />
+            )}
+            {me && (
+              <Link
+                to="/settings/members"
+                active={path.startsWith("/settings") && !on("/settings/usage")}
+                icon={I.gear}
+                label="Settings"
+              />
+            )}
+          </>
+        )}
+      </div>
     </>
   );
 }

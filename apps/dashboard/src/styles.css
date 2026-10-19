@@ -7,6 +7,40 @@ body {
   color: var(--oa-text);
   font: 400 var(--oa-text-sm) / 1.45 var(--oa-font-sans);
 }
+/* Sidebar brand: one header-tall row (the header is 48px) with its divider,
+   so the sidebar's top lines up with the header. The mark centers on the nav
+   icon column (x 18..34), the name on the label column (x 44). */
+.oa-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--oa-space-2);
+  /* The header is 48px plus its 1px bottom border (content-box). */
+  height: 49px;
+  box-sizing: border-box;
+  margin: calc(-1 * var(--oa-space-3)) -10px var(--oa-space-3);
+  padding: 0 10px 0 16px;
+  border-bottom: 1px solid var(--oa-divider);
+}
+.oa-brand img {
+  flex: none;
+  width: 20px;
+  height: 20px;
+}
+.oa-brand strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--oa-text-md);
+  font-weight: 600;
+}
+/* In the drawer the "Navigation" head is the top row. */
+[role="dialog"] .oa-brand {
+  height: 36px;
+  margin: 0 0 var(--oa-space-2);
+  padding-left: 6px;
+  border-bottom: 0;
+}
 .oa-edge {
   min-height: 70vh;
   display: flex;
