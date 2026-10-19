@@ -19,6 +19,10 @@ export const LIMITS = {
   uploadUrlTtlSec: 3600,
   thumbnailBytes: 200 * 1024,
   extractedTextBytes: 1024 * 1024,
+  /** Search indexes only the first this-many bytes of an artifact's entry file. */
+  indexTextBytes: 64 * 1024,
+  /** Body text is indexed this long after a publish/restore/undelete; bursts coalesce. */
+  indexDebounceMs: 10_000,
 } as const;
 
 /** The 413 too_large message for inline publish content over LIMITS.inlineBytes (REST and MCP). */

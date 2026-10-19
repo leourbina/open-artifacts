@@ -34,4 +34,6 @@ export const LIMIT_PLACEHOLDERS: Record<string, string> = {
   "{LIMIT_SOFT_DELETE}": plural(LIMITS.softDeleteDays, "day"),
   "{LIMIT_UPLOAD_URL_TTL}": formatSeconds(LIMITS.uploadUrlTtlSec),
   "{LIMIT_UPLOAD_TTL}": plural(LIMITS.uploadTtlHours, "hour"),
+  "{LIMIT_INDEX_LAG}": formatSeconds(LIMITS.indexDebounceMs / 1000),
+  "{LIMIT_INDEX_TEXT}": formatBytes(LIMITS.indexTextBytes),
 };

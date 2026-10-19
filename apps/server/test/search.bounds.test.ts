@@ -1,5 +1,6 @@
 // B17: extractText's per-entry work bounds (CPU budget), and that the
 // index-based scanner still matches the old output.
+import { LIMITS } from "@oa/shared";
 import { describe, expect, it } from "vitest";
 import {
   extractText,
@@ -31,9 +32,10 @@ describe("extractText bounds", () => {
       expect(t.startsWith("start")).toBe(true);
       expect(t).not.toContain("tail");
     }
-    // Under the cap, the tail is indexed.
+    // Under the cap, the tail is indexed (one-shot: ~80 KB is past the
+    // stream's INDEX_INPUT_BYTES).
     const small = `${head}${"<!--c-->".repeat(MAX_SKIPS - 1)}<p>tail</p>`;
-    expect(await extractText("html", chunked(small))).toBe("start tail");
+    expect(await extractText("html", small)).toBe("start tail");
   });
 
   it(`decodes at most ${MAX_ENTITIES} entities; the rest stay raw`, async () => {
@@ -58,7 +60,8 @@ describe("extractText bounds", () => {
   });
 
   it(`reads and extracts at most the first ${INDEX_INPUT_BYTES} bytes`, async () => {
-    expect(INDEX_INPUT_BYTES).toBe(96 * 1024);
+    expect(INDEX_INPUT_BYTES).toBe(LIMITS.indexTextBytes);
+    expect(INDEX_INPUT_BYTES).toBe(64 * 1024);
     // Markdown is raw: exactly the first INDEX_INPUT_BYTES bytes, whatever the chunking.
     const md = "abcdefgh".repeat(40 * 1024); // 320 KB
     for (const size of [1000, 64 * 1024, 100 * 1024, 512 * 1024])
