@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/leourbina/open-artifacts/compare/v0.2.0...v0.2.1) (2026-10-19)
+
+
+### Bug Fixes
+
+* **setup:** selftest follows the markdown render shell to its entry file ([#165](https://github.com/leourbina/open-artifacts/issues/165)) ([b28e20e](https://github.com/leourbina/open-artifacts/commit/b28e20e9f37bda0e17dfda5247ce6924d2cf8b04))
+
 ## [0.2.0](https://github.com/leourbina/open-artifacts/compare/v0.1.0...v0.2.0) (2026-10-19)
 
 
