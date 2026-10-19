@@ -249,16 +249,16 @@ export function createBridge(opts: {
 **Interfaces**
 
 ```ts
-export async function uploadArtifact(input: { files: File[]; title: string; artifactId?: string; message?: string; entry?: string },
+export async function uploadArtifact(input: { files: File[]; title: string; message?: string; entry?: string },
   onProgress: (p: { done: number; total: number }) => void): Promise<PublishResult>;
 ```
 
-- Each file goes `POST R.uploads` (passing `artifactId` once the first call reserves one), then `api.putRaw` to the signed URL. After that, one `POST R.artifacts` (create, with the reserved id) or `POST R.versions(id)` with `files: { [path]: { uploadId } }`.
+- Each file goes `POST R.uploads` (passing `artifactId` once the first call reserves one), then `api.putRaw` to the signed URL. After that, one `POST R.artifacts` (create, with the reserved id) with `files: { [path]: { uploadId } }`.
 - Folder drops keep relative paths (`webkitRelativePath`) and strip the common top folder.
 - Client-side checks before anything is sent: each file ≤ `LIMITS.fileBytes`, total ≤ `LIMITS.publishBytes`, and paths pass `normalizePath`. On failure it shows which file failed.
 - Default entry: `index.html`, else `README.md`, else the only file, else ask with a select in the dialog.
 - After a PDF upload, the viewer's `onPdfText` handles indexing (FE11).
-- Dropping onto the artifact view uploads a new version; dropping onto the library creates a new artifact.
+- Dropping onto the library creates a new artifact. The artifact view has no upload: new versions come only from agents (MCP or API).
 
 **Steps**
 - [ ] **Step 1: Write the failing tests.**

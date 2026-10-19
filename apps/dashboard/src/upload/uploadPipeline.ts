@@ -13,7 +13,6 @@ import { api } from "../api/client";
 export type UploadInput = {
   files: File[];
   title: string;
-  artifactId?: string;
   message?: string;
   entry?: string;
 };
@@ -119,8 +118,8 @@ const abortable = <T>(p: Promise<T>, signal?: AbortSignal): Promise<T> =>
     : p;
 
 /**
- * Uploads each file to its signed URL, then publishes once. A new artifact reuses the
- * id the first upload reserved; pass `artifactId` to add a version instead.
+ * Uploads each file to its signed URL, then publishes once, reusing the artifact id
+ * the first upload reserved.
  */
 export async function uploadArtifact(
   input: UploadInput,
@@ -128,8 +127,7 @@ export async function uploadArtifact(
   signal?: AbortSignal,
 ): Promise<PublishResult> {
   const paths = validateUpload(input.files);
-  const isNew = input.artifactId === undefined;
-  if (isNew && !input.title.trim())
+  if (!input.title.trim())
     throw new UploadValidationError("A title is required");
   const given =
     input.entry === undefined ? undefined : normalizePath(input.entry);
@@ -144,7 +142,7 @@ export async function uploadArtifact(
     throw new UploadValidationError(`Entry "${entry}" is not one of the files`);
 
   const total = paths.length;
-  let reserved = input.artifactId;
+  let reserved: string | undefined;
   const files: Record<string, { uploadId: string }> = Object.create(null);
   onProgress({ done: 0, total });
   for (const [i, file] of input.files.entries()) {
@@ -177,19 +175,11 @@ export async function uploadArtifact(
   signal?.throwIfAborted();
   const message = input.message?.trim() || undefined;
   const body = { files, entry, message };
-  return isNew
-    ? api.send(
-        "POST",
-        R.artifacts,
-        { ...body, id: reserved, title: input.title.trim() },
-        PublishResultSchema,
-        signal,
-      )
-    : api.send(
-        "POST",
-        R.versions(input.artifactId as string),
-        { ...body, id: input.artifactId },
-        PublishResultSchema,
-        signal,
-      );
+  return api.send(
+    "POST",
+    R.artifacts,
+    { ...body, id: reserved, title: input.title.trim() },
+    PublishResultSchema,
+    signal,
+  );
 }
