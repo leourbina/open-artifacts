@@ -181,3 +181,103 @@ test("stacked rows at 390px: name on its own line, meta left, action right", asy
   });
   expect(row.gap).toBeGreaterThanOrEqual(8);
 });
+
+/** The client tab strip: the active underline drawn and unclipped, and
+    whether each tab sits inside the strip's visible box. */
+const strip = (page: Page) =>
+  page
+    .getByRole("tablist")
+    .first()
+    .evaluate((list) => {
+      const l = list.getBoundingClientRect();
+      const tabs = [...list.querySelectorAll<HTMLElement>("[role=tab]")];
+      const active = tabs.find((t) => t.dataset.state === "active");
+      const after = active ? getComputedStyle(active, "::after") : null;
+      const a = active?.getBoundingClientRect();
+      return {
+        active: active?.textContent,
+        underline: {
+          opacity: after?.opacity,
+          bottom: after?.bottom,
+          height: after?.height,
+          painted: after?.backgroundColor !== "rgba(0, 0, 0, 0)",
+          inside: !!a && a.bottom <= l.bottom + 0.5 && a.top >= l.top - 0.5,
+        },
+        inView: Object.fromEntries(
+          tabs.map((t) => {
+            const b = t.getBoundingClientRect();
+            return [
+              t.textContent,
+              b.left >= l.left - 0.5 && b.right <= l.right + 0.5,
+            ];
+          }),
+        ),
+      };
+    });
+
+for (const width of [1280, 390])
+  for (const theme of ["light", "dark"])
+    test(`client tabs at ${width}px ${theme}: underline, focus ring, scroll into view`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto("/settings/agents");
+      await page.evaluate(
+        (t) => document.documentElement.setAttribute("data-theme", t),
+        theme,
+      );
+      const tabs = page.getByRole("tablist").first().getByRole("tab");
+      await expect(tabs.first()).toHaveAttribute("data-state", "active");
+
+      // (a) The active underline is drawn, at the strip's bottom edge.
+      const s = await strip(page);
+      expect(s.underline).toEqual({
+        opacity: "1",
+        bottom: "0px",
+        height: "2px",
+        painted: true,
+        inside: true,
+      });
+
+      // (b) The keyboard focus ring is inset, so the scrolling strip can't
+      // clip it. Polled: the trigger transitions its outline.
+      await tabs.first().focus();
+      await page.keyboard.press("ArrowRight");
+      const second = tabs.nth(1);
+      await expect(second).toBeFocused();
+      await expect
+        .poll(() =>
+          second.evaluate((t) => {
+            const c = getComputedStyle(t);
+            const w = parseFloat(c.outlineWidth);
+            return (
+              t.matches(":focus-visible") &&
+              c.outlineStyle === "solid" &&
+              w > 0 &&
+              parseFloat(c.outlineOffset) <= -w
+            );
+          }),
+        )
+        .toBe(true);
+
+      // (c) A picked tab scrolls into view, by keyboard and by click.
+      const inView = async (tab: typeof tabs) => {
+        await expect(tab).toHaveAttribute("data-state", "active");
+        await expect(tab).toBeFocused();
+        await expect
+          .poll(async () => {
+            const st = await strip(page);
+            return st.inView[st.active ?? ""];
+          })
+          .toBe(true);
+      };
+      await page.keyboard.press("End");
+      await inView(tabs.last());
+      await page.keyboard.press("Home");
+      await inView(tabs.first());
+      await tabs.last().click();
+      await inView(tabs.last());
+      await expect
+        .poll(async () => (await strip(page)).underline.opacity)
+        .toBe("1");
+    });

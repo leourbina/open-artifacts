@@ -21,7 +21,7 @@ import {
 } from "@oa/ui/shadcn";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ApiClientError, api } from "../api/client";
 import {
   qk,
@@ -109,15 +109,26 @@ function SnippetTabs({
     list.findIndex((s) => s.agent === picked),
     0,
   );
+  const listRef = useRef<HTMLDivElement>(null);
   return (
     <Tabs
       value={String(current)}
-      onValueChange={(v) => setPicked(list[Number(v)]?.agent)}
+      onValueChange={(v) => {
+        setPicked(list[Number(v)]?.agent);
+        // The strip scrolls sideways on phones; keep the picked tab in view
+        // (clicks and arrow keys alike).
+        listRef.current?.children[Number(v)]?.scrollIntoView?.({
+          block: "nearest",
+          inline: "nearest",
+        });
+      }}
       className={`min-w-0 ${GAP}`}
     >
-      {/* The hairline and underline are inset shadows: the scrolling list
-          would clip a border or an offset underline. */}
+      {/* The strip scrolls, so it clips anything outside it: the hairline is
+          an inset shadow, the underline sits at the bottom edge, and the
+          focus ring is inset. */}
       <TabsList
+        ref={listRef}
         variant="line"
         className="h-[34px] w-full justify-start gap-[var(--oa-space-4)] overflow-x-auto rounded-none p-0 shadow-[inset_0_-1px_0_var(--color-border)] [scrollbar-width:none]"
       >
@@ -125,7 +136,7 @@ function SnippetTabs({
           <TabsTrigger
             key={s.agent}
             value={String(i)}
-            className="h-full flex-none px-0 text-[length:var(--oa-text-sm)] after:bottom-0"
+            className="h-full flex-none px-0 text-[length:var(--oa-text-sm)] group-data-[orientation=horizontal]/tabs:after:bottom-0 group-data-[orientation=horizontal]/tabs:after:h-[2px] focus-visible:outline-offset-[-2px]"
           >
             {s.agent}
           </TabsTrigger>
