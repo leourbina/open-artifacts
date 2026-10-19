@@ -143,11 +143,40 @@ function pageHelpers() {
       }))
       .filter((m) => m.r < 3)
       .map((m) => `${m.id} ${m.r.toFixed(2)}`);
+  // State indicators drawn as inset box-shadows (toggle ring, tab underline,
+  // row bar): the shadow's color against the element's own fill.
+  const indicators = () => {
+    const sel: Record<string, string> = {
+      "toggle on": '[data-slot="toggle-group-item"][data-state="on"]',
+      "active tab": '[data-slot="tabs-trigger"][data-state="active"]',
+      "selected row":
+        '[data-slot="table-row"][data-state="selected"] > *:first-child',
+    };
+    return Object.entries(sel).map(([label, s]) => {
+      const els = [...document.querySelectorAll(s)];
+      const worst = Math.min(
+        ...els.map((el) => {
+          // Tailwind composes several shadows; take the visible inset one.
+          const inset = getComputedStyle(el)
+            .boxShadow.split(/,(?![^(]*\))/)
+            .filter((s) => s.includes("inset"))
+            .map((s) => s.match(/rgba?\([^)]*\)/)?.[0] ?? "")
+            .find((c) => c && (parse(c)[3] ?? 1) > 0);
+          return inset ? ratio(inset, fill(el)) : 0;
+        }),
+      );
+      return { label, count: els.length, worst: Number(worst.toFixed(2)) };
+    });
+  };
   // biome-ignore lint/suspicious/noExplicitAny: test-only global
-  (window as any).__oa = { focus, axeRun, borders };
+  (window as any).__oa = { focus, axeRun, borders, indicators };
 }
 
-const oa = (page: Page, fn: "focus" | "axeRun" | "borders", arg?: boolean) =>
+const oa = (
+  page: Page,
+  fn: "focus" | "axeRun" | "borders" | "indicators",
+  arg?: boolean,
+) =>
   // biome-ignore lint/suspicious/noExplicitAny: test-only global
   page.evaluate(([f, a]) => (window as any).__oa[f as string](a), [fn, arg]);
 
@@ -207,11 +236,104 @@ describe.each(["light", "dark"])("shadcn in Chromium (%s)", (theme) => {
     expect(focus?.ok, `${focus?.id}: ${focus?.detail}`).toBe(true);
   });
 
-  it("toast has no axe violations", async () => {
+  it("state indicators are >= 3:1 against their own fill", async () => {
     const page = await open(theme);
-    await page.getByRole("button", { name: "Show toast" }).first().click();
-    await page.waitForSelector("[data-sonner-toast]");
+    const found = (await oa(page, "indicators")) as {
+      label: string;
+      count: number;
+      worst: number;
+    }[];
+    await page.close();
+    for (const { label, count, worst } of found) {
+      expect(count, label).toBeGreaterThan(0);
+      expect(worst, label).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it("toggles expose their state to AT", async () => {
+    const page = await open(theme);
+    const on = page.locator('[data-slot="toggle-group-item"][data-state="on"]');
+    expect(await on.count()).toBeGreaterThan(0);
+    // Single-select groups are radio groups: aria-checked mirrors data-state.
+    for (const el of await on.all())
+      expect(await el.getAttribute("aria-checked")).toBe("true");
+    await page.close();
+  });
+
+  it.each([
+    ["Open dialog", '[role="dialog"]'],
+    ["Delete artifact", '[role="alertdialog"]'],
+  ])("%s traps focus and returns it to the trigger", async (label, sel) => {
+    const page = await open(theme);
+    const trigger = page
+      .getByRole("button", { name: label, exact: true })
+      .first();
+    await trigger.focus();
+    await page.keyboard.press("Enter");
+    await page.waitForSelector(sel);
+    const escaped: string[] = [];
+    for (let i = 0; i < 8; i++) {
+      await page.keyboard.press("Tab");
+      const inside = await page.evaluate(
+        (s) => !!document.activeElement?.closest(s),
+        sel,
+      );
+      if (!inside) escaped.push(`Tab ${i + 1}`);
+    }
+    await page.keyboard.press("Escape");
+    await page.waitForSelector(sel, { state: "detached" });
+    const back = await trigger.evaluate((el) => el === document.activeElement);
+    await page.close();
+    expect(escaped).toEqual([]);
+    expect(back).toBe(true);
+  });
+
+  it.each([
+    ["Show toast", "default"],
+    ["Show success toast", "success"],
+    ["Show error toast", "error"],
+    ["Show warning toast", "warning"],
+  ])("%s has no axe violations", async (label, type) => {
+    const page = await open(theme);
+    await page
+      .getByRole("button", { name: label, exact: true })
+      .first()
+      .click();
+    await page.waitForSelector(
+      type === "default"
+        ? "[data-sonner-toast]"
+        : `[data-sonner-toast][data-type="${type}"]`,
+    );
     expect(await oa(page, "axeRun")).toEqual([]);
+    await page.close();
+  });
+
+  it("toasts follow a data-theme flip", async () => {
+    const page = await open(theme);
+    await page
+      .getByRole("button", { name: "Show toast", exact: true })
+      .first()
+      .click();
+    await page.waitForSelector("[data-sonner-toaster]", { state: "attached" });
+    const themeOf = () =>
+      page.evaluate(() =>
+        document
+          .querySelector("[data-sonner-toaster]")
+          ?.getAttribute("data-sonner-theme"),
+      );
+    expect(await themeOf()).toBe(theme);
+    const other = theme === "light" ? "dark" : "light";
+    await page.evaluate((t) => {
+      document.documentElement.dataset.theme = t;
+    }, other);
+    await page.waitForFunction(
+      (t) =>
+        document
+          .querySelector("[data-sonner-toaster]")
+          ?.getAttribute("data-sonner-theme") === t,
+      other,
+    );
+    expect(await themeOf()).toBe(other);
     await page.close();
   });
 });

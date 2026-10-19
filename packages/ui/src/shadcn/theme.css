@@ -50,7 +50,8 @@
   --secondary-foreground: var(--oa-text);
   --muted: var(--oa-sunken);
   --muted-foreground: var(--oa-text-muted);
-  --accent: var(--oa-surface-2);
+  /* Hover and menu highlight surface, as the CSS-module menus use. */
+  --accent: var(--oa-sunken);
   --accent-foreground: var(--oa-text);
   --destructive: var(--oa-danger);
   /* >= 4.5:1 on --oa-danger in both themes (5.81 light, 7.4 dark). */
@@ -63,6 +64,9 @@
      text-brand). shadcn's --accent stays the neutral hover surface. */
   --brand: var(--oa-accent);
   --brand-foreground: var(--oa-accent-text);
+  /* Tinted state fills (toggle on, selected row), with --brand as the edge. */
+  --brand-soft: var(--oa-accent-soft);
+  --brand-soft-foreground: var(--oa-accent-fg);
 
   --chart-1: var(--oa-accent);
   --chart-2: var(--oa-success);
@@ -105,6 +109,8 @@
   --color-ring: var(--ring);
   --color-brand: var(--brand);
   --color-brand-foreground: var(--brand-foreground);
+  --color-brand-soft: var(--brand-soft);
+  --color-brand-soft-foreground: var(--brand-soft-foreground);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);

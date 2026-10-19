@@ -216,9 +216,13 @@ export const cases: Record<string, ReactElement> = {
         </TableRow>
       </TableHeader>
       <TableBody>
-        <TableRow>
+        <TableRow data-state="selected">
           <TableCell>v7</TableCell>
           <TableCell>Claude Code</TableCell>
+        </TableRow>
+        <TableRow>
+          <TableCell>v6</TableCell>
+          <TableCell>Codex CLI</TableCell>
         </TableRow>
       </TableBody>
     </Table>
@@ -235,6 +239,24 @@ export const cases: Record<string, ReactElement> = {
   ToastTrigger: (
     <Button variant="outline" onClick={() => toast("Link copied")}>
       Show toast
+    </Button>
+  ),
+  ToastSuccess: (
+    <Button variant="outline" onClick={() => toast.success("Published v8")}>
+      Show success toast
+    </Button>
+  ),
+  ToastError: (
+    <Button variant="outline" onClick={() => toast.error("Upload failed")}>
+      Show error toast
+    </Button>
+  ),
+  ToastWarning: (
+    <Button
+      variant="outline"
+      onClick={() => toast.warning("Daily free-plan limit almost reached")}
+    >
+      Show warning toast
     </Button>
   ),
 };
