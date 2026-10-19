@@ -37,15 +37,30 @@ export function createSideEffects(d: SideEffectDeps) {
   let pending: string | undefined;
   return {
     onHello() {
-      if (!canEdit || artifact.thumbnailUrl !== null || thumbAsked.has(id))
+      const stale =
+        artifact.thumbnailVersion == null ||
+        artifact.thumbnailVersion < artifact.currentVersion;
+      const key = `${id}:${artifact.currentVersion}`;
+      if (
+        !canEdit ||
+        !stale ||
+        version !== artifact.currentVersion ||
+        thumbAsked.has(key)
+      )
         return;
-      if (d.requestThumbnail()) thumbAsked.add(id);
+      if (d.requestThumbnail()) thumbAsked.add(key);
     },
     onThumb(blob: Blob) {
       if (!canEdit || blob.size > LIMITS.thumbnailBytes) return;
-      d.put(R.thumbnail(id), blob, "image/webp").then(
+      if (version !== artifact.currentVersion) return;
+      d.put(`${R.thumbnail(id)}?v=${version}`, blob, "image/webp").then(
         () => d.invalidate("thumbnail"),
-        (e) => console.debug("thumbnail upload failed", e),
+        (e) => {
+          // 409: the server already holds a newer thumbnail.
+          if ((e as { status?: number } | null)?.status === 409)
+            d.invalidate("thumbnail");
+          else console.debug("thumbnail upload failed", e);
+        },
       );
     },
     onPdfText(text: string) {
@@ -92,7 +107,7 @@ export function useArtifactSideEffects(
   latest.current = { info, requestThumbnail };
   const id = artifact.id;
   // Rebuilt only when the artifact's identity, version or rights change.
-  const key = `${id}:${version}:${artifact.currentVersion}:${artifact.access}:${artifact.thumbnailUrl}`;
+  const key = `${id}:${version}:${artifact.currentVersion}:${artifact.access}:${artifact.thumbnailVersion}`;
   // biome-ignore lint/correctness/useExhaustiveDependencies: keyed by `key`
   const fx = useMemo(
     () =>
