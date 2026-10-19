@@ -23,6 +23,9 @@ From `packages/ui`, always through the script:
 pnpm shadcn:add <name…>
 ```
 
+When the CLI asks to overwrite an existing file (e.g. `button.tsx`, pulled
+in as a dependency), answer no: our copies carry local changes.
+
 It runs the pinned CLI (`shadcn@4.22.1`), pins any dependency ranges the CLI
 saved (`^x` becomes the installed version; a test rejects ranges), and runs
 `biome check --write` on `src/shadcn`.
@@ -58,13 +61,31 @@ saved (`^x` becomes the installed version; a test rejects ranges), and runs
   (`--oa-border-strong`, ≥ 3:1) in both themes, not `border-border`. Input
   drops `dark:bg-input/30`, so its placeholder stays ≥ 4.5:1.
 
-Real-browser checks (axe incl. color-contrast, and every focus outline, in
-both themes): `pnpm --filter @oa/ui test:browser` (Playwright Chromium).
+Real-browser checks: `pnpm --filter @oa/ui test:browser` builds Ladle and
+drives the "shadcn / a11y fixture" story in Playwright Chromium, in both
+themes: axe incl. color-contrast, outlined borders, a Tab walk over every
+focus outline, and each overlay opened from the keyboard.
+
+- **Overlays (select, dialog, dropdown-menu, tabs, toggle, scroll-area):**
+  the same solid outline replaces every `ring-ring/50` and `focus:ring-2`;
+  menu and select items, and the scroll-area viewport, use it inset
+  (`-outline-offset-2`). Tabs panels get it too, and inactive tab triggers use
+  `text-muted-foreground` instead of `text-foreground/60` (below 4.5:1 in
+  light). Select's trigger drops `dark:bg-input/30` like Input.
+- **State indicators:** shadcn's on/active/selected states used `--accent`
+  and `--muted`, about 1.05:1 against their surroundings. Toggle and
+  ToggleGroup "on" is `bg-brand-soft text-brand-soft-foreground` with a 1px
+  inset `--brand` ring (5.88 light, 6.38 dark at worst). The active tab keeps
+  its `bg-background` fill and gets a 2px inset ink underline (`--foreground`,
+  15.3:1 on the list); the dark `bg-input/30` fill is gone. A selected table
+  row is `bg-brand-soft` with a 3px inset `--brand` bar on its first cell.
+  Menu and select highlights use `--accent`, now `--oa-sunken`, plus the
+  inset focus outline.
+- **sonner:** reads the theme from `useDataTheme()`
+  (`hooks/use-data-theme.ts`, `<html data-theme>` then the OS) instead of
+  `next-themes`, which is not a dependency.
 
 ### To fix when these components are added
-- **sonner:** it reads the theme from `next-themes`' `useTheme()`, which has no
-  provider here and ignores `data-theme`. Replace it with a hook that reads
-  `<html data-theme>` (and `prefers-color-scheme`), and drop `next-themes`.
 - **chart:** it scopes dark colors to `.dark`, which nothing sets. Change its
   `THEMES.dark` selector to ours: `:root[data-theme="dark"]` (plus the
   `prefers-color-scheme` case).
@@ -92,7 +113,7 @@ on a nested element doesn't switch the theme.
 | `--secondary-foreground` | `--oa-text` | |
 | `--muted` | `--oa-sunken` | |
 | `--muted-foreground` | `--oa-text-muted` | |
-| `--accent` | `--oa-surface-2` | shadcn's hover surface, not our accent |
+| `--accent` | `--oa-sunken` | shadcn's hover and menu-highlight surface, not our accent |
 | `--accent-foreground` | `--oa-text` | |
 | `--destructive` | `--oa-danger` | |
 | `--destructive-foreground` | `--oa-accent-text` | ≥ 4.5:1 on danger in both themes |
@@ -100,6 +121,7 @@ on a nested element doesn't switch the theme.
 | `--input` | `--oa-border-strong` | ≥ 3:1 for control boundaries |
 | `--ring` | `--oa-focus` | |
 | `--brand` | `--oa-accent` | Ours, not shadcn's: `bg-brand`/`text-brand` for state marks |
+| `--brand-soft`, `--brand-soft-foreground` | `--oa-accent-soft`, `--oa-accent-fg` | Ours: tinted state fills (toggle on, selected row) |
 | `--brand-foreground` | `--oa-accent-text` | Text on a brand fill |
 | `--radius` | `--oa-radius-md` | |
 | `--chart-1` … `--chart-5` | `--oa-accent`, `--oa-success`, `--oa-warning`, `--oa-danger`, `--oa-text-muted` | |

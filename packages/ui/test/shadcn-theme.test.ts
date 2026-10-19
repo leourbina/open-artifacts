@@ -52,6 +52,8 @@ const SHADCN_VARS = [
     // Ours: the Studio accent for state marks.
     "brand",
     "brand-foreground",
+    "brand-soft",
+    "brand-soft-foreground",
   ],
 ];
 
