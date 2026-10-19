@@ -61,6 +61,14 @@ describe("e2e.sh", () => {
       "PW_DIR=playwright-report/real",
     ]);
   });
+  it("ui runs the @oa/ui real-browser checks (axe contrast, focus)", () => {
+    const r = run("ui");
+    expect(r.code).toBe(0);
+    expect(r.sb.log()).toEqual([
+      "pnpm --filter @oa/ui test:browser",
+      "PW_DIR=",
+    ]);
+  });
   it("rejects an unknown step", () => {
     expect(run("deploy").code).toBe(2);
   });

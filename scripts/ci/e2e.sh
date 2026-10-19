@@ -4,6 +4,7 @@
 #   e2e.sh install  -> Chromium and WebKit with their OS deps
 #   e2e.sh hosts    -> app.localhost and content.localhost resolve to 127.0.0.1
 #   e2e.sh mock|real -> one suite, html report in playwright-report/<suite>
+#   e2e.sh ui       -> @oa/ui real-browser checks (axe contrast, focus outlines)
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 hosts_file="${HOSTS_FILE:-/etc/hosts}"
@@ -29,8 +30,11 @@ case "${1:-}" in
     PLAYWRIGHT_HTML_OUTPUT_DIR=playwright-report/real \
       pnpm --filter @oa/dashboard exec playwright test -c playwright.real.config.ts
     ;;
+  ui)
+    pnpm --filter @oa/ui test:browser
+    ;;
   *)
-    echo "usage: e2e.sh version|install|hosts|mock|real" >&2
+    echo "usage: e2e.sh version|install|hosts|mock|real|ui" >&2
     exit 2
     ;;
 esac
