@@ -1,9 +1,15 @@
 import { type Member, R } from "@oa/shared";
 import { fixtures } from "@oa/shared/mocks";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { delay, HttpResponse, http } from "msw";
 import { describe, expect, it } from "vitest";
-import { installHarness, mount, server, wait } from "./harness";
+import { installHarness, mount, server } from "./harness";
 
 installHarness();
 
@@ -242,11 +248,18 @@ describe("members: failures and edge cases", () => {
 
   it("Enter in the invite form submits it, once while pending", async () => {
     let posts = 0;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
     server.use(
       http.post(`*${R.members}`, async () => {
         posts++;
-        await delay(50);
-        return HttpResponse.json(mk("n1", "new@example.com", "member"));
+        await gate;
+        return HttpResponse.json({
+          ...mk("n1", "new@example.com", "member"),
+          emailed: false,
+        });
       }),
     );
     mount("/settings/members");
@@ -254,11 +267,18 @@ describe("members: failures and edge cases", () => {
     const input = await screen.findByLabelText("Email");
     fireEvent.change(input, { target: { value: "new@example.com" } });
     const form = input.closest("form") as HTMLFormElement;
-    // jsdom submits a form's default button on Enter via its `form=` owner.
-    fireEvent.click(screen.getByRole("button", { name: "Add member" }));
-    await waitFor(() => expect(posts).toBe(1));
+    // Two Enters before React re-renders: neither sees `isPending` yet.
+    act(() => {
+      fireEvent.submit(form);
+      fireEvent.submit(form);
+    });
+    await waitFor(() => expect(posts).toBeGreaterThanOrEqual(1));
+    // A third while the request is still in flight.
     fireEvent.submit(form);
-    await wait(100);
+    release();
+    await screen.findByRole("heading", {
+      name: "new@example.com can now sign in",
+    });
     expect(posts).toBe(1);
   });
 

@@ -151,14 +151,21 @@ function InviteDialog({ onClose }: { onClose: () => void }) {
     email: string;
     emailed: boolean;
   } | null>(null);
+  // Set synchronously: `isPending` only turns true on the next render, so two
+  // submits in one tick (a fast double Enter) would both pass that check.
+  const sending = useRef(false);
   const submit = () => {
-    if (invite.isPending) return;
+    if (sending.current || invite.isPending) return;
     const parsed = parseInviteEmail(email);
     if (!parsed) return setError("Enter a valid email address (ASCII only).");
     setError(null);
+    sending.current = true;
     invite.mutate(
       { email: parsed, role },
       {
+        onSettled: () => {
+          sending.current = false;
+        },
         onSuccess: (r) => setAdded({ email: parsed, emailed: r.emailed }),
         onError: (e) =>
           setError(e instanceof ApiClientError ? e.message : "Couldn't add."),
