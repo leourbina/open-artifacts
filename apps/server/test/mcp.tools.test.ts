@@ -487,6 +487,125 @@ describe("MCP request limits and roles (PAT)", () => {
     expect(await r.text()).toContain("Published");
   });
 
+  /**
+   * A POST of `body` with Content-Length, streamed in 1 KB chunks; `state`
+   * counts the bytes the server pulled and whether it cancelled the rest.
+   */
+  const metered = (body: string) => {
+    const bytes = new TextEncoder().encode(body);
+    const state = { read: 0, cancelled: false };
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        pull(c) {
+          if (state.read >= bytes.length) return c.close();
+          const n = Math.min(1024, bytes.length - state.read);
+          c.enqueue(bytes.slice(state.read, state.read + n));
+          state.read += n;
+        },
+        cancel() {
+          state.cancelled = true;
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    const res = post(stream, { "content-length": String(bytes.length) });
+    return { res, state, size: bytes.length };
+  };
+  const escapeHeavy = (n: number) => '"\\'.repeat(n / 2);
+  const rpc = (params: unknown, id: unknown = 7) =>
+    JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params });
+  const PUBLISH_CAP = 2 * LIMITS.inlineBytes + 64 * 1024;
+  const tooLargeText = `too_large: ${INLINE_TOO_LARGE_MESSAGE}`;
+
+  it("an oversize publish_artifact (name before arguments) gets too_large from a 4 KB peek", async () => {
+    const body = rpc(
+      {
+        name: "publish_artifact",
+        arguments: {
+          title: "big",
+          format: "html",
+          content: escapeHeavy(250 * 1024),
+        },
+      },
+      "req-9",
+    );
+    const { res, state, size } = metered(body);
+    expect(size).toBeGreaterThan(PUBLISH_CAP);
+    const r = await res;
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toMatch(/^application\/json/);
+    expect(await r.json()).toEqual({
+      jsonrpc: "2.0",
+      id: "req-9",
+      result: {
+        isError: true,
+        content: [{ type: "text", text: tooLargeText }],
+      },
+    });
+    expect(state.read).toBeLessThanOrEqual(4 * 1024);
+    expect(state.cancelled).toBe(true);
+  });
+
+  it("arguments before name: no peek, the full parse still answers too_large", async () => {
+    const body = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 8,
+      method: "tools/call",
+      params: {
+        arguments: {
+          title: "big",
+          format: "html",
+          content: escapeHeavy(250 * 1024),
+        },
+        name: "publish_artifact",
+      },
+    });
+    const { res, state, size } = metered(body);
+    const r = await res;
+    expect(r.status).toBe(200);
+    expect(await r.text()).toContain(JSON.stringify(tooLargeText).slice(1, -1));
+    expect(state.read).toBe(size);
+  });
+
+  it("a batch is never peeked: the body is read in full", async () => {
+    const body = `[${rpc({
+      name: "publish_artifact",
+      arguments: {
+        title: "big",
+        format: "html",
+        content: escapeHeavy(250 * 1024),
+      },
+    })}]`;
+    const { res, state, size } = metered(body);
+    const r = await res;
+    expect(await r.text()).not.toContain('"id":7,"result":{"isError":true');
+    expect(state.read).toBe(size);
+  });
+
+  it("another tool over the publish cap (a 900 KB artifact_data_set doc) is unaffected", async () => {
+    const id = (await publishMd(client, "# big doc")).id;
+    const body = rpc({
+      name: "artifact_data_set",
+      arguments: {
+        id,
+        collection: "big",
+        docId: "a",
+        data: { text: "x".repeat(900 * 1024) },
+      },
+    });
+    const { res, state, size } = metered(body);
+    expect(size).toBeGreaterThan(PUBLISH_CAP);
+    const r = await res;
+    expect(r.status).toBe(200);
+    const text = await r.text();
+    const msg = JSON.parse(
+      (/^data: (.*)$/m.exec(text)?.[1] ?? text) as string,
+    ) as { result: { isError?: boolean; structuredContent?: { id?: string } } };
+    expect(msg.result.isError).toBeUndefined();
+    expect(msg.result.structuredContent?.id).toBe("a");
+    expect(state.read).toBe(size);
+  });
+
   it("a guest's PAT → 401 with the resource-metadata challenge", async () => {
     const g = await login(`mcp-guest-${tag}@x.com`, "guest");
     const { token } = await createPat(env, g.userId, "g");

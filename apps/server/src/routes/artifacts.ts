@@ -12,7 +12,7 @@ import {
 import type { Context } from "hono";
 import { caller, requireAccess, requireUser } from "../auth/authz.js";
 import { publicPrefix, signContent } from "../content/signing.js";
-import { readCapped } from "../http/body.js";
+import { MAX_PUBLISH_BODY, readCapped } from "../http/body.js";
 import { ApiError, contentOrigin } from "../http/errors.js";
 import { type AppEnv, execCtx } from "../http/middleware.js";
 import {
@@ -33,12 +33,9 @@ import { putExtractedText } from "../services/search.js";
 import { utf8Decoder } from "../util/text.js";
 import type { AppType } from "./index.js";
 
-// JSON escaping at most doubles inline text (`"` and `\`; base64 is 4/3), plus
-// 64 KB for the rest of the body. A body past it can only be oversize inline
-// content: 413 with the upload hint, from Content-Length before it is read or
-// parsed, so an oversize burst costs no JSON.parse. (Text of control
-// characters, escaped 6×, can be refused under the limit; uploads take it.)
-const MAX_BODY = 2 * LIMITS.inlineBytes + 64 * 1024;
+// MAX_PUBLISH_BODY: past it, 413 with the upload hint from Content-Length,
+// before the body is read or parsed (an oversize burst costs no JSON.parse).
+const MAX_BODY = MAX_PUBLISH_BODY;
 const ARTIFACT = "/api/v1/artifacts/:id";
 const VERSIONS = `${ARTIFACT}/versions`;
 const VERSION_FILE = `${VERSIONS}/:v/files/*`;
