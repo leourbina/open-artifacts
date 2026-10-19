@@ -45,18 +45,22 @@ async function takeSlot(env: Env, userId: string, now: number) {
   return !!u?.results.length && !!all?.results.length;
 }
 
-/** Sends `content` to the (already validated) address `to` on behalf of `userId`. */
+/**
+ * Sends `render()` to the (already validated) address `to` on behalf of
+ * `userId`. Rendering runs inside the guard, so a template error is `false`.
+ */
 export async function sendEmail(
   env: Env,
   userId: string,
   to: string,
-  content: EmailContent,
+  render: () => EmailContent,
   now = Date.now(),
 ): Promise<boolean> {
   const { EMAIL, EMAIL_FROM } = env;
   if (!EMAIL || !EMAIL_FROM) return false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
+    const content = render();
     if (!(await takeSlot(env, userId, now))) return false;
     await Promise.race([
       EMAIL.send({ from: EMAIL_FROM, to, ...content }),

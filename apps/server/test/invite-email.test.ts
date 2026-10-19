@@ -92,8 +92,9 @@ describe("invite email", () => {
     const s = m.sent[0] as Sent;
     expect(s.to).toBe(email);
     expect(s.from).toBe(FROM);
-    expect(s.text).toContain("https://app.localhost/");
-    expect(s.html).toContain('href="https://app.localhost/"');
+    expect(s.text).toContain("https://app.localhost/sign-in");
+    expect(s.html).toContain('href="https://app.localhost/sign-in"');
+    expect(s.subject).toContain("added you to");
   });
 
   it("missing EMAIL or EMAIL_FROM gives emailed:false", async () => {
@@ -224,7 +225,7 @@ describe("share email", () => {
     const s = m.sent[0] as Sent;
     expect(s.to).toBe(email);
     expect(s.html).toContain("Plan &lt;img");
-    expect(s.html).not.toContain("<img");
+    expect(s.html).not.toContain("<img src=x");
     expect(s.html).toContain(`href="https://app.localhost/a/${id}"`);
     // A role change on the existing share sends nothing.
     const again = await call(e, R.shares(id), o.cookie, "PUT", {

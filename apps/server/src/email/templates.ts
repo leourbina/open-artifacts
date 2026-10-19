@@ -1,7 +1,15 @@
-// Minimal invite/share email templates, kept in one module so they are easy to
-// replace. Every interpolated value is untrusted: HTML-escaped in `html`, and
-// stripped of control characters (CR/LF included) and length-capped in
-// `subject` and `text`, so nothing can inject headers or markup.
+// Invite/share emails rendered from Design's templates (design/emails/, bundled
+// by scripts/emit-email-templates.ts). Every value is untrusted: stripped of
+// control characters (CR/LF included) and length-capped everywhere, then
+// HTML-escaped for the .html part, so nothing can inject headers or markup.
+import type { Format, ShareRole } from "@oa/shared";
+import { escapeHtml } from "../mcp/template.js";
+import {
+  INVITE_HTML,
+  INVITE_TXT,
+  SHARE_HTML,
+  SHARE_TXT,
+} from "./email-templates.js";
 
 export type EmailContent = { subject: string; text: string; html: string };
 
@@ -18,62 +26,125 @@ export function oneLine(s: string, max: number): string {
   return cps.length <= max ? t : `${cps.slice(0, max - 1).join("")}…`;
 }
 
-const esc = (s: string) =>
-  s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-
 const SUBJECT_MAX = 150;
 const NAME_MAX = 80;
 const TITLE_MAX = 200;
+const URL_MAX = 2000;
+const PLACEHOLDER = /\{\{([A-Za-z]+)\}\}/g;
 
-function layout(lead: string, cta: string, url: string): string {
-  return `<!doctype html><html><body style="font-family:system-ui,sans-serif;line-height:1.5;color:#111">
-<p>${lead}</p>
-<p><a href="${esc(url)}" style="display:inline-block;padding:8px 16px;background:#111;color:#fff;text-decoration:none;border-radius:6px">${cta}</a></p>
-<p style="color:#666;font-size:13px">Or open ${esc(url)}</p>
-</body></html>`;
+/**
+ * Fills every `{{name}}` with `encode(value)`. Throws on a placeholder without
+ * a value or any malformed `{{`, so a template change can't ship unfilled.
+ */
+export function fill(
+  template: string,
+  values: Record<string, string>,
+  encode: (s: string) => string = (s) => s,
+): string {
+  const all = template.split("{{").length - 1;
+  if ((template.match(PLACEHOLDER) ?? []).length !== all)
+    throw new Error("malformed template placeholder");
+  return template.replace(PLACEHOLDER, (_, k: string) => {
+    const v = values[k];
+    if (v === undefined)
+      throw new Error(`template placeholder {{${k}}} has no value`);
+    return encode(v);
+  });
 }
 
-/** A member invite; `url` must be the instance's https app origin. */
-export function inviteEmail(p: {
+/** An absolute https URL on `origin` only. */
+const linkOn = (origin: string, path: string): string => {
+  const url = new URL(origin + path);
+  if (
+    !path.startsWith("/") ||
+    url.origin !== origin ||
+    url.href.length > URL_MAX
+  )
+    throw new Error("email links must be https on the app host");
+  return url.href;
+};
+
+const FORMAT_LABEL: Record<Format, string> = {
+  html: "HTML page",
+  markdown: "Markdown doc",
+  code: "Code",
+  pdf: "PDF",
+};
+const ROLE_LABEL: Record<ShareRole, string> = {
+  viewer: "Viewer",
+  editor: "Editor",
+};
+
+type Common = {
   inviter: string;
   instance: string;
-  url: string;
-}): EmailContent {
-  const inviter = oneLine(p.inviter, NAME_MAX);
-  const instance = oneLine(p.instance, NAME_MAX);
+  /** The validated recipient address. */
+  recipient: string;
+  /** The app host (no scheme); links and the logo point only here. */
+  appHost: string;
+};
+
+function common(p: Common) {
+  const url = new URL(`https://${p.appHost}/`);
+  if (url.host !== p.appHost.toLowerCase()) throw new Error("invalid app host");
+  const origin = url.origin;
   return {
-    subject: oneLine(`${inviter} invited you to ${instance}`, SUBJECT_MAX),
-    text: `${inviter} invited you to join ${instance} on Open Artifacts.\n\nSign in: ${p.url}\n`,
-    html: layout(
-      `<strong>${esc(inviter)}</strong> invited you to join <strong>${esc(instance)}</strong> on Open Artifacts.`,
-      "Sign in",
-      p.url,
-    ),
+    origin,
+    values: {
+      inviterName: oneLine(p.inviter, NAME_MAX),
+      instanceName: oneLine(p.instance, NAME_MAX),
+      recipientEmail: oneLine(p.recipient, 320),
+      appHost: url.host,
+      logoUrl: linkOn(origin, "/email/logo@2x.png"),
+    },
   };
 }
 
-/** An artifact shared with a non-member; `url` is its https viewer URL. */
-export function shareEmail(p: {
-  inviter: string;
-  instance: string;
-  title: string;
-  url: string;
-}): EmailContent {
-  const inviter = oneLine(p.inviter, NAME_MAX);
-  const instance = oneLine(p.instance, NAME_MAX);
-  const title = oneLine(p.title, TITLE_MAX);
+function render(
+  html: string,
+  txt: string,
+  subject: string,
+  values: Record<string, string>,
+): EmailContent {
   return {
-    subject: oneLine(`${inviter} shared "${title}" with you`, SUBJECT_MAX),
-    text: `${inviter} shared "${title}" with you on ${instance}.\n\nOpen it: ${p.url}\n`,
-    html: layout(
-      `<strong>${esc(inviter)}</strong> shared <strong>${esc(title)}</strong> with you on ${esc(instance)}.`,
-      "Open",
-      p.url,
-    ),
+    subject: oneLine(fill(subject, values), SUBJECT_MAX),
+    text: fill(txt, values),
+    html: fill(html, values, escapeHtml),
   };
+}
+
+/** A member invite, linking to the instance's sign-in page. */
+export function inviteEmail(p: Common): EmailContent {
+  const { origin, values } = common(p);
+  return render(
+    INVITE_HTML,
+    INVITE_TXT,
+    "{{inviterName}} added you to {{instanceName}}",
+    { ...values, signInUrl: linkOn(origin, "/sign-in") },
+  );
+}
+
+/** An artifact shared with a non-member, linking to its viewer URL. */
+export function shareEmail(
+  p: Common & {
+    title: string;
+    /** Viewer path on the app host, e.g. `/a/<id>`. */
+    path: string;
+    format: Format;
+    role: ShareRole;
+  },
+): EmailContent {
+  const { origin, values } = common(p);
+  return render(
+    SHARE_HTML,
+    SHARE_TXT,
+    "{{inviterName}} shared “{{artifactTitle}}” with you",
+    {
+      ...values,
+      artifactTitle: oneLine(p.title, TITLE_MAX),
+      artifactUrl: linkOn(origin, p.path),
+      artifactFormat: FORMAT_LABEL[p.format],
+      role: ROLE_LABEL[p.role],
+    },
+  );
 }

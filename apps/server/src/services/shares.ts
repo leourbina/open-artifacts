@@ -1,4 +1,5 @@
 import {
+  type Format,
   type Member,
   type Share,
   type ShareResult,
@@ -87,15 +88,16 @@ export async function putShare(
   const created = row.createdAt === now;
   return {
     ...toShare(row),
-    emailed: created && (await emailShare(env, user, artifact, email)),
+    emailed: created && (await emailShare(env, user, artifact, email, s.role)),
   };
 }
 
 async function emailShare(
   env: Env,
   user: Member,
-  artifact: { id: string; title: string },
+  artifact: { id: string; title: string; format: string },
   email: string,
+  role: ShareRole,
 ): Promise<boolean> {
   if (!emailEnabled(env)) return false;
   try {
@@ -104,15 +106,16 @@ async function emailShare(
       getSettings(env),
     ]);
     if (member) return false;
-    return await sendEmail(
-      env,
-      user.id,
-      email,
+    return await sendEmail(env, user.id, email, () =>
       shareEmail({
         inviter: user.name || user.email,
         instance: settings.name,
+        recipient: email,
+        appHost: env.APP_HOST,
         title: artifact.title,
-        url: `https://${env.APP_HOST}${viewerPath(artifact.id)}`,
+        path: viewerPath(artifact.id),
+        format: artifact.format as Format,
+        role,
       }),
     );
   } catch {

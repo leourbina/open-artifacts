@@ -4,6 +4,7 @@
 //                                                then a placeholder index.html)
 //   packages/render/dist/*  → dist-assets/_oa/  (when built; B11)
 //   packages/runtime/dist/* → dist-assets/_oa/  (when built; B13)
+//   design/emails/logo@2x.png → dist-assets/email/ (invite/share email logo)
 // Flags (for tests): --root <repo root> --out <output dir>.
 import {
   cpSync,
@@ -72,4 +73,10 @@ for (const pkg of ["render", "runtime"]) {
   if (existsSync(vite) && !existsSync(path.join(oa, name)))
     cpSync(vite, path.join(oa, name));
 }
+const logo = path.join(root, "design", "emails", "logo@2x.png");
+if (existsSync(logo)) {
+  mkdirSync(path.join(out, "email"), { recursive: true });
+  cpSync(logo, path.join(out, "email", "logo@2x.png"));
+} else
+  console.warn("assemble-assets: design/emails/logo@2x.png missing; skipping");
 console.log(`assemble-assets: wrote ${path.relative(root, out)}`);
