@@ -2,7 +2,7 @@ import { R } from "@oa/shared";
 import { fixtures } from "@oa/shared/mocks";
 import { screen, waitFor } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installHarness, mount, server } from "./harness";
 
 installHarness();
@@ -26,6 +26,13 @@ const asRole = (role: "admin" | "member" | "guest") =>
   );
 
 describe("usage", () => {
+  // The default mock reports "today"; pin the clock so the date never drifts.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-18T12:00:00Z"));
+  });
+  afterEach(() => vi.useRealTimers());
+
   it("shows setup steps when analytics is not available", async () => {
     server.use(
       http.get(`*${R.usage}`, () =>
