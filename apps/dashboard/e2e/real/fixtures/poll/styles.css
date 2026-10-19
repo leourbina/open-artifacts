@@ -1,0 +1,24 @@
+body {
+  font:
+    15px / 1.5 system-ui,
+    sans-serif;
+  margin: 2rem auto;
+  max-width: 32rem;
+  padding: 0 1rem;
+}
+button.vote {
+  font: inherit;
+  padding: 0.4rem 1rem;
+  margin-right: 0.5rem;
+}
+#results li {
+  list-style: none;
+  padding: 0.15rem 0;
+}
+#status {
+  color: #484;
+}
+#err {
+  color: #b00;
+  min-height: 1.2em;
+}
