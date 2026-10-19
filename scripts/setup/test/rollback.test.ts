@@ -184,6 +184,21 @@ describe("--rollback", () => {
     expect(w.ops).toEqual([]);
   });
 
+  it("an unreadable live version says why; a 403 names the token permission", async () => {
+    const o: Parameters<typeof world>[0] = {};
+    const w = await twice(o);
+    o.deploymentsFail = true;
+    expect(await run(ROLLBACK, w.deps, ROOT)).toBe(2);
+    expect(last(w).message).toContain("internal error");
+    expect(last(w).message).not.toContain("Workers Scripts Read");
+    o.deploymentsFail = false;
+    o.deploymentsForbidden = true;
+    w.lines.length = 0;
+    expect(await run(ROLLBACK, w.deps, ROOT)).toBe(2);
+    expect(last(w).message).toContain("Authentication error");
+    expect(last(w).message).toContain("Workers Scripts Read");
+  });
+
   it("a --name or --account-id that differs from state is a usage error", async () => {
     const w = await twice();
     for (const extra of [

@@ -82,14 +82,20 @@ export async function rollbackCommand(
   }
   const wrangler = makeWrangler(deps, root, () => accountId);
   let live: string | undefined;
+  let readError: string | undefined;
   try {
     live = await currentVersion(makeApi(deps, wrangler), name, accountId ?? "");
-  } catch {}
+  } catch (e) {
+    readError = (e as Error).message;
+  }
   if (!live || live !== state.workerVersion) {
+    const why = readError
+      ? ` (${readError}${/\b40[13]\b/.test(readError) ? "; the token needs Workers Scripts Read" : ""})`
+      : "";
     report(
       "action_required",
       "rollback",
-      `the live Worker (${live ?? "unreadable"}) isn't the one setup last deployed; ${dashboard}`,
+      `the live Worker (${live ?? "unreadable"}${why}) isn't the one setup last deployed; ${dashboard}`,
     );
     return 2;
   }

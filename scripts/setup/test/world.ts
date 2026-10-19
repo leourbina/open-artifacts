@@ -123,6 +123,8 @@ type World = {
   rollbackFails?: string;
   /** The live deployment splits traffic 50/50 across two versions. */
   splitDeployment?: boolean;
+  /** GET deployments answers 403 (a token without Workers Scripts Read). */
+  deploymentsForbidden?: boolean;
   /** GET deployments answers 500. */
   deploymentsFail?: boolean;
 };
@@ -701,6 +703,8 @@ export function world(w: World = {}) {
           q,
         );
       if (p.match(/\/workers\/scripts\/[^/]+\/deployments$/) && m === "GET") {
+        if (w.deploymentsForbidden)
+          return envelope(null, 403, [{ message: "Authentication error" }]);
         if (w.deploymentsFail)
           return envelope(null, 500, [{ message: "internal error" }]);
         if (!versions.length)
