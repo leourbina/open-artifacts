@@ -37,6 +37,7 @@ import { closeRuntimeSockets } from "../runtime/revoke.js";
 import { type ManifestEntry, materialize, planFiles } from "./manifest.js";
 import { getSettings } from "./members.js";
 import { ftsFilter, seedSearchStmt, syncTitleStmt } from "./search.js";
+import { writeThumbnail } from "./thumbs.js";
 
 type Ctx = Pick<ExecutionContext, "waitUntil">;
 const CAPS = { db: false, viewer: false, storage: false };
@@ -56,9 +57,10 @@ export async function enqueueIndex(
   env: Env,
   id: string,
   version: number,
+  thumb = false,
 ): Promise<void> {
   try {
-    await runtimeStub(env, id).scheduleIndex(id, version);
+    await runtimeStub(env, id).scheduleIndex(id, version, thumb);
   } catch (e) {
     console.error(
       JSON.stringify({
@@ -297,7 +299,7 @@ export async function publish(
       throw new ApiError("conflict", "An upload was already used");
     throw notFound();
   }
-  await enqueueIndex(env, id, version);
+  await enqueueIndex(env, id, version, true);
   if (accessChanged)
     await closeRuntimeSockets(env, [id], "access changed", ctx);
   return { id, version, url: appOrigin(env) + viewerPath(id) };
@@ -414,7 +416,12 @@ export function toSummary(
       a.lastAgentName == null
         ? null
         : { name: a.lastAgentName, version: a.lastAgentVersion },
-    thumbnailUrl: a.hasThumbnail ? appOrigin(env) + R.thumbnail(a.id) : null,
+    thumbnailUrl: a.hasThumbnail
+      ? appOrigin(env) +
+        R.thumbnail(a.id) +
+        (a.thumbnailVersion ? `?v=${a.thumbnailVersion}` : "")
+      : null,
+    thumbnailVersion: a.hasThumbnail ? (a.thumbnailVersion ?? null) : null,
     access,
     capabilities: { ...CAPS, ...(JSON.parse(a.capabilities) as object) },
     allowAnonymousWrites: a.allowAnonymousWrites === 1,
@@ -704,12 +711,15 @@ const isWebp = (b: Uint8Array) =>
  * Editor+ always. A viewer may set only the FIRST thumbnail, and only via a
  * share or a team role on a team artifact (never public visibility alone).
  * The first-thumbnail slot is claimed atomically before the R2 put.
+ * `version` is the version the image depicts (default: the current one); a
+ * thumbnail of a newer version already stored → 409 conflict (writeThumbnail).
  */
 export async function putThumbnail(
   env: Env,
   user: Member,
   id: string,
   bytes: Uint8Array,
+  version?: number,
 ): Promise<void> {
   const r = await accessLevel(env, asUser(user), id);
   if (!r) throw notFound();
@@ -727,13 +737,15 @@ export async function putThumbnail(
       r.artifact.visibility === "team" && TEAM_ROLES.includes(user.role);
     if (!shared && !team) throw notFound();
   }
+  const v = version ?? r.artifact.currentVersion;
+  if (v > r.artifact.currentVersion)
+    throw new ApiError("bad_request", "No such version");
   if (!isWebp(bytes)) throw new ApiError("bad_request", "Body must be WebP");
-  const key = `thumbs/${id}.webp`;
+  const stale = () =>
+    new ApiError("conflict", "A thumbnail of a newer version exists");
   if (editor) {
-    await env.FILES.put(key, bytes);
-    await env.DB.prepare("update artifacts set has_thumbnail = 1 where id = ?")
-      .bind(id)
-      .run();
+    if ((await writeThumbnail(env, id, v, bytes, "client")) === "stale")
+      throw stale();
     return;
   }
   const claimed = await env.DB.prepare(
@@ -742,14 +754,18 @@ export async function putThumbnail(
     .bind(id)
     .first();
   if (!claimed) throw notFound();
+  let result: "stored" | "stale";
   try {
-    await env.FILES.put(key, bytes);
+    result = await writeThumbnail(env, id, v, bytes, "client");
   } catch (e) {
-    await env.DB.prepare("update artifacts set has_thumbnail = 0 where id = ?")
+    await env.DB.prepare(
+      "update artifacts set has_thumbnail = 0 where id = ? and thumbnail_version is null",
+    )
       .bind(id)
       .run();
     throw e;
   }
+  if (result === "stale") throw stale();
 }
 
 /**
@@ -795,7 +811,7 @@ export async function restoreVersion(
   ]);
   const version = res[0]?.results[0]?.current_version;
   if (version === undefined) throw notFound();
-  await enqueueIndex(env, id, version);
+  await enqueueIndex(env, id, version, true);
   return { id, version, url: appOrigin(env) + viewerPath(id) };
 }
 

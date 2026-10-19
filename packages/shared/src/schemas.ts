@@ -168,6 +168,12 @@ export const ArtifactSummarySchema = z.object({
   deletedAt: z.string().nullable(),
   lastAgent: AgentRefSchema.nullable(),
   thumbnailUrl: z.string().nullable(),
+  /**
+   * The version the thumbnail depicts (server capture or client upload);
+   * null without a thumbnail or for one stored before versions were tracked.
+   * thumbnailUrl carries it as `?v=` so a new thumbnail busts caches.
+   */
+  thumbnailVersion: z.number().int().positive().nullable(),
   access: AccessLevelSchema,
   capabilities: CapabilitiesSchema,
   allowAnonymousWrites: z.boolean(),

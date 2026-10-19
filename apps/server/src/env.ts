@@ -8,6 +8,8 @@ export interface Env {
   ASSETS: Fetcher;
   /** Anonymous-write limiter (per IP); unbound in the test pool. */
   RL_ANON?: RateLimit;
+  /** Browser Run, for server-side thumbnails (services/thumbs.ts); optional. */
+  BROWSER?: Fetcher;
   // vars
   APP_HOST: string;
   CONTENT_HOST: string;

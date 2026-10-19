@@ -92,6 +92,8 @@ async function boot(): Promise<void> {
   } catch (e) {
     fail(e instanceof Error ? e.message : "Could not render the artifact.");
   }
+  // Readiness marker: server-side thumbnails screenshot once it is set.
+  document.documentElement.dataset.oaRendered = "";
 }
 
 if (
