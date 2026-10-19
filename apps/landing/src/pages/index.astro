@@ -1,7 +1,6 @@
 ---
 import { REPO_URL } from "@oa/shared";
-import LiveDesk from "../components/LiveDesk.astro";
-import SetupSteps from "../components/SetupSteps.astro";
+import AgentWiring from "../components/AgentWiring.astro";
 import Shot from "../components/Shot.astro";
 import Base from "../layouts/Base.astro";
 import { gatesFor } from "../lib/release";
@@ -75,13 +74,54 @@ const plans = [
       <p class="cta-note" role="status" aria-live="polite"></p>
     </div>
 
-    <LiveDesk />
+    <AgentWiring />
+
+    <figure class="frame hero-shot">
+      <Shot
+        name="library"
+        eager
+        sizes="(min-width: 1180px) 1120px, 100vw"
+        alt="The Open Artifacts library: a grid of artifacts with thumbnails, the agent that made each one, and its visibility."
+      />
+    </figure>
   </section>
 
   <section class="band" aria-labelledby="steps-h">
     <div class="wrap">
       <h2 id="steps-h">Set up in three steps</h2>
-      <SetupSteps prompt={prompt} />
+      <ol class="steps">
+        <li>
+          <h3>Tell your agent</h3>
+          <p>
+            Your agent reads llms.txt, checks the prerequisites, clones the latest release, and runs
+            pnpm install.
+          </p>
+          <span class="step-chip mono" aria-hidden="true"
+            ><span class="caret">{"\u203a"}</span> {prompt}</span
+          >
+        </li>
+        <li>
+          <h3>Sign in to Cloudflare</h3>
+          <p>
+            One step needs you: <code>npx wrangler login</code>. Setup then creates D1, R2 and KV and the
+            Access sign-in app, deploys to both domains, and adds the MCP server to your agent.
+          </p>
+          <span class="step-chip" aria-hidden="true">
+            Allow Wrangler to manage your account? <span class="mini-btn">Allow</span>
+          </span>
+        </li>
+        <li>
+          <h3>Publish and share</h3>
+          <p>
+            Your agent publishes a Welcome artifact and gives you the link. Later, ask it to write up the
+            Q4 data migration plan and share it with a teammate.
+          </p>
+          <span class="step-chip" aria-hidden="true">
+            <span class="mono">artifacts.example.com/a/7Hq3…</span>
+            <span class="badge team">Team</span>
+          </span>
+        </li>
+      </ol>
     </div>
   </section>
 
@@ -116,15 +156,7 @@ const plans = [
     </ul>
   </section>
 
-  <section class="wrap screens" aria-label="Screens">
-    <figure class="frame">
-      <Shot
-        name="library"
-        sizes="(min-width: 1180px) 1120px, 100vw"
-        alt="The Open Artifacts library: a grid of artifacts with thumbnails, the agent that made each one, and its visibility."
-      />
-      <figcaption>Everything your agents publish, in one library with search.</figcaption>
-    </figure>
+  <section class="wrap pair" aria-label="Screens">
     <figure class="frame">
       <Shot
         name="artifact"
