@@ -113,6 +113,16 @@ type World = {
   dropSendEmail?: boolean;
   /** GET worker settings answers 500. */
   settingsFail?: boolean;
+  /** Process env handed to the setup run. */
+  env?: Record<string, string>;
+  /** The live Worker's current version id before any deploy in this world. */
+  workerVersion?: string;
+  /** `wrangler deploy` fails with this stderr. */
+  deployFails?: string;
+  /** `wrangler rollback` fails with this stderr. */
+  rollbackFails?: string;
+  /** GET deployments answers 500. */
+  deploymentsFail?: boolean;
 };
 type Dns = { name: string; type: string; content: string };
 
@@ -193,6 +203,9 @@ export function world(w: World = {}) {
   const apps: Obj[] = [...(w.apps ?? [])];
   let secrets = w.secrets && [...w.secrets];
   let deployedConfig: string | undefined;
+  /** Live version ids, newest first; deploys add `ver-<n>`, rollbacks re-promote one. */
+  const versions: string[] = w.workerVersion ? [w.workerVersion] : [];
+  let deployCount = 0;
   let published = 0;
   const pubs: { id: string; title: string }[] = [];
   const deleted = [...(w.deletedArtifacts ?? [])];
@@ -356,6 +369,7 @@ export function world(w: World = {}) {
   };
   const c = core({
     answers: w.answers,
+    env: w.env,
     files: {
       [join(ROOT, TEMPLATE)]: readFileSync(join(realRoot, TEMPLATE), "utf8"),
       [join(ROOT, WELCOME)]: readFileSync(join(realRoot, WELCOME), "utf8"),
@@ -385,6 +399,9 @@ export function world(w: World = {}) {
       const exe = a.match(
         /^d1 execute ([\w-]+) --remote --json --command (.+)$/s,
       );
+      const rollback = a.match(
+        /^rollback (\S+) --message oa:setup --rollback -y$/,
+      );
       const mig = a.match(/^d1 migrations apply ([\w-]+) --remote$/);
       if (a.startsWith("secret list ")) {
         if (!secrets)
@@ -410,8 +427,16 @@ export function world(w: World = {}) {
           return { code: 1, stdout: "", stderr: (e as Error).message };
         }
       } else if (mig) ops.push(`migrate ${mig[1]}`);
-      else if (a === "deploy") {
+      else if (rollback) {
+        if (w.rollbackFails)
+          return { code: 1, stdout: "", stderr: w.rollbackFails };
+        ops.push(`rollback ${rollback[1]}`);
+        versions.unshift(rollback[1]);
+      } else if (a === "deploy") {
+        if (w.deployFails)
+          return { code: 1, stdout: "", stderr: w.deployFails };
         ops.push("deploy");
+        versions.unshift(`ver-${++deployCount}`);
         deployedConfig = c.files.get(join(ROOT, "apps/server/wrangler.jsonc"));
       } else if (a === "whoami --json") stdout = WHOAMI(acct.accounts);
       else if (a === "auth token --json")
@@ -672,6 +697,23 @@ export function world(w: World = {}) {
           acct.d1.filter((d) => d.name.includes(q("name") ?? "")),
           q,
         );
+      if (p.match(/\/workers\/scripts\/[^/]+\/deployments$/) && m === "GET") {
+        if (w.deploymentsFail)
+          return envelope(null, 500, [{ message: "internal error" }]);
+        if (!versions.length)
+          return envelope(null, 404, [
+            {
+              code: 10007,
+              message: "This Worker does not exist on your account.",
+            },
+          ]);
+        return envelope({
+          deployments: versions.map((v, i) => ({
+            id: `dep-${i}`,
+            versions: [{ version_id: v, percentage: 100 }],
+          })),
+        });
+      }
       const settings = p.match(/\/workers\/scripts\/([^/]+)\/settings$/);
       if (settings && m === "GET" && w.settingsFail)
         return envelope(null, 500, [{ message: "internal error" }]);

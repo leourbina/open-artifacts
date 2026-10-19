@@ -39,3 +39,21 @@ export async function deployedVars(
   );
   return PINNED.some((k) => vars.has(k)) ? vars : undefined;
 }
+
+type Deployments = {
+  deployments?: { versions?: { version_id: string; percentage: number }[] }[];
+};
+
+/**
+ * The version id serving 100% of traffic, from `GET .../workers/scripts/{name}/deployments`
+ * (newest first). Undefined when no Worker is deployed (404) or nothing is at 100%.
+ */
+export async function currentVersion(ctx: Ctx, accountId: string) {
+  const path = `/accounts/${accountId}/workers/scripts/${encodeURIComponent(ctx.opts.name)}/deployments`;
+  const res = await ctx.api<Deployments>("GET", path).catch((e) => {
+    if ((e as { status?: number }).status === 404) return undefined;
+    throw e;
+  });
+  return res?.deployments?.[0]?.versions?.find((v) => v.percentage === 100)
+    ?.version_id;
+}
