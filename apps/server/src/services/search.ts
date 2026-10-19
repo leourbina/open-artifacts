@@ -509,6 +509,7 @@ export async function search(
       a: artifacts,
       ownerEmail: users.email,
       ownerName: users.name,
+      ownerDisplayName: users.displayName,
       shareRole: shares.role,
       sb: snip(3),
       sd: snip(2),
@@ -539,7 +540,12 @@ export async function search(
           env,
           r.a,
           redact(
-            { id: r.a.ownerId, email: r.ownerEmail, name: r.ownerName },
+            {
+              id: r.a.ownerId,
+              email: r.ownerEmail,
+              name: r.ownerName,
+              displayName: r.ownerDisplayName,
+            },
             caller,
           ),
           r.a.ownerId === me

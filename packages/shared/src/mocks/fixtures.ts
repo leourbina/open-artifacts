@@ -119,6 +119,9 @@ export const fixtures: {
       appUrl: "https://app.example.com",
       mcpUrl: "https://app.example.com/mcp",
     },
+    displayName: null,
+    suggestedName: null,
+    needsDisplayName: false,
   },
   artifacts: [
     art(ID.landing, "Landing page", "html", {

@@ -32,7 +32,10 @@ export const users = sqliteTable(
   {
     id: text("id").primaryKey(),
     email: text("email").notNull().unique(),
+    /** IdP name (or the sign-in default); refreshed on every sign-in. */
     name: text("name").notNull(),
+    /** The name the user chose (PATCH /me); never touched by sign-in. */
+    displayName: text("display_name"),
     role: text("role").notNull(),
     createdAt: integer("created_at").notNull(),
     lastSeenAt: integer("last_seen_at"),
