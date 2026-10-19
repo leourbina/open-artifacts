@@ -55,6 +55,7 @@ const art = (
   deletedAt: null,
   lastAgent: agent,
   thumbnailUrl: null,
+  thumbnailVersion: null,
   access: "owner",
   capabilities: caps(),
   allowAnonymousWrites: false,
@@ -123,7 +124,8 @@ export const fixtures: {
     art(ID.landing, "Landing page", "html", {
       description: "Marketing mockup",
       currentVersion: 2,
-      thumbnailUrl: `/api/v1/artifacts/${ID.landing}/thumbnail`,
+      thumbnailUrl: `/api/v1/artifacts/${ID.landing}/thumbnail?v=2`,
+      thumbnailVersion: 2,
     }),
     art(ID.notes, "Meeting notes", "markdown", { visibility: "team" }),
     art(ID.script, "Parser script", "code", { currentVersion: 25 }),

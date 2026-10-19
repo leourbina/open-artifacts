@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { LIMITS } from "@oa/shared";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderCode } from "../src/code";
 import { prepareMarkdown, renderMarkdown } from "../src/markdown";
 import { truncateUtf8, versionFromPath } from "../src/shell";
@@ -177,5 +177,34 @@ describe("entryUrl", () => {
     expect(
       entryUrl("docs/a b#1.md", "https://c.test/s/tok/abc/v3/__view"),
     ).toBe("https://c.test/s/tok/abc/v3/docs/a%20b%231.md");
+  });
+});
+
+describe("boot readiness marker", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    document.head.innerHTML = "";
+    document.documentElement.removeAttribute("data-oa-rendered");
+  });
+
+  // Server-side thumbnails (apps/server services/thumbs.ts) wait for it.
+  it("sets <html data-oa-rendered> only once the artifact is rendered", async () => {
+    document.head.innerHTML =
+      '<meta name="oa-format" content="code"><meta name="oa-entry" content="main.txt"><meta name="oa-language" content="text">';
+    let release: (r: Response) => void = () => {};
+    vi.stubGlobal("fetch", () => new Promise<Response>((r) => (release = r)));
+    vi.resetModules();
+    await import("../src/index");
+    await new Promise((r) => setTimeout(r, 10));
+    expect(document.documentElement.hasAttribute("data-oa-rendered")).toBe(
+      false,
+    );
+    release(new Response("readybody"));
+    await vi.waitFor(() =>
+      expect(document.documentElement.hasAttribute("data-oa-rendered")).toBe(
+        true,
+      ),
+    );
+    expect(document.body.textContent).toContain("readybody");
   });
 });

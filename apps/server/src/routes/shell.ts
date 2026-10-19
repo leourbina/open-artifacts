@@ -6,6 +6,7 @@ import { artifacts } from "../db/schema.js";
 import type { Env } from "../env.js";
 import { appOrigin } from "../http/errors.js";
 import type { AppEnv } from "../http/middleware.js";
+import { getSettings } from "../services/members.js";
 import type { AppType } from "./index.js";
 
 const SITE = "Open Artifacts";
@@ -79,12 +80,62 @@ function metaTags(og: Og): string {
   ].join("");
 }
 
+const NAME_TTL_MS = 60_000;
+/** Per isolate (per D1 binding); the name is display-only, never authz. */
+const nameMemo = new WeakMap<D1Database, { name: string; at: number }>();
+
+/**
+ * Shell contract for the dashboard: every SPA shell HTML response carries
+ * `<meta name="oa-instance" content="<settings.name>">` in its <head> (omitted
+ * if the settings read fails), so signed-out pages can show the instance name.
+ * The name is memoized per isolate for 60 s, so it may be up to 60 s stale.
+ */
+export async function instanceMeta(
+  env: Env,
+  now = Date.now(),
+): Promise<string> {
+  let m = nameMemo.get(env.DB);
+  if (!m || now - m.at >= NAME_TTL_MS) {
+    try {
+      m = { name: (await getSettings(env)).name, at: now };
+    } catch {
+      return "";
+    }
+    nameMemo.set(env.DB, m);
+  }
+  return `<meta name="oa-instance" content="${esc(m.name)}">`;
+}
+
+/** SPA fallback: injects the instance meta into an HTML shell response. */
+export async function withInstanceMeta(
+  env: Env,
+  res: Response,
+): Promise<Response> {
+  if (!res.ok || !res.headers.get("content-type")?.startsWith("text/html"))
+    return res;
+  const meta = await instanceMeta(env);
+  if (!meta) return res;
+  const headers = new Headers(res.headers);
+  // The body changed: the asset's length and validator no longer apply.
+  headers.delete("content-length");
+  headers.delete("etag");
+  const body = new HTMLRewriter()
+    .on("head", {
+      element(e) {
+        e.append(meta, { html: true });
+      },
+    })
+    .transform(res).body;
+  return new Response(body, { status: res.status, headers });
+}
+
 export function mountShell(app: AppType): void {
   const shell = async (c: Context<AppEnv>, id: string, v?: number) => {
-    const og = await publicOg(c.env, id, v);
-    const index = await c.env.ASSETS.fetch(
-      new Request(new URL("/", c.req.url)),
-    );
+    const [og, meta, index] = await Promise.all([
+      publicOg(c.env, id, v),
+      instanceMeta(c.env),
+      c.env.ASSETS.fetch(new Request(new URL("/", c.req.url))),
+    ]);
     if (!index.ok) return index;
     const rewritten = new HTMLRewriter()
       .on("title", {
@@ -94,7 +145,7 @@ export function mountShell(app: AppType): void {
       })
       .on("head", {
         element(e) {
-          if (og) e.append(metaTags(og), { html: true });
+          e.append(meta + (og ? metaTags(og) : ""), { html: true });
         },
       })
       .transform(index);

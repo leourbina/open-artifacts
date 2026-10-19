@@ -18,6 +18,7 @@ const summary = {
   deletedAt: null,
   lastAgent: null,
   thumbnailUrl: null,
+  thumbnailVersion: null,
   access: "owner",
   capabilities: { db: false, viewer: false, storage: false },
   allowAnonymousWrites: false,

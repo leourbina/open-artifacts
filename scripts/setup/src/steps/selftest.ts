@@ -139,7 +139,21 @@ async function content(ctx: Ctx, token: string, id: string): Promise<string> {
   // The signed URL is a bearer capability: report only its origin.
   const shown = `${new URL(url).origin}/…`;
   const res2 = await until200(ctx, "welcome content", url, undefined, shown);
-  const body = await res2.text();
+  let body = await res2.text();
+  // Markdown is served as a render shell that loads its entry file next to
+  // the view URL (packages/render entryUrl); check that file instead.
+  const entry = body.match(/<meta name="oa-entry" content="([^"]+)">/)?.[1];
+  if (entry) {
+    const file = entry.split("/").map(encodeURIComponent).join("/");
+    const res3 = await until200(
+      ctx,
+      "welcome content",
+      new URL(file, url).href,
+      undefined,
+      shown,
+    );
+    body = await res3.text();
+  }
   if (!body.includes(TITLE))
     throw new Error(`welcome content at ${shown} lacks "${TITLE}"`);
   return shown;

@@ -270,14 +270,30 @@ export function mountArtifacts(app: AppType): void {
     });
   });
 
+  /**
+   * PUT thumbnail (image/webp, ≤ LIMITS.thumbnailBytes). Optional `?v=` is
+   * the version the image depicts (default: the current one). A thumbnail is
+   * only replaced by one of the same or a newer version: an upload for an
+   * older version than the stored thumbnail answers 409 conflict (so a client
+   * knows its image was not used), never silently ignored.
+   */
   app.put(`${ARTIFACT}/thumbnail`, async (c) => {
     const user = requireUser(c);
     const id = idParam(c);
+    const vq = c.req.query("v");
+    if (vq !== undefined && !/^[1-9]\d{0,8}$/.test(vq))
+      throw new ApiError("bad_request", "v must be a version number");
     const ct = c.req.header("content-type") ?? "";
     if (!/^image\/webp\s*(;|$)/i.test(ct))
       throw new ApiError("bad_request", "Content-Type must be image/webp");
     const buf = await readCapped(c, LIMITS.thumbnailBytes);
-    await putThumbnail(c.env, user, id, buf);
+    await putThumbnail(
+      c.env,
+      user,
+      id,
+      buf,
+      vq === undefined ? undefined : Number(vq),
+    );
     return c.body(null, 204);
   });
 
