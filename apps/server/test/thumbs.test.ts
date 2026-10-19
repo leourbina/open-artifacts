@@ -83,6 +83,8 @@ function fake(
     sizes?: number[];
     launchError?: Error;
     gotoError?: Error;
+    /** goto takes this long, then times out (like puppeteer past its timeout). */
+    gotoTimeoutAfterMs?: number;
     hang?: boolean;
     onShot?: () => Promise<void>;
     /** false: the readiness signal never comes (waitForFunction times out). */
@@ -146,11 +148,19 @@ function fake(
       if (blocked) throw new Error("net::ERR_BLOCKED_BY_CLIENT");
       if (o.hang) await new Promise(() => {});
       if (o.gotoError) throw o.gotoError;
+      if (o.gotoTimeoutAfterMs !== undefined) {
+        await new Promise((r) => setTimeout(r, o.gotoTimeoutAfterMs));
+        const e = new Error("Navigation timeout");
+        e.name = "TimeoutError";
+        throw e;
+      }
       return null;
     },
     waitForFunction: async (fn: string, w: { timeout: number }) => {
       f.waited.push(fn);
       expect(w.timeout).toBeLessThanOrEqual(THUMB.navigationMs);
+      // puppeteer: timeout 0 disables the timeout, so it waits forever.
+      if (w.timeout === 0) await new Promise(() => {});
       if (o.ready === false) {
         const e = new Error("Waiting failed");
         e.name = "TimeoutError";
@@ -364,6 +374,23 @@ describe("captureThumbnail", () => {
       expect(await capture(id, 1, g)).toBe("stopped");
       expect(g.launched).toBe(0);
     }
+  });
+
+  it("a goto that uses up the navigation budget is shot as it is (no 0 ms = endless wait)", async () => {
+    const id = await pub("markdown", "x");
+    const f = fake({ gotoTimeoutAfterMs: 30 });
+    expect(
+      await captureThumbnail(withBrowser, id, 1, {
+        launch: f.launch,
+        now: next(),
+        navigationMs: 20,
+        totalMs: 3_000,
+      }),
+    ).toBe("stored");
+    expect(f.waited).toEqual([]);
+    expect(f.idled).toBe(0);
+    expect(f.shots.length).toBeGreaterThan(0);
+    expect(f.closed).toBe(1);
   });
 
   it("a launch error that is not the quota does not stop the day", async () => {

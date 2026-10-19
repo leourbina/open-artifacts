@@ -165,7 +165,12 @@ export async function captureThumbnail(
   env: Env,
   id: string,
   version: number,
-  o: { launch?: ThumbLaunch; now?: number; totalMs?: number } = {},
+  o: {
+    launch?: ThumbLaunch;
+    now?: number;
+    totalMs?: number;
+    navigationMs?: number;
+  } = {},
 ): Promise<ThumbResult> {
   const binding = env.BROWSER;
   if (!binding) return "skipped";
@@ -206,6 +211,7 @@ export async function captureThumbnail(
       `${contentOrigin(env)}${prefix}__view`,
       o.launch ?? puppeteerLaunch,
       o.totalMs ?? THUMB.totalMs,
+      o.navigationMs ?? THUMB.navigationMs,
       READY[row.f] ?? null,
     );
   } catch (e) {
@@ -250,6 +256,7 @@ async function shoot(
   url: string,
   launch: ThumbLaunch,
   totalMs: number,
+  navigationMs: number,
   ready: string | null,
 ): Promise<Uint8Array | null> {
   const origin = new URL(url).origin;
@@ -295,7 +302,7 @@ async function shoot(
     });
     const t0 = Date.now();
     try {
-      await page.goto(url, { waitUntil: "load", timeout: THUMB.navigationMs });
+      await page.goto(url, { waitUntil: "load", timeout: navigationMs });
     } catch (e) {
       // A slow page is shot as it is; anything else (or leaving) fails.
       if (left || (e as Error)?.name !== "TimeoutError") throw e;
@@ -303,18 +310,23 @@ async function shoot(
     if (left || !sameOrigin(page.url(), origin))
       throw new Error("navigation left the content host");
     // The page's readiness signal, within the same 8 s; else a short
-    // networkidle2-style settle (≤ 2 inflight requests for 500 ms).
-    const left8s = Math.max(0, THUMB.navigationMs - (Date.now() - t0));
-    const signalled =
-      ready !== null &&
-      (await page.waitForFunction(ready, { timeout: left8s }).then(
-        () => true,
-        () => false,
-      ));
-    if (!signalled)
-      await page
-        .waitForNetworkIdle({ concurrency: 2, idleTime: 500, timeout: 2_000 })
-        .catch(() => {});
+    // networkidle2-style settle (≤ 2 inflight requests for 500 ms). With the
+    // budget spent, shoot as it is: puppeteer reads timeout 0 as "no timeout".
+    const leftMs = navigationMs - (Date.now() - t0);
+    if (leftMs > 0) {
+      const signalled =
+        ready !== null &&
+        (await page
+          .waitForFunction(ready, { timeout: Math.max(1, leftMs) })
+          .then(
+            () => true,
+            () => false,
+          ));
+      if (!signalled)
+        await page
+          .waitForNetworkIdle({ concurrency: 2, idleTime: 500, timeout: 2_000 })
+          .catch(() => {});
+    }
     if (left || !sameOrigin(page.url(), origin))
       throw new Error("navigation left the content host");
     for (const quality of THUMB.qualities) {
