@@ -52,8 +52,13 @@ that gap is runtime overhead, not our code.
 
 Kills: none in this run (72 alarms ok, 192 requests 2xx). Staging is a
 **Paid** account, though, so a request over 10 ms isn't killed there and the
-run can't show kills. It is inconclusive for half 1 of the bar. **The decisive
-run, with `limits.cpu_ms = 10`, is pending (Platform).**
+run can't show kills. It is inconclusive for half 1 of the bar.
+
+Kill check (2026-10-19): staging on PLAN=free with limits.cpu_ms=10, n=12 per
+route at 2 s spacing: zero kills on every route, 0/36 alarms non-ok, all
+requests 2xx. Requests that used 20–22 ms CPU were not killed, so the cap is
+enforced leniently. Zero kills holds for this load; headroom under real
+Workers Free is unproven.
 
 ## Decision (2026-10-19), superseded
 
