@@ -1,5 +1,5 @@
-import type { Ctx } from "../../../../scripts/setup/src/step.ts";
 import { decide, warnings } from "../../../../scripts/setup/src/plan.ts";
+import type { Ctx } from "../../../../scripts/setup/src/step.ts";
 
 type Row = { code: string; message: string };
 
@@ -10,7 +10,12 @@ type Row = { code: string; message: string };
  */
 export async function planWarnings(): Promise<Row[]> {
   const ctx = {
-    opts: { teamChoice: false, browserFlag: true, interactive: false, check: false },
+    opts: {
+      teamChoice: false,
+      browserFlag: true,
+      interactive: false,
+      check: false,
+    },
     notes: [],
   } as unknown as Ctx;
   const extra = await decide({}, ctx, "unknown");

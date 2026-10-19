@@ -43,9 +43,24 @@ describe("plan-aware setup steps in llms.txt", () => {
     expect(email).toMatch(/then run setup again/);
   });
 
-  it("tells the user whether invite emails are on", () => {
-    for (const field of ["`plan`", "`team`", "`email`", "`emailDomain`"])
+  it("re-runs with --solo or --team when prereqs asks", () => {
+    expect(setup).toMatch(
+      /`action_required` with "Pass --solo or --team", ask the user[^.]*run again with `--solo` or `--team`/,
+    );
+  });
+
+  it("reads invite email from the final state line, not a --check run", () => {
+    expect(setup).toContain(
+      '{"step": "state", "status": "ok", "message": "final"}',
+    );
+    for (const field of [
+      "`data.plan`",
+      "`data.team`",
+      "`data.email`",
+      "`data.emailDomain`",
+    ])
       expect(setup).toContain(field);
+    expect(setup).not.toContain("--check --json");
   });
 
   it("uses no em dashes", () => {
