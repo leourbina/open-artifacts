@@ -1,0 +1,166 @@
+<!doctype html>
+<!--
+  Token helper page for `pnpm oa:setup --token-page` (served on 127.0.0.1).
+  Static mock: setup templates it from scripts/setup/src/tokens.ts.
+  Pattern: the analytics-token steps page, one section per token.
+
+  Repeat per token, in table order:
+    - one <li> in .progress (between progress:start and progress:end)
+    - one <section class="token"> (between token:start and token:end)
+  Field map per token:
+    {{id}}           token.id (anchor: id="token-{{id}}")
+    {{n}} / {{total}}  1-based position / token count
+    {{scope}}        "read-only" when every permission type is "read", else "account" (or "account and zone" when a zoneId is set)
+    {{title}}        "Create the " + short name, e.g. "Create the deploy token"
+    {{name}}         token.name
+    {{purpose}}      token.purpose (the one-paragraph why)
+    {{url}}          token.url (attribute-escaped)
+    {{chips}}        one <code> per token.permissions[].label
+    {{store}}        storeAs.kind "gh-secret": storeAs.command
+                     storeAs.kind "env": read -rs NAME && export NAME
+    {{storeLead}}    gh-secret: "Run the line below. It prompts for the value, so the token never shows on screen or in a transcript:"
+                     env: "In the terminal where you'll run setup, run the line below and paste the token when it waits. Nothing is shown:"
+    Optional:        when token.required is false, append " · optional" to the eyebrow and the progress item.
+  Rules: no inputs, never a token value, no external requests, the Copy script is the only script.
+  Escape every value as HTML text.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="no-referrer">
+<title>Create your Cloudflare tokens</title>
+<style>
+:root{
+  color-scheme:light;
+  --bg:#eef0f3;--surface:#ffffff;--chrome:#f5f6f8;--line:#e0e3e8;--border:#bec4cd;--border-strong:#848b95;
+  --ink:#15181c;--text-2:#454c56;--muted:#5f6670;
+  --accent:#2350d0;--accent-fg:#1d45b8;--accent-soft:#e7edfc;--on-accent:#ffffff;
+  --ok:#157a3a;--ok-soft:#e3f3e8;
+  --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root{
+  color-scheme:dark;
+  --bg:#131518;--surface:#1c1f23;--chrome:#17191d;--line:#2c3037;--border:#3b414a;--border-strong:#676e78;
+  --ink:#e9ebee;--text-2:#b7bdc6;--muted:#9097a1;
+  --accent:#7f9cff;--accent-fg:#a3b8ff;--accent-soft:#1f2a4a;--on-accent:#131518;
+  --ok:#6fd08f;--ok-soft:#173022;
+}}
+*{box-sizing:border-box}
+html{scroll-padding-top:16px}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 var(--sans);-webkit-text-size-adjust:100%}
+main{max-width:640px;margin:0 auto;padding:40px 16px 64px;display:flex;flex-direction:column;gap:24px}
+.eyebrow{font:500 12px/1.3 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+h1,h2{margin:8px 0;line-height:1.15;letter-spacing:-.02em;font-weight:600;text-wrap:balance}
+h1{font-size:clamp(26px,5vw,32px)}
+h2{font-size:clamp(22px,4.4vw,26px)}
+p{margin:0;color:var(--text-2)}
+.progress{list-style:none;margin:16px 0 0;padding:0;background:var(--surface);border:1px solid var(--border);border-radius:8px;counter-reset:p}
+.progress li{counter-increment:p;border-bottom:1px solid var(--line)}
+.progress li:last-child{border-bottom:0}
+.progress a{display:flex;align-items:center;gap:12px;padding:10px 16px;color:var(--ink);text-decoration:none}
+.progress a::before{content:counter(p);flex:none;width:22px;height:22px;border-radius:50%;background:var(--accent-soft);color:var(--accent-fg);display:grid;place-items:center;font:600 12px var(--mono)}
+.progress a:hover{background:var(--chrome)}
+.progress span{margin-left:auto;font-size:13px;color:var(--muted)}
+.token{display:flex;flex-direction:column;gap:16px;padding-top:24px;border-top:1px solid var(--border)}
+.go{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;background:var(--accent);color:var(--on-accent);text-decoration:none;border-radius:8px;padding:16px 18px;font-weight:600}
+.go .host{font:400 13px var(--mono);opacity:.85;overflow-wrap:anywhere}
+.go:hover{filter:brightness(1.08)}
+.go:focus-visible,.copy:focus-visible,.progress a:focus-visible{outline:2px solid var(--ink);outline-offset:3px}
+ol.steps{list-style:none;margin:0;padding:0;background:var(--surface);border:1px solid var(--border);border-radius:8px;counter-reset:s}
+ol.steps>li{counter-increment:s;display:grid;grid-template-columns:32px minmax(0,1fr);gap:12px;padding:16px 18px;border-bottom:1px solid var(--line)}
+ol.steps>li:last-child{border-bottom:0}
+ol.steps>li::before{content:counter(s);width:26px;height:26px;border-radius:50%;background:var(--accent-soft);color:var(--accent-fg);display:grid;place-items:center;font:600 13px var(--mono)}
+ol.steps .st{display:block;margin-bottom:2px;color:var(--ink);font-weight:600}
+ol.steps p{font-size:14px}
+ol.steps p b{color:var(--ink);font-weight:600}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.chips code{font:12.5px/1.4 var(--mono);padding:3px 7px;border-radius:4px;background:var(--accent-soft);color:var(--ink)}
+.cmd{display:flex;align-items:stretch;margin-top:10px;border:1px solid var(--border-strong);border-radius:6px;overflow:hidden;background:var(--chrome)}
+.cmd code{flex:1;min-width:0;padding:9px 12px;font:13px/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
+.copy{flex:none;min-width:72px;border:0;border-left:1px solid var(--border-strong);background:var(--surface);color:var(--ink);font:500 13px var(--sans);cursor:pointer;padding:0 14px}
+.copy:hover{background:var(--chrome)}
+.copy[data-done]{color:var(--ok)}
+.done{background:var(--ok-soft);border-radius:8px;padding:14px 18px;color:var(--ink)}
+.done b{color:var(--ok)}
+.done code{font:13px var(--mono)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+@media (max-width:480px){main{padding-top:24px}ol.steps>li{grid-template-columns:26px minmax(0,1fr);gap:10px;padding:14px}}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">Open Artifacts setup · about 1 minute per token</div>
+    <h1>Create your Cloudflare tokens</h1>
+    <p>Each link opens Cloudflare with the token already filled in. You create it and store it yourself, so the token never passes through your agent. This page never asks for it.</p>
+    <ol class="progress">
+      <!-- progress:start -->
+      <li><a href="#token-deploy">Deploy token</a></li>
+      <!-- progress:end -->
+      <li><a href="#token-access">Access token</a></li>
+      <li><a href="#token-analytics">Analytics token <span>optional</span></a></li>
+    </ol>
+  </header>
+
+  <!-- token:start -->
+  <section class="token" id="token-deploy" aria-labelledby="h-deploy">
+    <header>
+      <div class="eyebrow">Token 1 of 3 · about 1 minute · account</div>
+      <h2 id="h-deploy">Create the deploy token</h2>
+      <p>Setup uses this to create the Worker, database, file storage and routes on your Cloudflare account. It's only needed while setting up and updating.</p>
+    </header>
+    <a class="go" href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noopener noreferrer">Create the token (prefilled)<span class="sr"> (opens in a new tab)</span> <span class="host" aria-hidden="true">dash.cloudflare.com ↗</span></a>
+    <ol class="steps">
+      <li><div><span class="st">Check what the link filled in</span><p>Name: <b>open-artifacts deploy</b>. Account: yours. Permissions:</p><div class="chips"><code>Workers Scripts: Edit</code><code>Workers KV Storage: Edit</code><code>Workers R2 Storage: Edit</code><code>D1: Edit</code><code>Workers Routes: Edit</code><code>DNS: Edit</code></div></div></li>
+      <li><div><span class="st">Continue to summary, then Create Token</span><p>Cloudflare shows the token only once. Copy it, and don't paste it into chat.</p></div></li>
+      <li><div><span class="st">Store it yourself</span><p>In the terminal where you'll run setup, run the line below and paste the token when it waits. Nothing is shown:</p><div class="cmd"><code>read -rs CLOUDFLARE_API_TOKEN &amp;&amp; export CLOUDFLARE_API_TOKEN</code><button class="copy" type="button">Copy</button></div></div></li>
+    </ol>
+  </section>
+  <!-- token:end -->
+
+  <section class="token" id="token-access" aria-labelledby="h-access">
+    <header>
+      <div class="eyebrow">Token 2 of 3 · about 1 minute · account</div>
+      <h2 id="h-access">Create the access token</h2>
+      <p>Setup uses this to put Cloudflare Access sign-in in front of your instance, so only people you allow can open it.</p>
+    </header>
+    <a class="go" href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noopener noreferrer">Create the token (prefilled)<span class="sr"> (opens in a new tab)</span> <span class="host" aria-hidden="true">dash.cloudflare.com ↗</span></a>
+    <ol class="steps">
+      <li><div><span class="st">Check what the link filled in</span><p>Name: <b>open-artifacts access</b>. Account: yours. Permissions:</p><div class="chips"><code>Access: Apps and Policies: Edit</code><code>Access: Organizations: Read</code></div></div></li>
+      <li><div><span class="st">Continue to summary, then Create Token</span><p>Cloudflare shows the token only once. Copy it, and don't paste it into chat.</p></div></li>
+      <li><div><span class="st">Store it yourself</span><p>Run the line below. It prompts for the value, so the token never shows on screen or in a transcript:</p><div class="cmd"><code>gh secret set ACCESS_TOKEN -R you/open-artifacts</code><button class="copy" type="button">Copy</button></div></div></li>
+    </ol>
+  </section>
+
+  <section class="token" id="token-analytics" aria-labelledby="h-analytics">
+    <header>
+      <div class="eyebrow">Token 3 of 3 · about 1 minute · read-only · optional</div>
+      <h2 id="h-analytics">Create the analytics token</h2>
+      <p>The dashboard's Usage page reads Cloudflare analytics to show requests and CPU against your plan's limits. This token is read-only and does nothing else.</p>
+    </header>
+    <a class="go" href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noopener noreferrer">Create the token (prefilled)<span class="sr"> (opens in a new tab)</span> <span class="host" aria-hidden="true">dash.cloudflare.com ↗</span></a>
+    <ol class="steps">
+      <li><div><span class="st">Check what the link filled in</span><p>Name: <b>open-artifacts analytics</b>. Account: yours. Permissions:</p><div class="chips"><code>Account Analytics: Read</code></div></div></li>
+      <li><div><span class="st">Continue to summary, then Create Token</span><p>Cloudflare shows the token only once. Copy it, and don't paste it into chat.</p></div></li>
+      <li><div><span class="st">Store it yourself</span><p>Run the line below. It prompts for the value, so the token never shows on screen or in a transcript:</p><div class="cmd"><code>gh secret set ANALYTICS_TOKEN -R you/open-artifacts</code><button class="copy" type="button">Copy</button></div></div></li>
+    </ol>
+  </section>
+
+  <div class="done"><b>Then:</b> tell your agent "done". It runs setup again and checks each token.</div>
+</main>
+<script>
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest(".copy");
+  if (!b) return;
+  const code = b.previousElementSibling;
+  try { await navigator.clipboard.writeText(code.textContent); }
+  catch { const r = document.createRange(); r.selectNodeContents(code); const s = getSelection(); s.removeAllRanges(); s.addRange(r); document.execCommand("copy"); }
+  b.textContent = "Copied"; b.dataset.done = "";
+  setTimeout(() => { b.textContent = "Copy"; delete b.dataset.done; }, 1600);
+});
+</script>
+</body>
+</html>
