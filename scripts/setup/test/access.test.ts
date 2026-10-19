@@ -267,6 +267,55 @@ describe("access + secrets", () => {
     expect(w.ops).not.toContain("put ANALYTICS_TOKEN");
   });
 
+  it("refuses an ANALYTICS_TOKEN equal to CLOUDFLARE_API_TOKEN, with a link", async () => {
+    const w = world();
+    w.deps.env.CLOUDFLARE_API_TOKEN = w.deps.env.ANALYTICS_TOKEN = "same";
+    expect(await run(HOSTS, w.deps, ROOT, B16_2)).toBe(0);
+    expect(w.ops).not.toContain("put ANALYTICS_TOKEN");
+    const msg = parsed(w).find((j) => j.step === "secrets")?.message ?? "";
+    expect(msg).toContain("is the deploy token");
+    expect(msg).toContain(
+      encodeURIComponent('[{"key":"account_analytics","type":"read"}]'),
+    );
+  });
+
+  it("refuses an ANALYTICS_TOKEN that verifies to the deploy token's id", async () => {
+    const w = world({ tokenIds: { dep: "tok1", "dep ": "tok1", an: "tok1" } });
+    w.deps.env.CLOUDFLARE_API_TOKEN = "dep";
+    w.deps.env.ANALYTICS_TOKEN = "an";
+    expect(await run(HOSTS, w.deps, ROOT, B16_2)).toBe(0);
+    expect(w.ops).not.toContain("put ANALYTICS_TOKEN");
+  });
+
+  it("a dedicated ANALYTICS_TOKEN (different id) is put", async () => {
+    const w = world();
+    w.deps.env.CLOUDFLARE_API_TOKEN = "dep";
+    w.deps.env.ANALYTICS_TOKEN = "an";
+    expect(await run(HOSTS, w.deps, ROOT, B16_2)).toBe(0);
+    expect(w.ops).toContain("put ANALYTICS_TOKEN");
+  });
+
+  it("--check --strict is clean when the exported ANALYTICS_TOKEN is already set", async () => {
+    const w = world();
+    w.deps.env.ANALYTICS_TOKEN = ANALYTICS;
+    expect(await run(HOSTS, w.deps, ROOT, B16_2)).toBe(0);
+    w.lines.length = 0;
+    expect(
+      await run([...HOSTS, "--check", "--strict"], w.deps, ROOT, B16_2),
+    ).toBe(0);
+    expect(parsed(w).find((j) => j.step === "secrets")?.status).toBe("done");
+  });
+
+  it("--check reports todo when the exported ANALYTICS_TOKEN is absent on the Worker", async () => {
+    const w = world();
+    expect(await run(HOSTS, w.deps, ROOT, B16_2)).toBe(0);
+    w.deps.env.ANALYTICS_TOKEN = ANALYTICS;
+    w.lines.length = 0;
+    expect(
+      await run([...HOSTS, "--check", "--strict"], w.deps, ROOT, B16_2),
+    ).toBe(2);
+  });
+
   it("an empty env ANALYTICS_TOKEN counts as unset", async () => {
     const w = world();
     w.deps.env.ANALYTICS_TOKEN = "";
