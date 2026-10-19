@@ -22,7 +22,7 @@ import {
 } from "../db/schema.js";
 import { stmt } from "../db/stmt.js";
 import { emailEnabled, sendEmail } from "../email/send.js";
-import { inviteEmail } from "../email/templates.js";
+import { inviteEmail, senderName } from "../email/templates.js";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
 import { revokeAllGrants } from "../mcp/oauth-api.js";
@@ -70,7 +70,7 @@ export async function inviteMember(
       email,
       () =>
         inviteEmail({
-          inviter: inviter.name || inviter.email,
+          inviter: senderName(inviter),
           instance,
           recipient: email,
           appHost: env.APP_HOST,

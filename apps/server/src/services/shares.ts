@@ -13,7 +13,7 @@ import { normEmail } from "../db/email.js";
 import { shares } from "../db/schema.js";
 import { stmt } from "../db/stmt.js";
 import { emailEnabled, sendEmail } from "../email/send.js";
-import { shareEmail } from "../email/templates.js";
+import { senderName, shareEmail } from "../email/templates.js";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
 import { closeRuntimeSockets } from "../runtime/revoke.js";
@@ -112,7 +112,7 @@ async function emailShare(
       email,
       () =>
         shareEmail({
-          inviter: user.name || user.email,
+          inviter: senderName(user),
           instance: settings.name,
           recipient: email,
           appHost: env.APP_HOST,

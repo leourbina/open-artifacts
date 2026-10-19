@@ -515,3 +515,66 @@ describe("email logs", () => {
     expect(leaks(lines2)).toEqual([]);
   });
 });
+
+describe("sender name in emails", () => {
+  const setName = (id: string, name: string) =>
+    env.DB.prepare("update users set name = ? where id = ?")
+      .bind(name, id)
+      .run();
+
+  async function both(o: { cookie: string; userId: string }) {
+    const m = mailer();
+    const e = { ...m, EMAIL_FROM: FROM };
+    await invite(e, o.cookie);
+    const owner = await getUser(env, o.userId);
+    if (!owner) throw new Error("no user");
+    const { id } = await publish(
+      env,
+      owner,
+      {
+        title: "T",
+        visibility: "private",
+        format: "markdown",
+        content: "x",
+      } as never,
+      null,
+      undefined,
+      "create",
+    );
+    await call(e, R.shares(id), o.cookie, "PUT", {
+      email: fresh(),
+      role: "viewer",
+    });
+    expect(m.sent).toHaveLength(2);
+    return m.sent;
+  }
+
+  // login() stores the default name (the email's local part), like a first
+  // sign-in without a display name; "" and whitespace are also "no name".
+  for (const [label, name] of [
+    ["the default local-part name", null],
+    ["an empty name", ""],
+    ["a whitespace-only name", "   "],
+  ] as const)
+    it(`${label} uses the full email address`, async () => {
+      const email = fresh();
+      const o = await login(email, "owner");
+      if (name !== null) await setName(o.userId, name);
+      for (const s of await both(o)) {
+        expect(s.subject.startsWith(`${email} `), s.subject).toBe(true);
+        expect(s.text.startsWith(`${email} `)).toBe(true);
+        expect(s.html).toContain(`>${email} `);
+        expect(s.html).not.toMatch(new RegExp(`>${email.split("@")[0]} `));
+      }
+    });
+
+  it("a display name is used (trimmed)", async () => {
+    const o = await newOwner();
+    await setName(o.userId, "  Ada Lovelace ");
+    for (const s of await both(o)) {
+      expect(s.subject.startsWith("Ada Lovelace ")).toBe(true);
+      expect(s.text.startsWith("Ada Lovelace ")).toBe(true);
+      expect(s.html).toContain(">Ada Lovelace ");
+    }
+  });
+});
