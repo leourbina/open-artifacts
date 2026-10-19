@@ -80,18 +80,30 @@ function metaTags(og: Og): string {
   ].join("");
 }
 
+const NAME_TTL_MS = 60_000;
+/** Per isolate (per D1 binding); the name is display-only, never authz. */
+const nameMemo = new WeakMap<D1Database, { name: string; at: number }>();
+
 /**
  * Shell contract for the dashboard: every SPA shell HTML response carries
  * `<meta name="oa-instance" content="<settings.name>">` in its <head> (omitted
  * if the settings read fails), so signed-out pages can show the instance name.
+ * The name is memoized per isolate for 60 s, so it may be up to 60 s stale.
  */
-export async function instanceMeta(env: Env): Promise<string> {
-  try {
-    const { name } = await getSettings(env);
-    return `<meta name="oa-instance" content="${esc(name)}">`;
-  } catch {
-    return "";
+export async function instanceMeta(
+  env: Env,
+  now = Date.now(),
+): Promise<string> {
+  let m = nameMemo.get(env.DB);
+  if (!m || now - m.at >= NAME_TTL_MS) {
+    try {
+      m = { name: (await getSettings(env)).name, at: now };
+    } catch {
+      return "";
+    }
+    nameMemo.set(env.DB, m);
   }
+  return `<meta name="oa-instance" content="${esc(m.name)}">`;
 }
 
 /** SPA fallback: injects the instance meta into an HTML shell response. */

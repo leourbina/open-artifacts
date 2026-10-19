@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { type Member, newId, viewerPath } from "@oa/shared";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
+import { instanceMeta } from "../src/routes/shell.js";
 import { publish } from "../src/services/artifacts.js";
 import { getUser } from "../src/services/users.js";
 import { fakeAssets } from "./assets-stub.js";
@@ -24,6 +25,37 @@ const setName = (name: string) =>
   )
     .bind(name)
     .run();
+/**
+ * A fresh D1 binding (so a fresh instance-name memo) that counts settings
+ * reads; with `fail`, those reads throw.
+ */
+function settingsDb(fail = false) {
+  const n = { reads: 0 };
+  const DB = new Proxy(env.DB, {
+    get(t, k) {
+      if (k === "prepare")
+        return (sql: string) => {
+          const st = t.prepare(sql);
+          if (!sql.includes("from settings")) return st;
+          return new Proxy(st, {
+            get(s, j) {
+              if (j === "all")
+                return () => {
+                  n.reads++;
+                  if (fail) throw new Error("d1 down");
+                  return s.all();
+                };
+              const v = Reflect.get(s, j);
+              return typeof v === "function" ? v.bind(s) : v;
+            },
+          });
+        };
+      const v = Reflect.get(t, k);
+      return typeof v === "function" ? v.bind(t) : v;
+    },
+  });
+  return { DB, n };
+}
 const metas = (t: string) => t.match(/<meta name="oa-instance"[^>]*>/g) ?? [];
 
 let owner: Member;
@@ -99,8 +131,9 @@ describe("instance meta", () => {
   it("signed-out shell routes carry exactly one instance meta", async () => {
     await setName("Acme Docs");
     const id = await mk("public", "T", "D");
+    const { DB } = settingsDb();
     for (const p of ["/", "/library", viewerPath(id), viewerPath(newId())]) {
-      const r = await get(p);
+      const r = await get(p, { DB });
       expect(r.status).toBe(200);
       const t = await r.text();
       expect(metas(t)).toEqual([
@@ -110,10 +143,30 @@ describe("instance meta", () => {
     }
   });
 
+  it("memoizes the name for 60 s per isolate", async () => {
+    const { DB, n } = settingsDb();
+    const e = { ...(env as object), DB } as never;
+    await setName("Memo One");
+    expect(await instanceMeta(e, 1_000)).toContain('content="Memo One"');
+    await setName("Memo Two");
+    expect(await instanceMeta(e, 60_999)).toContain('content="Memo One"');
+    expect(n.reads).toBe(1);
+    expect(await instanceMeta(e, 61_000)).toContain('content="Memo Two"');
+    expect(n.reads).toBe(2);
+  });
+
+  it("two shell loads within 60 s do one settings read", async () => {
+    const { DB, n } = settingsDb();
+    await get("/", { DB });
+    await get(viewerPath(newId()), { DB });
+    expect(n.reads).toBe(1);
+  });
+
   it("escapes the name", async () => {
     await setName('Evil"><script>alert(1)</script> & co');
+    const { DB } = settingsDb();
     for (const p of ["/", viewerPath(newId())]) {
-      const t = await (await get(p)).text();
+      const t = await (await get(p, { DB })).text();
       expect(t).not.toContain("<script>");
       expect(metas(t)).toEqual([
         '<meta name="oa-instance" content="Evil&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt; &amp; co">',
@@ -123,17 +176,7 @@ describe("instance meta", () => {
 
   it("a failed settings read serves the shell without the meta", async () => {
     // Only the settings read fails (the /a/:id OG read still works).
-    const DB = new Proxy(env.DB, {
-      get(t, k) {
-        if (k === "prepare")
-          return (sql: string) => {
-            if (sql.includes("from settings")) throw new Error("d1 down");
-            return t.prepare(sql);
-          };
-        const v = Reflect.get(t, k);
-        return typeof v === "function" ? v.bind(t) : v;
-      },
-    });
+    const { DB, n } = settingsDb(true);
     for (const p of ["/", "/library", viewerPath(newId())]) {
       const r = await get(p, { DB });
       expect(r.status).toBe(200);
@@ -141,6 +184,7 @@ describe("instance meta", () => {
       expect(t).toContain('<div id="root">');
       expect(metas(t)).toEqual([]);
     }
+    expect(n.reads).toBe(3); // failures are not memoized
   });
 
   it("static assets are untouched", async () => {

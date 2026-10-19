@@ -3,6 +3,7 @@ import { newId, R } from "@oa/shared";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import type { Env } from "../src/env.js";
+import { instanceMeta } from "../src/routes/shell.js";
 import { login } from "./helpers.js";
 
 const app = createApp();
@@ -29,22 +30,19 @@ beforeAll(async () => {
 });
 
 describe("session() scope", () => {
-  // /a/:id reads only the instance name (settings), never the session.
-  for (const [path, reads] of [
-    ["/library", 0],
-    ["/", 0],
-    ["/a/abc", 1],
-    ["/assets/app.js", 0],
-  ] as const) {
-    it(`GET ${path} with a cookie makes no session DB call`, async () => {
+  for (const path of ["/library", "/", "/a/abc", "/assets/app.js"]) {
+    it(`GET ${path} with a cookie makes no DB call`, async () => {
       const { e, count } = counted();
+      // Warm the shell's instance-name memo (one settings read per 60 s).
+      await instanceMeta(e);
+      const before = count();
       const r = await app.fetch(
         new Request(`http://app.localhost${path}`, { headers: { cookie } }),
         e,
         ctx,
       );
       expect(r.status).toBe(200);
-      expect(count()).toBe(reads);
+      expect(count()).toBe(before);
     });
   }
 
