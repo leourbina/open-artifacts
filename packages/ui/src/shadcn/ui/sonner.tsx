@@ -16,12 +16,19 @@ const Toaster = ({ ...props }: ToasterProps) => {
     <Sonner
       theme={theme}
       className="toaster group"
-      // Studio defaults: bottom-right (Sonner goes full width below 600px),
-      // 5s (pass duration: 8000 for errors and toasts with an action), at
-      // most 3 visible, a close button on each. Tone lives in the icon only.
+      // Studio defaults: bottom-right, 16px in (full width below 600px, above
+      // the home indicator), 5s (pass duration: 8000 for errors and toasts
+      // with an action), at most 3 visible, a close button on each. Tone
+      // lives in the icon only.
       position="bottom-right"
       duration={5000}
       visibleToasts={3}
+      offset={16}
+      mobileOffset={{
+        bottom: "calc(16px + env(safe-area-inset-bottom))",
+        left: 16,
+        right: 16,
+      }}
       closeButton
       icons={{
         success: <CircleCheckIcon className="size-4 text-(--oa-success-fg)" />,
