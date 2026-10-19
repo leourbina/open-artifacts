@@ -117,6 +117,21 @@
   --color-chart-4: var(--chart-4);
   --color-chart-5: var(--chart-5);
 
+  /* Ours: px, not rem. Studio sizes in px (tokens.css), and a host that sets
+     a smaller root font-size must not shrink these components. Same values
+     as Tailwind's defaults at a 16px root. */
+  --spacing: 4px;
+  --text-xs: 12px;
+  --text-sm: 14px;
+  --text-base: 16px;
+  --text-lg: 18px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+  --container-xs: 320px;
+  --container-sm: 384px;
+  --container-md: 448px;
+  --container-lg: 512px;
+
   /* Studio's scale: sm 4px, md 6px (buttons, inputs), lg 8px (cards). */
   --radius-sm: var(--oa-radius-sm);
   --radius-md: var(--oa-radius-md);

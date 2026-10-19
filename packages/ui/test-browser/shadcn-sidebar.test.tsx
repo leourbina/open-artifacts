@@ -42,13 +42,14 @@ describe.each(["light", "dark"])("shadcn sidebar in Chromium (%s)", (theme) => {
     ).toEqual([]);
   });
 
-  it("the active item's indicator is >= 3:1 against its own fill", async () => {
+  it("the active item's ring is >= 3:1 against its fill and the chrome", async () => {
     const page = await openStory(browser, STORY, theme, READY);
-    const ratio = await page.evaluate(() => {
+    const ratios = await page.evaluate(() => {
       const el = document.querySelector(
         '[data-sidebar="menu-button"][data-active="true"]',
       );
-      if (!el) return 0;
+      const chrome = document.querySelector('[data-sidebar="sidebar"]');
+      if (!el || !chrome) return [0, 0];
       const parse = (c: string) => c.match(/[\d.]+/g)?.map(Number) ?? [];
       const lum = (c: number[]) => {
         const [r, g, b] = c.slice(0, 3).map((v) => {
@@ -57,20 +58,49 @@ describe.each(["light", "dark"])("shadcn sidebar in Chromium (%s)", (theme) => {
         });
         return 0.2126 * r + 0.7152 * g + 0.0722 * b;
       };
+      const contrast = (a: string, b: string) => {
+        const [hi, lo] = [lum(parse(a)), lum(parse(b))].sort((x, y) => y - x);
+        return (hi + 0.05) / (lo + 0.05);
+      };
       const s = getComputedStyle(el);
       const ring = s.boxShadow
         .split(/,(?![^(]*\))/)
         .filter((x) => x.includes("inset"))
         .map((x) => x.match(/rgba?\([^)]*\)/)?.[0] ?? "")
         .find((c) => c && (parse(c)[3] ?? 1) > 0);
-      if (!ring) return 0;
-      const [hi, lo] = [lum(parse(ring)), lum(parse(s.backgroundColor))].sort(
-        (a, b) => b - a,
-      );
-      return (hi + 0.05) / (lo + 0.05);
+      if (!ring) return [0, 0];
+      return [
+        contrast(ring, s.backgroundColor),
+        contrast(ring, getComputedStyle(chrome).backgroundColor),
+      ];
     });
     await page.close();
-    expect(ratio).toBeGreaterThanOrEqual(3);
+    expect(Math.min(...ratios)).toBeGreaterThanOrEqual(3);
+  });
+
+  it("keeps its px sizes under a 13px root font-size", async () => {
+    const page = await openStory(browser, STORY, theme, READY);
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = "13px";
+    });
+    const sizes = await page.evaluate(() => {
+      const h = (sel: string) =>
+        document.querySelector(sel)?.getBoundingClientRect().height;
+      return {
+        width: document
+          .querySelector('[data-slot="sidebar-container"]')
+          ?.getBoundingClientRect().width,
+        item: h('[data-sidebar="menu-button"][data-active="true"]'),
+        brand: h('[data-sidebar="menu-button"][data-size="lg"]'),
+        font: getComputedStyle(
+          document.querySelector(
+            '[data-sidebar="menu-button"][data-active="true"]',
+          ) as Element,
+        ).fontSize,
+      };
+    });
+    await page.close();
+    expect(sizes).toEqual({ width: 256, item: 32, brand: 48, font: "14px" });
   });
 
   it("collapses off-canvas: Cmd/Ctrl+B and the trigger, out of the tab order", async () => {
