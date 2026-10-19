@@ -179,7 +179,7 @@ These are designer's calls, because the user approved the spec before the dashbo
   - Members: invite, set role, remove.
   - Agent connections: the MCP URL with copy-paste config snippets for common agents, the list of OAuth clients with a revoke button, and personal access tokens.
   - Instance: name, default visibility, limits.
-- **Thumbnails:** the shell can't screenshot the sandbox, so the artifact makes its own thumbnail. On the shell's request, the runtime inside the iframe renders a snapshot and posts it back. PDFs use the first page from pdf.js. Markdown and code get a typographic card. Cloudflare Browser Rendering is a stretch option.
+- **Thumbnails** (revision 5, user decision): generated **server-side with Cloudflare Browser Run**. After a publish or restore, a debounced background job screenshots the version's signed content URL (same sandbox, no cookies or capabilities, navigation pinned to the content host), at about 1280×800, as webp ≤ the thumbnail limit. It respects the free browser budget, stops for the UTC day once the budget runs out, and is skipped when the optional `BROWSER` binding is missing. The original browser-side snapshot (the runtime renders it on the shell's request) remains the fallback.
 - **Usage panel:** needs an optional `ANALYTICS_TOKEN` secret with Account Analytics: Read. The Worker queries Cloudflare's GraphQL Analytics API and caches the result for 5 minutes. Without the token, the panel explains how to enable it.
 
 ### 6.10 Setup and upgrade flow
