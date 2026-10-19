@@ -21,10 +21,14 @@ body {
     --oa-page-gutter: var(--oa-space-4);
   }
 }
-/* No preflight: links in the shadcn sidebar take its colors, not the UA's. */
+/* No preflight: the shadcn sidebar's links take its colors and its lists
+   have no markers, not the UA's. */
 [data-slot="sidebar"] a {
   color: inherit;
   text-decoration: none;
+}
+[data-slot="sidebar"] ul {
+  list-style: none;
 }
 .oa-edge {
   min-height: 70vh;

@@ -127,9 +127,18 @@ test("phone: a 288px sheet that navigates, closes and returns focus", async ({
       brandY: (brand?.top ?? 0) - d.getBoundingClientRect().top,
       brandRow: head?.getBoundingClientRect().height,
       rowX: (row?.left ?? 0) - left,
+      markers: [...d.querySelectorAll("li")].some(
+        (li) => getComputedStyle(li).listStyleType !== "none",
+      ),
     };
   });
-  expect(inset).toEqual({ brandX: 8, brandY: 8, brandRow: 48, rowX: 16 });
+  expect(inset).toEqual({
+    brandX: 8,
+    brandY: 8,
+    brandRow: 48,
+    rowX: 16,
+    markers: false,
+  });
   await page.keyboard.press("Escape");
   await expect(sheet).toHaveCount(0);
   await expect(trigger).toBeFocused();
