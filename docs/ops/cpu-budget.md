@@ -16,7 +16,7 @@ Two conditions, both required:
    against in-process bindings, thread CPU minus D1, R2 and DO time (DO rows
    meter the DO invocation), p95 of 20 requests, median of 5 runs. A stall
    in a handler fails its row. The 2 ms is on the reference laptop; a slower
-   runner (CI is 2–3×) scales it by a fixed calibration workload, at most 4×.
+   runner (CI is about 3×) scales it by its own `GET /api/v1/me` p95, at most 4×.
 
 This replaces the earlier bar, "staging cpuTime p95 ≤ 10 ms". Staging
 `cpuTime` includes **8–15 ms of runtime overhead** that our code doesn't
