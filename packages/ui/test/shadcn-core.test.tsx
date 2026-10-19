@@ -144,6 +144,14 @@ describe("variant edges", () => {
     expect(source("input")).not.toContain("dark:bg-input");
   });
 
+  it("--input maps to --oa-border-strong", () => {
+    const theme = readFileSync(
+      `${import.meta.dirname}/../src/shadcn/theme.css`,
+      "utf8",
+    );
+    expect(theme).toMatch(/--input:\s*var\(--oa-border-strong\);/);
+  });
+
   it.each(["light", "dark"] as const)("ratios hold (%s)", (t) => {
     for (const bg of pages) {
       // --input = --oa-border-strong, --ring = --oa-focus

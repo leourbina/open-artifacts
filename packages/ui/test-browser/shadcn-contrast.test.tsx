@@ -89,6 +89,50 @@ describe.each(["light", "dark"])("shadcn core in Chromium (%s)", (theme) => {
     expect(violations).toEqual([]);
   });
 
+  it("outlined controls' computed borders are >= 3:1 on their page", async () => {
+    const tab = await browser.newPage();
+    await tab.setContent(page(theme, css));
+    const measured = await tab.evaluate(() => {
+      const parse = (c: string) => c.match(/[\d.]+/g)?.map(Number) ?? [];
+      const lum = (c: number[]) => {
+        const [r, g, b] = c.slice(0, 3).map((v) => {
+          const s = v / 255;
+          return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+        });
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      };
+      const fill = (el: Element | null) => {
+        for (let h = el; h; h = h.parentElement) {
+          const c = getComputedStyle(h).backgroundColor;
+          if ((parse(c)[3] ?? 1) > 0) return c;
+        }
+        return "rgb(255, 255, 255)";
+      };
+      const outlined = document.querySelectorAll(
+        '[data-variant="outline"], [data-slot="input"]',
+      );
+      return [...outlined].map((el) => {
+        const [hi, lo] = [
+          lum(parse(getComputedStyle(el).borderTopColor)),
+          lum(parse(fill(el.parentElement))),
+        ].sort((a, b) => b - a);
+        return {
+          id: `${el.tagName}.${el.textContent?.trim() || el.getAttribute("aria-label") || ""}`,
+          ratio: (hi + 0.05) / (lo + 0.05),
+        };
+      });
+    });
+    await tab.close();
+    // Two copies (bg, surface) of: outline button, tooltip trigger (outline),
+    // outline badge, two inputs.
+    expect(measured.length).toBeGreaterThanOrEqual(10);
+    expect(
+      measured
+        .filter((m) => m.ratio < 3)
+        .map((m) => `${m.id} ${m.ratio.toFixed(2)}`),
+    ).toEqual([]);
+  });
+
   it("every focus outline is >= 3:1 against what it sits on", async () => {
     const tab = await browser.newPage();
     await tab.setContent(page(theme, css));
