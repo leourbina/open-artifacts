@@ -1,5 +1,58 @@
 # Changelog
 
+## [0.3.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.2.1...v0.3.0) (2026-10-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* on Workers Free (PLAN unset or "free"), data docs and storage values drop from 1 MB to 256 KB, and /mcp request bodies over 320 KB are refused before parsing (HTTP 413, JSON-RPC error -32000). Paid (PLAN=paid) keeps 1 MB docs, with a 1 MB + 64 KB /mcp body cap. Publish large files through create_upload.
+
+### Features
+
+* CPU-limit and KV-write usage metrics, MCP CPU nudge ([#159](https://github.com/open-artifacts-ai/open-artifacts/issues/159)) ([065b2e0](https://github.com/open-artifacts-ai/open-artifacts/commit/065b2e067823671322896aaf72eb739366fd71f0))
+* **dashboard:** CPU-limit (1102) banner, Usage CPU card and viewer notice ([#198](https://github.com/open-artifacts-ai/open-artifacts/issues/198)) ([3ca56e1](https://github.com/open-artifacts-ai/open-artifacts/commit/3ca56e1967e8870772096b51a1dab6e274ac8f70))
+* **dashboard:** display-name dialog and Settings → Profile ([#215](https://github.com/open-artifacts-ai/open-artifacts/issues/215)) ([#219](https://github.com/open-artifacts-ai/open-artifacts/issues/219)) ([a8355e1](https://github.com/open-artifacts-ai/open-artifacts/commit/a8355e1507518f42c3545513d13368c3ce20c178))
+* **dashboard:** remove human Upload version; agents publish new versions ([#194](https://github.com/open-artifacts-ai/open-artifacts/issues/194)) ([0c0545f](https://github.com/open-artifacts-ai/open-artifacts/commit/0c0545fd3923a53da121df3a3d70d81fdd5c77f2))
+* **dashboard:** sign-in shows the instance name for visitors not signed in ([#162](https://github.com/open-artifacts-ai/open-artifacts/issues/162)) ([c2a6145](https://github.com/open-artifacts-ai/open-artifacts/commit/c2a6145575b40cecd68b476a45606ad97824d848))
+* **dashboard:** versioned thumbnail uploads (?v=, 409 = up to date) ([#179](https://github.com/open-artifacts-ai/open-artifacts/issues/179)) ([e649d85](https://github.com/open-artifacts-ai/open-artifacts/commit/e649d8510a6521c8d8f4fbb6742a94d18dd7a482))
+* **landing:** which Cloudflare plan (D7) ([#174](https://github.com/open-artifacts-ai/open-artifacts/issues/174)) ([4205992](https://github.com/open-artifacts-ai/open-artifacts/commit/4205992a99ac335d5722bd9f509f933717ea36d9))
+* plan-aware data-doc limits and /mcp body cap ([#212](https://github.com/open-artifacts-ai/open-artifacts/issues/212)) ([3bd9bec](https://github.com/open-artifacts-ai/open-artifacts/commit/3bd9bec43c7e470a7b715f4ebf3eb67e8debaf47))
+* **server:** invite and share emails via Cloudflare Email Service ([#167](https://github.com/open-artifacts-ai/open-artifacts/issues/167)) ([#177](https://github.com/open-artifacts-ai/open-artifacts/issues/177)) ([f2b16fe](https://github.com/open-artifacts-ai/open-artifacts/commit/f2b16fe90576c0186277fbf6d36f134f797a29d9))
+* **server:** log email messageId and failure reason without PII ([#209](https://github.com/open-artifacts-ai/open-artifacts/issues/209)) ([1a4ee57](https://github.com/open-artifacts-ai/open-artifacts/commit/1a4ee57224e50aa76206f81c70ab760e115d7bb8))
+* **server:** server-side thumbnails via Browser Run ([#157](https://github.com/open-artifacts-ai/open-artifacts/issues/157)) ([b11367d](https://github.com/open-artifacts-ai/open-artifacts/commit/b11367d6ca9cd2ab1f1b668c95b91ba96225428f))
+* **setup:** --token-links and --token-page from one token table ([#207](https://github.com/open-artifacts-ai/open-artifacts/issues/207)) ([953f7f6](https://github.com/open-artifacts-ai/open-artifacts/commit/953f7f6bffcf64fac139e485d63495a18e03aab3))
+* **setup:** render the PLAN var from the Cloudflare plan, with --plan override and a downgrade guard ([#216](https://github.com/open-artifacts-ai/open-artifacts/issues/216)) ([b4b1652](https://github.com/open-artifacts-ai/open-artifacts/commit/b4b1652106b37a94a1407eeaf6ef7b80507a6ea4))
+* **setup:** Workers plan detection, team/solo, email sending domain step and send_email binding ([#180](https://github.com/open-artifacts-ai/open-artifacts/issues/180)) ([ea1af3b](https://github.com/open-artifacts-ai/open-artifacts/commit/ea1af3b2c462c873c87c2ef5c0309d9a5118b9b4))
+* **ui:** Banner icon, optional title, compact and dismiss ([06d8754](https://github.com/open-artifacts-ai/open-artifacts/commit/06d875433d74d00b0ad65418b8b1c5358a826a35))
+* **ui:** no-preflight shadcn entry for incremental migration ([#225](https://github.com/open-artifacts-ai/open-artifacts/issues/225)) ([4a5c670](https://github.com/open-artifacts-ai/open-artifacts/commit/4a5c670fd1831e603462fde6c1ea3e25f5b72be4))
+* **ui:** shadcn core components (Button, Input, Label, Card, Badge, Avatar, Tooltip, Skeleton, Separator) ([#201](https://github.com/open-artifacts-ai/open-artifacts/issues/201)) ([9bd8dfd](https://github.com/open-artifacts-ai/open-artifacts/commit/9bd8dfd9a088543ca5e0044ae7de92c09fb1e072))
+* **ui:** shadcn overlays (Select, Dialog, AlertDialog, DropdownMenu, Tabs, ToggleGroup, Table, ScrollArea, Sonner) ([#205](https://github.com/open-artifacts-ai/open-artifacts/issues/205)) ([ad11c7c](https://github.com/open-artifacts-ai/open-artifacts/commit/ad11c7cbec4bf70f95108cd6c9e3fc6e1f664ecc))
+* **ui:** shadcn Sidebar (flush, off-canvas) with Framed Artifact brand ([#226](https://github.com/open-artifacts-ai/open-artifacts/issues/226)) ([407e531](https://github.com/open-artifacts-ai/open-artifacts/commit/407e53110de7bff4c84cd467106107ffaee91b74))
+* **ui:** shadcn/ui foundation (Tailwind v4, theme mapped to Studio tokens) ([#190](https://github.com/open-artifacts-ai/open-artifacts/issues/190)) ([85bc0b3](https://github.com/open-artifacts-ai/open-artifacts/commit/85bc0b3f70903536842847c47e7a8ff967ba5f63))
+* user display name ([#215](https://github.com/open-artifacts-ai/open-artifacts/issues/215)) ([#218](https://github.com/open-artifacts-ai/open-artifacts/issues/218)) ([22d9ff7](https://github.com/open-artifacts-ai/open-artifacts/commit/22d9ff719772b062b57bc28ec82900f957eefbf5))
+
+
+### Bug Fixes
+
+* **dashboard:** display-name follow-ups from Design's review of [#219](https://github.com/open-artifacts-ai/open-artifacts/issues/219) ([#229](https://github.com/open-artifacts-ai/open-artifacts/issues/229)) ([293e8e2](https://github.com/open-artifacts-ai/open-artifacts/commit/293e8e21993504b8801c1e3ff258ac4c62d97bfd))
+* **dashboard:** favicon, apple-touch-icon and theme-color links ([#195](https://github.com/open-artifacts-ai/open-artifacts/issues/195)) ([e38e9a4](https://github.com/open-artifacts-ai/open-artifacts/commit/e38e9a4fac1150a28261f4affa5dee6ffb6666ec))
+* **dashboard:** invites and shares show the link to send, not an email promise ([#170](https://github.com/open-artifacts-ai/open-artifacts/issues/170)) ([be8338e](https://github.com/open-artifacts-ai/open-artifacts/commit/be8338e6490cffa339492532bd53a4eae4994a93))
+* **dashboard:** M2 review — snippet a11y, instance name in titles, demotion refresh ([#161](https://github.com/open-artifacts-ai/open-artifacts/issues/161)) ([fdc376b](https://github.com/open-artifacts-ai/open-artifacts/commit/fdc376bc7b695a2ce343b1161772eb6afea43ca4))
+* **dashboard:** Settings → Agents spacing on shadcn primitives (P1) ([#222](https://github.com/open-artifacts-ai/open-artifacts/issues/222)) ([d2f8cb2](https://github.com/open-artifacts-ai/open-artifacts/commit/d2f8cb2ce50fa636017c92797b75791c65f7717b))
+* **dashboard:** visibility confirmation layout in Share ([#193](https://github.com/open-artifacts-ai/open-artifacts/issues/193)) ([ac322a4](https://github.com/open-artifacts-ai/open-artifacts/commit/ac322a4ab0487a42e4acf709ea2b078c75b310fd))
+* **e2e:** make the agent journey deterministic under parallel workers ([#185](https://github.com/open-artifacts-ai/open-artifacts/issues/185)) ([#200](https://github.com/open-artifacts-ai/open-artifacts/issues/200)) ([62ee196](https://github.com/open-artifacts-ai/open-artifacts/commit/62ee19635751aa74cfefe2abd96a8850f3927af2))
+* **e2e:** usage smoke skips when analytics is unconfigured (staging red) ([#188](https://github.com/open-artifacts-ai/open-artifacts/issues/188)) ([d5e535b](https://github.com/open-artifacts-ai/open-artifacts/commit/d5e535b18acde04f45dfe42259b128f3144915cd))
+* **email:** copy and deliverability fixes ([#213](https://github.com/open-artifacts-ai/open-artifacts/issues/213)) ([#214](https://github.com/open-artifacts-ai/open-artifacts/issues/214)) ([c6e92a9](https://github.com/open-artifacts-ai/open-artifacts/commit/c6e92a9b7003da21e6da3164c13cac984884ca74))
+* **server:** favicon links on server-rendered pages ([#197](https://github.com/open-artifacts-ai/open-artifacts/issues/197)) ([d665d83](https://github.com/open-artifacts-ai/open-artifacts/commit/d665d831a29866a2625127083fb18619e2cf3cef))
+* **smoke:** staging /healthz reports plan paid since [#212](https://github.com/open-artifacts-ai/open-artifacts/issues/212) ([#220](https://github.com/open-artifacts-ai/open-artifacts/issues/220)) ([cbead9f](https://github.com/open-artifacts-ai/open-artifacts/commit/cbead9f6e73a0bdc312a7f0fabf8dd7450ff3205))
+* **ui:** border-box form controls ([7a097be](https://github.com/open-artifacts-ai/open-artifacts/commit/7a097be81ee7d9a02ab0b069c208bd7f7d6bd38c))
+* **ui:** color-only transitions on Button and Tabs, left-aligned dialog header ([#227](https://github.com/open-artifacts-ai/open-artifacts/issues/227)) ([3c3cad1](https://github.com/open-artifacts-ai/open-artifacts/commit/3c3cad1bdab44463efd377ce8254f5aad10fff01))
+
+
+### Performance Improvements
+
+* **server:** raw CDP client for thumbnail captures (drop puppeteer) ([#192](https://github.com/open-artifacts-ai/open-artifacts/issues/192)) ([d6b4680](https://github.com/open-artifacts-ai/open-artifacts/commit/d6b4680b008114d92b9b878d4eb976c6c1350d39))
+
 ## [0.2.1](https://github.com/leourbina/open-artifacts/compare/v0.2.0...v0.2.1) (2026-10-19)
 
 
