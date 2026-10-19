@@ -11,7 +11,9 @@ function watch(page: Page) {
   });
   page.on("pageerror", (e) => problems.push(`pageerror: ${e.message}`));
   page.on("requestfailed", (r) => {
-    if (new URL(r.url()).pathname.startsWith("/api/"))
+    // A request the browser cancels on navigation is not a failure; real errors still are.
+    const aborted = /ERR_ABORTED|cancelled/i.test(r.failure()?.errorText ?? "");
+    if (!aborted && new URL(r.url()).pathname.startsWith("/api/"))
       problems.push(`failed: ${r.method()} ${r.url()}`);
   });
   page.on("response", (r) => {
