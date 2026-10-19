@@ -250,15 +250,18 @@ test("keyboard: role select, invite dialog and remove confirm without a mouse", 
   await page.keyboard.press("Escape");
   await expect(page.getByRole("listbox")).toBeHidden();
   await expect(sel).toBeFocused();
-  await page
-    .getByRole("button", { name: /invite/i })
-    .first()
-    .focus();
+  await page.getByRole("button", { name: "Add member" }).first().focus();
   await page.keyboard.press("Enter");
   const dlg = page.getByRole("dialog");
   await expect(dlg).toBeVisible();
   await expect(dlg.getByRole("textbox", { name: "Email" })).toBeFocused();
   await page.keyboard.type("kbd@example.com");
+  await page.keyboard.press("Enter");
+  // #167: the dialog confirms with the sign-in link before closing.
+  await expect(
+    dlg.getByRole("heading", { name: "kbd@example.com can now sign in" }),
+  ).toBeVisible();
+  await dlg.getByRole("button", { name: "Done" }).focus();
   await page.keyboard.press("Enter");
   await expect(dlg).toBeHidden();
   await expect(page.getByText("kbd@example.com")).toBeVisible();

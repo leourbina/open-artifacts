@@ -71,7 +71,7 @@ describe("share panel", () => {
     const input = await screen.findByRole("textbox", { name: "Email" });
     for (const bad of ["nope", "josé@example.com", "a@exämple.com"]) {
       fireEvent.change(input, { target: { value: bad } });
-      fireEvent.click(screen.getByRole("button", { name: "Invite" }));
+      fireEvent.click(screen.getByRole("button", { name: "Add" }));
       await screen.findByRole("alert");
     }
     const puts = seen.filter((u) => u.pathname === R.shares(OWNED));
@@ -83,8 +83,31 @@ describe("share panel", () => {
     mount(panel(OWNED));
     const input = await screen.findByRole("textbox", { name: "Email" });
     fireEvent.change(input, { target: { value: "  Eve@Example.com " } });
-    fireEvent.click(screen.getByRole("button", { name: "Invite" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
     await screen.findByText("eve@example.com");
+  });
+
+  it("after adding, shows the artifact link to send, with no email promise", async () => {
+    mount(panel(OWNED));
+    expect(
+      await screen.findByText(
+        "No email is sent. Copy the link and share it yourself.",
+      ),
+    ).toBeInTheDocument();
+    fireEvent.change(await screen.findByRole("textbox", { name: "Email" }), {
+      target: { value: "eve@example.com" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(
+      await screen.findByText("Shared with eve@example.com"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Artifact link" })).toHaveValue(
+      location.origin + viewerPath(OWNED),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    await waitFor(() =>
+      expect(screen.queryByText("Shared with eve@example.com")).toBeNull(),
+    );
   });
 
   it("a share row renders its email with a title", async () => {
