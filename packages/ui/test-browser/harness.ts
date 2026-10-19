@@ -1,10 +1,48 @@
 // Shared by the browser tests: open a Ladle story in Chromium under
 // <html data-theme>, with axe and the WCAG ratio helpers injected.
 import axe from "axe-core";
-import type { Browser, Page } from "playwright";
+import { type Browser, chromium, type Page } from "playwright";
 import { inject } from "vitest";
 
 export type Focus = { id: string; ok: boolean; detail: string } | null;
+
+// Chromium is launched as a server so teardown has its process: closing can
+// stall on a loaded runner, so it gets 5s before the process is killed.
+// Pass `close` to afterAll with a timeout above that.
+export async function launch() {
+  const server = await chromium.launchServer();
+  const browser = await chromium.connect(server.wsEndpoint());
+  const close = async () => {
+    let timer: NodeJS.Timeout | undefined;
+    const closed = await Promise.race([
+      server.close().then(() => true),
+      new Promise<false>((r) => {
+        timer = setTimeout(() => r(false), 5_000);
+      }),
+    ]);
+    clearTimeout(timer);
+    if (!closed) await server.kill();
+  };
+  return { browser, close };
+}
+
+// Radix overlays take keys only once settled. Focus moves in on mount, but
+// Escape is wired one render later: the DismissableLayer re-renders as the
+// top layer (setting pointer-events:auto on itself while the body is none)
+// and only then attaches its keydown listener, in an effect. Waiting out the
+// open animation as well puts that effect behind us.
+export const settled = (page: Page, sel: string) =>
+  page.waitForFunction((s) => {
+    const el = document.querySelector(s);
+    return (
+      el?.getAttribute("data-state") === "open" &&
+      el.contains(document.activeElement) &&
+      getComputedStyle(el).pointerEvents === "auto" &&
+      el
+        .getAnimations({ subtree: true })
+        .every((a) => a.playState === "finished")
+    );
+  }, sel);
 
 export async function openStory(
   browser: Browser,

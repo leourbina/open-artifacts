@@ -1,17 +1,18 @@
 // The shadcn sidebar in Chromium, both themes: axe, focus outlines, the
 // active item's indicator, off-canvas collapse, and the mobile sheet.
-import { type Browser, chromium, type Page } from "playwright";
+import type { Browser, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type Focus, oa, openStory } from "./harness";
+import { type Focus, launch, oa, openStory, settled } from "./harness";
 
 const STORY = "shadcn-sidebar--shadcn-sidebar";
 const READY = '[data-slot="sidebar-wrapper"]';
 
 let browser: Browser;
+let close: () => Promise<void>;
 beforeAll(async () => {
-  browser = await chromium.launch();
+  ({ browser, close } = await launch());
 });
-afterAll(() => browser?.close());
+afterAll(() => close?.(), 15_000);
 
 const tabWalk = async (page: Page, max = 40) => {
   const seen: NonNullable<Focus>[] = [];
@@ -129,8 +130,9 @@ describe.each(["light", "dark"])("shadcn sidebar in Chromium (%s)", (theme) => {
     const trigger = page.locator('[data-sidebar="trigger"]');
     await trigger.focus();
     await page.keyboard.press("Enter");
-    const sheet = page.locator('[data-mobile="true"][role="dialog"]');
-    await sheet.waitFor();
+    const sel = '[data-mobile="true"][role="dialog"]';
+    const sheet = page.locator(sel);
+    await settled(page, sel);
     const violations = await oa(page, "axeRun", true);
     await page.keyboard.press("Escape");
     await sheet.waitFor({ state: "detached" });

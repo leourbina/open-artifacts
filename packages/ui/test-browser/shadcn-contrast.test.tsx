@@ -3,38 +3,21 @@
 // themes: axe incl. color-contrast, outlined borders, every focus outline
 // (Tab walk), each overlay while open, state indicators, focus traps, toasts.
 // jsdom can't do any of this. Run: pnpm --filter @oa/ui test:browser
-import { type Browser, chromium, type Page } from "playwright";
+import type { Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type Focus, oa, openStory } from "./harness";
+import { type Focus, launch, oa, openStory, settled } from "./harness";
 
 const STORY = "shadcn-a11y--shadcn-a11y-fixture";
 
 let browser: Browser;
+let close: () => Promise<void>;
 beforeAll(async () => {
-  browser = await chromium.launch();
+  ({ browser, close } = await launch());
 });
-afterAll(() => browser?.close());
+afterAll(() => close?.(), 15_000);
 
 const open = (theme: string) =>
   openStory(browser, STORY, theme, "[data-a11y-ready]");
-
-// Radix overlays take keys only once settled. Focus moves in on mount, but
-// Escape is wired one render later: the DismissableLayer re-renders as the
-// top layer (setting pointer-events:auto on itself while the body is none)
-// and only then attaches its keydown listener, in an effect. Waiting out the
-// open animation as well puts that effect behind us.
-const settled = (page: Page, sel: string) =>
-  page.waitForFunction((s) => {
-    const el = document.querySelector(s);
-    return (
-      el?.getAttribute("data-state") === "open" &&
-      el.contains(document.activeElement) &&
-      getComputedStyle(el).pointerEvents === "auto" &&
-      el
-        .getAnimations({ subtree: true })
-        .every((a) => a.playState === "finished")
-    );
-  }, sel);
 
 describe.each(["light", "dark"])("shadcn in Chromium (%s)", (theme) => {
   it("has no axe violations, color-contrast included", async () => {
@@ -146,11 +129,22 @@ describe.each(["light", "dark"])("shadcn in Chromium (%s)", (theme) => {
 
   it("tooltip has no axe violations when shown", async () => {
     const page = await open(theme);
-    await page
+    const trigger = page
       .getByRole("button", { name: "Hover", exact: true })
-      .first()
-      .focus();
-    await page.waitForSelector('[role="tooltip"]', { state: "attached" });
+      .first();
+    // Radix closes a tooltip on any page scroll, and focus() scrolls the
+    // trigger in, firing the scroll event a frame after the tooltip opens.
+    // Scroll first and let that frame pass, then wait out the fade-in.
+    await trigger.scrollIntoViewIfNeeded();
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+    await trigger.focus();
+    await page.waitForFunction(() => {
+      const el = document.querySelector('[data-slot="tooltip-content"]');
+      return (
+        el?.getAttribute("data-state")?.endsWith("open") &&
+        el.getAnimations().every((a) => a.playState === "finished")
+      );
+    });
     expect(await oa(page, "axeRun")).toEqual([]);
     await page.close();
   });
