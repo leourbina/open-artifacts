@@ -122,7 +122,7 @@ export {
   useSidebar,
 } from "./ui/sidebar";
 export { Skeleton } from "./ui/skeleton";
-export { Toaster } from "./ui/sonner";
+export { Toaster, toast } from "./ui/sonner";
 export {
   Table,
   TableBody,
