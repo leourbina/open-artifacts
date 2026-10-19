@@ -1,7 +1,7 @@
 import { type ArtifactSummary, LIMITS, R } from "@oa/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
-import { api } from "../api/client";
+import { ApiClientError, api } from "../api/client";
 import { qk, useVersionInfo } from "../api/queries";
 
 // Once per session, across remounts.
@@ -57,7 +57,7 @@ export function createSideEffects(d: SideEffectDeps) {
         () => d.invalidate("thumbnail"),
         (e) => {
           // 409: the server already holds a newer thumbnail.
-          if ((e as { status?: number } | null)?.status === 409)
+          if (e instanceof ApiClientError && e.status === 409)
             d.invalidate("thumbnail");
           else console.debug("thumbnail upload failed", e);
         },

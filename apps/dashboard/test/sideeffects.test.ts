@@ -1,5 +1,6 @@
 import { type ArtifactSummary, LIMITS, R } from "@oa/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiClientError } from "../src/api/client";
 import { createBridge } from "../src/viewer/bridge";
 import {
   createSideEffects,
@@ -72,7 +73,7 @@ describe("thumbnails", () => {
   it("treats 409 as up to date: refreshes, no log", async () => {
     const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
     const { fx, put, invalidate } = setup(art());
-    put.mockRejectedValue(Object.assign(new Error("stale"), { status: 409 }));
+    put.mockRejectedValue(new ApiClientError("conflict", "stale", 409));
     fx.onThumb(blob(10));
     await flush();
     expect(invalidate).toHaveBeenCalledTimes(1);
