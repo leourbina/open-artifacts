@@ -1,4 +1,6 @@
 .control {
+  /* Include padding and border in width:100% so fields never overflow cards. */
+  box-sizing: border-box;
   height: 30px;
   width: 100%;
   padding: 0 var(--oa-space-2);
