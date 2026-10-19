@@ -26,13 +26,6 @@ export default defineConfig({
     // Resolve the workspace contract from source so no prior shared build is needed.
     alias: [
       {
-        // @oa/ui/shadcn.css imports all of Tailwind; drop preflight (src/tailwind.css).
-        find: /^tailwindcss$/,
-        replacement: fileURLToPath(
-          new URL("./src/tailwind.css", import.meta.url),
-        ),
-      },
-      {
         find: /^@oa\/shared$/,
         replacement: fileURLToPath(
           new URL("../../packages/shared/src/index.ts", import.meta.url),
