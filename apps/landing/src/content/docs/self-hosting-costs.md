@@ -4,7 +4,7 @@ description: What an instance costs on Cloudflare's free and paid plans.
 order: 7
 ---
 
-Every feature works on the Cloudflare Workers Free plan. For a person or a small team, an instance usually costs nothing.
+Every feature works on the Cloudflare Workers Free plan. For personal use, an instance usually costs nothing.
 
 ## What it uses
 
@@ -28,6 +28,8 @@ The free plan allows 100,000 Worker requests a day and 10 ms of CPU time per req
 The dashboard's **Usage** page shows today's requests and database reads and writes, and warns as you near the limits. It needs an optional `ANALYTICS_TOKEN` secret with Account Analytics read access; without it, the page explains how to add one.
 
 ## When to upgrade
+
+The free plan handles personal use; sustained bursts of large publishes can exceed the 10 ms CPU limit. Workers Paid ($5 a month) is recommended for heavy or team use.
 
 Consider Workers Paid (from $5 a month) if you publish heavily, share public links that get a lot of traffic, or run busy live pages. Paid plans raise the request and CPU limits; nothing in Open Artifacts changes.
 
