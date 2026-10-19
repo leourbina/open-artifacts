@@ -9,7 +9,6 @@ on:
         required: true
         type: string
 permissions:
-  actions: write
   contents: write
   pull-requests: write
 jobs:
@@ -20,24 +19,20 @@ jobs:
       release_created: ${{ steps.rp.outputs.release_created }}
       tag_name: ${{ steps.rp.outputs.tag_name }}
     steps:
+      # The release App's token, not GITHUB_TOKEN: PRs and pushes made with
+      # GITHUB_TOKEN trigger no workflows, so the release PR's required checks would
+      # never run.
+      - id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
       - id: rp
         uses: googleapis/release-please-action@v4
         with:
+          token: ${{ steps.app.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-      - if: ${{ steps.rp.outputs.release_created != 'true' }}
-        uses: actions/checkout@v4
-        with:
-          sparse-checkout: scripts/ci
-      # Pushes made with GITHUB_TOKEN (release-please creating AND updating its PR on
-      # every push to main) do not trigger workflows, so the required checks would never
-      # run and the release PR would sit blocked. Dispatch ci.yml on the release branch
-      # whenever that PR is open. Skipped on release_created: the PR was just merged.
-      - if: ${{ steps.rp.outputs.release_created != 'true' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BRANCH: release-please--branches--main--components--open-artifacts
-        run: bash scripts/ci/release-pr-dispatch.sh
   deploy-landing:
     needs: [release-please]
     # always(): on workflow_dispatch the release-please job is skipped.

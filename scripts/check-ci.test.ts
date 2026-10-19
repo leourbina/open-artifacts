@@ -1,5 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -385,7 +391,6 @@ describe("release-please", () => {
     );
     expect(w.on.push.branches).toContain("main");
     expect(w.permissions).toMatchObject({
-      actions: "write",
       contents: "write",
       "pull-requests": "write",
     });
@@ -393,29 +398,41 @@ describe("release-please", () => {
       /googleapis\/release-please-action@v\d+/,
     );
   });
-  it("dispatches CI on the release branch and deploys the tag", () => {
+  it("deploys the tag", () => {
     const raw = read(".github/workflows/release-please.yml");
-    expect(raw).toContain("scripts/ci/release-pr-dispatch.sh");
-    expect(ci("release-pr-dispatch.sh")).toContain("gh workflow run ci.yml");
-    expect(ci("release-pr-dispatch.sh")).toContain("headRefName");
     // biome-ignore lint/suspicious/noTemplateCurlyInString: literal workflow expression
     expect(raw).toContain("needs.release-please.outputs.tag_name");
     const gate = wf("release-please.yml").jobs["deploy-landing"].steps;
     expect(JSON.stringify(gate)).toContain("steps.gate.outputs.present");
   });
-  it("dispatches CI whenever the release PR exists, not only when created", () => {
+  it("release-please opens its PR with the release App token, so CI runs on it", () => {
+    // PRs and pushes made with GITHUB_TOKEN trigger no workflows; an App token's do.
     const steps = wf("release-please.yml").jobs["release-please"].steps;
     // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
-    const step = steps.find((s: any) =>
-      (s.run ?? "").includes("release-pr-dispatch.sh"),
+    const app = steps.find((s: any) =>
+      /^actions\/create-github-app-token@v\d+$/.test(s.uses ?? ""),
     );
-    expect(step).toBeDefined();
-    expect(String(step.if ?? "")).not.toBe(
-      "steps.rp.outputs.prs_created == 'true'",
+    expect(app?.id).toBe("app");
+    expect(app.with).toEqual({
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal workflow expression
+      "app-id": "${{ secrets.RELEASE_APP_ID }}",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal workflow expression
+      "private-key": "${{ secrets.RELEASE_APP_PRIVATE_KEY }}",
+    });
+    // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
+    const rp = steps.find((s: any) => s.id === "rp");
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal workflow expression
+    expect(rp.with.token).toBe("${{ steps.app.outputs.token }}");
+    expect(steps.indexOf(app)).toBeLessThan(steps.indexOf(rp));
+  });
+  it("has no dispatch workaround for the release PR", () => {
+    const raw = read(".github/workflows/release-please.yml");
+    expect(raw).not.toContain("release-pr-dispatch");
+    expect(raw).not.toContain("gh workflow run");
+    expect(existsSync(join(root, "scripts/ci/release-pr-dispatch.sh"))).toBe(
+      false,
     );
-    expect(String(step.if ?? "")).toContain("release_created");
-    expect(ci("release-pr-dispatch.sh")).toContain("gh pr list");
-    expect(step.env.BRANCH).toContain("release-please--branches--main");
+    expect(wf("release-please.yml").permissions.actions).toBeUndefined();
   });
   it("deploy-landing uses no scripts/ci files (older tags lack them)", () => {
     const steps = wf("release-please.yml").jobs["deploy-landing"].steps;
