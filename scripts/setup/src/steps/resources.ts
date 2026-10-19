@@ -60,16 +60,11 @@ export function renderConfig(
   vars: Record<string, string | undefined>,
   browser = true,
 ): string {
-  // The marker line is dropped (off) or kept without its comment (on).
+  // The template stays strict JSON (e2e fixtures JSON.parse it), so the
+  // browser binding line is matched by its key and dropped when off.
   const text = template
     .split("\n")
-    .flatMap((l) =>
-      l.includes("// @browser")
-        ? browser
-          ? [l.replace(/\s*\/\/ @browser.*$/, "")]
-          : []
-        : [l],
-    )
+    .filter((l) => browser || !/^\s*"browser":/.test(l))
     .join("\n")
     .replace(/\{\{(\w+)\}\}/g, (_, k: string) => {
       const val = vars[k];

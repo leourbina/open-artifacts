@@ -97,6 +97,13 @@ describe("wrangler.staging.jsonc env.staging", () => {
     );
     expect(tpl.browser).toEqual({ binding: "BROWSER" });
   });
+  it("keeps the setup template strict JSON (e2e fixtures JSON.parse it)", () => {
+    const raw = readFileSync(
+      join(root, "apps/server/wrangler.template.jsonc"),
+      "utf8",
+    );
+    expect(() => JSON.parse(raw)).not.toThrow();
+  });
   it("binds RL_ANON ratelimit", () => {
     const rl = by(env.ratelimits, "name", "RL_ANON") as {
       namespace_id: string;
