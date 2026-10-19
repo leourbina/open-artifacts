@@ -275,36 +275,6 @@ function alerts(metrics: Metric[]) {
     });
 }
 
-function Guide() {
-  return (
-    <section className="oa-card oa-guide" aria-labelledby="oa-guide-h">
-      <h2 id="oa-guide-h">When to upgrade</h2>
-      <p>
-        The free plan's limits reset every day at 00:00 UTC. A meter turns amber
-        at 80% and red at 95%. Once a limit is reached, writes fail until the
-        reset.
-      </p>
-      <p>
-        If one turns red most days, move the account to Workers Paid in the
-        Cloudflare dashboard. Nothing in Open Artifacts changes, and no redeploy
-        is needed.
-      </p>
-      <ul>
-        <li>
-          <b>Worker requests</b> grow with views, uploads, and agent calls.
-        </li>
-        <li>
-          <b>D1</b> grows with library browsing, search, and publishing.
-        </li>
-        <li>
-          <b>Durable Objects</b> grow with live pages: polls, checklists, shared
-          data.
-        </li>
-      </ul>
-    </section>
-  );
-}
-
 export function Usage() {
   useDocumentTitle("Usage");
   const q = useUsage();
@@ -352,7 +322,6 @@ export function Usage() {
               ))}
           </div>
           <CpuCard metrics={q.data.metrics} />
-          <Guide />
         </>
       )}
     </div>
