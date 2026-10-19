@@ -12,6 +12,7 @@ import {
   MAX_EMAILS_PER_DAY,
   MAX_EMAILS_PER_RECIPIENT_PER_DAY,
   MAX_EMAILS_PER_USER_PER_DAY,
+  sendEmail,
   sweepEmailCounters,
 } from "../src/email/send.js";
 import { publish } from "../src/services/artifacts.js";
@@ -362,4 +363,60 @@ it("the cron sweep drops only past days' email counters", async () => {
     "select key from counters where key in ('email:old', 'email:new', 'client:keep') order by key",
   ).all<{ key: string }>();
   expect(results.map((r) => r.key)).toEqual(["client:keep", "email:new"]);
+});
+
+describe("one recipient per send", () => {
+  // Addresses with RFC specials that a list parser could split or reinterpret.
+  const SPECIAL = [
+    '"a,b"@x.com',
+    "a,b@x.com",
+    "a@x.com,b@y.com",
+    "a;b@x.com",
+    "<a@x.com>",
+    "a(b)@x.com",
+    '"a@x.com"@y.com',
+  ];
+
+  it("invites and shares reject them at validation (400), sending nothing", async () => {
+    const o = await newOwner();
+    const owner = await getUser(env, o.userId);
+    if (!owner) throw new Error("no user");
+    const m = mailer();
+    const e = { ...m, EMAIL_FROM: FROM };
+    for (const addr of SPECIAL) {
+      const before = m.sent.length;
+      const inv = await invite(e, o.cookie, addr);
+      expect(inv.status, addr).toBe(400);
+      const { id } = await publish(
+        env,
+        owner,
+        {
+          title: "t",
+          visibility: "private",
+          format: "markdown",
+          content: "x",
+        } as never,
+        null,
+        undefined,
+        "create",
+      );
+      const sh = await call(e, R.shares(id), o.cookie, "PUT", {
+        email: addr,
+        role: "viewer",
+      });
+      expect(sh.status, addr).toBe(400);
+      expect(m.sent.length).toBe(before);
+    }
+  });
+
+  it("sendEmail itself refuses any `to` that is not one plain address", async () => {
+    const m = mailer();
+    const e = { ...(env as object), ...m, EMAIL_FROM: FROM } as never;
+    const content = () => ({ subject: "s", text: "t", html: "h" });
+    for (const addr of SPECIAL)
+      expect(await sendEmail(e, "u-special", addr, content), addr).toBe(false);
+    expect(m.sent).toHaveLength(0);
+    expect(await sendEmail(e, "u-special", "a+b@x.com", content)).toBe(true);
+    expect(m.sent.map((s) => s.to)).toEqual(["a+b@x.com"]);
+  });
 });

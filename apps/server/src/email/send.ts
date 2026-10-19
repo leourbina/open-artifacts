@@ -15,6 +15,10 @@ export const MAX_EMAILS_PER_RECIPIENT_PER_DAY = 5;
 export const EMAIL_TIMEOUT_MS = 3000;
 const ALL_KEY = "email:*";
 
+// One plain addr-spec: no quotes, commas, semicolons, angle brackets, comments
+// or whitespace, so the binding can never read `to` as a list or display name.
+const SINGLE_ADDRESS = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+$/;
+
 const utcDay = (now: number) => new Date(now).toISOString().slice(0, 10);
 
 // Counts one email unless today's count is already at the cap (the row resets
@@ -71,7 +75,7 @@ export async function sendEmail(
 ): Promise<boolean> {
   const now = opts.now ?? Date.now();
   const { EMAIL, EMAIL_FROM } = env;
-  if (!EMAIL || !EMAIL_FROM) return false;
+  if (!EMAIL || !EMAIL_FROM || !SINGLE_ADDRESS.test(to)) return false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const content = render();
