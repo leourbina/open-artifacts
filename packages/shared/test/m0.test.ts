@@ -150,6 +150,10 @@ describe("routes and misc", () => {
   it("SNIPPET_MARK and limits", () => {
     expect(S.SNIPPET_MARK).toEqual({ open: "\u0002", close: "\u0003" });
     expect(S.LIMITS.uploadUrlTtlSec).toBe(3600);
+    // Search indexes only an entry's first 64 KB (the index alarm's CPU budget).
+    expect(S.LIMITS.indexTextBytes).toBe(64 * 1024);
+    // Body text is indexed this long after a publish (bursts coalesce).
+    expect(S.LIMITS.indexDebounceMs).toBe(10_000);
   });
   it("summary deletedAt, list filters", () => {
     expect(S.ArtifactSummarySchema.safeParse(summary).success).toBe(true);

@@ -1,6 +1,13 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { type Member, newId, PageSchema, R, SearchHitSchema } from "@oa/shared";
+import {
+  LIMITS,
+  type Member,
+  newId,
+  PageSchema,
+  R,
+  SearchHitSchema,
+} from "@oa/shared";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import type { Env } from "../src/env.js";
@@ -87,6 +94,11 @@ describe("async search indexing (C3)", () => {
     expect(await inDo(a.id, (i) => i.pendingIndex())).toBeNull();
     // Nothing pending, no socket: no alarm left.
     expect(await runIndex(a.id)).toBe(false);
+  });
+
+  it("debounces 10 s: bursts coalesce, off the publishing isolate", () => {
+    expect(INDEX_DELAY_MS).toBe(LIMITS.indexDebounceMs);
+    expect(INDEX_DELAY_MS).toBe(10_000);
   });
 
   it("a newer version supersedes an older pending one (one index run)", async () => {
