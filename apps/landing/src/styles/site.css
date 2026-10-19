@@ -258,8 +258,12 @@ code,
 }
 
 .demo-section,
+.gallery-section,
 .story-section {
   margin-top: var(--section-gap);
+}
+.gallery-section .gallery {
+  margin-top: 24px;
 }
 .section-lede {
   max-width: 64ch;

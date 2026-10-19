@@ -4,6 +4,7 @@ import { REPO_URL } from "@oa/shared";
 import AgentWiring from "./AgentWiring.astro";
 import ChatDemo from "./ChatDemo.astro";
 import FeatureStory from "./FeatureStory.astro";
+import Gallery from "./gallery/Gallery.astro";
 import Shot from "./Shot.astro";
 
 const prompt = "set up open-artifacts.com/llms.txt";
@@ -88,6 +89,15 @@ const plans = [
       thing, ready to click and use. Try each example.
     </p>
     <ChatDemo />
+  </section>
+
+  <section class="wrap gallery-section" aria-labelledby="gallery-h">
+    <h2 id="gallery-h">What any AI agent makes</h2>
+    <p class="section-lede">
+      Six artifacts that agents published, and every one works. Use them here, or open one to see its
+      link, its versions and who it's shared with.
+    </p>
+    <Gallery />
   </section>
 
   <section class="band" aria-labelledby="steps-h">

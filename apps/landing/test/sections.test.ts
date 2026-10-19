@@ -54,6 +54,20 @@ describe("landing sections", () => {
     expect(story).toContain("Restore this version");
   });
 
+  it("the gallery has six working tiles and an accessible viewer", () => {
+    const gallery = index.slice(index.indexOf("data-gallery"));
+    expect(gallery.match(/<article[^>]*data-tile/g)).toHaveLength(6);
+    expect(gallery.match(/aria-haspopup="dialog"/g)).toHaveLength(6);
+    expect(gallery).toMatch(/<dialog[^>]*aria-labelledby="vw-title"/);
+    for (const title of [
+      "Publishing dashboard",
+      "Sprint 41 retro poll",
+      "Mortgage calculator",
+      "backfill.py",
+    ])
+      expect(gallery).toContain(`aria-label="Open ${title}"`);
+  });
+
   it("the hero keeps the library screenshot", () => {
     expect(index).toMatch(/class="frame hero-shot"/);
   });
