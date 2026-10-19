@@ -88,6 +88,22 @@ describe("wrangler.staging.jsonc env.staging", () => {
       run_worker_first: true,
     });
   });
+  it("binds BROWSER (Browser Run) in staging and the setup template", () => {
+    expect(env.browser).toEqual({ binding: "BROWSER" });
+    const tpl = JSON.parse(
+      strip(
+        readFileSync(join(root, "apps/server/wrangler.template.jsonc"), "utf8"),
+      ),
+    );
+    expect(tpl.browser).toEqual({ binding: "BROWSER" });
+  });
+  it("keeps the setup template strict JSON (e2e fixtures JSON.parse it)", () => {
+    const raw = readFileSync(
+      join(root, "apps/server/wrangler.template.jsonc"),
+      "utf8",
+    );
+    expect(() => JSON.parse(raw)).not.toThrow();
+  });
   it("binds RL_ANON ratelimit", () => {
     const rl = by(env.ratelimits, "name", "RL_ANON") as {
       namespace_id: string;

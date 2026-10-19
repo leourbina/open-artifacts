@@ -22,6 +22,8 @@ export type State = {
   welcomeArtifactId?: string;
   /** The user declined the optional ANALYTICS_TOKEN; don't ask again. */
   analyticsSkipped?: boolean;
+  /** Browser Run binding on/off; absent means on. Set by --no-browser, kept across --upgrade. */
+  browser?: boolean;
 };
 
 /** `.openartifacts/state.json` under the repo root (gitignored). */

@@ -1,5 +1,58 @@
 # Changelog
 
+## [0.2.1](https://github.com/leourbina/open-artifacts/compare/v0.2.0...v0.2.1) (2026-10-19)
+
+
+### Bug Fixes
+
+* **setup:** selftest follows the markdown render shell to its entry file ([#165](https://github.com/leourbina/open-artifacts/issues/165)) ([b28e20e](https://github.com/leourbina/open-artifacts/commit/b28e20e9f37bda0e17dfda5247ce6924d2cf8b04))
+
+## [0.2.0](https://github.com/leourbina/open-artifacts/compare/v0.1.0...v0.2.0) (2026-10-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **server:** 256 KB inline limit, async search indexing (C3) ([#126](https://github.com/leourbina/open-artifacts/issues/126))
+
+### Features
+
+* **dashboard:** card and row hover, focus and pressed states ([#136](https://github.com/leourbina/open-artifacts/issues/136)) ([c30f838](https://github.com/leourbina/open-artifacts/commit/c30f838971e49e41bdf170db328df6f7ad832b05))
+* **dashboard:** send db.resync on every subscription open (C4) ([#128](https://github.com/leourbina/open-artifacts/issues/128)) ([686132e](https://github.com/leourbina/open-artifacts/commit/686132e63dab757d94b5122e9f4f643a1dddfb53))
+* **dashboard:** settings agents — MCP snippets, OAuth clients, tokens (FE9) ([#116](https://github.com/leourbina/open-artifacts/issues/116)) ([6a81ed5](https://github.com/leourbina/open-artifacts/commit/6a81ed56768ef33cb0439dde71aadffcab858eba))
+* **dashboard:** settings instance and usage (FE10) ([#121](https://github.com/leourbina/open-artifacts/issues/121)) ([5d1662b](https://github.com/leourbina/open-artifacts/commit/5d1662b1a2e4975fde6b086cb84195d4bfde0cc8))
+* **dashboard:** thumbnails and PDF text pipeline (FE11) ([#124](https://github.com/leourbina/open-artifacts/issues/124)) ([cfe8b03](https://github.com/leourbina/open-artifacts/commit/cfe8b0380913ecd04f33cdcbd403ae73100983b9))
+* **landing:** product-led layout with agent-first copy (D7) ([49df286](https://github.com/leourbina/open-artifacts/commit/49df2865b7aaad6afba7b21c418a7129e1b25712))
+* **runtime:** db.resync event after reconnect (C4) ([#125](https://github.com/leourbina/open-artifacts/issues/125)) ([03c7aa8](https://github.com/leourbina/open-artifacts/commit/03c7aa812a9f748c9658e8bffaa1a3888690cb70))
+* **server:** 256 KB inline limit, async search indexing (C3) ([#126](https://github.com/leourbina/open-artifacts/issues/126)) ([4a9ae0f](https://github.com/leourbina/open-artifacts/commit/4a9ae0f0633da9e319e2bd528e5b9063d98e88cd))
+* **server:** expose instance name to the SPA shell via meta tag ([#158](https://github.com/leourbina/open-artifacts/issues/158)) ([7079868](https://github.com/leourbina/open-artifacts/commit/7079868c8abaa5e061789ca9d8654db9d979aaaf))
+* **server:** MCP server, tools and PAT routing (B14-1) ([#95](https://github.com/leourbina/open-artifacts/issues/95)) ([75a8263](https://github.com/leourbina/open-artifacts/commit/75a8263484192bca5cb443aad525163065893cdb))
+* **server:** OAuth provider, consent page and oauth-clients routes (B14-2) ([#97](https://github.com/leourbina/open-artifacts/issues/97)) ([970d5e2](https://github.com/leourbina/open-artifacts/commit/970d5e2787a9c9041de13e876b54e5bc6da33a29))
+* **setup:** --ci mode never prints the owner token and revokes it after selftest (B16-7) ([#137](https://github.com/leourbina/open-artifacts/issues/137)) ([8e6ae6f](https://github.com/leourbina/open-artifacts/commit/8e6ae6f0e18854e082adc721655f8e8f99ad9fe4))
+* **setup:** optional BROWSER binding (Browser Run), default on; --no-browser opt-out ([#154](https://github.com/leourbina/open-artifacts/issues/154)) ([1b5b6cd](https://github.com/leourbina/open-artifacts/commit/1b5b6cdd247d3d70fa85395054ac801c989e73be))
+* **setup:** rebuild state from Cloudflare by name; --check read-only mode (B16-5) ([#111](https://github.com/leourbina/open-artifacts/issues/111)) ([7d233f1](https://github.com/leourbina/open-artifacts/commit/7d233f1551a8e71c895990ffd72eaaed9b5e2262))
+
+
+### Bug Fixes
+
+* **ci:** checkout before release-pr-dispatch; guard scripts/ use without checkout ([#142](https://github.com/leourbina/open-artifacts/issues/142)) ([9409524](https://github.com/leourbina/open-artifacts/commit/9409524860050ec207284da45405f9d8acb2cc52))
+* **dashboard:** agent snippets never embed the token ([#148](https://github.com/leourbina/open-artifacts/issues/148)) ([#150](https://github.com/leourbina/open-artifacts/issues/150)) ([2ea0fd1](https://github.com/leourbina/open-artifacts/commit/2ea0fd163965183fa18cfdb308ac6564f0158f2a))
+* **dashboard:** deterministic usage date and e2e abort handling ([#147](https://github.com/leourbina/open-artifacts/issues/147)) ([5a2f387](https://github.com/leourbina/open-artifacts/commit/5a2f38766f7b697d85643c957c2fdad8e56a611b))
+* **dashboard:** whole library card and row open the artifact ([#133](https://github.com/leourbina/open-artifacts/issues/133)) ([2e3469e](https://github.com/leourbina/open-artifacts/commit/2e3469eeaa044743a52820826f3ac8c2709a9a0d))
+* **server:** key /oauth/token rate limit on the authenticated client ([#149](https://github.com/leourbina/open-artifacts/issues/149)) ([#151](https://github.com/leourbina/open-artifacts/issues/151)) ([c54c7ce](https://github.com/leourbina/open-artifacts/commit/c54c7ce802e181b9a151f998b6d69cbec4074748))
+* **server:** M2 review fixes (sockets, privacy, quotas, MCP parity) ([#119](https://github.com/leourbina/open-artifacts/issues/119)) ([4161daa](https://github.com/leourbina/open-artifacts/commit/4161daa8f2efeec7d1017294900ea3d7b3d2cc4d))
+* **setup:** agent-config follow-ups (OpenCode oauth:false, unset token, guidance) ([#105](https://github.com/leourbina/open-artifacts/issues/105)) ([0615472](https://github.com/leourbina/open-artifacts/commit/061547274ce92d7870eb4d6b6b027ee820df54a9))
+* **setup:** agent-config never embeds the token ([#98](https://github.com/leourbina/open-artifacts/issues/98)) ([43dba90](https://github.com/leourbina/open-artifacts/commit/43dba905edd628415b6fc2c3dd36acf965d5fb3b))
+* **setup:** owner token revokes prior setup PATs, respects the cap, demotes a replaced owner (B16-6) ([#117](https://github.com/leourbina/open-artifacts/issues/117)) ([855f646](https://github.com/leourbina/open-artifacts/commit/855f6467179bfd3b397e521ca05235dc560edb8e))
+* **ui,render:** control border contrast and render error style ([19223b2](https://github.com/leourbina/open-artifacts/commit/19223b2c969bb78987fcafa55a704ecd4b0ada1f))
+
+
+### Performance Improvements
+
+* **server:** 10 s index debounce, 64 KB index input ([#145](https://github.com/leourbina/open-artifacts/issues/145)) ([09764d0](https://github.com/leourbina/open-artifacts/commit/09764d09c1b82dc5ac1952f5b5a1e09eb7908b6f))
+* **server:** cut per-request CPU on publish and list ([#120](https://github.com/leourbina/open-artifacts/issues/120)) ([bfbea08](https://github.com/leourbina/open-artifacts/commit/bfbea08eb948d8239c61d65ec1140502d8b56cb5))
+* **server:** eager isolate init, 128 KB index cap ([#134](https://github.com/leourbina/open-artifacts/issues/134)) ([debd746](https://github.com/leourbina/open-artifacts/commit/debd746969a2658a07224016d5fa268e783b2a62))
+* **server:** leaner request path and publish allocations ([#141](https://github.com/leourbina/open-artifacts/issues/141)) ([c5dda24](https://github.com/leourbina/open-artifacts/commit/c5dda24ece98a83a40e10518eddeb84c6e0b1156))
+
 ## 0.1.0 (2026-10-18)
 
 

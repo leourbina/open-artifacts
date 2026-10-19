@@ -9,6 +9,7 @@ import {
   session,
 } from "./http/middleware.js";
 import { type AppType, mountRoutes } from "./routes/index.js";
+import { withInstanceMeta } from "./routes/shell.js";
 
 export const ROBOTS = "User-agent: *\nDisallow: /";
 
@@ -70,7 +71,7 @@ export function createApp(mount: (app: AppType) => void = mountRoutes) {
   app.all("/robots.txt", methodNotAllowed);
 
   // c.var.user (Bearer PAT wins over the cookie) for Worker routes only, so
-  // SPA/asset requests never touch D1. Elsewhere caller() sees anonymous.
+  // SPA/asset requests never touch D1 (beyond the shell's instance-name read). Elsewhere caller() sees anonymous.
   for (const p of SESSION_PATHS) app.use(p, unlessSigned(session()));
   // Cookie-authenticated mutations need X-OA-Request: 1 (PATs exempt).
   app.use("/api/v1/*", unlessSigned(csrf()));
@@ -80,12 +81,13 @@ export function createApp(mount: (app: AppType) => void = mountRoutes) {
 
   // Final fallback (registered last, in one place): SPA from ASSETS for GET/HEAD non-Worker paths.
   // (Requires run_worker_first: true, so the Worker sees every request.)
-  app.on(["GET", "HEAD"], "*", (c) => {
+  app.on(["GET", "HEAD"], "*", async (c) => {
     const path = normalizedPath(c.req.url);
     if (path === null || WORKER_PREFIX.test(path) || !c.env.ASSETS) {
       return toErrorResponse(new ApiError("not_found", "Not found"));
     }
-    return c.env.ASSETS.fetch(c.req.raw);
+    const res = await c.env.ASSETS.fetch(c.req.raw);
+    return path.startsWith("/assets/") ? res : withInstanceMeta(c.env, res);
   });
   return app;
 }

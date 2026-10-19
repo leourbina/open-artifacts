@@ -14,6 +14,8 @@ export type Opts = {
   /** With --check: exit 2 when a step (other than an `always` one) is todo. */
   strict: boolean;
   newOwnerToken: boolean;
+  /** Render the BROWSER binding (Browser Run). Default on; --no-browser or saved state turns it off. */
+  browser: boolean;
   /** False under --yes or --json: never prompt. */
   interactive: boolean;
   json: boolean;
