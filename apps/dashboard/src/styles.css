@@ -8,7 +8,8 @@ body {
   font: 400 var(--oa-text-sm) / 1.45 var(--oa-font-sans);
 }
 .oa-edge {
-  min-height: 70vh;
+  min-height: 100vh;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -149,4 +150,127 @@ body {
   min-width: 0;
   font-family: var(--oa-font-mono, ui-monospace, monospace);
   font-size: var(--oa-text-xs);
+}
+
+/* Sign-in: split brand panel (stacks into a header strip on phones). */
+.oa-split {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+.oa-split-brand {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 40px 44px;
+  background: var(--oa-surface-2);
+}
+.oa-split-logo img {
+  height: 28px;
+}
+.oa-split-pitch {
+  position: relative;
+  z-index: 1;
+  max-width: 34rem;
+}
+.oa-split-pitch h2 {
+  margin: 0 0 12px;
+  font-size: 40px;
+  line-height: 1.12;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+}
+.oa-split-pitch p {
+  margin: 0;
+  font-size: var(--oa-text-lg, 18px);
+  color: var(--oa-text-2);
+}
+.oa-split-foot {
+  position: relative;
+  z-index: 1;
+  color: var(--oa-text-muted);
+}
+.oa-split-mark {
+  position: absolute;
+  right: -12%;
+  bottom: -14%;
+  width: 70%;
+  opacity: 0.1;
+  pointer-events: none;
+}
+.oa-split-form {
+  display: flex;
+  align-items: center;
+  padding: 40px 24px;
+}
+.oa-split-formbox {
+  width: 100%;
+  max-width: 360px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.oa-split-formbox h1 {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 600;
+}
+.oa-split-formbox p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--oa-text-2);
+}
+.oa-split-formbox .oa-note {
+  color: var(--oa-text-muted);
+}
+.oa-split-btn {
+  width: 100%;
+  height: 40px;
+  font-size: var(--oa-text-lg);
+  text-decoration: none;
+}
+.oa-dk {
+  display: none;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .oa-lt {
+    display: none;
+  }
+  :root:not([data-theme="light"]) .oa-dk {
+    display: initial;
+  }
+}
+:root[data-theme="dark"] .oa-lt {
+  display: none;
+}
+:root[data-theme="dark"] .oa-dk {
+  display: initial;
+}
+@media (max-width: 760px) {
+  .oa-split {
+    display: block;
+    min-height: 100vh;
+  }
+  .oa-split-brand {
+    padding: 20px 16px;
+    gap: 16px;
+    border-bottom: 1px solid var(--oa-border);
+  }
+  .oa-split-pitch h2 {
+    font-size: 26px;
+  }
+  .oa-split-pitch p {
+    font-size: var(--oa-text-md, 16px);
+  }
+  .oa-split-foot,
+  .oa-split-mark {
+    display: none !important;
+  }
+  .oa-split-form {
+    padding: 32px 16px;
+  }
 }
