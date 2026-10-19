@@ -3,10 +3,14 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: staging
+  cancel-in-progress: false
 jobs:
   id:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - name: Print staging token id (never the token)

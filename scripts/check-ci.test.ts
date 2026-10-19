@@ -538,6 +538,13 @@ describe("ops-staging-token-id.yml", () => {
     expect(triggers(w)).toEqual(["workflow_dispatch"]);
     expect(w.jobs.id.if).toBe("github.ref == 'refs/heads/main'");
   });
+  it("serializes with other staging ops and times out", () => {
+    expect(w.concurrency).toEqual({
+      group: "staging",
+      "cancel-in-progress": false,
+    });
+    expect(w.jobs.id["timeout-minutes"]).toBeLessThanOrEqual(5);
+  });
   it("passes the staging token only to the tested script step", () => {
     expect(raw).toContain("scripts/ops/staging-token-id.sh");
     expect(w.jobs.id.env).toBeUndefined();
