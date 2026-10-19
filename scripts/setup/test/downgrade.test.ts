@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { HELP, run } from "../src/index.ts";
-import { ROOT } from "./fakes.ts";
+import { ROOT, STATE } from "./fakes.ts";
 import { HOSTS, world } from "./world.ts";
 
 type Opts = NonNullable<Parameters<typeof world>[0]>;
@@ -94,6 +94,17 @@ describe("downgrade guard", () => {
     expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
     expect(w.hits.filter((h) => h === "GET /healthz")).toHaveLength(1);
     expect(line(w, "deploy").message).not.toContain("guard");
+  });
+
+  it("--upgrade with a rebuilt state (no deployedVersion) is guarded", async () => {
+    const o: Opts = {};
+    const w = await installed("0.1.0", o);
+    const { deployedVersion: _, ...st } = w.state();
+    w.files.set(STATE, JSON.stringify({ name: st.name }));
+    o.healthVersion = "0.2.0";
+    expect(await run(UP, w.deps, ROOT)).toBe(2);
+    expect(line(w, "prereqs").message).toBe(MESSAGE("0.1.0", "0.2.0"));
+    expect(w.ops).toEqual([]);
   });
 
   it("--ci with no state is not guarded", async () => {

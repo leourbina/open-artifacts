@@ -43,8 +43,8 @@ async function liveVersion(state: State, ctx: Ctx) {
 }
 
 /**
- * Compares this checkout with the deployed version. A fresh install (no saved
- * deployedVersion) has nothing to compare and makes no request. Suffixes are
+ * Compares this checkout with the deployed version. A fresh install (not --upgrade, and
+ * no workerVersion, deployedVersion or accessAppId saved) has nothing to compare and makes no request. Suffixes are
  * dropped: -dev+sha is not a tag to check out.
  */
 export async function versionInfo(
@@ -61,7 +61,12 @@ export async function versionInfo(
       `cannot read this checkout's version (${JSON.stringify(raw)}) from package.json; fix it before deploying`,
     );
   const out = { repoVersion: a.join("."), downgrade: false };
-  if (!state.deployedVersion) return out;
+  const existing =
+    ctx.opts.upgrade ||
+    state.workerVersion ||
+    state.deployedVersion ||
+    state.accessAppId;
+  if (!existing) return out;
   const b = await liveVersion(state, ctx);
   if (!b) return out;
   const i = a.findIndex((x, k) => x !== b[k]);
