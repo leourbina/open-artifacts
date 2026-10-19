@@ -1,0 +1,422 @@
+import { env } from "cloudflare:workers";
+import {
+  MemberInviteResultSchema,
+  newId,
+  R,
+  ShareResultSchema,
+} from "@oa/shared";
+import { beforeEach, describe, expect, it } from "vitest";
+import { createApp } from "../src/app.js";
+import { createPat } from "../src/auth/pat.js";
+import {
+  MAX_EMAILS_PER_DAY,
+  MAX_EMAILS_PER_RECIPIENT_PER_DAY,
+  MAX_EMAILS_PER_USER_PER_DAY,
+  sendEmail,
+  sweepEmailCounters,
+} from "../src/email/send.js";
+import { publish } from "../src/services/artifacts.js";
+import { getUser } from "../src/services/users.js";
+import { login } from "./helpers.js";
+import { connect, E, textOf, tool } from "./mcp-helpers.js";
+
+const app = createApp();
+const ctx = { waitUntil() {}, passThroughOnException() {} } as never;
+const FROM = "noreply@mail.example.com";
+const today = () => new Date().toISOString().slice(0, 10);
+
+type Sent = {
+  from: string;
+  to: string;
+  subject: string;
+  text: string;
+  html: string;
+};
+
+/** A mock `send_email` binding; `fail` makes send() reject. */
+function mailer(fail = false) {
+  const sent: Sent[] = [];
+  return {
+    sent,
+    EMAIL: {
+      async send(m: Sent) {
+        if (fail) throw new Error("E_SENDER_NOT_VERIFIED");
+        sent.push(m);
+        return { messageId: "m1" };
+      },
+    },
+  };
+}
+
+const call = (
+  e: object,
+  path: string,
+  cookie: string,
+  method: string,
+  body: unknown,
+) =>
+  app.fetch(
+    new Request(`http://app.localhost${path}`, {
+      method,
+      headers: {
+        cookie,
+        "x-oa-request": "1",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    }),
+    { ...(env as object), ...e } as never,
+    ctx,
+  );
+
+const fresh = () => `e-${newId().slice(0, 8).toLowerCase()}@x.com`;
+const invite = (e: object, cookie: string, email = fresh()) =>
+  call(e, R.members, cookie, "POST", { email, role: "member" });
+
+async function newOwner() {
+  const l = await login(fresh(), "owner");
+  return l;
+}
+
+beforeEach(async () => {
+  await env.DB.prepare("delete from counters where key like 'email:%'").run();
+});
+
+describe("invite email", () => {
+  it("sends one email and returns emailed:true", async () => {
+    const o = await newOwner();
+    const m = mailer();
+    const email = fresh();
+    const r = await invite({ ...m, EMAIL_FROM: FROM }, o.cookie, email);
+    expect(r.status).toBe(201);
+    const body = MemberInviteResultSchema.parse(await r.json());
+    expect(body.emailed).toBe(true);
+    expect(m.sent).toHaveLength(1);
+    const s = m.sent[0] as Sent;
+    expect(s.to).toBe(email);
+    expect(s.from).toBe(FROM);
+    expect(s.text).toContain("https://app.localhost/sign-in");
+    expect(s.html).toContain('href="https://app.localhost/sign-in"');
+    expect(s.subject).toContain("added you to");
+  });
+
+  it("missing EMAIL or EMAIL_FROM gives emailed:false", async () => {
+    const o = await newOwner();
+    const m = mailer();
+    for (const e of [{ EMAIL_FROM: FROM }, { EMAIL: m.EMAIL }, {}]) {
+      const r = await invite(e, o.cookie);
+      expect(r.status).toBe(201);
+      expect(((await r.json()) as { emailed: boolean }).emailed).toBe(false);
+    }
+    expect(m.sent).toHaveLength(0);
+  });
+
+  it("a send that throws gives emailed:false and the invite still exists", async () => {
+    const o = await newOwner();
+    const email = fresh();
+    const r = await invite(
+      { ...mailer(true), EMAIL_FROM: FROM },
+      o.cookie,
+      email,
+    );
+    expect(r.status).toBe(201);
+    expect(((await r.json()) as { emailed: boolean }).emailed).toBe(false);
+    const row = await env.DB.prepare("select 1 as x from users where email = ?")
+      .bind(email)
+      .first();
+    expect(row).not.toBeNull();
+  });
+
+  it(`caps each inviter at ${MAX_EMAILS_PER_USER_PER_DAY} a day`, async () => {
+    const o = await newOwner();
+    const m = mailer();
+    const e = { ...m, EMAIL_FROM: FROM };
+    await env.DB.prepare("insert into counters (key, n, day) values (?, ?, ?)")
+      .bind(`email:${o.userId}`, MAX_EMAILS_PER_USER_PER_DAY - 1, today())
+      .run();
+    const last = await invite(e, o.cookie);
+    expect(((await last.json()) as { emailed: boolean }).emailed).toBe(true);
+    const over = await invite(e, o.cookie);
+    expect(over.status).toBe(201);
+    expect(((await over.json()) as { emailed: boolean }).emailed).toBe(false);
+    expect(m.sent).toHaveLength(1);
+    // Another inviter is unaffected.
+    const o2 = await newOwner();
+    const r2 = await invite(e, o2.cookie);
+    expect(((await r2.json()) as { emailed: boolean }).emailed).toBe(true);
+  });
+
+  it("30 concurrent invites from one owner send exactly the per-user cap", async () => {
+    const o = await newOwner();
+    const m = mailer();
+    const e = { ...m, EMAIL_FROM: FROM };
+    const rs = await Promise.all(
+      Array.from({ length: 30 }, () => invite(e, o.cookie)),
+    );
+    const bodies = (await Promise.all(rs.map((r) => r.json()))) as {
+      emailed: boolean;
+    }[];
+    expect(rs.every((r) => r.status === 201)).toBe(true);
+    expect(bodies.filter((b) => b.emailed).length).toBe(
+      MAX_EMAILS_PER_USER_PER_DAY,
+    );
+    expect(m.sent).toHaveLength(MAX_EMAILS_PER_USER_PER_DAY);
+  });
+
+  it("yesterday's count does not apply today", async () => {
+    const o = await newOwner();
+    const m = mailer();
+    await env.DB.prepare("insert into counters (key, n, day) values (?, ?, ?)")
+      .bind(`email:${o.userId}`, MAX_EMAILS_PER_USER_PER_DAY, "2000-01-01")
+      .run();
+    const r = await invite({ ...m, EMAIL_FROM: FROM }, o.cookie);
+    expect(((await r.json()) as { emailed: boolean }).emailed).toBe(true);
+  });
+
+  it(`caps the instance at ${MAX_EMAILS_PER_DAY} a day`, async () => {
+    const o = await newOwner();
+    const m = mailer();
+    await env.DB.prepare("insert into counters (key, n, day) values (?, ?, ?)")
+      .bind("email:*", MAX_EMAILS_PER_DAY, today())
+      .run();
+    const r = await invite({ ...m, EMAIL_FROM: FROM }, o.cookie);
+    expect(r.status).toBe(201);
+    expect(((await r.json()) as { emailed: boolean }).emailed).toBe(false);
+    expect(m.sent).toHaveLength(0);
+  });
+
+  it("escapes names in HTML and strips CR/LF from the subject and text", async () => {
+    const o = await newOwner();
+    await env.DB.prepare("update users set name = ? where id = ?")
+      .bind("Mal<script>alert(1)</script>\r\nBcc: evil@x.com", o.userId)
+      .run();
+    await env.DB.prepare(
+      "insert or replace into settings (key, value) values ('name', ?)",
+    )
+      .bind("Acme & <Co>\r\nX-Evil: 1")
+      .run();
+    const m = mailer();
+    await invite({ ...m, EMAIL_FROM: FROM }, o.cookie);
+    const s = m.sent[0] as Sent;
+    expect(s.html).not.toContain("<script>");
+    expect(s.html).toContain("&lt;script&gt;");
+    expect(s.html).toContain("Acme &amp; &lt;Co&gt;");
+    expect(s.subject).not.toMatch(/[\r\n]/);
+    expect(s.subject.length).toBeLessThanOrEqual(150);
+    expect(s.text).not.toContain("\r\nBcc");
+    expect(s.text).not.toContain("\nX-Evil");
+    expect(s.html).not.toContain("\nBcc");
+    await env.DB.prepare("delete from settings where key = 'name'").run();
+  });
+});
+
+describe("share email", () => {
+  async function setup() {
+    const o = await newOwner();
+    const owner = await getUser(env, o.userId);
+    if (!owner) throw new Error("no user");
+    const { id } = await publish(
+      env,
+      owner,
+      {
+        title: 'Plan <img src=x onerror="1">',
+        visibility: "private",
+        format: "markdown",
+        content: "x",
+      } as never,
+      null,
+      undefined,
+      "create",
+    );
+    return { o, id };
+  }
+
+  it("emails a non-member once, with an escaped title and an https link", async () => {
+    const { o, id } = await setup();
+    const m = mailer();
+    const e = { ...m, EMAIL_FROM: FROM };
+    const email = fresh();
+    const r = await call(e, R.shares(id), o.cookie, "PUT", {
+      email,
+      role: "viewer",
+    });
+    expect(r.status).toBe(200);
+    expect(ShareResultSchema.parse(await r.json()).emailed).toBe(true);
+    const s = m.sent[0] as Sent;
+    expect(s.to).toBe(email);
+    expect(s.html).toContain("Plan &lt;img");
+    expect(s.html).not.toContain("<img src=x");
+    expect(s.html).toContain(`href="https://app.localhost/a/${id}"`);
+    // A role change on the existing share sends nothing.
+    const again = await call(e, R.shares(id), o.cookie, "PUT", {
+      email,
+      role: "editor",
+    });
+    expect(((await again.json()) as { emailed: boolean }).emailed).toBe(false);
+    expect(m.sent).toHaveLength(1);
+  });
+
+  it("does not email an existing member", async () => {
+    const { o, id } = await setup();
+    const member = fresh();
+    await login(member);
+    const m = mailer();
+    const r = await call(
+      { ...m, EMAIL_FROM: FROM },
+      R.shares(id),
+      o.cookie,
+      "PUT",
+      {
+        email: member,
+        role: "viewer",
+      },
+    );
+    expect(r.status).toBe(200);
+    expect(((await r.json()) as { emailed: boolean }).emailed).toBe(false);
+    expect(m.sent).toHaveLength(0);
+  });
+
+  it("share_artifact says whether it emailed", async () => {
+    const { o, id } = await setup();
+    const pat = (await createPat(env, o.userId, "agent")).token;
+    const m = mailer();
+    const client = await connect(pat, { env: E({ ...m, EMAIL_FROM: FROM }) });
+    const email = fresh();
+    const r = await tool(client, "share_artifact", {
+      id,
+      email,
+      role: "viewer",
+    });
+    expect(r.structuredContent?.emailed).toBe(true);
+    expect(textOf(r)).toContain(`Emailed ${email} a link.`);
+    const r2 = await tool(client, "share_artifact", {
+      id,
+      email,
+      role: "editor",
+    });
+    expect(r2.structuredContent?.emailed).toBe(false);
+    expect(textOf(r2)).toContain("No email sent.");
+    await client.close();
+  });
+
+  it("removing and re-adding a share 3 times sends one email", async () => {
+    const { o, id } = await setup();
+    const m = mailer();
+    const e = { ...m, EMAIL_FROM: FROM };
+    const email = fresh();
+    const emailed: boolean[] = [];
+    for (let i = 0; i < 3; i++) {
+      const r = await call(e, R.shares(id), o.cookie, "PUT", {
+        email,
+        role: "viewer",
+      });
+      emailed.push(((await r.json()) as { emailed: boolean }).emailed);
+      const d = await call(
+        e,
+        R.share(id, email),
+        o.cookie,
+        "DELETE",
+        undefined,
+      );
+      expect(d.status).toBe(204);
+    }
+    expect(emailed).toEqual([true, false, false]);
+    expect(m.sent).toHaveLength(1);
+  });
+
+  it(`emails one address at most ${MAX_EMAILS_PER_RECIPIENT_PER_DAY} times a day across artifacts`, async () => {
+    const m = mailer();
+    const e = { ...m, EMAIL_FROM: FROM };
+    const email = fresh();
+    const emailed: boolean[] = [];
+    for (let i = 0; i <= MAX_EMAILS_PER_RECIPIENT_PER_DAY; i++) {
+      const { o, id } = await setup();
+      const r = await call(e, R.shares(id), o.cookie, "PUT", {
+        email,
+        role: "viewer",
+      });
+      expect(r.status).toBe(200);
+      emailed.push(((await r.json()) as { emailed: boolean }).emailed);
+    }
+    expect(emailed.filter(Boolean).length).toBe(
+      MAX_EMAILS_PER_RECIPIENT_PER_DAY,
+    );
+    expect(emailed.at(-1)).toBe(false);
+    expect(m.sent).toHaveLength(MAX_EMAILS_PER_RECIPIENT_PER_DAY);
+  });
+});
+
+it("the cron sweep drops only past days' email counters", async () => {
+  await env.DB.batch([
+    env.DB.prepare(
+      "insert into counters (key, n, day) values ('email:old', 1, '2000-01-01')",
+    ),
+    env.DB.prepare(
+      "insert into counters (key, n, day) values ('email:new', 1, ?)",
+    ).bind(today()),
+    env.DB.prepare(
+      "insert or replace into counters (key, n, day) values ('client:keep', 0, '2000-01-01')",
+    ),
+  ]);
+  await sweepEmailCounters(env as never);
+  const { results } = await env.DB.prepare(
+    "select key from counters where key in ('email:old', 'email:new', 'client:keep') order by key",
+  ).all<{ key: string }>();
+  expect(results.map((r) => r.key)).toEqual(["client:keep", "email:new"]);
+});
+
+describe("one recipient per send", () => {
+  // Addresses with RFC specials that a list parser could split or reinterpret.
+  const SPECIAL = [
+    '"a,b"@x.com',
+    "a,b@x.com",
+    "a@x.com,b@y.com",
+    "a;b@x.com",
+    "<a@x.com>",
+    "a(b)@x.com",
+    '"a@x.com"@y.com',
+  ];
+
+  it("invites and shares reject them at validation (400), sending nothing", async () => {
+    const o = await newOwner();
+    const owner = await getUser(env, o.userId);
+    if (!owner) throw new Error("no user");
+    const m = mailer();
+    const e = { ...m, EMAIL_FROM: FROM };
+    for (const addr of SPECIAL) {
+      const before = m.sent.length;
+      const inv = await invite(e, o.cookie, addr);
+      expect(inv.status, addr).toBe(400);
+      const { id } = await publish(
+        env,
+        owner,
+        {
+          title: "t",
+          visibility: "private",
+          format: "markdown",
+          content: "x",
+        } as never,
+        null,
+        undefined,
+        "create",
+      );
+      const sh = await call(e, R.shares(id), o.cookie, "PUT", {
+        email: addr,
+        role: "viewer",
+      });
+      expect(sh.status, addr).toBe(400);
+      expect(m.sent.length).toBe(before);
+    }
+  });
+
+  it("sendEmail itself refuses any `to` that is not one plain address", async () => {
+    const m = mailer();
+    const e = { ...(env as object), ...m, EMAIL_FROM: FROM } as never;
+    const content = () => ({ subject: "s", text: "t", html: "h" });
+    for (const addr of SPECIAL)
+      expect(await sendEmail(e, "u-special", addr, content), addr).toBe(false);
+    expect(m.sent).toHaveLength(0);
+    expect(await sendEmail(e, "u-special", "a+b@x.com", content)).toBe(true);
+    expect(m.sent.map((s) => s.to)).toEqual(["a+b@x.com"]);
+  });
+});

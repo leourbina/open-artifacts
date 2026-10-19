@@ -10,6 +10,8 @@ export interface Env {
   RL_ANON?: RateLimit;
   /** Browser Run, for server-side thumbnails (services/thumbs.ts); optional. */
   BROWSER?: Fetcher;
+  /** Optional Email Service send binding; invite/share emails are off without it. */
+  EMAIL?: SendEmail;
   // vars
   APP_HOST: string;
   CONTENT_HOST: string;
@@ -17,6 +19,8 @@ export interface Env {
   ENVIRONMENT: "dev" | "production";
   ACCESS_TEAM_DOMAIN: string;
   ACCESS_CLIENT_ID: string;
+  /** Sender for invite/share emails (an onboarded Email Service domain). */
+  EMAIL_FROM?: string;
   // secrets
   ACCESS_CLIENT_SECRET: string;
   SESSION_SECRET: string;

@@ -226,6 +226,13 @@ export const ShareSchema = z.object({
 });
 export type Share = z.infer<typeof ShareSchema>;
 
+/** PUT shares response. */
+export const ShareResultSchema = ShareSchema.extend({
+  /** True if a notification email went to a non-member (best effort). */
+  emailed: z.boolean(),
+});
+export type ShareResult = z.infer<typeof ShareResultSchema>;
+
 export const ArtifactPatchSchema = z
   .strictObject({
     title: z.string().trim().min(1).max(200),
@@ -253,6 +260,13 @@ export const MemberInviteSchema = z.strictObject({
   role: MemberRoleInputSchema,
 });
 export type MemberInvite = z.infer<typeof MemberInviteSchema>;
+
+/** POST members (invite) response. */
+export const MemberInviteResultSchema = MemberSchema.extend({
+  /** True if an invite email was sent (best effort). */
+  emailed: z.boolean(),
+});
+export type MemberInviteResult = z.infer<typeof MemberInviteResultSchema>;
 
 export const MemberPatchSchema = z.strictObject({
   role: MemberRoleInputSchema,

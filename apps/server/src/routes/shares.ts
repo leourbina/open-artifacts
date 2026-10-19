@@ -23,6 +23,10 @@ export function mountShares(app: AppType): void {
     return c.json(await listShares(c.env, user, idParam(c)));
   });
 
+  /**
+   * Upsert a share; the result has `emailed`. `emailed:false` after the 3 s
+   * send timeout means delivery isn't confirmed: the email may still arrive.
+   */
   app.put(SHARES, async (c) => {
     const user = requireUser(c);
     const id = idParam(c);

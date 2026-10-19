@@ -77,4 +77,15 @@ describe("assemble-assets", () => {
       false,
     );
   });
+
+  it("copies the email logo to email/logo@2x.png", () => {
+    const { root, out } = fixture({});
+    const emails = path.join(root, "design", "emails");
+    mkdirSync(emails, { recursive: true });
+    writeFileSync(path.join(emails, "logo@2x.png"), "png");
+    expect(run(root, out).code).toBe(0);
+    expect(readFileSync(path.join(out, "email", "logo@2x.png"), "utf8")).toBe(
+      "png",
+    );
+  });
 });
