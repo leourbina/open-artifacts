@@ -68,9 +68,10 @@ const SOCKET_TTL_MS = LIMITS.signedUrlTtlSec * 1000;
 const SOCKET_TTL_SLACK_MS = 60_000;
 /**
  * Search indexing (C3) runs this long after scheduleIndex, from the alarm:
- * a burst of publishes indexes only the newest version.
+ * a burst of publishes indexes only the newest version, and the alarm runs
+ * after the publishing isolate's burst is over.
  */
-export const INDEX_DELAY_MS = 2_000;
+export const INDEX_DELAY_MS = LIMITS.indexDebounceMs;
 /** Index attempts per version before {evt:"index_failed"}. */
 export const INDEX_MAX_ATTEMPTS = 5;
 /** Retry delay after the n-th failure (1-based): 10 s, 20 s, 40 s, 80 s. */
