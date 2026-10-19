@@ -12,7 +12,7 @@ Transactional emails in the Studio direction (see `../DIRECTION.md`). Each one h
 | Placeholder | Used in | Meaning |
 |---|---|---|
 | `{{inviterName}}` | both | Display name of the member who added or shared, falling back to their email |
-| `{{instanceName}}` | both | The instance's display name; also the CTA label, `Open {{instanceName}}` |
+| `{{instanceName}}` | both | The instance's display name; also the invite CTA label, `Open {{instanceName}}` (the share CTA is `Open the artifact`) |
 | `{{recipientEmail}}` | both | The address this email goes to, where the one-time code will be sent |
 | `{{appHost}}` | both | The instance's host, such as `artifacts.example.com` (no scheme) |
 | `{{logoUrl}}` | both (HTML) | Absolute HTTPS URL of `logo@2x.png` served by the instance |
