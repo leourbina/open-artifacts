@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Journey Poll</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main>
+      <h1 id="label">Tabs or spaces?</h1>
+      <p id="who">loading…</p>
+      <p>
+        <button type="button" class="vote" data-choice="tabs">Tabs</button>
+        <button type="button" class="vote" data-choice="spaces">Spaces</button>
+      </p>
+      <ul id="results"></ul>
+      <p id="status" aria-live="polite"></p>
+      <p id="err" role="alert"></p>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>
