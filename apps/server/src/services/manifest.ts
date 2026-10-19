@@ -12,6 +12,7 @@ import {
 } from "@oa/shared";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
+import { decodeBase64 } from "../util/base64.js";
 import { isWellFormed, utf8Encoder, utf8Length } from "../util/text.js";
 
 /** One file of a version, as stored in versions.manifest (JSON). */
@@ -124,21 +125,6 @@ function defaultEntry(format: Format, language: string | null): string {
   if (format === "markdown") return "README.md";
   if (format === "pdf") return "document.pdf";
   return `main.${EXT.get((language ?? "").toLowerCase()) ?? "txt"}`;
-}
-
-function decodeBase64(s: string): Uint8Array | null {
-  const U = Uint8Array as unknown as {
-    fromBase64?: (s: string) => Uint8Array;
-  };
-  try {
-    if (U.fromBase64) return U.fromBase64(s);
-    const bin = atob(s);
-    const out = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-    return out;
-  } catch {
-    return null;
-  }
 }
 
 /**

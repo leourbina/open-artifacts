@@ -397,6 +397,7 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
         deletedAt: null,
         lastAgent: null,
         thumbnailUrl: null,
+        thumbnailVersion: null,
         access: "owner",
         capabilities: {
           db: false,
@@ -522,7 +523,8 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
     http.put(
       `${A}/thumbnail`,
       withArt((a) => {
-        a.thumbnailUrl = `/api/v1/artifacts/${a.id}/thumbnail`;
+        a.thumbnailVersion = a.currentVersion;
+        a.thumbnailUrl = `/api/v1/artifacts/${a.id}/thumbnail?v=${a.currentVersion}`;
         return noContent();
       }, "write"),
     ),

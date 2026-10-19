@@ -2,11 +2,14 @@ import { LIMITS } from "@oa/shared";
 import { signContent } from "../content/signing.js";
 import type { Env } from "../env.js";
 import { contentOrigin } from "../http/errors.js";
+import { decodeBase64 } from "../util/base64.js";
 
 // Server-side thumbnails (spec §6.9 stretch) through Browser Run, run from the
-// artifact DO's alarm (runtime/do.ts), never on a request. The client upload
-// (PUT /thumbnail) stays the fallback: without a BROWSER binding, past the
-// day's stop, or when a capture fails, nothing here writes anything.
+// artifact DO's alarm (runtime/do.ts), never on a request, and strictly
+// best-effort: the client upload (PUT /thumbnail) stays the fallback. Without a
+// BROWSER binding, past the day's stop, or when a capture fails, nothing here
+// writes anything. Both paths store through writeThumbnail, which keeps the
+// stored thumbnail at the newest version written.
 
 export const THUMB = {
   width: 1280,
@@ -22,7 +25,7 @@ export const THUMB = {
   launchGapMs: 20_000,
 } as const;
 
-/** What the job did: the DO re-queues only "deferred". */
+/** What the job did. "deferred": the launch slot was taken (no browser used). */
 export type ThumbResult =
   | "stored"
   | "skipped"
@@ -49,7 +52,11 @@ type ThumbPage = {
     url: string,
     o: { waitUntil: "networkidle2"; timeout: number },
   ): Promise<unknown>;
-  screenshot(o: { type: "webp"; quality: number }): Promise<Uint8Array>;
+  screenshot(o: {
+    type: "webp";
+    quality: number;
+    encoding: "base64";
+  }): Promise<string>;
 };
 type ThumbBrowser = { newPage(): Promise<ThumbPage>; close(): Promise<void> };
 export type ThumbLaunch = (binding: Fetcher) => Promise<ThumbBrowser>;
@@ -68,9 +75,10 @@ const thumbKey = (id: string) => `thumbs/${id}.webp`;
 class LaunchError extends Error {}
 class TimeoutError extends Error {}
 
-/** A 429 / daily quota from Browser Run, or any failure to launch: stop for the day. */
+/** A 429 (status or text) / daily quota from Browser Run, or any failure to launch: stop for the day. */
 const isBudgetError = (e: unknown) =>
   e instanceof LaunchError ||
+  (e as { status?: unknown })?.status === 429 ||
   /\b429\b|time limit exceeded|quota/i.test(String((e as Error)?.message ?? e));
 
 const sameOrigin = (u: string, origin: string) => {
@@ -82,11 +90,46 @@ const sameOrigin = (u: string, origin: string) => {
 };
 
 /**
- * One capture of `version` (the artifact's current one) into thumbs/{id}.webp.
- * Order: binding, artifact state, the day's stop (D1 counters), an existing
- * thumbnail for this version, then the account-wide launch slot, so skips cost
- * no browser time. The put is conditional on the object seen before the
- * capture: a client upload that lands meanwhile wins.
+ * Stores `bytes` as thumbs/{id}.webp for `version` unless a newer version's
+ * thumbnail is stored (→ "stale"; an equal version is replaced). The R2 put is
+ * conditional on the object just read, so of two racing writers the older
+ * version can never land last; D1 thumbnail_version only moves forward.
+ */
+export async function writeThumbnail(
+  env: Env,
+  id: string,
+  version: number,
+  bytes: Uint8Array,
+  by: "server" | "client",
+): Promise<"stored" | "stale"> {
+  for (let i = 0; i < 3; i++) {
+    const prev = await env.FILES.head(thumbKey(id));
+    if (prev && Number(prev.customMetadata?.v ?? 0) > version) return "stale";
+    const put = await env.FILES.put(thumbKey(id), bytes, {
+      onlyIf: prev
+        ? { etagMatches: prev.etag }
+        : new Headers({ "If-None-Match": "*" }),
+      httpMetadata: { contentType: "image/webp" },
+      customMetadata: { v: String(version), by },
+    });
+    if (!put) continue;
+    await env.DB.prepare(
+      `update artifacts set has_thumbnail = 1, thumbnail_version = ?2
+       where id = ?1 and deleted_at is null and coalesce(thumbnail_version, 0) <= ?2`,
+    )
+      .bind(id, version)
+      .run();
+    return "stored";
+  }
+  // Lost three races in a row: newer writers are active; let them win.
+  return "stale";
+}
+
+/**
+ * One capture of `version` (the artifact's current one). Order: binding,
+ * artifact state (current version, no thumbnail of it yet), the day's stop
+ * (D1 counters), then the account-wide launch slot, so skips cost no browser
+ * time. Stored through writeThumbnail: a newer client upload meanwhile wins.
  */
 export async function captureThumbnail(
   env: Env,
@@ -98,11 +141,11 @@ export async function captureThumbnail(
   if (!binding) return "skipped";
   const now = o.now ?? Date.now();
   const row = await env.DB.prepare(
-    "select current_version v from artifacts where id = ? and deleted_at is null",
+    "select current_version v, thumbnail_version t from artifacts where id = ? and deleted_at is null",
   )
     .bind(id)
-    .first<{ v: number }>();
-  if (row?.v !== version) return "skipped";
+    .first<{ v: number; t: number | null }>();
+  if (row?.v !== version || (row.t ?? 0) >= version) return "skipped";
   const day = utcDay(now);
   const stop = await env.DB.prepare(
     "select 1 x from counters where key = ? and day = ?",
@@ -110,8 +153,6 @@ export async function captureThumbnail(
     .bind(STOP_KEY, day)
     .first();
   if (stop) return "stopped";
-  const prev = await env.FILES.head(thumbKey(id));
-  if (prev && Number(prev.customMetadata?.v ?? 0) >= version) return "skipped";
   const slot = await env.DB.prepare(
     `insert into counters (key, n, day) values (?1, ?2, ?3)
      on conflict (key) do update set n = excluded.n, day = excluded.day
@@ -156,20 +197,9 @@ export async function captureThumbnail(
     return stopped ? "stopped" : "failed";
   }
   if (!bytes) return "failed";
-  const put = await env.FILES.put(thumbKey(id), bytes, {
-    onlyIf: prev
-      ? { etagMatches: prev.etag }
-      : new Headers({ "If-None-Match": "*" }),
-    httpMetadata: { contentType: "image/webp" },
-    customMetadata: { v: String(version), by: "server" },
-  });
-  if (!put) return "skipped";
-  await env.DB.prepare(
-    "update artifacts set has_thumbnail = 1 where id = ? and deleted_at is null",
-  )
-    .bind(id)
-    .run();
-  return "stored";
+  return (await writeThumbnail(env, id, version, bytes, "server")) === "stored"
+    ? "stored"
+    : "skipped";
 }
 
 /**
@@ -238,8 +268,15 @@ async function shoot(
     if (left || !sameOrigin(page.url(), origin))
       throw new Error("navigation left the content host");
     for (const quality of THUMB.qualities) {
-      const shot = await page.screenshot({ type: "webp", quality });
-      if (shot.byteLength <= LIMITS.thumbnailBytes) return new Uint8Array(shot);
+      // base64 straight from CDP, decoded natively (decodeBase64).
+      const b64 = await page.screenshot({
+        type: "webp",
+        quality,
+        encoding: "base64",
+      });
+      const shot = decodeBase64(b64);
+      if (!shot) throw new Error("screenshot is not base64");
+      if (shot.byteLength <= LIMITS.thumbnailBytes) return shot;
     }
     return null;
   };
