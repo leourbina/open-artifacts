@@ -1,5 +1,6 @@
 import {
   getOAuthApi,
+  OAuthError,
   type OAuthHelpers,
   type OAuthProviderOptions,
 } from "@cloudflare/workers-oauth-provider";
@@ -15,6 +16,9 @@ export const OAUTH = {
   token: "/oauth/token",
   register: "/oauth/register",
 } as const;
+
+/** Token grants (refresh storms: 2 KV writes each) per client per RL_ANON window. */
+const TOKEN_KEY = "tok:";
 
 /** OAuth access-token lifetime (24 h; the provider default is 1 h). */
 export const ACCESS_TOKEN_TTL_S = 86_400;
@@ -38,6 +42,19 @@ export function providerOptions(
     // Each refresh costs 2 KV writes (Free plan: 1000/day): long-lived access
     // tokens keep agents from refreshing hourly.
     accessTokenTTL: ACCESS_TOKEN_TTL_S,
+    // The provider calls this only once the client and its code or refresh
+    // token are verified, and before it writes KV, so `tok:<client_id>` is
+    // charged to the authenticated client: a forged client_id cannot drain it.
+    tokenExchangeCallback: async ({ clientId, env }) => {
+      const rl = env.RL_ANON as RateLimit | undefined;
+      if (!rl || (await rl.limit({ key: TOKEN_KEY + clientId })).success)
+        return;
+      throw new OAuthError("temporarily_unavailable", {
+        description: "Too many token requests; try again in a minute",
+        statusCode: 429,
+        headers: { "retry-after": "60", "cache-control": "no-store" },
+      });
+    },
     resourceMetadata: {
       resource,
       authorization_servers: [new URL(resource).origin],

@@ -141,7 +141,10 @@ async function oauthToken(email: string, clientName = "Test Agent") {
   const t = await callWorker(
     new Request(`${APP}/oauth/token`, {
       method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "cf-connecting-ip": nextIp(),
+      },
       body: new URLSearchParams({
         grant_type: "authorization_code",
         code,
