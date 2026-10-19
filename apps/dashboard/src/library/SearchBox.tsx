@@ -1,4 +1,4 @@
-import { Input } from "@oa/ui";
+import { Input } from "@oa/ui/shadcn";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 
@@ -32,6 +32,7 @@ export function SearchBox() {
       type="search"
       aria-label="Search artifacts"
       placeholder="Search titles, content, and agents"
+      className="h-[30px] min-w-0 flex-1 text-[length:var(--oa-text-sm)] md:text-[length:var(--oa-text-sm)]"
       value={value}
       onChange={(e) => {
         const q = e.target.value;

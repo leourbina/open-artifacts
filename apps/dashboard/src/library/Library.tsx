@@ -1,5 +1,12 @@
 import type { Format } from "@oa/shared";
-import { Button, EmptyState, Skeleton, Tabs } from "@oa/ui";
+import {
+  Button,
+  Skeleton,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@oa/ui/shadcn";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useRef } from "react";
 import { useMe } from "../auth/useMe";
@@ -10,7 +17,7 @@ import { ArtifactCard } from "./ArtifactCard";
 import { ArtifactRow } from "./ArtifactRow";
 import { Filters } from "./Filters";
 import { LibraryIcon } from "./icons";
-import "./library.css";
+import { ALERT, BAR, Empty, GRID, H1, LIST, PAGE } from "./ui";
 import { uniqueItems, useSentinel } from "./useInfinite";
 import { type Scope, useLibraryQuery } from "./useLibraryQuery";
 
@@ -101,23 +108,8 @@ export function Library({ scope }: { scope: Scope }) {
   const filtered = Boolean(s.format || s.agent);
   const [emptyTitle, emptyText] = EMPTY[scope];
 
-  return (
-    <section className="lib">
-      <div className="lib-bar">
-        <h1>Library</h1>
-        <span className="lib-spacer" />
-        <DropZone button allowed={me.status === "authed" && !guest} />
-      </div>
-      {me.status === "authed" && (
-        <Tabs
-          value={scope}
-          onValueChange={(id) => go(PATH[id as Scope], {})}
-          tabs={TABS.filter((t) => !guest || t.id === "shared").map((t) => ({
-            ...t,
-            content: null,
-          }))}
-        />
-      )}
+  const results = (
+    <>
       <Filters
         format={s.format}
         agent={s.agent}
@@ -132,38 +124,46 @@ export function Library({ scope }: { scope: Scope }) {
         }}
       />
       {q.isError && (
-        <div className="lib-error" role="alert">
-          <span>
+        <div className={ALERT} role="alert">
+          <span className="flex-1">
             <strong>Couldn't load the library.</strong> Your artifacts are safe;
             this is usually brief.
           </span>
-          <Button size="sm" onClick={() => void q.refetch()}>
+          <Button
+            size="sm"
+            variant="outline"
+            className="text-[length:var(--oa-text-sm)]"
+            onClick={() => void q.refetch()}
+          >
             Retry
           </Button>
         </div>
       )}
       {q.isPending && !q.isError && (
         <div
-          className={view === "grid" ? "lib-grid" : "lib-list"}
+          className={view === "grid" ? GRID : LIST}
           role="status"
           aria-busy="true"
           aria-label="Loading artifacts"
         >
           {Array.from({ length: 6 }, (_, i) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: static placeholders
-            <Skeleton key={i} height={view === "grid" ? 180 : 40} />
+            <Skeleton
+              // biome-ignore lint/suspicious/noArrayIndexKey: static placeholders
+              key={i}
+              className={view === "grid" ? "h-[180px]" : "h-10"}
+            />
           ))}
         </div>
       )}
       {q.isSuccess && items.length === 0 && (
-        <EmptyState
+        <Empty
           icon={<LibraryIcon />}
           title={filtered ? "No artifacts match these filters" : emptyTitle}
           description={filtered ? "Try removing a filter." : emptyText}
         />
       )}
       {items.length > 0 && (
-        <div className={view === "grid" ? "lib-grid" : "lib-list"}>
+        <div className={view === "grid" ? GRID : LIST}>
           {items.map((a) =>
             view === "grid" ? (
               <ArtifactCard key={a.id} artifact={a} meId={meId} />
@@ -173,7 +173,47 @@ export function Library({ scope }: { scope: Scope }) {
           )}
         </div>
       )}
-      <div ref={sentinel} className="lib-sentinel" />
+      <div ref={sentinel} className="h-px" />
+    </>
+  );
+
+  return (
+    <section className={PAGE}>
+      <div className={BAR}>
+        <h1 className={H1}>Library</h1>
+        <span className="flex-1" />
+        <DropZone button allowed={me.status === "authed" && !guest} />
+      </div>
+      {me.status === "authed" ? (
+        <Tabs
+          value={scope}
+          onValueChange={(id) => go(PATH[id as Scope], {})}
+          className="gap-[var(--oa-space-4)]"
+        >
+          {/* The strip scrolls, so the hairline is an inset shadow, the
+              underline sits on the bottom edge and the focus ring is inset. */}
+          <TabsList
+            variant="line"
+            className="h-[34px] w-full justify-start gap-[var(--oa-space-4)] overflow-x-auto rounded-none p-0 shadow-[inset_0_-1px_0_var(--color-border)] [scrollbar-width:none]"
+          >
+            {TABS.filter((t) => !guest || t.id === "shared").map((t) => (
+              <TabsTrigger
+                key={t.id}
+                value={t.id}
+                className="h-full flex-none px-0 text-[length:var(--oa-text-sm)] group-data-[orientation=horizontal]/tabs:after:bottom-0 group-data-[orientation=horizontal]/tabs:after:h-[2px] focus-visible:outline-offset-[-2px]"
+              >
+                {t.label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+          {/* Not a tab stop: Tab goes from the tabs straight to the filters. */}
+          <TabsContent value={scope} tabIndex={-1} className={PAGE}>
+            {results}
+          </TabsContent>
+        </Tabs>
+      ) : (
+        results
+      )}
     </section>
   );
 }

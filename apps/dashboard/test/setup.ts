@@ -17,3 +17,7 @@ if (!window.matchMedia)
       removeListener: () => {},
       dispatchEvent: () => false,
     }) as MediaQueryList;
+
+// jsdom has no scrollIntoView; Radix Select scrolls the chosen item into view.
+if (!Element.prototype.scrollIntoView)
+  Element.prototype.scrollIntoView = () => {};
