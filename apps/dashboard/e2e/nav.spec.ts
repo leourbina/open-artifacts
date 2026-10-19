@@ -278,7 +278,7 @@ test("below 768px the panel is full-bleed", async ({ page }) => {
   expect(p.border[0]).toBe("0px");
 });
 
-test("from 768px the content scrolls by keyboard and resets on navigation", async ({
+test("from 768px the content, not the window, scrolls by keyboard", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 600 });
@@ -296,19 +296,6 @@ test("from 768px the content scrolls by keyboard and resets on navigation", asyn
   await page.keyboard.press("PageDown");
   await expect.poll(top).toBeGreaterThan(0);
   expect(await windowY()).toBe(0);
-
-  // Back to "All" from "Mine": the library stays mounted and "All" is
-  // cached, so it renders long at once and would keep the old offset.
-  await page.getByRole("tab", { name: "Mine", exact: true }).click();
-  await expect(page).toHaveURL(/\/mine$/);
-  await expect(page.locator(".lib-card").first()).toBeVisible();
-  await main.evaluate((m) => {
-    m.scrollTop = 150;
-  });
-  await page.getByRole("tab", { name: "All", exact: true }).click();
-  await expect(page).not.toHaveURL(/\/mine$/);
-  expect(
-    await main.evaluate((m) => m.scrollHeight - m.clientHeight),
-  ).toBeGreaterThanOrEqual(150);
-  await expect.poll(top).toBe(0);
+  // The reset to the top on route change is pinned in vitest
+  // (layout.test.tsx): here the page re-renders short and clamps anyway.
 });
