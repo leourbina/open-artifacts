@@ -47,7 +47,7 @@ matching row.
 | index alarm (DO) | 12 / 12 | 0.53 (64 KB html) |
 
 The 1 KB publish control is the worst staging row while doing almost no
-work, and where both columns have a number staging is 10–30× the code CPU:
+work, and where both columns have a number staging is 5–33× the code CPU:
 that gap is runtime overhead, not our code.
 
 Kills: none in this run (72 alarms ok, 192 requests 2xx). Staging is a
