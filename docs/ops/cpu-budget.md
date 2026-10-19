@@ -4,17 +4,59 @@ Open Artifacts targets the Cloudflare Workers **Free** plan, where an
 invocation should stay under **10 ms of CPU**. This page records how we
 measure that and the decision we took for 0.2.0.
 
-## Decision (2026-10-19)
+## The bar (2026-10-19)
 
-The bar is **p95 ≤ 10 ms CPU for personal-scale traffic**, meaning requests
-at least ~3 s apart. Every route meets it.
+Two conditions, both required:
 
-Back-to-back large HTML publishes (250 KB, 2 s apart) still have a tail
+1. **Zero CPU-limit kills on the Free path at realistic load.** Platform's
+   staging run with `limits.cpu_ms = 10` is the evidence: any request the
+   runtime stops for CPU (outcome `exceededCpu`, error 1102) fails the bar.
+2. **Code CPU ≤ 2 ms per route (p95)**, pinned by `pnpm test:cpu`
+   (`apps/server/test/code-cpu/routes.test.ts`): the real Worker in Node
+   against in-process bindings, thread CPU minus D1, R2 and DO time (DO rows
+   meter the DO invocation), p95 of 20 requests, median of 5 runs. A stall
+   in a handler fails its row.
+
+This replaces the earlier bar, "staging cpuTime p95 ≤ 10 ms". Staging
+`cpuTime` includes **8–15 ms of runtime overhead** that our code doesn't
+control. A 1 KB publish, the control, was the worst row. A p95 on that
+number measures the isolate, not us. What we control is our own code's CPU,
+and what users feel is whether the runtime kills a request. The bar now
+measures each of those directly.
+
+### Latest measurements
+
+Staging p95 is `cpuTime` from `wrangler tail` (the latest runs below and in
+#223). Code CPU is the `test:cpu` row (Node proxy, p95, median of 5).
+
+| Route | Staging p95 (ms) | Code CPU p95 (ms) |
+|---|---|---|
+| `GET /healthz` | 1 | 0.29 |
+| `GET /api/v1/me` | 4 | 0.56 |
+| `GET /api/v1/artifacts?limit=25` | 10 | 1.18 |
+| search | 10 | 1.26 |
+| inline publish 128 KB escape-heavy | n/a | 0.99 |
+| upload create | n/a | 0.48 |
+| upload PUT 250 KB | n/a | 0.36 |
+| publish `{ uploadId }` 250 KB html | n/a | 0.52 |
+| data doc write 256 KB (Worker / DO) | n/a | 0.88 / 0.51 |
+| index alarm 64 KB html (DO) | 12 | 0.53 |
+
+Wherever both columns have a number, staging is 3–23× the code CPU: the
+gap is the runtime overhead above. "n/a" means no staging p95 for that route
+at the current limits yet; Platform's Free run fills it in.
+
+## Decision (2026-10-19), superseded
+
+The bar was **p95 ≤ 10 ms CPU for personal-scale traffic**, meaning requests
+at least ~3 s apart. Every route met it.
+
+Back-to-back large HTML publishes (250 KB, 2 s apart) still had a tail
 (p95 16 ms). That burst pattern isn't realistic personal use, and Cloudflare
 tolerates occasional overruns. For heavy or team use, Workers Paid ($5/mo) is
 recommended; the self-hosting costs doc says so.
 
-Follow-ups, which don't block 0.2.0:
+Follow-ups, which didn't block 0.2.0:
 - ~~Inline HTML publishes over 128 KB go through the upload path~~: done, see
   below.
 - The indexing alarm itself gets to p95 ≤ 10 ms.
@@ -115,8 +157,14 @@ These numbers drove contract change C3 and the follow-up perf PRs.
 | #134 | Eager isolate init plus the 128 KB index cap. Cold firsts dropped. |
 | #141 | The table above. |
 | be/inline-128k | Inline limit 256 → 128 KB; the publish body cap is now 2 × inline + 64 KB, checked before the body is read. |
+| #223 | Staging regressions investigated: no code regression; staging p95 is mostly runtime overhead (alarm: 12 ms staging vs ~0.5 ms code). |
+| be/cpu-bar-docs | New bar: zero Free kills (`limits.cpu_ms = 10` run) plus code CPU ≤ 2 ms per route in `test:cpu`. |
 
 ## Re-running
+
+Code CPU: `pnpm --filter @oa/server test:cpu` (CI runs it on every PR).
+
+Staging:
 
 The bench scripts live in the Platform lead's scratchpad: `publish-bench.sh`
 (mixed and spaced runs, knobs `SCEN`, `REPS`, `PUB_SLEEP`, `GAP`) and
