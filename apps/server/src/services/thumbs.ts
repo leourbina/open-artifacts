@@ -25,12 +25,17 @@ export const THUMB = {
   launchGapMs: 20_000,
 } as const;
 
-/** What the job did. "deferred": the launch slot was taken (no browser used). */
+/**
+ * What the job did. "deferred": the launch slot was taken (no browser used);
+ * "launch_failed": the browser did not start for a reason other than the
+ * daily quota (the DO backs off THUMB_LAUNCH_BACKOFF_MS).
+ */
 export type ThumbResult =
   | "stored"
   | "skipped"
   | "stopped"
   | "deferred"
+  | "launch_failed"
   | "failed";
 
 // The slice of @cloudflare/puppeteer this uses (tests pass a fake).
@@ -50,8 +55,14 @@ type ThumbPage = {
   url(): string;
   goto(
     url: string,
-    o: { waitUntil: "networkidle2"; timeout: number },
+    o: { waitUntil: "load"; timeout: number },
   ): Promise<unknown>;
+  waitForFunction(fn: string, o: { timeout: number }): Promise<unknown>;
+  waitForNetworkIdle(o: {
+    concurrency: number;
+    idleTime: number;
+    timeout: number;
+  }): Promise<void>;
   screenshot(o: {
     type: "webp";
     quality: number;
@@ -75,11 +86,23 @@ const thumbKey = (id: string) => `thumbs/${id}.webp`;
 class LaunchError extends Error {}
 class TimeoutError extends Error {}
 
-/** A 429 (status or text) / daily quota from Browser Run, or any failure to launch: stop for the day. */
+/** Browser Run's 429 (status or text) or its daily "time limit exceeded": stop for the UTC day. */
 const isBudgetError = (e: unknown) =>
-  e instanceof LaunchError ||
   (e as { status?: unknown })?.status === 429 ||
-  /\b429\b|time limit exceeded|quota/i.test(String((e as Error)?.message ?? e));
+  /\b429\b|time limit exceeded/i.test(String((e as Error)?.message ?? e));
+
+/**
+ * Per format, the page's own "rendered" signal: renderer pages set
+ * <html data-oa-rendered> (packages/render boot), a pdf also needs its first
+ * page's canvas; html is ready once loaded with the runtime installed (top
+ * level is the runtime's raw view, which sends no hello).
+ */
+const READY: Record<string, string> = {
+  html: 'document.readyState === "complete" && "openArtifacts" in window',
+  markdown: 'document.documentElement.hasAttribute("data-oa-rendered")',
+  code: 'document.documentElement.hasAttribute("data-oa-rendered")',
+  pdf: 'document.documentElement.hasAttribute("data-oa-rendered") && !!document.querySelector(".page canvas, .oa-error")',
+};
 
 const sameOrigin = (u: string, origin: string) => {
   try {
@@ -141,10 +164,10 @@ export async function captureThumbnail(
   if (!binding) return "skipped";
   const now = o.now ?? Date.now();
   const row = await env.DB.prepare(
-    "select current_version v, thumbnail_version t from artifacts where id = ? and deleted_at is null",
+    "select current_version v, thumbnail_version t, format f from artifacts where id = ? and deleted_at is null",
   )
     .bind(id)
-    .first<{ v: number; t: number | null }>();
+    .first<{ v: number; t: number | null; f: string }>();
   if (row?.v !== version || (row.t ?? 0) >= version) return "skipped";
   const day = utcDay(now);
   const stop = await env.DB.prepare(
@@ -176,6 +199,7 @@ export async function captureThumbnail(
       `${contentOrigin(env)}${prefix}__view`,
       o.launch ?? puppeteerLaunch,
       o.totalMs ?? THUMB.totalMs,
+      READY[row.f] ?? null,
     );
   } catch (e) {
     const stopped = isBudgetError(e);
@@ -186,15 +210,20 @@ export async function captureThumbnail(
       )
         .bind(STOP_KEY, day)
         .run();
+    const result: ThumbResult = stopped
+      ? "stopped"
+      : e instanceof LaunchError
+        ? "launch_failed"
+        : "failed";
     console.error(
       JSON.stringify({
-        evt: stopped ? "thumbnail_stopped" : "thumbnail_failed",
+        evt: `thumbnail_${result}`,
         artifactId: id,
         version,
         error: String((e as Error)?.message ?? e).slice(0, 300),
       }),
     );
-    return stopped ? "stopped" : "failed";
+    return result;
   }
   if (!bytes) return "failed";
   return (await writeThumbnail(env, id, version, bytes, "server")) === "stored"
@@ -214,6 +243,7 @@ async function shoot(
   url: string,
   launch: ThumbLaunch,
   totalMs: number,
+  ready: string | null,
 ): Promise<Uint8Array | null> {
   const origin = new URL(url).origin;
   let browser: ThumbBrowser | null = null;
@@ -256,15 +286,28 @@ async function shoot(
     page.on("dialog", (d: { dismiss(): Promise<void> }) => {
       void d.dismiss().catch(() => {});
     });
+    const t0 = Date.now();
     try {
-      await page.goto(url, {
-        waitUntil: "networkidle2",
-        timeout: THUMB.navigationMs,
-      });
+      await page.goto(url, { waitUntil: "load", timeout: THUMB.navigationMs });
     } catch (e) {
       // A slow page is shot as it is; anything else (or leaving) fails.
       if (left || (e as Error)?.name !== "TimeoutError") throw e;
     }
+    if (left || !sameOrigin(page.url(), origin))
+      throw new Error("navigation left the content host");
+    // The page's readiness signal, within the same 8 s; else a short
+    // networkidle2-style settle (≤ 2 inflight requests for 500 ms).
+    const left8s = Math.max(0, THUMB.navigationMs - (Date.now() - t0));
+    const signalled =
+      ready !== null &&
+      (await page.waitForFunction(ready, { timeout: left8s }).then(
+        () => true,
+        () => false,
+      ));
+    if (!signalled)
+      await page
+        .waitForNetworkIdle({ concurrency: 2, idleTime: 500, timeout: 2_000 })
+        .catch(() => {});
     if (left || !sameOrigin(page.url(), origin))
       throw new Error("navigation left the content host");
     for (const quality of THUMB.qualities) {

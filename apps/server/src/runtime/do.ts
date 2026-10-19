@@ -88,6 +88,8 @@ export const indexBackoffMs = (n: number) => 10_000 * 2 ** (n - 1);
 export const THUMB_MAX_ATTEMPTS = 2;
 /** When a started capture is looked at again if its run never finished. */
 export const THUMB_RETRY_MS = 60_000;
+/** After a launch error that is not the daily quota: the one retry, an hour on. */
+export const THUMB_LAUNCH_BACKOFF_MS = 3_600_000;
 /** Header carrying the subscriber's actor from the route to fetch. */
 export const ACTOR_HEADER = "X-OA-Actor";
 /**
@@ -1099,8 +1101,9 @@ export class ArtifactRuntime extends DurableObject<Env> {
    * and an alarm armed BEFORE the browser launches, so a run killed for CPU
    * (which nothing can catch) is looked at again THUMB_RETRY_MS later and
    * retried once; at THUMB_MAX_ATTEMPTS the version gets no server thumbnail.
-   * A deferral (launch slot taken) is retried within the same budget; any
-   * other outcome, failures included, ends the job. A newer version queued
+   * A deferral (launch slot taken) or a launch error that is not the daily
+   * quota (after THUMB_LAUNCH_BACKOFF_MS) is retried within the same budget;
+   * any other outcome, failures included, ends the job. A newer version queued
    * meanwhile replaces the job (writes below match on version).
    */
   private async runThumbnail(job: {
@@ -1149,10 +1152,16 @@ export class ArtifactRuntime extends DurableObject<Env> {
       );
       result = "failed";
     }
-    if (result === "deferred" && job.attempts + 1 < THUMB_MAX_ATTEMPTS)
+    const retryIn =
+      result === "deferred"
+        ? THUMB.launchGapMs
+        : result === "launch_failed"
+          ? THUMB_LAUNCH_BACKOFF_MS
+          : null;
+    if (retryIn !== null && job.attempts + 1 < THUMB_MAX_ATTEMPTS)
       this.sql.exec(
         `update thumb_job set due = ? ${same}`,
-        this.now() + THUMB.launchGapMs,
+        this.now() + retryIn,
         job.version,
       );
     else end(result === "stored" || result === "skipped" ? "done" : "no_thumb");

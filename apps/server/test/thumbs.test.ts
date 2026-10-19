@@ -14,6 +14,7 @@ import { contentOrigin } from "../src/http/errors.js";
 import {
   type ArtifactRuntime,
   runtimeStub,
+  THUMB_LAUNCH_BACKOFF_MS,
   THUMB_MAX_ATTEMPTS,
   THUMB_RETRY_MS,
 } from "../src/runtime/do.js";
@@ -67,6 +68,9 @@ type Fake = {
   shots: { type: string; quality: number; encoding: string }[];
   aborted: string[];
   continued: string[];
+  /** waitForFunction predicates, then how often the idle fallback ran. */
+  waited: string[];
+  idled: number;
 };
 
 /**
@@ -81,6 +85,8 @@ function fake(
     gotoError?: Error;
     hang?: boolean;
     onShot?: () => Promise<void>;
+    /** false: the readiness signal never comes (waitForFunction times out). */
+    ready?: boolean;
   } = {},
 ): Fake {
   const f: Fake = {
@@ -91,6 +97,8 @@ function fake(
     shots: [],
     aborted: [],
     continued: [],
+    waited: [],
+    idled: 0,
     launch: async (b) => {
       expect(b).toBe(BROWSER);
       if (o.launchError) throw o.launchError;
@@ -139,6 +147,18 @@ function fake(
       if (o.hang) await new Promise(() => {});
       if (o.gotoError) throw o.gotoError;
       return null;
+    },
+    waitForFunction: async (fn: string, w: { timeout: number }) => {
+      f.waited.push(fn);
+      expect(w.timeout).toBeLessThanOrEqual(THUMB.navigationMs);
+      if (o.ready === false) {
+        const e = new Error("Waiting failed");
+        e.name = "TimeoutError";
+        throw e;
+      }
+    },
+    waitForNetworkIdle: async () => {
+      f.idled++;
     },
     screenshot: async (opts: {
       type: string;
@@ -303,6 +323,41 @@ describe("captureThumbnail", () => {
     expect(Date.now() - t0).toBeLessThan(2_000);
     expect(f.closed).toBe(1);
     expect(await hasThumb(id)).toBe(0);
+  });
+
+  it("waits for the page's readiness signal per format; idle settle only without one", async () => {
+    const expected: Record<string, RegExp> = {
+      html: /openArtifacts/,
+      markdown: /data-oa-rendered/,
+      code: /data-oa-rendered/,
+      pdf: /data-oa-rendered.*\.page canvas/,
+    };
+    for (const [format, re] of Object.entries(expected)) {
+      const id = await pub(format, format === "pdf" ? "%PDF-1.4" : "x");
+      const f = fake();
+      expect(await capture(id, 1, f)).toBe("stored");
+      expect(f.waited).toHaveLength(1);
+      expect(f.waited[0]).toMatch(re);
+      expect(f.idled).toBe(0);
+    }
+    const id = await pub();
+    const slow = fake({ ready: false });
+    expect(await capture(id, 1, slow)).toBe("stored");
+    expect(slow.idled).toBe(1);
+  });
+
+  it("a launch error that is not the quota does not stop the day", async () => {
+    const id = await pub();
+    const f = fake({ launchError: new Error("WebSocket connection failed") });
+    expect(await capture(id, 1, f)).toBe("launch_failed");
+    expect(
+      await env.DB.prepare(
+        "select 1 x from counters where key = 'browser_stop'",
+      ).first(),
+    ).toBeNull();
+    const g = fake();
+    expect(await capture(id, 1, g)).toBe("stored");
+    expect(g.launched).toBe(1);
   });
 
   it("a launch error or quota 429 stops captures for the UTC day", async () => {
@@ -593,6 +648,40 @@ describe("thumbnail job on the artifact DO", () => {
         expect(calls).toBe(3);
         expect(i.thumbnailJob()).toMatchObject({
           version: 2,
+          state: "no_thumb",
+          attempts: 2,
+        });
+      },
+      withBrowser,
+    );
+  });
+
+  it("a non-quota launch error backs off an hour, retries once, then gives up", async () => {
+    const id = await pub();
+    await inDo(
+      id,
+      async (i) => {
+        await i.scheduleIndex(id, 1, true);
+        i.indexer = async () => {};
+        await i.alarm();
+        let calls = 0;
+        i.thumbnailer = async () => {
+          calls++;
+          return "launch_failed";
+        };
+        const t = Date.now();
+        await i.alarm();
+        const job = i.pendingThumbnail();
+        expect(job).toMatchObject({ attempts: 1 });
+        expect(job?.due ?? 0).toBeGreaterThanOrEqual(
+          t + THUMB_LAUNCH_BACKOFF_MS,
+        );
+        await i.alarm(); // not due yet
+        expect(calls).toBe(1);
+        i.now = () => Date.now() + THUMB_LAUNCH_BACKOFF_MS + 1_000;
+        await i.alarm();
+        expect(calls).toBe(2);
+        expect(i.thumbnailJob()).toMatchObject({
           state: "no_thumb",
           attempts: 2,
         });
