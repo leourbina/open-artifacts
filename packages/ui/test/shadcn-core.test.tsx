@@ -120,16 +120,23 @@ describe("variant edges", () => {
   const ratio = (fg: string, bg: string, t: "light" | "dark") =>
     contrast(rgb(tokens[fg]?.[t] as string), rgb(tokens[bg]?.[t] as string));
 
-  it.each(["button", "badge", "input"])(
-    "%s: focus is a solid ring outline, no translucent rings",
-    (name) => {
-      const src = source(name);
-      expect(src).toContain("focus-visible:outline-ring");
-      // outline-none sets --tw-outline-style: none, so the style is explicit.
-      expect(src).toContain("focus-visible:outline-solid");
-      expect(src).not.toMatch(/focus-visible:ring-(ring|destructive)\//);
-    },
-  );
+  it.each([
+    "button",
+    "badge",
+    "input",
+    "select",
+    "tabs",
+    "toggle",
+    "dialog",
+    "scroll-area",
+    "dropdown-menu",
+  ])("%s: focus is a solid ring outline, no translucent rings", (name) => {
+    const src = source(name);
+    expect(src).toContain("focus-visible:outline-ring");
+    // outline-none sets --tw-outline-style: none, so the style is explicit.
+    expect(src).toContain("focus-visible:outline-solid");
+    expect(src).not.toMatch(/focus-visible:ring-(ring|destructive)\//);
+  });
 
   it("outlined variants use border-input, not border-border", () => {
     const outline = (cls: string) =>

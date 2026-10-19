@@ -2,7 +2,23 @@
 // Import the CSS once in the app, after the tokens:
 //   import "@oa/ui/tokens.css";
 //   import "@oa/ui/shadcn.css";
+
+export { type DataTheme, useDataTheme } from "./hooks/use-data-theme";
 export { cn } from "./lib/utils";
+export {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogOverlay,
+  AlertDialogPortal,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "./ui/alert-dialog";
 export {
   Avatar,
   AvatarBadge,
@@ -22,10 +38,72 @@ export {
   CardHeader,
   CardTitle,
 } from "./ui/card";
+export {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogOverlay,
+  DialogPortal,
+  DialogTitle,
+  DialogTrigger,
+} from "./ui/dialog";
+export {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuPortal,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu";
 export { Input } from "./ui/input";
 export { Label } from "./ui/label";
+export { ScrollArea, ScrollBar } from "./ui/scroll-area";
+export {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectScrollDownButton,
+  SelectScrollUpButton,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
+} from "./ui/select";
 export { Separator } from "./ui/separator";
 export { Skeleton } from "./ui/skeleton";
+export { Toaster } from "./ui/sonner";
+export {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableFooter,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "./ui/table";
+export {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+  tabsListVariants,
+} from "./ui/tabs";
+export { Toggle, toggleVariants } from "./ui/toggle";
+export { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group";
 export {
   Tooltip,
   TooltipContent,

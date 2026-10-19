@@ -1,186 +1,217 @@
-// Real-browser a11y for the shadcn components: compiles Tailwind with the
-// Studio tokens, renders every variant on bg and on surface under
-// <html data-theme>, and runs axe (incl. color-contrast) in Chromium. Also
-// tabs through every control and measures its focus outline. jsdom can't do
-// either. Run: pnpm --filter @oa/ui test:browser
-import { readdirSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+// Real-browser a11y for the shadcn components. Builds Ladle (Vite + Tailwind
+// + the Studio tokens), opens the "shadcn / a11y fixture" story in Chromium
+// under <html data-theme>, and checks: axe incl. color-contrast, outlined
+// borders, every focus outline (Tab walk), and each overlay while open
+// (axe plus the outline on its focused item). jsdom can't do any of this.
+// Run: pnpm --filter @oa/ui test:browser
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import { extname, join, resolve } from "node:path";
 import axe from "axe-core";
-import { type Browser, chromium } from "playwright";
-import { renderToStaticMarkup } from "react-dom/server";
-import { compile } from "tailwindcss";
+import { type Browser, chromium, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { cases } from "../test/shadcn-fixtures";
 
 const pkg = resolve(import.meta.dirname, "..");
-const themePath = `${pkg}/src/shadcn/theme.css`;
+const out = "node_modules/.cache/oa-ladle-a11y";
+const STORY = "shadcn-a11y--shadcn-a11y-fixture";
 
-async function buildCss() {
-  const resolveCss = (id: string) => {
-    const file = resolve(pkg, "node_modules", id, "package.json");
-    const { exports, style } = JSON.parse(readFileSync(file, "utf8"));
-    return resolve(dirname(file), exports?.["."]?.style ?? style);
-  };
-  const compiler = await compile(readFileSync(themePath, "utf8"), {
-    base: dirname(themePath),
-    from: themePath,
-    loadStylesheet: async (id: string, base: string) => {
-      const path = id.startsWith(".") ? resolve(base, id) : resolveCss(id);
-      return { path, base: dirname(path), content: readFileSync(path, "utf8") };
-    },
+let server: Server;
+let base: string;
+let browser: Browser;
+
+beforeAll(async () => {
+  execFileSync("pnpm", ["exec", "ladle", "build", "-o", out], {
+    cwd: pkg,
+    stdio: "pipe",
   });
-  // Candidates: every token in the component sources and the fixtures;
-  // Tailwind ignores the ones that aren't classes.
-  const sources = [
-    ...readdirSync(`${pkg}/src/shadcn/ui`).map(
-      (f) => `${pkg}/src/shadcn/ui/${f}`,
-    ),
-    `${pkg}/test/shadcn-fixtures.tsx`,
-    import.meta.filename,
-  ].map((f) => readFileSync(f, "utf8"));
-  const candidates = new Set(sources.join(" ").split(/[\s"'`{}(),;]+/));
-  // The tokens' Google Fonts @import would need the network; fonts don't
-  // change contrast math.
-  const tokens = readFileSync(`${pkg}/src/tokens/tokens.css`, "utf8").replace(
-    /@import url\([^)]*\);/,
-    "",
-  );
-  return tokens + compiler.build([...candidates]);
+  const root = join(pkg, out);
+  const types: Record<string, string> = {
+    ".html": "text/html",
+    ".js": "text/javascript",
+    ".css": "text/css",
+    ".json": "application/json",
+    ".svg": "image/svg+xml",
+  };
+  server = createServer((req, res) => {
+    const path = join(root, new URL(req.url ?? "/", "http://x").pathname);
+    const file =
+      existsSync(path) && statSync(path).isFile()
+        ? path
+        : join(root, "index.html");
+    res.setHeader("content-type", types[extname(file)] ?? "text/plain");
+    res.end(readFileSync(file));
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  browser = await chromium.launch();
+}, 120_000);
+
+afterAll(async () => {
+  await browser?.close();
+  server?.close();
+});
+
+type Focus = { id: string; ok: boolean; detail: string } | null;
+
+async function open(theme: string): Promise<Page> {
+  const page = await browser.newPage();
+  await page.goto(`${base}/?story=${STORY}&mode=preview`);
+  await page.waitForSelector("[data-a11y-ready]");
+  await page.evaluate((t) => {
+    document.documentElement.dataset.theme = t;
+  }, theme);
+  // Measure settled styles: transition-all would animate outlines in.
+  await page.addStyleTag({
+    content: "*, *::before, *::after { transition: none !important; }",
+  });
+  await page.addScriptTag({ content: axe.source });
+  await page.addScriptTag({ content: `(${pageHelpers})()` });
+  return page;
 }
 
-const markup = Object.values(cases)
-  .map((el) => `<div class="py-1">${renderToStaticMarkup(el)}</div>`)
-  .join("");
-const page = (theme: string, css: string) => `<!doctype html>
-<html lang="en" data-theme="${theme}"><head><title>shadcn core</title>
-<style>${css}</style>
-<!-- Measure settled styles: transition-all would animate the outline in. -->
-<style>*, *::before, *::after { transition: none !important; }</style></head>
-<body class="bg-background text-foreground font-sans">
-  <main>
-    <section class="p-4">${markup}</section>
-    <section class="bg-card p-4">${markup}</section>
-  </main>
-</body></html>`;
-
-let browser: Browser;
-let css: string;
-beforeAll(async () => {
-  [browser, css] = await Promise.all([chromium.launch(), buildCss()]);
-});
-afterAll(() => browser?.close());
-
-describe.each(["light", "dark"])("shadcn core in Chromium (%s)", (theme) => {
-  it("has no axe violations, color-contrast included", async () => {
-    const tab = await browser.newPage();
-    await tab.setContent(page(theme, css));
-    await tab.addScriptTag({ content: axe.source });
-    const violations = await tab.evaluate(async () => {
-      // biome-ignore lint/suspicious/noExplicitAny: axe is injected globally
-      const r = await (window as any).axe.run(document, {
-        runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21aa"] },
-      });
-      return r.violations.map(
-        (v: { id: string; nodes: { target: string[] }[] }) =>
-          `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`,
-      );
+// Runs in the page: WCAG ratio helpers on window.__oa.
+function pageHelpers() {
+  const parse = (c: string) => c.match(/[\d.]+/g)?.map(Number) ?? [];
+  const lum = (c: number[]) => {
+    const [r, g, b] = c.slice(0, 3).map((v) => {
+      const s = v / 255;
+      return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
     });
-    await tab.close();
-    expect(violations).toEqual([]);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const ratio = (a: string, b: string) => {
+    const [hi, lo] = [lum(parse(a)), lum(parse(b))].sort((x, y) => y - x);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+  const fill = (el: Element | null) => {
+    for (let h = el; h; h = h.parentElement) {
+      const c = getComputedStyle(h).backgroundColor;
+      if ((parse(c)[3] ?? 1) > 0) return c;
+    }
+    return "rgb(255, 255, 255)";
+  };
+  const name = (el: Element) =>
+    `${el.tagName}.${el.getAttribute("aria-label") || el.textContent?.trim().slice(0, 24) || ""}`;
+  // Inset outlines (negative offset) sit on the element's own fill.
+  const focus = () => {
+    const el = document.activeElement;
+    if (!el || el === document.body) return null;
+    const s = getComputedStyle(el);
+    const inset = Number.parseFloat(s.outlineOffset) < 0;
+    const r = ratio(s.outlineColor, fill(inset ? el : el.parentElement));
+    const ok =
+      s.outlineStyle === "solid" &&
+      Number.parseFloat(s.outlineWidth) >= 2 &&
+      r >= 3;
+    return {
+      id: name(el),
+      ok,
+      detail: `${s.outlineStyle} ${s.outlineWidth} ${r.toFixed(2)}`,
+    };
+  };
+  // `overlay`: an open modal. Radix hides the page with aria-hidden while
+  // trapping focus in the overlay, which axe's aria-hidden-focus flags.
+  const axeRun = async (overlay = false) => {
+    // biome-ignore lint/suspicious/noExplicitAny: axe is injected globally
+    const res = await (window as any).axe.run(document, {
+      runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21aa"] },
+      rules: {
+        region: { enabled: false },
+        "aria-hidden-focus": { enabled: !overlay },
+      },
+    });
+    return res.violations.map(
+      (v: { id: string; nodes: { target: string[] }[] }) =>
+        `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`,
+    );
+  };
+  const borders = () =>
+    [
+      ...document.querySelectorAll(
+        '[data-variant="outline"], [data-slot="input"], [data-slot="select-trigger"]',
+      ),
+    ]
+      // Group wrappers carry data-variant too but draw no border.
+      .filter(
+        (el) => Number.parseFloat(getComputedStyle(el).borderTopWidth) > 0,
+      )
+      .map((el) => ({
+        id: name(el),
+        r: ratio(getComputedStyle(el).borderTopColor, fill(el.parentElement)),
+      }))
+      .filter((m) => m.r < 3)
+      .map((m) => `${m.id} ${m.r.toFixed(2)}`);
+  // biome-ignore lint/suspicious/noExplicitAny: test-only global
+  (window as any).__oa = { focus, axeRun, borders };
+}
+
+const oa = (page: Page, fn: "focus" | "axeRun" | "borders", arg?: boolean) =>
+  // biome-ignore lint/suspicious/noExplicitAny: test-only global
+  page.evaluate(([f, a]) => (window as any).__oa[f as string](a), [fn, arg]);
+
+describe.each(["light", "dark"])("shadcn in Chromium (%s)", (theme) => {
+  it("has no axe violations, color-contrast included", async () => {
+    const page = await open(theme);
+    expect(await oa(page, "axeRun")).toEqual([]);
+    await page.close();
   });
 
   it("outlined controls' computed borders are >= 3:1 on their page", async () => {
-    const tab = await browser.newPage();
-    await tab.setContent(page(theme, css));
-    const measured = await tab.evaluate(() => {
-      const parse = (c: string) => c.match(/[\d.]+/g)?.map(Number) ?? [];
-      const lum = (c: number[]) => {
-        const [r, g, b] = c.slice(0, 3).map((v) => {
-          const s = v / 255;
-          return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
-        });
-        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-      };
-      const fill = (el: Element | null) => {
-        for (let h = el; h; h = h.parentElement) {
-          const c = getComputedStyle(h).backgroundColor;
-          if ((parse(c)[3] ?? 1) > 0) return c;
-        }
-        return "rgb(255, 255, 255)";
-      };
-      const outlined = document.querySelectorAll(
-        '[data-variant="outline"], [data-slot="input"]',
-      );
-      return [...outlined].map((el) => {
-        const [hi, lo] = [
-          lum(parse(getComputedStyle(el).borderTopColor)),
-          lum(parse(fill(el.parentElement))),
-        ].sort((a, b) => b - a);
-        return {
-          id: `${el.tagName}.${el.textContent?.trim() || el.getAttribute("aria-label") || ""}`,
-          ratio: (hi + 0.05) / (lo + 0.05),
-        };
-      });
-    });
-    await tab.close();
-    // Two copies (bg, surface) of: outline button, tooltip trigger (outline),
-    // outline badge, two inputs.
-    expect(measured.length).toBeGreaterThanOrEqual(10);
-    expect(
-      measured
-        .filter((m) => m.ratio < 3)
-        .map((m) => `${m.id} ${m.ratio.toFixed(2)}`),
-    ).toEqual([]);
+    const page = await open(theme);
+    expect(await oa(page, "borders")).toEqual([]);
+    await page.close();
   });
 
-  it("every focus outline is >= 3:1 against what it sits on", async () => {
-    const tab = await browser.newPage();
-    await tab.setContent(page(theme, css));
-    const results: string[] = [];
+  it("every focus outline is a solid 2px ring at >= 3:1", async () => {
+    const page = await open(theme);
+    const bad: string[] = [];
     let focused = 0;
-    for (let i = 0; i < 80; i++) {
-      await tab.keyboard.press("Tab");
-      const r = await tab.evaluate(() => {
-        const el = document.activeElement as HTMLElement | null;
-        if (!el || el === document.body) return null;
-        const parse = (c: string) => c.match(/[\d.]+/g)?.map(Number) ?? [];
-        const lum = (c: number[]) => {
-          const [r, g, b] = c.slice(0, 3).map((v) => {
-            const s = v / 255;
-            return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
-          });
-          return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        };
-        // The outline sits 2px outside the element, on its parent's fill.
-        let host = el.parentElement;
-        let bg = "rgb(255, 255, 255)";
-        while (host) {
-          const c = getComputedStyle(host).backgroundColor;
-          if ((parse(c)[3] ?? 1) > 0) {
-            bg = c;
-            break;
-          }
-          host = host.parentElement;
-        }
-        const s = getComputedStyle(el);
-        const [hi, lo] = [lum(parse(s.outlineColor)), lum(parse(bg))].sort(
-          (a, b) => b - a,
-        );
-        return {
-          id: `${el.tagName}.${el.textContent?.trim() || el.getAttribute("aria-label") || ""}`,
-          style: s.outlineStyle,
-          width: Number.parseFloat(s.outlineWidth),
-          ratio: (hi + 0.05) / (lo + 0.05),
-        };
-      });
+    for (let i = 0; i < 120; i++) {
+      await page.keyboard.press("Tab");
+      const r = (await oa(page, "focus")) as Focus;
       if (!r) break;
       focused++;
-      if (r.style !== "solid" || r.width < 2 || r.ratio < 3)
-        results.push(`${r.id}: ${r.style} ${r.width}px ${r.ratio.toFixed(2)}`);
+      if (!r.ok) bad.push(`${r.id}: ${r.detail}`);
     }
-    await tab.close();
-    // Two copies (bg, surface): 6 buttons, 2 inputs, 2 badge links, trigger.
-    expect(focused).toBeGreaterThanOrEqual(22);
-    expect(results).toEqual([]);
+    await page.close();
+    // Two copies (bg, surface) of ~20 focusable controls each.
+    expect(focused).toBeGreaterThanOrEqual(36);
+    expect(bad).toEqual([]);
+  });
+
+  // Each overlay opened from the keyboard: axe on the open state, then the
+  // outline on the first item focused inside it.
+  it.each([
+    ["select", "combobox", "Role", "ArrowDown", '[role="listbox"]'],
+    ["dropdown menu", "button", "Actions", "ArrowDown", '[role="menu"]'],
+    ["dialog", "button", "Open dialog", "Tab", '[role="dialog"]'],
+    [
+      "alert dialog",
+      "button",
+      "Delete artifact",
+      "Tab",
+      '[role="alertdialog"]',
+    ],
+  ] as const)("%s, open", async (_, role, label, key, selector) => {
+    const page = await open(theme);
+    await page.getByRole(role, { name: label, exact: true }).first().focus();
+    await page.keyboard.press("Enter");
+    await page.waitForSelector(selector);
+    const violations = await oa(page, "axeRun", true);
+    await page.keyboard.press(key);
+    const focus = (await oa(page, "focus")) as Focus;
+    await page.close();
+    expect(violations).toEqual([]);
+    expect(focus?.ok, `${focus?.id}: ${focus?.detail}`).toBe(true);
+  });
+
+  it("toast has no axe violations", async () => {
+    const page = await open(theme);
+    await page.getByRole("button", { name: "Show toast" }).first().click();
+    await page.waitForSelector("[data-sonner-toast]");
+    expect(await oa(page, "axeRun")).toEqual([]);
+    await page.close();
   });
 });

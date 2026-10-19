@@ -1,7 +1,17 @@
-// Every shadcn core component and variant, shared by the jsdom and the
-// real-browser (test-browser/) checks.
+// Every shadcn component and variant, shared by the jsdom checks, the a11y
+// Ladle story and the real-browser checks (test-browser/) that drive it.
 import type { ReactElement } from "react";
+import { toast } from "sonner";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
   Avatar,
   AvatarFallback,
   Badge,
@@ -11,10 +21,43 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
   Input,
   Label,
+  ScrollArea,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   Separator,
   Skeleton,
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+  ToggleGroup,
+  ToggleGroupItem,
   Tooltip,
   TooltipContent,
   TooltipProvider,
@@ -76,4 +119,122 @@ export const cases: Record<string, ReactElement> = {
   ),
   Skeleton: <Skeleton className="h-4 w-24" />,
   Separator: <Separator />,
+  Select: (
+    <Select defaultValue="viewer">
+      <SelectTrigger aria-label="Role">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="viewer">Viewer</SelectItem>
+        <SelectItem value="editor">Editor</SelectItem>
+      </SelectContent>
+    </Select>
+  ),
+  Dialog: (
+    <Dialog>
+      <DialogTrigger asChild>
+        <Button variant="outline">Open dialog</Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Share</DialogTitle>
+          <DialogDescription>Invite people to this artifact.</DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button>Done</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  ),
+  AlertDialog: (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button variant="destructive">Delete artifact</Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete artifact?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This removes every version.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction>Delete</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  ),
+  DropdownMenu: (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline">Actions</Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent>
+        <DropdownMenuLabel>Artifact</DropdownMenuLabel>
+        <DropdownMenuItem>Rename</DropdownMenuItem>
+        <DropdownMenuCheckboxItem checked>Starred</DropdownMenuCheckboxItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem variant="destructive">Delete</DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  ),
+  Tabs: (
+    <Tabs defaultValue="versions">
+      <TabsList>
+        <TabsTrigger value="versions">Versions</TabsTrigger>
+        <TabsTrigger value="share">Share</TabsTrigger>
+      </TabsList>
+      <TabsContent value="versions">7 versions</TabsContent>
+      <TabsContent value="share">Shared with the team</TabsContent>
+    </Tabs>
+  ),
+  ToggleGroup: (
+    <ToggleGroup type="single" defaultValue="grid" aria-label="Layout">
+      <ToggleGroupItem value="grid">Grid</ToggleGroupItem>
+      <ToggleGroupItem value="list">List</ToggleGroupItem>
+    </ToggleGroup>
+  ),
+  ToggleGroupOutline: (
+    <ToggleGroup
+      type="single"
+      variant="outline"
+      defaultValue="grid"
+      aria-label="Density"
+    >
+      <ToggleGroupItem value="grid">Cozy</ToggleGroupItem>
+      <ToggleGroupItem value="list">Compact</ToggleGroupItem>
+    </ToggleGroup>
+  ),
+  Table: (
+    <Table>
+      <TableCaption>Recent versions</TableCaption>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Version</TableHead>
+          <TableHead>Agent</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        <TableRow>
+          <TableCell>v7</TableCell>
+          <TableCell>Claude Code</TableCell>
+        </TableRow>
+      </TableBody>
+    </Table>
+  ),
+  ScrollArea: (
+    <ScrollArea className="h-16 w-48 rounded-md border" aria-label="Notes">
+      <p className="p-2">
+        Marked billing cutover at risk; added ledger replay task and the review
+        note. Rewrote the cutover procedure around the new script.
+      </p>
+    </ScrollArea>
+  ),
+  // The <Toaster /> itself is mounted once, by the a11y story.
+  ToastTrigger: (
+    <Button variant="outline" onClick={() => toast("Link copied")}>
+      Show toast
+    </Button>
+  ),
 };
