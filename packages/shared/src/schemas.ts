@@ -322,6 +322,8 @@ export const MeSchema = z.object({
     defaultVisibility: z.enum(["private", "team"]),
     appUrl: z.string(),
     mcpUrl: z.string(),
+    /** Server can send invite/share emails; the result's `emailed` reports each send. */
+    emailEnabled: z.boolean(),
   }),
   /** The name the user chose (PATCH R.me), or null. */
   displayName: z.string().nullable(),

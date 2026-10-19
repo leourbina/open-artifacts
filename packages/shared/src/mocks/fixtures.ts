@@ -118,6 +118,7 @@ export const fixtures: {
       defaultVisibility: "private",
       appUrl: "https://app.example.com",
       mcpUrl: "https://app.example.com/mcp",
+      emailEnabled: false,
     },
     displayName: null,
     suggestedName: null,
