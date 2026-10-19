@@ -257,11 +257,11 @@ One master plan covers the whole system: `docs/superpowers/plans/2026-10-18-open
   - Anonymous per-IP limits use the Workers rate-limit binding.
   - Defaults: 1 MB per doc, 50 MB per artifact, 100 writes per minute per viewer, 30 writes per minute per anonymous IP.
 - **Releases:** llms.txt installs the **latest tagged release**, not `main`.
-- **Repo URL:** `https://github.com/leourbina/open-artifacts` (user decision), defined once in `packages/shared/src/meta.ts`.
+- **Repo URL:** `https://github.com/open-artifacts-ai/open-artifacts` (user decision), defined once in `packages/shared/src/meta.ts`.
 
 ## 10. Delivery (user decision, revision 3)
 
-- **Small PRs:** everything ships as small, single-task PRs to `github.com/leourbina/open-artifacts`. `main` is protected: a PR and passing CI are required, admins are held to the same rules, and merges are squash only, with Conventional Commit titles.
+- **Small PRs:** everything ships as small, single-task PRs to `github.com/open-artifacts-ai/open-artifacts`. `main` is protected: a PR and passing CI are required, admins are held to the same rules, and merges are squash only, with Conventional Commit titles.
 - **Staging:** every merge to `main` deploys to **staging**: `staging.open-artifacts.com` serves the app and `staging-content.open-artifacts.com` serves content (designer's call for the second host). Migrations run first, then a smoke test. A red staging deploy blocks all merges until it's fixed.
   - Staging has no Access gate. It's public from the start (user decision).
 - **Releases** are managed by **release-please**: manifest mode, a single root component, starting at 0.1.0. The Platform lead merges the release PR at each milestone once staging is green. No human approval is needed (user decision). Publishing a release tags it, creates a GitHub release, and deploys the landing site to **open-artifacts.com**, which is on the user's Cloudflare account. Landing changes get preview URLs on their PRs.

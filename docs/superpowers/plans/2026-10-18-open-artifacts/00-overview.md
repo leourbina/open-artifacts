@@ -60,7 +60,7 @@ Every lead runs its track using **superpowers:subagent-driven-development**. Eac
 
 ## Delivery: small increments, always deployed (user decision)
 
-- **Remote:** `https://github.com/leourbina/open-artifacts` (public). The default branch is `main`, which is protected by F4: it requires a PR and passing checks, and admins are held to the same rules.
+- **Remote:** `https://github.com/open-artifacts-ai/open-artifacts` (public). The default branch is `main`, which is protected by F4: it requires a PR and passing checks, and admins are held to the same rules.
 - **One task is one PR.** A task bigger than about 400 changed lines (excluding generated files and lockfiles) is split into stacked PRs, `…-1`, `…-2`, each green on its own.
 - **Branch names:** `<track>/<task-id>-<slug>`. Examples: `be/b06-publish`, `fe/fe04-bridge`, `de/d02-tokens`, `fo/f02-contract`, `in/i01-journey`.
 - **PR title** is a Conventional Commit, for example `feat(server): race-safe publish (B6)`. release-please reads the squash-merge title, so it has to be right.
@@ -111,7 +111,7 @@ All three leads work in the same repository, so each one needs its own git workt
 scripts/oa-blocker.sh "<your session name>" "<short title>" "<exact action needed, how to do it, and what it blocks>"
 ```
 
-- The script creates an issue in `leourbina/open-artifacts` titled `[<session>] <title>`, with the label `blocker`, assigned to `leourbina`.
+- The script creates an issue in `open-artifacts-ai/open-artifacts` titled `[<session>] <title>`, with the label `blocker`, assigned to `leourbina`.
 - It adds the issue to the project **Open Artifacts** (https://github.com/users/leourbina/projects/1) and sets the **Raised by** field to the session name.
 - The lead then keeps working on anything that isn't blocked. It watches the issue (`gh issue view <n> --comments`) and closes it once it's resolved.
 - One issue per blocker. Never put secrets in an issue: ask the user to run `! gh secret set …` instead.
@@ -158,7 +158,7 @@ Every task's requirements include this section implicitly.
 **Product rules:**
 - MCP tool names and descriptions are vendor-neutral. The words "Claude", "Anthropic", and "OpenAI" never appear in tool names or descriptions.
 - Deployed instances send no telemetry.
-- The repo URL is defined in exactly one place: `packages/shared/src/meta.ts` exports `REPO_URL = "https://github.com/leourbina/open-artifacts"`.
+- The repo URL is defined in exactly one place: `packages/shared/src/meta.ts` exports `REPO_URL = "https://github.com/open-artifacts-ai/open-artifacts"`.
 - **Node 22+** (wrangler requires it). `engines.node` is `">=22"` in every package, and `.nvmrc` and CI use 22, so CI tests exactly what users run. All packages are ESM. TypeScript runs with `"strict": true`.
 
 **Process rules:**
