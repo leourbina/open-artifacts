@@ -184,14 +184,16 @@ export function Library({ scope }: { scope: Scope }) {
         <span className="flex-1" />
         <DropZone button allowed={me.status === "authed" && !guest} />
       </div>
-      {me.status === "authed" ? (
-        <Tabs
-          value={scope}
-          onValueChange={(id) => go(PATH[id as Scope], {})}
-          className="gap-[var(--oa-space-4)]"
-        >
-          {/* The strip scrolls, so the hairline is an inset shadow, the
-              underline sits on the bottom edge and the focus ring is inset. */}
+      {/* One tree whether or not /me has loaded: the results never remount
+          when the tabs appear (a remount detaches every card mid-use). */}
+      <Tabs
+        value={scope}
+        onValueChange={(id) => go(PATH[id as Scope], {})}
+        className="gap-[var(--oa-space-4)]"
+      >
+        {/* The strip scrolls, so the hairline is an inset shadow, the
+            underline sits on the bottom edge and the focus ring is inset. */}
+        {me.status === "authed" && (
           <TabsList
             variant="line"
             className="h-[34px] w-full justify-start gap-[var(--oa-space-4)] overflow-x-auto rounded-none p-0 shadow-[inset_0_-1px_0_var(--color-border)] [scrollbar-width:none]"
@@ -206,14 +208,12 @@ export function Library({ scope }: { scope: Scope }) {
               </TabsTrigger>
             ))}
           </TabsList>
-          {/* Not a tab stop: Tab goes from the tabs straight to the filters. */}
-          <TabsContent value={scope} tabIndex={-1} className={PAGE}>
-            {results}
-          </TabsContent>
-        </Tabs>
-      ) : (
-        results
-      )}
+        )}
+        {/* Not a tab stop: Tab goes from the tabs straight to the filters. */}
+        <TabsContent value={scope} tabIndex={-1} className={PAGE}>
+          {results}
+        </TabsContent>
+      </Tabs>
     </section>
   );
 }
