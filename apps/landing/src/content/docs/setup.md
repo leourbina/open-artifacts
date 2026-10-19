@@ -32,7 +32,7 @@ The agent follows the steps below. The only thing you do yourself is approve the
    If `TAG` comes back empty or `curl` fails, stop and tell the user: "Open Artifacts has no stable release yet; check back later."
 3. **Install dependencies:** `pnpm install`.
 4. **Ask the user to log in to Cloudflare.** Ask them to run `npx wrangler login` and approve access in the browser. On a remote machine or in a container, use `npx wrangler login --device` instead. This is the one step a person has to do.
-5. **Run setup.** First ask the user: "Just you, or a team?" Don't guess. Pass `--solo` for just them, or `--team` for a team, which also sets up invite email. Use the user's hostnames and email:
+5. **Run setup.** First ask the user: "Just you, or a team?" Don't guess. Pass `--solo` for just them, or `--team` for a team, which also sets up invite email on Workers Paid (detected, or confirmed with `--yes-paid`). Use the user's hostnames and email:
 
    ```sh
    pnpm -s oa:setup --json --app-host artifacts.example.com --content-host artifacts-content.example.com --owner-email you@example.com --name open-artifacts --solo
@@ -54,11 +54,11 @@ The agent follows the steps below. The only thing you do yourself is approve the
 
    If the `prereqs` line is `action_required` with "Pass --solo or --team", ask the user "Just you, or a team?" and run again with `--solo` or `--team`.
 
-   **The Workers plan.** The `prereqs` line has `data.plan` (`free`, `paid`, or `unknown`) and `data.warnings`. Relay every `data.warnings[].message` to the user verbatim, and say nothing else about the plan: don't paraphrase the warnings or add free-plan notes of your own.
+   **The Workers plan.** The `prereqs` line has `data.plan` (`free`, `paid`, or `unknown`) and `data.warnings`. If it stops because a hostname isn't in a zone on the account, the line carries only `data.missing`, with no plan or warnings; once the zone is added and setup runs again, the plan appears. Relay every `data.warnings[].message` to the user verbatim, and say nothing else about the plan: don't paraphrase the warnings or add free-plan notes of your own.
 
    - **`unknown`** is the common case. `wrangler login` has no billing access, so setup couldn't read the plan and relays the Workers Free notes to be safe. The first warning explains this.
    - **`paid`**, with no warnings: tell the user Workers Paid was detected. If they chose `--solo`, offer the team path: run setup again with `--team`. Invite emails need an email sending domain (below).
-   - **A team on a plan that isn't `paid`:** invite email stays off. If the user confirms the account is on Workers Paid, run again with `--team --yes-paid`.
+   - **A team on a plan that isn't `paid`:** invite email stays off, except on an `unknown` plan where an earlier run saved `email: true`; then it stays on. Otherwise, if the user confirms the account is on Workers Paid, run again with `--team --yes-paid`.
 
    **Invite email (teams only).** The `email` step checks the sending domain, `mail.<app-host>` unless you pass `--email-domain`. When it returns `action_required`, give the user its `message`, the dashboard link in `data.dashboard`, and the DNS records in `data.records`, verbatim. Wait until they've onboarded the domain in the dashboard, then run setup again; the records can take 5 to 15 minutes to appear. If the domain already has mail records from another provider, setup asks first: relay that `action_required` message, and pass `--yes-email-domain` only if the user agrees. Otherwise pick another `--email-domain`.
 6. **Connect yourself.** The `owner-token` line's `data.token` is the owner's personal access token (`oa_pat_…`). It's shown only once, by the run that mints it, so keep it. The `agent-config` line's `data.url` is the MCP URL, and its `data.snippets` holds MCP configs for `claudeCode`, `codex`, `cursor`, `opencode`, and a generic `json`. They don't contain the token: most read it from the `OA_TOKEN` environment variable, and `json` has a `<YOUR_TOKEN>` placeholder to replace, in a file kept out of git. Add the one for *this* agent to your MCP config, and make the token available as `OA_TOKEN` to its client. If you've lost the token, run setup again with `--new-owner-token`, which mints a new one and revokes the old one. Connect agents shows each client's config format.
@@ -120,7 +120,7 @@ The `prereqs` line's `data.warnings` holds one `{ code, plan, message }` per not
 
 {PLAN_WARNINGS_TABLE}
 
-On Workers Paid (`data.plan` `paid`), `data.warnings` is empty and the `prereqs` message is "Workers Paid detected".
+On Workers Paid (`data.plan` `paid`), `data.warnings` is empty and the `prereqs` message is "Workers Paid detected". When `prereqs` stops because a hostname isn't in a zone, its `action_required` line carries only `data.missing`: no plan, no warnings, and no "Workers Paid detected".
 
 ## Cloudflare Access permissions
 
