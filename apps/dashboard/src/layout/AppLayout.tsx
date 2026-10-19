@@ -245,7 +245,7 @@ function Sidebar({ me, path }: { me: Me | null; path: string }) {
   return (
     <ShSidebar variant="inset">
       <SidebarHeader
-        className="h-12 justify-center gap-0 p-0"
+        className="h-12 justify-center gap-0 p-0 in-data-[mobile=true]:mx-2 in-data-[mobile=true]:mt-2"
         onClick={(e) => {
           if ((e.target as Element).closest("a")) go(e, home);
         }}
@@ -255,7 +255,9 @@ function Sidebar({ me, path }: { me: Me | null; path: string }) {
           name={me?.instance.name || "Open Artifacts"}
         />
       </SidebarHeader>
-      <SidebarContent>
+      {/* The phone sheet has no inset container, so it takes the desktop's
+          8px itself. */}
+      <SidebarContent className="in-data-[mobile=true]:px-2">
         <nav aria-label="Primary">
           <SidebarGroup>
             <SidebarGroupContent>

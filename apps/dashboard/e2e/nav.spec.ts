@@ -7,7 +7,8 @@ test("sidebar B metrics at 1280px", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/");
   const nav = page.getByRole("navigation", { name: "Primary" });
-  await expect(nav.getByRole("link", { name: "Library" })).toBeVisible();
+  // Settings needs /me, so every row is in once it shows.
+  await expect(nav.getByRole("link", { name: "Settings" })).toBeVisible();
   const m = await page.evaluate(() => {
     const box = (el?: Element | null) => el?.getBoundingClientRect();
     const css = (el: Element) => getComputedStyle(el);
@@ -113,6 +114,22 @@ test("phone: a 288px sheet that navigates, closes and returns focus", async ({
   const sheet = page.getByRole("dialog");
   await expect(sheet.getByRole("link", { name: "Team" })).toBeVisible();
   expect((await sheet.boundingBox())?.width).toBe(288);
+  // The desktop's insets: brand 8px in and 48px tall, rows 16px in.
+  const inset = await sheet.evaluate((d) => {
+    const left = d.getBoundingClientRect().left;
+    const head = d.querySelector("[data-slot=sidebar-header]");
+    const brand = head?.querySelector("a")?.getBoundingClientRect();
+    const row = d
+      .querySelector("nav a[data-slot=sidebar-menu-button]")
+      ?.getBoundingClientRect();
+    return {
+      brandX: (brand?.left ?? 0) - left,
+      brandY: (brand?.top ?? 0) - d.getBoundingClientRect().top,
+      brandRow: head?.getBoundingClientRect().height,
+      rowX: (row?.left ?? 0) - left,
+    };
+  });
+  expect(inset).toEqual({ brandX: 8, brandY: 8, brandRow: 48, rowX: 16 });
   await page.keyboard.press("Escape");
   await expect(sheet).toHaveCount(0);
   await expect(trigger).toBeFocused();
