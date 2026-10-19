@@ -24,12 +24,27 @@ const features = [
     body: "An HTML artifact can save and read shared data, so polls, trackers and checklists just work.",
   },
   {
-    title: "Any MCP agent",
+    title: "Any AI agent",
     body: "Claude Code, Codex CLI, Cursor, OpenCode, ChatGPT, or anything else that speaks MCP.",
   },
   {
     title: "Yours to run",
-    body: "MIT-licensed, on your own domain, and works on the Workers Free plan. Nothing passes through us.",
+    body: "MIT-licensed, on your own Cloudflare account and domain. Nothing passes through us.",
+  },
+];
+
+const plans = [
+  {
+    name: "Workers Free",
+    who: "For you",
+    price: "$0",
+    body: "Publish, version and share everything your agents make. Sized for one person.",
+  },
+  {
+    name: "Workers Paid",
+    who: "For your team",
+    price: "$5 a month",
+    body: "Invite emails for teammates, and more CPU for large publishes. Sized for a team.",
   },
 ];
 ---
@@ -120,6 +135,23 @@ const features = [
           <li class="card">
             <h3>{f.title}</h3>
             <p>{f.body}</p>
+          </li>
+        ))
+      }
+    </ul>
+  </section>
+
+  <section class="wrap features plans" aria-labelledby="plans-h">
+    <h2 id="plans-h">Which Cloudflare plan</h2>
+    <p class="plans-lede">Open Artifacts runs on either. Pick the one that fits who uses it.</p>
+    <ul class="cards">
+      {
+        plans.map((p) => (
+          <li class="card">
+            <p class="plan-who">{p.who}</p>
+            <h3>{p.name}</h3>
+            <p class="plan-price">{p.price}</p>
+            <p>{p.body}</p>
           </li>
         ))
       }

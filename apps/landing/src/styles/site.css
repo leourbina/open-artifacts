@@ -368,6 +368,28 @@ code,
   font-size: 15px;
 }
 
+/* Plans: two parallel cards, neither styled as the "upgrade". */
+.plans-lede {
+  margin-top: 8px;
+  color: var(--oa-text-2);
+}
+@media (min-width: 960px) {
+  .plans .cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+.card .plan-who {
+  margin: 0 0 4px;
+  color: var(--oa-text-muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+.card .plan-price {
+  margin-top: 4px;
+  color: var(--oa-text);
+  font: 500 15px var(--oa-font-mono);
+}
+
 .pair {
   display: grid;
   gap: 24px;
