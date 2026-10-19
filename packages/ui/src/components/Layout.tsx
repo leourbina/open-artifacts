@@ -20,22 +20,44 @@ export function Banner({
   title,
   children,
   action,
+  icon,
+  compact = false,
+  onDismiss,
 }: {
   tone: "info" | "success" | "warning" | "danger";
-  title: string;
+  /** Omit for a single-line notice such as the viewer strip. */
+  title?: string;
   children?: ReactNode;
   action?: ReactNode;
+  /** Decorative; rendered aria-hidden before the text. */
+  icon?: ReactNode;
+  /** Tighter padding for a one-line strip. */
+  compact?: boolean;
+  onDismiss?: () => void;
 }) {
   return (
     <div
       role={tone === "danger" ? "alert" : "status"}
-      className={cx(s.banner, s[tone])}
+      className={cx(s.banner, s[tone], compact && s.compact)}
     >
+      {icon && (
+        <span className={s.bannerIcon} aria-hidden="true">
+          {icon}
+        </span>
+      )}
       <div className={s.bannerText}>
-        <strong>{title}</strong>
+        {title && <strong>{title}</strong>}
         {children && <div>{children}</div>}
       </div>
       {action}
+      {onDismiss && (
+        <IconButton
+          label="Dismiss"
+          size="sm"
+          icon={glyph("M4 4l8 8M12 4l-8 8")}
+          onClick={onDismiss}
+        />
+      )}
     </div>
   );
 }
