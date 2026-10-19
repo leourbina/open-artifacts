@@ -27,6 +27,16 @@ The free plan allows 100,000 Worker requests a day and 10 ms of CPU time per req
 
 The dashboard's **Usage** page shows today's requests, database reads and writes, and KV writes, plus a CPU card with how many requests hit the CPU limit and how much CPU a typical busy request uses. It warns as you near the limits. It needs an optional `ANALYTICS_TOKEN` secret with Account Analytics read access; without it, the page explains how to add one.
 
+## Free vs Paid limits
+
+An instance applies the Workers Free limits unless its Worker variable `PLAN` is `paid`.
+
+| Limit | Workers Free | Workers Paid |
+|---|---|---|
+| Live-page data document size | {LIMIT_DATA_DOC_FREE} | {LIMIT_DATA_DOC_PAID} |
+| MCP request size | {LIMIT_MCP_BODY_FREE} | {LIMIT_MCP_BODY_PAID} |
+| CPU time per request | 10 ms | 30 seconds |
+
 ## Hitting the CPU limit
 
 On the Workers Free plan, each request gets 10 ms of CPU time. A request that needs more is stopped by Cloudflare. You might notice:
