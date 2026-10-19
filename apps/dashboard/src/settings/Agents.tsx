@@ -6,10 +6,6 @@ import {
 } from "@oa/shared";
 import { Button, Dialog, Input, toast } from "@oa/ui";
 import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
   Button as ShButton,
   Input as ShInput,
   Tabs,
@@ -20,8 +16,7 @@ import {
   ToggleGroupItem,
 } from "@oa/ui/shadcn";
 import { useQueryClient } from "@tanstack/react-query";
-import type { ReactNode } from "react";
-import { useRef, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 import { ApiClientError, api } from "../api/client";
 import {
   qk,
@@ -34,6 +29,7 @@ import { useMe } from "../auth/useMe";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { relativeTime } from "../library/time";
 import { snippets } from "./snippets";
+import { errorText, GAP, muted, SettingsCard, STACK } from "./ui";
 
 const copyText = (text: string, ok: string) => {
   const failed = () =>
@@ -191,50 +187,6 @@ function Connect({ mcpUrl }: { mcpUrl: string }) {
   );
 }
 
-/** Settings card: one inset for every child (Design: 20px, 16px <= 600px). */
-const CARD =
-  "gap-[var(--oa-space-3)] py-[var(--oa-space-5)] shadow-none max-[600px]:py-[var(--oa-space-4)]";
-const INSET = "px-[var(--oa-space-5)] max-[600px]:px-[var(--oa-space-4)]";
-/** One vertical rhythm inside a card. */
-const GAP = "gap-[var(--oa-space-3)]";
-
-function SettingsCard({
-  id,
-  title,
-  action,
-  children,
-}: {
-  id: string;
-  title: string;
-  action?: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <section aria-labelledby={id} className="min-w-0">
-      <Card className={CARD}>
-        <CardHeader
-          className={`flex min-h-[30px] items-center justify-between ${GAP} ${INSET}`}
-        >
-          <CardTitle>
-            <h2
-              id={id}
-              className="m-0 text-[length:var(--oa-text-md)] font-semibold"
-            >
-              {title}
-            </h2>
-          </CardTitle>
-          {action}
-        </CardHeader>
-        <CardContent className={`grid min-w-0 ${GAP} ${INSET}`}>
-          {children}
-        </CardContent>
-      </Card>
-    </section>
-  );
-}
-
-const muted = "m-0 text-[length:var(--oa-text-xs)] text-muted-foreground";
-
 /** Name, meta and actions on one line; at <= 600px the name takes its own
     ellipsized line and the meta and actions share the next. */
 const ROWS =
@@ -292,7 +244,7 @@ function OAuthClients() {
   return (
     <SettingsCard id="oa-oauth-h" title="Connected agents">
       {q.isError ? (
-        <p role="alert" className="oa-err">
+        <p role="alert" className={errorText}>
           Couldn't load connected agents.
         </p>
       ) : q.data?.length === 0 ? (
@@ -393,7 +345,7 @@ function CreateDialog({ onClose }: { onClose: () => void }) {
       }
     >
       {created ? (
-        <div className="oa-form">
+        <div className="grid gap-[var(--oa-space-3)]">
           <p role="alert">You won't see this again.</p>
           <CodeBlock copy={created.token} label="Copy token">
             <code className="oa-token block min-w-0 flex-1 p-[var(--oa-space-3)] font-mono text-[length:var(--oa-text-xs)] break-all">
@@ -402,7 +354,7 @@ function CreateDialog({ onClose }: { onClose: () => void }) {
           </CodeBlock>
           {mcpUrl && (
             <>
-              <p className="oa-seen">
+              <p className={muted}>
                 Snippets read the token from OA_TOKEN. In your shell, run{" "}
                 <code>read -rs OA_TOKEN; export OA_TOKEN</code> and paste it.
               </p>
@@ -412,7 +364,7 @@ function CreateDialog({ onClose }: { onClose: () => void }) {
         </div>
       ) : (
         <form
-          className="oa-form"
+          className="grid gap-[var(--oa-space-3)]"
           onSubmit={(e) => {
             e.preventDefault();
             void submit();
@@ -425,7 +377,7 @@ function CreateDialog({ onClose }: { onClose: () => void }) {
             onChange={(e) => setLabel(e.target.value)}
           />
           {error && (
-            <p role="alert" className="oa-err">
+            <p role="alert" className={errorText}>
               {error}
             </p>
           )}
@@ -458,7 +410,7 @@ function Tokens() {
       }
     >
       {q.isError ? (
-        <p role="alert" className="oa-err">
+        <p role="alert" className={errorText}>
           Couldn't load tokens.
         </p>
       ) : q.data?.length === 0 ? (
@@ -506,7 +458,7 @@ export function Agents() {
   const state = useMe();
   const mcpUrl = state.status === "authed" ? state.me.instance.mcpUrl : null;
   return (
-    <div className="oa-stack">
+    <div className={STACK}>
       {mcpUrl && (
         <SettingsCard id="oa-mcp-h" title="MCP server">
           <div className="flex min-w-0 items-center gap-[var(--oa-space-2)]">

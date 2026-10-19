@@ -1,8 +1,19 @@
 import { type Settings, SettingsSchema } from "@oa/shared";
-import { Banner, Button, Input, SegmentedControl } from "@oa/ui";
+import { Banner } from "@oa/ui";
+import {
+  Button,
+  Card,
+  CardContent,
+  CardFooter,
+  Input,
+  Label,
+  ToggleGroup,
+  ToggleGroupItem,
+} from "@oa/ui/shadcn";
 import { useState } from "react";
 import { useSettings, useUpdateSettings } from "../api/queries";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
+import { CARD, errorText, INSET, muted } from "./ui";
 
 const VISIBILITY = [
   { value: "private", label: "Private" },
@@ -28,7 +39,11 @@ export function Instance() {
         tone="danger"
         title="Couldn't load instance settings"
         action={
-          <Button variant="secondary" onClick={() => void settings.refetch()}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void settings.refetch()}
+          >
             Retry
           </Button>
         }
@@ -60,78 +75,121 @@ export function Instance() {
     });
   };
   return (
-    <form
-      className="oa-card oa-instance"
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (dirty && valid) save();
-      }}
-    >
-      {settings.isError && (
-        <Banner tone="warning" title="Couldn't refresh settings.">
-          Showing the last loaded values. Your edits are kept.
-        </Banner>
-      )}
-      <div className="oa-frow">
-        <div className="oa-flabel">
-          <label htmlFor="oa-inst-name">Instance name</label>
-          <small>
-            Shown in the sidebar, page titles, and on the sign-in page.
-          </small>
-        </div>
-        <div>
-          <Input
-            id="oa-inst-name"
-            value={name}
-            maxLength={NAME_MAX}
-            disabled={saving}
-            aria-describedby={nameOk ? undefined : "oa-inst-name-err"}
-            placeholder="e.g. Northwind Eng"
-            aria-invalid={!nameOk || undefined}
-            onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-          />
-          {!nameOk && (
-            <p className="oa-err" id="oa-inst-name-err" role="alert">
-              Name must be 1 to {NAME_MAX} characters.
-            </p>
+    <Card className={CARD}>
+      <form
+        className="contents"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (dirty && valid) save();
+        }}
+      >
+        <CardContent className={`grid min-w-0 ${INSET}`}>
+          {settings.isError && (
+            <div className="pb-[var(--oa-space-3)]">
+              <Banner tone="warning" title="Couldn't refresh settings.">
+                Showing the last loaded values. Your edits are kept.
+              </Banner>
+            </div>
           )}
-        </div>
-      </div>
-      <div className="oa-frow">
-        <div className="oa-flabel">
-          <b>Default visibility</b>
-          <small>
-            For new artifacts from agents and uploads. Public is always chosen
-            per artifact.
-          </small>
-        </div>
-        <fieldset className="oa-bare" disabled={saving}>
-          <SegmentedControl
-            aria-label="Default visibility"
-            options={[...VISIBILITY]}
-            value={visibility}
-            onChange={(v) => setDraft({ ...draft, defaultVisibility: v })}
-          />
-          <p className="oa-seen">{HELP[visibility]}</p>
-        </fieldset>
-      </div>
-      <div className="oa-form-foot">
-        <Button
-          variant="ghost"
-          type="button"
-          disabled={!Object.keys(draft).length || saving}
-          onClick={() => setDraft({})}
+          <div className={FIELD}>
+            <div className={HINT}>
+              <Label htmlFor="oa-inst-name" className={LABEL}>
+                Instance name
+              </Label>
+              <p className={muted}>
+                Shown in the sidebar, page titles, and on the sign-in page.
+              </p>
+            </div>
+            <div className="grid min-w-0 gap-[var(--oa-space-1)]">
+              <Input
+                id="oa-inst-name"
+                value={name}
+                maxLength={NAME_MAX}
+                disabled={saving}
+                aria-describedby={nameOk ? undefined : "oa-inst-name-err"}
+                placeholder="e.g. Northwind Eng"
+                aria-invalid={!nameOk || undefined}
+                className="h-[30px] text-[length:var(--oa-text-sm)]"
+                onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+              />
+              {!nameOk && (
+                <p className={errorText} id="oa-inst-name-err" role="alert">
+                  Name must be 1 to {NAME_MAX} characters.
+                </p>
+              )}
+            </div>
+          </div>
+          <div className={FIELD}>
+            <div className={HINT}>
+              <span id="oa-inst-vis" className={LABEL}>
+                Default visibility
+              </span>
+              <p className={muted}>
+                For new artifacts from agents and uploads. Public is always
+                chosen per artifact.
+              </p>
+            </div>
+            <div className="grid min-w-0 justify-items-start gap-[var(--oa-space-1)]">
+              <ToggleGroup
+                type="single"
+                variant="outline"
+                size="sm"
+                aria-label="Default visibility"
+                disabled={saving}
+                value={visibility}
+                // Single toggle groups can deselect; keep one chosen.
+                onValueChange={(v) =>
+                  v &&
+                  setDraft({
+                    ...draft,
+                    defaultVisibility: v as Settings["defaultVisibility"],
+                  })
+                }
+              >
+                {VISIBILITY.map((o) => (
+                  <ToggleGroupItem
+                    key={o.value}
+                    value={o.value}
+                    className="h-[30px] px-[var(--oa-space-3)] text-[length:var(--oa-text-sm)]"
+                  >
+                    {o.label}
+                  </ToggleGroupItem>
+                ))}
+              </ToggleGroup>
+              <p className={muted}>{HELP[visibility]}</p>
+            </div>
+          </div>
+        </CardContent>
+        <CardFooter
+          className={`justify-end gap-[var(--oa-space-2)] border-t ${INSET} [.border-t]:pt-[var(--oa-space-5)] max-[600px]:[.border-t]:pt-[var(--oa-space-4)]`}
         >
-          Discard
-        </Button>
-        <Button
-          variant="primary"
-          type="submit"
-          disabled={!dirty || !valid || saving}
-        >
-          Save changes
-        </Button>
-      </div>
-    </form>
+          <Button
+            variant="ghost"
+            type="button"
+            size="sm"
+            className="text-[length:var(--oa-text-sm)]"
+            disabled={!Object.keys(draft).length || saving}
+            onClick={() => setDraft({})}
+          >
+            Discard
+          </Button>
+          <Button
+            type="submit"
+            size="sm"
+            className="text-[length:var(--oa-text-sm)]"
+            disabled={!dirty || !valid || saving}
+          >
+            Save changes
+          </Button>
+        </CardFooter>
+      </form>
+    </Card>
   );
 }
+
+/** Label and hint beside the control; stacked at <= 600px. Rows are divided
+    by a hairline and 16px above and below it. */
+const FIELD =
+  "grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] items-start gap-x-[var(--oa-space-6)] gap-y-[var(--oa-space-3)] border-0 border-b border-solid border-border py-[var(--oa-space-4)] first:pt-0 last:border-b-0 last:pb-0 max-[600px]:grid-cols-1";
+const HINT = "grid gap-[2px]";
+const LABEL = "text-[length:var(--oa-text-sm)] font-medium";

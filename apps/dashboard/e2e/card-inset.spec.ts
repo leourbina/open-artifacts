@@ -22,7 +22,7 @@ const misaligned = (page: Page, token: string) =>
       "li > b",
     ].join(",");
     for (const card of document.querySelectorAll<HTMLElement>(
-      ".oa-stack [data-slot=card]",
+      "#oa-main [data-slot=card]",
     )) {
       const r = card.getBoundingClientRect();
       const border = parseFloat(getComputedStyle(card).borderLeftWidth);
