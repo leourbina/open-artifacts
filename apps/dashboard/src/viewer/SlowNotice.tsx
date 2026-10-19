@@ -1,6 +1,7 @@
-import { Banner, Button } from "@oa/ui";
+import { Button } from "@oa/ui/shadcn";
 import { ExtIcon } from "../layout/CpuBanner";
 import { CPU_DOC, PLANS_URL } from "../layout/cpu";
+import { LINK_BTN, SM } from "./ui";
 
 const svg = (d: string) => (
   <svg
@@ -19,6 +20,7 @@ const svg = (d: string) => (
 );
 const AlertIcon = svg("M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2zM8 4.8v3.7M8 11v.2");
 const RetryIcon = svg("M13 3.5v3h-3M13 6.5A5 5 0 1 0 13.4 10");
+const DismissIcon = svg("M4 4l8 8M12 4l-8 8");
 
 /** After this many reloads the CPU variant mentions Workers Paid. */
 export const UPSELL_AFTER = 2;
@@ -44,46 +46,58 @@ export function SlowNotice({
   // Only the people who can change the plan are pointed at it.
   const upsell = cpu && admin && reloads >= UPSELL_AFTER;
   return (
-    <div className="oa-vnotice">
-      <Banner
-        tone="info"
-        compact
-        icon={AlertIcon}
-        onDismiss={onDismiss}
-        action={
-          <span className="oa-vnotice-acts">
-            {upsell && (
-              <a
-                className="oa-btn oa-sm"
-                href={PLANS_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
+    <div className="oa-vnotice mx-auto my-3 w-[calc(100%-32px)] max-w-[680px]">
+      <div
+        role="status"
+        className="flex items-center gap-2 rounded-md bg-[var(--oa-accent-soft)] py-1 pr-1 pl-3 text-[length:var(--oa-text-sm)] leading-[1.45] text-foreground max-[560px]:flex-wrap"
+      >
+        <span
+          className="inline-flex flex-none text-[var(--oa-accent-fg)]"
+          aria-hidden="true"
+        >
+          {AlertIcon}
+        </span>
+        <div className="min-w-0 flex-1 max-[560px]:basis-[calc(100%-60px)]">
+          <span className="oa-vnotice-text [&_a]:font-medium [&_a]:whitespace-nowrap [&_a]:text-foreground [&_a]:underline-offset-2">
+            {cpu ? (
+              <>
+                This artifact may have hit your instance's CPU limit. Reloading
+                usually works.
+                {upsell && " Workers Paid raises the limit."}{" "}
+                <a href={CPU_DOC} target="_blank" rel="noopener noreferrer">
+                  Learn more
+                  <span className="sr-only"> about the CPU limit</span>
+                </a>
+              </>
+            ) : (
+              "This artifact hasn't responded yet. If it looks wrong, reload it."
+            )}
+          </span>
+        </div>
+        <span className="flex flex-none items-center gap-[6px] max-[560px]:ml-[22px]">
+          {upsell && (
+            <Button asChild variant="outline" size="xs" className={LINK_BTN}>
+              <a href={PLANS_URL} target="_blank" rel="noopener noreferrer">
                 See plans
                 {ExtIcon}
               </a>
-            )}
-            <Button size="sm" icon={RetryIcon} onClick={onReload}>
-              Reload
             </Button>
-          </span>
-        }
-      >
-        <span className="oa-vnotice-text">
-          {cpu ? (
-            <>
-              This artifact may have hit your instance's CPU limit. Reloading
-              usually works.
-              {upsell && " Workers Paid raises the limit."}{" "}
-              <a href={CPU_DOC} target="_blank" rel="noopener noreferrer">
-                Learn more<span className="oa-sr"> about the CPU limit</span>
-              </a>
-            </>
-          ) : (
-            "This artifact hasn't responded yet. If it looks wrong, reload it."
           )}
+          <Button variant="outline" size="xs" className={SM} onClick={onReload}>
+            {RetryIcon}
+            Reload
+          </Button>
         </span>
-      </Banner>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          className="flex-none"
+          aria-label="Dismiss"
+          onClick={onDismiss}
+        >
+          {DismissIcon}
+        </Button>
+      </div>
     </div>
   );
 }

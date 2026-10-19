@@ -5,14 +5,20 @@ import {
   type UserRef,
   viewerPath,
 } from "@oa/shared";
+import { Button, Dialog, FormatIcon, toast } from "@oa/ui";
 import {
-  Button,
-  Dialog,
-  FormatIcon,
-  Menu,
-  toast,
-  VisibilityBadge,
-} from "@oa/ui";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  Input,
+  Button as ShButton,
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@oa/ui/shadcn";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
@@ -24,10 +30,13 @@ import {
   useVersionInfo,
   useVersions,
 } from "../api/queries";
+import { SM, VisibilityBadge } from "./ui";
 import { useOfferUndo } from "./useOfferUndo";
-import "./viewer.css";
 
 const TITLE_MAX = 200;
+/** The page h1: Design's 20/600. */
+const H1 =
+  "m-0 min-w-0 truncate text-[length:var(--oa-text-xl)] leading-tight font-semibold";
 const who = (u: UserRef) => u.name ?? u.email ?? "Unknown";
 
 function EditableTitle({ artifact }: { artifact: ArtifactSummary }) {
@@ -66,11 +75,11 @@ function EditableTitle({ artifact }: { artifact: ArtifactSummary }) {
 
   if (!editing)
     return (
-      <h1 className="oa-vt-title">
+      <h1 className={H1}>
         <button
           ref={button}
           type="button"
-          className="oa-vt-edit"
+          className="m-0 max-w-full cursor-text truncate border-0 bg-transparent p-0 [font:inherit] text-inherit underline-offset-[3px] hover:underline hover:decoration-dotted focus-visible:rounded-sm focus-visible:underline focus-visible:decoration-dotted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-solid focus-visible:outline-ring"
           title="Rename"
           onClick={() => {
             done.current = false;
@@ -83,13 +92,12 @@ function EditableTitle({ artifact }: { artifact: ArtifactSummary }) {
       </h1>
     );
   return (
-    <h1 className="oa-vt-title">
-      <input
-        className="oa-vt-input"
+    <h1 className={H1}>
+      <Input
+        className="oa-vt-input h-8 w-[min(480px,60vw)] text-[length:var(--oa-text-lg)]"
         aria-label="Title"
         value={draft}
         maxLength={TITLE_MAX}
-        // biome-ignore lint/a11y/noAutofocus: the user just chose to rename
         autoFocus
         onChange={(e) => setDraft(e.target.value)}
         onBlur={() => finish(true)}
@@ -153,7 +161,10 @@ export function TitleBar({
   );
   const next = viewerPath(artifact.id, explicitVersion ? version : undefined);
   const label = `v${version}${version === artifact.currentVersion ? " · Current" : ""}`;
-  const items = [
+  const items: (
+    | "separator"
+    | { label: string; danger?: boolean; onSelect: () => void }
+  )[] = [
     {
       label: "Copy link",
       onSelect: () =>
@@ -186,62 +197,114 @@ export function TitleBar({
   ];
 
   return (
-    <div className="oa-vt">
-      <div className="oa-vt-group">
+    <div className="oa-vt flex flex-wrap items-center gap-[10px] border-0 border-b border-solid border-border bg-card px-5 py-[10px] max-[600px]:px-4">
+      <div className="flex min-w-0 items-center gap-2 max-[600px]:flex-[1_1_100%]">
         {iconFormat && <FormatIcon format={iconFormat} />}
         {canEdit ? (
           <EditableTitle artifact={artifact} />
         ) : (
-          <h1 className="oa-vt-title">{artifact.title}</h1>
+          <h1 className={H1}>{artifact.title}</h1>
         )}
         <VisibilityBadge visibility={artifact.visibility} />
       </div>
-      <div className="oa-vt-actions">
+      <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2 max-[600px]:flex-[1_1_100%]">
         {authed && (
-          <Menu
-            trigger={
-              <Button size="sm" aria-label={`Version: ${label}`}>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <ShButton
+                variant="outline"
+                size="xs"
+                className={SM}
+                aria-label={`Version: ${label}`}
+              >
                 {label}
-              </Button>
-            }
-            items={(versions.data ?? []).map((x) => ({
-              label: `v${x.version}${x.version === artifact.currentVersion ? " (current)" : ""} · ${x.agent?.name ?? who(x.createdBy)}`,
-              onSelect: () => go(viewerPath(artifact.id, x.version)),
-            }))}
-          />
+              </ShButton>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className={SM}>
+              {(versions.data ?? []).map((x) => (
+                <DropdownMenuItem
+                  key={x.version}
+                  onSelect={() => go(viewerPath(artifact.id, x.version))}
+                >
+                  {`v${x.version}${x.version === artifact.currentVersion ? " (current)" : ""} · ${x.agent?.name ?? who(x.createdBy)}`}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
         {rawUrl && (
           // A button, not a link: an href could be middle-clicked after it expired.
-          <Button size="sm" disabled={rawBusy} onClick={onOpenRaw}>
+          <ShButton
+            variant="outline"
+            size="xs"
+            className={SM}
+            disabled={rawBusy}
+            onClick={onOpenRaw}
+          >
             Open raw
-          </Button>
+          </ShButton>
         )}
         {authed && (
-          <Button size="sm" aria-expanded={panelOpen} onClick={onPanel}>
+          <ShButton
+            variant="outline"
+            size="xs"
+            className={SM}
+            aria-expanded={panelOpen}
+            onClick={onPanel}
+          >
             Versions
-          </Button>
+          </ShButton>
         )}
         {isOwner && (
-          <Button size="sm" variant="primary" onClick={onShare}>
+          <ShButton size="xs" className={SM} onClick={onShare}>
             Share
-          </Button>
+          </ShButton>
         )}
         {authed ? (
-          <Menu
-            trigger={
-              <Button size="sm" aria-label="More actions">
-                •••
-              </Button>
-            }
-            items={items}
-          />
+          <TooltipProvider>
+            <DropdownMenu>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    <ShButton
+                      variant="outline"
+                      size="xs"
+                      className={SM}
+                      aria-label="More actions"
+                    >
+                      •••
+                    </ShButton>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent>More actions</TooltipContent>
+              </Tooltip>
+              <DropdownMenuContent align="end" className={SM}>
+                {items.map((it) =>
+                  it === "separator" ? (
+                    <DropdownMenuSeparator key="separator" />
+                  ) : (
+                    <DropdownMenuItem
+                      key={it.label}
+                      variant={it.danger ? "destructive" : "default"}
+                      onSelect={it.onSelect}
+                    >
+                      {it.label}
+                    </DropdownMenuItem>
+                  ),
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </TooltipProvider>
         ) : (
-          <a
-            className="oa-btn oa-primary"
-            href={`${AUTH.login}?next=${encodeURIComponent(next)}`}
+          <ShButton
+            asChild
+            size="xs"
+            className={`${SM} text-primary-foreground no-underline hover:text-primary-foreground`}
           >
-            Sign in
-          </a>
+            <a href={`${AUTH.login}?next=${encodeURIComponent(next)}`}>
+              Sign in
+            </a>
+          </ShButton>
         )}
       </div>
       <Dialog
