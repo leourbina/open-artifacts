@@ -1,12 +1,22 @@
-import type { Member, Share, ShareRole } from "@oa/shared";
+import {
+  type Member,
+  type Share,
+  type ShareResult,
+  type ShareRole,
+  viewerPath,
+} from "@oa/shared";
 import { and, asc, eq } from "drizzle-orm";
 import { requireAccess } from "../auth/authz.js";
 import { getDb } from "../db/client.js";
 import { normEmail } from "../db/email.js";
 import { shares } from "../db/schema.js";
+import { stmt } from "../db/stmt.js";
+import { emailEnabled, sendEmail } from "../email/send.js";
+import { shareEmail } from "../email/templates.js";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
 import { closeRuntimeSockets } from "../runtime/revoke.js";
+import { getSettings } from "./members.js";
 
 export const MAX_SHARES = 200;
 
@@ -38,18 +48,24 @@ export async function listShares(
   return rows.map(toShare);
 }
 
-/** Upsert (owner-only). Sharing only ever adds access; see accessLevel. */
+const IS_USER = "select 1 as x from users where email = ? limit 1";
+
+/**
+ * Upsert (owner-only). Sharing only ever adds access; see accessLevel.
+ * A new share with a non-member is emailed a link (best effort).
+ */
 export async function putShare(
   env: Env,
   user: Member,
   id: string,
   s: { email: string; role: ShareRole },
-): Promise<Share> {
-  await ownerOnly(env, user, id);
+): Promise<ShareResult> {
+  const artifact = await ownerOnly(env, user, id);
   const email = normEmail(s.email);
   if (!email) throw new ApiError("bad_request", "Invalid email");
   if (email === normEmail(user.email))
     throw new ApiError("bad_request", "Cannot share with yourself");
+  const now = Date.now();
   // One atomic statement: a new email is inserted only while under the cap;
   // updating an existing share bypasses it.
   const row = await env.DB.prepare(
@@ -60,14 +76,48 @@ export async function putShare(
      ON CONFLICT (artifact_id, email) DO UPDATE SET role = excluded.role
      RETURNING email, role, created_at AS createdAt`,
   )
-    .bind(id, email, s.role, user.id, Date.now(), MAX_SHARES)
+    .bind(id, email, s.role, user.id, now, MAX_SHARES)
     .first<{ email: string; role: string; createdAt: number }>();
   if (!row)
     throw new ApiError(
       "bad_request",
       `At most ${MAX_SHARES} shares per artifact`,
     );
-  return toShare(row);
+  // An update keeps the original created_at, so this is a new share.
+  const created = row.createdAt === now;
+  return {
+    ...toShare(row),
+    emailed: created && (await emailShare(env, user, artifact, email)),
+  };
+}
+
+async function emailShare(
+  env: Env,
+  user: Member,
+  artifact: { id: string; title: string },
+  email: string,
+): Promise<boolean> {
+  if (!emailEnabled(env)) return false;
+  try {
+    const [member, settings] = await Promise.all([
+      stmt(env.DB, IS_USER).bind(email).first(),
+      getSettings(env),
+    ]);
+    if (member) return false;
+    return await sendEmail(
+      env,
+      user.id,
+      email,
+      shareEmail({
+        inviter: user.name || user.email,
+        instance: settings.name,
+        title: artifact.title,
+        url: `https://${env.APP_HOST}${viewerPath(artifact.id)}`,
+      }),
+    );
+  } catch {
+    return false;
+  }
 }
 
 export async function deleteShare(

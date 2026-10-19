@@ -66,6 +66,7 @@ describe("requiredSecrets parser (fixtures)", () => {
           "  DO: DurableObjectNamespace<Foo>;",
           "  AS: Fetcher;",
           "  RL: RateLimit;",
+          "  EM?: SendEmail;",
           "  S: string;",
         ].join("\n"),
       ),

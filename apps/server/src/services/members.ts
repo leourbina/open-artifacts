@@ -1,6 +1,7 @@
 import {
   type Member,
   type MemberInvite,
+  type MemberInviteResult,
   type MemberPatch,
   newId,
   type Settings,
@@ -20,6 +21,8 @@ import {
   versions,
 } from "../db/schema.js";
 import { stmt } from "../db/stmt.js";
+import { emailEnabled, sendEmail } from "../email/send.js";
+import { inviteEmail } from "../email/templates.js";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
 import { revokeAllGrants } from "../mcp/oauth-api.js";
@@ -34,11 +37,15 @@ export async function listMembers(env: Env): Promise<Member[]> {
   return rows.map(toMember);
 }
 
-/** Pre-creates the user row. 400 on an invalid (non-ASCII) email, 409 if it exists. */
+/**
+ * Pre-creates the user row, then emails the invitee (best effort).
+ * 400 on an invalid (non-ASCII) email, 409 if it exists.
+ */
 export async function inviteMember(
   env: Env,
+  inviter: Member,
   input: MemberInvite,
-): Promise<Member> {
+): Promise<MemberInviteResult> {
   const email = normEmail(input.email);
   if (!email) throw new ApiError("bad_request", "Invalid email");
   const [row] = await getDb(env)
@@ -53,7 +60,22 @@ export async function inviteMember(
     .onConflictDoNothing({ target: users.email })
     .returning();
   if (!row) throw new ApiError("conflict", "Already a member");
-  return toMember(row);
+  let emailed = false;
+  if (emailEnabled(env)) {
+    const instance = (await getSettings(env).catch(() => DEFAULT_SETTINGS))
+      .name;
+    emailed = await sendEmail(
+      env,
+      inviter.id,
+      email,
+      inviteEmail({
+        inviter: inviter.name || inviter.email,
+        instance,
+        url: `https://${env.APP_HOST}/`,
+      }),
+    );
+  }
+  return { ...toMember(row), emailed };
 }
 
 async function getRow(env: Env, id: string) {

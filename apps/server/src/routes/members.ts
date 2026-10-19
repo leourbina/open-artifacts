@@ -35,9 +35,9 @@ export function mountMembers(app: AppType): void {
   });
 
   app.post(R.members, async (c) => {
-    requireManager(c);
+    const inviter = requireManager(c);
     const input = await jsonBody(c, MemberInviteSchema);
-    return c.json(await inviteMember(c.env, input), 201);
+    return c.json(await inviteMember(c.env, inviter, input), 201);
   });
 
   app.patch(MEMBER, async (c) => {
