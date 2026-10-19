@@ -109,6 +109,9 @@ describe("wrangler.staging.jsonc env.staging", () => {
     );
     expect(tpl.vars.SERVER_THUMBNAILS).toBe("on");
   });
+  it("runs staging with PLAN=paid (the account is on Workers Paid)", () => {
+    expect(env.vars.PLAN).toBe("paid");
+  });
   it("keeps the setup template strict JSON (e2e fixtures JSON.parse it)", () => {
     const raw = readFileSync(
       join(root, "apps/server/wrangler.template.jsonc"),
