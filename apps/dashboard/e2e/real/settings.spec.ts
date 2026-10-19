@@ -12,7 +12,8 @@ test("a token created in Settings works with /mcp tools/list", async ({
   await dialog.getByRole("textbox", { name: "Label" }).fill(label);
   await dialog.getByRole("button", { name: "Create" }).click();
   const created = page.getByRole("dialog", { name: "Token created" });
-  const code = created.locator("pre code").first();
+  // The token sits outside every snippet block (#148).
+  const code = created.locator("code.oa-token");
   await expect(code).toHaveText(/^oa_pat_[1-9A-HJ-NP-Za-km-z]{32}$/);
   const token = (await code.textContent()) ?? "";
 

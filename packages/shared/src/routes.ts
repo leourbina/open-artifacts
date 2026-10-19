@@ -53,11 +53,12 @@ export const R = {
    * GET ?q=&cursor=&limit= -> Page<SearchHit>
    *
    * Body text is indexed asynchronously after publish, restore and undelete
-   * (C3), usually within a few seconds (longer while retrying). Until then a
-   * new or undeleted artifact matches on title/description only, and a new
-   * version still matches the previous version's body. Title/description
-   * changes (PATCH) apply immediately. Only the first 96 KB of a document
-   * (its entry file) is indexed: text past that never matches.
+   * (C3), within ~10 s (LIMITS.indexDebounceMs; a burst of versions indexes
+   * only the newest; longer while retrying). Until then a new or undeleted
+   * artifact matches on title/description only, and a new version still
+   * matches the previous version's body. Title/description changes (PATCH)
+   * apply immediately. Only the first 64 KB (LIMITS.indexTextBytes) of a
+   * document's entry file is indexed: text past that never matches.
    */
   search: "/api/v1/search",
   /** GET -> Member[]; POST MemberInvite -> Member */
@@ -74,7 +75,13 @@ export const R = {
   oauthClient: (grantId: string) => `/api/v1/oauth-clients/${seg(grantId)}`,
   /** GET -> Settings; PATCH SettingsPatch -> Settings */
   settings: "/api/v1/settings",
-  /** GET -> Usage */
+  /**
+   * GET -> Usage: today's (UTC) free-plan counts. Also `cpu_limit_hits`
+   * (invocations ending exceededCpu or exceededResources; limit 0) and
+   * `cpu_p99_ms` (p99 CPU time in ms; limit 10 on Free, 0 when not applicable),
+   * both for this Worker's script, and `kv_writes` (OAUTH_KV write operations;
+   * limit 1000). Each is omitted when unavailable.
+   */
   usage: "/api/v1/usage",
   /** GET -> Page<DataDoc> */
   dataCollection: (id: string, col: string) =>

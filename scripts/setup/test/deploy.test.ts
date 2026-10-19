@@ -114,6 +114,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
       "mcp tools/call",
       "GET content-url",
       "GET content no auth",
+      "GET content no auth",
     ]);
     expect(w.mcpCalls[0]).toEqual({
       name: "publish_artifact",
@@ -281,6 +282,21 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     ]);
     expect(line(w, "deploy").message).toContain("CF_ACCOUNT_ID");
     expect(w.state().deployedVersion).toBe("0.1.0");
+  });
+
+  it("selftest follows the markdown render shell to its entry file", async () => {
+    const w = world({});
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    expect(line(w, "selftest").status).toBe("ok");
+  });
+
+  it("selftest fails when the render shell's entry lacks the welcome text", async () => {
+    const w = world({ entryBody: "# Something else" });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(1);
+    expect(line(w, "selftest").message).toMatch(
+      /content.*Welcome to Open Artifacts/,
+    );
+    noSignedUrl(w);
   });
 
   it("selftest fetches the signed content URL and checks the welcome text", async () => {

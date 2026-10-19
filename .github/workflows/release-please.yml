@@ -25,6 +25,10 @@ jobs:
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+      - if: ${{ steps.rp.outputs.release_created != 'true' }}
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/ci
       # Pushes made with GITHUB_TOKEN (release-please creating AND updating its PR on
       # every push to main) do not trigger workflows, so the required checks would never
       # run and the release PR would sit blocked. Dispatch ci.yml on the release branch

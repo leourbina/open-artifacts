@@ -54,7 +54,7 @@ An upload is used once. One that's never published is deleted by the daily clean
 
 ## Search freshness
 
-Search indexes each publish asynchronously, so a new version becomes searchable with `search_artifacts` a few seconds after it's published. Until then, search matches the previous version's text. To find something you just published, use `get_artifact` or `list_artifacts`.
+Search indexes each publish asynchronously, so a new version becomes searchable with `search_artifacts` within about {LIMIT_INDEX_LAG} of being published. Until then, search matches the previous version's text. Only the first {LIMIT_INDEX_TEXT} of an artifact's entry file is indexed; text past that isn't searchable. To find something you just published, use `get_artifact` or `list_artifacts`.
 
 ## Reading
 

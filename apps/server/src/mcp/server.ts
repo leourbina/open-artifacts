@@ -16,6 +16,7 @@ import {
   isD1QuotaError,
 } from "../http/errors.js";
 import { toRuntimeApiError } from "../runtime/do.js";
+import { cpuNudge } from "../services/usage.js";
 import { INSTRUCTIONS, RUNTIME_DOC_URI } from "./instructions.js";
 import { registerArtifactTools } from "./tools/artifacts.js";
 import { registerDataTools } from "./tools/data.js";
@@ -65,15 +66,23 @@ export function errorResult(e: unknown): CallToolResult {
   return text("internal", "Internal error");
 }
 
-/** Runs a tool body, mapping thrown errors to an isError result. */
+/**
+ * Runs a tool body, mapping thrown errors to an isError result. Appends the
+ * CPU-limit nudge as its own text item (from the per-isolate usage memo; no fetch).
+ */
 export async function guard(
   fn: () => Promise<CallToolResult>,
 ): Promise<CallToolResult> {
+  let r: CallToolResult;
   try {
-    return await fn();
+    r = await fn();
   } catch (e) {
-    return errorResult(e);
+    r = errorResult(e);
   }
+  const nudge = cpuNudge();
+  return nudge
+    ? { ...r, content: [...r.content, { type: "text", text: nudge }] }
+    : r;
 }
 
 export function createServer(ctx: McpContext): McpServer {

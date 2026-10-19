@@ -19,6 +19,11 @@ import {
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
 import { indexVersionOrThrow } from "../services/search.js";
+import {
+  captureThumbnail,
+  THUMB,
+  type ThumbResult,
+} from "../services/thumbs.js";
 
 // Errors cross the RPC boundary as plain Error (subclass + fields are lost), so the
 // code rides in the message: "oa:<code>:<message>". B13 maps it back with toRuntimeApiError.
@@ -68,13 +73,23 @@ const SOCKET_TTL_MS = LIMITS.signedUrlTtlSec * 1000;
 const SOCKET_TTL_SLACK_MS = 60_000;
 /**
  * Search indexing (C3) runs this long after scheduleIndex, from the alarm:
- * a burst of publishes indexes only the newest version.
+ * a burst of publishes indexes only the newest version, and the alarm runs
+ * after the publishing isolate's burst is over.
  */
-export const INDEX_DELAY_MS = 2_000;
+export const INDEX_DELAY_MS = LIMITS.indexDebounceMs;
 /** Index attempts per version before {evt:"index_failed"}. */
 export const INDEX_MAX_ATTEMPTS = 5;
 /** Retry delay after the n-th failure (1-based): 10 s, 20 s, 40 s, 80 s. */
 export const indexBackoffMs = (n: number) => 10_000 * 2 ** (n - 1);
+/**
+ * Thumbnail runs per version, counted before the browser launches: a run
+ * killed for CPU (uncatchable) is retried once, then the version gets none.
+ */
+export const THUMB_MAX_ATTEMPTS = 2;
+/** When a started capture is looked at again if its run never finished. */
+export const THUMB_RETRY_MS = 60_000;
+/** After a launch error that is not the daily quota: the one retry, an hour on. */
+export const THUMB_LAUNCH_BACKOFF_MS = 3_600_000;
 /** Header carrying the subscriber's actor from the route to fetch. */
 export const ACTOR_HEADER = "X-OA-Actor";
 /**
@@ -236,6 +251,11 @@ create table if not exists index_job (
   version integer not null, attempts integer not null, due integer not null,
   seq integer not null
 );
+create table if not exists thumb_job (
+  id integer primary key check (id = 1), artifact_id text not null,
+  version integer not null, attempts integer not null, due integer not null,
+  state text not null
+);
 `;
 
 type SqlParam = string | number | null;
@@ -259,6 +279,13 @@ export class ArtifactRuntime extends DurableObject<Env> {
     artifactId: string,
     version: number,
   ) => Promise<void> = indexVersionOrThrow;
+
+  /** The thumbnail capture the alarm runs; overridable in tests. */
+  thumbnailer: (
+    env: Env,
+    artifactId: string,
+    version: number,
+  ) => Promise<ThumbResult> = captureThumbnail;
 
   /**
    * Creates the schema (and migrates pre-M2 tables) outside any transaction:
@@ -874,9 +901,14 @@ export class ArtifactRuntime extends DurableObject<Env> {
    * A newer version replaces the job (attempts reset, due INDEX_DELAY_MS from
    * now); the same version only bumps `seq` (keeping any retry backoff), so a
    * re-enqueue while the alarm runs it is never dropped; an older one is
-   * ignored.
+   * ignored. With `thumb` (publish, restore) and a BROWSER binding, the same
+   * debounce queues a server-side thumbnail of the newest version.
    */
-  async scheduleIndex(artifactId: string, version: number): Promise<void> {
+  async scheduleIndex(
+    artifactId: string,
+    version: number,
+    thumb = false,
+  ): Promise<void> {
     if (typeof artifactId !== "string" || artifactId.length > 64)
       fail("bad_request", "invalid artifact id");
     if (!Number.isSafeInteger(version) || version < 1)
@@ -894,6 +926,18 @@ export class ArtifactRuntime extends DurableObject<Env> {
       version,
       due,
     );
+    if (thumb && this.env.BROWSER)
+      this.sql.exec(
+        `insert into thumb_job (id, artifact_id, version, attempts, due, state)
+         values (1, ?, ?, 0, ?, 'pending')
+         on conflict (id) do update set artifact_id = excluded.artifact_id,
+           version = excluded.version, attempts = 0, due = excluded.due,
+           state = 'pending'
+         where excluded.version > thumb_job.version`,
+        artifactId,
+        version,
+        due,
+      );
     await this.armAt(due);
   }
 
@@ -927,6 +971,54 @@ export class ArtifactRuntime extends DurableObject<Env> {
       : null;
   }
 
+  /** The latest version's thumbnail job and its state (tests). */
+  thumbnailJob(): {
+    artifactId: string;
+    version: number;
+    attempts: number;
+    due: number;
+    state: "pending" | "done" | "no_thumb";
+  } | null {
+    const r = this.sql
+      .exec<{
+        artifact_id: string;
+        version: number;
+        attempts: number;
+        due: number;
+        state: "pending" | "done" | "no_thumb";
+      }>(
+        "select artifact_id, version, attempts, due, state from thumb_job where id = 1",
+      )
+      .toArray()[0];
+    return r
+      ? {
+          artifactId: r.artifact_id,
+          version: r.version,
+          attempts: r.attempts,
+          due: r.due,
+          state: r.state,
+        }
+      : null;
+  }
+
+  /** The pending thumbnail job, if any (tests and the alarm). */
+  pendingThumbnail(): {
+    artifactId: string;
+    version: number;
+    attempts: number;
+    due: number;
+  } | null {
+    const j = this.thumbnailJob();
+    return j?.state === "pending"
+      ? {
+          artifactId: j.artifactId,
+          version: j.version,
+          attempts: j.attempts,
+          due: j.due,
+        }
+      : null;
+  }
+
   /**
    * One alarm, multiplexed by the next due time of both kinds of work:
    * - Socket lifetime: closes sockets older than LIMITS.signedUrlTtlSec (minus
@@ -938,12 +1030,16 @@ export class ArtifactRuntime extends DurableObject<Env> {
    *   A failure retries with indexBackoffMs, up to INDEX_MAX_ATTEMPTS, then
    *   logs {evt:"index_failed"} and drops the job. A job re-enqueued while
    *   it ran (seq changed) stays pending.
+   * - Thumbnails: never in the same run as indexing (its browser wait would
+   *   skew the index alarm): a run that indexed re-arms at once when a
+   *   capture is pending (runThumbnail).
    * Re-arms for the oldest remaining socket or the pending job.
    */
   override async alarm(): Promise<void> {
     const sockets = this.ctx.getWebSockets();
     const job = this.pendingIndex();
-    if (!job && sockets.length === 0) return;
+    const thumb = this.pendingThumbnail();
+    if (!job && !thumb && sockets.length === 0) return;
     const now = this.now();
     let next = Number.POSITIVE_INFINITY;
     for (const ws of sockets) {
@@ -956,7 +1052,8 @@ export class ArtifactRuntime extends DurableObject<Env> {
         }
       } else next = Math.min(next, t + SOCKET_TTL_MS);
     }
-    if (job && (job.attempts === 0 || job.due <= now)) {
+    const indexDue = !!job && (job.attempts === 0 || job.due <= now);
+    if (job && indexDue) {
       const same = "where id = 1 and seq = ?";
       const key = [job.seq] as const;
       try {
@@ -984,10 +1081,90 @@ export class ArtifactRuntime extends DurableObject<Env> {
           );
       }
     }
+    if (!indexDue && thumb && (thumb.attempts === 0 || thumb.due <= now))
+      await this.runThumbnail(thumb);
     const pending = this.pendingIndex();
     if (pending) next = Math.min(next, pending.due);
+    const pendingThumb = this.pendingThumbnail();
+    if (pendingThumb)
+      next = Math.min(
+        next,
+        indexDue && pendingThumb.attempts === 0 ? this.now() : pendingThumb.due,
+      );
     if (next !== Number.POSITIVE_INFINITY)
       await this.ctx.storage.setAlarm(next);
+  }
+
+  /**
+   * At most one capture (one browser session) per alarm run, strictly
+   * best-effort (the client upload is the fallback). The attempt is counted
+   * and an alarm armed BEFORE the browser launches, so a run killed for CPU
+   * (which nothing can catch) is looked at again THUMB_RETRY_MS later and
+   * retried once; at THUMB_MAX_ATTEMPTS the version gets no server thumbnail.
+   * A deferral (launch slot taken) or a launch error that is not the daily
+   * quota (after THUMB_LAUNCH_BACKOFF_MS) is retried within the same budget;
+   * any other outcome, failures included, ends the job. A newer version queued
+   * meanwhile replaces the job (writes below match on version).
+   */
+  private async runThumbnail(job: {
+    artifactId: string;
+    version: number;
+    attempts: number;
+  }): Promise<void> {
+    const same = "where id = 1 and version = ?";
+    const end = (state: "done" | "no_thumb") =>
+      this.sql.exec(
+        `update thumb_job set state = ? ${same}`,
+        state,
+        job.version,
+      );
+    if (job.attempts >= THUMB_MAX_ATTEMPTS) {
+      console.error(
+        JSON.stringify({
+          evt: "thumbnail_abandoned",
+          artifactId: job.artifactId,
+          version: job.version,
+          attempts: job.attempts,
+        }),
+      );
+      end("no_thumb");
+      return;
+    }
+    const retryAt = this.now() + THUMB_RETRY_MS;
+    this.sql.exec(
+      `update thumb_job set attempts = attempts + 1, due = ? ${same}`,
+      retryAt,
+      job.version,
+    );
+    await this.ctx.storage.setAlarm(retryAt);
+    await this.ctx.storage.sync();
+    let result: ThumbResult;
+    try {
+      result = await this.thumbnailer(this.env, job.artifactId, job.version);
+    } catch (e) {
+      console.error(
+        JSON.stringify({
+          evt: "thumbnail_failed",
+          artifactId: job.artifactId,
+          version: job.version,
+          error: String((e as Error)?.message ?? e).slice(0, 300),
+        }),
+      );
+      result = "failed";
+    }
+    const retryIn =
+      result === "deferred"
+        ? THUMB.launchGapMs
+        : result === "launch_failed"
+          ? THUMB_LAUNCH_BACKOFF_MS
+          : null;
+    if (retryIn !== null && job.attempts + 1 < THUMB_MAX_ATTEMPTS)
+      this.sql.exec(
+        `update thumb_job set due = ? ${same}`,
+        this.now() + retryIn,
+        job.version,
+      );
+    else end(result === "stored" || result === "skipped" ? "done" : "no_thumb");
   }
 
   /** Subscribe-only feed: any client message closes the socket (1008 policy violation). */

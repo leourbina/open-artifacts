@@ -59,6 +59,8 @@ export const artifacts = sqliteTable(
       .notNull()
       .default(0),
     hasThumbnail: integer("has_thumbnail").notNull().default(0),
+    /** The version thumbs/{id}.webp depicts; null = unknown (pre-0005) or none. */
+    thumbnailVersion: integer("thumbnail_version"),
     lastAgentName: text("last_agent_name"),
     lastAgentVersion: text("last_agent_version"),
     createdAt: integer("created_at").notNull(),

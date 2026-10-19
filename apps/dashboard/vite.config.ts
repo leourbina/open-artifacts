@@ -46,6 +46,8 @@ export default defineConfig({
   },
   build: { outDir: "dist", emptyOutDir: true },
   test: {
+    // Dates render the same on every machine and CI runner.
+    env: { TZ: "UTC" },
     projects: [
       {
         extends: true,
