@@ -1,7 +1,7 @@
 // `pnpm shadcn:add <name…>`: runs the pinned shadcn CLI, then pins any ranges
 // it wrote to package.json and formats the generated files for Biome.
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const SHADCN = "shadcn@4.22.1";
 const pkgDir = new URL("..", import.meta.url).pathname;
@@ -13,9 +13,25 @@ const run = (cmd, args, cwd = pkgDir) =>
 // so nothing is dropped silently, then reset the sink to its header.
 const sink = `${pkgDir}src/shadcn/cli-sink.css`;
 const sinkHeader = readFileSync(sink, "utf8");
+
+// Existing components carry local changes (README), and the CLI's overwrite
+// prompts can't be answered non-interactively. So run with --overwrite and
+// put every file that already existed back as it was; only new files land.
+const kept = new Map();
+for (const dir of ["ui", "hooks", "lib"]) {
+  const abs = `${pkgDir}src/shadcn/${dir}`;
+  if (!existsSync(abs)) continue;
+  for (const f of readdirSync(abs))
+    kept.set(`${abs}/${f}`, readFileSync(`${abs}/${f}`, "utf8"));
+}
 try {
-  run("pnpm", ["dlx", SHADCN, "add", ...process.argv.slice(2)]);
+  run("pnpm", ["dlx", SHADCN, "add", "--overwrite", ...process.argv.slice(2)]);
 } finally {
+  for (const [file, content] of kept)
+    if (readFileSync(file, "utf8") !== content) {
+      writeFileSync(file, content);
+      console.log(`kept existing ${file.slice(pkgDir.length)}`);
+    }
   const written = readFileSync(sink, "utf8");
   if (written !== sinkHeader) {
     const added = written.startsWith(sinkHeader)

@@ -109,7 +109,7 @@ export const cases: Record<string, ReactElement> = {
   ),
   Tooltip: (
     <TooltipProvider>
-      <Tooltip open>
+      <Tooltip>
         <TooltipTrigger asChild>
           <Button variant="outline">Hover</Button>
         </TooltipTrigger>

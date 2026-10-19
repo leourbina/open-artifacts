@@ -23,8 +23,11 @@ From `packages/ui`, always through the script:
 pnpm shadcn:add <name…>
 ```
 
-When the CLI asks to overwrite an existing file (e.g. `button.tsx`, pulled
-in as a dependency), answer no: our copies carry local changes.
+Components that already exist (e.g. `button.tsx`, pulled in as a
+dependency) are kept as they are: the script runs the CLI with `--overwrite`
+(its prompts can't be answered non-interactively) and restores every file
+that existed before. To update an existing component on purpose, run the CLI
+directly and review the diff.
 
 It runs the pinned CLI (`shadcn@4.22.1`), pins any dependency ranges the CLI
 saved (`^x` becomes the installed version; a test rejects ranges), and runs
@@ -81,6 +84,15 @@ focus outline, and each overlay opened from the keyboard.
   row is `bg-brand-soft` with a 3px inset `--brand` bar on its first cell.
   Menu and select highlights use `--accent`, now `--oa-sunken`, plus the
   inset focus outline.
+- **sidebar, sheet:** the focus rings (`ring-2 ring-sidebar-ring`, a box
+  shadow) become the solid outline, inset in the sidebar. The active item is
+  `bg-card` with a 1px inset `--input` ring (≥ 3:1) instead of
+  `--sidebar-accent` (about 1.2:1). A collapsed off-canvas sidebar is `inert`,
+  so its links leave the tab order. The mobile sheet returns focus to the
+  trigger that opened it.
+- **brand.tsx (ours):** `BrandMark`, the Framed Artifact mark inline (frame in
+  `currentColor`, corners in the accent), and `SidebarBrand`, the sidebar
+  header row with the mark and "Open Artifacts".
 - **sonner:** reads the theme from `useDataTheme()`
   (`hooks/use-data-theme.ts`, `<html data-theme>` then the OS) instead of
   `next-themes`, which is not a dependency.

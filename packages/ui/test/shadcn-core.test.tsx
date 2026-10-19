@@ -2,8 +2,15 @@
 import { readFileSync } from "node:fs";
 import { cleanup, render } from "@testing-library/react";
 import axe from "axe-core";
-import { afterEach, describe, expect, it } from "vitest";
-import { Badge, Button, badgeVariants, buttonVariants } from "../src/shadcn";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  Badge,
+  Button,
+  badgeVariants,
+  buttonVariants,
+  SidebarBrand,
+  SidebarProvider,
+} from "../src/shadcn";
 import { tokens } from "../src/tokens/index";
 import { cases } from "./shadcn-fixtures";
 
@@ -130,9 +137,11 @@ describe("variant edges", () => {
     "dialog",
     "scroll-area",
     "dropdown-menu",
+    "sidebar",
+    "sheet",
   ])("%s: focus is a solid ring outline, no translucent rings", (name) => {
     const src = source(name);
-    expect(src).toContain("focus-visible:outline-ring");
+    expect(src).toMatch(/focus-visible:outline-(sidebar-)?ring(?![\w/-])/);
     // outline-none sets --tw-outline-style: none, so the style is explicit.
     expect(src).toContain("focus-visible:outline-solid");
     expect(src).not.toMatch(/focus-visible:ring-(ring|destructive)\//);
@@ -172,5 +181,27 @@ describe("variant edges", () => {
         `placeholder on ${bg}`,
       ).toBeGreaterThanOrEqual(4.5);
     }
+  });
+});
+
+describe("SidebarBrand", () => {
+  it("links home with the product name; the mark is decorative", () => {
+    // SidebarProvider's useIsMobile needs matchMedia, which jsdom lacks.
+    vi.stubGlobal("matchMedia", () => ({
+      matches: false,
+      addEventListener() {},
+      removeEventListener() {},
+    }));
+    const { getByRole, container } = render(
+      <SidebarProvider>
+        <SidebarBrand href="/library" />
+      </SidebarProvider>,
+    );
+    const link = getByRole("link", { name: "Open Artifacts" });
+    expect(link.getAttribute("href")).toBe("/library");
+    expect(container.querySelector("svg")?.getAttribute("aria-hidden")).toBe(
+      "true",
+    );
+    vi.unstubAllGlobals();
   });
 });
