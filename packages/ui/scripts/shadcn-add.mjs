@@ -9,13 +9,25 @@ const run = (cmd, args, cwd = pkgDir) =>
   execFileSync(cmd, args, { cwd, stdio: "inherit" });
 
 // components.json points the CLI's CSS target at cli-sink.css so it never
-// edits theme.css; keep the sink's header and drop whatever the CLI wrote.
+// edits theme.css. Print whatever the CLI wrote there (new vars, keyframes)
+// so nothing is dropped silently, then reset the sink to its header.
 const sink = `${pkgDir}src/shadcn/cli-sink.css`;
 const sinkHeader = readFileSync(sink, "utf8");
 try {
   run("pnpm", ["dlx", SHADCN, "add", ...process.argv.slice(2)]);
 } finally {
-  writeFileSync(sink, sinkHeader);
+  const written = readFileSync(sink, "utf8");
+  if (written !== sinkHeader) {
+    const added = written.startsWith(sinkHeader)
+      ? written.slice(sinkHeader.length)
+      : written;
+    console.log(
+      "\nshadcn wrote this CSS to cli-sink.css (not applied; map anything" +
+        " needed into theme.css by hand):\n",
+    );
+    console.log(added.trim());
+    writeFileSync(sink, sinkHeader);
+  }
 }
 
 // The CLI saves deps with ^; pin them to the installed version instead.

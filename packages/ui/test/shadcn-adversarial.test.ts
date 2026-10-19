@@ -80,6 +80,19 @@ describe("shadcn foundation: adversarial", () => {
     const variantNested = /&:where\(\[data-theme="dark"\]/.test(theme);
     const tokensNested = /(^|[\s,}])\[data-theme="dark"\]\s*[,{]/.test(tokens);
     expect(variantNested).toBe(tokensNested);
+
+    // The prefers-color-scheme branch must be root-scoped the same way as
+    // tokens.css's media rule, not match a nested data-theme="light".
+    const variant = theme.slice(
+      theme.indexOf("@custom-variant dark"),
+      theme.indexOf("\n}\n", theme.indexOf("@custom-variant dark")),
+    );
+    const media = variant.slice(variant.indexOf("@media"));
+    const rootNotLight = ':root:not([data-theme="light"])';
+    expect(media).toContain("prefers-color-scheme: dark");
+    expect(media).toContain(rootNotLight);
+    expect(media.split(rootNotLight).join("")).not.toContain("data-theme");
+    expect(tokens).toContain(`${rootNotLight} {`);
   });
 
   it("documents data-theme wiring for sonner and chart (they assume .dark)", () => {

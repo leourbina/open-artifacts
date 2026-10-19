@@ -33,7 +33,9 @@ saved (`^x` becomes the installed version; a test rejects ranges), and runs
   `lib/utils.ts` re-exports it.
 - **CSS.** The CLI's CSS target is `cli-sink.css`, which nothing imports, so
   `add` never edits `theme.css` (it appends neutral `:root`/`.dark` variable
-  blocks, e.g. for `sidebar`). The script resets the sink afterwards.
+  blocks, e.g. for `sidebar`). The script prints whatever the CLI wrote to
+  the sink (new variables, keyframes) and then resets it, so map anything a
+  component needs into `theme.css` by hand.
 - **Lint.** `packages/ui/biome.jsonc` turns off, for `src/shadcn/ui/**` only,
   the rules shadcn breaks on purpose, each with its reason:
   `noDangerouslySetInnerHtml` (chart's `<style>`), `noDocumentCookie`
