@@ -55,7 +55,10 @@ const THUMBS = {
     <p>9.3 Liability is capped at fees paid in the prior 12 months.</p><span class="stamp">REDLINE</span></div>`,
   "Churn by signup cohort": `<div class="pg mini"><b>Churn by signup cohort</b><p>Share of signups gone after 90 days</p>
     <div class="bars">${[38, 52, 47, 61, 70, 58, 82, 76]
-      .map((h, i) => `<i class="${i === 6 ? "hi" : ""}" style="height:${h}%"><span>${Math.round(h / 4)}%</span></i>`)
+      .map(
+        (h, i) =>
+          `<i class="${i === 6 ? "hi" : ""}" style="height:${h}%"><span>${Math.round(h / 4)}%</span></i>`,
+      )
       .join("")}</div>
     <div class="axis">${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug"].map((m) => `<span>${m}</span>`).join("")}</div></div>`,
   "Billing webhook retries: postmortem": `<div class="pg mini"><b>Billing webhook retries</b>
@@ -90,7 +93,9 @@ async function patch(page) {
 const browser = await chromium.launch();
 const tmp = mkdtempSync(join(tmpdir(), "oa-shots-"));
 try {
-  const names = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(SHOTS);
+  const names = process.argv.slice(2).length
+    ? process.argv.slice(2)
+    : Object.keys(SHOTS);
   for (const name of names)
     for (const theme of ["light", "dark"]) {
       const page = await browser.newPage({
@@ -107,7 +112,17 @@ try {
       await page.screenshot({ path: png });
       await page.close();
       for (const w of [800, 1280, 2560])
-        execFileSync("cwebp", ["-quiet", "-q", "82", "-resize", String(w), "0", png, "-o", join(out, `${name}-${theme}-${w}.webp`)]);
+        execFileSync("cwebp", [
+          "-quiet",
+          "-q",
+          "82",
+          "-resize",
+          String(w),
+          "0",
+          png,
+          "-o",
+          join(out, `${name}-${theme}-${w}.webp`),
+        ]);
       console.log(`${name}-${theme}`);
     }
 } finally {
