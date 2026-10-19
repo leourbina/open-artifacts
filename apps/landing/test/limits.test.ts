@@ -21,6 +21,7 @@ describe("limits in the docs", () => {
     expect(formatBytes(2 * 1024 * 1024)).toBe("2 MB");
     expect(formatBytes(1.5 * 1024 * 1024)).toBe("1.5 MB");
     expect(formatBytes(512 * 1024)).toBe("512 KB");
+    expect(formatBytes(1024 * 1024 + 64 * 1024)).toBe("1,088 KB");
     expect(formatSeconds(600)).toBe("10 minutes");
     expect(formatSeconds(3600)).toBe("1 hour");
     expect(formatSeconds(45)).toBe("45 seconds");
@@ -33,6 +34,24 @@ describe("limits in the docs", () => {
         expect(text, `${f}: ${value}`).not.toMatch(
           new RegExp(`(?<![\\d.])${escapeRe(value)}`),
         );
+    }
+  });
+
+  // Plan-aware sizes come only from placeholders; {LIMIT_DOC} is retired.
+  it("uses the plan-aware placeholders and no size literals", () => {
+    for (const key of [
+      "{LIMIT_DATA_DOC_FREE}",
+      "{LIMIT_DATA_DOC_PAID}",
+      "{LIMIT_MCP_BODY_FREE}",
+      "{LIMIT_MCP_BODY_PAID}",
+    ])
+      expect(LIMIT_PLACEHOLDERS[key], key).toBeDefined();
+    expect(LIMIT_PLACEHOLDERS["{LIMIT_DOC}"]).toBeUndefined();
+    for (const f of docs) {
+      const text = read(src, f);
+      expect(text, f).not.toContain("{LIMIT_DOC}");
+      for (const literal of ["256 KB", "320 KB", "128 KB"])
+        expect(text, `${f}: ${literal}`).not.toContain(literal);
     }
   });
 
@@ -51,7 +70,19 @@ describe("limits in the docs", () => {
       `Only the first ${formatBytes(LIMITS.indexTextBytes)} of an artifact's entry file is indexed`,
     );
     expect(page("runtime-api.md")).toContain(
-      `| Document size | ${formatBytes(LIMITS.docBytes)} |`,
+      `| Document size (Workers Free) | ${formatBytes(LIMITS.dataDocBytesFree)} |`,
+    );
+    expect(page("runtime-api.md")).toContain(
+      `| Document size (Workers Paid) | ${formatBytes(LIMITS.dataDocBytesPaid)} |`,
+    );
+    expect(page("self-hosting-costs.md")).toContain(
+      `| Live-page data document size | ${formatBytes(LIMITS.dataDocBytesFree)} | ${formatBytes(LIMITS.dataDocBytesPaid)} |`,
+    );
+    expect(page("self-hosting-costs.md")).toContain(
+      `| MCP request size | ${formatBytes(LIMITS.mcpBodyBytesFree)} | ${formatBytes(LIMITS.mcpBodyBytesPaid)} |`,
+    );
+    expect(page("mcp-tools.md")).toContain(
+      `an MCP request larger than ${formatBytes(LIMITS.mcpBodyBytesFree)} is refused`,
     );
     expect(page("runtime-api.md")).toContain(
       `| Writes per viewer | ${LIMITS.viewerWritesPerMin} per minute |`,

@@ -76,7 +76,8 @@ await votes.set(crypto.randomUUID(), { option: "Lisbon" });
 
 | Limit | Default |
 |---|---|
-| Document size | {LIMIT_DOC} |
+| Document size (Workers Free) | {LIMIT_DATA_DOC_FREE} |
+| Document size (Workers Paid) | {LIMIT_DATA_DOC_PAID} |
 | Data per artifact | {LIMIT_ARTIFACT_DATA} |
 | Writes per viewer | {LIMIT_VIEWER_WRITES} |
 | Anonymous writes per IP | {LIMIT_ANON_WRITES} |
