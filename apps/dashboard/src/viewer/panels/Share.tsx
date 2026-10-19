@@ -144,8 +144,9 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
         ) : (
           <VisibilityBadge visibility={artifact.visibility} />
         )}
+        <p className="oa-muted oa-vis-note">{NOTE[staged]}</p>
         {owner && changed && (
-          <div className="oa-invite">
+          <div className="oa-vis-actions">
             <Button
               variant="primary"
               loading={patch.isPending}
@@ -166,7 +167,6 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
             </Button>
           </div>
         )}
-        <p className="oa-muted">{NOTE[staged]}</p>
       </section>
 
       {owner && (

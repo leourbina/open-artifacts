@@ -352,3 +352,17 @@
 .oa-file-drag .oa-vframe {
   pointer-events: none;
 }
+/* #189: toggle, helper text, then an aligned action row. */
+.oa-share .oa-vis-note {
+  margin: 8px 0 0;
+}
+.oa-vis-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+}
+/* Keep the segment focus ring inside the toggle's border. */
+.oa-share [role="radiogroup"] [role="radio"]:focus-visible {
+  outline-offset: -2px;
+}
