@@ -19,6 +19,7 @@ import {
   callWorker,
   connect,
   E,
+  limiter,
   MCP_URL,
   nextIp,
   tool,
@@ -206,7 +207,10 @@ async function oauthToken(email: string, clientName = "Test Agent") {
   const t = await callWorker(
     new Request(`${APP}/oauth/token`, {
       method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "cf-connecting-ip": nextIp(),
+      },
       body: new URLSearchParams({
         grant_type: "authorization_code",
         code,
@@ -485,6 +489,7 @@ describe("MCP auth: fix round 1", () => {
   });
 
   it("registration is limited per IP (reg:ip:<ipKey>, IPv6 per /64)", async () => {
+    const e = E({ RL_ANON: limiter().RL_ANON });
     const reg = (ip: string) =>
       callWorker(
         new Request(`${APP}/oauth/register`, {
@@ -499,6 +504,7 @@ describe("MCP auth: fix round 1", () => {
             token_endpoint_auth_method: "none",
           }),
         }),
+        e,
       );
     const net = `2001:db8:${Math.floor(Math.random() * 0xffff).toString(16)}:7`;
     let limitedAt = 0;

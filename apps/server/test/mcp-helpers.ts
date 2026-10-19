@@ -12,6 +12,24 @@ export const MCP_URL = `${APP}/mcp`;
 export const E = (over: Record<string, unknown> = {}) =>
   ({ ...(env as object), ...over }) as never;
 
+/**
+ * RL_ANON stub: `max` per key (the binding's 30/min) with no clock, so a test
+ * never straddles the real fixed window. `counts` records every key charged.
+ */
+export const limiter = (max = 30) => {
+  const counts = new Map<string, number>();
+  return {
+    counts,
+    RL_ANON: {
+      async limit({ key }: { key: string }) {
+        const n = (counts.get(key) ?? 0) + 1;
+        counts.set(key, n);
+        return { success: n <= max };
+      },
+    },
+  };
+};
+
 /** Calls the Worker (default export), awaiting its waitUntil work. */
 export const callWorker = (req: Request, e: unknown = E()) =>
   fetchAndWait(worker as never, req, e);

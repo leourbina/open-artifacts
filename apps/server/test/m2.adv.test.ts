@@ -6,7 +6,15 @@ import { createPat } from "../src/auth/pat.js";
 import { type ArtifactRuntime, runtimeStub } from "../src/runtime/do.js";
 import { removeMember } from "../src/services/members.js";
 import { login } from "./helpers.js";
-import { APP, callWorker, connect, E, nextIp, tool } from "./mcp-helpers.js";
+import {
+  APP,
+  callWorker,
+  connect,
+  E,
+  limiter,
+  nextIp,
+  tool,
+} from "./mcp-helpers.js";
 
 const tag = newId().slice(0, 6).toLowerCase();
 const CONTENT = "https://content.localhost";
@@ -55,7 +63,8 @@ const b64url = (b: ArrayBuffer | Uint8Array) =>
     .replace(/\//g, "_")
     .replace(/=+$/, "");
 
-async function oauth(email: string, e?: unknown) {
+/** Register + consent: a code ready for the token exchange. */
+async function authorize(email: string, e?: unknown, basic = false) {
   const m = await login(email);
   const reg = await w(
     new Request(`${APP}/oauth/register`, {
@@ -67,14 +76,15 @@ async function oauth(email: string, e?: unknown) {
       body: JSON.stringify({
         client_name: "Adv",
         redirect_uris: [REDIRECT],
-        token_endpoint_auth_method: "none",
+        token_endpoint_auth_method: basic ? "client_secret_basic" : "none",
         grant_types: ["authorization_code", "refresh_token"],
         response_types: ["code"],
       }),
     }),
     e,
   );
-  const clientId = ((await reg.json()) as { client_id: string }).client_id;
+  const { client_id: clientId, client_secret: clientSecret } =
+    (await reg.json()) as { client_id: string; client_secret?: string };
   const verifier = b64url(crypto.getRandomValues(new Uint8Array(32)));
   const challenge = b64url(
     await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)),
@@ -112,24 +122,43 @@ async function oauth(email: string, e?: unknown) {
   );
   const code =
     new URL(d.headers.get("location") ?? "").searchParams.get("code") ?? "";
-  const t = await w(
+  return { m, clientId, clientSecret, code, verifier };
+}
+
+type Authorized = Awaited<ReturnType<typeof authorize>>;
+
+/** The code exchange, from `ip` (a fresh one by default); Basic auth when the client has a secret. */
+const exchange = (a: Authorized, e?: unknown, ip = nextIp()) =>
+  w(
     new Request(`${APP}/oauth/token`, {
       method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "cf-connecting-ip": ip,
+        ...(a.clientSecret
+          ? {
+              authorization: `Basic ${btoa(`${a.clientId}:${a.clientSecret}`)}`,
+            }
+          : {}),
+      },
       body: new URLSearchParams({
         grant_type: "authorization_code",
-        code,
+        code: a.code,
         redirect_uri: REDIRECT,
-        client_id: clientId,
-        code_verifier: verifier,
+        ...(a.clientSecret ? {} : { client_id: a.clientId }),
+        code_verifier: a.verifier,
         resource: `${APP}/mcp`,
       }).toString(),
     }),
     e,
   );
+
+async function oauth(email: string, e?: unknown) {
+  const a = await authorize(email, e);
+  const t = await exchange(a, e);
   expect(t.status).toBe(200);
   const j = (await t.json()) as { access_token: string; refresh_token: string };
-  return { m, clientId, ...j };
+  return { m: a.m, clientId: a.clientId, ...j };
 }
 
 const closedWithin = (ws: WebSocket, ms: number) =>
@@ -209,7 +238,7 @@ describe("M2 whole-track adversarial", () => {
         return typeof v === "function" ? v.bind(t) : v;
       },
     });
-    const e = E({ OAUTH_KV: counting });
+    const e = E({ OAUTH_KV: counting, RL_ANON: limiter().RL_ANON });
     const o = await oauth(`o3-${tag}@x.com`, e);
     let rt = o.refresh_token;
     puts = 0;
@@ -242,20 +271,168 @@ describe("M2 whole-track adversarial", () => {
     expect(puts).toBeLessThanOrEqual(2 * ok);
   });
 
-  it("F3d token client_id is read with a 16 KB cap even without content-length", async () => {
-    const keys: string[] = [];
-    const e = E({
-      RL_ANON: {
-        async limit({ key }: { key: string }) {
-          keys.push(key);
-          return { success: true };
+  const token = (params: Record<string, string>, ip: string, e: unknown) =>
+    w(
+      new Request(`${APP}/oauth/token`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          "cf-connecting-ip": ip,
         },
+        body: new URLSearchParams(params).toString(),
+      }),
+      e,
+    );
+
+  it("F3d requests naming a client_id without valid credentials cannot drain that client's bucket (#149)", async () => {
+    const o = await oauth(`o3d-${tag}@x.com`);
+    const l = limiter(3);
+    const e = E({ RL_ANON: l.RL_ANON });
+    for (let i = 0; i < 6; i++) {
+      const bogus = await token(
+        {
+          grant_type: "refresh_token",
+          client_id: o.clientId,
+          ...(i % 2 ? { refresh_token: `${o.m.userId}:nope:${i}` } : {}),
+        },
+        `198.51.100.${i + 1}`,
+        e,
+      );
+      expect(bogus.status).not.toBe(200);
+    }
+    expect(l.counts.has(`tok:${o.clientId}`)).toBe(false);
+    const ok = await token(
+      {
+        grant_type: "refresh_token",
+        refresh_token: o.refresh_token,
+        client_id: o.clientId,
       },
+      "192.0.2.10",
+      e,
+    );
+    expect(ok.status).toBe(200);
+    expect(l.counts.get(`tok:${o.clientId}`)).toBe(1);
+  });
+
+  it("F3e every token request is rate-limited per IP before the provider, valid ones too", async () => {
+    const o = await oauth(`o3e-${tag}@x.com`);
+    const l = limiter(3);
+    const e = E({ RL_ANON: l.RL_ANON });
+    const fail = (ip: string) =>
+      token(
+        {
+          grant_type: "refresh_token",
+          client_id: o.clientId,
+          refresh_token: "x:y:z",
+        },
+        ip,
+        e,
+      );
+    const statuses: number[] = [];
+    for (let i = 0; i < 5; i++)
+      statuses.push((await fail("203.0.113.9")).status);
+    expect(statuses.slice(0, 3)).not.toContain(429);
+    expect(statuses.slice(3)).toEqual([429, 429]);
+    // Another IP is unaffected; the limited IP is limited even when valid.
+    expect((await fail("203.0.113.10")).status).not.toBe(429);
+    const valid = (ip: string) =>
+      token(
+        {
+          grant_type: "refresh_token",
+          refresh_token: o.refresh_token,
+          client_id: o.clientId,
+        },
+        ip,
+        e,
+      );
+    expect((await valid("203.0.113.9")).status).toBe(429);
+    expect((await valid("203.0.113.11")).status).toBe(200);
+  });
+
+  it("F3f a valid client is limited at its own threshold, before the refresh rotates", async () => {
+    const o = await oauth(`o3f-${tag}@x.com`);
+    const l = limiter(2);
+    const e = E({ RL_ANON: l.RL_ANON });
+    const refresh = (rt: string) =>
+      token(
+        {
+          grant_type: "refresh_token",
+          refresh_token: rt,
+          client_id: o.clientId,
+        },
+        nextIp(),
+        e,
+      );
+    const r1 = await refresh(o.refresh_token);
+    expect(r1.status).toBe(200);
+    const rt1 = ((await r1.json()) as { refresh_token: string }).refresh_token;
+    const r2 = await refresh(rt1);
+    expect(r2.status).toBe(200);
+    const rt2 = ((await r2.json()) as { refresh_token: string }).refresh_token;
+    const limited = await refresh(rt2);
+    expect(limited.status).toBe(429);
+    expect(l.counts.get(`tok:${o.clientId}`)).toBe(3);
+    expect(limited.headers.get("retry-after")).toBe("60");
+    expect(await limited.json()).toMatchObject({
+      error: "temporarily_unavailable",
     });
-    const big = `client_id=huge-${tag}&grant_type=refresh_token&pad=${"x".repeat(32 * 1024)}`;
+    // rt1 is still the grant's previous token only if the limited refresh did
+    // not rotate it (a rotation would make rt2 the previous one).
+    l.counts.clear();
+    expect((await refresh(rt1)).status).toBe(200);
+  });
+
+  it("F3g a code exchange over the client's limit is 429 and leaves the code usable", async () => {
+    const l = limiter(30);
+    const e = E({ RL_ANON: l.RL_ANON });
+    const a = await authorize(`o3g-${tag}@x.com`, e);
+    l.counts.set(`tok:${a.clientId}`, 30);
+    expect((await exchange(a, e)).status).toBe(429);
+    l.counts.delete(`tok:${a.clientId}`);
+    expect((await exchange(a, e)).status).toBe(200);
+  });
+
+  it("F3h a Basic-auth client is limited on its authenticated client_id only", async () => {
+    const l = limiter(30);
+    const e = E({ RL_ANON: l.RL_ANON });
+    const a = await authorize(`o3h-${tag}@x.com`, e, true);
+    expect(a.clientSecret).toBeTruthy();
+    const forged = await exchange({ ...a, clientSecret: "wrong" }, e);
+    expect(forged.status).toBe(401);
+    expect(l.counts.has(`tok:${a.clientId}`)).toBe(false);
+    expect((await exchange(a, e)).status).toBe(200);
+    expect(l.counts.get(`tok:${a.clientId}`)).toBe(1);
+  });
+
+  it("F3i revocation (token, no grant_type) is rate-limited per IP", async () => {
+    const o = await oauth(`o3i-${tag}@x.com`);
+    const l = limiter(3);
+    const e = E({ RL_ANON: l.RL_ANON });
+    const statuses: number[] = [];
+    for (let i = 0; i < 5; i++)
+      statuses.push(
+        (
+          await token(
+            { token: `x:y:${i}`, client_id: o.clientId },
+            "203.0.113.30",
+            e,
+          )
+        ).status,
+      );
+    expect(statuses.slice(0, 3)).not.toContain(429);
+    expect(statuses.slice(3)).toEqual([429, 429]);
+  });
+
+  it("F3k a streamed token body under 16 KB without content-length reaches the provider", async () => {
+    const o = await oauth(`o3k-${tag}@x.com`);
+    const body = new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: o.refresh_token,
+      client_id: o.clientId,
+    }).toString();
     const stream = new ReadableStream<Uint8Array>({
       start(c) {
-        c.enqueue(new TextEncoder().encode(big));
+        c.enqueue(new TextEncoder().encode(body));
         c.close();
       },
     });
@@ -263,15 +440,48 @@ describe("M2 whole-track adversarial", () => {
       method: "POST",
       headers: {
         "content-type": "application/x-www-form-urlencoded",
-        "cf-connecting-ip": "203.0.113.5",
+        "cf-connecting-ip": nextIp(),
       },
       body: stream,
       duplex: "half",
     } as RequestInit);
     expect(r.headers.get("content-length")).toBeNull();
-    await w(r, e);
-    expect(keys).toContain("tok:ip:203.0.113.5");
-    expect(keys).not.toContain(`tok:huge-${tag}`);
+    const res = await w(r, E({ RL_ANON: limiter().RL_ANON }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toHaveProperty("refresh_token");
+  });
+
+  it("F3j token bodies over 16 KB → 413, with or without content-length", async () => {
+    const big = `grant_type=refresh_token&pad=${"x".repeat(17 * 1024)}`;
+    const declared = await w(
+      new Request(`${APP}/oauth/token`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          "content-length": String(big.length),
+          "cf-connecting-ip": nextIp(),
+        },
+        body: big,
+      }),
+    );
+    expect(declared.status).toBe(413);
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode(big));
+        c.close();
+      },
+    });
+    const streamed = new Request(`${APP}/oauth/token`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "cf-connecting-ip": nextIp(),
+      },
+      body: stream,
+      duplex: "half",
+    } as RequestInit);
+    expect(streamed.headers.get("content-length")).toBeNull();
+    expect((await w(streamed)).status).toBe(413);
   });
 
   it("F3b access tokens live 24 h", async () => {

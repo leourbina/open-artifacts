@@ -44,8 +44,8 @@ export type GrantProps = { userId: string; clientName: string };
 const MAX_CLIENT_NAME = 64;
 /** Client registrations per IP (IPv6: per /64) per window of RL_ANON. */
 const REGISTER_KEY = "reg:ip:";
-/** Token requests (refresh storms: 2 KV writes each) per client_id per RL_ANON window. */
-const TOKEN_KEY = "tok:";
+/** Token requests (grants and revocations) per IP (IPv6: per /64) per RL_ANON window. */
+const TOKEN_IP_KEY = "tok:ip:";
 /** Consent page renders (beginConsent: a KV write) per user per RL_ANON window. */
 const CONSENT_KEY = "consent:u:";
 const MAX_TOKEN_BODY = 16 * 1024;
@@ -162,32 +162,6 @@ async function registrationLimited(
   return null;
 }
 
-/** The token request's client_id: form body, else HTTP Basic username. */
-async function tokenClientId(req: Request): Promise<string | null> {
-  try {
-    // Capped read of a clone (with or without content-length); oversize → no id.
-    const body = await readCappedRequest(req.clone(), MAX_TOKEN_BODY);
-    const id = new URLSearchParams(new TextDecoder().decode(body)).get(
-      "client_id",
-    );
-    if (id) return id.slice(0, 256);
-  } catch {
-    // oversize or unreadable body: fall back to Basic, then the IP key
-  }
-  const basic = /^Basic ([A-Za-z0-9+/=]+)$/i.exec(
-    req.headers.get("authorization") ?? "",
-  );
-  if (basic?.[1]) {
-    try {
-      const user = atob(basic[1]).split(":")[0];
-      if (user) return decodeURIComponent(user).slice(0, 256);
-    } catch {
-      // malformed: the provider rejects it
-    }
-  }
-  return null;
-}
-
 /** OAuth-style JSON error for the token endpoint (RFC 6749 §5.2 shape). */
 const tokenError = (status: number, error: string, description: string) =>
   new Response(JSON.stringify({ error, error_description: description }), {
@@ -199,28 +173,42 @@ const tokenError = (status: number, error: string, description: string) =>
     },
   });
 
+const isTokenRequest = (req: Request) =>
+  req.method === "POST" && new URL(req.url).pathname === OAUTH.token;
+
 /**
- * /oauth/token: each refresh_token grant is 2 KV writes (Free plan: 1000/day),
- * so one client's refresh loop could exhaust OAuth for everyone. RL_ANON per
- * client_id (`tok:<client_id>`; without one, per IP); fails closed outside dev.
+ * /oauth/token before the provider: bodies over 16 KB → 413 (a body without
+ * a numeric Content-Length is read through a capped reader and re-attached), then
+ * RL_ANON per IP (`tok:ip:<ipKey>`) on every request, revocations included:
+ * keyed on the caller, it cannot drain anyone else's bucket. Without RL_ANON
+ * it fails closed outside dev. The per-client limit runs inside the provider,
+ * after authentication (tokenExchangeCallback in oauth-api.ts).
  */
-async function tokenLimited(req: Request, env: Env): Promise<Response | null> {
-  if (req.method !== "POST" || new URL(req.url).pathname !== OAUTH.token)
-    return null;
+async function tokenGate(req: Request, env: Env): Promise<Request | Response> {
   const rl = env.RL_ANON as RateLimit | undefined;
-  if (!rl) {
-    if (env.ENVIRONMENT === "dev") return null;
+  if (!rl && env.ENVIRONMENT !== "dev")
     return tokenError(
       503,
       "temporarily_unavailable",
       "Token endpoint is unavailable",
     );
+  const tooLarge = () =>
+    tokenError(413, "invalid_request", "Token request body is too large");
+  let gated = req;
+  const declared = req.headers.get("content-length") ?? "";
+  if (/^\d+$/.test(declared)) {
+    if (Number(declared) > MAX_TOKEN_BODY) return tooLarge();
+  } else {
+    try {
+      const body = await readCappedRequest(req, MAX_TOKEN_BODY);
+      gated = new Request(req, { body: body as Uint8Array<ArrayBuffer> });
+    } catch {
+      return tooLarge();
+    }
   }
-  const client = await tokenClientId(req);
-  const key = client
-    ? TOKEN_KEY + client
-    : `${TOKEN_KEY}ip:${ipKey(req.headers.get("cf-connecting-ip") ?? "") ?? "unknown"}`;
-  if ((await rl.limit({ key })).success) return null;
+  if (!rl) return gated;
+  const ip = ipKey(req.headers.get("cf-connecting-ip") ?? "") ?? "unknown";
+  if ((await rl.limit({ key: TOKEN_IP_KEY + ip })).success) return gated;
   return tokenError(
     429,
     "temporarily_unavailable",
@@ -235,9 +223,13 @@ export async function serveAppHost(
   ctx: ExecutionContext,
   app: ProviderOptions["defaultHandler"],
 ): Promise<Response> {
-  const limited =
-    (await registrationLimited(req, env)) ?? (await tokenLimited(req, env));
+  const limited = await registrationLimited(req, env);
   if (limited) return limited;
+  if (isTokenRequest(req)) {
+    const gated = await tokenGate(req, env);
+    if (gated instanceof Response) return gated;
+    req = gated;
+  }
   const res = await oauthProvider(env, app).fetch(req, env, ctx);
   if (req.method === "POST" && new URL(req.url).pathname === OAUTH.register)
     await trackRegisteredClient(env, res);
