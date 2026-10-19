@@ -66,9 +66,16 @@ describe("F1: a deploy never silently drops a live binding", () => {
     expect(cfg(w)).not.toHaveProperty("browser");
   });
 
-  it("a failed bindings read warns and continues", async () => {
+  it("a failed bindings read with no saved PLAN refuses a free render", async () => {
     const w = world({ settingsFail: true });
-    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(2);
+    expect(line(w, "deploy").status).toBe("action_required");
+    expect(line(w, "deploy").message).toContain("--plan");
+  });
+
+  it("a failed bindings read still deploys when --plan is explicit", async () => {
+    const w = world({ settingsFail: true });
+    expect(await run([...HOSTS, "--plan", "free"], w.deps, ROOT)).toBe(0);
     expect(line(w, "deploy").message).toContain("could not read");
   });
 });

@@ -81,7 +81,7 @@ type Live = Awaited<ReturnType<typeof workerBindings>> | "unreadable";
  * A deploy never turns a live (or last-deployed) paid PLAN into free unless
  * asked with --plan free: an unreadable plan must not downgrade prod. The live
  * PLAN var wins; with an unreadable Worker only the saved value (written after
- * a successful deploy) counts, and with neither over a deployed Worker, refuse.
+ * a successful deploy) counts, and with neither, refuse (a 404 is "no Worker", not unreadable).
  */
 function planGuard(
   state: State,
@@ -103,7 +103,7 @@ function planGuard(
       return refuse(
         "the saved PLAN is paid and the live Worker could not be read",
       );
-    if (state.planVar === undefined && state.deployedVersion)
+    if (state.planVar === undefined)
       return refuse(
         "the live Worker's PLAN could not be read and none is saved",
       );

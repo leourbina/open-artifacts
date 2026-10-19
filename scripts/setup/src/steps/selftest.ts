@@ -20,17 +20,21 @@ async function until200(
     ctx.deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   for (let i = 0; ; i++) {
     let last: string;
+    let wrong = false;
     try {
       const res = await ctx.deps.fetch(url, init);
       if (res.status === 200) {
         const bad = await verify?.(res.clone());
         if (!bad) return res;
         last = bad;
+        wrong = true;
       } else last = `HTTP ${res.status}`;
     } catch (e) {
       last = (e as Error).message;
     }
     const delay = DELAYS[i];
+    if (delay === undefined && wrong)
+      throw new Error(`${label}: ${shown} answered 200 but ${last}`);
     if (delay === undefined)
       throw new Error(`${label}: ${shown} not 200 after ~60s (last: ${last})`);
     await sleep(delay * 1000);

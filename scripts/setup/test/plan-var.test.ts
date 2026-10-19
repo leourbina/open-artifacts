@@ -149,6 +149,8 @@ describe("selftest checks /healthz plan", () => {
     expect(l.status).toBe("error");
     expect(l.message).toContain("PLAN");
     expect(l.message).toContain("paid");
+    expect(l.message).toContain('"free"');
+    expect(l.message).not.toContain("not 200");
   });
 });
 
