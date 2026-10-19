@@ -257,17 +257,16 @@ describe("drag over the viewer", () => {
   });
 });
 
-describe("viewer upload button", () => {
+describe("artifact detail", () => {
   const find = (t: string) =>
     (fixtures.artifacts.find((a) => a.title === t) as { id: string }).id;
-  it("shows for an editor and not for a viewer", async () => {
-    mount(viewerPath(find("Shared draft")));
-    expect(
-      await screen.findByRole("button", { name: "Upload version" }),
-    ).toBeVisible();
-    cleanup();
-    mount(viewerPath(find("Onboarding guide")));
-    await screen.findByRole("button", { name: /^Version:/ });
-    expect(screen.queryByRole("button", { name: "Upload version" })).toBeNull();
+  it("has no upload-version control for an owner or an editor", async () => {
+    for (const title of ["Landing page", "Shared draft"]) {
+      mount(viewerPath(find(title)));
+      await screen.findByRole("button", { name: /^Version:/ });
+      expect(screen.queryByText(/upload version/i)).toBeNull();
+      expect(screen.queryByTestId("upload-files")).toBeNull();
+      cleanup();
+    }
   });
 });

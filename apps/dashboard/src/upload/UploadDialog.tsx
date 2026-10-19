@@ -1,4 +1,4 @@
-import { type ArtifactSummary, normalizePath, viewerPath } from "@oa/shared";
+import { normalizePath, viewerPath } from "@oa/shared";
 import { Button, Dialog, Input, Select, Textarea, toast } from "@oa/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
@@ -19,11 +19,9 @@ const stem = (p: string) => (p.split("/").pop() ?? p).replace(/\.[^.]*$/, "");
 
 export function UploadDialog({
   files,
-  artifact,
   onClose,
 }: {
   files: File[];
-  artifact?: ArtifactSummary;
   onClose: () => void;
 }) {
   // NFC, as the server and the pipeline see them.
@@ -44,7 +42,7 @@ export function UploadDialog({
   const navigate = useNavigate();
   const busy = progress !== null;
   const needsEntry = auto === undefined;
-  const invalid = (!artifact && !title.trim()) || (needsEntry && !entry);
+  const invalid = !title.trim() || (needsEntry && !entry);
 
   const alive = useRef(true);
   useEffect(() => {
@@ -65,7 +63,7 @@ export function UploadDialog({
     abort.current = new AbortController();
     try {
       const r = await uploadArtifact(
-        { files, title, artifactId: artifact?.id, message, entry },
+        { files, title, message, entry },
         setProgress,
         abort.current.signal,
       );
@@ -75,9 +73,7 @@ export function UploadDialog({
         qc.invalidateQueries({ queryKey: qk.artifact(r.id) }),
       ]);
       if (!alive.current) return;
-      toast({
-        title: artifact ? `Published v${r.version}` : "Artifact created",
-      });
+      toast({ title: "Artifact created" });
       onClose();
       void navigate({ to: viewerPath(r.id, r.version) as never });
     } catch (e) {
@@ -96,9 +92,7 @@ export function UploadDialog({
     <Dialog
       open
       onOpenChange={(o) => !o && cancel()}
-      title={
-        artifact ? `Upload new version of ${artifact.title}` : "Create artifact"
-      }
+      title="Create artifact"
       description={`${files.length} file${files.length === 1 ? "" : "s"} selected`}
       footer={
         <>
@@ -110,7 +104,7 @@ export function UploadDialog({
             disabled={busy || invalid}
             onClick={() => void submit()}
           >
-            {busy ? "Uploading…" : artifact ? "Publish version" : "Create"}
+            {busy ? "Uploading…" : "Create"}
           </Button>
         </>
       }
@@ -122,19 +116,17 @@ export function UploadDialog({
           if (!busy && !invalid) void submit();
         }}
       >
-        {!artifact && (
-          <div>
-            <label htmlFor="up-title">Title</label>
-            <Input
-              id="up-title"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              maxLength={200}
-              required
-              disabled={busy}
-            />
-          </div>
-        )}
+        <div>
+          <label htmlFor="up-title">Title</label>
+          <Input
+            id="up-title"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            maxLength={200}
+            required
+            disabled={busy}
+          />
+        </div>
         {needsEntry && (
           <div>
             <span id="up-entry" className="up-entry-label">
