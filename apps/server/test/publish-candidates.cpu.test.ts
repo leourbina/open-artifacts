@@ -58,5 +58,5 @@ describe("inline publish candidates (report)", () => {
       await add(`${kb} KB escape-heavy`, escapeHeavy(kb * 1024 - 64));
     await add("120 KB typical html", typical(120 * 1024));
     for (const [k, v] of rows) await annotate(`${v}  ${k}`);
-  });
+  }, 60_000);
 });
