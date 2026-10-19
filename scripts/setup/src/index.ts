@@ -122,6 +122,10 @@ async function resolve(argv: string[], deps: Deps, state: State) {
   if (v["revoke-ci-tokens"] && !v.ci)
     throw new Error("--revoke-ci-tokens needs --ci");
   if (v.strict && !v.check) throw new Error("--strict needs --check");
+  if (v.repo !== undefined || v["no-open"])
+    throw new Error(
+      "--repo and --no-open only go with --token-links or --token-page",
+    );
   if (v.solo && v.team) throw new Error("--solo and --team conflict; pass one");
   if (v.browser && v["no-browser"])
     throw new Error("--browser and --no-browser conflict; pass one");
@@ -288,6 +292,8 @@ export const HELP = `Usage: pnpm oa:setup [options]
   --token-page [--no-open] [--json]  Serve the same links as a page on
                 127.0.0.1 (random port), print its URL (json: tokenPage.url) and
                 open it unless --no-open. Stops on Ctrl-C or after 30 min idle.
+  --content-host <h>  With --token-links/--token-page: the zones of both hosts
+                are listed (zoneScope) for the zone-scoped tokens.
   --repo <owner/name>  With --token-links/--token-page: store each token as a
                 GitHub secret there (gh secret set) instead of an env var.
   -h, --help`;

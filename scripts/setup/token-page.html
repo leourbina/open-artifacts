@@ -22,6 +22,9 @@
     {{storeLead}}    the sentence before {{store}}, per storeAs.kind
     {{optional}}     " · optional" when token.required is false, else ""
     {{optionalTag}}  " <span>optional</span>" when token.required is false (built)
+    {{zoneStep}}     zone-scoped token with token.zoneScope: one more numbered step,
+                     "Under Zone Resources, change All zones to Specific zone → <zone names>"
+                     (built; names only, never ids: the dashboard ignores the link's zoneId)
   Rules: no inputs, never a token value, no external requests, the Copy script is the only script.
 -->
 <html lang="en">
@@ -113,6 +116,7 @@ ol.steps p b{color:var(--ink);font-weight:600}
     <a class="go" href="{{url}}" target="_blank" rel="noopener noreferrer">Create the token (prefilled)<span class="sr"> (opens in a new tab)</span> <span class="host" aria-hidden="true">dash.cloudflare.com ↗</span></a>
     <ol class="steps">
       <li><div><span class="st">Check what the link filled in</span><p>Name: <b>{{name}}</b>. Account: yours. Permissions:</p><div class="chips">{{chips}}</div></div></li>
+      {{zoneStep}}
       <li><div><span class="st">Continue to summary, then Create Token</span><p>Cloudflare shows the token only once. Copy it, and don't paste it into chat.</p></div></li>
       <li><div><span class="st">Store it yourself</span><p>{{storeLead}}</p><div class="cmd"><code>{{store}}</code><button class="copy" type="button">Copy</button></div></div></li>
     </ol>

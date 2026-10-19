@@ -123,7 +123,10 @@ describe("prereqs token report", () => {
       required: false,
     });
     expect(a.url).toBe(
-      linkFor(tokenById("analytics"), { accountId: "acc1", zones: [{ id: "z", name: "example.com" }] }),
+      linkFor(tokenById("analytics"), {
+        accountId: "acc1",
+        zones: [{ id: "z", name: "example.com" }],
+      }),
     );
     expect(pre.message).toContain(a.url);
   });
@@ -136,10 +139,11 @@ describe("prereqs token report", () => {
     const deploy = pre.data.tokens.find(
       (t: { id: string }) => t.id === "deploy",
     );
-    // world: no subscriptions -> 403 on Billing.
+    // world: no subscriptions -> 403 on Billing, an optional permission.
     expect(deploy).toMatchObject({
-      status: "lacks",
-      missing: ["Billing: Read"],
+      status: "optional",
+      missing: [],
+      optional: ["Billing: Read (optional, lets setup detect your plan)"],
     });
     const access = pre.data.tokens.find(
       (t: { id: string }) => t.id === "access",
@@ -161,7 +165,10 @@ describe("prereqs token report", () => {
     );
     const pre = w.lines.find((l) => l.includes("prereqs:")) ?? "";
     expect(pre).toContain(
-      linkFor(tokenById("analytics"), { accountId: "acc1", zones: [{ id: "z", name: "example.com" }] }),
+      linkFor(tokenById("analytics"), {
+        accountId: "acc1",
+        zones: [{ id: "z", name: "example.com" }],
+      }),
     );
   });
 });
@@ -187,9 +194,10 @@ describe("--token-links", () => {
     expect(await run(["--token-links", "--json"], w.deps, ROOT)).toBe(0);
     const j = JSON.parse(w.lines.at(-1) as string);
     expect(j.data.tokens.map((t: { url: string }) => t.url)).toEqual(
-      withUrls(tokens({ name: "oa" }), { accountId: "acc1", zones: [{ id: "z", name: "example.com" }] }).map(
-        (t) => t.url,
-      ),
+      withUrls(tokens({ name: "oa" }), {
+        accountId: "acc1",
+        zones: [{ id: "z", name: "example.com" }],
+      }).map((t) => t.url),
     );
     expect(w.ops).toEqual([]);
   });
@@ -214,7 +222,10 @@ describe("--token-links", () => {
 
 describe("--token-page", () => {
   const template = readFileSync(TEMPLATE_PATH, "utf8");
-  const linked = withUrls(tokens(), { accountId: ACC, zones: [{ id: "z1", name: "example.com" }] });
+  const linked = withUrls(tokens(), {
+    accountId: ACC,
+    zones: [{ id: "z1", name: "example.com" }],
+  });
   const html = renderTokenPage(linked, template);
   const count = (s: string, re: RegExp) => (s.match(re) ?? []).length;
 

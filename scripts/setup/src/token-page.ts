@@ -11,7 +11,7 @@ import {
   type StoreAs,
   tokens,
   withUrls,
-  ZONE_KEYS,
+  type Zone,
 } from "./tokens.ts";
 
 /** The page template (a copy of design/setup/token-page.html with fields). */
@@ -60,12 +60,17 @@ function fill(item: string, fields: Record<string, string>, raw: Set<string>) {
 export function renderTokenPage(list: LinkedToken[], template: string): string {
   // The header comment documents the fields; it is not shipped.
   let html = template.replace(/<!--[\s\S]*?-->\n?/, "");
-  const raw = new Set(["chips", "optionalTag"]);
+  const raw = new Set(["chips", "optionalTag", "zoneStep"]);
+  const names = (z: string[]) =>
+    z.length < 2
+      ? `<b>${esc(z[0] ?? "")}</b>`
+      : `${z
+          .slice(0, -1)
+          .map((n) => `<b>${esc(n)}</b>`)
+          .join(", ")} and <b>${esc(z.at(-1) as string)}</b>`;
   const fields = (t: LinkedToken, i: number) => {
     const readOnly = t.permissions.every((p) => p.type === "read");
-    const zoned =
-      /[?&]zoneId=/.test(t.url) &&
-      t.permissions.some((p) => ZONE_KEYS.has(p.key));
+    const zoned = Boolean(t.zoneScope);
     const label = `${t.id} token`;
     return {
       id: t.id,
@@ -82,6 +87,9 @@ export function renderTokenPage(list: LinkedToken[], template: string): string {
       storeLead: STORE_LEAD[t.storeAs.kind],
       optional: t.required ? "" : " · optional",
       optionalTag: t.required ? "" : " <span>optional</span>",
+      zoneStep: t.zoneScope
+        ? `<li><div><span class="st">Limit it to your ${t.zoneScope.zones.length > 1 ? "zones" : "zone"}</span><p>Under Zone Resources, change All zones to Specific zone → ${names(t.zoneScope.zones)}. The link can't preselect ${t.zoneScope.zones.length > 1 ? "them" : "it"}.</p></div></li>`
+        : "",
     };
   };
   for (const name of ["progress", "token"]) {
@@ -154,21 +162,26 @@ const TOKEN_FLAGS = ["--token-links", "--token-page"];
 export const isTokenCommand = (argv: string[]) =>
   argv.some((a) => TOKEN_FLAGS.includes(a));
 
-/** Best effort, read-only: the app host's zone id, when the login can see it. */
-async function detectZone(
+/** Best effort, read-only: the zones holding the hosts, when the login can see them. */
+async function detectZones(
   deps: Deps,
   root: string,
   accountId: string,
-  host: string,
-): Promise<string | undefined> {
+  hosts: string[],
+): Promise<Zone[] | undefined> {
   const ro = readOnlyDeps(deps);
   const wrangler = makeWrangler(ro, root, () => accountId);
   const ctx = { api: makeApi(ro, wrangler) } as unknown as Ctx;
+  const zones: Zone[] = [];
   try {
-    return (await zoneOf(ctx, accountId, host))?.id;
+    for (const h of hosts) {
+      const z = await zoneOf(ctx, accountId, h);
+      if (z && !zones.some((x) => x.id === z.id)) zones.push(z);
+    }
   } catch {
     return undefined;
   }
+  return zones.length ? zones : undefined;
 }
 
 const opener = () =>
@@ -205,13 +218,14 @@ export async function tokenCommand(
         json: { type: "boolean" },
         name: { type: "string" },
         "app-host": { type: "string" },
+        "content-host": { type: "string" },
         "account-id": { type: "string" },
         repo: { type: "string" },
       },
     }).values;
   } catch (e) {
     return fail(
-      `${(e as Error).message} (--token-links/--token-page take --json, --no-open, --name, --app-host, --account-id, --repo)`,
+      `${(e as Error).message} (--token-links/--token-page take --json, --no-open, --name, --app-host, --content-host, --account-id, --repo)`,
     );
   }
   const repo = v.repo as string | undefined;
@@ -223,12 +237,15 @@ export async function tokenCommand(
     (v["account-id"] as string | undefined) ??
     state.accountId ??
     deps.env.CLOUDFLARE_ACCOUNT_ID;
-  const host = (v["app-host"] as string | undefined) ?? state.appHost;
-  const zoneId =
-    accountId && host
-      ? await detectZone(deps, root, accountId, host)
+  const hosts = [
+    (v["app-host"] as string | undefined) ?? state.appHost,
+    (v["content-host"] as string | undefined) ?? state.contentHost,
+  ].filter((h): h is string => Boolean(h));
+  const zones =
+    accountId && hosts.length
+      ? await detectZones(deps, root, accountId, hosts)
       : undefined;
-  const list = withUrls(tokens({ name, repo }), { accountId, zoneId });
+  const list = withUrls(tokens({ name, repo }), { accountId, zones });
 
   if (v["token-links"]) {
     if (json)
@@ -246,6 +263,11 @@ export async function tokenCommand(
             `${t.name}${t.required ? "" : " (optional)"}: ${t.purpose}`,
             `  permissions: ${t.permissions.map((p) => p.label).join(", ")}`,
             `  create: ${t.url}`,
+            ...(t.zoneScope
+              ? [
+                  `  zones: under Zone Resources pick Specific zone: ${t.zoneScope.zones.join(", ")}`,
+                ]
+              : []),
             `  store: ${storeLine(t.storeAs)}`,
             `  next: ${t.next}`,
           ].join("\n"),

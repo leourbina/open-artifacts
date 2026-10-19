@@ -9,7 +9,18 @@
  * install needs no extra permission.
  */
 
-export type Perm = { key: string; type: "read" | "edit"; label: string };
+export type Perm = {
+  key: string;
+  type: "read" | "edit";
+  label: string;
+  /** false: setup works without it (its absence is a note, never a lack). */
+  required?: false;
+  /** Why an optional permission helps. */
+  note?: string;
+};
+export type Zone = { id: string; name: string };
+export type ZoneScope = { mode: "specific"; zones: string[] };
+export type Ids = { accountId?: string; zones?: Zone[] };
 export type StoreAs =
   | { kind: "env"; name: string }
   | { kind: "gh-secret"; name: string; command: string };
@@ -22,9 +33,12 @@ export type Token = {
   next: string;
   required: boolean;
 };
-export type LinkedToken = Token & { url: string };
+export type LinkedToken = Token & { url: string; zoneScope?: ZoneScope };
 
-/** Zone-level permission groups: the link scopes them to the zone when known. */
+/**
+ * Zone-level permission groups. The dashboard ignores the link's zoneId (Zone
+ * Resources stays "All zones"), so zoneScope names the zones to pick by hand.
+ */
 export const ZONE_KEYS = new Set(["zone", "dns", "workers_routes"]);
 
 const DEPLOY: Perm[] = [
@@ -36,7 +50,13 @@ const DEPLOY: Perm[] = [
   },
   { key: "workers_r2", type: "edit", label: "Workers R2 Storage: Edit" },
   { key: "d1", type: "edit", label: "D1: Edit" },
-  { key: "billing", type: "read", label: "Billing: Read" },
+  {
+    key: "billing",
+    type: "read",
+    label: "Billing: Read",
+    required: false,
+    note: "lets setup detect your plan",
+  },
   { key: "zone", type: "read", label: "Zone: Read" },
   { key: "workers_routes", type: "edit", label: "Workers Routes: Edit" },
   { key: "dns", type: "edit", label: "DNS: Edit" },
@@ -44,7 +64,6 @@ const DEPLOY: Perm[] = [
 const ACCESS: Perm[] = [
   { key: "access", type: "edit", label: "Access: Apps and Policies: Edit" },
   { key: "access_acct", type: "read", label: "Access: Organizations: Read" },
-  { key: "dns", type: "read", label: "DNS: Read" },
 ];
 const ANALYTICS: Perm[] = [
   { key: "account_analytics", type: "read", label: "Account Analytics: Read" },
@@ -124,20 +143,29 @@ export function tokenUrl(
   return `https://dash.cloudflare.com/profile/api-tokens?${q.join("&")}`;
 }
 
-/** A token's link; the zone id only for a token with zone permissions. */
-export const linkFor = (
+export const zoneScoped = (t: Token) =>
+  t.permissions.some((p) => ZONE_KEYS.has(p.key));
+
+/** The zones a zone-scoped token must cover, by name; undefined when unknown or not zoned. */
+export const zoneScopeFor = (
   t: Token,
-  ids: { accountId?: string; zoneId?: string } = {},
-) =>
+  zones?: Zone[],
+): ZoneScope | undefined =>
+  zoneScoped(t) && zones?.length
+    ? { mode: "specific", zones: [...new Set(zones.map((z) => z.name))] }
+    : undefined;
+
+/** A token's link. zoneId (harmless, ignored by the dashboard) only for a single zone. */
+export const linkFor = (t: Token, ids: Ids = {}) =>
   tokenUrl(t.permissions, {
     accountId: ids.accountId,
-    zoneId: t.permissions.some((p) => ZONE_KEYS.has(p.key))
-      ? ids.zoneId
-      : undefined,
+    zoneId:
+      zoneScoped(t) && ids.zones?.length === 1 ? ids.zones[0]?.id : undefined,
     name: t.name,
   });
 
-export const withUrls = (
-  list: Token[],
-  ids: { accountId?: string; zoneId?: string } = {},
-): LinkedToken[] => list.map((t) => ({ ...t, url: linkFor(t, ids) }));
+export const withUrls = (list: Token[], ids: Ids = {}): LinkedToken[] =>
+  list.map((t) => {
+    const zoneScope = zoneScopeFor(t, ids.zones);
+    return { ...t, url: linkFor(t, ids), ...(zoneScope ? { zoneScope } : {}) };
+  });

@@ -28,7 +28,12 @@ describe("M1: zone-scoped tokens cover every zone of the hosts", () => {
     const w = twoZones();
     const args = [
       ...["--token-links", "--json", "--account-id", "acc1"],
-      ...["--app-host", "app.example.com", "--content-host", "content.other.com"],
+      ...[
+        "--app-host",
+        "app.example.com",
+        "--content-host",
+        "content.other.com",
+      ],
     ];
     expect(await run(args, w.deps, ROOT)).toBe(0);
     const t = JSON.parse(w.lines.at(-1) as string).data.tokens;
@@ -39,7 +44,9 @@ describe("M1: zone-scoped tokens cover every zone of the hosts", () => {
     });
     expect(deploy.url).not.toContain("zoneId=");
     for (const id of ["access", "analytics"])
-      expect(t.find((x: { id: string }) => x.id === id).zoneScope).toBeUndefined();
+      expect(
+        t.find((x: { id: string }) => x.id === id).zoneScope,
+      ).toBeUndefined();
   });
   it("one zone: zoneScope names it, zoneId stays in the URL", async () => {
     const w = twoZones();
@@ -49,7 +56,10 @@ describe("M1: zone-scoped tokens cover every zone of the hosts", () => {
     ];
     await run(args, w.deps, ROOT);
     const deploy = JSON.parse(w.lines.at(-1) as string).data.tokens[0];
-    expect(deploy.zoneScope).toEqual({ mode: "specific", zones: ["example.com"] });
+    expect(deploy.zoneScope).toEqual({
+      mode: "specific",
+      zones: ["example.com"],
+    });
     expect(deploy.url).toContain("zoneId=z1");
   });
   it("prereqs probes the zone permissions on every zone", async () => {
@@ -66,7 +76,9 @@ describe("M1: zone-scoped tokens cover every zone of the hosts", () => {
       expect(seen).toContain(`/client/v4/zones/${z}/workers/routes`);
       expect(seen).toContain(`/client/v4/zones/${z}/dns_records`);
     }
-    expect(issue(w, "deploy")?.zoneScope ?? { zones: ["example.com", "other.com"] }).toMatchObject({
+    expect(
+      issue(w, "deploy")?.zoneScope ?? { zones: ["example.com", "other.com"] },
+    ).toMatchObject({
       zones: ["example.com", "other.com"],
     });
   });
@@ -97,11 +109,20 @@ describe("M2: required permissions come from the calls setup makes", () => {
     [/^GET \/accounts\/[^/]+\/subscriptions$/, "billing:read"],
     [/^GET \/zones$/, "zone:read"],
     [/^GET \/zones\/[^/]+\/dns_records$/, "dns:read"],
-    [/^(GET|POST|PUT|DELETE) \/accounts\/[^/]+\/access\/(apps|policies)(\/.*)?$/, "access:edit"],
+    [
+      /^(GET|POST|PUT|DELETE) \/accounts\/[^/]+\/access\/(apps|policies)(\/.*)?$/,
+      "access:edit",
+    ],
     [/^GET \/accounts\/[^/]+\/access\/organizations$/, "access_acct:read"],
-    [/^GET \/accounts\/[^/]+\/workers\/scripts\/[^/]+\/settings$/, "workers_scripts:read"],
+    [
+      /^GET \/accounts\/[^/]+\/workers\/scripts\/[^/]+\/settings$/,
+      "workers_scripts:read",
+    ],
     [/^GET \/accounts\/[^/]+\/r2\/buckets\/[^/]+$/, "workers_r2:read"],
-    [/^GET \/accounts\/[^/]+\/storage\/kv\/namespaces$/, "workers_kv_storage:read"],
+    [
+      /^GET \/accounts\/[^/]+\/storage\/kv\/namespaces$/,
+      "workers_kv_storage:read",
+    ],
     [/^GET \/accounts\/[^/]+\/d1\/database$/, "d1:read"],
   ];
   const WRANGLER: [RegExp, string[]][] = [
@@ -116,12 +137,17 @@ describe("M2: required permissions come from the calls setup makes", () => {
   ];
   const covers = (have: Perm[], need: string) => {
     const [key, type] = need.split(":");
-    return have.some((p) => p.key === key && (p.type === "edit" || type === "read"));
+    return have.some(
+      (p) => p.key === key && (p.type === "edit" || type === "read"),
+    );
   };
 
   it("the table equals what a full team install's calls need, per token", async () => {
     const PAID = [{ rate_plan: { id: "WORKERS_PAID" }, state: "Paid" }];
-    const w = world({ subscriptions: PAID, dns: onboarded("mail.app.example.com") });
+    const w = world({
+      subscriptions: PAID,
+      dns: onboarded("mail.app.example.com"),
+    });
     w.deps.env.CLOUDFLARE_API_TOKEN = "dep";
     w.deps.env.OA_ACCESS_TOKEN = "acc";
     const calls: string[] = [];
@@ -132,12 +158,17 @@ describe("M2: required permissions come from the calls setup makes", () => {
       const probe = new Error().stack?.includes("tokenIssues");
       if (url.host === "api.cloudflare.com" && !probe) {
         const auth = new Headers(i?.headers).get("authorization") ?? "";
-        calls.push(`${auth.replace("Bearer ", "")} ${i?.method ?? "GET"} ${url.pathname.replace("/client/v4", "")}`);
+        calls.push(
+          `${auth.replace("Bearer ", "")} ${i?.method ?? "GET"} ${url.pathname.replace("/client/v4", "")}`,
+        );
       }
       return f(u, i);
     };
     expect(await run([...BASE, "--team", "--yes-paid"], w.deps, ROOT)).toBe(0);
-    const need: Record<string, Set<string>> = { dep: new Set(), acc: new Set() };
+    const need: Record<string, Set<string>> = {
+      dep: new Set(),
+      acc: new Set(),
+    };
     for (const c of calls) {
       const [tok, ...rest] = c.split(" ");
       const call = rest.join(" ");
@@ -165,7 +196,8 @@ describe("M2: required permissions come from the calls setup makes", () => {
     };
     for (const t of tokens()) {
       const want = derived[t.id];
-      for (const n of want) expect(covers(t.permissions, n), `${t.id} needs ${n}`).toBe(true);
+      for (const n of want)
+        expect(covers(t.permissions, n), `${t.id} needs ${n}`).toBe(true);
       for (const p of t.permissions)
         expect(
           want.some((n) => n.split(":")[0] === p.key),
@@ -194,15 +226,25 @@ describe("M2: required permissions come from the calls setup makes", () => {
 describe("L5: Billing: Read is optional", () => {
   it("is marked optional with why", () => {
     const b = tokenById("deploy").permissions.find((p) => p.key === "billing");
-    expect(b).toMatchObject({ required: false, note: "lets setup detect your plan" });
-    expect(tokenById("deploy").permissions.filter((p) => p.required === false)).toHaveLength(1);
+    expect(b).toMatchObject({
+      required: false,
+      note: "lets setup detect your plan",
+    });
+    expect(
+      tokenById("deploy").permissions.filter((p) => p.required === false),
+    ).toHaveLength(1);
   });
   it("its absence is a note marked optional, not a lack", async () => {
     const w = world();
     w.deps.env.CLOUDFLARE_API_TOKEN = "dep";
     await run(HOSTS, w.deps, ROOT);
-    expect(line(w, "prereqs").message).toMatch(/Billing: Read \(optional, lets setup detect your plan\)/);
-    expect(issue(w, "deploy")).toMatchObject({ status: "optional", missing: [] });
+    expect(line(w, "prereqs").message).toMatch(
+      /Billing: Read \(optional, lets setup detect your plan\)/,
+    );
+    expect(issue(w, "deploy")).toMatchObject({
+      status: "optional",
+      missing: [],
+    });
   });
   it("never shows under --ci or --check --strict, nor the unset analytics token", async () => {
     for (const extra of [["--ci"], ["--check", "--strict"]]) {
@@ -211,9 +253,13 @@ describe("L5: Billing: Read is optional", () => {
       w.deps.env.OA_ACCESS_TOKEN = "acc";
       await run([...HOSTS, ...extra], w.deps, ROOT);
       const pre = line(w, "prereqs");
-      expect(pre.message, extra.join(" ")).not.toContain("Billing: Read (optional");
-      expect(pre.message, extra.join(" ")).not.toContain("analytics token not set");
-      expect(pre.data.tokens, extra.join(" ")).toBeUndefined();
+      expect(pre.message, extra.join(" ")).not.toContain(
+        "Billing: Read (optional",
+      );
+      expect(pre.message, extra.join(" ")).not.toContain(
+        "analytics token not set",
+      );
+      expect(pre.data?.tokens, extra.join(" ")).toBeUndefined();
     }
   });
 });
