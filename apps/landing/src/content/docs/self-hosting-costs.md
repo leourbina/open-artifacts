@@ -48,4 +48,6 @@ The free plan handles personal use; sustained bursts of large publishes can exce
 
 Consider Workers Paid (from $5 a month) if you publish heavily, share public links that get a lot of traffic, or run busy live pages. Paid plans raise the request and CPU limits; nothing in Open Artifacts changes.
 
+Server-side thumbnails (Browser Run) are best-effort and work best on Workers Paid. On Free, previews fall back to the in-browser capture.
+
 Cloudflare's free allowances change from time to time. Check Cloudflare's pricing pages for the current numbers.
