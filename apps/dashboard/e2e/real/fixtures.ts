@@ -57,6 +57,8 @@ export function devConfig(): Record<string, unknown> {
     R2_BUCKET: "oa-e2e",
     KV_ID: "oa-e2e-kv",
     OWNER_EMAIL: "owner@e2e.test",
+    // wrangler dev simulates send_email locally: nothing is sent.
+    EMAIL_FROM: "noreply@mail.e2e.test",
     ACCESS_TEAM_DOMAIN,
     ACCESS_CLIENT_ID: "e2e-client",
     CF_ACCOUNT_ID: "e2e-account",

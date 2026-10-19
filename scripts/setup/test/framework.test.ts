@@ -105,7 +105,7 @@ describe("runner", () => {
       answers: ["app.example.com", "c.example.com", "o@example.com"],
     });
     expect(await go(c, [], [marker])).toBe(0);
-    expect(c.prompts).toHaveLength(3);
+    expect(c.prompts).toHaveLength(4); // + "Just you, or a team?"
     for (const flag of ["--app-host", "--content-host", "--owner-email"]) {
       const c2 = core();
       const yesOnly = without(flag).filter((a) => a !== "--json");

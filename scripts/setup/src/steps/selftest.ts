@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import type { Ctx, Step } from "../step.ts";
+import { workerBindings } from "../worker.ts";
 
 const TITLE = "Welcome to Open Artifacts";
 const WELCOME = "scripts/setup/welcome.md";
@@ -183,6 +184,14 @@ export const selftest: Step = {
     await until200(ctx, "healthz", `${app}/healthz`);
     const oidc = `https://${state.teamDomain}/cdn-cgi/access/sso/oidc/${state.accessClientId}/.well-known/openid-configuration`;
     await until200(ctx, "OIDC discovery", oidc);
+    if (ctx.opts.email) {
+      const b = await workerBindings(ctx, state.accountId ?? "");
+      if (!b?.some((x) => x.type === "send_email" && x.name === "EMAIL"))
+        throw new Error(
+          `the deployed Worker ${ctx.opts.name} has no EMAIL (send_email) binding; rerun setup`,
+        );
+      ctx.notes.push("EMAIL binding deployed");
+    }
     if (!ctx.pat) {
       ctx.notes.push(
         "healthz and OIDC discovery ok; MCP check skipped: no token minted this run (rerun with --new-owner-token to test it)",

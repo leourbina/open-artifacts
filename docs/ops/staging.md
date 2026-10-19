@@ -139,3 +139,38 @@ Server-side thumbnails use the Workers `browser` binding (Browser Run). Staging 
 - Workers Free limits: 10 browser-minutes/day, 3 concurrent sessions, 1 new browser per 20 s, Quick Actions 1 req per 10 s. Over the limit Cloudflare returns 429 until the next UTC day. Not billed on Free.
 - Opt out with `--no-browser` (renders no binding). The choice is saved in `.openartifacts/state.json`, so `--upgrade` keeps it. State is otherwise rebuilt from Cloudflare, which cannot tell an opt-out from a pre-BROWSER deploy, so stateless runs (`--ci`) must pass `--no-browser` every time. `--check` and `--json` report `browser: true|false`.
 - `.quickAction()` needs `compatibility_date` >= 2026-03-24. The template's is 2026-01-01 (unchanged); staging's is 2026-10-01.
+
+## Team email: Email Sending domain and `send_email` binding
+
+Setup asks "Just you, or a team?" (`--solo` / `--team`; `--json`, `--yes` and `--ci` default to solo). Product split: Free = Individual, Paid = Team.
+
+- **Solo:** no email. The template's `send_email` line and `EMAIL_FROM` var are dropped from the rendered config.
+- **Team:** the `email` step runs (after `secrets`, before `deploy`). `--no-email` turns it off.
+- State: `team`, `email`, `emailDomain` in `.openartifacts/state.json`, kept by `--upgrade`, reported by `--check`/`--json`.
+
+**Paid only.** Email Sending to arbitrary recipients needs Workers Paid; Free can only send to verified destination addresses. Setup reads `GET /accounts/{id}/subscriptions` (`rate_plan.id == "workers_paid"`), which needs Billing Read. The `wrangler login` token lacks it, so normally setup asks (interactive) or needs `--yes-paid` (non-interactive). Not confirmed: setup warns that invites can't be sent and turns email off (saved; `--team` turns it back on). Plans: https://dash.cloudflare.com/?to=/:account/workers/plans
+
+**Sending domain.** Default `mail.<app host>` (e.g. `mail.staging.open-artifacts.com`), override with `--email-domain`. Use a subdomain: each subdomain is its own sending domain, and onboarding adds `_dmarc.<domain>` with `p=reject`, which at a zone apex can break the mail an existing provider (e.g. Google Workspace) sends. Before onboarding, setup checks the domain: MX or SPF for another provider (at the apex, any MX) needs confirmation (prompt, or `--yes-email-domain`; else `action_required`), with a strong warning when the apex has such MX and no `_dmarc`.
+
+**Onboarding is a human step** (no API): https://dash.cloudflare.com/?to=/:account/email-service/sending, Onboard Domain, pick the domain. It adds:
+
+| Type | Name | Content |
+|---|---|---|
+| MX | `cf-bounce.<domain>` | `route1.mx.cloudflare.net`, `route2…`, `route3…` |
+| TXT | `cf-bounce.<domain>` | `v=spf1 include:_spf.mx.cloudflare.net ~all` |
+| TXT | `cf-bounce._domainkey.<domain>` | `v=DKIM1; …` (Cloudflare-generated key) |
+| TXT | `_dmarc.<domain>` | `v=DMARC1; p=reject;` |
+
+Until all four resolve, the step is `action_required` (with the link and the records) and setup stops before `deploy`. Re-running re-checks. DNS is read with the zone `dns_records` API, or DNS over HTTPS (`cloudflare-dns.com`) when the token has no DNS Read (the `wrangler login` token).
+
+**Config.** With email on, the rendered config has `"send_email": [{ "name": "EMAIL" }]` and `vars.EMAIL_FROM = "noreply@<domain>"`. The template stays strict JSON; `EMAIL_FROM` is never the last var, so dropping its line keeps valid JSON. Selftest checks the deployed Worker's settings for the `EMAIL` `send_email` binding.
+
+**Staging (pending).** `mail.staging.open-artifacts.com` is not onboarded yet, so `wrangler.staging.jsonc` is unchanged. Once it is onboarded, add to `env.staging`:
+
+```jsonc
+"send_email": [{ "name": "EMAIL" }],
+// in vars:
+"EMAIL_FROM": "noreply@mail.staging.open-artifacts.com"
+```
+
+The binding is held back because the docs don't say whether `wrangler deploy` accepts a `send_email` binding before the account has an onboarded domain (the older Email Routing docs required Email Routing to be enabled first).

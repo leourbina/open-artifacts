@@ -24,6 +24,7 @@ const ALL = [
   "resources",
   "access",
   "secrets",
+  "email",
   "deploy",
   "owner-token",
   "selftest",
@@ -94,7 +95,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
     expect(statuses(w)).toEqual([
       "prereqs:skipped",
-      ...ALL.slice(1).map((s) => `${s}:ok`),
+      ...ALL.slice(1).map((s) => `${s}:${s === "email" ? "skipped" : "ok"}`),
     ]);
     expect(w.ops).toEqual([
       "POST policies",
@@ -239,7 +240,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     w.lines.length = 0;
     const argv = [...HOSTS, "--upgrade", "--new-owner-token"];
     expect(await run(argv, w.deps, ROOT)).toBe(0);
-    expect(statuses(w).slice(4)).toEqual([
+    expect(statuses(w).slice(5)).toEqual([
       "deploy:ok",
       "owner-token:ok",
       "selftest:ok",
@@ -388,7 +389,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     await run(HOSTS, w.deps, ROOT);
     await run(HOSTS, w.deps, ROOT);
     await run([...HOSTS, "--upgrade", "--new-owner-token"], w.deps, ROOT);
-    expect(w.lines.length).toBe(24);
+    expect(w.lines.length).toBe(27);
     for (const l of w.lines)
       expect(Object.keys(JSON.parse(l))).toEqual(
         expect.arrayContaining(["step", "status", "message"]),

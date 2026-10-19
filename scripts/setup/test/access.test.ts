@@ -107,9 +107,10 @@ describe("access + secrets", () => {
   });
 
   it("prompts for OA_ACCESS_TOKEN without echo and keeps it in memory only", async () => {
-    const w = world({ org: "forbidden", answers: ["USER-TOKEN-abc", ""] });
+    const w = world({ org: "forbidden", answers: ["", "USER-TOKEN-abc", ""] });
     expect(await run(interactive, w.deps, ROOT)).toBe(0);
-    expect(w.prompts[0]).toMatch(/^\[secret\] .*OA_ACCESS_TOKEN/);
+    expect(w.prompts[0]).toContain("Just you, or a team?");
+    expect(w.prompts[1]).toMatch(/^\[secret\] .*OA_ACCESS_TOKEN/);
     expect(w.ops).toContain("POST apps");
     noLeak(w, ["USER-TOKEN-abc"]);
   });
@@ -214,7 +215,7 @@ describe("access + secrets", () => {
   });
 
   it("ANALYTICS_TOKEN is prompted interactively and optional", async () => {
-    const w = world({ answers: ["ANALYTICS-val"] });
+    const w = world({ answers: ["", "ANALYTICS-val"] });
     expect(await run(interactive, w.deps, ROOT, B16_2)).toBe(0);
     expect(w.ops.at(-1)).toBe("put ANALYTICS_TOKEN");
     noLeak(w);
@@ -245,7 +246,7 @@ describe("B16-2 review fixes", () => {
   });
 
   it("a pasted token stays on the Access client only", async () => {
-    const w = world({ org: "forbidden", answers: ["USER-TOKEN-abc", ""] });
+    const w = world({ org: "forbidden", answers: ["", "USER-TOKEN-abc", ""] });
     expect(await run(interactive, w.deps, ROOT, [...STEPS, probe])).toBe(0);
     expect(bearer(w, "/zones").at(-1)).toBe("t");
   });
@@ -324,7 +325,7 @@ describe("B16-2 review fixes", () => {
 
   it("failed put errors carry no secret, raw or JSON-escaped", async () => {
     const tricky = 'an"al\\ytics';
-    const w = world({ answers: [tricky], putFails: "ANALYTICS_TOKEN" });
+    const w = world({ answers: ["", tricky], putFails: "ANALYTICS_TOKEN" });
     expect(await run(interactive, w.deps, ROOT)).toBe(1);
     expect(w.lines.at(-1)).toContain("secret put ANALYTICS_TOKEN failed");
     noLeak(w, [tricky]);

@@ -219,6 +219,7 @@ describe("--check is read-only", () => {
       "resources:done",
       "access:done",
       "secrets:done",
+      "email:done",
       "deploy:todo",
       "owner-token:todo",
       "selftest:todo",
@@ -227,6 +228,8 @@ describe("--check is read-only", () => {
     ]);
     expect(line(w, "state").data).toEqual({
       browser: true,
+      team: false,
+      email: false,
       name: "open-artifacts",
       accountId: "acc1",
       appHost: "app.example.com",

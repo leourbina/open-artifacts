@@ -8,6 +8,7 @@ import { type Ctx, NeedInput, type Opts, type Step } from "./step.ts";
 import { access } from "./steps/access.ts";
 import { agentConfig } from "./steps/agent-config.ts";
 import { deploy } from "./steps/deploy.ts";
+import { email } from "./steps/email.ts";
 import {
   ownerToken,
   revokeCiTokens,
@@ -23,6 +24,7 @@ export const STEPS: Step[] = [
   resources,
   access,
   secrets,
+  email,
   deploy,
   ownerToken,
   selftest,
@@ -83,6 +85,12 @@ async function resolve(argv: string[], deps: Deps, state: State) {
       ci: { type: "boolean", default: false },
       "revoke-ci-tokens": { type: "boolean", default: false },
       "no-browser": { type: "boolean", default: false },
+      solo: { type: "boolean", default: false },
+      team: { type: "boolean", default: false },
+      "no-email": { type: "boolean", default: false },
+      "email-domain": { type: "string" },
+      "yes-email-domain": { type: "boolean", default: false },
+      "yes-paid": { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
   });
@@ -107,6 +115,7 @@ async function resolve(argv: string[], deps: Deps, state: State) {
   if (v["revoke-ci-tokens"] && !v.ci)
     throw new Error("--revoke-ci-tokens needs --ci");
   if (v.strict && !v.check) throw new Error("--strict needs --check");
+  if (v.solo && v.team) throw new Error("--solo and --team conflict; pass one");
   // Without state, the name is what everything is found by: never guess it.
   if (!v.name && !state.name && (v.upgrade || v.check || v.yes || v.json))
     throw new NeedInput(
@@ -140,6 +149,21 @@ async function resolve(argv: string[], deps: Deps, state: State) {
     ),
     accountId:
       v["account-id"] ?? state.accountId ?? deps.env.CLOUDFLARE_ACCOUNT_ID,
+    // Flag, then saved state, then the question; non-interactive (and --check) default to solo.
+    team:
+      v.team ||
+      (!v.solo &&
+        (state.team ??
+          (interactive && !v.check && !v["revoke-ci-tokens"]
+            ? /^t(eam)?$/i.test(
+                await deps.prompt(
+                  "Just you, or a team? [solo/team] (team sends invite email; needs Workers Paid):",
+                ),
+              )
+            : false))),
+    email: false,
+    yesEmailDomain: v["yes-email-domain"],
+    yesPaid: v["yes-paid"],
     yes: v.yes || v.ci,
     upgrade: v.upgrade,
     check: v.check,
@@ -153,6 +177,20 @@ async function resolve(argv: string[], deps: Deps, state: State) {
     ci: v.ci,
     revokeCi: v["revoke-ci-tokens"],
   };
+  if (opts.team) {
+    // Flag, then saved state, then on. --team re-enables it after a Free fallback.
+    opts.email = !v["no-email"] && (v.team || (state.email ?? true));
+    // A saved default follows a changed app host; an explicit domain is kept.
+    const saved =
+      state.emailDomain !== `mail.${state.appHost}`
+        ? state.emailDomain
+        : undefined;
+    opts.emailDomain = valid(
+      "--email-domain",
+      v["email-domain"] ?? saved ?? `mail.${opts.appHost}`,
+      HOST,
+    );
+  }
   return opts;
 }
 
@@ -171,6 +209,9 @@ const REPORTED = [
   "teamDomain",
   "ownerTokenId",
   "browser",
+  "team",
+  "email",
+  "emailDomain",
 ] as const;
 
 /** --check: every step's check(), never apply; the rebuilt state goes in the last line. */
@@ -225,6 +266,15 @@ export const HELP = `Usage: pnpm oa:setup [options]
                 Default on; free-plan safe (CF caps usage, no billing on Free).
                 Saved in state, so --upgrade keeps it; stateless runs (CI) repeat it.
                 --check/--json report it as browser: true|false.
+  --solo | --team  "Just you, or a team?" Solo (default without a prompt) sends no email.
+                Team turns on the email step: invites via Cloudflare Email Sending
+                (Workers Paid only) and the send_email binding (EMAIL, EMAIL_FROM).
+  --no-email    With --team: omit the send_email binding.
+  --email-domain <d>  Sending domain; default mail.<app host>. Onboard it at
+                https://dash.cloudflare.com/?to=/:account/email-service/sending
+  --yes-email-domain  Accept a sending domain that already has MX/SPF elsewhere.
+  --yes-paid    Confirm the account is on Workers Paid (setup can't always read the plan).
+                Saved in state: team, email, emailDomain (--check/--json report them).
   -h, --help`;
 
 /** Runs setup; resolves to the exit code (0 ok, 2 action_required, 1 error). */
@@ -286,6 +336,9 @@ export async function run(
     contentHost,
     ownerEmail,
     browser: opts.browser,
+    team: opts.team,
+    email: opts.email,
+    emailDomain: opts.emailDomain,
   });
   const noState = !prev.name;
   // --check: fetch is GET-only and exec runs only read-only wrangler, for every client.

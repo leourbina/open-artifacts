@@ -9,11 +9,12 @@ export const apexCandidates = (host: string) => {
   return labels.slice(0, -1).map((_, i) => labels.slice(i).join("."));
 };
 
-async function zoneOf(ctx: Ctx, accountId: string, host: string) {
+/** The account's active zone holding `host`, most specific first. */
+export async function zoneOf(ctx: Ctx, accountId: string, host: string) {
   for (const name of apexCandidates(host)) {
     const q = `/zones?name=${encodeURIComponent(name)}&account.id=${accountId}&status=active`;
-    const zones = await ctx.api<{ name: string }[]>("GET", q);
-    if (zones.length) return name;
+    const zones = await ctx.api<{ id: string; name: string }[]>("GET", q);
+    if (zones.length) return { id: zones[0].id, name };
   }
   return null;
 }

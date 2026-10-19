@@ -59,12 +59,15 @@ export function renderConfig(
   template: string,
   vars: Record<string, string | undefined>,
   browser = true,
+  email = false,
 ): string {
   // The template stays strict JSON (e2e fixtures JSON.parse it), so the
-  // browser binding line is matched by its key and dropped when off.
+  // browser and email lines are matched by their keys and dropped when off.
+  // EMAIL_FROM is never the last var, so dropping it leaves no trailing comma.
   const text = template
     .split("\n")
     .filter((l) => browser || !/^\s*"browser":/.test(l))
+    .filter((l) => email || !/^\s*"(send_email|EMAIL_FROM)":/.test(l))
     .join("\n")
     .replace(/\{\{(\w+)\}\}/g, (_, k: string) => {
       const val = vars[k];
@@ -91,6 +94,7 @@ const configVars = (s: State, ctx: Ctx) => ({
   // Filled by the `access` step (B16-2); B16-3's deploy refuses them empty.
   ACCESS_TEAM_DOMAIN: s.teamDomain ?? "",
   ACCESS_CLIENT_ID: s.accessClientId ?? "",
+  EMAIL_FROM: ctx.opts.email ? `noreply@${ctx.opts.emailDomain}` : undefined,
 });
 
 /** Records ids in state and (re)writes the gitignored config; local only. */
@@ -103,7 +107,12 @@ function sync(state: State, ctx: Ctx, found: Awaited<ReturnType<typeof find>>) {
 export function writeConfig(state: State, ctx: Ctx) {
   const template = ctx.fs.read(join(ctx.root, TEMPLATE));
   if (template === null) throw new Error(`missing ${TEMPLATE}`);
-  const text = renderConfig(template, configVars(state, ctx), ctx.opts.browser);
+  const text = renderConfig(
+    template,
+    configVars(state, ctx),
+    ctx.opts.browser,
+    ctx.opts.email,
+  );
   if (ctx.fs.read(join(ctx.root, CONFIG)) !== text)
     ctx.fs.write(join(ctx.root, CONFIG), text);
 }
