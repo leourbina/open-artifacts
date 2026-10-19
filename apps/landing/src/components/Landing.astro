@@ -53,9 +53,10 @@ const plans = [
 ---
   <section class="hero wrap">
     <h1>Bring any agent. <br />Keep every artifact.</h1>
+    <p class="hero-tag">Free and <a href={REPO_URL}>open source</a>, on your own Cloudflare.</p>
     <p class="lede">
       Open Artifacts keeps the pages, docs, code and PDFs from any AI agent (Claude Code, Codex,
-      Cursor, OpenCode) on your own Cloudflare account.
+      Cursor, OpenCode) in one private library.
     </p>
 
     <div class="cta" role="group" aria-labelledby="cta-label">
@@ -111,7 +112,7 @@ const plans = [
             pnpm install.
           </p>
           <span class="step-chip mono" aria-hidden="true"
-            ><span class="caret">{"\u203a"}</span> {prompt}</span
+            ><span class="caret">{"\u203a"}</span> <span class="chip-t">{prompt}</span></span
           >
         </li>
         <li>
@@ -121,7 +122,7 @@ const plans = [
             Access sign-in app, deploys to both domains, and adds the MCP server to your agent.
           </p>
           <span class="step-chip" aria-hidden="true">
-            Allow Wrangler to manage your account? <span class="mini-btn">Allow</span>
+            <span class="chip-t">Allow Wrangler to manage your account?</span> <span class="mini-btn">Allow</span>
           </span>
         </li>
         <li>
@@ -131,7 +132,7 @@ const plans = [
             Q4 data migration plan and share it with a teammate.
           </p>
           <span class="step-chip" aria-hidden="true">
-            <span class="mono">artifacts.example.com/a/7Hq3…</span>
+            <span class="mono chip-t">artifacts.example.com/a/7Hq3…</span>
             <span class="badge team">Team</span>
           </span>
         </li>
@@ -140,7 +141,8 @@ const plans = [
   </section>
 
   <section class="wrap story-section" aria-labelledby="story-h">
-    <h2 id="story-h">One home for everything your agents make</h2>
+    <h2 id="story-h">One library for everything your agents publish</h2>
+    <p class="section-lede">Versions, sharing and access control, in one dashboard.</p>
     <FeatureStory />
   </section>
 
@@ -160,7 +162,7 @@ const plans = [
 
   <section class="wrap features plans" aria-labelledby="plans-h">
     <h2 id="plans-h">Which Cloudflare plan</h2>
-    <p class="plans-lede">Open Artifacts runs on either. Pick the one that fits who uses it.</p>
+    <p class="section-lede">Open Artifacts runs on either. Pick the one that fits who uses it.</p>
     <ul class="cards">
       {
         plans.map((p) => (

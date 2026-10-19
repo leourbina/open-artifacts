@@ -41,4 +41,11 @@ describe("charset and glyphs", () => {
     // UTF-8 bytes of the glyphs decoded as Windows-1252.
     expect(index).not.toMatch(/â€º|âœ“|Â·/);
   });
+
+  it("no em dashes in the built index", () => {
+    const index = readFileSync(join(dist, "index.html"), "utf8");
+    const hits =
+      index.match(/.{0,30}(\u2014|&mdash;|&#8212;|&#x2014;).{0,30}/gi) ?? [];
+    expect(hits).toEqual([]);
+  });
 });

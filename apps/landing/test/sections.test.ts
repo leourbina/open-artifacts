@@ -68,6 +68,12 @@ describe("landing sections", () => {
       expect(gallery).toContain(`aria-label="Open ${title}"`);
   });
 
+  it("the hero's title block links open source to the repo", () => {
+    expect(index).toMatch(
+      /class="hero-tag"[^>]*>Free and <a href="https:\/\/github\.com\/open-artifacts-ai\/open-artifacts"[^>]*>open source<\/a>, on your own Cloudflare\.<\/p>/,
+    );
+  });
+
   it("the hero keeps the library screenshot", () => {
     expect(index).toMatch(/class="frame hero-shot"/);
   });

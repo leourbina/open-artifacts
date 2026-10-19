@@ -196,6 +196,24 @@ code,
     display: none;
   }
 }
+/* Attached to the h1: one title block. */
+.hero-tag {
+  margin-top: 12px;
+  color: var(--oa-text-2);
+  font-size: clamp(19px, 2.2vw, 26px);
+  font-weight: 500;
+  line-height: 1.25;
+  letter-spacing: -0.015em;
+}
+.hero .hero-tag a {
+  color: var(--oa-text);
+  text-decoration: underline;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 4px;
+}
+.hero .hero-tag a:hover {
+  text-decoration-color: var(--oa-accent);
+}
 .lede {
   max-width: 60ch;
   margin-top: 20px;
@@ -228,25 +246,6 @@ code,
   font-size: clamp(15px, 2.4vw, 24px);
   font-weight: 500;
   overflow-wrap: anywhere;
-}
-/* The hero sits on one centered axis: headline, copy, the prompt box, the
-   agent wiring and the screenshot. */
-.hero {
-  text-align: center;
-}
-.hero h1,
-.hero .lede {
-  margin-inline: auto;
-}
-.hero .cta {
-  max-width: 600px;
-  margin-inline: auto;
-}
-.hero .cta-row {
-  text-align: left;
-}
-.hero .cta-prompt {
-  font-size: clamp(15px, 2vw, 20px);
 }
 .cta-note {
   min-height: 1.5em;
@@ -308,8 +307,23 @@ code,
 }
 @media (min-width: 860px) {
   .steps {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-items: stretch;
     gap: 32px;
+  }
+  .steps p {
+    margin-bottom: 12px;
+  }
+  .steps .step-chip {
+    height: 36px;
+    margin-top: auto;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .step-chip .chip-t {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 }
 .steps li {
@@ -401,10 +415,6 @@ code,
 }
 
 /* Plans: two parallel cards, neither styled as the "upgrade". */
-.plans-lede {
-  margin-top: 8px;
-  color: var(--oa-text-2);
-}
 @media (min-width: 960px) {
   .plans .cards {
     grid-template-columns: repeat(2, 1fr);
@@ -425,7 +435,7 @@ code,
 .pair {
   display: grid;
   gap: 24px;
-  margin-top: 48px;
+  margin-top: var(--section-gap);
 }
 @media (min-width: 900px) {
   .pair {
