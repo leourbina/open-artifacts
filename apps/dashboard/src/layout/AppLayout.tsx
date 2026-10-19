@@ -115,6 +115,7 @@ export function AppLayout() {
   const me = state.status === "authed" ? state.me : null;
   return (
     <SidebarProvider>
+      <ContentScrollReset path={path} />
       <a
         href="#oa-main"
         className="sr-only z-[60] rounded-sm bg-[var(--oa-surface)] px-[var(--oa-space-2)] py-[var(--oa-space-1)] text-[var(--oa-text)] shadow-[var(--oa-shadow-2)] focus:not-sr-only focus:fixed focus:top-[var(--oa-space-2)] focus:left-[var(--oa-space-2)]"
@@ -125,16 +126,18 @@ export function AppLayout() {
       {/* The inset panel (Design's sidebar B), SidebarInset's box as a div so
           the header stays the banner, outside <main>. From 768px it floats
           8px in from the chrome (0 on the sidebar side unless collapsed),
-          viewport-tall, and its content scrolls under the header. Below
-          768px it is full-bleed and the page scrolls. */}
-      <div className="relative flex w-full min-w-0 flex-1 flex-col bg-[var(--oa-bg)] md:m-[var(--oa-space-2)] md:ml-0 md:h-[calc(100svh-2*var(--oa-space-2))] md:overflow-hidden md:rounded-[var(--oa-radius-lg)] md:border md:border-solid md:border-[var(--oa-border)] md:peer-data-[state=collapsed]:ml-[var(--oa-space-2)]">
-        <header className="sticky top-0 z-[5] box-border flex h-12 flex-none items-center gap-[10px] border-0 border-b border-solid border-[var(--oa-divider)] bg-[var(--oa-bg)] px-[var(--oa-space-5)] max-md:px-[var(--oa-space-3)]">
+          viewport-tall, and its content (not the panel) scrolls under the
+          header. Below 768px it is full-bleed and the page scrolls. */}
+      <div className="relative flex w-full min-w-0 flex-1 flex-col bg-[var(--oa-bg)] md:m-[var(--oa-space-2)] md:ml-0 md:h-[calc(100svh-2*var(--oa-space-2))] md:rounded-[var(--oa-radius-lg)] md:border md:border-solid md:border-[var(--oa-border)] md:peer-data-[state=collapsed]:ml-[var(--oa-space-2)]">
+        <header className="sticky top-0 z-[5] box-border flex h-12 flex-none items-center gap-[10px] border-0 border-b border-solid border-[var(--oa-divider)] bg-[var(--oa-bg)] px-[var(--oa-space-5)] max-md:px-[var(--oa-space-3)] md:static md:rounded-t-[calc(var(--oa-radius-lg)-1px)]">
           <SidebarTrigger aria-label="Toggle navigation" />
           <TopBar me={me} />
         </header>
+        {/* Focusable (not tabbable) so the keyboard can scroll it. */}
         <main
           id="oa-main"
-          className="min-w-0 flex-1 md:min-h-0 md:overflow-y-auto"
+          tabIndex={-1}
+          className="min-w-0 flex-1 outline-none md:min-h-0 md:overflow-auto md:rounded-b-[calc(var(--oa-radius-lg)-1px)] md:[scrollbar-gutter:stable]"
         >
           <QuotaBanner />
           <CpuBanner role={me?.user.role} />
@@ -179,6 +182,17 @@ function LoadError({ quota }: { quota: boolean }) {
       </div>
     </EdgePanel>
   );
+}
+
+/** From 768px the panel's content scrolls, not the window, so a new page
+    starts at its top. */
+function ContentScrollReset({ path }: { path: string }) {
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs per page
+  useEffect(() => {
+    const main = document.getElementById("oa-main");
+    if (main) main.scrollTop = 0;
+  }, [path]);
+  return null;
 }
 
 /** A router link that also closes the phone sheet. */

@@ -251,3 +251,38 @@ test("below 768px the panel is full-bleed", async ({ page }) => {
   expect(p).toMatchObject({ top: 0, right: 0, leftEdge: 0, radius: "0px" });
   expect(p.border[0]).toBe("0px");
 });
+
+test("from 768px the content scrolls by keyboard and resets on navigation", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 600 });
+  await page.goto("/");
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  const main = page.locator("#oa-main");
+  const top = () => main.evaluate((m) => m.scrollTop);
+  const windowY = () => page.evaluate(() => window.scrollY);
+
+  // The content, not the window, scrolls; the gutter is kept for it.
+  expect(await main.evaluate((m) => getComputedStyle(m).scrollbarGutter)).toBe(
+    "stable",
+  );
+  await main.focus();
+  await page.keyboard.press("PageDown");
+  await expect.poll(top).toBeGreaterThan(0);
+  expect(await windowY()).toBe(0);
+
+  // Back to "All" from "Mine": the library stays mounted and "All" is
+  // cached, so it renders long at once and would keep the old offset.
+  await page.getByRole("tab", { name: "Mine", exact: true }).click();
+  await expect(page).toHaveURL(/\/mine$/);
+  await expect(page.locator(".lib-card").first()).toBeVisible();
+  await main.evaluate((m) => {
+    m.scrollTop = 150;
+  });
+  await page.getByRole("tab", { name: "All", exact: true }).click();
+  await expect(page).not.toHaveURL(/\/mine$/);
+  expect(
+    await main.evaluate((m) => m.scrollHeight - m.clientHeight),
+  ).toBeGreaterThanOrEqual(150);
+  await expect.poll(top).toBe(0);
+});
