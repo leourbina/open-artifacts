@@ -20,6 +20,7 @@ import { prereqs } from "./steps/prereqs.ts";
 import { resources } from "./steps/resources.ts";
 import { secrets } from "./steps/secrets.ts";
 import { selftest } from "./steps/selftest.ts";
+import { withTokenFiles } from "./token-files.ts";
 import { isTokenCommand, tokenCommand } from "./token-page.ts";
 
 export const STEPS: Step[] = [
@@ -93,6 +94,9 @@ async function resolve(
       json: { type: "boolean", default: false },
       ci: { type: "boolean", default: false },
       "revoke-ci-tokens": { type: "boolean", default: false },
+      "token-file": { type: "string" },
+      "access-token-file": { type: "string" },
+      "analytics-token-file": { type: "string" },
       browser: { type: "boolean", default: false },
       "no-browser": { type: "boolean", default: false },
       solo: { type: "boolean", default: false },
@@ -319,6 +323,14 @@ export const HELP = `Usage: pnpm oa:setup [options]
                 thumbnails are read from the deployed Worker's plain-text vars and
                 bindings (never secrets). Flags win, with a note when they differ; the
                 state line and --check report data.sources (worker|flag) per value.
+  --token-file <p>  --access-token-file <p>  --analytics-token-file <p>
+                Read the deploy (CLOUDFLARE_API_TOKEN), Access (OA_ACCESS_TOKEN) or
+                analytics (ANALYTICS_TOKEN) token from a file instead of the env.
+                Order: the env var, the flag's file, then ~/.open-artifacts/<name>-
+                cloudflare-token, -access-token, -analytics-token, then the usual
+                fallback (wrangler login). Refused unless mode 0600 (exit 2); a
+                missing flag file is exit 1, an empty one exit 2. Never printed or
+                stored. --token-links prints the hidden line that saves each one.
   --browser | --no-browser  Server-side thumbnails: the BROWSER binding (Browser Run)
                 and SERVER_THUMBNAILS=on. Paid only: on when the plan reads paid, off
                 on free; on unknown, saved state decides. --browser forces it on
@@ -396,6 +408,7 @@ export async function run(
   let deployed: Deployed | undefined;
   try {
     state = readState(fs, root);
+    deps = withTokenFiles(argv, deps, state);
     deployed = await fromWorker(argv, deps, root, state);
     opts = await resolve(argv, deps, state, deployed);
   } catch (e) {

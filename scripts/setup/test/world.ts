@@ -37,6 +37,11 @@ export const filler = (n: number) =>
   Array.from({ length: n }, (_, i) => ({ id: `f${i}`, title: `other-${i}` }));
 
 type World = {
+  /** Process env handed to the setup run. */
+  env?: Record<string, string>;
+  /** Extra files (token files) and their modes. */
+  files?: Record<string, string>;
+  fileModes?: Record<string, number>;
   accounts?: string[];
   zones?: string[];
   /** Zone id per zone name (default "z"). */
@@ -384,7 +389,9 @@ export function world(w: World = {}) {
   const c = core({
     answers: w.answers,
     env: w.env,
+    modes: w.fileModes,
     files: {
+      ...w.files,
       [join(ROOT, TEMPLATE)]: readFileSync(join(realRoot, TEMPLATE), "utf8"),
       [join(ROOT, WELCOME)]: readFileSync(join(realRoot, WELCOME), "utf8"),
       [join(ROOT, "package.json")]:

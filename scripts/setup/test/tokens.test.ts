@@ -48,9 +48,13 @@ describe("token table", () => {
   });
   it("stores as env vars, or as gh secrets with --repo", () => {
     expect(tokens().map((t) => t.storeAs)).toEqual([
-      { kind: "env", name: "CLOUDFLARE_API_TOKEN" },
-      { kind: "env", name: "OA_ACCESS_TOKEN" },
-      { kind: "env", name: "ANALYTICS_TOKEN" },
+      {
+        kind: "env",
+        name: "CLOUDFLARE_API_TOKEN",
+        command: expect.any(String),
+      },
+      { kind: "env", name: "OA_ACCESS_TOKEN", command: expect.any(String) },
+      { kind: "env", name: "ANALYTICS_TOKEN", command: expect.any(String) },
     ]);
     expect(tokens({ repo: "me/oa" })[2]?.storeAs).toEqual({
       kind: "gh-secret",
@@ -210,7 +214,7 @@ describe("--token-links", () => {
       expect(out).toContain(t.url);
       for (const p of t.permissions) expect(out).toContain(p.label);
     }
-    expect(out).toContain("read -rs CLOUDFLARE_API_TOKEN");
+    expect(out).toContain("read -rsp");
   });
   it("is listed in --help", async () => {
     const c = core();
@@ -267,7 +271,7 @@ describe("--token-page", () => {
   });
   it("store lines follow storeAs; optional tokens say so", () => {
     expect(html).toContain(
-      "read -rs CLOUDFLARE_API_TOKEN &amp;&amp; export CLOUDFLARE_API_TOKEN",
+      "read -rsp &quot;open-artifacts-cloudflare token (hidden, then Enter): &quot; T",
     );
     expect(html).toMatch(
       /Token 3 of 3 · about 1 minute · read-only · optional/,

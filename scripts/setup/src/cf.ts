@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
@@ -13,6 +13,8 @@ export type Exec = (
 export type Fs = {
   read: (path: string) => string | null;
   write: (path: string, data: string) => void;
+  /** Permission bits of a file; null when it does not exist. */
+  mode?: (path: string) => number | null;
 };
 export type Deps = {
   exec: Exec;
@@ -25,6 +27,8 @@ export type Deps = {
   sleep?: (ms: number) => Promise<void>;
   /** Test seam: process.exit. */
   exit?: (code: number) => void;
+  /** Env for wrangler children beyond the process env: a deploy token read from a file. */
+  childEnv?: Record<string, string>;
   /** Test seam: process.on for SIGTERM/SIGINT; returns the unsubscribe. */
   onSignal?: (sig: "SIGTERM" | "SIGINT", h: () => void) => () => void;
 };
@@ -40,6 +44,13 @@ export const realFs: Fs = {
   write: (p, d) => {
     mkdirSync(dirname(p), { recursive: true });
     writeFileSync(p, d);
+  },
+  mode: (p) => {
+    try {
+      return statSync(p).mode & 0o777;
+    } catch {
+      return null;
+    }
   },
 };
 
@@ -109,7 +120,11 @@ export function makeWrangler(
     o: { input?: string; sensitive?: boolean } = {},
   ): Promise<string> => {
     const id = accountId();
-    const env = id ? { CLOUDFLARE_ACCOUNT_ID: id } : undefined;
+    const extra = {
+      ...(id ? { CLOUDFLARE_ACCOUNT_ID: id } : {}),
+      ...deps.childEnv,
+    };
+    const env = Object.keys(extra).length ? extra : undefined;
     const pnpmArgs = [
       "--dir",
       join(root, "apps/server"),

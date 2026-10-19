@@ -23,6 +23,8 @@ type Core = {
   answers?: string[];
   env?: Record<string, string>;
   files?: Record<string, string>;
+  /** Mode per path; a file without one is 0600. */
+  modes?: Record<string, number>;
   exec?: Exec;
   stdout?: string;
   fetch?: typeof fetch;
@@ -40,6 +42,7 @@ export function core(o: Core = {}) {
     fs: {
       read: (p) => files.get(p) ?? null,
       write: (p, d) => void files.set(p, d),
+      mode: (p) => (files.has(p) ? (o.modes?.[p] ?? 0o600) : null),
     },
     out: (l) => void lines.push(l),
     prompt: async (q, opts) => {
