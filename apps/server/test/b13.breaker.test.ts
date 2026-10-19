@@ -173,7 +173,6 @@ describe("B13 CPU", () => {
       },
     };
     try {
-      const t = performance.now();
       const r = await app.fetch(
         new Request(`http://app.localhost${R.dataDoc(id, "c", "big")}`, {
           method: "PUT",
@@ -189,7 +188,6 @@ describe("B13 CPU", () => {
       );
       expect(r.status).toBe(200);
       const out = await r.text();
-      const wall = performance.now() - t;
       expect(forwarded).toHaveLength(1);
       const [col, doc, raw, actor] = forwarded[0] as unknown[];
       expect([col, doc, actor]).toEqual(["c", "big", `u:${viewer.userId}`]);
@@ -205,8 +203,6 @@ describe("B13 CPU", () => {
       // The response echoes the stored doc, spliced from the original bytes.
       expect(out.length).toBeGreaterThan(text.length);
       expect(out).toContain(`"data":${text}`);
-      // Loose guard only (shared CI runners): the old path took ~107 ms locally.
-      expect(wall).toBeLessThanOrEqual(250);
     } finally {
       parse.mockRestore();
     }

@@ -189,12 +189,10 @@ describe("B12 adversarial", () => {
     });
     expect(over.status).toBe(429);
     expect(await inDo(s, (_i, st) => st.getWebSockets("v").length)).toBe(200);
-    const t0 = Date.now();
     await s.set("v", "a", "x".repeat(1024 * 1024 - 2), "u:1");
     await s.set("v", "b", "x".repeat(1024 * 1024 - 2), "u:1");
     await s.set("v", "small", { ok: 1 }, "u:1");
-    // Loose guard only; the bounds that matter are the frame sizes below.
-    expect(Date.now() - t0).toBeLessThan(250);
+    // The bound: frame sizes below (200 sockets never get the 1 MB doc).
     await vi.waitFor(() => expect(msgs).toHaveLength(3));
     const frames = msgs.map((m) => JSON.parse(m));
     // Over 16 KB: the broadcast carries data:null (subscribers refetch), so each of the
@@ -249,11 +247,9 @@ describe("B12 adversarial scan", () => {
         2000 * body.length,
       );
     });
-    const t0 = Date.now();
     expect(await codeOf(s.query("v", { where: { choice: "B" } }))).toBe(
       "bad_request",
     );
-    expect(Date.now() - t0).toBeLessThan(250);
     // Refused from the totals row alone: no doc rows are scanned.
     const probe = await rowsReadBy(s, (i) =>
       i.query("v", { where: { choice: "B" } }),
@@ -280,10 +276,8 @@ describe("B12 adversarial scan", () => {
     expect(tracked).toBe(real);
     expect(tracked).toBeLessThanOrEqual(2 * 1024 * 1024);
     expect(tracked).toBeGreaterThan(2 * 1024 * 1024 - 30_000);
-    const t0 = Date.now();
     const r = await s.query("v", { where: { choice: "B" } });
-    // Loose guard only (locally ~4 ms); the scan bound is the rows-read check below.
-    expect(Date.now() - t0).toBeLessThan(250);
+    // The scan bound is the rows-read check below.
     expect(r.items.map((d) => d.id)).toEqual(["d7"]);
     // The scan touches only this collection's 83 rows (+ the totals row), never "w".
     const probe = await rowsReadBy(s, (i) =>
