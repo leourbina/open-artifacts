@@ -75,7 +75,13 @@ export const R = {
   oauthClient: (grantId: string) => `/api/v1/oauth-clients/${seg(grantId)}`,
   /** GET -> Settings; PATCH SettingsPatch -> Settings */
   settings: "/api/v1/settings",
-  /** GET -> Usage */
+  /**
+   * GET -> Usage: today's (UTC) free-plan counts. Also `cpu_limit_hits`
+   * (invocations ending exceededCpu or exceededResources; limit 0) and
+   * `cpu_p99_ms` (p99 CPU time in ms; limit 10 on Free, 0 when not applicable),
+   * both for this Worker's script, and `kv_writes` (OAUTH_KV write operations;
+   * limit 1000). Each is omitted when unavailable.
+   */
   usage: "/api/v1/usage",
   /** GET -> Page<DataDoc> */
   dataCollection: (id: string, col: string) =>

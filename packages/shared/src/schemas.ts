@@ -448,7 +448,15 @@ export const UsageSchema = z.object({
   date: z.string(),
   metrics: z.array(
     z.object({
-      key: z.enum(["requests", "d1_reads", "d1_writes", "do_requests"]),
+      key: z.enum([
+        "requests",
+        "d1_reads",
+        "d1_writes",
+        "do_requests",
+        "cpu_limit_hits",
+        "cpu_p99_ms",
+        "kv_writes",
+      ]),
       used: z.number(),
       limit: z.number(),
     }),
