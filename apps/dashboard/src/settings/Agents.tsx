@@ -4,9 +4,24 @@ import {
   TokenCreatedSchema,
   TokenCreateInputSchema,
 } from "@oa/shared";
-import { Button, Dialog, Input, SegmentedControl, Tabs, toast } from "@oa/ui";
+import { Button, Dialog, Input, toast } from "@oa/ui";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  Button as ShButton,
+  Input as ShInput,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+  ToggleGroup,
+  ToggleGroupItem,
+} from "@oa/ui/shadcn";
 import { useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import type { ReactNode } from "react";
+import { useRef, useState } from "react";
 import { ApiClientError, api } from "../api/client";
 import {
   qk,
@@ -35,35 +50,50 @@ const copyText = (text: string, ok: string) => {
 
 const when = (iso: string) => relativeTime(iso) || "Unknown";
 
-function Code({
-  code,
+/** Code with its Copy button beside it (never over it); no outer padding, so
+    it fits a card or a dialog. */
+function CodeBlock({
+  children,
+  copy,
   label,
-  agent,
 }: {
-  code: string;
+  children: ReactNode;
+  copy: string;
   label: string;
-  agent: string;
 }) {
   return (
-    <div className="oa-code">
-      {/* Focusable so keyboard users can scroll it where it still overflows. */}
-      {/* biome-ignore lint/a11y/useSemanticElements: a scrollable <pre> region */}
-      {/* biome-ignore lint/a11y/noNoninteractiveTabindex: scrollable region */}
-      <pre tabIndex={0} role="region" aria-label={`${agent} snippet`}>
-        <code>{code}</code>
-      </pre>
-      <Button
+    <div className="flex min-w-0 items-start gap-[var(--oa-space-1)] rounded-md bg-secondary">
+      {children}
+      <ShButton
         variant="ghost"
+        size="sm"
+        className="m-[var(--oa-space-1)] flex-none text-[length:var(--oa-text-sm)]"
         aria-label={label}
-        onClick={() => copyText(code, "Copied")}
+        onClick={() => copyText(copy, "Copied")}
       >
         Copy
-      </Button>
+      </ShButton>
     </div>
   );
 }
 
-/** Agent picker over one variant's snippets. */
+function Code({ code, label }: { code: string; label: string }) {
+  return (
+    <CodeBlock copy={code} label={label}>
+      <pre
+        // Focusable so keyboard users can scroll a long line.
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: scrollable region
+        tabIndex={0}
+        className="m-0 min-w-0 flex-1 overflow-x-auto p-[var(--oa-space-3)] font-mono text-[length:var(--oa-text-xs)]"
+      >
+        <code>{code}</code>
+      </pre>
+    </CodeBlock>
+  );
+}
+
+/** Agent picker over one variant's snippets. The pick survives a variant
+    switch when that agent has a snippet there too. */
 function SnippetTabs({
   mcpUrl,
   variant,
@@ -72,24 +102,61 @@ function SnippetTabs({
   variant: "oauth" | "token";
 }) {
   const list = snippets(mcpUrl).filter((s) => s.variant === variant);
+  const [picked, setPicked] = useState(list[0]?.agent);
+  // Values are indexes: Radix builds element ids from them, and agent names
+  // have spaces.
+  const current = Math.max(
+    list.findIndex((s) => s.agent === picked),
+    0,
+  );
+  const listRef = useRef<HTMLDivElement>(null);
   return (
     <Tabs
-      tabs={list.map((s) => ({
-        id: s.agent,
-        label: s.agent,
-        content: (
-          <>
-            {s.hint && <p className="oa-seen">{s.hint}</p>}
-            {s.file && <p className="oa-seen">{s.file}</p>}
-            <Code
-              agent={s.agent}
-              code={s.code}
-              label={s.language === "bash" ? "Copy command" : "Copy config"}
-            />
-          </>
-        ),
-      }))}
-    />
+      value={String(current)}
+      onValueChange={(v) => {
+        setPicked(list[Number(v)]?.agent);
+        // The strip scrolls sideways on phones; keep the picked tab in view
+        // (clicks and arrow keys alike).
+        listRef.current?.children[Number(v)]?.scrollIntoView?.({
+          block: "nearest",
+          inline: "nearest",
+        });
+      }}
+      className={`min-w-0 ${GAP}`}
+    >
+      {/* The strip scrolls, so it clips anything outside it: the hairline is
+          an inset shadow, the underline sits at the bottom edge, and the
+          focus ring is inset. */}
+      <TabsList
+        ref={listRef}
+        variant="line"
+        className="h-[34px] w-full justify-start gap-[var(--oa-space-4)] overflow-x-auto rounded-none p-0 shadow-[inset_0_-1px_0_var(--color-border)] [scrollbar-width:none]"
+      >
+        {list.map((s, i) => (
+          <TabsTrigger
+            key={s.agent}
+            value={String(i)}
+            className="h-full flex-none px-0 text-[length:var(--oa-text-sm)] group-data-[orientation=horizontal]/tabs:after:bottom-0 group-data-[orientation=horizontal]/tabs:after:h-[2px] focus-visible:outline-offset-[-2px]"
+          >
+            {s.agent}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+      {list.map((s, i) => (
+        <TabsContent
+          key={s.agent}
+          value={String(i)}
+          className="grid min-w-0 gap-[var(--oa-space-2)] data-[state=inactive]:hidden"
+        >
+          {s.hint && <p className={muted}>{s.hint}</p>}
+          {s.file && <p className={muted}>{s.file}</p>}
+          <Code
+            code={s.code}
+            label={s.language === "bash" ? "Copy command" : "Copy config"}
+          />
+        </TabsContent>
+      ))}
+    </Tabs>
   );
 }
 
@@ -97,19 +164,86 @@ function Connect({ mcpUrl }: { mcpUrl: string }) {
   const [variant, setVariant] = useState<"oauth" | "token">("oauth");
   return (
     <>
-      <SegmentedControl
+      <ToggleGroup
+        type="single"
+        variant="outline"
+        size="sm"
         aria-label="Auth method"
-        options={[
-          { value: "oauth", label: "OAuth" },
-          { value: "token", label: "Token" },
-        ]}
         value={variant}
-        onChange={setVariant}
-      />
+        // Single toggle groups can deselect; keep one method chosen.
+        onValueChange={(v) => v && setVariant(v as "oauth" | "token")}
+      >
+        <ToggleGroupItem
+          value="oauth"
+          className="h-[30px] px-[var(--oa-space-3)] text-[length:var(--oa-text-sm)]"
+        >
+          OAuth
+        </ToggleGroupItem>
+        <ToggleGroupItem
+          value="token"
+          className="h-[30px] px-[var(--oa-space-3)] text-[length:var(--oa-text-sm)]"
+        >
+          Token
+        </ToggleGroupItem>
+      </ToggleGroup>
       <SnippetTabs mcpUrl={mcpUrl} variant={variant} />
     </>
   );
 }
+
+/** Settings card: one inset for every child (Design: 20px, 16px <= 600px). */
+const CARD =
+  "gap-[var(--oa-space-3)] py-[var(--oa-space-5)] shadow-none max-[600px]:py-[var(--oa-space-4)]";
+const INSET = "px-[var(--oa-space-5)] max-[600px]:px-[var(--oa-space-4)]";
+/** One vertical rhythm inside a card. */
+const GAP = "gap-[var(--oa-space-3)]";
+
+function SettingsCard({
+  id,
+  title,
+  action,
+  children,
+}: {
+  id: string;
+  title: string;
+  action?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section aria-labelledby={id} className="min-w-0">
+      <Card className={CARD}>
+        <CardHeader
+          className={`flex min-h-[30px] items-center justify-between ${GAP} ${INSET}`}
+        >
+          <CardTitle>
+            <h2
+              id={id}
+              className="m-0 text-[length:var(--oa-text-md)] font-semibold"
+            >
+              {title}
+            </h2>
+          </CardTitle>
+          {action}
+        </CardHeader>
+        <CardContent className={`grid min-w-0 ${GAP} ${INSET}`}>
+          {children}
+        </CardContent>
+      </Card>
+    </section>
+  );
+}
+
+const muted = "m-0 text-[length:var(--oa-text-xs)] text-muted-foreground";
+
+/** Name, meta and actions on one line; at <= 600px the name takes its own
+    ellipsized line and the meta and actions share the next. */
+const ROWS =
+  "m-0 grid list-none gap-[var(--oa-space-1)] p-0 max-[600px]:gap-[var(--oa-space-3)]";
+const ROW =
+  "flex min-h-[34px] items-center gap-[var(--oa-space-3)] max-[600px]:min-h-0 max-[600px]:flex-wrap max-[600px]:gap-y-[var(--oa-space-2)]";
+const NAME =
+  "min-w-0 flex-1 font-medium [overflow-wrap:anywhere] max-[600px]:basis-full max-[600px]:truncate";
+const ACTION = "flex-none text-[length:var(--oa-text-sm)] max-[600px]:ml-auto";
 
 function Confirm({
   title,
@@ -156,32 +290,31 @@ function OAuthClients() {
     clientName: string;
   } | null>(null);
   return (
-    <section className="oa-card" aria-labelledby="oa-oauth-h">
-      <div className="oa-card-head">
-        <h2 id="oa-oauth-h">Connected agents</h2>
-      </div>
+    <SettingsCard id="oa-oauth-h" title="Connected agents">
       {q.isError ? (
         <p role="alert" className="oa-err">
           Couldn't load connected agents.
         </p>
       ) : q.data?.length === 0 ? (
-        <p className="oa-seen">
+        <p className={muted}>
           No agents connected yet. They appear here after you approve them.
         </p>
       ) : (
-        <ul className="oa-members">
+        <ul className={ROWS}>
           {q.data?.map((c) => (
-            <li key={c.grantId} className="oa-row">
-              <b>{c.clientName}</b>
-              <span className="oa-seen">Connected {when(c.createdAt)}</span>
-              <Button
+            <li key={c.grantId} className={ROW}>
+              <b className={NAME}>{c.clientName}</b>
+              <span className={muted}>Connected {when(c.createdAt)}</span>
+              <ShButton
+                className={ACTION}
                 variant="ghost"
+                size="sm"
                 aria-label={`Revoke ${c.clientName}`}
                 disabled={revoke.isPending && revoke.variables === c.grantId}
                 onClick={() => setTarget(c)}
               >
                 Revoke
-              </Button>
+              </ShButton>
             </li>
           ))}
         </ul>
@@ -194,7 +327,7 @@ function OAuthClients() {
           onConfirm={() => revoke.mutate(target.grantId)}
         />
       )}
-    </section>
+    </SettingsCard>
   );
 }
 
@@ -262,16 +395,11 @@ function CreateDialog({ onClose }: { onClose: () => void }) {
       {created ? (
         <div className="oa-form">
           <p role="alert">You won't see this again.</p>
-          <div className="oa-code">
-            <code className="oa-token">{created.token}</code>
-            <Button
-              variant="ghost"
-              aria-label="Copy token"
-              onClick={() => copyText(created.token, "Copied")}
-            >
-              Copy
-            </Button>
-          </div>
+          <CodeBlock copy={created.token} label="Copy token">
+            <code className="oa-token block min-w-0 flex-1 p-[var(--oa-space-3)] font-mono text-[length:var(--oa-text-xs)] break-all">
+              {created.token}
+            </code>
+          </CodeBlock>
           {mcpUrl && (
             <>
               <p className="oa-seen">
@@ -315,38 +443,47 @@ function Tokens() {
     null,
   );
   return (
-    <section className="oa-card" aria-labelledby="oa-pat-h">
-      <div className="oa-card-head">
-        <h2 id="oa-pat-h">Personal access tokens</h2>
-        <Button variant="secondary" onClick={() => setCreating(true)}>
+    <SettingsCard
+      id="oa-pat-h"
+      title="Personal access tokens"
+      action={
+        <ShButton
+          variant="outline"
+          size="sm"
+          className="text-[length:var(--oa-text-sm)]"
+          onClick={() => setCreating(true)}
+        >
           Create token
-        </Button>
-      </div>
+        </ShButton>
+      }
+    >
       {q.isError ? (
         <p role="alert" className="oa-err">
           Couldn't load tokens.
         </p>
       ) : q.data?.length === 0 ? (
-        <p className="oa-seen">
+        <p className={muted}>
           No tokens. Create one for a script or an agent that can't use OAuth.
         </p>
       ) : (
-        <ul className="oa-members">
+        <ul className={ROWS}>
           {q.data?.map((t) => (
-            <li key={t.id} className="oa-row">
-              <b>{t.label}</b>
-              <span className="oa-seen">Created {when(t.createdAt)}</span>
-              <span className="oa-seen">
+            <li key={t.id} className={ROW}>
+              <b className={NAME}>{t.label}</b>
+              <span className={muted}>Created {when(t.createdAt)}</span>
+              <span className={muted}>
                 Last used {t.lastUsedAt ? when(t.lastUsedAt) : "Never"}
               </span>
-              <Button
+              <ShButton
+                className={ACTION}
                 variant="ghost"
+                size="sm"
                 aria-label={`Revoke ${t.label}`}
                 disabled={revoke.isPending && revoke.variables === t.id}
                 onClick={() => setTarget(t)}
               >
                 Revoke
-              </Button>
+              </ShButton>
             </li>
           ))}
         </ul>
@@ -360,7 +497,7 @@ function Tokens() {
           onConfirm={() => revoke.mutate(target.id)}
         />
       )}
-    </section>
+    </SettingsCard>
   );
 }
 
@@ -371,21 +508,24 @@ export function Agents() {
   return (
     <div className="oa-stack">
       {mcpUrl && (
-        <section className="oa-card" aria-labelledby="oa-mcp-h">
-          <div className="oa-card-head">
-            <h2 id="oa-mcp-h">MCP server</h2>
-          </div>
-          <div className="oa-form">
-            <Input readOnly aria-label="MCP server URL" value={mcpUrl} />
-            <Button
-              variant="secondary"
+        <SettingsCard id="oa-mcp-h" title="MCP server">
+          <div className="flex min-w-0 items-center gap-[var(--oa-space-2)]">
+            <ShInput
+              readOnly
+              aria-label="MCP server URL"
+              value={mcpUrl}
+              className="h-[30px] flex-1 text-[length:var(--oa-text-sm)] md:text-[length:var(--oa-text-sm)]"
+            />
+            <ShButton
+              variant="outline"
+              className="h-[30px] flex-none text-[length:var(--oa-text-sm)]"
               onClick={() => copyText(mcpUrl, "MCP URL copied")}
             >
               Copy URL
-            </Button>
+            </ShButton>
           </div>
           <Connect mcpUrl={mcpUrl} />
-        </section>
+        </SettingsCard>
       )}
       <OAuthClients />
       <Tokens />
