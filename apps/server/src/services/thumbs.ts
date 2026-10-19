@@ -83,7 +83,14 @@ const SLOT_KEY = "browser_slot";
 const utcDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 const thumbKey = (id: string) => `thumbs/${id}.webp`;
 
-class LaunchError extends Error {}
+class LaunchError extends Error {
+  /** The launch error's HTTP status, if it carried one (Browser Run's 429). */
+  status: unknown;
+  constructor(e: unknown) {
+    super(String((e as Error)?.message ?? e));
+    this.status = (e as { status?: unknown })?.status;
+  }
+}
 class TimeoutError extends Error {}
 
 /** Browser Run's 429 (status or text) or its daily "time limit exceeded": stop for the UTC day. */
@@ -260,7 +267,7 @@ async function shoot(
     try {
       b = await launch(binding);
     } catch (e) {
-      throw new LaunchError(String((e as Error)?.message ?? e));
+      throw new LaunchError(e);
     }
     // Launched after the deadline: close it here, nobody else will.
     if (done) {

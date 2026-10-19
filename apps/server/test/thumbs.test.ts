@@ -346,6 +346,26 @@ describe("captureThumbnail", () => {
     expect(slow.idled).toBe(1);
   });
 
+  it("stops the day on each quota signal: 429 status, 429 text, time limit exceeded", async () => {
+    const status429 = Object.assign(new Error("Unable to create new browser"), {
+      status: 429,
+    });
+    for (const err of [
+      status429,
+      new Error("code: 429: Too Many Requests"),
+      new Error("Browser time limit exceeded for today"),
+    ]) {
+      await env.DB.prepare(
+        "delete from counters where key = 'browser_stop'",
+      ).run();
+      const id = await pub();
+      expect(await capture(id, 1, fake({ launchError: err }))).toBe("stopped");
+      const g = fake();
+      expect(await capture(id, 1, g)).toBe("stopped");
+      expect(g.launched).toBe(0);
+    }
+  });
+
   it("a launch error that is not the quota does not stop the day", async () => {
     const id = await pub();
     const f = fake({ launchError: new Error("WebSocket connection failed") });
