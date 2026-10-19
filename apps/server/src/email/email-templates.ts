@@ -187,9 +187,9 @@ export const SHARE_HTML = `<!doctype html>
             <table role="presentation" cellpadding="0" cellspacing="0" border="0">
               <tr>
                 <td class="oa-btn" align="center" bgcolor="#15181C" style="border-radius:6px;background-color:#15181C;">
-                  <!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="{{artifactUrl}}" style="height:44px;v-text-anchor:middle;width:240px;" arcsize="14%" stroke="f" fillcolor="#15181C"><v:textbox inset="0,0,0,0"><center style="color:#FFFFFF;font-family:'Segoe UI',Arial,sans-serif;font-size:15px;font-weight:600;">Open {{instanceName}}</center></v:textbox></v:roundrect><![endif]-->
+                  <!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="{{artifactUrl}}" style="height:44px;v-text-anchor:middle;width:200px;" arcsize="14%" stroke="f" fillcolor="#15181C"><v:textbox inset="0,0,0,0"><center style="color:#FFFFFF;font-family:'Segoe UI',Arial,sans-serif;font-size:15px;font-weight:600;">Open the artifact</center></v:textbox></v:roundrect><![endif]-->
                   <!--[if !mso]><!-->
-                  <a href="{{artifactUrl}}" target="_blank" style="display:inline-block;padding:12px 22px;font-family:Geist,ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:20px;font-weight:600;color:#FFFFFF;text-decoration:none;border-radius:6px;">Open {{instanceName}}</a>
+                  <a href="{{artifactUrl}}" target="_blank" style="display:inline-block;padding:12px 22px;font-family:Geist,ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:20px;font-weight:600;color:#FFFFFF;text-decoration:none;border-radius:6px;">Open the artifact</a>
                   <!--<![endif]-->
                 </td>
               </tr>
@@ -229,7 +229,7 @@ Your role: {{role}}
 
 It lives on {{instanceName}}, where any AI agent publishes pages, docs, code and PDFs for your team. You'll sign in with a one-time code sent to {{recipientEmail}}.
 
-Open {{instanceName}}:
+Open the artifact:
 {{artifactUrl}}
 
 --
