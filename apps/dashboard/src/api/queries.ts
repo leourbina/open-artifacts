@@ -5,6 +5,7 @@ import {
   ListQuerySchema,
   type Member,
   type MemberInvite,
+  MemberInviteResultSchema,
   type MemberPatch,
   MemberSchema,
   type MePatch,
@@ -18,6 +19,7 @@ import {
   type SettingsPatch,
   SettingsSchema,
   type ShareInput,
+  ShareResultSchema,
   ShareSchema,
   TokenSchema,
   UsageSchema,
@@ -229,7 +231,8 @@ export const useDeleteArtifact = (id: string) =>
   );
 export const usePutShare = (id: string) =>
   useInvalidating(
-    (input: ShareInput) => api.send("PUT", R.shares(id), input, ShareSchema),
+    (input: ShareInput) =>
+      api.send("PUT", R.shares(id), input, ShareResultSchema),
     () => [qk.shares(id)],
   );
 export const useDeleteShare = (id: string) =>
@@ -242,7 +245,7 @@ export const useInviteMember = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: MemberInvite) =>
-      api.send("POST", R.members, input, MemberSchema),
+      api.send("POST", R.members, input, MemberInviteResultSchema),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.members }),
     onError: (e) => failToast(e, "Couldn't send the invite."),
   });
