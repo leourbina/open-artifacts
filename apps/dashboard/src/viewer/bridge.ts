@@ -307,7 +307,9 @@ export function createBridge(opts: BridgeOptions) {
       if (!checked.success) return fail(m.id, "internal", "Invalid response");
       ok(m.id, checked.data);
     } catch (e) {
-      if (e instanceof ApiClientError) fail(m.id, e.code, e.message);
+      // The artifact protocol only knows the API's codes.
+      if (e instanceof ApiClientError)
+        fail(m.id, e.code === "cpu_limit" ? "internal" : e.code, e.message);
       else fail(m.id, "internal", "Internal error");
     } finally {
       inFlight--;

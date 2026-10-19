@@ -100,3 +100,37 @@ body {
   clip-path: inset(50%);
   white-space: nowrap;
 }
+
+/* CPU-limit banner (below the quota banner) */
+.oa-cpu-banner {
+  padding: 16px 32px 0;
+}
+.oa-cpu-banner > [role="status"] {
+  align-items: flex-start;
+  padding: 12px 12px 12px 16px;
+}
+.oa-cpu-banner p {
+  margin: 2px 0 0;
+  color: var(--oa-text-2);
+}
+.oa-cpu-acts {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.oa-cpu-acts .oa-btn {
+  gap: 6px;
+}
+.oa-cpu-link {
+  color: var(--oa-text);
+  font-weight: 500;
+  text-underline-offset: 2px;
+  white-space: nowrap;
+}
+@media (max-width: 600px) {
+  .oa-cpu-banner {
+    padding: 12px 16px 0;
+  }
+}

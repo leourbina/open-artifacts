@@ -10,6 +10,7 @@ import { useSignOut } from "../auth/signOut";
 import { useMe } from "../auth/useMe";
 import { SearchBox } from "../library/SearchBox";
 import { EdgePanel } from "../pages/Edge";
+import { CpuBanner } from "./CpuBanner";
 import { QuotaBanner } from "./QuotaBanner";
 
 const icon = (d: string) => (
@@ -100,6 +101,7 @@ export function AppLayout() {
   return (
     <AppShell nav={<Sidebar me={me} path={path} />} header={<TopBar me={me} />}>
       <QuotaBanner />
+      <CpuBanner role={me?.user.role} />
       <Outlet />
       <Toaster />
     </AppShell>

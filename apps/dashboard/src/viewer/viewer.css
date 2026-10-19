@@ -366,3 +366,61 @@
 .oa-share [role="radiogroup"] [role="radio"]:focus-visible {
   outline-offset: -2px;
 }
+/* Slow-frame notice: above the frame, never in place of it. */
+.oa-vmain {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.oa-vmain .oa-vframe {
+  min-height: 0;
+}
+.oa-vnotice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: calc(100% - 32px);
+  max-width: 680px;
+  box-sizing: border-box;
+  margin: 12px auto;
+  padding: 6px 6px 6px 12px;
+  border-radius: var(--oa-radius-md);
+  background: var(--oa-accent-soft);
+  color: var(--oa-text);
+  font: 400 var(--oa-text-sm) / 1.45 var(--oa-font-sans);
+}
+.oa-vnotice > svg {
+  flex: none;
+  color: var(--oa-accent-fg);
+}
+.oa-vnotice-text {
+  flex: 1;
+  min-width: 0;
+}
+.oa-vnotice-text a {
+  color: var(--oa-text);
+  font-weight: 500;
+  text-underline-offset: 2px;
+  white-space: nowrap;
+}
+.oa-vnotice-acts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+.oa-vnotice-acts .oa-btn {
+  gap: 6px;
+}
+@media (max-width: 560px) {
+  .oa-vnotice {
+    flex-wrap: wrap;
+  }
+  .oa-vnotice-text {
+    flex: 1 1 calc(100% - 60px);
+  }
+  .oa-vnotice-acts {
+    margin-left: 24px;
+  }
+}

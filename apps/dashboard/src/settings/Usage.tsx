@@ -1,6 +1,9 @@
 import type { Usage as UsageData } from "@oa/shared";
 import { Badge, Banner, Button, toast } from "@oa/ui";
 import { useUsage } from "../api/queries";
+import { useMe } from "../auth/useMe";
+import { ExtIcon } from "../layout/CpuBanner";
+import { COSTS_DOC } from "../layout/cpu";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 
 type Tone = "normal" | "warning" | "danger";
@@ -38,6 +41,108 @@ export const percent = (used: number, limit: number) => {
 export const toneOf = (pct: number): Tone =>
   pct >= 95 ? "danger" : pct >= 80 ? "warning" : "normal";
 const fmt = (n: number) => n.toLocaleString("en-US");
+
+/** Per-request CPU numbers: shown in their own card, never as daily meters. */
+const CPU_KEYS: ReadonlySet<Metric["key"]> = new Set([
+  "cpu_limit_hits",
+  "cpu_p99_ms",
+]);
+const ms = (n: number) => `${Number(n.toFixed(1))} ms`;
+
+function CpuCard({ metrics }: { metrics: Metric[] }) {
+  const hitsM = metrics.find((m) => m.key === "cpu_limit_hits");
+  const p99M = metrics.find((m) => m.key === "cpu_p99_ms");
+  if (!hitsM && !p99M) return null;
+  const idle = metrics.every((m) => !(m.used > 0));
+  return (
+    <section className="oa-card oa-cpu" aria-labelledby="oa-cpu-h">
+      <div className="oa-cpu-head">
+        <h2 id="oa-cpu-h">CPU</h2>
+        <span>A per-request limit, not a daily quota</span>
+      </div>
+      <div className="oa-cpu-rows">
+        {hitsM && <HitsRow hits={Math.max(hitsM.used, 0)} />}
+        {p99M && <P99Row metric={p99M} idle={idle} />}
+      </div>
+    </section>
+  );
+}
+
+function HitsRow({ hits }: { hits: number }) {
+  return (
+    <div className="oa-cpu-row" data-tone={hits >= 3 ? "warning" : "normal"}>
+      <h3>Requests over the CPU limit today</h3>
+      <div className="oa-cpu-big">{fmt(hits)}</div>
+      <p>
+        {hits > 0
+          ? "These requests were stopped with Cloudflare error 1102. Retrying usually works."
+          : "No request was stopped for using too much CPU."}
+      </p>
+    </div>
+  );
+}
+
+function P99Row({ metric, idle }: { metric: Metric; idle: boolean }) {
+  const used = Math.max(metric.used, 0);
+  const { limit } = metric;
+  const pct = percent(used, limit);
+  // A limit of 0 means no per-request cap to measure against (Workers Paid).
+  const tone: Tone =
+    limit > 0 && pct >= 100
+      ? "danger"
+      : limit > 0 && pct >= 80
+        ? "warning"
+        : "normal";
+  return (
+    <div className="oa-cpu-row">
+      <h3>Typical busy request (p99)</h3>
+      {idle ? (
+        <div className="oa-cpu-big">
+          <small>No requests yet today</small>
+        </div>
+      ) : (
+        <>
+          <div className="oa-cpu-big">
+            {ms(used)} {limit > 0 && <small>of {ms(limit)}</small>}
+          </div>
+          {limit > 0 && (
+            // biome-ignore lint/a11y/useSemanticElements: <meter> cannot be styled per tone cross-browser
+            <div
+              className="oa-track oa-thin"
+              role="meter"
+              aria-label="p99 CPU time"
+              aria-valuemin={0}
+              aria-valuemax={limit}
+              aria-valuenow={Math.min(used, limit)}
+              aria-valuetext={`${ms(used)} of ${ms(limit)}`}
+              data-tone={tone}
+            >
+              <i style={{ width: `${Math.min(pct, 100)}%` }} />
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/** The plan positioning line, for the people who can change the plan. */
+function PlanLine() {
+  const me = useMe();
+  const role = me.status === "authed" ? me.me.user.role : null;
+  if (role !== "owner" && role !== "admin") return null;
+  return (
+    <p className="oa-plan-line">
+      Workers Free is sized for one person. Workers Paid ($5 a month) is sized
+      for a team: it sends invite emails and gives each request up to 30 seconds
+      of CPU.{" "}
+      <a href={COSTS_DOC} target="_blank" rel="noopener noreferrer">
+        Compare plans
+        {ExtIcon}
+      </a>
+    </p>
+  );
+}
 
 function Meter({ metric }: { metric: Metric }) {
   const { name, what } = LABELS[metric.key];
@@ -215,6 +320,7 @@ export function Usage() {
           Refresh
         </Button>
       </div>
+      <PlanLine />
       {q.isError ? (
         <Banner
           tone="danger"
@@ -233,16 +339,19 @@ export function Usage() {
         <Setup />
       ) : (
         <>
-          {alerts(q.data.metrics)}
+          {alerts(q.data.metrics.filter((m) => !CPU_KEYS.has(m.key)))}
           <p className="oa-seen">
             Today, {q.data.date}. Resets at 00:00 UTC. Cloudflare's numbers are
             cached for 5 minutes.
           </p>
           <div className="oa-meters">
-            {q.data.metrics.map((m) => (
-              <Meter key={m.key} metric={m} />
-            ))}
+            {q.data.metrics
+              .filter((m) => !CPU_KEYS.has(m.key))
+              .map((m) => (
+                <Meter key={m.key} metric={m} />
+              ))}
           </div>
+          <CpuCard metrics={q.data.metrics} />
           <Guide />
         </>
       )}
