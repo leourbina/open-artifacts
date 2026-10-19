@@ -6,7 +6,12 @@ export const CONSENT_TEMPLATE = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <meta name="referrer" content="no-referrer">
-<title>Connect {{client_name}} — Open Artifacts</title>
+<title>Connect {{client_name}} to Open Artifacts</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#EEF0F3" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#131518" media="(prefers-color-scheme: dark)">
 <style>
 :root{color-scheme:light;
 --bg:#eef0f3;--surface:#fff;--surface-2:#f6f7f9;--divider:#e0e3e8;--border:#bec4cd;--border-strong:#848b95;

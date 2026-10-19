@@ -427,10 +427,21 @@ describe("MCP auth: OAuth", () => {
     expect(page.body).not.toContain('name="csrf"');
   });
 
-  // Pending Design adding FAVICON_TAGS to design/screens/oauth-consent.html.
-  it.todo(
-    "consent page includes FAVICON_TAGS (after regenerating the template)",
-  );
+  it("consent page has every FAVICON_TAGS tag and the connect title", async () => {
+    const m = await login(`oauth-fav-${tag}@x.com`);
+    const clientId = await register("Fav Agent");
+    const page = await consentPage(
+      authorizeUrl(clientId, (await pkce()).challenge),
+      m.cookie,
+    );
+    expect(page.r.status).toBe(200);
+    const head = page.body.slice(0, page.body.indexOf("</head>"));
+    // Design's file has one tag per line; each must be in <head>.
+    for (const t of FAVICON_TAGS.split(/(?=<)/)) expect(head).toContain(t);
+    expect(head).toContain(
+      "<title>Connect Fav Agent to Open Artifacts</title>",
+    );
+  });
 
   it("the consent template is Design's file, comment stripped", () => {
     expect(CONSENT_TEMPLATE).toBe(stripTemplateComment(designConsent));
