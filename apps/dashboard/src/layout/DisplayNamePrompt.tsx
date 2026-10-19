@@ -82,7 +82,7 @@ export function DisplayNamePrompt({ me }: { me: Me }) {
             );
           }}
         >
-          <DialogHeader className="text-left">
+          <DialogHeader>
             <DialogTitle>What do you like to be called?</DialogTitle>
             <DialogDescription>
               Teammates see this name on invites and shared artifacts.
