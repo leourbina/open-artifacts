@@ -104,6 +104,11 @@ export const email: Step = {
       return "done";
     }
     const z = await zone(ctx, state.accountId ?? "", d);
+    // The apex is re-confirmed on every run (apply), onboarded or not.
+    if (d === z.name) {
+      ctx.notes.push(`${d} is the zone apex: confirmed on every run`);
+      return "todo";
+    }
     const gone = await missing(ctx, z.id, d);
     if (gone.length) {
       ctx.notes.push(
@@ -118,6 +123,12 @@ export const email: Step = {
     const d = ctx.opts.emailDomain ?? "";
     const accountId = state.accountId ?? "";
     const z = await zone(ctx, accountId, d);
+    if (d === z.name && !ctx.opts.emailDomainFlag)
+      return {
+        status: "action_required",
+        message: `the saved sending domain ${d} is the zone apex, which setup never reuses silently: pass --email-domain ${d} again (and confirm), or use a subdomain such as mail.${ctx.opts.appHost}`,
+        data: { domain: d },
+      };
     const conflict = await conflictOf(ctx, z, d);
     if (conflict && !ctx.opts.yesEmailDomain) {
       const data = { domain: d, conflicts: conflict.has };
@@ -134,6 +145,11 @@ export const email: Step = {
           data,
         };
     }
+    const gone = await missing(ctx, z.id, d);
+    if (!gone.length) {
+      ctx.notes.push(`sending domain ${d} onboarded`);
+      return undefined;
+    }
     const recs = records(d);
     const list = recs.map((r) => `${r.type} ${r.name} ${r.content}`).join("; ");
     return {
@@ -142,7 +158,7 @@ export const email: Step = {
       data: {
         domain: d,
         dashboard: DASH_SENDING,
-        missing: await missing(ctx, z.id, d),
+        missing: gone,
         records: recs,
       },
     };

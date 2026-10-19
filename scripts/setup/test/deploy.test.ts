@@ -12,7 +12,11 @@ import { HOSTS, world } from "./world.ts";
 
 type W = ReturnType<typeof world>;
 const parsed = (w: W) => w.lines.map((l) => JSON.parse(l));
-const statuses = (w: W) => parsed(w).map((j) => `${j.step}:${j.status}`);
+// The final \`state\` line (every successful --json run) is not a step.
+const statuses = (w: W) =>
+  parsed(w)
+    .filter((j) => j.step !== "state")
+    .map((j) => `${j.step}:${j.status}`);
 const CONFIG = join(ROOT, "apps/server/wrangler.jsonc");
 const SECRETS = [
   "ACCESS_CLIENT_SECRET",
@@ -389,7 +393,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     await run(HOSTS, w.deps, ROOT);
     await run(HOSTS, w.deps, ROOT);
     await run([...HOSTS, "--upgrade", "--new-owner-token"], w.deps, ROOT);
-    expect(w.lines.length).toBe(27);
+    expect(w.lines.length).toBe(30); // + a final state line per run
     for (const l of w.lines)
       expect(Object.keys(JSON.parse(l))).toEqual(
         expect.arrayContaining(["step", "status", "message"]),

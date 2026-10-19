@@ -63,10 +63,11 @@ export function renderConfig(
 ): string {
   // The template stays strict JSON (e2e fixtures JSON.parse it), so the
   // browser and email lines are matched by their keys and dropped when off.
-  // EMAIL_FROM is never the last var, so dropping it leaves no trailing comma.
+  // EMAIL_FROM and SERVER_THUMBNAILS are never the last var, so dropping
+  // them leaves no trailing comma.
   const text = template
     .split("\n")
-    .filter((l) => browser || !/^\s*"browser":/.test(l))
+    .filter((l) => browser || !/^\s*"(browser|SERVER_THUMBNAILS)":/.test(l))
     .filter((l) => email || !/^\s*"(send_email|EMAIL_FROM)":/.test(l))
     .join("\n")
     .replace(/\{\{(\w+)\}\}/g, (_, k: string) => {

@@ -14,8 +14,10 @@ export type Opts = {
   /** With --check: exit 2 when a step (other than an `always` one) is todo. */
   strict: boolean;
   newOwnerToken: boolean;
-  /** Render the BROWSER binding (Browser Run). Default on; --no-browser or saved state turns it off. */
+  /** Render BROWSER + SERVER_THUMBNAILS (Paid only): decided by prereqs from browserFlag, the plan, then state. */
   browser: boolean;
+  /** --browser (true) or --no-browser (false). */
+  browserFlag?: boolean;
   /** --team/--solo, else saved state; undefined: prereqs asks (or defaults to solo). */
   teamChoice?: boolean;
   /** --team was passed. */
@@ -28,6 +30,8 @@ export type Opts = {
   email: boolean;
   /** The Email Sending domain: --email-domain, saved state, else mail.<app host>. */
   emailDomain?: string;
+  /** --email-domain was passed this run (an apex is never reused from state). */
+  emailDomainFlag: boolean;
   /** --yes-email-domain: accept a domain with existing mail records non-interactively. */
   yesEmailDomain: boolean;
   /** --yes-paid: the account is on Workers Paid though setup read free or unknown. */

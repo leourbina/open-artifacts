@@ -103,6 +103,8 @@ type World = {
   subscriptions?: Obj[];
   /** The deployed Worker's settings omit the send_email binding. */
   dropSendEmail?: boolean;
+  /** GET worker settings answers 500. */
+  settingsFail?: boolean;
 };
 type Dns = { name: string; type: string; content: string };
 
@@ -178,6 +180,7 @@ export function world(w: World = {}) {
     ...w,
   };
   const dns: Dns[] = [...(w.dns ?? [])];
+  let subscriptions = w.subscriptions;
   const policies: Obj[] = [...(w.policies ?? [])];
   const apps: Obj[] = [...(w.apps ?? [])];
   let secrets = w.secrets && [...w.secrets];
@@ -616,6 +619,11 @@ export function world(w: World = {}) {
           q("status") === "active" && acct.zones.includes(q("name") ?? "");
         return envelope(ok ? [{ id: "z", name: q("name") }] : []);
       }
+      // DNS, billing and email are read-only here: a write is a bug.
+      if (m !== "GET" && /\/dns_records|\/subscriptions|\/email/.test(p)) {
+        ops.push(`WRITE ${m} ${p}`);
+        return envelope(null, 405, [{ message: "method not allowed" }]);
+      }
       if (/^\/zones\/[^/]+\/dns_records$/.test(p)) {
         if (w.dnsForbidden)
           return envelope(null, 403, [
@@ -629,11 +637,13 @@ export function world(w: World = {}) {
         );
       }
       if (p.endsWith("/subscriptions")) {
-        if (!w.subscriptions)
+        if (!subscriptions)
           return envelope(null, 403, [
             { code: 10000, message: "Authentication error" },
           ]);
-        return envelope(w.subscriptions);
+        return Array.isArray(subscriptions)
+          ? paged(subscriptions, q)
+          : envelope(subscriptions);
       }
       // The real ?name= filter is a fuzzy match, so exact names may sit past page 1.
       if (p.endsWith("/d1/database"))
@@ -642,6 +652,8 @@ export function world(w: World = {}) {
           q,
         );
       const settings = p.match(/\/workers\/scripts\/([^/]+)\/settings$/);
+      if (settings && m === "GET" && w.settingsFail)
+        return envelope(null, 500, [{ message: "internal error" }]);
       if (settings && m === "GET") {
         const full = deployedConfig
           ? JSON.parse(stripComments(deployedConfig))
@@ -664,6 +676,9 @@ export function world(w: World = {}) {
           ...(w.dropSendEmail ? [] : (full?.send_email ?? [])).map(
             (b: { name: string }) => ({ type: "send_email", name: b.name }),
           ),
+          ...(full?.browser
+            ? [{ type: "browser", name: full.browser.binding }]
+            : []),
         ];
         return envelope({ bindings });
       }
@@ -702,6 +717,9 @@ export function world(w: World = {}) {
     creates,
     zoneQueries,
     dns,
+    setSubscriptions: (x: Obj[] | undefined) => {
+      subscriptions = x;
+    },
     acct,
     ops,
     values,
@@ -719,4 +737,7 @@ export const HOSTS = [
     "a.b.usercontent.example.com",
   ],
   ...["--owner-email", "owner@example.com", "--yes", "--json"],
+  "--solo",
 ];
+/** HOSTS without --solo: for --team runs and the no-choice cases. */
+export const BASE = HOSTS.filter((a) => a !== "--solo");

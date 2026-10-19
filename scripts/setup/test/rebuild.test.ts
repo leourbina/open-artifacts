@@ -227,7 +227,7 @@ describe("--check is read-only", () => {
       "state:ok",
     ]);
     expect(line(w, "state").data).toEqual({
-      browser: true,
+      browser: false,
       plan: "unknown",
       team: false,
       email: false,

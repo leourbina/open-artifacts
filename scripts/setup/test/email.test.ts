@@ -5,7 +5,7 @@ import { run } from "../src/index.ts";
 import { DASH_SENDING, records } from "../src/steps/email.ts";
 import { renderConfig } from "../src/steps/resources.ts";
 import { ROOT, STATE } from "./fakes.ts";
-import { HOSTS, onboarded, world } from "./world.ts";
+import { BASE, HOSTS, onboarded, world } from "./world.ts";
 
 const CONFIG = join(ROOT, "apps/server/wrangler.jsonc");
 const TEMPLATE = readFileSync(
@@ -13,18 +13,18 @@ const TEMPLATE = readFileSync(
   "utf8",
 );
 const D = "mail.app.example.com";
-const TEAM = [...HOSTS, "--team", "--yes-paid"];
+const TEAM = [...BASE, "--team", "--yes-paid"];
 const parse = (lines: string[]) => lines.map((l) => JSON.parse(l));
 const line = (lines: string[], step: string) =>
   parse(lines).find((j) => j.step === step);
 const cfg = (w: { files: Map<string, string> }) =>
   JSON.parse(w.files.get(CONFIG) ?? "");
-const interactive = HOSTS.filter((a) => a !== "--yes" && a !== "--json");
+const interactive = BASE.filter((a) => a !== "--yes" && a !== "--json");
 const PAID = [{ rate_plan: { id: "WORKERS_PAID" }, state: "Paid" }];
 const FREE_CODES = ["cpu-limit", "kv-writes", "no-email", "individual-use"];
 
 describe("team/solo and the email step", () => {
-  it("solo (the non-interactive default) omits the binding and EMAIL_FROM", async () => {
+  it("--solo omits the binding and EMAIL_FROM", async () => {
     const w = world();
     expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
     const c = cfg(w);
@@ -34,7 +34,7 @@ describe("team/solo and the email step", () => {
     expect(line(w.lines, "email")).toMatchObject({ status: "skipped" });
   });
 
-  it("--yes without --json also defaults to solo", async () => {
+  it("--yes --solo without --json is solo", async () => {
     const w = world();
     const yes = HOSTS.filter((a) => a !== "--json");
     expect(await run(yes, w.deps, ROOT)).toBe(0);
@@ -82,7 +82,7 @@ describe("team/solo and the email step", () => {
     // Idempotent: once onboarded, the re-run re-checks and passes.
     w.dns.push(...onboarded(D));
     w.lines.length = 0;
-    expect(await run([...HOSTS, "--yes-paid"], w.deps, ROOT)).toBe(0);
+    expect(await run([...BASE, "--yes-paid"], w.deps, ROOT)).toBe(0);
     expect(line(w.lines, "email").status).toBe("skipped");
   });
 
@@ -132,7 +132,7 @@ describe("team/solo and the email step", () => {
 
   it("team with the plan unknown (no --yes-paid) warns and keeps email off", async () => {
     const w = world();
-    expect(await run([...HOSTS, "--team"], w.deps, ROOT)).toBe(0);
+    expect(await run([...BASE, "--team"], w.deps, ROOT)).toBe(0);
     const l = line(w.lines, "prereqs");
     expect(l.message).toContain("invites can't be sent");
     expect(l.message).toContain("--yes-paid");
@@ -144,17 +144,20 @@ describe("team/solo and the email step", () => {
     const w = world({
       dns: onboarded(D),
       subscriptions: [
-        { rate_plan: { id: "workers_paid", public_name: "Workers Paid" } },
+        {
+          rate_plan: { id: "workers_paid", public_name: "Workers Paid" },
+          state: "Paid",
+        },
       ],
     });
-    expect(await run([...HOSTS, "--team"], w.deps, ROOT)).toBe(0);
+    expect(await run([...BASE, "--team"], w.deps, ROOT)).toBe(0);
     expect(cfg(w).send_email).toEqual([{ name: "EMAIL" }]);
   });
 
   it("--upgrade keeps saved team/email/emailDomain", async () => {
     const w = world({ dns: onboarded(D) });
     expect(await run(TEAM, w.deps, ROOT)).toBe(0);
-    expect(await run([...HOSTS, "--upgrade"], w.deps, ROOT)).toBe(0);
+    expect(await run([...BASE, "--upgrade"], w.deps, ROOT)).toBe(0);
     expect(cfg(w).send_email).toEqual([{ name: "EMAIL" }]);
     expect(w.state()).toMatchObject({
       team: true,
@@ -163,7 +166,7 @@ describe("team/solo and the email step", () => {
     });
     const s = world();
     expect(await run(HOSTS, s.deps, ROOT)).toBe(0);
-    expect(await run([...HOSTS, "--upgrade"], s.deps, ROOT)).toBe(0);
+    expect(await run([...BASE, "--upgrade"], s.deps, ROOT)).toBe(0);
     expect(s.state()).toMatchObject({ team: false, email: false });
     expect(cfg(s)).not.toHaveProperty("send_email");
   });
@@ -188,7 +191,7 @@ describe("team/solo and the email step", () => {
     const w = world({ dns: onboarded(D) });
     await run(TEAM, w.deps, ROOT);
     w.lines.length = 0;
-    await run([...HOSTS.filter((a) => a !== "--yes"), "--check"], w.deps, ROOT);
+    await run([...BASE.filter((a) => a !== "--yes"), "--check"], w.deps, ROOT);
     expect(parse(w.lines).at(-1).data).toMatchObject({
       team: true,
       email: true,
@@ -213,7 +216,7 @@ describe("team/solo and the email step", () => {
 
   it("--solo and --team conflict", async () => {
     const w = world();
-    expect(await run([...HOSTS, "--solo", "--team"], w.deps, ROOT)).toBe(1);
+    expect(await run([...BASE, "--solo", "--team"], w.deps, ROOT)).toBe(1);
   });
 });
 
@@ -278,18 +281,18 @@ describe("plan detection (prereqs)", () => {
 
   it("paid: Workers Paid detected, no free warnings, team gets email without --yes-paid", async () => {
     const w = world({ subscriptions: PAID, dns: onboarded(D) });
-    expect(await run([...HOSTS, "--team"], w.deps, ROOT)).toBe(0);
+    expect(await run([...BASE, "--team"], w.deps, ROOT)).toBe(0);
     expect(pre(w).data).toEqual({ plan: "paid", warnings: [] });
     expect(pre(w).message).toBe("Workers Paid detected");
     expect(cfg(w).send_email).toEqual([{ name: "EMAIL" }]);
   });
 
-  it("free: warnings shown, solo by default", async () => {
+  it("free: warnings shown, --solo", async () => {
     const w = world({ subscriptions: [{ rate_plan: { id: "free" } }] });
     expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
     expect(planOf(w)).toEqual({ plan: "free", codes: FREE_CODES });
-    expect(pre(w).message).toContain("10 ms of CPU");
-    expect(pre(w).message).toContain("1,000 KV writes per day");
+    expect(pre(w).message).toContain("small amount of processing time");
+    expect(pre(w).message).toContain("sign-ins can be saved each day");
     expect(w.state()).toMatchObject({ plan: "free", team: false });
   });
 
@@ -318,11 +321,11 @@ describe("plan detection (prereqs)", () => {
   it("team on free keeps email off unless --yes-paid", async () => {
     const free = [{ rate_plan: { id: "free" } }];
     const w = world({ subscriptions: free });
-    expect(await run([...HOSTS, "--team"], w.deps, ROOT)).toBe(0);
+    expect(await run([...BASE, "--team"], w.deps, ROOT)).toBe(0);
     expect(pre(w).message).toContain("invites can't be sent");
     expect(w.state()).toMatchObject({ team: true, email: false });
     const y = world({ subscriptions: free, dns: onboarded(D) });
-    expect(await run([...HOSTS, "--team", "--yes-paid"], y.deps, ROOT)).toBe(0);
+    expect(await run([...BASE, "--team", "--yes-paid"], y.deps, ROOT)).toBe(0);
     expect(y.state()).toMatchObject({ team: true, email: true });
   });
 
@@ -355,7 +358,7 @@ describe("plan detection (prereqs)", () => {
     const w = world({ subscriptions: PAID });
     await run(HOSTS, w.deps, ROOT);
     w.lines.length = 0;
-    await run([...HOSTS.filter((a) => a !== "--yes"), "--check"], w.deps, ROOT);
+    await run([...BASE.filter((a) => a !== "--yes"), "--check"], w.deps, ROOT);
     expect(parse(w.lines).at(-1).data.plan).toBe("paid");
   });
 });

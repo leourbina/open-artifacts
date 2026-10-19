@@ -102,5 +102,17 @@ describe("prod-setup.sh", () => {
       expect(r.calls[1]).not.toContain("--check");
       expect(r.calls[2]).toContain("--ci --revoke-ci-tokens");
     });
+    it("install, preflight and upgrade pass --solo --browser; cleanup does not", () => {
+      // Prod is Workers Paid, but stateless CI reads the plan as unknown and
+      // --json never guesses team: both are explicit. No email flags yet.
+      const r = sequence(false);
+      for (const c of r.calls.slice(0, 2))
+        expect(c).toContain("--solo --browser");
+      expect(install([ok("a")]).calls[0]).toContain("--solo --browser");
+      expect(r.calls[2]).not.toContain("--solo");
+      expect(r.calls[2]).not.toContain("--browser");
+      for (const c of r.calls)
+        expect(c).not.toMatch(/--team|email-domain|yes-paid/);
+    });
   });
 });
