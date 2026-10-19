@@ -56,9 +56,10 @@ export async function enqueueIndex(
   env: Env,
   id: string,
   version: number,
+  thumb = false,
 ): Promise<void> {
   try {
-    await runtimeStub(env, id).scheduleIndex(id, version);
+    await runtimeStub(env, id).scheduleIndex(id, version, thumb);
   } catch (e) {
     console.error(
       JSON.stringify({
@@ -297,7 +298,7 @@ export async function publish(
       throw new ApiError("conflict", "An upload was already used");
     throw notFound();
   }
-  await enqueueIndex(env, id, version);
+  await enqueueIndex(env, id, version, true);
   if (accessChanged)
     await closeRuntimeSockets(env, [id], "access changed", ctx);
   return { id, version, url: appOrigin(env) + viewerPath(id) };
@@ -729,8 +730,12 @@ export async function putThumbnail(
   }
   if (!isWebp(bytes)) throw new ApiError("bad_request", "Body must be WebP");
   const key = `thumbs/${id}.webp`;
+  // The version it shows, so a server capture of that version skips (thumbs.ts).
+  const meta = {
+    customMetadata: { v: String(r.artifact.currentVersion), by: "client" },
+  };
   if (editor) {
-    await env.FILES.put(key, bytes);
+    await env.FILES.put(key, bytes, meta);
     await env.DB.prepare("update artifacts set has_thumbnail = 1 where id = ?")
       .bind(id)
       .run();
@@ -743,7 +748,7 @@ export async function putThumbnail(
     .first();
   if (!claimed) throw notFound();
   try {
-    await env.FILES.put(key, bytes);
+    await env.FILES.put(key, bytes, meta);
   } catch (e) {
     await env.DB.prepare("update artifacts set has_thumbnail = 0 where id = ?")
       .bind(id)
@@ -795,7 +800,7 @@ export async function restoreVersion(
   ]);
   const version = res[0]?.results[0]?.current_version;
   if (version === undefined) throw notFound();
-  await enqueueIndex(env, id, version);
+  await enqueueIndex(env, id, version, true);
   return { id, version, url: appOrigin(env) + viewerPath(id) };
 }
 

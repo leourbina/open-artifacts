@@ -19,6 +19,11 @@ import {
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
 import { indexVersionOrThrow } from "../services/search.js";
+import {
+  captureThumbnail,
+  THUMB,
+  type ThumbResult,
+} from "../services/thumbs.js";
 
 // Errors cross the RPC boundary as plain Error (subclass + fields are lost), so the
 // code rides in the message: "oa:<code>:<message>". B13 maps it back with toRuntimeApiError.
@@ -76,6 +81,8 @@ export const INDEX_DELAY_MS = LIMITS.indexDebounceMs;
 export const INDEX_MAX_ATTEMPTS = 5;
 /** Retry delay after the n-th failure (1-based): 10 s, 20 s, 40 s, 80 s. */
 export const indexBackoffMs = (n: number) => 10_000 * 2 ** (n - 1);
+/** Thumbnail captures deferred (launch slot taken) this often are dropped: ~10 min. */
+export const THUMB_MAX_DEFERS = 30;
 /** Header carrying the subscriber's actor from the route to fetch. */
 export const ACTOR_HEADER = "X-OA-Actor";
 /**
@@ -237,6 +244,10 @@ create table if not exists index_job (
   version integer not null, attempts integer not null, due integer not null,
   seq integer not null
 );
+create table if not exists thumb_job (
+  id integer primary key check (id = 1), artifact_id text not null,
+  version integer not null, defers integer not null, due integer not null
+);
 `;
 
 type SqlParam = string | number | null;
@@ -260,6 +271,13 @@ export class ArtifactRuntime extends DurableObject<Env> {
     artifactId: string,
     version: number,
   ) => Promise<void> = indexVersionOrThrow;
+
+  /** The thumbnail capture the alarm runs; overridable in tests. */
+  thumbnailer: (
+    env: Env,
+    artifactId: string,
+    version: number,
+  ) => Promise<ThumbResult> = captureThumbnail;
 
   /**
    * Creates the schema (and migrates pre-M2 tables) outside any transaction:
@@ -875,9 +893,14 @@ export class ArtifactRuntime extends DurableObject<Env> {
    * A newer version replaces the job (attempts reset, due INDEX_DELAY_MS from
    * now); the same version only bumps `seq` (keeping any retry backoff), so a
    * re-enqueue while the alarm runs it is never dropped; an older one is
-   * ignored.
+   * ignored. With `thumb` (publish, restore) and a BROWSER binding, the same
+   * debounce queues a server-side thumbnail of the newest version.
    */
-  async scheduleIndex(artifactId: string, version: number): Promise<void> {
+  async scheduleIndex(
+    artifactId: string,
+    version: number,
+    thumb = false,
+  ): Promise<void> {
     if (typeof artifactId !== "string" || artifactId.length > 64)
       fail("bad_request", "invalid artifact id");
     if (!Number.isSafeInteger(version) || version < 1)
@@ -895,7 +918,42 @@ export class ArtifactRuntime extends DurableObject<Env> {
       version,
       due,
     );
+    if (thumb && this.env.BROWSER)
+      this.sql.exec(
+        `insert into thumb_job (id, artifact_id, version, defers, due) values (1, ?, ?, 0, ?)
+         on conflict (id) do update set artifact_id = excluded.artifact_id,
+           version = excluded.version, defers = 0, due = excluded.due
+         where excluded.version > thumb_job.version`,
+        artifactId,
+        version,
+        due,
+      );
     await this.armAt(due);
+  }
+
+  /** The pending thumbnail job, if any (tests and the alarm). */
+  pendingThumbnail(): {
+    artifactId: string;
+    version: number;
+    defers: number;
+    due: number;
+  } | null {
+    const r = this.sql
+      .exec<{
+        artifact_id: string;
+        version: number;
+        defers: number;
+        due: number;
+      }>("select artifact_id, version, defers, due from thumb_job where id = 1")
+      .toArray()[0];
+    return r
+      ? {
+          artifactId: r.artifact_id,
+          version: r.version,
+          defers: r.defers,
+          due: r.due,
+        }
+      : null;
   }
 
   /** The pending index job, if any (tests and the alarm). */
@@ -944,7 +1002,8 @@ export class ArtifactRuntime extends DurableObject<Env> {
   override async alarm(): Promise<void> {
     const sockets = this.ctx.getWebSockets();
     const job = this.pendingIndex();
-    if (!job && sockets.length === 0) return;
+    const thumb = this.pendingThumbnail();
+    if (!job && !thumb && sockets.length === 0) return;
     const now = this.now();
     let next = Number.POSITIVE_INFINITY;
     for (const ws of sockets) {
@@ -985,10 +1044,50 @@ export class ArtifactRuntime extends DurableObject<Env> {
           );
       }
     }
+    if (thumb && (thumb.defers === 0 || thumb.due <= now))
+      await this.runThumbnail(thumb);
     const pending = this.pendingIndex();
     if (pending) next = Math.min(next, pending.due);
+    const pendingThumb = this.pendingThumbnail();
+    if (pendingThumb) next = Math.min(next, pendingThumb.due);
     if (next !== Number.POSITIVE_INFINITY)
       await this.ctx.storage.setAlarm(next);
+  }
+
+  /**
+   * At most one capture (one browser session) per alarm run. Only a deferral
+   * (the account's launch slot was taken) keeps the job, up to
+   * THUMB_MAX_DEFERS; every other outcome, failures included, drops it: the
+   * client upload is the fallback. A newer version queued meanwhile stays.
+   */
+  private async runThumbnail(job: {
+    artifactId: string;
+    version: number;
+    defers: number;
+  }): Promise<void> {
+    let result: ThumbResult;
+    try {
+      result = await this.thumbnailer(this.env, job.artifactId, job.version);
+    } catch (e) {
+      console.error(
+        JSON.stringify({
+          evt: "thumbnail_failed",
+          artifactId: job.artifactId,
+          version: job.version,
+          error: String((e as Error)?.message ?? e).slice(0, 300),
+        }),
+      );
+      result = "failed";
+    }
+    const same = "where id = 1 and version = ?";
+    if (result === "deferred" && job.defers + 1 < THUMB_MAX_DEFERS)
+      this.sql.exec(
+        `update thumb_job set defers = ?, due = ? ${same}`,
+        job.defers + 1,
+        this.now() + THUMB.launchGapMs,
+        job.version,
+      );
+    else this.sql.exec(`delete from thumb_job ${same}`, job.version);
   }
 
   /** Subscribe-only feed: any client message closes the socket (1008 policy violation). */
