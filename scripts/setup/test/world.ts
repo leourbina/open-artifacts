@@ -121,6 +121,10 @@ type World = {
   deployFails?: string;
   /** `wrangler rollback` fails with this stderr. */
   rollbackFails?: string;
+  /** /healthz reports this `version` (absent: an install without it). */
+  healthVersion?: string;
+  /** The setup version-check request to /healthz fails (network error). */
+  healthzDown?: boolean;
   /** The live deployment splits traffic 50/50 across two versions. */
   splitDeployment?: boolean;
   /** GET deployments answers 403 (a token without Workers Scripts Read). */
@@ -462,6 +466,13 @@ export function world(w: World = {}) {
       const body = init?.body ? JSON.parse(String(init.body)) : undefined;
       const q = (k: string) => u.searchParams.get(k);
       if (u.host === "app.example.com") {
+        if (
+          u.pathname === "/healthz" &&
+          new Headers(init?.headers).get("x-oa-setup") === "version-check"
+        ) {
+          if (w.healthzDown) throw new Error("fetch failed");
+          return Response.json({ ok: true, version: w.healthVersion });
+        }
         if (u.pathname === "/healthz") {
           hits.push("GET /healthz");
           if (healthFails-- > 0)

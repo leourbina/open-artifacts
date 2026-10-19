@@ -14,6 +14,8 @@ export type Opts = {
   /** With --check: exit 2 when a step (other than an `always` one) is todo. */
   strict: boolean;
   newOwnerToken: boolean;
+  /** --allow-downgrade: deploy a checkout older than the deployed version. */
+  allowDowngrade: boolean;
   /** Render BROWSER + SERVER_THUMBNAILS (Paid only): decided by prereqs from browserFlag, the plan, then state. */
   browser: boolean;
   /** --browser (true) or --no-browser (false). */

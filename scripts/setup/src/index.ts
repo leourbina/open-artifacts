@@ -81,6 +81,7 @@ async function resolve(argv: string[], deps: Deps, state: State) {
       yes: { type: "boolean", default: false },
       upgrade: { type: "boolean", default: false },
       check: { type: "boolean", default: false },
+      "allow-downgrade": { type: "boolean", default: false },
       strict: { type: "boolean", default: false },
       "new-owner-token": { type: "boolean", default: false },
       json: { type: "boolean", default: false },
@@ -184,6 +185,7 @@ async function resolve(argv: string[], deps: Deps, state: State) {
     check: v.check,
     strict: v.strict,
     newOwnerToken: v["new-owner-token"],
+    allowDowngrade: v["allow-downgrade"],
     // Decided in prereqs: flag, then the plan (Paid only), then saved state.
     browser: false,
     browserFlag: v.browser ? true : v["no-browser"] ? false : undefined,
@@ -250,6 +252,7 @@ async function checkOnly(
         step: step.name,
         status: r,
         message: notes ? `${r}: ${notes}` : r,
+        ...(ctx.data === undefined ? {} : { data: ctx.data }),
       });
     } catch (e) {
       ctx.notes.length = 0;
@@ -279,6 +282,10 @@ async function checkOnly(
 export const HELP = `Usage: pnpm oa:setup [options]
   --name <n>  --app-host <h>  --content-host <h>  --owner-email <e>  --account-id <id>
   --yes  --upgrade  --check [--strict]  --json  --ci [--revoke-ci-tokens]  --new-owner-token
+  --allow-downgrade  Deploy a checkout older than the deployed version (from /healthz
+                version, else saved state). Without it setup stops with action_required
+                before the D1 migrations. D1 is not rolled back. --check reports
+                {repoVersion, liveVersion, downgrade} on the deploy line.
   --browser | --no-browser  Server-side thumbnails: the BROWSER binding (Browser Run)
                 and SERVER_THUMBNAILS=on. Paid only: on when the plan reads paid, off
                 on free; on unknown, saved state decides. --browser forces it on

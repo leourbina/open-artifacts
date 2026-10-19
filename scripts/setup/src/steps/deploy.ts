@@ -138,6 +138,44 @@ function repoVersion(ctx: Ctx): string {
   );
 }
 
+/** X.Y.Z of a version, dropping any -pre or +build suffix; undefined when it isn't one. */
+function base(v: unknown): number[] | undefined {
+  const m =
+    typeof v === "string"
+      ? v.match(/^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/)
+      : null;
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : undefined;
+}
+
+/** The deployed version: live /healthz `version`, else the saved one; a failed fetch is unknown. */
+async function liveVersion(state: State, ctx: Ctx) {
+  try {
+    const r = await ctx.deps.fetch(`https://${ctx.opts.appHost}/healthz`, {
+      headers: { "x-oa-setup": "version-check" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    const v = r.ok
+      ? ((await r.json().catch(() => ({}))) as { version?: unknown }).version
+      : undefined;
+    if (base(v)) return v as string;
+  } catch {}
+  return base(state.deployedVersion) ? state.deployedVersion : undefined;
+}
+
+async function versionGuard(state: State, ctx: Ctx) {
+  const repo = repoVersion(ctx);
+  const live = await liveVersion(state, ctx);
+  const [a, b] = [base(repo), base(live)];
+  // Suffixes (-dev+sha) are dropped: they are not a tag to check out.
+  const i = a && b ? a.findIndex((x, k) => x !== b[k]) : -1;
+  const downgrade = a && b ? i >= 0 && a[i] < b[i] : false;
+  return {
+    repoVersion: repo,
+    liveVersion: b?.join("."),
+    downgrade,
+  };
+}
+
 export const deploy: Step = {
   name: "deploy",
   always: true,
@@ -147,6 +185,7 @@ export const deploy: Step = {
       ctx.mustRun = true;
       ctx.notes.push(`Worker ${ctx.opts.name} never deployed`);
     }
+    if (ctx.opts.check) ctx.data = await versionGuard(state, ctx);
     // A pending downgrade refusal is drift too: report it instead of a clean check.
     if (ctx.opts.check) {
       try {
@@ -167,6 +206,20 @@ export const deploy: Step = {
   },
   async apply(state, ctx) {
     const vars = renderedVars(ctx);
+    const ver = await versionGuard(state, ctx);
+    if (ver.downgrade && !ctx.opts.allowDowngrade)
+      return {
+        status: "action_required",
+        message: `this checkout is ${ver.repoVersion}, older than the deployed ${ver.liveVersion}; check out ${ver.liveVersion} or newer (git checkout v${ver.liveVersion}), or pass --allow-downgrade to deploy an older release on purpose`,
+      };
+    if (ver.downgrade)
+      ctx.notes.push(
+        `downgrading ${ver.liveVersion} → ${ver.repoVersion}; D1 is not rolled back`,
+      );
+    else if (!ver.liveVersion)
+      ctx.notes.push(
+        "no version guard: the deployed version is unknown (no /healthz version or saved state)",
+      );
     const cfg = JSON.parse(
       stripComments(ctx.fs.read(join(ctx.root, CONFIG)) ?? "{}"),
     ) as Rendered;
@@ -208,7 +261,7 @@ export const deploy: Step = {
     state.deployedVersion = repoVersion(ctx);
     state.planVar = ctx.opts.planVar;
     ctx.notes.push(`deployed ${state.deployedVersion}`);
-    ctx.data = { deployedVersion: state.deployedVersion };
+    ctx.data = { deployedVersion: state.deployedVersion, ...ver };
     return undefined;
   },
 };
