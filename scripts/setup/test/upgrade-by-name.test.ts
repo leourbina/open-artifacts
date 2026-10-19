@@ -88,7 +88,8 @@ describe("--upgrade --name without saved state", () => {
     // Access still refuses a host or owner that differs from the deployed one.
     expect(await run(argv, w.deps, ROOT)).toBe(2);
     expect(line(w, "access").message).toContain("differs in OWNER_EMAIL");
-    expect(w.state().ownerEmail).toBe("other@example.com");
+    // The refused flag is not persisted.
+    expect(w.state().ownerEmail).toBe("owner@example.com");
     const all = w.lines.join("\n");
     expect(all).toContain("--owner-email other@example.com differs");
     expect(all).toContain("owner@example.com");
@@ -118,10 +119,13 @@ describe("--upgrade --name without saved state", () => {
   it("passing the flag covers a missing var", async () => {
     const { APP_HOST: _, ...rest } = VARS;
     const w = ok(cloud({ worker: rest }));
-    await run([...ONLY, "--app-host", "app.example.com"], w.deps, ROOT);
-    // Past argument resolution: only a later step (access) objects.
+    // Past argument resolution; access then refuses an APP_HOST the Worker lacks.
+    expect(
+      await run([...ONLY, "--app-host", "app.example.com"], w.deps, ROOT),
+    ).toBe(2);
     expect(line(w, "args")).toBeUndefined();
-    expect(line(w, "prereqs")).toBeDefined();
+    expect(line(w, "access").message).toContain("differs in APP_HOST");
+    expect(w.state().appHost).toBeUndefined();
   });
 
   it("never reads or prints secret_text values", async () => {
@@ -168,20 +172,47 @@ describe("--upgrade --name without saved state", () => {
     expect(w.ops).toEqual([]);
   });
 
-  it("saved state wins over the Worker's vars and is untouched", async () => {
-    const w = ok(
-      cloud({
-        state: {
-          name: "open-artifacts",
-          appHost: "saved.example.com",
-          contentHost: "a.b.usercontent.example.com",
-          ownerEmail: "owner@example.com",
-        },
-      }),
-    );
-    await run(ONLY, w.deps, ROOT);
-    expect(w.state().appHost).toBe("saved.example.com");
+  it("saved state wins, is untouched, and the Worker is not read for it", async () => {
+    const saved = {
+      name: "open-artifacts",
+      appHost: "saved.example.com",
+      contentHost: "a.b.usercontent.example.com",
+      ownerEmail: "owner@example.com",
+    };
+    const w = cloud({ state: saved });
+    const at: number[] = [];
+    const f = w.deps.fetch;
+    w.deps.fetch = async (i, init) => {
+      if (/\/workers\/scripts\/[^/]+\/settings/.test(String(i)))
+        at.push(w.lines.length);
+      return f(i, init);
+    };
+    const before = w.files.get(STATE);
+    const argv = ["--name", "open-artifacts", "--json", "--upgrade", "--check"];
+    // Access reports the saved host as drift (exit 2): the saved value won.
+    expect(await run(argv, w.deps, ROOT)).toBe(2);
+    expect(w.files.get(STATE)).toBe(before);
+    // No by-name lookup: nothing read the settings before the steps ran.
+    expect(at.filter((n) => n === 0)).toEqual([]);
     expect(parse(w).at(-1).data?.sources).toBeUndefined();
+    expect(w.state()).toEqual(saved);
+  });
+
+  it("without state the lookup comes before any step", async () => {
+    const w = cloud();
+    const at: number[] = [];
+    const f = w.deps.fetch;
+    w.deps.fetch = async (i, init) => {
+      if (/\/workers\/scripts\/[^/]+\/settings/.test(String(i)))
+        at.push(w.lines.length);
+      return f(i, init);
+    };
+    await run(
+      ["--name", "open-artifacts", "--json", "--upgrade", "--check"],
+      w.deps,
+      ROOT,
+    );
+    expect(at[0]).toBe(0);
   });
 
   it("is not read without --upgrade", async () => {
@@ -189,6 +220,42 @@ describe("--upgrade --name without saved state", () => {
     const argv = ONLY.filter((a) => a !== "--upgrade");
     expect(await run(argv, w.deps, ROOT)).not.toBe(0);
     expect(line(w, "args").message).toContain("--app-host");
+  });
+});
+
+describe("--upgrade --name edge cases", () => {
+  it("a flag without a value is action_required, not a crash", async () => {
+    const w = cloud();
+    expect(await run([...ONLY, "--app-host"], w.deps, ROOT)).toBe(2);
+    expect(line(w, "args")).toMatchObject({ status: "action_required" });
+    expect(line(w, "args").message).toContain("pass --app-host");
+  });
+
+  it("a 403 on the settings read names Workers Scripts Read", async () => {
+    const w = cloud({ settingsForbidden: true });
+    expect(await run(ONLY, w.deps, ROOT)).toBe(2);
+    expect(line(w, "args")).toMatchObject({ status: "action_required" });
+    expect(line(w, "args").message).toContain("Workers Scripts Read");
+  });
+
+  it("several accounts without --account-id is action_required", async () => {
+    const w = cloud({ accounts: ["acc1", "acc2"] });
+    expect(await run(ONLY, w.deps, ROOT)).toBe(2);
+    expect(line(w, "args").message).toContain("pass --account-id");
+    expect(w.ops).toEqual([]);
+  });
+
+  it("--account-id picks the account among several", async () => {
+    const w = ok(cloud({ accounts: ["acc1", "acc2"] }));
+    expect(await run([...ONLY, "--account-id", "acc1"], w.deps, ROOT)).toBe(0);
+  });
+
+  it("works under --ci, which never writes state.json", async () => {
+    const w = ok(cloud());
+    const argv = ["--name", "open-artifacts", "--ci", "--upgrade"];
+    expect(await run(argv, w.deps, ROOT)).toBe(0);
+    expect(w.files.has(STATE)).toBe(false);
+    expect(parse(w).at(-1).data.sources.appHost).toBe("worker");
   });
 });
 

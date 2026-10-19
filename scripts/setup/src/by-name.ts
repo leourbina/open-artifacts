@@ -15,6 +15,8 @@ export type Deployed = {
   contentHost?: string;
   ownerEmail?: string;
   sources: Sources;
+  /** The deployed values, to restore over a flag when the run is refused. */
+  live: Partial<Record<keyof Sources, string>>;
   notes: string[];
 };
 
@@ -71,7 +73,17 @@ export async function fromWorker(
       );
     accountId = accounts[0].id;
   }
-  const bindings = await scriptBindings(makeApi(d, wrangler), name, accountId);
+  const bindings = await scriptBindings(
+    makeApi(d, wrangler),
+    name,
+    accountId,
+  ).catch((e) => {
+    if ([401, 403].includes((e as { status?: number }).status ?? 0))
+      throw new NeedInput(
+        `could not read Worker ${name}'s settings (${(e as Error).message}); the token needs Workers Scripts Read`,
+      );
+    throw e;
+  });
   if (!bindings)
     throw new NeedInput(
       `no Worker named ${name} on account ${accountId}; check --name (the Worker name from setup) or --account-id`,
@@ -84,16 +96,22 @@ export async function fromWorker(
   const out: Deployed = {
     accountId,
     sources: {} as Sources,
+    live: {},
     notes: [],
   };
   for (const [key, flag, varName] of FIELDS) {
-    const given = v[flag] as string | undefined;
+    const given = v[flag];
     const live = vars.get(varName) || undefined;
+    out.live[key] = live;
+    if (given === true)
+      throw new NeedInput(
+        `pass --${flag} <value> (the flag was given without one)`,
+      );
     if (given === undefined && !live)
       throw new NeedInput(
         `pass --${flag} (the deployed Worker has no ${varName})`,
       );
-    if (given !== undefined) {
+    if (typeof given === "string") {
       out.sources[key] = "flag";
       if (live && given.toLowerCase() !== live.toLowerCase())
         out.notes.push(

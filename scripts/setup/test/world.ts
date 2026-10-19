@@ -111,6 +111,8 @@ type World = {
   subscriptions?: Obj[];
   /** The deployed Worker's settings omit the send_email binding. */
   dropSendEmail?: boolean;
+  /** GET worker settings answers 403 (a token without Workers Scripts Read). */
+  settingsForbidden?: boolean;
   /** GET worker settings answers 500. */
   settingsFail?: boolean;
   /** Process env handed to the setup run. */
@@ -741,6 +743,8 @@ export function world(w: World = {}) {
         });
       }
       const settings = p.match(/\/workers\/scripts\/([^/]+)\/settings$/);
+      if (settings && m === "GET" && w.settingsForbidden)
+        return envelope(null, 403, [{ message: "Authentication error" }]);
       if (settings && m === "GET" && w.settingsFail)
         return envelope(null, 500, [{ message: "internal error" }]);
       if (settings && m === "GET") {

@@ -1,7 +1,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { type Deployed, fromWorker } from "./by-name.ts";
+import { type Deployed, fromWorker, type Sources } from "./by-name.ts";
 import { type Deps, makeApi, makeWrangler, realDeps, realFs } from "./cf.ts";
 import { readOnlyDeps } from "./readonly.ts";
 import { rollbackCommand } from "./rollback.ts";
@@ -473,6 +473,14 @@ export async function run(
     }
   }
   if (opts.check) return checkOnly(steps, state, ctx, report);
+  // A refused by-name run must not leave a flag that contradicts the Worker in state.json.
+  let refused = false;
+  const persist = () => {
+    if (refused && deployed)
+      for (const k of Object.keys(deployed.live) as (keyof Sources)[])
+        if (deployed.sources[k] === "flag") state[k] = deployed.live[k];
+    writeState(fs, root, state);
+  };
   const runSteps = async (): Promise<number> => {
     for (const step of steps) {
       human = ctx.data = ctx.human = undefined;
@@ -485,12 +493,14 @@ export async function run(
         ctx.notes.length = 0;
         const r = await step.apply(state, ctx);
         if (r) {
+          refused = true;
           ctx.notes.length = 0;
           report({ step: step.name, ...r });
           return 2;
         }
         report({ ...take("ok", "done"), step: step.name });
       } catch (e) {
+        refused = true;
         ctx.notes.length = 0;
         const message = (e as Error).message;
         if (e instanceof NeedInput) {
@@ -500,7 +510,7 @@ export async function run(
         report({ step: step.name, status: "error", message });
         return (e as { exitCode?: number }).exitCode ?? 1;
       } finally {
-        writeState(fs, root, state);
+        persist();
       }
     }
     writeState(fs, root, state);
