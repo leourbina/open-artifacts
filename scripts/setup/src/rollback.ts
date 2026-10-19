@@ -1,6 +1,7 @@
 import { parseArgs } from "node:util";
-import { type Deps, makeWrangler, realFs } from "./cf.ts";
+import { type Deps, makeApi, makeWrangler, realFs } from "./cf.ts";
 import { readState, writeState } from "./state.ts";
+import { currentVersion } from "./worker.ts";
 
 const PAT_RE = /oa_pat_[1-9A-HJ-NP-Za-km-z]+/g;
 
@@ -52,31 +53,63 @@ export async function rollbackCommand(
   }
   const fs = deps.fs ?? realFs;
   const state = readState(fs, root);
-  const name = (v.name as string | undefined) ?? state.name ?? "open-artifacts";
+  const name = state.name ?? (v.name as string | undefined) ?? "open-artifacts";
+  const accountId =
+    state.accountId ??
+    (v["account-id"] as string | undefined) ??
+    deps.env.CLOUDFLARE_ACCOUNT_ID;
+  if (v.name !== undefined && v.name !== name) {
+    report(
+      "error",
+      "args",
+      `--name ${v.name} differs from saved --name ${name}`,
+    );
+    return 1;
+  }
+  if (v["account-id"] !== undefined && v["account-id"] !== accountId) {
+    report("error", "args", "--account-id differs from the saved account");
+    return 1;
+  }
   const to = state.previousWorkerVersion;
+  const dashboard = `roll back in the dashboard: Workers → ${name} → Deployments`;
   if (!to) {
     report(
       "action_required",
       "rollback",
-      `no previous version is recorded; roll back in the dashboard: Workers → ${name} → Deployments`,
+      `no previous version is recorded; ${dashboard}`,
     );
     return 2;
   }
-  const accountId =
-    (v["account-id"] as string | undefined) ??
-    state.accountId ??
-    deps.env.CLOUDFLARE_ACCOUNT_ID;
   const wrangler = makeWrangler(deps, root, () => accountId);
+  let live: string | undefined;
   try {
-    await wrangler(["rollback", to, "--message", "oa:setup --rollback", "-y"]);
+    live = await currentVersion(makeApi(deps, wrangler), name, accountId ?? "");
+  } catch {}
+  if (!live || live !== state.workerVersion) {
+    report(
+      "action_required",
+      "rollback",
+      `the live Worker (${live ?? "unreadable"}) isn't the one setup last deployed; ${dashboard}`,
+    );
+    return 2;
+  }
+  try {
+    await wrangler([
+      "rollback",
+      to,
+      "--name",
+      name,
+      "--message",
+      "oa:setup --rollback",
+      "-y",
+    ]);
   } catch (e) {
     report("error", "rollback", (e as Error).message);
     return 1;
   }
-  const from = state.workerVersion;
   state.workerVersion = to;
-  state.previousWorkerVersion = from;
+  state.previousWorkerVersion = live;
   writeState(fs, root, state);
-  report("ok", "rollback", `rolled ${name} back to ${to}`, { from, to });
+  report("ok", "rollback", `rolled ${name} back to ${to}`, { from: live, to });
   return 0;
 }

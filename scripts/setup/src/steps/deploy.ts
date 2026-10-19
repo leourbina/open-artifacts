@@ -75,13 +75,13 @@ function drops(ctx: Ctx, live: Live, cfg: Rendered) {
   return out;
 }
 
-/** The live Worker version id; a failed read only warns, and never blocks the deploy. */
+/** The live Worker version id before a deploy; unreadable or split reads as none, with a note. */
 async function readVersion(ctx: Ctx, state: State) {
   try {
-    return await currentVersion(ctx, state.accountId ?? "");
+    return await currentVersion(ctx.api, ctx.opts.name, state.accountId ?? "");
   } catch (e) {
     ctx.notes.push(
-      `warning: could not read the live Worker version (${(e as Error).message}); --rollback may have no target`,
+      `warning: could not read the live Worker version (${(e as Error).message}); previousWorkerVersion left unset, so --rollback has no target`,
     );
     return undefined;
   }
@@ -198,10 +198,13 @@ export const deploy: Step = {
     const d1 = names(ctx.opts.name).d1;
     await ctx.wrangler(["d1", "migrations", "apply", d1, "--remote"]);
     const replaced = await readVersion(ctx, state);
-    await ctx.wrangler(["deploy"]);
-    if (replaced) state.previousWorkerVersion = replaced;
-    const now = await readVersion(ctx, state);
-    if (now) state.workerVersion = now;
+    const out = await ctx.wrangler(["deploy"]);
+    state.previousWorkerVersion = replaced;
+    state.workerVersion = out.match(/Current Version ID:\s*(\S+)/)?.[1];
+    if (!state.workerVersion)
+      ctx.notes.push(
+        "warning: could not read the new version id from wrangler's output; --rollback will refuse until the next deploy",
+      );
     state.deployedVersion = repoVersion(ctx);
     state.planVar = ctx.opts.planVar;
     ctx.notes.push(`deployed ${state.deployedVersion}`);

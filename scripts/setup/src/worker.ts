@@ -45,15 +45,23 @@ type Deployments = {
 };
 
 /**
- * The version id serving 100% of traffic, from `GET .../workers/scripts/{name}/deployments`
- * (newest first). Undefined when no Worker is deployed (404) or nothing is at 100%.
+ * The version id serving all traffic, from `GET .../workers/scripts/{name}/deployments`
+ * (newest first). Undefined when no Worker is deployed (404); throws when
+ * traffic is split or empty, since no single version is "current".
  */
-export async function currentVersion(ctx: Ctx, accountId: string) {
-  const path = `/accounts/${accountId}/workers/scripts/${encodeURIComponent(ctx.opts.name)}/deployments`;
-  const res = await ctx.api<Deployments>("GET", path).catch((e) => {
+export async function currentVersion(
+  api: Ctx["api"],
+  name: string,
+  accountId: string,
+) {
+  const path = `/accounts/${accountId}/workers/scripts/${encodeURIComponent(name)}/deployments`;
+  const res = await api<Deployments>("GET", path).catch((e) => {
     if ((e as { status?: number }).status === 404) return undefined;
     throw e;
   });
-  return res?.deployments?.[0]?.versions?.find((v) => v.percentage === 100)
-    ?.version_id;
+  if (!res) return undefined;
+  const vs = res.deployments?.[0]?.versions ?? [];
+  if (vs.length !== 1 || vs[0].percentage !== 100)
+    throw new Error("traffic is split across versions or not readable");
+  return vs[0].version_id;
 }

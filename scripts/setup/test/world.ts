@@ -121,6 +121,8 @@ type World = {
   deployFails?: string;
   /** `wrangler rollback` fails with this stderr. */
   rollbackFails?: string;
+  /** The live deployment splits traffic 50/50 across two versions. */
+  splitDeployment?: boolean;
   /** GET deployments answers 500. */
   deploymentsFail?: boolean;
 };
@@ -400,7 +402,7 @@ export function world(w: World = {}) {
         /^d1 execute ([\w-]+) --remote --json --command (.+)$/s,
       );
       const rollback = a.match(
-        /^rollback (\S+) --message oa:setup --rollback -y$/,
+        /^rollback (\S+) --name [\w-]+ --message oa:setup --rollback -y$/,
       );
       const mig = a.match(/^d1 migrations apply ([\w-]+) --remote$/);
       if (a.startsWith("secret list ")) {
@@ -437,6 +439,7 @@ export function world(w: World = {}) {
           return { code: 1, stdout: "", stderr: w.deployFails };
         ops.push("deploy");
         versions.unshift(`ver-${++deployCount}`);
+        stdout = `Uploaded x\nDeployed x triggers\nCurrent Version ID: ${versions[0]}\n`;
         deployedConfig = c.files.get(join(ROOT, "apps/server/wrangler.jsonc"));
       } else if (a === "whoami --json") stdout = WHOAMI(acct.accounts);
       else if (a === "auth token --json")
@@ -710,7 +713,12 @@ export function world(w: World = {}) {
         return envelope({
           deployments: versions.map((v, i) => ({
             id: `dep-${i}`,
-            versions: [{ version_id: v, percentage: 100 }],
+            versions: w.splitDeployment
+              ? [
+                  { version_id: v, percentage: 50 },
+                  { version_id: `${v}-b`, percentage: 50 },
+                ]
+              : [{ version_id: v, percentage: 100 }],
           })),
         });
       }
