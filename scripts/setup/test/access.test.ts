@@ -223,6 +223,105 @@ describe("access + secrets", () => {
     expect(w.ops.at(-1)).toBe("put ANALYTICS_TOKEN");
     noLeak(w);
   });
+
+  it("the ANALYTICS_TOKEN prompt carries the read-only token link", async () => {
+    const w = world({ answers: [""] });
+    expect(await run(interactive, w.deps, ROOT, B16_2)).toBe(0);
+    const q = w.prompts.find((p) => p.includes("ANALYTICS_TOKEN")) ?? "";
+    expect(q).toContain("Enter to skip");
+    expect(q).toContain(
+      `https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=${encodeURIComponent('[{"key":"account_analytics","type":"read"}]')}`,
+    );
+    expect(w.ops).not.toContain("put ANALYTICS_TOKEN");
+  });
+
+  const ANALYTICS = "analytics-ENV-value";
+  it("env ANALYTICS_TOKEN is put via stdin under --json, no prompt", async () => {
+    const w = world();
+    w.deps.env.ANALYTICS_TOKEN = ANALYTICS;
+    w.deps.env.CLOUDFLARE_API_TOKEN = "cf-wrangler-token";
+    expect(await run(HOSTS, w.deps, ROOT, B16_2)).toBe(0);
+    expect(w.prompts).toEqual([]);
+    expect(w.ops).toContain("put ANALYTICS_TOKEN");
+    expect(w.values).toContain(ANALYTICS);
+    expect(w.values).not.toContain("cf-wrangler-token");
+    expect(w.argv.join("\n")).not.toContain(` ${ANALYTICS}`);
+    noLeak(w);
+  });
+
+  it("env ANALYTICS_TOKEN is put again on --upgrade (rotation)", async () => {
+    const w = world();
+    await run(HOSTS, w.deps, ROOT, B16_2);
+    w.deps.env.ANALYTICS_TOKEN = ANALYTICS;
+    await run(HOSTS, w.deps, ROOT, B16_2);
+    w.ops.length = 0;
+    expect(await run([...HOSTS, "--upgrade"], w.deps, ROOT, B16_2)).toBe(0);
+    expect(w.ops).toEqual(["put ANALYTICS_TOKEN"]);
+    noLeak(w);
+  });
+
+  it("CLOUDFLARE_API_TOKEN is never stored as ANALYTICS_TOKEN", async () => {
+    const w = world();
+    w.deps.env.CLOUDFLARE_API_TOKEN = "cf-wrangler-token";
+    expect(await run(HOSTS, w.deps, ROOT, B16_2)).toBe(0);
+    expect(w.ops).not.toContain("put ANALYTICS_TOKEN");
+  });
+
+  it("refuses an ANALYTICS_TOKEN equal to CLOUDFLARE_API_TOKEN, with a link", async () => {
+    const w = world();
+    w.deps.env.CLOUDFLARE_API_TOKEN = w.deps.env.ANALYTICS_TOKEN = "same";
+    expect(await run(HOSTS, w.deps, ROOT, B16_2)).toBe(0);
+    expect(w.ops).not.toContain("put ANALYTICS_TOKEN");
+    const msg = parsed(w).find((j) => j.step === "secrets")?.message ?? "";
+    expect(msg).toContain("is the deploy token");
+    expect(msg).toContain(
+      encodeURIComponent('[{"key":"account_analytics","type":"read"}]'),
+    );
+  });
+
+  it("refuses an ANALYTICS_TOKEN that verifies to the deploy token's id", async () => {
+    const w = world({ tokenIds: { dep: "tok1", "dep ": "tok1", an: "tok1" } });
+    w.deps.env.CLOUDFLARE_API_TOKEN = "dep";
+    w.deps.env.ANALYTICS_TOKEN = "an";
+    expect(await run(HOSTS, w.deps, ROOT, B16_2)).toBe(0);
+    expect(w.ops).not.toContain("put ANALYTICS_TOKEN");
+  });
+
+  it("a dedicated ANALYTICS_TOKEN (different id) is put", async () => {
+    const w = world();
+    w.deps.env.CLOUDFLARE_API_TOKEN = "dep";
+    w.deps.env.ANALYTICS_TOKEN = "an";
+    expect(await run(HOSTS, w.deps, ROOT, B16_2)).toBe(0);
+    expect(w.ops).toContain("put ANALYTICS_TOKEN");
+  });
+
+  it("--check --strict is clean when the exported ANALYTICS_TOKEN is already set", async () => {
+    const w = world();
+    w.deps.env.ANALYTICS_TOKEN = ANALYTICS;
+    expect(await run(HOSTS, w.deps, ROOT, B16_2)).toBe(0);
+    w.lines.length = 0;
+    expect(
+      await run([...HOSTS, "--check", "--strict"], w.deps, ROOT, B16_2),
+    ).toBe(0);
+    expect(parsed(w).find((j) => j.step === "secrets")?.status).toBe("done");
+  });
+
+  it("--check reports todo when the exported ANALYTICS_TOKEN is absent on the Worker", async () => {
+    const w = world();
+    expect(await run(HOSTS, w.deps, ROOT, B16_2)).toBe(0);
+    w.deps.env.ANALYTICS_TOKEN = ANALYTICS;
+    w.lines.length = 0;
+    expect(
+      await run([...HOSTS, "--check", "--strict"], w.deps, ROOT, B16_2),
+    ).toBe(2);
+  });
+
+  it("an empty env ANALYTICS_TOKEN counts as unset", async () => {
+    const w = world();
+    w.deps.env.ANALYTICS_TOKEN = "";
+    expect(await run(HOSTS, w.deps, ROOT, B16_2)).toBe(0);
+    expect(w.ops).not.toContain("put ANALYTICS_TOKEN");
+  });
 });
 
 describe("B16-2 review fixes", () => {
@@ -263,14 +362,17 @@ describe("B16-2 review fixes", () => {
   it("the wrangler child env drops OA_ACCESS_TOKEN and WRANGLER_LOG*", async () => {
     process.env.OA_ACCESS_TOKEN = "oa-secret";
     process.env.WRANGLER_LOG = "debug";
+    process.env.ANALYTICS_TOKEN = "an-secret";
     try {
       const { stdout } = await realDeps().exec("env", [], { env: { X: "1" } });
       expect(stdout).toContain("X=1");
       expect(stdout).not.toContain("OA_ACCESS_TOKEN");
       expect(stdout).not.toContain("WRANGLER_LOG");
+      expect(stdout).not.toContain("ANALYTICS_TOKEN");
     } finally {
       delete process.env.OA_ACCESS_TOKEN;
       delete process.env.WRANGLER_LOG;
+      delete process.env.ANALYTICS_TOKEN;
     }
   });
 

@@ -84,11 +84,14 @@ export function realDeps(): Deps {
   };
 }
 
-/** Parent env minus what children must never see: the Access token, wrangler log knobs. */
+/** Parent env minus what children must never see: the Access and analytics tokens, wrangler log knobs. */
 export const childEnv = (env: NodeJS.ProcessEnv) =>
   Object.fromEntries(
     Object.entries(env).filter(
-      ([k]) => k !== "OA_ACCESS_TOKEN" && !k.startsWith("WRANGLER_LOG"),
+      ([k]) =>
+        k !== "OA_ACCESS_TOKEN" &&
+        k !== "ANALYTICS_TOKEN" &&
+        !k.startsWith("WRANGLER_LOG"),
     ),
   );
 

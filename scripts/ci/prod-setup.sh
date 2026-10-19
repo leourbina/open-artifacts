@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Production setup via @oa/setup. Never prints the owner token.
+# Production setup via @oa/setup. Never prints the owner token or ANALYTICS_TOKEN
+# (read by the setup secrets step from env, when set).
 # Usage: prod-setup.sh <install|preflight|upgrade|cleanup>
 set -uo pipefail
 
@@ -27,6 +28,13 @@ run_setup() {
 }
 
 pat='oa_pat_[1-9A-HJ-NP-Za-km-z]{32}'
+# ANALYTICS_TOKEN as given and as setup uses it (trimmed): either one leaking aborts.
+an_raw="${ANALYTICS_TOKEN:-}"
+an_trim="${an_raw#"${an_raw%%[![:space:]]*}"}"
+an_trim="${an_trim%"${an_trim##*[![:space:]]}"}"
+leaks() {
+  [[ -n "$an_trim" && "$1" == *"$an_trim"* ]] || [[ -n "${an_raw//[[:space:]]/}" && "$1" == *"$an_raw"* ]]
+}
 bad=0
 {
   echo "| step | status |"
@@ -34,7 +42,7 @@ bad=0
 } >>"$summary"
 
 while IFS= read -r line; do
-  if [[ "$line" =~ $pat ]]; then
+  if [[ "$line" =~ $pat ]] || leaks "$line"; then
     echo "token pattern found in output; aborting" >&2
     exit 1
   fi

@@ -54,6 +54,8 @@ const latestTag = (): string | undefined => {
   return tags.at(-1);
 };
 const ci = (n: string) => read(`scripts/ci/${n}`);
+// biome-ignore lint/suspicious/noTemplateCurlyInString: literal workflow expression
+const A_TOK = "${{ secrets.ANALYTICS_TOKEN }}";
 const RETRY_FLAGS = /--retry \d+ --retry-delay \d+ --retry-max-time \d+/;
 
 describe("ci.yml", () => {
@@ -249,6 +251,48 @@ describe("deploy-staging.yml", () => {
     expect(all).toContain("noindex, nofollow");
     expect(all).toContain("Disallow: /");
     expect(all).toContain("@oa/server smoke");
+  });
+  it("sets ANALYTICS_TOKEN after deploy and before smoke, step-scoped", () => {
+    const steps = w.jobs.deploy.steps as Step[];
+    const a = idx("deploy", "staging-analytics-token.sh");
+    expect(a).toBeGreaterThan(idx("deploy", "wrangler deploy"));
+    expect([w.jobs.smoke.needs].flat()).toContain("deploy");
+    expect(steps[a]["working-directory"]).toBe("apps/server");
+    expect(steps[a].env).toEqual({
+      ANALYTICS_TOKEN: A_TOK,
+    });
+    const scoped = steps.filter((s: Step) =>
+      JSON.stringify(s).includes("secrets.ANALYTICS_TOKEN"),
+    );
+    expect(scoped).toHaveLength(1);
+    expect(JSON.stringify(w.jobs.deploy.env)).not.toContain("ANALYTICS");
+    expect(JSON.stringify(w.jobs.smoke)).not.toContain("secrets.ANALYTICS");
+    const sh = ci("staging-analytics-token.sh");
+    expect(sh).toContain('printf %s "$ANALYTICS_TOKEN" |');
+    expect(sh).toContain(
+      "wrangler secret put ANALYTICS_TOKEN -c wrangler.staging.jsonc --env staging",
+    );
+    expect(sh).not.toMatch(/echo[^\n]*\$\{?ANALYTICS_TOKEN/);
+    expect(sh).not.toMatch(/set -[a-z]*x/);
+  });
+  it("a failed ANALYTICS_TOKEN put still runs smoke, then fails the run", () => {
+    const steps = w.jobs.deploy.steps as Step[];
+    const a = steps[idx("deploy", "staging-analytics-token.sh")];
+    expect(a.id).toBe("analytics");
+    expect(w.jobs.deploy.outputs?.analytics).toBe(
+      "${{ steps.analytics.outputs.analytics }}",
+    );
+    const s = w.jobs.smoke.steps as Step[];
+    const o = s.findIndex((x: Step) =>
+      (x.run ?? "").includes("staging-analytics-token.sh outcome"),
+    );
+    expect(o).toBe(s.length - 1);
+    expect(s[o].env).toEqual({
+      ANALYTICS_OUTCOME: "${{ needs.deploy.outputs.analytics }}",
+    });
+    const sh = ci("staging-analytics-token.sh");
+    expect(sh).toContain("::error::");
+    expect(sh).toContain('>>"$out"');
   });
   it("uses Cloudflare secrets", () => {
     const raw = read(".github/workflows/deploy-staging.yml");
@@ -587,9 +631,19 @@ describe("prod and staging tokens never cross", () => {
       expect(text).not.toMatch(/secrets\.CLOUDFLARE_API_TOKEN/);
       expect(text).toContain("--ci");
       expect([...refs(f)].sort()).toEqual([
+        "ANALYTICS_TOKEN",
         "CLOUDFLARE_ACCOUNT_ID",
         "PROD_CLOUDFLARE_API_TOKEN",
       ]);
+    });
+    it("passes ANALYTICS_TOKEN to the setup step only", () => {
+      const withA = steps.filter((s) =>
+        JSON.stringify(s).includes("secrets.ANALYTICS_TOKEN"),
+      );
+      expect(withA.map((s) => s.run)).toEqual([
+        "bash scripts/ci/prod-setup.sh install",
+      ]);
+      expect(withA[0]?.env?.ANALYTICS_TOKEN).toBe(A_TOK);
     });
   });
   describe("release-please.yml deploy-prod", () => {
@@ -657,12 +711,48 @@ describe("prod and staging tokens never cross", () => {
       expect(sh).toContain("--check --strict --upgrade --solo --browser");
       expect(sh).toContain("--ci --revoke-ci-tokens");
     });
+    it("passes ANALYTICS_TOKEN to the upgrade step only", () => {
+      const withA = steps.filter((s) =>
+        JSON.stringify(s).includes("secrets.ANALYTICS_TOKEN"),
+      );
+      expect(withA.map((s) => s.run)).toEqual([
+        "bash scripts/ci/prod-setup.sh upgrade",
+      ]);
+      expect(withA[0]?.env?.ANALYTICS_TOKEN).toBe(A_TOK);
+      for (const [n, j] of Object.entries(w.jobs))
+        if (n !== "deploy-prod")
+          expect(JSON.stringify(j), n).not.toContain("ANALYTICS_TOKEN");
+    });
     it("deploy-landing stays independent of deploy-prod", () => {
       expect(w.jobs["deploy-landing"].needs).toEqual(["release-please"]);
       expect(JSON.stringify(w.jobs["deploy-landing"])).not.toContain(
         "deploy-prod",
       );
     });
+  });
+  const secretInRun = (run: string) => /secrets\.ANALYTICS_TOKEN/.test(run);
+  it("the run: check catches any spacing", () => {
+    for (const r of [
+      "echo ${{secrets.ANALYTICS_TOKEN}}",
+      "echo ${{ secrets.ANALYTICS_TOKEN }}",
+      "echo ${{   secrets.ANALYTICS_TOKEN\t}}",
+    ])
+      expect(secretInRun(r), r).toBe(true);
+    expect(secretInRun("bash x.sh")).toBe(false);
+  });
+  it("ANALYTICS_TOKEN never appears in run: text or workflow/job env", () => {
+    for (const f of readdirSync(dir).filter((n) => /\.ya?ml$/.test(n))) {
+      const y = parse(readFileSync(join(dir, f), "utf8"));
+      expect(JSON.stringify(y.env ?? {}), f).not.toContain("ANALYTICS");
+      // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
+      for (const [n, j] of Object.entries(y.jobs ?? {}) as [string, any][]) {
+        expect(JSON.stringify(j.env ?? {}), `${f} ${n}`).not.toContain(
+          "ANALYTICS",
+        );
+        for (const st of j.steps ?? [])
+          expect(secretInRun(st.run ?? ""), `${f} ${n}`).toBe(false);
+      }
+    }
   });
   it("detects a crossing fixture", () => {
     const tmp = mkdtempSync(join(tmpdir(), "wf-"));

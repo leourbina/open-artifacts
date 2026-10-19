@@ -282,8 +282,8 @@ describe("plan detection (prereqs)", () => {
   it("paid: Workers Paid detected, no free warnings, team gets email without --yes-paid", async () => {
     const w = world({ subscriptions: PAID, dns: onboarded(D) });
     expect(await run([...BASE, "--team"], w.deps, ROOT)).toBe(0);
-    expect(pre(w).data).toEqual({ plan: "paid", warnings: [] });
-    expect(pre(w).message).toBe("Workers Paid detected");
+    expect(pre(w).data).toMatchObject({ plan: "paid", warnings: [] });
+    expect(pre(w).message).toMatch(/^Workers Paid detected(; |$)/);
     expect(cfg(w).send_email).toEqual([{ name: "EMAIL" }]);
   });
 

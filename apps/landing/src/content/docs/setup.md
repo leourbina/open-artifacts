@@ -75,12 +75,12 @@ Setup takes each value from its flag first, then from `.openartifacts/state.json
 | `--content-host` | The artifact content hostname, for example `artifacts-content.example.com`. |
 | `--owner-email` | The owner's email. That person becomes the owner and gets the owner token. |
 | `--account-id` | The Cloudflare account to use. Defaults to `CLOUDFLARE_ACCOUNT_ID`, or the only account the login can reach. |
-| `--yes` | Never prompt. Missing values are errors, and the optional `ANALYTICS_TOKEN` is skipped. Optional with `--json`. |
+| `--yes` | Never prompt. Missing values are errors, and the optional `ANALYTICS_TOKEN` is skipped unless it is set in the environment. Optional with `--json`. |
 | `--upgrade` | Upgrade an existing install: only `deploy` and `selftest` do work. See [Upgrade](/docs/upgrade/). |
 | `--new-owner-token` | Mint a new owner token, and revoke the one setup minted before. |
 | `--check` | Read-only. Runs each step's check without doing the work, and reports it as `done` or `todo`. Without saved state, it rebuilds the state from Cloudflare by `--name` and reports it on a last `state` line. It changes nothing on Cloudflare and writes no files. |
 | `--strict` | Only with `--check`: exit `2` when any step is `todo`, for example to gate CI. |
-| `--json` | Print one JSON object per line instead of text, and never prompt: a missing value is an `action_required` line naming the flag to pass. The optional `ANALYTICS_TOKEN` is skipped. |
+| `--json` | Print one JSON object per line instead of text, and never prompt: a missing value is an `action_required` line naming the flag to pass. The optional `ANALYTICS_TOKEN` is skipped unless it is set in the environment. |
 | `--ci` | CI mode: implies `--json`; the owner token is used only for selftest, never printed, and revoked at the end of the run (also on SIGTERM or SIGINT). Requires `--name`; not with `--new-owner-token`. It keeps no `state.json`, so it reuses the welcome artifact by title instead of tracking its id. A SIGKILL or out-of-memory kill can leave a `setup-ci` token live; it is never printed. Find it by the label `setup-ci` in Settings → Tokens. The next `--ci` run revokes it before minting, or run `--ci --revoke-ci-tokens` as an `if: always()` cleanup step. |
 | `--revoke-ci-tokens` | Only with `--ci`: revoke every live `setup-ci` token of the owner and exit. Needs `--name` and the owner email, not the hosts. |
 | `--browser` | Turn on server-side thumbnails (the `BROWSER` binding and `SERVER_THUMBNAILS`) even when setup doesn't read the plan as Workers Paid. Thumbnails need Workers Paid, so setup warns (`browser-free`) on free or unknown. Without either flag, thumbnails are on when the plan reads `paid`, off on `free`, and follow the saved choice when the plan is `unknown`. |
@@ -91,11 +91,16 @@ Setup takes each value from its flag first, then from `.openartifacts/state.json
 | `--email-domain` | The Email Sending domain. Defaults to `mail.<app host>`, a subdomain, so your existing mail is untouched. Onboard it in the Cloudflare dashboard under Email Service, Email Sending, Onboard Domain; setup checks its `cf-bounce` MX, SPF and DKIM records and `_dmarc`, and re-checks on every run. |
 | `--yes-email-domain` | Confirm a sending domain that already has MX or SPF records for another provider. Onboarding adds `_dmarc` with `p=reject`, which can break existing mail at a zone apex. Without it, setup asks interactively or returns `action_required`. |
 | `--yes-paid` | Confirm the account is on Workers Paid when `prereqs` reads the plan as `free` or `unknown`. Setup reads the plan from the account subscriptions, which needs Billing Read; the `wrangler login` token doesn't have it, so the plan is usually `unknown`. Without this flag, a team install on a plan that isn't `paid` keeps email off. Saved as `email: true` once confirmed. |
+| `--token-links` | Print each Cloudflare API token setup needs (deploy, access, and the optional analytics token), with its permissions, where to store it, and a link that opens the Cloudflare token form already filled in. The account and zone come from `--account-id` and `--app-host`, or saved state. With `--json`, one `token-links` line whose `data.tokens` lists each token and its `url`. A token with zone permissions also has `zoneScope`, the zones of both hosts by name: the Cloudflare form starts at All zones, so under Zone Resources pick Specific zone and choose each one. Billing: Read is optional (it lets setup detect your plan). The `prereqs` line also lists a token that is missing or lacks a permission, with its link, in `data.tokens`. Reads nothing secret and writes nothing. |
+| `--token-page` | Open a local page with the same token links and steps, served on `127.0.0.1` only (a random port). Setup prints its URL (`data.tokenPage.url` with `--json`) and stops on Ctrl-C or after 30 minutes idle. The page has no input fields: you create each token in Cloudflare and store it yourself, so it never passes through your agent. |
+| `--no-open` | With `--token-page`: print the URL without opening a browser. |
+| `--repo` | Only with `--token-links` or `--token-page` (otherwise an error, like `--no-open`): store each token as a GitHub secret in this `owner/name` repo (`gh secret set`) instead of an environment variable. |
 | `--help` | Print usage and exit (`-h` also works). |
 
 | Environment variable | Meaning |
 |---|---|
 | `OA_ACCESS_TOKEN` | A Cloudflare API token for Access, needed on the first run when the `wrangler login` token can't manage Access, and again to change the app host or account. |
+| `ANALYTICS_TOKEN` | A read-only token (Account Analytics: Read) for the dashboard's Usage page. When set, the `secrets` step stores it as the Worker secret on every run. Never your deploy token. |
 | `CLOUDFLARE_ACCOUNT_ID` | The default for `--account-id`. |
 | `OA_TEAM_DOMAIN` | The Zero Trust team domain (`<team>.cloudflareaccess.com`), used when rebuilding state if the token can't read the Access organization. Setup verifies it before use. |
 
@@ -108,7 +113,7 @@ Exit codes: `0` when every step is done, `2` when a step needs the user or a mis
 1. **`prereqs`:** checks Node 22 or later, pnpm, the Cloudflare login and account, and that both hostnames are in a zone on that account.
 2. **`resources`:** creates or reuses the D1 database, the R2 bucket, and the KV namespace, and writes `apps/server/wrangler.jsonc`.
 3. **`access`:** creates the Cloudflare Access for SaaS application and its sign-in policy.
-4. **`secrets`:** stores the Worker secrets. Without `--json` or `--yes`, it also offers to store the optional `ANALYTICS_TOKEN` for the Usage page.
+4. **`secrets`:** stores the Worker secrets. When `ANALYTICS_TOKEN` is set in the environment (a dedicated read-only token with Account Analytics: Read, never your deploy token), it stores it on every run. Otherwise, without `--json` or `--yes`, it offers to store one for the Usage page, with a link that pre-fills the token form.
 5. **`deploy`:** builds the server, applies database migrations, and deploys the Worker.
 6. **`owner-token`:** mints a personal access token for the owner, unless setup already minted one that's still valid.
 7. **`selftest`:** checks `/healthz` and the OIDC discovery document. When this run minted a token, it also publishes the Welcome artifact over MCP and checks that its content is served.
@@ -124,4 +129,4 @@ On Workers Paid (`data.plan` `paid`), `data.warnings` is empty and the `prereqs`
 
 ## Cloudflare Access permissions
 
-The token from `wrangler login` may not be able to manage Zero Trust (Access). If it can't, the `access` step asks for an API token with Access: Apps and Policies Edit, Access: Organizations Read, and Zone: DNS Read, and links to a pre-filled form for creating one. Set it as `OA_ACCESS_TOKEN`; in an interactive run, you can paste it at the prompt instead. Setup doesn't keep it. Later runs skip re-checking Access without it, unless the app host or account changes. If the account has no Zero Trust organization yet, setup links to the Zero Trust dashboard to turn it on. Zero Trust's free plan is enough.
+The token from `wrangler login` may not be able to manage Zero Trust (Access). If it can't, the `access` step asks for an API token with Access: Apps and Policies Edit and Access: Organizations Read, and links to a pre-filled form for creating one. Set it as `OA_ACCESS_TOKEN`; in an interactive run, you can paste it at the prompt instead. Setup doesn't keep it. Later runs skip re-checking Access without it, unless the app host or account changes. If the account has no Zero Trust organization yet, setup links to the Zero Trust dashboard to turn it on. Zero Trust's free plan is enough.

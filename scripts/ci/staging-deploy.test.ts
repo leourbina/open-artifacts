@@ -86,3 +86,71 @@ describe("ensure-dashboard-dist.sh", () => {
     expect(readFileSync(join(dist, "index.html"), "utf8")).toBe("real");
   });
 });
+
+describe("staging-analytics-token.sh", () => {
+  const secret = "analytics-SECRET-value";
+  // pnpm stub: record stdin so the test sees what `secret put` received.
+  const pnpm = 'cat > "$STUB_LOG.stdin"';
+  it("puts ANALYTICS_TOKEN on the staging Worker via stdin, never argv or output", () => {
+    const sb = sandbox({ pnpm });
+    const r = sb.run(["bash", script("staging-analytics-token.sh")], {
+      env: { ANALYTICS_TOKEN: secret },
+    });
+    expect(r.code).toBe(0);
+    expect(sb.log()).toEqual([
+      "pnpm exec wrangler secret put ANALYTICS_TOKEN -c wrangler.staging.jsonc --env staging",
+    ]);
+    expect(readFileSync(join(sb.dir, "calls.log.stdin"), "utf8")).toBe(secret);
+    expect(r.out + r.err).not.toContain(secret);
+  });
+  it("skips cleanly when the secret is empty", () => {
+    const sb = sandbox({ pnpm });
+    const r = sb.run(["bash", script("staging-analytics-token.sh")], {
+      env: { ANALYTICS_TOKEN: "" },
+    });
+    expect(r.code).toBe(0);
+    expect(sb.log()).toEqual([]);
+    expect(r.out).toContain("skipping");
+  });
+  it("a failed put reports failed (annotation + output) and exits 0 so smoke runs", () => {
+    const sb = sandbox({ pnpm: "cat >/dev/null; exit 1" });
+    const out = join(sb.dir, "gh-output");
+    const r = sb.run(["bash", script("staging-analytics-token.sh")], {
+      env: { ANALYTICS_TOKEN: secret, GITHUB_OUTPUT: out },
+    });
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("::error::");
+    expect(readFileSync(out, "utf8")).toBe("analytics=failed\n");
+    expect(r.out + r.err).not.toContain(secret);
+  });
+  it("records ok and skipped outcomes", () => {
+    for (const [env, want] of [
+      [{ ANALYTICS_TOKEN: secret }, "ok"],
+      [{ ANALYTICS_TOKEN: "" }, "skipped"],
+    ] as const) {
+      const sb = sandbox({ pnpm });
+      const out = join(sb.dir, "gh-output");
+      sb.run(["bash", script("staging-analytics-token.sh")], {
+        env: { ...env, GITHUB_OUTPUT: out },
+      });
+      expect(readFileSync(out, "utf8")).toBe(`analytics=${want}\n`);
+    }
+  });
+  it("outcome mode fails only on failed", () => {
+    for (const [v, code] of [
+      ["failed", 1],
+      ["ok", 0],
+      ["skipped", 0],
+      ["", 0],
+    ] as const) {
+      const sb = sandbox({});
+      const r = sb.run(
+        ["bash", script("staging-analytics-token.sh"), "outcome"],
+        {
+          env: { ANALYTICS_OUTCOME: v },
+        },
+      );
+      expect(r.code, v).toBe(code);
+    }
+  });
+});

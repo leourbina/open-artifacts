@@ -39,6 +39,10 @@ export const filler = (n: number) =>
 type World = {
   accounts?: string[];
   zones?: string[];
+  /** Zone id per zone name (default "z"). */
+  zoneIds?: Record<string, string>;
+  /** GET /user/tokens/verify: token id per bearer value (default `id-<value>`). */
+  tokenIds?: Record<string, string>;
   d1?: { uuid: string; name: string }[];
   r2?: { name: string }[];
   kv?: { id: string; title: string }[];
@@ -559,6 +563,10 @@ export function world(w: World = {}) {
       }
       const p = u.pathname.replace("/client/v4", "");
       auths.push(`${p} ${auth}`);
+      if (p === "/user/tokens/verify") {
+        const b = (auth ?? "").replace(/^Bearer /, "");
+        return envelope({ id: w.tokenIds?.[b] ?? `id-${b}`, status: "active" });
+      }
       const r2 = p.match(/\/r2\/buckets\/([^/]+)$/);
       const acc = p.match(/\/access\/(organizations|policies|apps)\/?(.*)$/);
       if (acc?.[1] === "organizations") {
@@ -617,7 +625,8 @@ export function world(w: World = {}) {
         zoneQueries.push(u.search);
         const ok =
           q("status") === "active" && acct.zones.includes(q("name") ?? "");
-        return envelope(ok ? [{ id: "z", name: q("name") }] : []);
+        const id = w.zoneIds?.[q("name") ?? ""] ?? "z";
+        return envelope(ok ? [{ id, name: q("name") }] : []);
       }
       // DNS, billing and email are read-only here: a write is a bug.
       if (m !== "GET" && /\/dns_records|\/subscriptions|\/email/.test(p)) {

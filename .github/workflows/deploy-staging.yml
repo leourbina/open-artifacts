@@ -10,6 +10,8 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    outputs:
+      analytics: ${{ steps.analytics.outputs.analytics }}
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -31,6 +33,12 @@ jobs:
         run: bash ../../scripts/ci/staging-clear-conflicts.sh
       - run: pnpm --filter @oa/server exec wrangler d1 migrations apply open-artifacts-staging --remote -c wrangler.staging.jsonc --env staging
       - run: pnpm --filter @oa/server exec wrangler deploy -c wrangler.staging.jsonc --env staging
+      - name: set ANALYTICS_TOKEN (dedicated read-only token; skipped when unset)
+        id: analytics
+        working-directory: apps/server
+        env:
+          ANALYTICS_TOKEN: ${{ secrets.ANALYTICS_TOKEN }}
+        run: bash ../../scripts/ci/staging-analytics-token.sh
   smoke:
     needs: [deploy]
     runs-on: ubuntu-latest
@@ -54,3 +62,7 @@ jobs:
       - name: auth login redirects to Access
         run: bash scripts/ci/staging-smoke.sh login https://staging.open-artifacts.com
       - run: pnpm --filter @oa/server smoke
+      - name: ANALYTICS_TOKEN put outcome (fails the run if the deploy job's put failed)
+        env:
+          ANALYTICS_OUTCOME: ${{ needs.deploy.outputs.analytics }}
+        run: bash scripts/ci/staging-analytics-token.sh outcome
