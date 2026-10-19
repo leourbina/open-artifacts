@@ -1,5 +1,6 @@
 import { rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
@@ -8,6 +9,8 @@ const target = "http://app.localhost:8787";
 export default defineConfig({
   plugins: [
     react(),
+    // Tailwind for the @oa/ui/shadcn components (src/shadcn.css).
+    tailwindcss(),
     {
       // The MSW worker lives in public/ for dev; keep it out of production output.
       name: "oa-drop-mock-worker",
@@ -22,6 +25,13 @@ export default defineConfig({
   resolve: {
     // Resolve the workspace contract from source so no prior shared build is needed.
     alias: [
+      {
+        // @oa/ui/shadcn.css imports all of Tailwind; drop preflight (src/tailwind.css).
+        find: /^tailwindcss$/,
+        replacement: fileURLToPath(
+          new URL("./src/tailwind.css", import.meta.url),
+        ),
+      },
       {
         find: /^@oa\/shared$/,
         replacement: fileURLToPath(

@@ -11,6 +11,7 @@ import { useMe } from "../auth/useMe";
 import { SearchBox } from "../library/SearchBox";
 import { EdgePanel } from "../pages/Edge";
 import { CpuBanner } from "./CpuBanner";
+import { DisplayNamePrompt } from "./DisplayNamePrompt";
 import { QuotaBanner } from "./QuotaBanner";
 
 const icon = (d: string) => (
@@ -103,6 +104,7 @@ export function AppLayout() {
       <QuotaBanner />
       <CpuBanner role={me?.user.role} />
       <Outlet />
+      {me && <DisplayNamePrompt key={me.user.id} me={me} />}
       <Toaster />
     </AppShell>
   );

@@ -219,12 +219,28 @@ export const uniq = () => randomBytes(6).toString("hex");
 export const freshEmail = (tag: string) => `${tag}-${uniq()}@e2e.test`;
 
 /** Signs `page`'s context in through AUTH.devLogin (the request shares the context's cookies). */
-export async function loginAs(page: Page, email: string, role: Role) {
+/**
+ * Signs in. Dev login names users after the email's local part, which the
+ * dashboard asks to replace with a real name (a dialog over every page), so
+ * this sets one unless `named` is false.
+ */
+export async function loginAs(
+  page: Page,
+  email: string,
+  role: Role,
+  { named = true }: { named?: boolean } = {},
+) {
   const q = new URLSearchParams({ email, role, next: "/" });
   const res = await page.request.get(`${APP}${AUTH.devLogin}?${q}`, {
     maxRedirects: 0,
   });
   expect(res.status(), await res.text()).toBe(302);
+  if (!named) return;
+  const me = await page.request.patch(`${APP}${R.me}`, {
+    headers: { "X-OA-Request": "1" },
+    data: { displayName: `E2E ${email.split("@")[0]}` },
+  });
+  expect(me.ok(), await me.text()).toBe(true);
 }
 
 /** A PAT for the signed-in user of `page`. */

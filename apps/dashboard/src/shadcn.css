@@ -1,0 +1,31 @@
+/* Tailwind + the shadcn theme for the @oa/ui/shadcn components. tokens.css
+   comes first, from styles.css. Its `@import "tailwindcss"` resolves to
+   ./tailwind.css (no preflight; see vite.config.ts).
+
+   Preflight is off so the existing pages keep their look. To turn it on,
+   delete the `tailwindcss` alias in vite.config.ts, ./tailwind.css and the
+   @layer base block below. */
+@import "@oa/ui/shadcn.css";
+
+@source "./";
+
+/* The parts of preflight the shadcn components rely on, scoped to them
+   (every one carries data-slot) so the existing pages keep their look. */
+@layer base {
+  :where([data-slot], [data-slot] *),
+  :where([data-slot], [data-slot] *)::before,
+  :where([data-slot], [data-slot] *)::after {
+    box-sizing: border-box;
+    border-width: 0;
+    border-style: solid;
+    margin: 0;
+    padding: 0;
+  }
+  :where([data-slot], [data-slot] *):is(button, input, select, textarea) {
+    font: inherit;
+    letter-spacing: inherit;
+    color: inherit;
+    background-color: transparent;
+    border-radius: 0;
+  }
+}

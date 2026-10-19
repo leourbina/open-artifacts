@@ -95,6 +95,28 @@ describe("viewer shell", () => {
     expect(screen.getByRole("button", { name: "Open raw" })).toBeEnabled();
   });
 
+  it("anonymous visitor: owner and authors with no name and no email render fine", async () => {
+    anonymous();
+    const nobody = { id: "u_x", name: null, email: null };
+    const art = fixtures.artifacts.find((a) => a.id === PUBLIC);
+    const vers = (fixtures.versions[PUBLIC] ?? []).map((v) => ({
+      ...v,
+      createdBy: nobody,
+    }));
+    server.use(
+      http.get(`*/api/v1/artifacts/${PUBLIC}`, () =>
+        HttpResponse.json({ ...art, owner: nobody }),
+      ),
+      http.get(`*/api/v1/artifacts/${PUBLIC}/versions`, () =>
+        HttpResponse.json(vers),
+      ),
+    );
+    mount(viewerPath(PUBLIC));
+    await frame();
+    expect(screen.getByRole("link", { name: "Sign in" })).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/@/);
+  });
+
   it("changing version remounts the iframe and disposes the old bridge", async () => {
     const router = mount(viewerPath(OWNED));
     const first = await frame();

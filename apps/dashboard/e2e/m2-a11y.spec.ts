@@ -229,10 +229,10 @@ test("keyboard: settings tabs and role select reachable by Tab", async ({
 }) => {
   await page.goto("/settings/members");
   await page.waitForLoadState("networkidle");
-  const tabs = page
+  await page
     .getByRole("navigation", { name: "Settings sections" })
-    .getByRole("link");
-  await tabs.nth(1).focus();
+    .getByRole("link", { name: "Agents" })
+    .focus();
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/\/settings\/agents$/);
   await expect(page.getByRole("radio", { name: "OAuth" })).toBeVisible();

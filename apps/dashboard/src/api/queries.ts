@@ -7,6 +7,8 @@ import {
   type MemberInvite,
   type MemberPatch,
   MemberSchema,
+  type MePatch,
+  MeSchema,
   OAuthClientSchema,
   PageSchema,
   type PublishInput,
@@ -282,6 +284,15 @@ export const useRemoveMember = () =>
     (list, id) => list.filter((m) => m.id !== id),
     "Couldn't remove the member.",
   );
+
+/** PATCH /me; the response is the new Me, so it replaces the cache. Errors are the caller's to show. */
+export const useUpdateMe = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (patch: MePatch) => api.send("PATCH", R.me, patch, MeSchema),
+    onSuccess: (me) => qc.setQueryData(qk.me, me),
+  });
+};
 
 export const useUpdateSettings = () => {
   const qc = useQueryClient();

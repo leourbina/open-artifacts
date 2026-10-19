@@ -17,6 +17,7 @@ import { SignIn } from "./pages/SignIn";
 import { Agents } from "./settings/Agents";
 import { Instance } from "./settings/Instance";
 import { Members } from "./settings/Members";
+import { Profile } from "./settings/Profile";
 import { Gate, SettingsLayout } from "./settings/SettingsLayout";
 import { Usage } from "./settings/Usage";
 import { Diff } from "./viewer/Diff";
@@ -135,6 +136,7 @@ const routeTree = root.addChildren([
   route("/a/$id/v/$v", ViewerRoute),
   route("/a/$id/diff/$from/$to", DiffRoute),
   settings.addChildren([
+    gated("/settings/profile", [...ADMINS, "member"], "/", Profile),
     gated("/settings/members", ADMINS, "/settings/agents", Members),
     gated("/settings/agents", [...ADMINS, "member"], "/", Agents),
     gated("/settings/instance", ADMINS, "/settings/agents", Instance),
