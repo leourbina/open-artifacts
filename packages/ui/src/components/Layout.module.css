@@ -22,6 +22,16 @@
 .bannerText strong {
   font-weight: 500;
 }
+.bannerIcon {
+  display: inline-flex;
+  flex: none;
+  color: var(--oa-text-2);
+}
+.compact {
+  gap: var(--oa-space-2);
+  padding: var(--oa-space-1) var(--oa-space-1) var(--oa-space-1)
+    var(--oa-space-3);
+}
 .info {
   background: var(--oa-accent-soft);
 }
