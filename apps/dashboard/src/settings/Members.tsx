@@ -9,6 +9,7 @@ import {
   useRemoveMember,
 } from "../api/queries";
 import { useMe } from "../auth/useMe";
+import { CopyLink } from "../layout/CopyLink";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { relativeTime } from "../library/time";
 
@@ -40,6 +41,7 @@ function InviteDialog({ onClose }: { onClose: () => void }) {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<Assignable>("member");
   const [error, setError] = useState<string | null>(null);
+  const [added, setAdded] = useState<string | null>(null);
   const submit = () => {
     if (invite.isPending) return;
     const parsed = parseInviteEmail(email);
@@ -48,18 +50,37 @@ function InviteDialog({ onClose }: { onClose: () => void }) {
     invite.mutate(
       { email: parsed, role },
       {
-        onSuccess: onClose,
+        onSuccess: () => setAdded(parsed),
         onError: (e) =>
-          setError(e instanceof ApiClientError ? e.message : "Invite failed."),
+          setError(e instanceof ApiClientError ? e.message : "Couldn't add."),
       },
     );
   };
+  if (added) {
+    // location.origin is the app host, where sign-in starts.
+    const url = location.origin;
+    return (
+      <Dialog
+        open
+        onOpenChange={(o) => !o && onClose()}
+        title={`${added} can now sign in`}
+        description={`Send them this link. They'll sign in at ${url} with a one-time code sent to that address.`}
+        footer={
+          <Button variant="primary" onClick={onClose}>
+            Done
+          </Button>
+        }
+      >
+        <CopyLink link={url} label="Sign-in link" />
+      </Dialog>
+    );
+  }
   return (
     <Dialog
       open
       onOpenChange={(o) => !o && onClose()}
-      title="Invite a member"
-      description="They sign in with a one-time code sent to their email."
+      title="Add a member"
+      description="Open Artifacts doesn't send invitations. Add their email here, then send them the sign-in link yourself."
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
@@ -70,7 +91,7 @@ function InviteDialog({ onClose }: { onClose: () => void }) {
             disabled={invite.isPending}
             onClick={submit}
           >
-            Send invite
+            Add member
           </Button>
         </>
       }
@@ -190,7 +211,7 @@ export function Members() {
       <div className="oa-card-head">
         <h2 id="oa-members-h">Members</h2>
         <Button variant="primary" onClick={() => setInviting(true)}>
-          Invite
+          Add member
         </Button>
       </div>
       {q.isError ? (

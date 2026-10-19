@@ -8,6 +8,7 @@ import {
 } from "@oa/shared";
 import {
   Avatar,
+  Banner,
   Button,
   Checkbox,
   Dialog,
@@ -26,6 +27,7 @@ import {
   usePutShare,
   useShares,
 } from "../../api/queries";
+import { CopyLink } from "../../layout/CopyLink";
 
 const VIS: { value: Visibility; label: string }[] = [
   { value: "private", label: "Private" },
@@ -84,6 +86,7 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<ShareRole>("viewer");
   const [invalid, setInvalid] = useState(false);
+  const [shared, setShared] = useState<string | null>(null);
 
   const save = (p: ArtifactPatch) =>
     patch.mutate(p, { onError: (e) => fail(e, "Couldn't save") });
@@ -114,8 +117,11 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
     put.mutate(
       { email: e, role },
       {
-        onSuccess: () => setEmail(""),
-        onError: (x) => fail(x, "Couldn't invite"),
+        onSuccess: () => {
+          setEmail("");
+          setShared(e);
+        },
+        onError: (x) => fail(x, "Couldn't share"),
       },
     );
   };
@@ -171,7 +177,7 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
 
       {owner && (
         <section>
-          <h3>Invite</h3>
+          <h3>Add people</h3>
           <form
             className="oa-invite"
             noValidate
@@ -198,14 +204,41 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
               onChange={setRole}
             />
             <Button type="submit" loading={put.isPending}>
-              Invite
+              Add
             </Button>
           </form>
           {invalid && <p role="alert">Enter a valid email address.</p>}
+          <p className="oa-muted">
+            No email is sent. Copy the link and share it yourself.
+          </p>
         </section>
       )}
 
       <section>
+        {shared && (
+          <div className="oa-shared">
+            <Banner
+              tone="success"
+              title={`Shared with ${shared}`}
+              action={
+                <Button
+                  variant="ghost"
+                  aria-label="Dismiss"
+                  onClick={() => setShared(null)}
+                >
+                  {"\u00d7"}
+                </Button>
+              }
+            >
+              <p>
+                {artifact.visibility === "public"
+                  ? "Send them this link. They can open it without signing in."
+                  : "Send them this link. They'll sign in with a one-time code sent to that address, then see the artifact."}
+              </p>
+              <CopyLink link={link} label="Artifact link" />
+            </Banner>
+          </div>
+        )}
         <h3>People</h3>
         <ul className="oa-people">
           <li>
