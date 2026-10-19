@@ -26,6 +26,17 @@ export function oneLine(s: string, max: number): string {
   return cps.length <= max ? t : `${cps.slice(0, max - 1).join("")}…`;
 }
 
+/**
+ * Who sent the invite/share: the display name (trimmed) if set, else the full
+ * email address. A name equal to the email's local part is the sign-in
+ * default, not a chosen name, so it also falls back to the full address.
+ */
+export function senderName(m: { name: string | null; email: string }): string {
+  const name = (m.name ?? "").trim();
+  const local = m.email.slice(0, m.email.lastIndexOf("@"));
+  return name && name !== local ? name : m.email;
+}
+
 const SUBJECT_MAX = 150;
 const NAME_MAX = 80;
 const TITLE_MAX = 200;

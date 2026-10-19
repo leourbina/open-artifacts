@@ -22,7 +22,7 @@ import {
 } from "../db/schema.js";
 import { stmt } from "../db/stmt.js";
 import { emailEnabled, sendEmail } from "../email/send.js";
-import { inviteEmail } from "../email/templates.js";
+import { inviteEmail, senderName } from "../email/templates.js";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
 import { revokeAllGrants } from "../mcp/oauth-api.js";
@@ -64,13 +64,18 @@ export async function inviteMember(
   if (emailEnabled(env)) {
     const instance = (await getSettings(env).catch(() => DEFAULT_SETTINGS))
       .name;
-    emailed = await sendEmail(env, inviter.id, email, () =>
-      inviteEmail({
-        inviter: inviter.name || inviter.email,
-        instance,
-        recipient: email,
-        appHost: env.APP_HOST,
-      }),
+    emailed = await sendEmail(
+      env,
+      inviter.id,
+      email,
+      () =>
+        inviteEmail({
+          inviter: senderName(inviter),
+          instance,
+          recipient: email,
+          appHost: env.APP_HOST,
+        }),
+      { kind: "invite" },
     );
   }
   return { ...toMember(row), emailed };
