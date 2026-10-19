@@ -12,11 +12,19 @@ const INDEX = `<!doctype html><html><head><title>Old</title></head><body><div id
 const assets = fakeAssets({
   "/index.html": { body: INDEX, type: "text/html" },
 }).fetcher;
-const get = (path: string) =>
+const get = (path: string, extra: object = {}) =>
   fetchAndWait(app, new Request(`http://app.localhost${path}`), {
     ...(env as object),
     ASSETS: assets,
+    ...extra,
   });
+const setName = (name: string) =>
+  env.DB.prepare(
+    "insert or replace into settings (key, value) values ('name', ?)",
+  )
+    .bind(name)
+    .run();
+const metas = (t: string) => t.match(/<meta name="oa-instance"[^>]*>/g) ?? [];
 
 let owner: Member;
 beforeAll(async () => {
@@ -83,6 +91,68 @@ describe("OG shell", () => {
   it("other /a/ paths fall through to the SPA", async () => {
     const id = await mk("public", "T", "D");
     const t = await (await get(`/a/${id}/diff/1/2`)).text();
-    expect(t).toBe(INDEX);
+    expect(t.replace(/<meta name="oa-instance"[^>]*>/, "")).toBe(INDEX);
+  });
+});
+
+describe("instance meta", () => {
+  it("signed-out shell routes carry exactly one instance meta", async () => {
+    await setName("Acme Docs");
+    const id = await mk("public", "T", "D");
+    for (const p of ["/", "/library", viewerPath(id), viewerPath(newId())]) {
+      const r = await get(p);
+      expect(r.status).toBe(200);
+      const t = await r.text();
+      expect(metas(t)).toEqual([
+        '<meta name="oa-instance" content="Acme Docs">',
+      ]);
+      expect(t).toMatch(/<head>.*oa-instance.*<\/head>/);
+    }
+  });
+
+  it("escapes the name", async () => {
+    await setName('Evil"><script>alert(1)</script> & co');
+    for (const p of ["/", viewerPath(newId())]) {
+      const t = await (await get(p)).text();
+      expect(t).not.toContain("<script>");
+      expect(metas(t)).toEqual([
+        '<meta name="oa-instance" content="Evil&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt; &amp; co">',
+      ]);
+    }
+  });
+
+  it("a failed settings read serves the shell without the meta", async () => {
+    // Only the settings read fails (the /a/:id OG read still works).
+    const DB = new Proxy(env.DB, {
+      get(t, k) {
+        if (k === "prepare")
+          return (sql: string) => {
+            if (sql.includes("from settings")) throw new Error("d1 down");
+            return t.prepare(sql);
+          };
+        const v = Reflect.get(t, k);
+        return typeof v === "function" ? v.bind(t) : v;
+      },
+    });
+    for (const p of ["/", "/library", viewerPath(newId())]) {
+      const r = await get(p, { DB });
+      expect(r.status).toBe(200);
+      const t = await r.text();
+      expect(t).toContain('<div id="root">');
+      expect(metas(t)).toEqual([]);
+    }
+  });
+
+  it("static assets are untouched", async () => {
+    const files = fakeAssets({
+      "/index.html": { body: INDEX, type: "text/html" },
+      "/assets/app.js": { body: "/*js*/", type: "text/javascript" },
+      "/favicon.svg": { body: "<svg/>", type: "image/svg+xml" },
+    }).fetcher;
+    for (const p of ["/assets/app.js", "/assets/missing.js", "/favicon.svg"]) {
+      const r = await get(p, { ASSETS: files });
+      expect(r.headers.get("etag")).toBe('"e1"');
+      expect(metas(await r.text())).toEqual([]);
+    }
   });
 });

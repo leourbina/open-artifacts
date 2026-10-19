@@ -6,6 +6,7 @@ import { artifacts } from "../db/schema.js";
 import type { Env } from "../env.js";
 import { appOrigin } from "../http/errors.js";
 import type { AppEnv } from "../http/middleware.js";
+import { getSettings } from "../services/members.js";
 import type { AppType } from "./index.js";
 
 const SITE = "Open Artifacts";
@@ -79,12 +80,50 @@ function metaTags(og: Og): string {
   ].join("");
 }
 
+/**
+ * Shell contract for the dashboard: every SPA shell HTML response carries
+ * `<meta name="oa-instance" content="<settings.name>">` in its <head> (omitted
+ * if the settings read fails), so signed-out pages can show the instance name.
+ */
+export async function instanceMeta(env: Env): Promise<string> {
+  try {
+    const { name } = await getSettings(env);
+    return `<meta name="oa-instance" content="${esc(name)}">`;
+  } catch {
+    return "";
+  }
+}
+
+/** SPA fallback: injects the instance meta into an HTML shell response. */
+export async function withInstanceMeta(
+  env: Env,
+  res: Response,
+): Promise<Response> {
+  if (!res.ok || !res.headers.get("content-type")?.startsWith("text/html"))
+    return res;
+  const meta = await instanceMeta(env);
+  if (!meta) return res;
+  const headers = new Headers(res.headers);
+  // The body changed: the asset's length and validator no longer apply.
+  headers.delete("content-length");
+  headers.delete("etag");
+  const body = new HTMLRewriter()
+    .on("head", {
+      element(e) {
+        e.append(meta, { html: true });
+      },
+    })
+    .transform(res).body;
+  return new Response(body, { status: res.status, headers });
+}
+
 export function mountShell(app: AppType): void {
   const shell = async (c: Context<AppEnv>, id: string, v?: number) => {
-    const og = await publicOg(c.env, id, v);
-    const index = await c.env.ASSETS.fetch(
-      new Request(new URL("/", c.req.url)),
-    );
+    const [og, meta, index] = await Promise.all([
+      publicOg(c.env, id, v),
+      instanceMeta(c.env),
+      c.env.ASSETS.fetch(new Request(new URL("/", c.req.url))),
+    ]);
     if (!index.ok) return index;
     const rewritten = new HTMLRewriter()
       .on("title", {
@@ -94,7 +133,7 @@ export function mountShell(app: AppType): void {
       })
       .on("head", {
         element(e) {
-          if (og) e.append(metaTags(og), { html: true });
+          e.append(meta + (og ? metaTags(og) : ""), { html: true });
         },
       })
       .transform(index);

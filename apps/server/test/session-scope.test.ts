@@ -29,8 +29,14 @@ beforeAll(async () => {
 });
 
 describe("session() scope", () => {
-  for (const path of ["/library", "/", "/a/abc", "/assets/app.js"]) {
-    it(`GET ${path} with a cookie makes no DB call`, async () => {
+  // /a/:id reads only the instance name (settings), never the session.
+  for (const [path, reads] of [
+    ["/library", 0],
+    ["/", 0],
+    ["/a/abc", 1],
+    ["/assets/app.js", 0],
+  ] as const) {
+    it(`GET ${path} with a cookie makes no session DB call`, async () => {
       const { e, count } = counted();
       const r = await app.fetch(
         new Request(`http://app.localhost${path}`, { headers: { cookie } }),
@@ -38,7 +44,7 @@ describe("session() scope", () => {
         ctx,
       );
       expect(r.status).toBe(200);
-      expect(count()).toBe(0);
+      expect(count()).toBe(reads);
     });
   }
 
