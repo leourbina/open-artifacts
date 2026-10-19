@@ -58,6 +58,17 @@ export function DisplayNamePrompt({ me }: { me: Me }) {
         className="bg-card sm:max-w-sm"
         // Escape and "Not now" dismiss; a stray click on the backdrop doesn't.
         onInteractOutside={(e) => e.preventDefault()}
+        // Nothing opened it, so focus the page heading rather than <body>.
+        onCloseAutoFocus={(e) => {
+          e.preventDefault();
+          // Two queries: "main h1, main" would match <main> first (document order).
+          const to =
+            document.querySelector<HTMLElement>("main h1") ??
+            document.querySelector<HTMLElement>("main");
+          if (!to) return;
+          if (!to.hasAttribute("tabindex")) to.tabIndex = -1;
+          to.focus();
+        }}
       >
         <form
           className="grid gap-4"

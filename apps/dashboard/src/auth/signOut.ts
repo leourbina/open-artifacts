@@ -3,6 +3,17 @@ import { toast } from "@oa/ui";
 import { api } from "../api/client";
 import { useRedirect } from "./redirect";
 
+/** Forgets every "Not now" on the display-name dialog, so the next sign-in asks again. */
+export function clearDisplayNameSkips() {
+  try {
+    for (const k of Object.keys(sessionStorage))
+      if (k.startsWith("oa:display-name-skipped:"))
+        sessionStorage.removeItem(k);
+  } catch {
+    // Storage blocked: nothing was stored.
+  }
+}
+
 /** POST logout, then go to /sign-in. On failure stay put and say so. */
 export function useSignOut() {
   const redirect = useRedirect();
@@ -17,6 +28,7 @@ export function useSignOut() {
       });
       return;
     }
+    clearDisplayNameSkips();
     redirect("/sign-in");
   };
 }

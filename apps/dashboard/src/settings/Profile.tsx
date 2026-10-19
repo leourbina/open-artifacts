@@ -40,9 +40,8 @@ function ProfileForm({ me }: { me: Me }) {
   const tooLong = nameLength(trimmed) > NAME_MAX;
   const problem = error ?? (tooLong ? TOO_LONG : null);
   return (
-    <section className="max-w-[460px]">
-      <h2 className="mt-0 mb-3 text-[15px] font-semibold">Profile</h2>
-      <Card className="gap-3 py-3.5">
+    <section className="max-w-[460px]" aria-label="Profile">
+      <Card className="gap-3 py-(--oa-space-5) shadow-none max-[600px]:py-(--oa-space-4)">
         <form
           className="contents"
           onSubmit={(e) => {
@@ -62,7 +61,7 @@ function ProfileForm({ me }: { me: Me }) {
             );
           }}
         >
-          <CardContent className="grid gap-3 px-3.5">
+          <CardContent className="grid gap-3 px-(--oa-space-5) max-[600px]:px-(--oa-space-4)">
             <div className="grid gap-1.5">
               <Label htmlFor="oa-profile-name">Display name</Label>
               <Input
@@ -108,7 +107,7 @@ function ProfileForm({ me }: { me: Me }) {
               />
             </div>
           </CardContent>
-          <CardFooter className="justify-between border-t px-3.5 [.border-t]:pt-3">
+          <CardFooter className="justify-between border-t px-(--oa-space-5) max-[600px]:px-(--oa-space-4) [.border-t]:pt-(--oa-space-5) max-[600px]:[.border-t]:pt-(--oa-space-4)">
             <span className="text-xs text-muted-foreground" aria-live="polite">
               {dirty ? "Unsaved changes" : justSaved ? "Saved" : ""}
             </span>

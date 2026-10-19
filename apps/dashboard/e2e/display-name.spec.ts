@@ -27,6 +27,9 @@ test("display-name dialog: Not now hides it for the rest of the session", async 
   const dialog = page.getByRole("dialog", { name: TITLE });
   await dialog.getByRole("button", { name: "Not now" }).click();
   await expect(dialog).toBeHidden();
+  await expect(
+    page.getByRole("heading", { name: "Library", level: 1 }),
+  ).toBeFocused();
   await page.reload();
   await expect(
     page.getByRole("heading", { name: "Library", level: 1 }),
