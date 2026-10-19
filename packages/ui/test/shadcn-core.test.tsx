@@ -2,29 +2,10 @@
 import { readFileSync } from "node:fs";
 import { cleanup, render } from "@testing-library/react";
 import axe from "axe-core";
-import type { ReactElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  Avatar,
-  AvatarFallback,
-  Badge,
-  Button,
-  buttonVariants,
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-  Input,
-  Label,
-  Separator,
-  Skeleton,
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "../src/shadcn";
+import { Badge, Button, badgeVariants, buttonVariants } from "../src/shadcn";
 import { tokens } from "../src/tokens/index";
+import { cases } from "./shadcn-fixtures";
 
 // jsdom has no ResizeObserver; Radix's popper (open tooltip) needs one.
 globalThis.ResizeObserver ??= class {
@@ -33,53 +14,13 @@ globalThis.ResizeObserver ??= class {
   disconnect() {}
 };
 
-afterEach(() => {
-  cleanup();
-  document.documentElement.removeAttribute("data-theme");
-});
+afterEach(cleanup);
 
-const cases: Record<string, ReactElement> = {
-  Button: <Button>Save</Button>,
-  ButtonDestructive: <Button variant="destructive">Delete</Button>,
-  Input: <Input aria-label="Title" />,
-  Label: (
-    <>
-      <Label htmlFor="t">Title</Label>
-      <Input id="t" />
-    </>
-  ),
-  Card: (
-    <Card>
-      <CardHeader>
-        <CardTitle>Q4 plan</CardTitle>
-        <CardDescription>Markdown · 2h ago</CardDescription>
-      </CardHeader>
-      <CardContent>Body</CardContent>
-    </Card>
-  ),
-  Badge: <Badge>Team</Badge>,
-  BadgeDestructive: <Badge variant="destructive">Failed</Badge>,
-  Avatar: (
-    <Avatar>
-      <AvatarFallback>MC</AvatarFallback>
-    </Avatar>
-  ),
-  Tooltip: (
-    <TooltipProvider>
-      <Tooltip open>
-        <TooltipTrigger>Hover</TooltipTrigger>
-        <TooltipContent>Hint</TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
-  ),
-  Skeleton: <Skeleton className="h-4 w-24" />,
-  Separator: <Separator />,
-};
-
-describe.each(["light", "dark"])("shadcn core a11y (%s)", (theme) => {
+// Structure only: jsdom can't compute color contrast. Contrast, focus outlines
+// and both themes are checked in a real browser: test-browser/.
+describe("shadcn core a11y (structure)", () => {
   for (const [name, el] of Object.entries(cases)) {
     it(`${name} has no axe violations`, async () => {
-      document.documentElement.dataset.theme = theme;
       render(<main>{el}</main>);
       // Portals (tooltip) land outside <main>; that's the app shell's concern.
       const result = await axe.run(document.body, {
@@ -157,7 +98,9 @@ describe("Button", () => {
     const cls = buttonVariants();
     expect(cls).toContain("bg-primary");
     expect(cls).toContain("text-primary-foreground");
-    expect(cls).toMatch(/focus-visible:ring-ring\b/);
+    const classes = cls.split(/\s+/);
+    expect(classes).toContain("focus-visible:outline-ring");
+    expect(classes).toContain("focus-visible:outline-2");
     const theme = readFileSync(
       `${import.meta.dirname}/../src/shadcn/theme.css`,
       "utf8",
@@ -165,5 +108,54 @@ describe("Button", () => {
     expect(theme).toMatch(/--primary:\s*var\(--oa-text\)/);
     expect(theme).toMatch(/--ring:\s*var\(--oa-focus\)/);
     expect(tokens.focus?.light).toBe("#2350D0");
+  });
+});
+
+// Token math for every variant's edges: borders and focus outlines need 3:1
+// on bg and surface (WCAG 1.4.11), the placeholder 4.5:1 (Input is transparent).
+describe("variant edges", () => {
+  const source = (name: string) =>
+    readFileSync(`${import.meta.dirname}/../src/shadcn/ui/${name}.tsx`, "utf8");
+  const pages = ["bg", "surface"];
+  const ratio = (fg: string, bg: string, t: "light" | "dark") =>
+    contrast(rgb(tokens[fg]?.[t] as string), rgb(tokens[bg]?.[t] as string));
+
+  it.each(["button", "badge", "input"])(
+    "%s: focus is a solid ring outline, no translucent rings",
+    (name) => {
+      const src = source(name);
+      expect(src).toContain("focus-visible:outline-ring");
+      // outline-none sets --tw-outline-style: none, so the style is explicit.
+      expect(src).toContain("focus-visible:outline-solid");
+      expect(src).not.toMatch(/focus-visible:ring-(ring|destructive)\//);
+    },
+  );
+
+  it("outlined variants use border-input, not border-border", () => {
+    const outline = (cls: string) =>
+      cls.split(/\s+/).filter((c) => /^border-[a-z]/.test(c));
+    expect(outline(buttonVariants({ variant: "outline" }))).toEqual([
+      "border-input",
+    ]);
+    expect(outline(badgeVariants({ variant: "outline" }))).toContain(
+      "border-input",
+    );
+    expect(source("input")).toContain("border-input");
+    expect(source("input")).not.toContain("dark:bg-input");
+  });
+
+  it.each(["light", "dark"] as const)("ratios hold (%s)", (t) => {
+    for (const bg of pages) {
+      // --input = --oa-border-strong, --ring = --oa-focus
+      expect(
+        ratio("border-strong", bg, t),
+        `border on ${bg}`,
+      ).toBeGreaterThanOrEqual(3);
+      expect(ratio("focus", bg, t), `focus on ${bg}`).toBeGreaterThanOrEqual(3);
+      expect(
+        ratio("text-muted", bg, t),
+        `placeholder on ${bg}`,
+      ).toBeGreaterThanOrEqual(4.5);
+    }
   });
 });

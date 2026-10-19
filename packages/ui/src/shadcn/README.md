@@ -50,6 +50,17 @@ saved (`^x` becomes the installed version; a test rejects ranges), and runs
   `bg-destructive`: 5.81:1 light, 7.4:1 dark, and at least 4.97:1 at the
   `/90` hover.
 
+- **Focus (button, badge, input):** shadcn's translucent `ring-ring/50` and
+  `ring-destructive/20|40` become a solid Studio outline,
+  `focus-visible:outline-2 outline-solid outline-offset-2 outline-ring`
+  (`--oa-focus`, ≥ 5.88:1 on bg and surface in both themes).
+- **Outline button, outline badge, input:** `border-input`
+  (`--oa-border-strong`, ≥ 3:1) in both themes, not `border-border`. Input
+  drops `dark:bg-input/30`, so its placeholder stays ≥ 4.5:1.
+
+Real-browser checks (axe incl. color-contrast, and every focus outline, in
+both themes): `pnpm --filter @oa/ui test:browser` (Playwright Chromium).
+
 ### To fix when these components are added
 - **sonner:** it reads the theme from `next-themes`' `useTheme()`, which has no
   provider here and ignores `data-theme`. Replace it with a hook that reads
