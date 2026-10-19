@@ -17,10 +17,18 @@ import {
   setup,
   summarize,
 } from "../../scripts/bench.js";
-import { meterDo } from "../../scripts/bench-env.js";
+import { cpuMicros, meterDo } from "../../scripts/bench-env.js";
 import type { ArtifactRuntime } from "../../src/runtime/do.js";
 
 const BAR_MS = 2;
+/**
+ * The bar is in reference-machine ms (the dev laptop the rows in
+ * docs/ops/cpu-budget.md came from). A slower runner (CI is 2–3×) scales it
+ * by how long a fixed JSON/regex workload takes there versus REF_MS, capped
+ * at MAX_SCALE so a pathological runner can't hide a regression.
+ */
+const REF_MS = 0.67;
+const MAX_SCALE = 4;
 const RUNS = 20;
 const REPEATS = 5;
 const APP = "http://app.localhost";
@@ -29,9 +37,34 @@ const APP = "http://app.localhost";
 const escapeHeavy = (bytes: number) =>
   `<p class="a\\b">${'"\\'.repeat(bytes / 2)}</p>`.slice(0, bytes);
 
+/** Median CPU ms of a fixed workload: JSON round trip and regex over 128 KB. */
+function referenceMs(): number {
+  const doc = {
+    rows: Array.from({ length: 2000 }, (_, i) => ({
+      i,
+      s: `row ${i} "quoted" \\ text`,
+    })),
+  };
+  const xs: number[] = [];
+  for (let k = 0; k < 15; k++) {
+    const t = cpuMicros();
+    const j = JSON.stringify(doc);
+    JSON.parse(j);
+    j.replace(/[<>&"]/g, "_");
+    xs.push((cpuMicros() - t) / 1000);
+  }
+  xs.sort((a, b) => a - b);
+  return xs[7] ?? 0;
+}
+
 let c: Ctx;
+let bar = BAR_MS;
+let scale = 1;
 beforeAll(async () => {
   c = await setup();
+  for (let k = 0; k < 5; k++) referenceMs();
+  scale = Math.min(MAX_SCALE, Math.max(1, referenceMs() / REF_MS));
+  bar = BAR_MS * scale;
 }, 120_000);
 
 const json = (x: unknown) => JSON.stringify(x);
@@ -228,8 +261,8 @@ describe(`code CPU ≤ ${BAR_MS} ms per route (p95, median of ${REPEATS})`, () =
       p95s.sort((a, b) => a - b);
       const median = p95s[Math.floor(REPEATS / 2)] ?? Number.POSITIVE_INFINITY;
       await annotate(
-        `p95 ${median.toFixed(2)} ms (runs: ${p95s.map((x) => x.toFixed(2)).join(", ")})`,
+        `p95 ${median.toFixed(2)} ms, bar ${bar.toFixed(2)} (×${scale.toFixed(2)}) (runs: ${p95s.map((x) => x.toFixed(2)).join(", ")})`,
       );
-      expect(median).toBeLessThanOrEqual(BAR_MS);
+      expect(median).toBeLessThanOrEqual(bar);
     }, 120_000);
 });
