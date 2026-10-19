@@ -42,6 +42,16 @@ export function SearchPage() {
           description="Try different words, or check the spelling."
         />
       )}
+      {r.isSuccess && items.length > 0 && (
+        <p
+          className="m-0 text-[length:var(--oa-text-sm)] text-muted-foreground"
+          aria-live="polite"
+        >
+          {items.length}
+          {r.hasNextPage ? "+" : ""} {items.length === 1 ? "result" : "results"}{" "}
+          for “{q}”
+        </p>
+      )}
       <div className={LIST}>
         {items.map((a) => (
           <ArtifactRow key={a.id} artifact={a} snippet={a.snippet} />

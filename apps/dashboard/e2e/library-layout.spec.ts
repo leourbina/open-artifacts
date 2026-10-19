@@ -64,7 +64,7 @@ for (const [name, path] of Object.entries(PAGES))
         if (name === "grid") {
           expect(m.cardPad).toBe("12px");
           expect(m.rowGap).toBe(16);
-          if (width > 600) expect(m.colGap).toBe(16);
+          expect(m.colGap).toBe(16);
         } else if (m.listGap !== null) expect(m.listGap).toBe(8);
         await info.attach(`${name}-${width}-${theme}`, {
           body: await page.screenshot(),
@@ -136,4 +136,74 @@ test("keyboard focus rings the whole card: solid 2px at offset 2", async ({
     return [s.outlineStyle, s.outlineWidth, s.outlineOffset];
   });
   expect(ring).toEqual(["solid", "2px", "2px"]);
+});
+
+test("every card shows its format tile, even with a blank thumbnail", async ({
+  page,
+}) => {
+  await page.goto("/?view=grid");
+  await expect(page.locator(".lib-card").first()).toBeVisible();
+  const tiles = await page.locator(".lib-thumb").evaluateAll((thumbs) =>
+    thumbs.map((t) => ({
+      icon: !!t.querySelector("svg"),
+      title: (t.textContent ?? "").trim().length > 0,
+    })),
+  );
+  expect(tiles.length).toBeGreaterThan(0);
+  for (const t of tiles) expect(t).toEqual({ icon: true, title: true });
+});
+
+test("phones: two grid columns, 4:3 thumbnails, titles clamped to 2 lines", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto("/?view=grid");
+  await expect(page.locator(".lib-card").first()).toBeVisible();
+  const g = await page.evaluate(() => {
+    const cards = [...document.querySelectorAll(".lib-card")].map((c) =>
+      c.getBoundingClientRect(),
+    );
+    const top = cards[0]?.top ?? 0;
+    const thumb = document.querySelector(".lib-thumb")?.getBoundingClientRect();
+    const h3 = document.querySelector(".lib-card h3");
+    return {
+      perRow: cards.filter((c) => Math.abs(c.top - top) < 1).length,
+      ratio: thumb ? Math.round((thumb.width / thumb.height) * 100) / 100 : 0,
+      clamp: h3 ? getComputedStyle(h3).webkitLineClamp : "",
+    };
+  });
+  expect(g).toEqual({ perRow: 2, ratio: 1.33, clamp: "2" });
+});
+
+for (const width of [1280, 390])
+  test(`list rows show visibility before the agent at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/?view=list");
+    const row = page.locator(".lib-row").first();
+    await expect(row).toBeVisible();
+    const r = await row.evaluate((li) => {
+      const badge = li.querySelector("time")?.parentElement;
+      const parts = [...(badge?.children ?? [])].map((e) =>
+        (e.textContent ?? "").trim(),
+      );
+      const title = li.querySelector("a.lib-title")?.getBoundingClientRect();
+      const meta = badge?.getBoundingClientRect();
+      return {
+        first: parts[0],
+        agent: parts[1],
+        below: !!title && !!meta && meta.top >= title.bottom - 0.5,
+      };
+    });
+    expect(r.first).toMatch(/^(Private|Team|Public)$/);
+    expect(r.agent).toBe("claude-code");
+    expect(r.below).toBe(width <= 600);
+  });
+
+test("search counts its results, singular and plural", async ({ page }) => {
+  await page.goto("/search?q=notes");
+  await expect(page.getByText("1 result for “notes”")).toBeVisible();
+  await page.goto("/search?q=e");
+  await expect(page.getByText(/^\d+\+? results for “e”$/)).toBeVisible();
 });

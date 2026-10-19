@@ -6,8 +6,9 @@ export const PAGE = "flex flex-col gap-[var(--oa-space-4)]";
 /** Design's page h1: 20px, semibold. */
 export const H1 = "m-0 text-[length:var(--oa-text-xl)] font-semibold";
 export const BAR = "flex flex-wrap items-center gap-[var(--oa-space-2)]";
+/** Auto-filling 240px columns; two columns on phones. */
 export const GRID =
-  "grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-[var(--oa-space-4)]";
+  "grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-[var(--oa-space-4)] max-[600px]:grid-cols-2";
 export const LIST = "flex flex-col gap-[var(--oa-space-2)]";
 export const META = "text-[length:var(--oa-text-xs)] text-muted-foreground";
 export const ALERT =

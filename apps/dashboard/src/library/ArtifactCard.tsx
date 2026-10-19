@@ -33,24 +33,31 @@ export function ArtifactCard(p: CardProps) {
   const a = p.artifact;
   return (
     <article className={CARD}>
-      <div className="lib-thumb aspect-[16/10] overflow-hidden rounded-md bg-background">
-        {a.thumbnailUrl ? (
+      {/* The format tile is always there; a thumbnail covers it, so a missing,
+          broken or blank one never leaves an empty block. 4:3 on phones. */}
+      <div className="lib-thumb relative aspect-[16/10] overflow-hidden rounded-md bg-background max-[600px]:aspect-[4/3]">
+        <div
+          className="flex h-full flex-col gap-[var(--oa-space-2)] overflow-hidden p-[var(--oa-space-3)] text-muted-foreground"
+          aria-hidden={a.thumbnailUrl ? true : undefined}
+        >
+          <FormatIcon format={a.format} size={20} decorative />
+          <span className="line-clamp-3 text-[length:var(--oa-text-md)] leading-[1.3] font-semibold [overflow-wrap:anywhere] text-foreground">
+            {a.title}
+          </span>
+        </div>
+        {a.thumbnailUrl && (
           <img
             src={a.thumbnailUrl}
             alt=""
             loading="lazy"
-            className="block size-full object-cover"
+            className="absolute inset-0 block size-full object-cover"
+            onError={(e) => {
+              e.currentTarget.hidden = true;
+            }}
           />
-        ) : (
-          <div className="flex h-full flex-col gap-[var(--oa-space-2)] overflow-hidden p-[var(--oa-space-3)] text-muted-foreground">
-            <FormatIcon format={a.format} size={20} decorative />
-            <span className="line-clamp-3 text-[length:var(--oa-text-md)] leading-[1.3] font-semibold [overflow-wrap:anywhere] text-foreground">
-              {a.title}
-            </span>
-          </div>
         )}
       </div>
-      <h3 className="m-0 text-[length:var(--oa-text-sm)] font-semibold">
+      <h3 className="m-0 text-[length:var(--oa-text-sm)] font-semibold max-[600px]:line-clamp-2">
         <AppLink className={TITLE_LINK} href={`/a/${a.id}`}>
           {a.title}
         </AppLink>
