@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { makeQueryClient } from "./api/queryClient";
 import { router } from "./router";
 import "./styles.css";
+import "./shadcn.css";
 
 /** Dev-only: serve the API from in-browser MSW handlers. Dead-code-eliminated from production builds. */
 async function startMocks() {
@@ -33,6 +34,26 @@ async function startMocks() {
         }),
       ),
     );
+  // ?mock=name: no display name yet (suggested "Ada Lovelace"); after a PATCH the shared mock answers.
+  if (params.get("mock") === "name") {
+    let named = false;
+    extra.push(
+      http.get("*/api/v1/me", () =>
+        named
+          ? undefined
+          : HttpResponse.json({
+              ...fixtures.me,
+              displayName: null,
+              suggestedName: "Ada Lovelace",
+              needsDisplayName: true,
+            }),
+      ),
+      http.patch("*/api/v1/me", () => {
+        named = true;
+        return undefined;
+      }),
+    );
+  }
   // ?mock=cpu: 4 CPU-limit hits today, and the first two library requests get a 1102 (the first may be aborted).
   if (params.get("mock") === "cpu") {
     let hits = 0;

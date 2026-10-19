@@ -6,6 +6,11 @@ import { AppLink } from "../library/AppLink";
 import "./settings.css";
 
 const TABS: { to: string; label: string; roles: Role[] }[] = [
+  {
+    to: "/settings/profile",
+    label: "Profile",
+    roles: ["owner", "admin", "member"],
+  },
   { to: "/settings/members", label: "Members", roles: ["owner", "admin"] },
   {
     to: "/settings/agents",
