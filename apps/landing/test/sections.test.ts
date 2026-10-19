@@ -42,6 +42,18 @@ describe("landing sections", () => {
     expect(index.match(/data-k="/g)).toHaveLength(16);
   });
 
+  it("the feature story is four real features with aria-hidden mocks", () => {
+    const story = index.slice(index.indexOf("data-story"));
+    expect(story.match(/class="story-item"/g)).toHaveLength(4);
+    expect(
+      story.match(/class="story-slot"[^>]*aria-hidden="true"/g),
+    ).toHaveLength(4);
+    expect(story).toMatch(/class="story-stage"[^>]*aria-hidden="true"/);
+    for (const badge of ["From Claude Code", "From Cursor", "From Codex"])
+      expect(story).toContain(badge);
+    expect(story).toContain("Restore this version");
+  });
+
   it("the hero keeps the library screenshot", () => {
     expect(index).toMatch(/class="frame hero-shot"/);
   });

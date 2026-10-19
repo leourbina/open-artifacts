@@ -2,6 +2,7 @@
 import { REPO_URL } from "@oa/shared";
 import AgentWiring from "../components/AgentWiring.astro";
 import ChatDemo from "../components/ChatDemo.astro";
+import FeatureStory from "../components/FeatureStory.astro";
 import Shot from "../components/Shot.astro";
 import Base from "../layouts/Base.astro";
 import { gatesFor } from "../lib/release";
@@ -133,6 +134,11 @@ const plans = [
         </li>
       </ol>
     </div>
+  </section>
+
+  <section class="wrap story-section" aria-labelledby="story-h">
+    <h2 id="story-h">One home for everything your agents make</h2>
+    <FeatureStory />
   </section>
 
   <section class="wrap features" aria-labelledby="features-h">

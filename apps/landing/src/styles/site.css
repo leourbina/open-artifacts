@@ -257,7 +257,8 @@ code,
   margin-top: 48px;
 }
 
-.demo-section {
+.demo-section,
+.story-section {
   margin-top: var(--section-gap);
 }
 .section-lede {
