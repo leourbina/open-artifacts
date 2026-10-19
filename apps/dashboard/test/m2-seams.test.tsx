@@ -48,3 +48,55 @@ describe("role change mid-session", () => {
     ).not.toBeInTheDocument();
   });
 });
+
+describe("sign-in for visitors not signed in", () => {
+  const anonymous = () =>
+    server.use(
+      http.get(`*${R.me}`, () =>
+        HttpResponse.json(
+          { error: { code: "unauthorized", message: "Sign in" } },
+          { status: 401 },
+        ),
+      ),
+    );
+  const setMeta = (content: string) => {
+    const m = document.createElement("meta");
+    m.name = "oa-instance";
+    m.content = content;
+    document.head.append(m);
+    return () => m.remove();
+  };
+
+  it("names the instance from the shell's oa-instance meta", async () => {
+    anonymous();
+    const cleanup = setMeta("Globex <Docs>");
+    try {
+      mount("/sign-in");
+      expect(
+        await screen.findByRole("heading", {
+          name: "Sign in to Globex <Docs>",
+        }),
+      ).toBeInTheDocument();
+      await waitFor(() =>
+        expect(document.title).toBe("Sign in · Globex <Docs>"),
+      );
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("falls back to Open Artifacts when the meta is absent or blank", async () => {
+    anonymous();
+    const cleanup = setMeta("   ");
+    try {
+      mount("/sign-in");
+      expect(
+        await screen.findByRole("heading", {
+          name: "Sign in to Open Artifacts",
+        }),
+      ).toBeInTheDocument();
+    } finally {
+      cleanup();
+    }
+  });
+});
