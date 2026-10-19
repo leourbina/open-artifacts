@@ -44,6 +44,12 @@ describe("limits in the docs", () => {
     expect(page("mcp-tools.md")).toContain(
       `A file can be up to ${formatBytes(LIMITS.fileBytes)}, and one publish up to ${formatBytes(LIMITS.publishBytes)}.`,
     );
+    expect(page("mcp-tools.md")).toContain(
+      `within about ${formatSeconds(LIMITS.indexDebounceMs / 1000)} of being published`,
+    );
+    expect(page("mcp-tools.md")).toContain(
+      `Only the first ${formatBytes(LIMITS.indexTextBytes)} of an artifact's entry file is indexed`,
+    );
     expect(page("runtime-api.md")).toContain(
       `| Document size | ${formatBytes(LIMITS.docBytes)} |`,
     );
@@ -68,6 +74,11 @@ describe("upload flow in llms.txt", () => {
     );
     expect(llms).toContain("`create_upload`");
     expect(llms).toContain('{ "uploadId": "<uploadId>" }');
-    expect(llms).toMatch(/search_artifacts[^.]*few seconds/);
+    expect(llms).toContain(
+      `searchable with \`search_artifacts\` within about ${formatSeconds(LIMITS.indexDebounceMs / 1000)} of being published`,
+    );
+    expect(llms).toContain(
+      `Only the first ${formatBytes(LIMITS.indexTextBytes)} of an artifact's entry file is indexed`,
+    );
   });
 });

@@ -19,7 +19,12 @@ describe("mcp-tools docs", () => {
       "`publish_artifact`",
     ])
       expect(large).toContain(word);
-    expect(doc).toMatch(/search_artifacts[^.]*few seconds/);
+    expect(doc).toMatch(
+      /search_artifacts[^.]*within about \{LIMIT_INDEX_LAG\}/,
+    );
+    expect(doc).toContain(
+      "Only the first {LIMIT_INDEX_TEXT} of an artifact's entry file is indexed",
+    );
     expect(doc).toContain("search matches the previous version's text");
     // The 413 message isn't quoted: {LIMIT_INLINE} carries the number.
     expect(doc).not.toMatch(/Inline content is limited to/);

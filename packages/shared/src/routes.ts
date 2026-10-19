@@ -53,11 +53,12 @@ export const R = {
    * GET ?q=&cursor=&limit= -> Page<SearchHit>
    *
    * Body text is indexed asynchronously after publish, restore and undelete
-   * (C3), usually within a few seconds (longer while retrying). Until then a
-   * new or undeleted artifact matches on title/description only, and a new
-   * version still matches the previous version's body. Title/description
-   * changes (PATCH) apply immediately. Only the first 96 KB of a document
-   * (its entry file) is indexed: text past that never matches.
+   * (C3), within ~10 s (LIMITS.indexDebounceMs; a burst of versions indexes
+   * only the newest; longer while retrying). Until then a new or undeleted
+   * artifact matches on title/description only, and a new version still
+   * matches the previous version's body. Title/description changes (PATCH)
+   * apply immediately. Only the first 64 KB (LIMITS.indexTextBytes) of a
+   * document's entry file is indexed: text past that never matches.
    */
   search: "/api/v1/search",
   /** GET -> Member[]; POST MemberInvite -> Member */
