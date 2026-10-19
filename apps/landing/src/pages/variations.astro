@@ -1,0 +1,48 @@
+---
+import Base from "../layouts/Base.astro";
+---
+
+<Base
+  title="Open Artifacts · Landing variations"
+  description="Five landing page concepts for Open Artifacts, each showing the real product."
+  noindex
+>
+  <section class="wrap vars">
+    <h1>Landing variations</h1>
+    <p class="lead">Five different concepts. Each one shows the real product working. Open them on your phone and pick what to keep.</p>
+    <ol>
+      <li>
+        <a href="/v1/"><span class="n">01</span> Product demo</a>
+        <p>Ask any AI agent in chat and get a link back. The real artifact opens beside the chat, and tabs switch between examples.</p>
+      </li>
+      <li>
+        <a href="/v2/"><span class="n">02</span> Editorial scroll</a>
+        <p>A short story you scroll through, from one agent's answer to a team's shared library. Real artifacts work inline as you read.</p>
+      </li>
+      <li>
+        <a href="/v3/"><span class="n">03</span> Terminal first</a>
+        <p>The page opens as an agent session. It publishes, and the result unfolds into the live artifact you can use.</p>
+      </li>
+      <li>
+        <a href="/v4/"><span class="n">04</span> Gallery</a>
+        <p>A wall of real, working artifacts made by AI agents. Open any of them in place to try it and see its versions.</p>
+      </li>
+      <li>
+        <a href="/v5/"><span class="n">05</span> Minimal</a>
+        <p>One screen: a single statement, one live artifact you can use, and the one line that sets it up.</p>
+      </li>
+    </ol>
+  </section>
+</Base>
+
+<style>
+  .vars { padding: 48px 0 64px; }
+  .vars h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: -0.02em; }
+  .lead { margin: 0 0 24px; color: var(--oa-text-2); max-width: 560px; }
+  .vars ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+  .vars li { background: var(--oa-surface); border: 1px solid var(--oa-border); border-radius: var(--oa-radius-lg); padding: 16px 20px; }
+  .vars li a { font-weight: 600; font-size: 17px; color: var(--oa-text); text-decoration: none; }
+  .vars li a:hover { text-decoration: underline; }
+  .vars li p { margin: 4px 0 0; color: var(--oa-text-2); }
+  .n { font-family: var(--oa-font-mono); color: var(--oa-accent-fg); margin-right: 6px; }
+</style>
