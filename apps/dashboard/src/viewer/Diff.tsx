@@ -5,7 +5,15 @@ import {
   R,
   type VersionInfo,
 } from "@oa/shared";
-import { Button, Tabs } from "@oa/ui";
+import {
+  Badge,
+  Button,
+  Skeleton,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@oa/ui/shadcn";
 import { useQuery } from "@tanstack/react-query";
 import { diffLines } from "diff";
 import { useMemo, useState } from "react";
@@ -17,6 +25,7 @@ import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { NotFound } from "../pages/NotFound";
 import { Crumbs } from "./Crumbs";
 import { SANDBOX, safeContentUrl } from "./frame";
+import { SM, TXT } from "./ui";
 import { useContentUrl } from "./useContentUrl";
 import "./viewer.css";
 
@@ -63,6 +72,10 @@ export function diffRows(a: string, b: string): Row[] | null {
   return rows;
 }
 
+const CELL = "px-2 align-top break-all whitespace-pre-wrap";
+const NUM = `${CELL} w-[1%] text-right text-muted-foreground select-none`;
+const GAP_ROW = "bg-[var(--oa-sunken)] text-muted-foreground";
+
 function Unified({ rows }: { rows: Row[] }) {
   const [all, setAll] = useState(false);
   const [limit, setLimit] = useState(CHUNK);
@@ -90,12 +103,13 @@ function Unified({ rows }: { rows: Row[] }) {
     if (hidden) out.push({ gap: hidden });
     return { shown: out.slice(0, limit), truncated: out.length > limit };
   }, [rows, all, limit]);
-  if (!rows.some((r) => r.kind !== "ctx")) return <p>No changes.</p>;
+  if (!rows.some((r) => r.kind !== "ctx"))
+    return <p className="m-0">No changes.</p>;
   const hiddenAny = all || shown.some((r) => "gap" in r);
   return (
     <>
-      <table className="oa-dtable">
-        <thead className="oa-sr">
+      <table className="w-full border-collapse font-mono text-[length:var(--oa-text-xs)] leading-normal">
+        <thead className="sr-only">
           <tr>
             <th>Old line</th>
             <th>New line</th>
@@ -107,28 +121,43 @@ function Unified({ rows }: { rows: Row[] }) {
           {shown.map((r, i) =>
             "gap" in r ? (
               // biome-ignore lint/suspicious/noArrayIndexKey: static list
-              <tr key={i} data-kind="gap">
-                <td colSpan={4}>{r.gap} unchanged lines</td>
+              <tr key={i} data-kind="gap" className={GAP_ROW}>
+                <td colSpan={4} className={CELL}>
+                  {r.gap} unchanged lines
+                </td>
               </tr>
             ) : (
-              <tr key={`${r.oldNo}:${r.newNo}`} data-kind={r.kind}>
-                <td className="n">{r.oldNo}</td>
-                <td className="n">{r.newNo}</td>
-                <td>{r.kind === "add" ? "+" : r.kind === "del" ? "-" : " "}</td>
-                <td>{r.text}</td>
+              <tr
+                key={`${r.oldNo}:${r.newNo}`}
+                data-kind={r.kind}
+                className="data-[kind=add]:bg-[var(--oa-success-soft)] data-[kind=del]:bg-[var(--oa-danger-soft)]"
+              >
+                <td className={NUM}>{r.oldNo}</td>
+                <td className={NUM}>{r.newNo}</td>
+                <td className={CELL}>
+                  {r.kind === "add" ? "+" : r.kind === "del" ? "-" : " "}
+                </td>
+                <td className={CELL}>{r.text}</td>
               </tr>
             ),
           )}
         </tbody>
       </table>
       {truncated && (
-        <Button size="sm" onClick={() => setLimit(limit + CHUNK)}>
+        <Button
+          variant="outline"
+          size="xs"
+          className={`${SM} self-start`}
+          onClick={() => setLimit(limit + CHUNK)}
+        >
           Show {CHUNK} more
         </Button>
       )}
       {(hiddenAny || all) && (
         <Button
-          size="sm"
+          variant="outline"
+          size="xs"
+          className={`${SM} self-start`}
           onClick={() => {
             setAll(!all);
             setLimit(CHUNK);
@@ -194,13 +223,25 @@ function FileDiff({
         : null,
     [q.data],
   );
-  if (q.error) return <p role="alert">Couldn't load this file.</p>;
-  if (!q.data) return <p aria-busy="true">Loading…</p>;
-  if (q.data.some((s) => s.binary)) return <p>Binary file changed</p>;
-  if (q.data.some((s) => s.big)) return <p>File too large to diff</p>;
+  if (q.error)
+    return (
+      <p role="alert" className="m-0">
+        Couldn't load this file.
+      </p>
+    );
+  if (!q.data)
+    return (
+      <p aria-busy="true" className="m-0">
+        Loading…
+      </p>
+    );
+  if (q.data.some((s) => s.binary))
+    return <p className="m-0">Binary file changed</p>;
+  if (q.data.some((s) => s.big))
+    return <p className="m-0">File too large to diff</p>;
   if (!rows)
     return (
-      <p>
+      <p className="m-0">
         Too many differences to display. Download both:{" "}
         {a && (
           <a href={R.versionFile(id, from, a.path)} download>
@@ -227,12 +268,14 @@ const LABEL: Record<Status, string> = {
   same: "No size change",
 };
 
-function Preview({ id, v }: { id: string; v: number }) {
+function Preview({ id, v, label }: { id: string; v: number; label: string }) {
   const c = useContentUrl(id, v);
   const url = safeContentUrl(c.url);
   return (
     <figure>
-      <figcaption>v{v}</figcaption>
+      <figcaption>
+        {label} (v{v})
+      </figcaption>
       {url && (
         <iframe
           src={url}
@@ -268,20 +311,27 @@ function Compare({
   const fb = picked ? find(b, picked) : find(b, b.entry);
   const path = picked ?? b.entry;
   const source = (
-    <>
-      <ul className="oa-dfiles" aria-label="Files">
+    <div className="flex flex-col gap-3">
+      <ul className="m-0 flex list-none flex-col gap-1 p-0" aria-label="Files">
         {paths.map((p) => {
           const s = status(find(a, p), find(b, p));
           return (
-            <li key={p}>
-              <button
-                type="button"
+            <li key={p} className="flex min-w-0 items-center gap-2">
+              <Button
+                variant="ghost"
+                size="xs"
+                className="min-w-0 justify-start px-2 font-mono text-[length:var(--oa-text-sm)] aria-[current=true]:bg-accent aria-[current=true]:font-semibold"
                 aria-current={p === path}
                 onClick={() => setPicked(p)}
               >
-                {p}
-              </button>
-              <span className="oa-muted">{LABEL[s]}</span>
+                <span className="truncate">{p}</span>
+              </Button>
+              <Badge
+                variant="outline"
+                className="ml-auto text-muted-foreground"
+              >
+                {LABEL[s]}
+              </Badge>
             </li>
           );
         })}
@@ -294,30 +344,45 @@ function Compare({
         a={fa}
         b={fb}
       />
-    </>
+    </div>
   );
   const previewable = [a, b].every(
     (v) => v.format === "html" || v.format === "markdown",
   );
   if (!previewable) return source;
   return (
-    <Tabs
-      tabs={[
-        { id: "source", label: "Source diff", content: source },
-        {
-          id: "preview",
-          label: "Preview",
-          content: (
-            <div className="oa-dpreview">
-              <Preview id={id} v={from} />
-              <Preview id={id} v={to} />
-            </div>
-          ),
-        },
-      ]}
-    />
+    <Tabs defaultValue="source">
+      <TabsList
+        variant="line"
+        className="h-auto w-full justify-start gap-1 border-0 border-b border-solid border-border p-0"
+      >
+        {[
+          ["source", "Source diff"],
+          ["preview", "Preview"],
+        ].map(([v, label]) => (
+          <TabsTrigger
+            key={v}
+            value={v as string}
+            className={`h-[34px] flex-none rounded-sm px-3 ${TXT}`}
+          >
+            {label}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+      <TabsContent value="source" className="pt-3">
+        {source}
+      </TabsContent>
+      <TabsContent value="preview" className="pt-3">
+        <div className="oa-dpreview">
+          <Preview id={id} v={from} label="Before" />
+          <Preview id={id} v={to} label="After" />
+        </div>
+      </TabsContent>
+    </Tabs>
   );
 }
+
+const DIFF = "flex flex-col gap-3 px-5 py-4 max-[600px]:px-4";
 
 export function Diff({
   id,
@@ -349,13 +414,19 @@ export function Diff({
   if (err && status !== 404)
     return <p role="alert">Couldn't load this comparison.</p>;
   if (!art.data || a.isPending || b.isPending)
-    return <div className="oa-diff" aria-busy="true" />;
+    return (
+      <div className={DIFF} aria-busy="true">
+        <Skeleton className="h-6 w-48" />
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-2/3" />
+      </div>
+    );
   if (!a.data || !b.data) return <NotFound />;
   return (
     <div className="oa-viewer">
       <Crumbs title={art.data.title} />
-      <div className="oa-diff">
-        <h1>
+      <div className={DIFF}>
+        <h1 className="m-0 text-[length:var(--oa-text-xl)] leading-tight font-semibold">
           Compare v{from} → v{to}
         </h1>
         <Compare id={id} from={from} to={to} a={a.data} b={b.data} />
