@@ -19,6 +19,9 @@ const ALL_KEY = "email:*";
 // or whitespace, so the binding can never read `to` as a list or display name.
 const SINGLE_ADDRESS = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+$/;
 
+/** Sender display name, the same on every email. */
+const FROM_NAME = "Open Artifacts";
+
 export type EmailKind = "invite" | "share";
 const ERROR_CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
 
@@ -90,7 +93,13 @@ export async function sendEmail(
   userId: string,
   to: string,
   render: () => EmailContent,
-  opts: { kind: EmailKind; artifactId?: string; now?: number },
+  opts: {
+    kind: EmailKind;
+    artifactId?: string;
+    /** The inviter's/sharer's address; dropped unless one plain address. */
+    replyTo?: string;
+    now?: number;
+  },
 ): Promise<boolean> {
   const now = opts.now ?? Date.now();
   const { EMAIL, EMAIL_FROM } = env;
@@ -117,7 +126,18 @@ export async function sendEmail(
     // On timeout we report false, but delivery is only unconfirmed: the
     // email may still arrive.
     const { messageId } = await Promise.race([
-      EMAIL.send({ from: EMAIL_FROM, to, ...content }),
+      EMAIL.send({
+        // A plain address gets the product as its display name; anything
+        // else is passed through as configured.
+        from: SINGLE_ADDRESS.test(EMAIL_FROM)
+          ? { email: EMAIL_FROM, name: FROM_NAME }
+          : EMAIL_FROM,
+        to,
+        ...(opts.replyTo && SINGLE_ADDRESS.test(opts.replyTo)
+          ? { replyTo: opts.replyTo }
+          : {}),
+        ...content,
+      }),
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new EmailTimeout()), EMAIL_TIMEOUT_MS);
       }),
