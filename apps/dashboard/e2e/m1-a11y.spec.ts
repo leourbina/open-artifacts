@@ -17,6 +17,9 @@ const ROUTES = [
   "/sign-in",
   "/nope",
   "/?mock=quota",
+  "/?mock=cpu",
+  "/?mock=cpu&role=member",
+  "/settings/usage?mock=cpu",
 ];
 
 const open = async (page: Page, path: string, theme: string, w: number) => {

@@ -163,10 +163,13 @@ const LenientUsageSchema = z.preprocess((raw) => {
     metrics: metrics.filter((m) => known.safeParse(m).success),
   };
 }, UsageSchema);
-export const useUsage = () =>
+export const useUsage = (
+  opts: { enabled?: boolean; staleTime?: number } = {},
+) =>
   useQuery({
     queryKey: qk.usage,
     queryFn: ({ signal }) => api.get(R.usage, LenientUsageSchema, signal),
+    ...opts,
   });
 
 /** Run `fn` then invalidate every key `keys()` returns. */

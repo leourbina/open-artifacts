@@ -1,13 +1,19 @@
 import { R } from "@oa/shared";
 import { fixtures } from "@oa/shared/mocks";
-import { screen, waitFor } from "@testing-library/react";
+import { cleanup, screen, waitFor } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installHarness, mount, server } from "./harness";
 
 installHarness();
 
-type Key = "requests" | "d1_reads" | "d1_writes" | "do_requests";
+type Key =
+  | "requests"
+  | "d1_reads"
+  | "d1_writes"
+  | "do_requests"
+  | "cpu_limit_hits"
+  | "cpu_p99_ms";
 const usage = (metrics: { key: Key; used: number; limit: number }[]) =>
   server.use(
     http.get(`*${R.usage}`, () =>
@@ -134,5 +140,154 @@ describe("usage", () => {
     asRole("admin");
     mount("/settings/usage");
     expect(await meter("Worker requests")).toBeTruthy();
+  });
+});
+
+describe("usage CPU card", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-18T12:00:00Z"));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  const BASE = [
+    { key: "requests" as const, used: 1200, limit: 100000 },
+    { key: "d1_reads" as const, used: 3400, limit: 5000000 },
+    { key: "d1_writes" as const, used: 120, limit: 100000 },
+    { key: "do_requests" as const, used: 80, limit: 100000 },
+  ];
+  const cpu = (hits: number, p99: number, p99Limit = 10) =>
+    usage([
+      ...BASE,
+      { key: "cpu_limit_hits", used: hits, limit: 0 },
+      { key: "cpu_p99_ms", used: p99, limit: p99Limit },
+    ]);
+  const card = () => screen.findByRole("region", { name: "CPU" });
+  const hitsRow = async () =>
+    (await screen.findByText("Requests over the CPU limit today"))
+      .parentElement as HTMLElement;
+  const p99 = () => screen.findByRole("meter", { name: "p99 CPU time" });
+
+  it("is its own card after the four meters, never a meter or an alert", async () => {
+    cpu(4, 9.6);
+    mount("/settings/usage");
+    await card();
+    expect(screen.getByText("A per-request limit, not a daily quota"));
+    // Four daily meters plus the p99 bar; cpu_limit_hits (limit 0) is no meter.
+    expect(screen.getAllByRole("meter").length).toBe(5);
+    expect(screen.queryByRole("meter", { name: "CPU limit hits" })).toBeNull();
+    expect(screen.queryByText(/have reached today's limit/)).toBeNull();
+    expect(screen.getByText("9.6 ms")).toBeTruthy();
+    expect(screen.getByText("of 10 ms")).toBeTruthy();
+    expect(screen.queryByText(/Free plan requests get 10 ms/)).toBeNull();
+  });
+
+  it("hits: neutral at 0 and 2, warning from 3", async () => {
+    const tones: Record<number, string> = {
+      0: "normal",
+      2: "normal",
+      3: "warning",
+    };
+    for (const [hits, tone] of Object.entries(tones)) {
+      cpu(Number(hits), 4);
+      mount("/settings/usage");
+      const row = await hitsRow();
+      expect(row.getAttribute("data-tone")).toBe(tone);
+      expect(row.textContent).toContain(hits);
+      expect(row.textContent).toMatch(
+        Number(hits)
+          ? /stopped with Cloudflare error 1102/
+          : /No request was stopped/,
+      );
+      cleanup();
+    }
+  });
+
+  it("p99 bar: normal under 8 ms, warning from 8, danger from 10", async () => {
+    const tones: [number, string, string][] = [
+      [7.9, "normal", "79"],
+      [8, "warning", "80"],
+      [9.6, "warning", "96"],
+      [10, "danger", "100"],
+      [14, "danger", "100"],
+    ];
+    for (const [ms, tone, width] of tones) {
+      cpu(0, ms);
+      mount("/settings/usage");
+      const m = await p99();
+      expect(m.getAttribute("data-tone")).toBe(tone);
+      expect((m.firstElementChild as HTMLElement).style.width).toMatch(
+        new RegExp(`^${width}(\\.\\d+)?%$`),
+      );
+      cleanup();
+    }
+  });
+
+  it("no bar when the p99 limit is 0 (Workers Paid)", async () => {
+    cpu(0, 42, 0);
+    mount("/settings/usage");
+    await card();
+    expect(screen.getByText("42 ms")).toBeTruthy();
+    expect(screen.queryByRole("meter", { name: "p99 CPU time" })).toBeNull();
+    expect(screen.queryByText(/of 0 ms/)).toBeNull();
+  });
+
+  it("no card when both metrics are absent; one row when one is", async () => {
+    usage(BASE);
+    mount("/settings/usage");
+    await meter("Worker requests");
+    expect(screen.queryByRole("region", { name: "CPU" })).toBeNull();
+    cleanup();
+
+    usage([...BASE, { key: "cpu_limit_hits", used: 1, limit: 0 }]);
+    mount("/settings/usage");
+    await card();
+    expect(screen.getByText("Requests over the CPU limit today")).toBeTruthy();
+    expect(screen.queryByText("Typical busy request (p99)")).toBeNull();
+  });
+
+  it("no requests yet today: no p99 figure", async () => {
+    usage([
+      ...BASE.map((m) => ({ ...m, used: 0 })),
+      { key: "cpu_limit_hits", used: 0, limit: 0 },
+      { key: "cpu_p99_ms", used: 0, limit: 10 },
+    ]);
+    mount("/settings/usage");
+    expect(await screen.findByText("No requests yet today")).toBeTruthy();
+    expect(screen.queryByRole("meter", { name: "p99 CPU time" })).toBeNull();
+  });
+
+  it("not configured: setup only, no CPU card", async () => {
+    server.use(
+      http.get(`*${R.usage}`, () =>
+        HttpResponse.json({
+          available: false,
+          date: "2026-10-18",
+          metrics: [],
+        }),
+      ),
+    );
+    mount("/settings/usage");
+    await screen.findByText(/pnpm oa:setup/);
+    expect(screen.queryByRole("region", { name: "CPU" })).toBeNull();
+  });
+
+  it("the plan line sits at the top for owners and admins", async () => {
+    for (const role of [null, "admin"] as const) {
+      if (role) asRole(role);
+      mount("/settings/usage");
+      const line = await screen.findByText(
+        /Workers Free is sized for one person\./,
+      );
+      expect(line.textContent).toContain(
+        "Workers Paid ($5 a month) is sized for a team: it sends invite emails and gives each request up to 30 seconds of CPU.",
+      );
+      expect(
+        screen
+          .getByRole("link", { name: /Compare plans/ })
+          .getAttribute("href"),
+      ).toBe("https://open-artifacts.com/docs/self-hosting-costs/");
+      cleanup();
+    }
   });
 });

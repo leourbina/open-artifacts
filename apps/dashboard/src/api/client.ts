@@ -1,15 +1,18 @@
 import { ApiErrorSchema, type ErrorCode } from "@oa/shared";
 import type { z } from "zod";
 
+/** `cpu_limit` is client-only: Cloudflare's error 1102 page, never sent by the API. */
+export type ClientErrorCode = ErrorCode | "cpu_limit";
+
 export class ApiClientError extends Error {
-  code: ErrorCode;
+  code: ClientErrorCode;
   status: number;
   details?: unknown;
   /** Request that failed, when it came from `request`. */
   method?: string;
   path?: string;
   constructor(
-    code: ErrorCode,
+    code: ClientErrorCode,
     message: string,
     status: number,
     details?: unknown,
@@ -25,7 +28,61 @@ export class ApiClientError extends Error {
 const internal = (message: string, status: number) =>
   new ApiClientError("internal", message, status);
 
-function toError(text: string, status: number): ApiClientError {
+const CPU_LIMIT_MARKER = "Worker exceeded resource limits";
+const CPU_LIMIT_MESSAGE =
+  "This request hit Cloudflare's free CPU limit. Retrying generally works.";
+
+let cpuLimitAt: number | null = null;
+const cpuListeners = new Set<() => void>();
+
+/** When this tab last got a 1102 from its own instance (ms since epoch), if ever. */
+export const lastCpuLimitAt = () => cpuLimitAt;
+export const subscribeCpuLimit = (fn: () => void) => {
+  cpuListeners.add(fn);
+  return () => {
+    cpuListeners.delete(fn);
+  };
+};
+export const recordCpuLimit = (at = Date.now()) => {
+  cpuLimitAt = at;
+  for (const fn of cpuListeners) fn();
+};
+/** Tests only. */
+export const resetCpuLimit = () => {
+  cpuLimitAt = null;
+};
+
+/**
+ * Cloudflare's 1102 page: a 503 HTML body from this origin, not the API's JSON. A
+ * cross-origin URL (content host, signed upload elsewhere) is never ours to report.
+ */
+const isCpuLimit = (
+  status: number,
+  url: string,
+  contentType: string,
+  text: string,
+) => {
+  if (status !== 503 || contentType.includes("json")) return false;
+  if (typeof location === "undefined") return false;
+  try {
+    if (new URL(url || "/", location.href).origin !== location.origin)
+      return false;
+  } catch {
+    return false;
+  }
+  return text.includes(CPU_LIMIT_MARKER);
+};
+
+function toError(
+  text: string,
+  status: number,
+  url = "",
+  contentType = "",
+): ApiClientError {
+  if (isCpuLimit(status, url, contentType, text)) {
+    recordCpuLimit();
+    return new ApiClientError("cpu_limit", CPU_LIMIT_MESSAGE, status);
+  }
   let json: unknown = null;
   try {
     json = JSON.parse(text);
@@ -46,7 +103,12 @@ async function request(path: string, init: RequestInit): Promise<Response> {
     throw internal(e instanceof Error ? e.message : "Network error", 0);
   }
   if (res.ok) return res;
-  const err = toError(await res.text().catch(() => ""), res.status);
+  const err = toError(
+    await res.text().catch(() => ""),
+    res.status,
+    res.url || path,
+    res.headers.get("content-type") ?? "",
+  );
   err.method = init.method;
   err.path = path;
   throw err;
@@ -141,7 +203,15 @@ export const api = {
       xhr.onload = () => {
         done();
         if (xhr.status >= 200 && xhr.status < 300) resolve();
-        else reject(toError(xhr.responseText, xhr.status));
+        else
+          reject(
+            toError(
+              xhr.responseText,
+              xhr.status,
+              xhr.responseURL || url,
+              xhr.getResponseHeader("content-type") ?? "",
+            ),
+          );
       };
       xhr.onerror = () => {
         done();

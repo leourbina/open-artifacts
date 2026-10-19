@@ -6,6 +6,7 @@ import { act, render } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { setupServer } from "msw/node";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
+import { resetCpuLimit } from "../src/api/client";
 import { makeQueryClient } from "../src/api/queryClient";
 import { RedirectProvider } from "../src/auth/redirect";
 import { createAppRouter } from "../src/router";
@@ -67,6 +68,7 @@ export const installHarness = () => {
       },
     );
     localStorage.clear();
+    resetCpuLimit();
   });
   afterEach(() => {
     server.resetHandlers();

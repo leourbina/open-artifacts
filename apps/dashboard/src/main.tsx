@@ -9,13 +9,57 @@ import "./styles.css";
 /** Dev-only: serve the API from in-browser MSW handlers. Dead-code-eliminated from production builds. */
 async function startMocks() {
   if (import.meta.env.VITE_MOCK !== "1") return;
-  const [{ setupWorker }, { createHandlers }] = await Promise.all([
+  const [
+    { setupWorker },
+    { createHandlers, fixtures },
+    { HttpResponse, http },
+  ] = await Promise.all([
     import("msw/browser"),
     import("@oa/shared/mocks"),
+    import("msw"),
   ]);
+  const params = new URLSearchParams(location.search);
   const quotaExceeded =
-    import.meta.env.VITE_MOCK_QUOTA === "1" ||
-    new URLSearchParams(location.search).get("mock") === "quota";
+    import.meta.env.VITE_MOCK_QUOTA === "1" || params.get("mock") === "quota";
+  const extra = [];
+  // ?role=admin|member|guest: sign in as that role.
+  const role = params.get("role");
+  if (role === "admin" || role === "member" || role === "guest")
+    extra.push(
+      http.get("*/api/v1/me", () =>
+        HttpResponse.json({
+          ...fixtures.me,
+          user: { ...fixtures.me.user, role },
+        }),
+      ),
+    );
+  // ?mock=cpu: 4 CPU-limit hits today, and the first two library requests get a 1102 (the first may be aborted).
+  if (params.get("mock") === "cpu") {
+    let hits = 0;
+    extra.push(
+      http.get("*/api/v1/usage", () =>
+        HttpResponse.json({
+          available: true,
+          date: new Date().toISOString().slice(0, 10),
+          metrics: [
+            { key: "requests", used: 1200, limit: 100000 },
+            { key: "d1_reads", used: 3400, limit: 5000000 },
+            { key: "d1_writes", used: 120, limit: 100000 },
+            { key: "do_requests", used: 80, limit: 100000 },
+            { key: "cpu_limit_hits", used: 4, limit: 0 },
+            { key: "cpu_p99_ms", used: 9.6, limit: 10 },
+          ],
+        }),
+      ),
+      http.get("*/api/v1/artifacts", () => {
+        if (hits++ >= 2) return undefined;
+        return new HttpResponse(
+          "<!DOCTYPE html><title>Worker exceeded resource limits</title><h1>Error 1102</h1><p>Worker exceeded resource limits</p>",
+          { status: 503, headers: { "content-type": "text/html" } },
+        );
+      }),
+    );
+  }
   // Mock-only: the mocks treat unauthenticated requests as anonymous, and a service worker
   // can't see the cookie header, so authenticate with a bearer token instead.
   const realFetch = window.fetch.bind(window);
@@ -24,7 +68,7 @@ async function startMocks() {
     req.headers.set("Authorization", "Bearer mock");
     return realFetch(req);
   };
-  await setupWorker(...createHandlers({ quotaExceeded })).start({
+  await setupWorker(...extra, ...createHandlers({ quotaExceeded })).start({
     onUnhandledRequest: "bypass",
   });
 }

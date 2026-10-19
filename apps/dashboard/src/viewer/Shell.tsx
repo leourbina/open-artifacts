@@ -1,18 +1,20 @@
-import { type ArtifactSummary, viewerPath } from "@oa/shared";
+import { type ArtifactSummary, type Me, viewerPath } from "@oa/shared";
 import { Button, toast } from "@oa/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiClientError } from "../api/client";
 import { qk, useArtifact, useVersionInfo } from "../api/queries";
 import { useLoginRedirect } from "../auth/redirect";
 import { useMe } from "../auth/useMe";
+import { useCpuSignals } from "../layout/cpu";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { NotFound } from "../pages/NotFound";
 import { createBridge } from "./bridge";
 import { Crumbs } from "./Crumbs";
 import { SANDBOX, safeContentUrl } from "./frame";
 import { isPanelTab, type PanelTab, SidePanel } from "./panels/SidePanel";
+import { SlowNotice } from "./SlowNotice";
 import { TitleBar } from "./TitleBar";
 import { useArtifactSideEffects } from "./useArtifactSideEffects";
 import { useContentUrl } from "./useContentUrl";
@@ -20,6 +22,9 @@ import { useTheme } from "./useTheme";
 import "./viewer.css";
 
 type Bridge = ReturnType<typeof createBridge>;
+
+/** No hello this long after the frame loaded: hint that it may be stuck. */
+export const SLOW_MS = 8_000;
 
 function ErrorPanel({ onRetry }: { onRetry?: () => void }) {
   return (
@@ -39,7 +44,9 @@ function Viewer({
   explicitVersion,
   authed,
   viewer,
+  role,
 }: {
+  role: Me["user"]["role"] | undefined;
   artifact: ArtifactSummary;
   version: number;
   explicitVersion: boolean;
@@ -108,6 +115,51 @@ function Viewer({
   const fxRef = useRef(fx);
   fxRef.current = fx;
 
+  // The slow notice: armed on each frame load, cleared by hello, gone for this view
+  // once dismissed. Reloading remounts the frame (and so the bridge) with a fresh
+  // URL; one reload per frame load, so a double click counts once.
+  const cpu = useCpuSignals(role);
+  const helloSeen = useRef(false);
+  const slowTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const dismissed = useRef(false);
+  const reloading = useRef(false);
+  const [slow, setSlow] = useState(false);
+  const [reloads, setReloads] = useState(0);
+  const [frame, setFrame] = useState<{ key: number; src: string | null }>({
+    key: 0,
+    src: null,
+  });
+  const onHello = useCallback(() => {
+    helloSeen.current = true;
+    clearTimeout(slowTimer.current);
+    setSlow(false);
+  }, []);
+  const contentLoaded = content.onLoad;
+  const onFrameLoad = useCallback(() => {
+    contentLoaded();
+    reloading.current = false;
+    clearTimeout(slowTimer.current);
+    if (helloSeen.current || dismissed.current) return;
+    slowTimer.current = setTimeout(() => {
+      if (!helloSeen.current) setSlow(true);
+    }, SLOW_MS);
+  }, [contentLoaded]);
+  useEffect(() => () => clearTimeout(slowTimer.current), []);
+  const reload = () => {
+    if (reloading.current) return;
+    reloading.current = true;
+    helloSeen.current = false;
+    clearTimeout(slowTimer.current);
+    setSlow(false);
+    setReloads((r) => r + 1);
+    const ready = content.fresh()
+      ? Promise.resolve(content.current)
+      : content.refresh();
+    void ready.then((u) =>
+      setFrame((f) => ({ key: f.key + 1, src: safeContentUrl(u) ?? f.src })),
+    );
+  };
+
   useEffect(() => {
     if (!el) return;
     const b = createBridge({
@@ -115,7 +167,10 @@ function Viewer({
       ...latest.current,
       version,
       formatOf: () => formatRef.current,
-      onHello: () => fxRef.current.onHello(),
+      onHello: () => {
+        onHello();
+        fxRef.current.onHello();
+      },
       onPdfText: (t) => fxRef.current.onPdfText(t),
       onThumb: (b) => fxRef.current.onThumb(b),
       // The refetch 404s if access is gone, which the shell then handles.
@@ -127,7 +182,7 @@ function Viewer({
       b.dispose();
       bridge.current = null;
     };
-  }, [el, version, qc, artifact.id]);
+  }, [el, version, qc, artifact.id, onHello]);
 
   useEffect(() => bridge.current?.setTheme(theme), [theme]);
 
@@ -153,16 +208,32 @@ function Viewer({
           <ErrorPanel onRetry={() => void content.refresh()} />
         ) : null}
         {url && (
-          <iframe
-            ref={setEl}
-            className="oa-vframe"
-            src={url}
-            onLoad={content.onLoad}
-            title={artifact.title}
-            sandbox={SANDBOX}
-            referrerPolicy="no-referrer"
-            allow="clipboard-write"
-          />
+          <div className="oa-vmain">
+            {slow && (
+              <SlowNotice
+                cpu={(cpu.hits ?? 0) > 0 || cpu.recent}
+                reloads={reloads}
+                admin={cpu.admin}
+                onReload={reload}
+                onDismiss={() => {
+                  dismissed.current = true;
+                  clearTimeout(slowTimer.current);
+                  setSlow(false);
+                }}
+              />
+            )}
+            <iframe
+              key={frame.key}
+              ref={setEl}
+              className="oa-vframe"
+              src={frame.src ?? url}
+              onLoad={onFrameLoad}
+              title={artifact.title}
+              sandbox={SANDBOX}
+              referrerPolicy="no-referrer"
+              allow="clipboard-write"
+            />
+          </div>
         )}
         {panelOpen && authed && (
           <SidePanel
@@ -219,6 +290,7 @@ export function Shell({ id, v }: { id: string; v?: number }) {
       version={version}
       explicitVersion={v !== undefined}
       authed={authed}
+      role={authed ? me.me.user.role : undefined}
       viewer={
         authed ? { email: me.me.user.email, name: me.me.user.name } : null
       }
