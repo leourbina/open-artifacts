@@ -1,7 +1,7 @@
 import type { Me } from "@oa/shared";
 import { Banner } from "@oa/ui";
 import { useState } from "react";
-import { CPU_DOC, PLANS_URL, useCpuSignals } from "./cpu";
+import { CPU_DOC, PLANS_URL, useCpuSignals, utcDay } from "./cpu";
 
 const DISMISSED_KEY = "oa.cpuBanner.dismissed";
 
@@ -60,10 +60,12 @@ export function CpuBanner({ role }: { role: Me["user"]["role"] | undefined }) {
       ? `Your instance hit the limit ${n} ${n === 1 ? "time" : "times"} today, usually from bursts of large publishes.`
       : "A request just hit Cloudflare's free CPU limit.";
   const dismiss = () => {
+    // The day it is now, not at the last render (the tab may have sat past midnight).
+    const day = utcDay();
     try {
-      localStorage.setItem(DISMISSED_KEY, today);
+      localStorage.setItem(DISMISSED_KEY, day);
     } catch {}
-    setDismissed(today);
+    setDismissed(day);
   };
   return (
     <div className="oa-cpu-banner">

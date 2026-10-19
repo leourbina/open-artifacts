@@ -41,7 +41,8 @@ export function SlowNotice({
   onReload: () => void;
   onDismiss: () => void;
 }) {
-  const upsell = cpu && reloads >= UPSELL_AFTER;
+  // Only the people who can change the plan are pointed at it.
+  const upsell = cpu && admin && reloads >= UPSELL_AFTER;
   return (
     <div className="oa-vnotice">
       <Banner
@@ -51,7 +52,7 @@ export function SlowNotice({
         onDismiss={onDismiss}
         action={
           <span className="oa-vnotice-acts">
-            {upsell && admin && (
+            {upsell && (
               <a
                 className="oa-btn oa-sm"
                 href={PLANS_URL}

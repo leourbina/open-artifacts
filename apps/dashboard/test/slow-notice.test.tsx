@@ -130,6 +130,17 @@ describe("viewer slow notice", () => {
     expect(text()).toBeNull();
   });
 
+  it("stays dismissed when the frame loads again", async () => {
+    mount(viewerPath(ID));
+    const f = await loaded();
+    await advance(8_000);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    // The artifact navigates its own frame: a new load, still no hello.
+    fireEvent.load(f);
+    await advance(10_000);
+    expect(text()).toBeNull();
+  });
+
   it("CPU variant after a recent cpu_limit error", async () => {
     recordCpuLimit();
     mount(viewerPath(ID));
@@ -174,7 +185,7 @@ describe("viewer slow notice", () => {
     ).toBe("https://dash.cloudflare.com/?to=/:account/workers/plans");
   });
 
-  it("members get the upsell text but no plan link", async () => {
+  it("members keep the base CPU copy: no upsell text, no plan link", async () => {
     asMember();
     recordCpuLimit();
     mount(viewerPath(ID));
@@ -182,8 +193,29 @@ describe("viewer slow notice", () => {
     await advance(8_000);
     await reloadAndWait();
     await reloadAndWait();
-    expect(text()).toMatch(UPSELL);
+    expect(text()).toMatch(CPU);
+    expect(text()).not.toMatch(UPSELL);
     expect(screen.queryByRole("link", { name: /See plans/ })).toBeNull();
+  });
+
+  it("a double click on Reload counts once", async () => {
+    recordCpuLimit();
+    mount(viewerPath(ID));
+    await loaded();
+    await advance(8_000);
+    const b = screen.getByRole("button", { name: "Reload" });
+    // Both clicks land before React re-renders, as a fast double click can.
+    act(() => {
+      b.click();
+      b.click();
+    });
+    await advance(0);
+    fireEvent.load(document.querySelector("iframe") as HTMLIFrameElement);
+    await advance(8_000);
+    expect(text()).toMatch(CPU);
+    expect(text()).not.toMatch(UPSELL); // one reload so far, not two
+    await reloadAndWait();
+    expect(text()).toMatch(UPSELL);
   });
 
   it("the generic variant never mentions plans, however many reloads", async () => {

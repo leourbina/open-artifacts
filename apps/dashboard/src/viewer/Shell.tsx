@@ -115,11 +115,14 @@ function Viewer({
   const fxRef = useRef(fx);
   fxRef.current = fx;
 
-  // The slow notice: armed on each frame load, cleared by hello. Reloading remounts
-  // the frame (and so the bridge) with a fresh URL.
+  // The slow notice: armed on each frame load, cleared by hello, gone for this view
+  // once dismissed. Reloading remounts the frame (and so the bridge) with a fresh
+  // URL; one reload per frame load, so a double click counts once.
   const cpu = useCpuSignals(role);
   const helloSeen = useRef(false);
   const slowTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const dismissed = useRef(false);
+  const reloading = useRef(false);
   const [slow, setSlow] = useState(false);
   const [reloads, setReloads] = useState(0);
   const [frame, setFrame] = useState<{ key: number; src: string | null }>({
@@ -134,14 +137,17 @@ function Viewer({
   const contentLoaded = content.onLoad;
   const onFrameLoad = useCallback(() => {
     contentLoaded();
+    reloading.current = false;
     clearTimeout(slowTimer.current);
-    if (helloSeen.current) return;
+    if (helloSeen.current || dismissed.current) return;
     slowTimer.current = setTimeout(() => {
       if (!helloSeen.current) setSlow(true);
     }, SLOW_MS);
   }, [contentLoaded]);
   useEffect(() => () => clearTimeout(slowTimer.current), []);
   const reload = () => {
+    if (reloading.current) return;
+    reloading.current = true;
     helloSeen.current = false;
     clearTimeout(slowTimer.current);
     setSlow(false);
@@ -209,7 +215,11 @@ function Viewer({
                 reloads={reloads}
                 admin={cpu.admin}
                 onReload={reload}
-                onDismiss={() => setSlow(false)}
+                onDismiss={() => {
+                  dismissed.current = true;
+                  clearTimeout(slowTimer.current);
+                  setSlow(false);
+                }}
               />
             )}
             <iframe

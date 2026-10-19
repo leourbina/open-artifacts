@@ -166,6 +166,16 @@ describe("CPU banner", () => {
     await banner();
   });
 
+  it("dismissing after midnight stores the day of the click", async () => {
+    vi.setSystemTime(new Date(`${DAY}T23:59:00Z`));
+    usage(5);
+    mount("/");
+    await banner();
+    vi.setSystemTime(new Date("2026-10-20T00:01:00Z")); // no re-render since
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(localStorage.getItem("oa.cpuBanner.dismissed")).toBe("2026-10-20");
+  });
+
   it("the next day with no hits it stays gone", async () => {
     localStorage.setItem("oa.cpuBanner.dismissed", "2026-10-18");
     usage(0);
