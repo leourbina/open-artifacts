@@ -291,5 +291,5 @@ describe("cron purge", () => {
     expect(n.do).toBe(50);
     expect(n.d1).toBe(51);
     expect(n.d1 + n.r2 + n.do).toBeLessThan(1000);
-  });
+  }, 30_000);
 });

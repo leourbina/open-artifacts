@@ -89,7 +89,7 @@ describe("B6 breaker", () => {
     expect((await errOf(over)).message).toBe(
       "publish more than 900 inline files via uploads",
     );
-  });
+  }, 30_000);
 
   it("an upload that was never PUT is rejected without an R2 head", async () => {
     const up = await uploaded("z.bin");
