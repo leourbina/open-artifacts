@@ -29,7 +29,7 @@ The dashboard's **Usage** page shows today's requests, database reads and writes
 
 ## Free vs Paid limits
 
-An instance applies the Workers Free limits unless its Worker variable `PLAN` is `paid`.
+An instance applies the Workers Free limits unless its Worker variable `PLAN` is `paid`. Setup sets `PLAN` from your Cloudflare plan: `paid` when it reads Workers Paid or you pass `--yes-paid`, otherwise `free`. Pass `--plan paid` or `--plan free` to choose it yourself. `/healthz` reports the value as `plan`.
 
 | Limit | Workers Free | Workers Paid |
 |---|---|---|
@@ -50,13 +50,13 @@ It usually comes from bursts of large publishes. A few hits a day are normal, an
 
 To see how often it happens, open **Settings → Usage** in the dashboard. The CPU card shows how many requests hit the limit today and how much CPU a typical busy request uses compared with the 10 ms budget.
 
-If it happens often, move the account to Workers Paid ($5 a month), which raises the limit to 30 seconds per request. In the Cloudflare dashboard, go to **Workers & Pages → Plans** and choose Paid. Open Artifacts needs no changes or redeploy.
+If it happens often, move the account to Workers Paid ($5 a month), which raises the limit to 30 seconds per request. In the Cloudflare dashboard, go to **Workers & Pages → Plans** and choose Paid. The CPU limit rises right away. To also get the Paid size limits above, run setup again with `--upgrade --plan paid`.
 
 ## When to upgrade
 
 The free plan handles personal use; sustained bursts of large publishes can exceed the 10 ms CPU limit. Workers Paid ($5 a month) is recommended for heavy or team use.
 
-Consider Workers Paid (from $5 a month) if you publish heavily, share public links that get a lot of traffic, or run busy live pages. Paid plans raise the request and CPU limits; nothing in Open Artifacts changes.
+Consider Workers Paid (from $5 a month) if you publish heavily, share public links that get a lot of traffic, or run busy live pages. Paid plans raise the request and CPU limits. After upgrading, run setup again with `--upgrade --plan paid` so the instance uses the Paid limits too.
 
 Server-side thumbnails (Browser Run) are best-effort and work best on Workers Paid. On Free, previews fall back to the in-browser capture.
 
