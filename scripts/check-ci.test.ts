@@ -671,3 +671,34 @@ describe("prod and staging tokens never cross", () => {
     expect(violations(tmp)).toHaveLength(2);
   });
 });
+
+describe("workflow jobs that use repo files have a checkout", () => {
+  const usesRepo = (s: { run?: string; "working-directory"?: string }) =>
+    /(^|[\s"'=])(\.\/|(\.\.\/)+)?scripts\//.test(s.run ?? "") ||
+    /(^|[\s"'=])(\.\.\/)+scripts\//.test(s.run ?? "") ||
+    (!!s["working-directory"] &&
+      !/^(\/|~|\$|\$\{\{)/.test(s["working-directory"]));
+  const dir = join(root, ".github/workflows");
+  for (const file of readdirSync(dir).filter((f) => /\.ya?ml$/.test(f))) {
+    for (const [job, def] of Object.entries(
+      // biome-ignore lint/suspicious/noExplicitAny: workflow YAML is untyped
+      (wf(file).jobs ?? {}) as Record<string, any>,
+    )) {
+      it(`${file} job ${job}`, () => {
+        let checkedOut = false;
+        const bad: string[] = [];
+        for (const s of def.steps ?? []) {
+          if (String(s.uses ?? "").startsWith("actions/checkout")) {
+            checkedOut = true;
+          } else if (usesRepo(s) && !checkedOut) {
+            bad.push(s.run ?? s["working-directory"]);
+          }
+        }
+        expect(
+          bad,
+          `${file} job ${job} uses repo files before actions/checkout`,
+        ).toEqual([]);
+      });
+    }
+  }
+});
