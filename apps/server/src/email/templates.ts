@@ -37,6 +37,18 @@ export function senderName(m: { name: string | null; email: string }): string {
   return name && name !== local ? name : m.email;
 }
 
+const PRODUCT = "Open Artifacts";
+const PITCH =
+  "a place where any AI agent publishes pages, docs, code and PDFs for your team.";
+
+/** The intro sentence; never "Open Artifacts runs Open Artifacts". */
+export function introLine(instanceName: string): string {
+  const name = oneLine(instanceName, NAME_MAX);
+  return name.toLowerCase() === PRODUCT.toLowerCase()
+    ? `${PRODUCT} is ${PITCH}`
+    : `${name} runs ${PRODUCT}, ${PITCH}`;
+}
+
 const SUBJECT_MAX = 150;
 const NAME_MAX = 80;
 const TITLE_MAX = 200;
@@ -104,6 +116,7 @@ function common(p: Common) {
     values: {
       inviterName: oneLine(p.inviter, NAME_MAX),
       instanceName: oneLine(p.instance, NAME_MAX),
+      introLine: introLine(p.instance),
       recipientEmail: oneLine(p.recipient, 320),
       appHost: url.host,
       logoUrl: linkOn(origin, "/email/logo@2x.png"),

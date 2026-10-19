@@ -9,7 +9,13 @@ import {
   SHARE_HTML,
   SHARE_TXT,
 } from "../src/email/email-templates.js";
-import { fill, inviteEmail, shareEmail } from "../src/email/templates.js";
+import {
+  fill,
+  introLine,
+  inviteEmail,
+  senderName,
+  shareEmail,
+} from "../src/email/templates.js";
 
 const EVIL = '"><script>alert(1)</script>\r\nBcc: evil@x.com {{logoUrl}} &amp;';
 const common = {
@@ -91,5 +97,56 @@ describe("email templates", () => {
     expect(fill("Hi {{who}}", { who: "<b>" }, (s) => `[${s}]`)).toBe(
       "Hi [<b>]",
     );
+  });
+});
+
+describe("copy (#213)", () => {
+  const OWN =
+    "Open Artifacts is a place where any AI agent publishes pages, docs, code and PDFs for your team.";
+  it("introLine names a custom instance, and never repeats the product", () => {
+    expect(introLine("Acme Docs")).toBe(
+      "Acme Docs runs Open Artifacts, a place where any AI agent publishes pages, docs, code and PDFs for your team.",
+    );
+    for (const n of ["Open Artifacts", "  open artifacts ", "OPEN ARTIFACTS"])
+      expect(introLine(n)).toBe(OWN);
+  });
+
+  const render = (instance: string) => [
+    inviteEmail({ ...common, inviter: "Ada", instance }),
+    shareEmail({
+      ...common,
+      inviter: "Ada",
+      instance,
+      title: "Plan",
+      path: "/a/abc",
+      format: "markdown",
+      role: "viewer",
+    }),
+  ];
+
+  it("no email says 'Open Open' or 'Open Artifacts runs Open Artifacts'", () => {
+    for (const instance of ["Open Artifacts", " open artifacts", "Acme"])
+      for (const m of render(instance))
+        for (const part of [m.subject, m.text, m.html]) {
+          expect(part).not.toMatch(/Open Open/i);
+          expect(part).not.toMatch(/Open Artifacts runs Open Artifacts/i);
+        }
+  });
+
+  it("the invite intro uses introLine, HTML-escaped", () => {
+    const [inv] = render("A&B <Docs>");
+    expect(inv?.text).toContain(introLine("A&B <Docs>"));
+    expect(inv?.html).toContain(
+      "A&amp;B &lt;Docs&gt; runs Open Artifacts, a place where",
+    );
+    const [own] = render("Open Artifacts");
+    expect(own?.text).toContain(OWN);
+    expect(own?.html).toContain(OWN);
+  });
+
+  it("a user named 'me' (the sign-in default) is shown as the full address", () => {
+    const inviter = senderName({ name: "me", email: "me@leourbina.com" });
+    const m = inviteEmail({ ...common, inviter, instance: "Open Artifacts" });
+    expect(m.subject).toBe("me@leourbina.com added you to Open Artifacts");
   });
 });

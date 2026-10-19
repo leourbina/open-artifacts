@@ -1,10 +1,10 @@
 {{inviterName}} added you to {{instanceName}}
 
-{{instanceName}} runs Open Artifacts, a place where any AI agent publishes pages, docs, code and PDFs for your team.
+{{introLine}}
 
 There's no password to set up. You'll sign in with a one-time code sent to {{recipientEmail}}.
 
-Open {{instanceName}}:
+Go to {{instanceName}}:
 {{signInUrl}}
 
 --
