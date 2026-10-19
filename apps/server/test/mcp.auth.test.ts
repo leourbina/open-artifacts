@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import designConsent from "../../../design/screens/oauth-consent.html?raw";
 import { createApp } from "../src/app.js";
 import { createPat, verifyPat } from "../src/auth/pat.js";
+import { FAVICON_TAGS } from "../src/http/head.js";
 import { CONSENT_TEMPLATE } from "../src/mcp/consent-template.js";
 import { clientNameOf, oauthApi, oauthProvider } from "../src/mcp/oauth.js";
 import { oauthApi as helpers } from "../src/mcp/oauth-api.js";
@@ -393,6 +394,9 @@ describe("MCP auth: OAuth", () => {
     expect(page.r.headers.get("content-security-policy")).toContain(
       "frame-ancestors 'none'",
     );
+    expect(page.r.headers.get("content-security-policy")).toContain(
+      "img-src 'self'",
+    );
     expect(page.r.headers.get("x-robots-tag")).toBe("noindex, nofollow");
   });
 
@@ -416,7 +420,27 @@ describe("MCP auth: OAuth", () => {
     );
     expect(page.r.status).toBe(403);
     expect(page.body).toContain("Only members can connect agents");
+    expect(page.body).toContain(`${FAVICON_TAGS}\n</head>`);
+    expect(page.r.headers.get("content-security-policy")).toContain(
+      "img-src 'self'",
+    );
     expect(page.body).not.toContain('name="csrf"');
+  });
+
+  it("consent page has every FAVICON_TAGS tag and the connect title", async () => {
+    const m = await login(`oauth-fav-${tag}@x.com`);
+    const clientId = await register("Fav Agent");
+    const page = await consentPage(
+      authorizeUrl(clientId, (await pkce()).challenge),
+      m.cookie,
+    );
+    expect(page.r.status).toBe(200);
+    const head = page.body.slice(0, page.body.indexOf("</head>"));
+    // Design's file has one tag per line; each must be in <head>.
+    for (const t of FAVICON_TAGS.split(/(?=<)/)) expect(head).toContain(t);
+    expect(head).toContain(
+      "<title>Connect Fav Agent to Open Artifacts</title>",
+    );
   });
 
   it("the consent template is Design's file, comment stripped", () => {

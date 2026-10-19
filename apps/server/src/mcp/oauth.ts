@@ -9,6 +9,7 @@ import { requireUser, TEAM_ROLES } from "../auth/authz.js";
 import type { Env } from "../env.js";
 import { readCappedRequest } from "../http/body.js";
 import { ApiError, errorJson } from "../http/errors.js";
+import { FAVICON_TAGS } from "../http/head.js";
 import type { AppEnv } from "../http/middleware.js";
 import type { AppType } from "../routes/index.js";
 import { ipKey } from "../runtime/routes.js";
@@ -239,7 +240,7 @@ export async function serveAppHost(
 // ------------------------------------------------------------------ consent
 
 const PAGE_CSP =
-  "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'";
+  "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'";
 
 function html(body: string, status: number, headers?: Headers): Response {
   const h = new Headers(headers);
@@ -257,6 +258,7 @@ function messagePage(title: string, message: string, status: number) {
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>${escapeHtml(title)} — Open Artifacts</title>
 <style>:root{color-scheme:light dark}body{font:15px/1.5 system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 16px;color:#15181c;background:#eef0f3}@media (prefers-color-scheme:dark){body{color:#e9ebee;background:#131518}}</style>
+${FAVICON_TAGS}
 </head><body><h1>${escapeHtml(title)}</h1><p>${escapeHtml(message)}</p></body></html>`,
     status,
   );

@@ -16,6 +16,7 @@ import { accessIssuer, safeNext } from "../src/auth/oidc.js";
 import { createPat } from "../src/auth/pat.js";
 import { readSession, sessionCookieName } from "../src/auth/session.js";
 import type { Env } from "../src/env.js";
+import { FAVICON_TAGS } from "../src/http/head.js";
 import { type AppVariables, session } from "../src/http/middleware.js";
 import { b64urlEncode } from "../src/util/crypto.js";
 import { login } from "./helpers.js";
@@ -769,6 +770,10 @@ describe("resilient OIDC state", () => {
       "Sign-in took too long or was opened in another tab. Try again.",
     );
     expect(html).toContain('href="/auth/login?next=%2Fa%2Fq"');
+    expect(html).toContain(`${FAVICON_TAGS}\n</head>`);
+    expect(r2.headers.get("content-security-policy")).toContain(
+      "img-src 'self'",
+    );
     expect(clearedNames(r2)).toEqual([b2.cname]);
   });
 
