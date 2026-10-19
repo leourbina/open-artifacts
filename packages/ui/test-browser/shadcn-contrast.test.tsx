@@ -3,7 +3,7 @@
 // themes: axe incl. color-contrast, outlined borders, every focus outline
 // (Tab walk), each overlay while open, state indicators, focus traps, toasts.
 // jsdom can't do any of this. Run: pnpm --filter @oa/ui test:browser
-import { type Browser, chromium } from "playwright";
+import { type Browser, chromium, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type Focus, oa, openStory } from "./harness";
 
@@ -17,6 +17,24 @@ afterAll(() => browser?.close());
 
 const open = (theme: string) =>
   openStory(browser, STORY, theme, "[data-a11y-ready]");
+
+// Radix overlays take keys only once settled. Focus moves in on mount, but
+// Escape is wired one render later: the DismissableLayer re-renders as the
+// top layer (setting pointer-events:auto on itself while the body is none)
+// and only then attaches its keydown listener, in an effect. Waiting out the
+// open animation as well puts that effect behind us.
+const settled = (page: Page, sel: string) =>
+  page.waitForFunction((s) => {
+    const el = document.querySelector(s);
+    return (
+      el?.getAttribute("data-state") === "open" &&
+      el.contains(document.activeElement) &&
+      getComputedStyle(el).pointerEvents === "auto" &&
+      el
+        .getAnimations({ subtree: true })
+        .every((a) => a.playState === "finished")
+    );
+  }, sel);
 
 describe.each(["light", "dark"])("shadcn in Chromium (%s)", (theme) => {
   it("has no axe violations, color-contrast included", async () => {
@@ -65,7 +83,7 @@ describe.each(["light", "dark"])("shadcn in Chromium (%s)", (theme) => {
     const page = await open(theme);
     await page.getByRole(role, { name: label, exact: true }).first().focus();
     await page.keyboard.press("Enter");
-    await page.waitForSelector(selector);
+    await settled(page, selector);
     const violations = await oa(page, "axeRun", true);
     await page.keyboard.press(key);
     const focus = (await oa(page, "focus")) as Focus;
@@ -108,7 +126,7 @@ describe.each(["light", "dark"])("shadcn in Chromium (%s)", (theme) => {
       .first();
     await trigger.focus();
     await page.keyboard.press("Enter");
-    await page.waitForSelector(sel);
+    await settled(page, sel);
     const escaped: string[] = [];
     for (let i = 0; i < 8; i++) {
       await page.keyboard.press("Tab");
