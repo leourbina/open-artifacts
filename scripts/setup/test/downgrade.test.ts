@@ -33,7 +33,7 @@ describe("downgrade guard", () => {
     const w = await installed("0.1.0", o);
     o.healthVersion = "0.2.0";
     expect(await run(UP, w.deps, ROOT)).toBe(2);
-    expect(line(w, "deploy")).toMatchObject({
+    expect(line(w, "prereqs")).toMatchObject({
       status: "action_required",
       message: MESSAGE("0.1.0", "0.2.0"),
     });
@@ -70,7 +70,7 @@ describe("downgrade guard", () => {
     o.healthVersion = "0.3.0-dev+abc123";
     w.lines.length = 0;
     expect(await run(UP, w.deps, ROOT)).toBe(2);
-    expect(line(w, "deploy").message).toBe(MESSAGE("0.1.0", "0.3.0"));
+    expect(line(w, "prereqs").message).toBe(MESSAGE("0.1.0", "0.3.0"));
   });
 
   it("compares numerically, not as strings", async () => {
@@ -81,17 +81,79 @@ describe("downgrade guard", () => {
   });
 
   it("healthz down: falls back to the saved deployed version", async () => {
-    const o: Opts = { healthzDown: true };
+    const o: Opts = {};
     const w = await installed("0.0.5", o);
+    o.healthzDown = true;
     expect(w.state().deployedVersion).toBe("0.1.0");
     expect(await run(UP, w.deps, ROOT)).toBe(2);
-    expect(line(w, "deploy").message).toBe(MESSAGE("0.0.5", "0.1.0"));
+    expect(line(w, "prereqs").message).toBe(MESSAGE("0.0.5", "0.1.0"));
   });
 
-  it("nothing known: no guard, with a note", async () => {
-    const w = world({ healthzDown: true });
+  it("a fresh install makes no healthz request and adds no note", async () => {
+    const w = world({ healthVersion: "9.9.9" });
     expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
-    expect(line(w, "deploy").message).toContain("no version guard");
+    expect(w.hits.filter((h) => h === "GET /healthz")).toHaveLength(1);
+    expect(line(w, "deploy").message).not.toContain("guard");
+  });
+
+  it("--ci with no state is not guarded", async () => {
+    const w = world({ healthVersion: "9.9.9" });
+    const ci = HOSTS.filter((a) => a !== "--yes");
+    expect(await run([...ci, "--ci"], w.deps, ROOT)).toBe(0);
+  });
+
+  it("a full setup of an older checkout stops before any write", async () => {
+    const o: Opts = {};
+    const w = await installed("0.1.0", o);
+    o.healthVersion = "0.2.0";
+    const writes: string[] = [];
+    const f = w.deps.fetch;
+    w.deps.fetch = async (i, init) => {
+      if ((init?.method ?? "GET") !== "GET") writes.push(String(i));
+      return f(i, init);
+    };
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(2);
+    expect(parse(w).map((j) => `${j.step}:${j.status}`)).toEqual([
+      "prereqs:action_required",
+    ]);
+    expect(writes).toEqual([]);
+    expect(w.ops).toEqual([]);
+  });
+
+  it("an unparseable checkout version is an error, not a disabled guard", async () => {
+    const w = await installed("banana");
+    expect(await run(UP, w.deps, ROOT)).toBe(1);
+    expect(line(w, "prereqs")).toMatchObject({ status: "error" });
+    expect(line(w, "prereqs").message).toContain(
+      "cannot read this checkout's version",
+    );
+    expect(w.ops).toEqual([]);
+  });
+
+  it.each([
+    ["an HTML (Access login) body", { healthzBody: "<html>Sign in</html>" }],
+    ["a garbage version", { healthVersion: "not-a-version" }],
+  ])("%s falls back to the saved version", async (_n, flip) => {
+    const o: Opts = {};
+    const w = await installed("0.0.5", o);
+    Object.assign(o, flip);
+    expect(await run(UP, w.deps, ROOT)).toBe(2);
+    expect(line(w, "prereqs").message).toBe(MESSAGE("0.0.5", "0.1.0"));
+  });
+
+  it("a v-prefixed live version is read", async () => {
+    const o: Opts = {};
+    const w = await installed("0.1.0", o);
+    o.healthVersion = "v0.3.0";
+    expect(await run(UP, w.deps, ROOT)).toBe(2);
+    expect(line(w, "prereqs").message).toBe(MESSAGE("0.1.0", "0.3.0"));
+  });
+
+  it("0.10.0 over a live 0.9.0 proceeds", async () => {
+    const o: Opts = {};
+    const w = await installed("0.10.0", o);
+    o.healthVersion = "0.9.0";
+    expect(await run(UP, w.deps, ROOT)).toBe(0);
   });
 
   it("--check reports the comparison and never blocks", async () => {

@@ -194,6 +194,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     expect(w.ops).toEqual(["build", "migrate open-artifacts", "deploy"]);
     expect(w.db.tokens).toHaveLength(1);
     expect(w.hits).toEqual([
+      "GET /healthz", // the version guard (prereqs), then selftest's
       "GET /healthz",
       "GET /cdn-cgi/access/sso/oidc/cid-new/.well-known/openid-configuration",
     ]);

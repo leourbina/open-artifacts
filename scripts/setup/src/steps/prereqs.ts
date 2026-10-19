@@ -11,6 +11,7 @@ import {
   type ZoneScope,
   zoneScopeFor,
 } from "../tokens.ts";
+import { downgradeMessage, versionInfo } from "../version-guard.ts";
 import { reusesDeployToken } from "./secrets.ts";
 
 /** Hosts lacking a zone, found by check and reported by apply. */
@@ -189,6 +190,10 @@ export const prereqs: Step = {
       throw new Error(`Node >= 22 required (found ${process.versions.node})`);
     if ((await ctx.deps.exec("pnpm", ["--version"])).code !== 0)
       throw new Error("pnpm not found on PATH");
+    // First, so an older checkout stops before any step has a side effect (--check only reports).
+    ctx.version = await versionInfo(state, ctx);
+    if (ctx.version.downgrade && !ctx.opts.allowDowngrade && !ctx.opts.check)
+      throw new NeedInput(downgradeMessage(ctx.version));
     const who = JSON.parse(await ctx.wrangler(["whoami", "--json"])) as {
       accounts?: { id: string; name: string }[];
     };

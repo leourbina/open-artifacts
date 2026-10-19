@@ -1,5 +1,6 @@
 import type { Api, Deps, Fs, Wrangler } from "./cf.ts";
 import type { State } from "./state.ts";
+import type { VersionInfo } from "./version-guard.ts";
 
 export type Opts = {
   name: string;
@@ -70,6 +71,8 @@ export type Ctx = {
   ciTokenId?: string;
   /** The welcome artifact's view URL, when selftest published it this run. */
   welcomeUrl?: string;
+  /** Set by prereqs: this checkout against the deployed version. */
+  version?: VersionInfo;
   /** Set by an `always` step's check: its todo counts for --strict this run. */
   mustRun?: boolean;
   /** No saved state: it is being rebuilt from Cloudflare by name. */
