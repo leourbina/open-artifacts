@@ -1,0 +1,16 @@
+{{inviterName}} shared “{{artifactTitle}}” with you
+
+{{artifactTitle}}
+Format: {{artifactFormat}}
+Your role: {{role}}
+
+It lives on {{instanceName}}, where any AI agent publishes pages, docs, code and PDFs for your team. You'll sign in with a one-time code sent to {{recipientEmail}}.
+
+Open {{instanceName}}:
+{{artifactUrl}}
+
+--
+
+You got this because {{inviterName}} added {{recipientEmail}} on {{instanceName}}. If you weren't expecting it, you can ignore this email.
+
+Sent by Open Artifacts, self-hosted at {{appHost}}.
