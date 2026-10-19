@@ -1,0 +1,20 @@
+
+  VITE v8.3.4  ready in 1275 ms
+
+  ➜  Local:   http://localhost:5185/
+  ➜  Network: use --host to expose
+6:15:50 AM [vite] (client) hmr update /src/viewer/Shell.tsx
+6:15:50 AM [vite] (client) hmr update /src/viewer/TitleBar.tsx
+6:15:50 AM [vite] (client) hmr update /src/upload/DropZone.tsx
+6:15:50 AM [vite] (client) hmr update /src/upload/UploadDialog.tsx
+6:15:50 AM [vite] (client) hmr update /src/upload/DropZone.tsx, /src/upload/UploadDialog.tsx
+6:16:33 AM [vite] (client) hmr update /src/upload/DropZone.tsx
+6:16:33 AM [vite] (client) hmr update /src/upload/UploadDialog.tsx
+6:16:33 AM [vite] (client) hmr update /src/upload/DropZone.tsx, /src/upload/UploadDialog.tsx
+6:16:33 AM [vite] (client) hmr update /src/viewer/Shell.tsx
+6:16:33 AM [vite] (client) hmr update /src/viewer/TitleBar.tsx
+6:16:34 AM [vite] (client) hmr update /src/upload/DropZone.tsx
+6:16:34 AM [vite] (client) hmr update /src/upload/UploadDialog.tsx
+6:16:34 AM [vite] (client) hmr update /src/upload/DropZone.tsx, /src/upload/UploadDialog.tsx
+6:16:34 AM [vite] (client) hmr update /src/viewer/Shell.tsx
+6:16:34 AM [vite] (client) hmr update /src/viewer/TitleBar.tsx
