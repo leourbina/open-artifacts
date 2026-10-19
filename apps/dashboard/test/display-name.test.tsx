@@ -153,6 +153,74 @@ describe("display-name dialog", () => {
     expect(await dialog()).toBeInTheDocument();
   });
 
+  it("closing it moves focus to the page heading, not <body>", async () => {
+    serveMe(needsName());
+    mount("/");
+    await dialog();
+    fireEvent.click(screen.getByRole("button", { name: "Not now" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const h1 = screen.getByRole("heading", { name: "Library", level: 1 });
+    await waitFor(() => expect(document.activeElement).toBe(h1));
+    expect(h1).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("closing it after Save also lands on the heading", async () => {
+    serveMe(needsName());
+    mount("/");
+    await nameField();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("heading", { name: "Library", level: 1 }),
+      ),
+    );
+  });
+
+  it("sign-out forgets Not now, so the next sign-in asks again", async () => {
+    serveMe(needsName());
+    sessionStorage.setItem("unrelated", "keep");
+    mount("/");
+    await dialog();
+    fireEvent.click(screen.getByRole("button", { name: "Not now" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    sessionStorage.setItem("oa:display-name-skipped:u_other", "1");
+    const menu = await screen.findByRole("button", { name: "Account menu" });
+    fireEvent.keyDown(menu, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Sign out" }));
+    await waitFor(() =>
+      expect(
+        Object.keys(sessionStorage).filter((k) =>
+          k.startsWith("oa:display-name-skipped:"),
+        ),
+      ).toEqual([]),
+    );
+    expect(sessionStorage.getItem("unrelated")).toBe("keep");
+  });
+
+  it("a failed sign-out keeps Not now", async () => {
+    serveMe(needsName());
+    server.use(
+      http.post("*/auth/logout", () =>
+        HttpResponse.json(
+          { error: { code: "internal", message: "down" } },
+          { status: 500 },
+        ),
+      ),
+    );
+    mount("/");
+    await dialog();
+    fireEvent.click(screen.getByRole("button", { name: "Not now" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const menu = await screen.findByRole("button", { name: "Account menu" });
+    fireEvent.keyDown(menu, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Sign out" }));
+    expect(await screen.findByText("Couldn't sign out")).toBeInTheDocument();
+    expect(
+      sessionStorage.getItem(`oa:display-name-skipped:${fixtures.me.user.id}`),
+    ).toBe("1");
+  });
+
   it("still works when sessionStorage throws", async () => {
     const get = Storage.prototype.getItem;
     const set = Storage.prototype.setItem;
