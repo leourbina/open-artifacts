@@ -30,17 +30,17 @@ Requires `agent-bus` on `PATH` (`which agent-bus`).
 
 ### Use it
 
-| Task | Command |
-|------|---------|
-| See who is online | `agent-bus list` (add `--kind all` for every harness) |
-| See your own address | `agent-bus self` |
-| Send a message | `agent-bus send <name> -m "text" --summary "short"` |
-| Read your inbox | `agent-bus inbox` (add `--unread`) |
-| Read one message in full | `agent-bus read <id>` |
-| Mark a message read | `agent-bus ack <id>` |
-| Follow incoming live | `agent-bus watch` |
-| Report what you are doing | `agent-bus status busy` (`idle`, `waiting`, …) |
-| Step off the bus | `agent-bus leave --name <your-name>` |
+| Task                      | Command                                               |
+| ------------------------- | ----------------------------------------------------- |
+| See who is online         | `agent-bus list` (add `--kind all` for every harness) |
+| See your own address      | `agent-bus self`                                      |
+| Send a message            | `agent-bus send <name> -m "text" --summary "short"`   |
+| Read your inbox           | `agent-bus inbox` (add `--unread`)                    |
+| Read one message in full  | `agent-bus read <id>`                                 |
+| Mark a message read       | `agent-bus ack <id>`                                  |
+| Follow incoming live      | `agent-bus watch`                                     |
+| Report what you are doing | `agent-bus status busy` (`idle`, `waiting`, …)        |
+| Step off the bus          | `agent-bus leave --name <your-name>`                  |
 
 With the MCP server, the same operations are the `agent-bus` tools:
 `list_agents`, `send_message`, `get_inbox`, `read_message`, `ack_message`,
