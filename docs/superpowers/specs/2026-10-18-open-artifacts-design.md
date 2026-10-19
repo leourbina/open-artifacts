@@ -220,7 +220,7 @@ These are designer's calls, because the user approved the spec before the dashbo
 - **Free-plan limits apply to every Worker code path:** 10 ms of CPU per request and 50 external subrequests. Backend tests include CPU-budget checks for publish, read, and runtime API calls.
 - Each deployment has one Cloudflare account and one owner.
 - **Upload limits:** 25 MB per file and 100 MB per publish.
-  - Inline `content` and `files` in an MCP or JSON publish are capped at **256 KB total** (C3), because decoding and search indexing must fit the 10 ms CPU budget. Over it, publish returns 413 `too_large`: "Inline content is limited to 256 KB. Use create_upload for larger files, then publish with {uploadId}."
+  - Inline `content` and `files` in an MCP or JSON publish are capped at **128 KB total** (C3; 256 KB until be/inline-128k), because parsing the JSON body must fit the 10 ms CPU budget (see docs/ops/cpu-budget.md). Over it, publish returns 413 `too_large`: "Inline content is limited to 128 KB per publish. For larger files: create_upload({ path, size, contentType }), PUT the bytes to the returned url, then publish_artifact({ id: artifactId, title, files: { "<path>": { uploadId } } })."
   - Anything larger goes through the `create_upload` tool or endpoint. It returns a signed PUT URL, and the body streams straight into R2.
   - Uploads that are never used are swept by a daily cron after 24 h.
 - **Local development:** runs as `app.localhost:8787` and `content.localhost:8787`. A dev-only login, `/auth/dev-login`, is available when `ENVIRONMENT=dev` and returns `404` otherwise. Setup refuses to deploy with it turned on.

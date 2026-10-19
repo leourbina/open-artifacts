@@ -15,9 +15,36 @@ tolerates occasional overruns. For heavy or team use, Workers Paid ($5/mo) is
 recommended; the self-hosting costs doc says so.
 
 Follow-ups, which don't block 0.2.0:
-- Inline HTML publishes over 128 KB go through the upload path, with text
-  extraction only in the indexing alarm.
+- ~~Inline HTML publishes over 128 KB go through the upload path~~: done, see
+  below.
 - The indexing alarm itself gets to p95 ≤ 10 ms.
+
+## Inline limit: 128 KB (be/inline-128k)
+
+The 250 KB burst tail was the request's own `JSON.parse` of an escape-heavy
+body: every `"` and `\` in HTML doubles in JSON, so 250 KB of HTML is up to
+500 KB to parse, and nothing on the server can publish it without parsing it.
+So the fix is the contract: `LIMITS.inlineBytes` is now **128 KB** for every
+format (it was 256 KB since C3). Anything larger goes through the upload path
+(create_upload, PUT, then `files: { "<path>": { uploadId } }`), which streams
+to R2 and never parses the file.
+
+- The 413 `too_large` text (`INLINE_TOO_LARGE_MESSAGE`) spells out that path,
+  for REST and for the MCP `publish_artifact` tool.
+- The REST publish body cap is now `2 × inlineBytes + 64 KB` (320 KB): the
+  worst legitimate body is 128 KB of quote and backslash text, escaped 2×.
+  A body over the cap is refused from its `Content-Length`, before it is read
+  or parsed, so an oversize escape-heavy burst costs no parse. A body under
+  the cap but over the limit (for example 250 KB of plain text) is parsed
+  once (plain JSON parses fast) and then gets the 413. Text made of control
+  characters (escaped 6×) can hit the cap below 128 KB; it is refused with
+  the same upload hint.
+- The MCP body cap is unchanged: it is set by the largest
+  `artifact_data_set` document (1 MB), not by inline publishes.
+- `pnpm test:cpu` (`test/publish.cpu.test.ts`) asserts it: a 128 KB
+  escape-heavy HTML publish costs < 10 ms more than a tiny one (local D1/R2
+  I/O, off-isolate in production, cancels out), and 200 and 250 KB
+  escape-heavy bodies get the 413 in < 2 ms without the body being read.
 
 ## How we measure
 
@@ -74,6 +101,7 @@ These numbers drove contract change C3 and the follow-up perf PRs.
 | C3 (#126) | Inline publishes capped at 256 KB (larger returns 413, at 3–4 ms). Indexing moved to a Durable Object alarm. Steady state 4–9 ms, with a cold mode of 20–41 ms. |
 | #134 | Eager isolate init plus the 128 KB index cap. Cold firsts dropped. |
 | #141 | The table above. |
+| be/inline-128k | Inline limit 256 → 128 KB; the publish body cap is now 2 × inline + 64 KB, checked before the body is read. |
 
 ## Re-running
 

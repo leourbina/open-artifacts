@@ -305,8 +305,8 @@ export function scenarios(c: Ctx): Scenario[] {
     format: "markdown",
     content: prose(50 * 1024),
   });
-  // Just under LIMITS.inlineBytes (256 KB), the largest inline publish.
-  const inline = 250 * 1024;
+  // Just under LIMITS.inlineBytes, the largest inline publish.
+  const inline = LIMITS.inlineBytes - 2 * 1024;
   const bin19 = JSON.stringify({
     title: "Inline base64",
     files: {
@@ -384,7 +384,7 @@ export function scenarios(c: Ctx): Scenario[] {
   return [
     // First, so nothing has run extractText on this shape yet.
     {
-      name: "publish 250 KB inline html, script-dense, COLD (first requests, no gc)",
+      name: "publish 126 KB inline html, script-dense, COLD (first requests, no gc)",
       budgetMs: 9,
       bucket: "worker",
       cold: true,
@@ -403,7 +403,7 @@ export function scenarios(c: Ctx): Scenario[] {
       },
     },
     {
-      name: "publish 250 KB inline base64 (binary file)",
+      name: "publish 126 KB inline base64 (binary file)",
       budgetMs: 9,
       bucket: "worker",
       prepare: async () => {
@@ -412,7 +412,7 @@ export function scenarios(c: Ctx): Scenario[] {
       },
     },
     {
-      name: "publish 250 KB inline base64 (html entry, indexing enqueued)",
+      name: "publish 126 KB inline base64 (html entry, indexing enqueued)",
       budgetMs: 9,
       bucket: "worker",
       prepare: async () => {
@@ -427,7 +427,7 @@ export function scenarios(c: Ctx): Scenario[] {
       ] as const
     ).map(
       ([shape, body]): Scenario => ({
-        name: `publish 250 KB inline html, ${shape} (indexing enqueued)`,
+        name: `publish 126 KB inline html, ${shape} (indexing enqueued)`,
         budgetMs: 9,
         bucket: "worker",
         prepare: async () => {
@@ -436,7 +436,7 @@ export function scenarios(c: Ctx): Scenario[] {
         },
       }),
     ),
-    // C3: the same 250 KB html bodies, indexed by the DO alarm (its own invocation).
+    // C3: the same 126 KB html bodies, indexed by the DO alarm (its own invocation).
     ...(
       [
         ["plain", html19b],
@@ -445,7 +445,7 @@ export function scenarios(c: Ctx): Scenario[] {
       ] as const
     ).map(
       ([shape, body]): Scenario => ({
-        name: `DO alarm: index 250 KB html, ${shape}`,
+        name: `DO alarm: index 126 KB html, ${shape}`,
         budgetMs: 10,
         bucket: "do",
         info: true,

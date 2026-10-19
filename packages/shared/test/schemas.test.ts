@@ -182,10 +182,11 @@ describe("fix round 1: PublishInput refinements", () => {
       }).success,
     ).toBe(true);
   });
-  it("C3: 256 KB inline limit, upload hint; the MCP schema leaves it to the server", () => {
-    expect(LIMITS.inlineBytes).toBe(256 * 1024);
+  it("128 KB inline limit, upload hint; the MCP schema leaves it to the server", () => {
+    expect(LIMITS.inlineBytes).toBe(128 * 1024);
+    const kb = LIMITS.inlineBytes / 1024;
     expect(INLINE_TOO_LARGE_MESSAGE).toBe(
-      "Inline content is limited to 256 KB. Use create_upload for larger files, then publish with {uploadId}.",
+      `Inline content is limited to ${kb} KB per publish. For larger files: create_upload({ path, size, contentType }), PUT the bytes to the returned url, then publish_artifact({ id: artifactId, title, files: { "<path>": { uploadId } } }).`,
     );
     const big = {
       ...base,
