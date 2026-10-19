@@ -122,14 +122,20 @@ export function AppLayout() {
         Skip to content
       </a>
       <Sidebar me={me} path={path} />
-      {/* SidebarInset's box, but as a div: the header is the banner, not
-          part of <main>. */}
-      <div className="relative flex w-full min-w-0 flex-1 flex-col bg-background">
-        <header className="sticky top-0 z-[5] box-border flex h-[49px] items-center gap-[10px] border-0 border-b border-solid border-[var(--oa-divider)] bg-[var(--oa-chrome)] px-[var(--oa-space-5)] max-md:px-[var(--oa-space-3)]">
+      {/* The inset panel (Design's sidebar B), SidebarInset's box as a div so
+          the header stays the banner, outside <main>. From 768px it floats
+          8px in from the chrome (0 on the sidebar side unless collapsed),
+          viewport-tall, and its content scrolls under the header. Below
+          768px it is full-bleed and the page scrolls. */}
+      <div className="relative flex w-full min-w-0 flex-1 flex-col bg-[var(--oa-bg)] md:m-[var(--oa-space-2)] md:ml-0 md:h-[calc(100svh-2*var(--oa-space-2))] md:overflow-hidden md:rounded-[var(--oa-radius-lg)] md:border md:border-solid md:border-[var(--oa-border)] md:peer-data-[state=collapsed]:ml-[var(--oa-space-2)]">
+        <header className="sticky top-0 z-[5] box-border flex h-12 flex-none items-center gap-[10px] border-0 border-b border-solid border-[var(--oa-divider)] bg-[var(--oa-bg)] px-[var(--oa-space-5)] max-md:px-[var(--oa-space-3)]">
           <SidebarTrigger aria-label="Toggle navigation" />
           <TopBar me={me} />
         </header>
-        <main id="oa-main" className="min-w-0 flex-1">
+        <main
+          id="oa-main"
+          className="min-w-0 flex-1 md:min-h-0 md:overflow-y-auto"
+        >
           <QuotaBanner />
           <CpuBanner role={me?.user.role} />
           <div className="oa-page">
@@ -223,11 +229,9 @@ function Sidebar({ me, path }: { me: Me | null; path: string }) {
   const go = useGo();
   const home = guest ? "/shared" : "/";
   return (
-    <ShSidebar>
-      {/* One header-tall row (49px with its divider), so the sidebar's top
-          lines up with the header. */}
+    <ShSidebar variant="inset">
       <SidebarHeader
-        className="h-[49px] justify-center gap-0 border-b border-sidebar-border px-2 py-0"
+        className="h-12 justify-center gap-0 p-0"
         onClick={(e) => {
           if ((e.target as Element).closest("a")) go(e, home);
         }}

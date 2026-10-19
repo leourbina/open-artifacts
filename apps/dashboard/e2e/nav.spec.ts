@@ -1,8 +1,9 @@
-// Sidebar A ("Flush", Design spec): sizes, the brand row lined up with the
-// header, row metrics, the active/focus treatment, and the phone sheet.
+// Sidebar B ("Inset", Design spec): sidebar sizes and rows, the inset panel
+// with the header inside it, collapse, the active/focus treatment, and the
+// full-bleed phone layout with its sheet.
 import { expect, test } from "@playwright/test";
 
-test("sidebar A metrics at 1280px", async ({ page }) => {
+test("sidebar B metrics at 1280px", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/");
   const nav = page.getByRole("navigation", { name: "Primary" });
@@ -36,8 +37,9 @@ test("sidebar A metrics at 1280px", async ({ page }) => {
       body: css(document.body).fontSize,
       width: box(side)?.width,
       brandHeight: box(head)?.height,
-      brandBottom: box(head)?.bottom,
-      headerBottom: box(header)?.bottom,
+      header: box(header)?.height,
+      headerDivider: header ? css(header).borderBottomColor : "",
+      divider: resolve("color", "var(--oa-divider)"),
       mark: box(mark)?.width,
       word: word ? [css(word).fontSize, css(word).fontWeight] : [],
       heights: [...new Set(rows.map((r) => r.height))],
@@ -67,8 +69,9 @@ test("sidebar A metrics at 1280px", async ({ page }) => {
   expect(m.html).toBe("16px");
   expect(m.body).toBe("13px");
   expect(m.width).toBe(256);
-  expect(m.brandHeight).toBe(49);
-  expect(m.brandBottom).toBe(m.headerBottom);
+  expect(m.brandHeight).toBe(48);
+  expect(m.header).toBe(48);
+  expect(m.headerDivider).toBe(m.divider);
   expect(m.mark).toBe(24);
   expect(m.word).toEqual(["16px", "600"]);
   expect(m.heights).toEqual([32]);
@@ -150,3 +153,101 @@ for (const [width, gutter] of [
     expect(Math.abs(s.left - s.right)).toBeLessThanOrEqual(1);
     if (width < 880 + 2 * gutter + 256) expect(s.left).toBe(gutter);
   });
+
+/** The panel's box and treatment, against the viewport and the sidebar. */
+const panel = (page: import("@playwright/test").Page) =>
+  page.evaluate(() => {
+    const header = document.querySelector("header");
+    const p = header?.parentElement;
+    const side = document.querySelector("[data-slot=sidebar-container]");
+    const r = p?.getBoundingClientRect();
+    const c = p ? getComputedStyle(p) : null;
+    const resolve = (prop: string, value: string) => {
+      const probe = document.createElement("div");
+      probe.style.setProperty(prop, value);
+      document.body.append(probe);
+      const out = getComputedStyle(probe).getPropertyValue(prop);
+      probe.remove();
+      return out;
+    };
+    return {
+      top: r?.top,
+      right: window.innerWidth - (r?.right ?? 0),
+      bottom: window.innerHeight - (r?.bottom ?? 0),
+      left:
+        (r?.left ?? 0) - Math.max(0, side?.getBoundingClientRect().right ?? 0),
+      leftEdge: r?.left,
+      radius: c?.borderTopLeftRadius,
+      border: c ? [c.borderTopWidth, c.borderTopColor] : [],
+      borderToken: resolve("color", "var(--oa-border)"),
+      shadow: c?.boxShadow,
+      bg: c?.backgroundColor,
+      bgToken: resolve("background-color", "var(--oa-bg)"),
+      wrapper: getComputedStyle(
+        document.querySelector("[data-slot=sidebar-wrapper]") as Element,
+      ).backgroundColor,
+      chrome: resolve("background-color", "var(--oa-chrome)"),
+      headerInside: !!header && !!p && header.parentElement === p,
+    };
+  });
+
+test("the inset panel at 1280px, then collapsed", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/");
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  const p = await panel(page);
+  expect(p).toMatchObject({
+    top: 8,
+    right: 8,
+    bottom: 8,
+    left: 0,
+    radius: "8px",
+    shadow: "none",
+    headerInside: true,
+  });
+  expect(p.border).toEqual(["1px", p.borderToken]);
+  expect(p.bg).toBe(p.bgToken);
+  expect(p.wrapper).toBe(p.chrome);
+
+  await page.getByRole("button", { name: "Toggle navigation" }).click();
+  await expect.poll(async () => (await panel(page)).leftEdge).toBe(8);
+});
+
+test("the active row's ring is at least 3:1 against the chrome", async ({
+  page,
+}) => {
+  await page.goto("/");
+  for (const theme of ["light", "dark"]) {
+    const ratio = await page.evaluate((theme) => {
+      document.documentElement.setAttribute("data-theme", theme);
+      const rgb = (value: string) => {
+        const probe = document.createElement("div");
+        probe.style.color = value;
+        document.body.append(probe);
+        const m = getComputedStyle(probe).color.match(/[\d.]+/g) ?? [];
+        probe.remove();
+        return m.slice(0, 3).map(Number);
+      };
+      const lum = ([r, g, b]: number[]) => {
+        const f = (v: number) => {
+          const c = v / 255;
+          return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+        };
+        return 0.2126 * f(r ?? 0) + 0.7152 * f(g ?? 0) + 0.0722 * f(b ?? 0);
+      };
+      const a = lum(rgb("var(--oa-border-strong)"));
+      const b = lum(rgb("var(--oa-chrome)"));
+      return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+    }, theme);
+    expect(ratio, theme).toBeGreaterThanOrEqual(3);
+  }
+});
+
+test("below 768px the panel is full-bleed", async ({ page }) => {
+  await page.setViewportSize({ width: 767, height: 900 });
+  await page.goto("/");
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  const p = await panel(page);
+  expect(p).toMatchObject({ top: 0, right: 0, leftEdge: 0, radius: "0px" });
+  expect(p.border[0]).toBe("0px");
+});
