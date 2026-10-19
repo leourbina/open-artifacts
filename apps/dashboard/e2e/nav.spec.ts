@@ -158,17 +158,28 @@ for (const [width, gutter] of [
 ] as const)
   test(`page gutter is ${gutter}px at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
+    // Against main's scrollport (clientWidth), not its border box: with a
+    // classic scrollbar, `scrollbar-gutter: stable` reserves its width.
     const gap = (sel: string) =>
       page.evaluate((sel) => {
-        const main = document
-          .getElementById("oa-main")
-          ?.getBoundingClientRect();
+        const main = document.getElementById("oa-main") as HTMLElement;
+        const left = main.getBoundingClientRect().left + main.clientLeft;
+        const right = left + main.clientWidth;
         const el = document.querySelector(sel)?.getBoundingClientRect();
         return {
-          left: (el?.left ?? 0) - (main?.left ?? 0),
-          right: (main?.right ?? 0) - (el?.right ?? 0),
+          left: (el?.left ?? 0) - left,
+          right: right - (el?.right ?? 0),
         };
       }, sel);
+    // Force a classic (space-taking) scrollbar, as on Linux CI, so the
+    // reserved gutter is in play on every platform.
+    await page.addInitScript(() => {
+      document.addEventListener("DOMContentLoaded", () => {
+        const style = document.createElement("style");
+        style.textContent = "#oa-main::-webkit-scrollbar { width: 15px; }";
+        document.head.append(style);
+      });
+    });
     await page.goto("/");
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     expect(await gap(".lib")).toEqual({ left: gutter, right: gutter });
