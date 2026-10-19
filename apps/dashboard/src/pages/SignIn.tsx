@@ -1,7 +1,7 @@
 import { AUTH } from "@oa/shared";
 import { Banner } from "@oa/ui";
 import { brand } from "@oa/ui/brand";
-import { Button, Separator } from "@oa/ui/shadcn";
+import { Button } from "@oa/ui/shadcn";
 import { useDocumentTitle, useInstanceName } from "../layout/useDocumentTitle";
 
 /** Light and dark variants of one brand image; CSS shows the matching one. */
@@ -16,8 +16,18 @@ function Themed({
 }) {
   return (
     <>
-      <img className={`oa-lt ${className ?? ""}`} src={light} alt="" />
-      <img className={`oa-dk ${className ?? ""}`} src={dark} alt="" />
+      <img
+        className={`oa-lt ${className ?? ""}`}
+        src={light}
+        alt=""
+        aria-hidden="true"
+      />
+      <img
+        className={`oa-dk ${className ?? ""}`}
+        src={dark}
+        alt=""
+        aria-hidden="true"
+      />
     </>
   );
 }
@@ -48,14 +58,19 @@ export function SignIn({ failed = false }: { failed?: boolean }) {
       </section>
       <section className="oa-split-form">
         <div className="oa-split-formbox">
+          <Themed
+            light={brand.markLight}
+            dark={brand.markDark}
+            className="oa-split-formmark"
+          />
           <h1>Sign in</h1>
-          <p>Use your work email to open {name}.</p>
+          <p className="oa-split-sub">Use your work email to open {name}.</p>
           {failed && (
             <Banner tone="danger" title="Sign-in didn't finish.">
               The login link expired or was cancelled. Try again.
             </Banner>
           )}
-          <Button asChild size="lg" className="oa-split-btn">
+          <Button asChild className="oa-split-btn">
             <a href={AUTH.login}>
               <svg
                 aria-hidden="true"
@@ -72,7 +87,6 @@ export function SignIn({ failed = false }: { failed?: boolean }) {
               Continue with Cloudflare Access
             </a>
           </Button>
-          <Separator />
           <p className="oa-note">
             You'll confirm your email with a one-time PIN or your organization's
             login.
