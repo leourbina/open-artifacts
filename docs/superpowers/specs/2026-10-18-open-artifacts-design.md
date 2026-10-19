@@ -173,7 +173,7 @@ These are designer's calls, because the user approved the spec before the dashbo
   - versions: timeline, view, a text diff between versions, restore
   - sharing: visibility, invite by email, copy link
   - details: editing title and description, delete
-- **Upload:** drag and drop files to create an artifact or a new version.
+- **Upload:** drag and drop files to create an artifact. Humans do not upload new versions; agents publish them via MCP or the API.
 - **Usage:** a panel showing today's free-plan usage (Worker requests, D1 and Durable Object reads and writes), with guidance on when to upgrade.
 - **Settings:**
   - Members: invite, set role, remove.

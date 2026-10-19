@@ -1,11 +1,9 @@
-import type { ArtifactSummary } from "@oa/shared";
 import { Button, toast } from "@oa/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { filesFromDrop, filterIgnored } from "./collect";
 import { UploadDialog } from "./UploadDialog";
 import "./upload.css";
 
-const RANK = { viewer: 0, editor: 1, owner: 2 } as const;
 const hasFiles = (e: DragEvent) => e.dataTransfer?.types.includes("Files");
 
 const UploadIcon = () => (
@@ -25,22 +23,19 @@ const UploadIcon = () => (
 );
 
 /**
- * Window-level drop target plus a picker button. Without `artifact`, uploads create a new
- * artifact; with one, they add a version (editors and above only). Takes `allowed` rather
- * than calling useMe: a second observer on a failed /me query would refetch it.
+ * Window-level drop target plus a picker button; uploads create a new artifact. New
+ * versions come only from agents. Takes `allowed` rather than calling useMe: a second
+ * observer on a failed /me query would refetch it.
  */
 export function DropZone({
-  artifact,
   allowed,
   button = false,
 }: {
-  artifact?: ArtifactSummary;
   /** Whether this user may publish here (signed in, not a guest). */
   allowed: boolean;
   button?: boolean;
 }) {
-  const enabled =
-    allowed && (!artifact || RANK[artifact.access] >= RANK.editor);
+  const enabled = allowed;
   const [dragging, setDragging] = useState(false);
   const [batch, setBatch] = useState<{ n: number; files: File[] } | null>(null);
   const busy = useRef(false);
@@ -126,20 +121,12 @@ export function DropZone({
     <>
       {button && (
         <span className="up-buttons">
-          <Button
-            size={artifact ? "sm" : undefined}
-            onClick={() => filePicker.current?.click()}
-          >
-            {artifact ? "Upload version" : "Upload files"}
+          <Button onClick={() => filePicker.current?.click()}>
+            Upload files
           </Button>
-          {!artifact && (
-            <Button
-              variant="ghost"
-              onClick={() => folderPicker.current?.click()}
-            >
-              Upload folder
-            </Button>
-          )}
+          <Button variant="ghost" onClick={() => folderPicker.current?.click()}>
+            Upload folder
+          </Button>
           <input
             ref={filePicker}
             type="file"
@@ -165,19 +152,14 @@ export function DropZone({
             <div className="up-icon">
               <UploadIcon />
             </div>
-            <h2>
-              {artifact
-                ? "Drop files to add a new version"
-                : "Drop files to create an artifact"}
-            </h2>
+            <h2>Drop files to create an artifact</h2>
             <p>
-              {artifact
-                ? "The dropped files become the next version of this artifact."
-                : "One file makes one artifact; several files dropped together make one multi-file artifact. To add a version instead, drop onto an open artifact."}
+              One file makes one artifact; several files dropped together make
+              one multi-file artifact.
             </p>
             <div className="up-foot">
-              Up to 25 MB per file and 100 MB per drop
-              {artifact ? "" : " · Visibility starts as Private"}
+              Up to 25 MB per file and 100 MB per drop · Visibility starts as
+              Private
             </div>
           </div>
         </div>
@@ -186,7 +168,6 @@ export function DropZone({
         <UploadDialog
           key={batch.n}
           files={batch.files}
-          artifact={artifact}
           onClose={() => setBatch(null)}
         />
       )}
