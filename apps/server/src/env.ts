@@ -18,6 +18,12 @@ export interface Env {
    * alarm CPU (10 ms) can't afford a capture.
    */
   SERVER_THUMBNAILS?: string;
+  /**
+   * The Workers plan: "paid", else free (unset or anything else; planOf).
+   * Sets the data-doc limit and the /mcp body cap. Setup sets it from the
+   * detected plan.
+   */
+  PLAN?: string;
   // vars
   APP_HOST: string;
   CONTENT_HOST: string;

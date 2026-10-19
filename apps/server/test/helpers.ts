@@ -1,6 +1,7 @@
 import {
   createExecutionContext,
   runDurableObjectAlarm,
+  runInDurableObject,
   waitOnExecutionContext,
 } from "cloudflare:test";
 import { env } from "cloudflare:workers";
@@ -97,3 +98,15 @@ export const runIndex = (id: string, e: { ARTIFACT_RUNTIME: unknown } = env) =>
   runDurableObjectAlarm(
     runtimeStub(e as never, id) as unknown as DurableObjectStub,
   );
+
+/** env with PLAN "paid": the 1 MB data-doc limit and the Paid /mcp body cap. */
+export const PAID_ENV = { ...(env as object), PLAN: "paid" } as typeof env;
+
+/**
+ * Puts the artifact's runtime DO on the Paid plan (the DO reads PLAN from its
+ * own env, which tests can't pass per call).
+ */
+export const doAsPaid = (stub: unknown) =>
+  runInDurableObject(stub as DurableObjectStub, (i) => {
+    (i as unknown as { env: object }).env = PAID_ENV;
+  });

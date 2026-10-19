@@ -3,9 +3,11 @@ import {
   CapabilitiesSchema,
   DataNameSchema,
   DataQuerySchema,
+  dataDocLimit,
+  dataDocTooLargeMessage,
   isId,
-  LIMITS,
   METHOD_CAPABILITY,
+  planOf,
   RUNTIME_PARAMS,
   type RuntimeMethod,
   StorageKeyNameSchema,
@@ -28,8 +30,19 @@ const SUBSCRIBE = `${ART}/data-subscribe`;
 const STORAGE = `${ART}/storage`;
 const KEY = `${STORAGE}/:key`;
 
-/** Raw write bodies (doc, patch, {value}): ≤ LIMITS.docBytes once minified; allow whitespace slack. */
-const MAX_DOC_BODY = LIMITS.docBytes + 64 * 1024;
+/**
+ * Raw write bodies (doc, patch, {value}): ≤ the plan's data-doc limit once
+ * minified (the DO enforces it exactly); allow 64 KB of whitespace slack. Over
+ * it, 413 with the plan message, before the body is read.
+ */
+const readDocBody = (c: C): Promise<Uint8Array> => {
+  const plan = planOf(c.env.PLAN);
+  return readCapped(
+    c,
+    dataDocLimit(plan) + 64 * 1024,
+    dataDocTooLargeMessage(plan),
+  );
+};
 const MAX_QUERY_BODY = 64 * 1024;
 /** CF-Connecting-IP: IPv4 or IPv6 text form. */
 const IP_RE = /^[0-9A-Fa-f:.]{2,45}$/;
@@ -148,7 +161,7 @@ const toBuffer = (b: Uint8Array): ArrayBuffer =>
     : (b.slice().buffer as ArrayBuffer);
 /** The raw request body, capped while streaming; never decoded or parsed here. */
 const rawBody = async (c: C): Promise<ArrayBuffer> =>
-  toBuffer(await readCapped(c, MAX_DOC_BODY));
+  toBuffer(await readDocBody(c));
 function concat(...parts: Uint8Array[]): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(parts.reduce((n, p) => n + p.byteLength, 0));
   let off = 0;
@@ -201,7 +214,7 @@ export function mountRuntime(app: AppType): void {
     const g = await gate(c, "db.set", "write");
     const col = name(c.req.param("col"), "collection");
     const id = name(c.req.param("doc"), "document id");
-    const body = await readCapped(c, MAX_DOC_BODY);
+    const body = await readDocBody(c);
     const { updatedAt } = await runtimeCall(() =>
       stub(c, g).setRaw(col, id, toBuffer(body), g.actor),
     );

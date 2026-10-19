@@ -79,7 +79,7 @@ const apiHandler = {
     // A member demoted to guest loses agent access (grants are also revoked).
     if (user.role === "guest")
       return mcpUnauthorized(env, "Only members can connect agents");
-    const capped = await capMcpBody(req);
+    const capped = await capMcpBody(req, env);
     if (capped instanceof Response) return capped;
     const agent = { name: props?.clientName || "unknown agent", version: null };
     return mcpHandler(env, () =>

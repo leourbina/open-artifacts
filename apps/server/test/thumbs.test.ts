@@ -872,6 +872,10 @@ describe("thumbnail job on the artifact DO", () => {
         await i.scheduleIndex(id, 1, true);
         i.indexer = async () => {};
         await i.alarm(); // indexes only
+        // Drive the alarm by hand: a real one firing now would run the capture.
+        await (
+          i as unknown as { ctx: DurableObjectState }
+        ).ctx.storage.deleteAlarm();
       },
       withBrowser,
     );

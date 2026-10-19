@@ -3,9 +3,10 @@ import { env } from "cloudflare:workers";
 import { type Member, newId, R } from "@oa/shared";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
+import { runtimeStub } from "../src/runtime/do.js";
 import { publish } from "../src/services/artifacts.js";
 import { getUser } from "../src/services/users.js";
-import { api, login } from "./helpers.js";
+import { api, doAsPaid, login, PAID_ENV } from "./helpers.js";
 
 const app = createApp();
 const tag = newId().slice(0, 6).toLowerCase();
@@ -147,6 +148,7 @@ describe("B13 breaks", () => {
 describe("B13 CPU", () => {
   it("PUT of a ~1 MB doc: forwarded raw via setRaw; the Worker never JSON.parses it", async () => {
     const id = await pub({ visibility: "team" });
+    await doAsPaid(runtimeStub(env, id)); // ~1 MB docs: the Paid limit
     const body: Record<string, number> = {};
     for (let i = 0; i < 90_000; i++) body[`k${i}`] = 0; // ~980 KB JSON
     const text = JSON.stringify(body);
@@ -183,7 +185,7 @@ describe("B13 CPU", () => {
           },
           body: text,
         }),
-        { ...env, ARTIFACT_RUNTIME: ns } as never,
+        { ...env, PLAN: "paid", ARTIFACT_RUNTIME: ns } as never,
         ctx,
       );
       expect(r.status).toBe(200);
@@ -212,6 +214,7 @@ describe("B13 CPU", () => {
 describe("B13 deep JSON", () => {
   it("a 500k-deep array doc is a 400, not a 500 from the RPC clone stack overflow", async () => {
     const id = await pub({ visibility: "team" });
+    await doAsPaid(runtimeStub(env, id)); // ~1 MB docs: the Paid limit
     const r = await app.fetch(
       new Request(`http://app.localhost${R.dataDoc(id, "c", "deep")}`, {
         method: "PUT",
@@ -222,7 +225,7 @@ describe("B13 deep JSON", () => {
         },
         body: "[".repeat(500_000) + "]".repeat(500_000),
       }),
-      env,
+      PAID_ENV,
       ctx,
     );
     expect(r.status).toBe(400);

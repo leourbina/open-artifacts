@@ -35,7 +35,7 @@ async function mcpWithPat(
   // Guests can't connect agents (they only see what's shared with them).
   if (user.role === "guest")
     return mcpUnauthorized(env, "Only members can connect agents");
-  const capped = await capMcpBody(req);
+  const capped = await capMcpBody(req, env);
   if (capped instanceof Response) return capped;
   const agent = { name: pat.label, version: null };
   return mcpHandler(env, () =>

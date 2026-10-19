@@ -1,9 +1,11 @@
 import { type CallToolResult, McpServer } from "@modelcontextprotocol/server";
 import {
   type AgentRef,
-  LIMITS,
   MCP_PATH,
   type Member,
+  mcpBodyLimit,
+  mcpTooLargeMessage,
+  planOf,
   QUOTA_MESSAGE,
 } from "@oa/shared";
 import { createMcpHandler } from "agents/mcp/server";
@@ -124,27 +126,42 @@ export function createServer(ctx: McpContext): McpServer {
 }
 
 /**
- * The largest tool argument (base64 inline publish at 4/3, or an
- * artifact_data_set document) plus JSON-RPC overhead. Oversize inline content
- * under it reaches publish_artifact, which answers too_large with the
- * create_upload hint.
+ * The /mcp body cap of the instance's plan (LIMITS.mcpBodyBytesFree/Paid),
+ * generic for every tool and checked before any parse.
  */
-export const MAX_MCP_BODY =
-  Math.max(Math.ceil((LIMITS.inlineBytes * 4) / 3), LIMITS.docBytes) +
-  256 * 1024;
+export const mcpBodyCap = (env: Pick<Env, "PLAN">): number =>
+  mcpBodyLimit(planOf(env.PLAN));
 
-const tooLarge = () =>
-  errorJson(413, "too_large", `Request body exceeds ${MAX_MCP_BODY} bytes`);
+/**
+ * Over the cap: HTTP 413 with a JSON-RPC error, as the SDK's transport answers
+ * an oversize body (code -32000, id null: the request was never read). The
+ * message gives the create_upload steps and the data-doc limit.
+ */
+const tooLarge = (env: Pick<Env, "PLAN">) =>
+  Response.json(
+    {
+      jsonrpc: "2.0",
+      error: { code: -32000, message: mcpTooLargeMessage(planOf(env.PLAN)) },
+      id: null,
+    },
+    { status: 413 },
+  );
 
 /**
  * Reads an MCP request body once, into one buffer, with a running cap: 413 on a
- * declared or streamed size over MAX_MCP_BODY. Returns a new Request carrying the
- * buffer, so every era (including the 2025 fallback, which reads the body
- * itself) sees a bounded body and nothing reads the stream twice.
+ * declared size over mcpBodyCap(env) before anything is read, or as soon as a
+ * streamed body passes it (nothing past the cap is buffered). Returns a new
+ * Request carrying the buffer, so every era (including the 2025 fallback,
+ * which reads the body itself) sees a bounded body and nothing reads the
+ * stream twice.
  */
-export async function capMcpBody(req: Request): Promise<Request | Response> {
-  if (Number(req.headers.get("content-length") ?? 0) > MAX_MCP_BODY)
-    return tooLarge();
+export async function capMcpBody(
+  req: Request,
+  env: Pick<Env, "PLAN">,
+): Promise<Request | Response> {
+  const cap = mcpBodyCap(env);
+  if (Number(req.headers.get("content-length") ?? 0) > cap)
+    return tooLarge(env);
   if (!req.body) return req;
   const reader = req.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -153,9 +170,9 @@ export async function capMcpBody(req: Request): Promise<Request | Response> {
     const { done, value } = await reader.read();
     if (done) break;
     size += value.byteLength;
-    if (size > MAX_MCP_BODY) {
+    if (size > cap) {
       await reader.cancel().catch(() => {});
-      return tooLarge();
+      return tooLarge(env);
     }
     chunks.push(value);
   }
@@ -213,6 +230,6 @@ export function mcpHandler(env: Env, factory: () => McpServer) {
     route: MCP_PATH,
     corsOptions: false,
     allowedOriginHostnames: [new URL(`http://${env.APP_HOST}`).hostname],
-    maxRequestBodySize: MAX_MCP_BODY,
+    maxRequestBodySize: mcpBodyCap(env),
   });
 }

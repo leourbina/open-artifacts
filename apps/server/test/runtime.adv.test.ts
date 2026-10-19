@@ -9,6 +9,7 @@ import {
   runtimeStub,
   toRuntimeApiError,
 } from "../src/runtime/do.js";
+import { doAsPaid } from "./helpers.js";
 
 let seq = 0;
 const stubFor = () => runtimeStub(env, `adv-${++seq}-${Math.random()}`);
@@ -174,6 +175,7 @@ describe("B12 adversarial", () => {
   });
   it("fan-out: sockets capped at 200; 1 MB docs fan out as small data:null frames", async () => {
     const s = stubFor();
+    await doAsPaid(s); // 1 MB docs: the Paid limit
     const msgs: string[] = [];
     for (let k = 0; k < 200; k++) {
       const r = await s.fetch("http://do/s?collection=v", {

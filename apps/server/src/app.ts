@@ -1,4 +1,4 @@
-import { AUTH } from "@oa/shared";
+import { AUTH, planOf } from "@oa/shared";
 import { type Context, Hono, type MiddlewareHandler } from "hono";
 import { ApiError, errorJson, toErrorResponse } from "./http/errors.js";
 import {
@@ -63,7 +63,7 @@ export function createApp(mount: (app: AppType) => void = mountRoutes) {
   app.onError((e) => toErrorResponse(e));
   app.notFound(() => toErrorResponse(new ApiError("not_found", "Not found")));
 
-  app.get("/healthz", (c) => c.json({ ok: true }));
+  app.get("/healthz", (c) => c.json({ ok: true, plan: planOf(c.env.PLAN) }));
   app.get("/robots.txt", (c) => c.text(ROBOTS));
   // Ordering: GET (and HEAD, which Hono routes to GET handlers) match above
   // first; app.all only catches the remaining methods.
