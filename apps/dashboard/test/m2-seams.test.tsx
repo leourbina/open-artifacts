@@ -73,9 +73,7 @@ describe("sign-in for visitors not signed in", () => {
     try {
       mount("/sign-in");
       expect(
-        await screen.findByRole("heading", {
-          name: "Sign in to Globex <Docs>",
-        }),
+        await screen.findByText("Use your work email to open Globex <Docs>."),
       ).toBeInTheDocument();
       await waitFor(() =>
         expect(document.title).toBe("Sign in · Globex <Docs>"),
@@ -91,9 +89,7 @@ describe("sign-in for visitors not signed in", () => {
     try {
       mount("/sign-in");
       expect(
-        await screen.findByRole("heading", {
-          name: "Sign in to Open Artifacts",
-        }),
+        await screen.findByText("Use your work email to open Open Artifacts."),
       ).toBeInTheDocument();
     } finally {
       cleanup();
