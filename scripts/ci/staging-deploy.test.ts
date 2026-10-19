@@ -112,12 +112,45 @@ describe("staging-analytics-token.sh", () => {
     expect(sb.log()).toEqual([]);
     expect(r.out).toContain("skipping");
   });
-  it("fails when wrangler fails", () => {
+  it("a failed put reports failed (annotation + output) and exits 0 so smoke runs", () => {
     const sb = sandbox({ pnpm: "cat >/dev/null; exit 1" });
+    const out = join(sb.dir, "gh-output");
     const r = sb.run(["bash", script("staging-analytics-token.sh")], {
-      env: { ANALYTICS_TOKEN: secret },
+      env: { ANALYTICS_TOKEN: secret, GITHUB_OUTPUT: out },
     });
-    expect(r.code).not.toBe(0);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("::error::");
+    expect(readFileSync(out, "utf8")).toBe("analytics=failed\n");
     expect(r.out + r.err).not.toContain(secret);
+  });
+  it("records ok and skipped outcomes", () => {
+    for (const [env, want] of [
+      [{ ANALYTICS_TOKEN: secret }, "ok"],
+      [{ ANALYTICS_TOKEN: "" }, "skipped"],
+    ] as const) {
+      const sb = sandbox({ pnpm });
+      const out = join(sb.dir, "gh-output");
+      sb.run(["bash", script("staging-analytics-token.sh")], {
+        env: { ...env, GITHUB_OUTPUT: out },
+      });
+      expect(readFileSync(out, "utf8")).toBe(`analytics=${want}\n`);
+    }
+  });
+  it("outcome mode fails only on failed", () => {
+    for (const [v, code] of [
+      ["failed", 1],
+      ["ok", 0],
+      ["skipped", 0],
+      ["", 0],
+    ] as const) {
+      const sb = sandbox({});
+      const r = sb.run(
+        ["bash", script("staging-analytics-token.sh"), "outcome"],
+        {
+          env: { ANALYTICS_OUTCOME: v },
+        },
+      );
+      expect(r.code, v).toBe(code);
+    }
   });
 });

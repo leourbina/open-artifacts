@@ -266,7 +266,7 @@ describe("deploy-staging.yml", () => {
     );
     expect(scoped).toHaveLength(1);
     expect(JSON.stringify(w.jobs.deploy.env)).not.toContain("ANALYTICS");
-    expect(JSON.stringify(w.jobs.smoke)).not.toContain("ANALYTICS");
+    expect(JSON.stringify(w.jobs.smoke)).not.toContain("secrets.ANALYTICS");
     const sh = ci("staging-analytics-token.sh");
     expect(sh).toContain('printf %s "$ANALYTICS_TOKEN" |');
     expect(sh).toContain(
@@ -274,6 +274,25 @@ describe("deploy-staging.yml", () => {
     );
     expect(sh).not.toMatch(/echo[^\n]*\$\{?ANALYTICS_TOKEN/);
     expect(sh).not.toMatch(/set -[a-z]*x/);
+  });
+  it("a failed ANALYTICS_TOKEN put still runs smoke, then fails the run", () => {
+    const steps = w.jobs.deploy.steps as Step[];
+    const a = steps[idx("deploy", "staging-analytics-token.sh")];
+    expect(a.id).toBe("analytics");
+    expect(w.jobs.deploy.outputs?.analytics).toBe(
+      "${{ steps.analytics.outputs.analytics }}",
+    );
+    const s = w.jobs.smoke.steps as Step[];
+    const o = s.findIndex((x: Step) =>
+      (x.run ?? "").includes("staging-analytics-token.sh outcome"),
+    );
+    expect(o).toBe(s.length - 1);
+    expect(s[o].env).toEqual({
+      ANALYTICS_OUTCOME: "${{ needs.deploy.outputs.analytics }}",
+    });
+    const sh = ci("staging-analytics-token.sh");
+    expect(sh).toContain("::error::");
+    expect(sh).toContain('>>"$out"');
   });
   it("uses Cloudflare secrets", () => {
     const raw = read(".github/workflows/deploy-staging.yml");
@@ -711,6 +730,16 @@ describe("prod and staging tokens never cross", () => {
       );
     });
   });
+  const secretInRun = (run: string) => /secrets\.ANALYTICS_TOKEN/.test(run);
+  it("the run: check catches any spacing", () => {
+    for (const r of [
+      "echo ${{secrets.ANALYTICS_TOKEN}}",
+      "echo ${{ secrets.ANALYTICS_TOKEN }}",
+      "echo ${{   secrets.ANALYTICS_TOKEN\t}}",
+    ])
+      expect(secretInRun(r), r).toBe(true);
+    expect(secretInRun("bash x.sh")).toBe(false);
+  });
   it("ANALYTICS_TOKEN never appears in run: text or workflow/job env", () => {
     for (const f of readdirSync(dir).filter((n) => /\.ya?ml$/.test(n))) {
       const y = parse(readFileSync(join(dir, f), "utf8"));
@@ -721,7 +750,7 @@ describe("prod and staging tokens never cross", () => {
           "ANALYTICS",
         );
         for (const st of j.steps ?? [])
-          expect(st.run ?? "", `${f} ${n}`).not.toContain("ANALYTICS_TOKEN }}");
+          expect(secretInRun(st.run ?? ""), `${f} ${n}`).toBe(false);
       }
     }
   });

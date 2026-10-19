@@ -103,7 +103,7 @@ It runs only on `main`, in the `prod` concurrency group, via `scripts/ops/check-
 
 ## Analytics token
 
-The Usage page reads Cloudflare analytics with its own token, repo secret **`ANALYTICS_TOKEN`** (Account Analytics: Read, nothing else). It is never the deploy token. `deploy-staging.yml` puts it on the staging Worker after each deploy and before the smoke job (`scripts/ci/staging-analytics-token.sh`, stdin only; skipped when the secret is empty). Prod gets it through the setup `secrets` step: `ops-prod-install.yml` (install) and the `deploy-prod` upgrade step pass it step-scoped, and setup stores it on every run, so rotating the repo secret rotates the Worker on the next release.
+The Usage page reads Cloudflare analytics with its own token, repo secret **`ANALYTICS_TOKEN`** (Account Analytics: Read, nothing else). It is never the deploy token. `deploy-staging.yml` puts it on the staging Worker after each deploy and before the smoke job (`scripts/ci/staging-analytics-token.sh`, stdin only; skipped when the secret is empty). If the put fails, smoke still runs and its last step fails the run, so both outcomes show. Setup refuses an `ANALYTICS_TOKEN` that verifies to the deploy token's id. Prod gets it through the setup `secrets` step: `ops-prod-install.yml` (install) and the `deploy-prod` upgrade step pass it step-scoped, and setup stores it on every run, so rotating the repo secret rotates the Worker on the next release.
 
 ## First production install
 

@@ -74,6 +74,19 @@ describe("prod-setup.sh", () => {
     expect(r.out + r.err + r.sum).not.toContain(a);
     expect(r.out + r.err).toContain("token pattern found in output; aborting");
   });
+  it("aborts on a trimmed or untrimmed echo of ANALYTICS_TOKEN", () => {
+    for (const [secret, echoed] of [
+      ["abc123\n", "abc123"],
+      ["  abc123 ", "abc123"],
+      ["  abc123 ", "  abc123 "],
+    ] as const) {
+      const r = install([`{"step":"x","m":"${echoed}"}`], 0, "install", {
+        ANALYTICS_TOKEN: secret,
+      });
+      expect(r.code, JSON.stringify(secret)).not.toBe(0);
+      expect(r.out + r.sum).not.toContain("abc123");
+    }
+  });
   it("fails when setup exits non-zero", () => {
     expect(install([ok("a")], 1).code).not.toBe(0);
   });

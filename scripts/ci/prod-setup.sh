@@ -28,6 +28,13 @@ run_setup() {
 }
 
 pat='oa_pat_[1-9A-HJ-NP-Za-km-z]{32}'
+# ANALYTICS_TOKEN as given and as setup uses it (trimmed): either one leaking aborts.
+an_raw="${ANALYTICS_TOKEN:-}"
+an_trim="${an_raw#"${an_raw%%[![:space:]]*}"}"
+an_trim="${an_trim%"${an_trim##*[![:space:]]}"}"
+leaks() {
+  [[ -n "$an_trim" && "$1" == *"$an_trim"* ]] || [[ -n "${an_raw//[[:space:]]/}" && "$1" == *"$an_raw"* ]]
+}
 bad=0
 {
   echo "| step | status |"
@@ -35,7 +42,7 @@ bad=0
 } >>"$summary"
 
 while IFS= read -r line; do
-  if [[ "$line" =~ $pat ]] || [[ -n "${ANALYTICS_TOKEN:-}" && "$line" == *"$ANALYTICS_TOKEN"* ]]; then
+  if [[ "$line" =~ $pat ]] || leaks "$line"; then
     echo "token pattern found in output; aborting" >&2
     exit 1
   fi

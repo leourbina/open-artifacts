@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { makeApi } from "../cf.ts";
 import type { Ctx, Step } from "../step.ts";
 
 export const ACCESS_SECRET = "ACCESS_CLIENT_SECRET";
@@ -9,6 +10,30 @@ const analyticsUrl = (accountId?: string) =>
   `https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=${encodeURIComponent(JSON.stringify([{ key: "account_analytics", type: "read" }]))}&accountId=${encodeURIComponent(accountId ?? "*")}&name=${encodeURIComponent("Open Artifacts analytics")}`;
 /** ANALYTICS_TOKEN from the environment (a dedicated token; never CLOUDFLARE_API_TOKEN). */
 const envAnalytics = (ctx: Ctx) => ctx.deps.env.ANALYTICS_TOKEN?.trim() || "";
+
+/**
+ * True when `value` is the deploy token: the same string, or the same token id
+ * from `GET /user/tokens/verify` (which answers for any live token).
+ */
+export async function reusesDeployToken(ctx: Ctx, value: string) {
+  const deploy = ctx.deps.env.CLOUDFLARE_API_TOKEN?.trim();
+  if (!deploy) return false;
+  if (deploy === value) return true;
+  const id = async (t: string) => {
+    try {
+      const r = await makeApi(
+        ctx.deps,
+        ctx.wrangler,
+        t,
+      )<{ id?: string }>("GET", "/user/tokens/verify");
+      return r?.id;
+    } catch {
+      return undefined;
+    }
+  };
+  const [a, b] = await Promise.all([id(deploy), id(value)]);
+  return Boolean(a && a === b);
+}
 
 /** Worker secret names. A Worker that doesn't exist yet has none. */
 export async function listSecrets(ctx: Ctx): Promise<Set<string>> {
@@ -62,9 +87,19 @@ const random = () => randomBytes(32).toString("base64url");
 export const secrets: Step = {
   name: "secrets",
   async check(state, ctx) {
-    // A provided token is put every run, so rotating the source rotates the Worker.
-    if (envAnalytics(ctx)) return "todo";
     const have = await listSecrets(ctx);
+    if (envAnalytics(ctx)) {
+      // A provided token is put on every run, so rotating the source rotates
+      // the Worker. --check can't read the stored value: present counts as done.
+      if (!ctx.opts.check) return "todo";
+      if (have.has(OPTIONAL))
+        ctx.notes.push(
+          `${OPTIONAL} set; the exported value is re-put on the next run`,
+        );
+      return GENERATED.every((n) => have.has(n)) && have.has(OPTIONAL)
+        ? "done"
+        : "todo";
+    }
     const quiet =
       !ctx.opts.interactive || ctx.opts.upgrade || state.analyticsSkipped;
     const done =
@@ -81,9 +116,14 @@ export const secrets: Step = {
       };
     for (const n of GENERATED)
       if (!have.has(n)) await putSecret(ctx, n, random());
+    const refuse = () =>
+      ctx.notes.push(
+        `${OPTIONAL} is the deploy token (same token id), not stored; create a dedicated read-only one: ${analyticsUrl(state.accountId)}`,
+      );
     const provided = envAnalytics(ctx);
     if (provided) {
-      await putSecret(ctx, OPTIONAL, provided);
+      if (await reusesDeployToken(ctx, provided)) refuse();
+      else await putSecret(ctx, OPTIONAL, provided);
       return undefined;
     }
     if (
@@ -95,7 +135,8 @@ export const secrets: Step = {
       return undefined;
     const q = `${OPTIONAL} for the Usage page (optional). Create a read-only token: ${analyticsUrl(state.accountId)}\nPaste it (input hidden; Enter to skip):`;
     const v = await ctx.deps.prompt(q, { secret: true });
-    if (v) await putSecret(ctx, OPTIONAL, v);
+    if (v && (await reusesDeployToken(ctx, v))) refuse();
+    else if (v) await putSecret(ctx, OPTIONAL, v);
     else state.analyticsSkipped = true;
     return undefined;
   },
