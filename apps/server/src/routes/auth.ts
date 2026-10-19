@@ -15,6 +15,7 @@ import {
 } from "../auth/session.js";
 import { normEmail } from "../db/email.js";
 import { ApiError, toErrorResponse } from "../http/errors.js";
+import { FAVICON_TAGS } from "../http/head.js";
 import { upsertOnLogin, upsertWithRole } from "../services/users.js";
 import type { AppType } from "./index.js";
 
@@ -34,7 +35,7 @@ const esc = (s: string) =>
   );
 
 const RETRY_PAGE_CSP =
-  "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+  "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 /** Static page for a second state failure. Only user-derived content: escaped `next`. */
 function retryPage(next: string, cookies: string[]): Response {
@@ -43,6 +44,7 @@ function retryPage(next: string, cookies: string[]): Response {
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Sign-in interrupted</title>
 <style>:root{color-scheme:light dark}body{font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 16px;color:#1a1a1a;background:#fff}@media (prefers-color-scheme:dark){body{color:#eee;background:#111}a{color:#8ab4ff}}</style>
+${FAVICON_TAGS}
 </head><body><h1>Sign-in interrupted</h1>
 <p>Sign-in took too long or was opened in another tab. Try again.</p>
 <p><a href="${href}">Sign in again</a></p></body></html>`;
