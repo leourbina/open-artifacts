@@ -113,13 +113,18 @@
   position: relative;
   padding: 0 18px 12px;
 }
-.oa-code pre {
+.oa-code pre,
+.oa-code .oa-token {
   margin: 0;
   padding: 12px 72px 12px 12px;
   overflow-x: auto;
   border-radius: var(--oa-radius-md, 6px);
   background: var(--oa-surface-2, rgba(127, 127, 127, 0.1));
   font-size: var(--oa-text-xs);
+}
+.oa-code .oa-token {
+  display: block;
+  word-break: break-all;
 }
 .oa-code button {
   position: absolute;
