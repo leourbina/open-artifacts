@@ -95,7 +95,38 @@ type World = {
   discoveryFails?: number;
   /** POST /access/apps answers 403 (a token without Access: Apps Edit). */
   appsPostForbidden?: boolean;
+  /** Public DNS records, served by the zone dns_records API and by DoH. */
+  dns?: Dns[];
+  /** The dns_records API answers 403 (wrangler's OAuth has no DNS Read). */
+  dnsForbidden?: boolean;
+  /** Account subscriptions; absent means 403 (wrangler's OAuth has no Billing Read). */
+  subscriptions?: Obj[];
+  /** The deployed Worker's settings omit the send_email binding. */
+  dropSendEmail?: boolean;
+  /** GET worker settings answers 500. */
+  settingsFail?: boolean;
 };
+type Dns = { name: string; type: string; content: string };
+
+/** The records Email Sending's "Onboard Domain" adds for `d`. */
+export const onboarded = (d: string): Dns[] => [
+  ...[1, 2, 3].map((i) => ({
+    name: `cf-bounce.${d}`,
+    type: "MX",
+    content: `route${i}.mx.cloudflare.net`,
+  })),
+  {
+    name: `cf-bounce.${d}`,
+    type: "TXT",
+    content: '"v=spf1 include:_spf.mx.cloudflare.net ~all"',
+  },
+  {
+    name: `cf-bounce._domainkey.${d}`,
+    type: "TXT",
+    content: '"v=DKIM1; h=sha256; k=rsa; p=MIIBIjANBg"',
+  },
+  { name: `_dmarc.${d}`, type: "TXT", content: '"v=DMARC1; p=reject;"' },
+];
 // biome-ignore lint/suspicious/noExplicitAny: loose API fixtures
 type Obj = any;
 
@@ -148,6 +179,8 @@ export function world(w: World = {}) {
     kv: [],
     ...w,
   };
+  const dns: Dns[] = [...(w.dns ?? [])];
+  let subscriptions = w.subscriptions;
   const policies: Obj[] = [...(w.policies ?? [])];
   const apps: Obj[] = [...(w.apps ?? [])];
   let secrets = w.secrets && [...w.secrets];
@@ -497,6 +530,21 @@ export function world(w: World = {}) {
           { headers: { "content-type": "text/html; charset=utf-8" } },
         );
       }
+      if (u.host === "cloudflare-dns.com" && u.pathname === "/dns-query") {
+        hits.push(`DoH ${q("name")} ${q("type")}`);
+        const code = { MX: 15, TXT: 16 }[q("type") ?? ""];
+        const Answer = dns
+          .filter((r) => r.name === q("name") && r.type === q("type"))
+          .map((r) => ({
+            name: `${r.name}.`,
+            type: code,
+            data: r.type === "MX" ? `10 ${r.content}.` : r.content,
+          }));
+        return Response.json({
+          Status: 0,
+          ...(Answer.length ? { Answer } : {}),
+        });
+      }
       if (u.host.endsWith(".cloudflareaccess.com")) {
         hits.push(`GET ${u.pathname}`);
         if (discoveryFails-- > 0)
@@ -571,6 +619,32 @@ export function world(w: World = {}) {
           q("status") === "active" && acct.zones.includes(q("name") ?? "");
         return envelope(ok ? [{ id: "z", name: q("name") }] : []);
       }
+      // DNS, billing and email are read-only here: a write is a bug.
+      if (m !== "GET" && /\/dns_records|\/subscriptions|\/email/.test(p)) {
+        ops.push(`WRITE ${m} ${p}`);
+        return envelope(null, 405, [{ message: "method not allowed" }]);
+      }
+      if (/^\/zones\/[^/]+\/dns_records$/.test(p)) {
+        if (w.dnsForbidden)
+          return envelope(null, 403, [
+            { code: 10000, message: "Authentication error" },
+          ]);
+        return paged(
+          dns
+            .filter((r) => r.name === q("name") && r.type === q("type"))
+            .map((r, i) => ({ id: `r${i}`, ...r })),
+          q,
+        );
+      }
+      if (p.endsWith("/subscriptions")) {
+        if (!subscriptions)
+          return envelope(null, 403, [
+            { code: 10000, message: "Authentication error" },
+          ]);
+        return Array.isArray(subscriptions)
+          ? paged(subscriptions, q)
+          : envelope(subscriptions);
+      }
       // The real ?name= filter is a fuzzy match, so exact names may sit past page 1.
       if (p.endsWith("/d1/database"))
         return paged(
@@ -578,10 +652,13 @@ export function world(w: World = {}) {
           q,
         );
       const settings = p.match(/\/workers\/scripts\/([^/]+)\/settings$/);
+      if (settings && m === "GET" && w.settingsFail)
+        return envelope(null, 500, [{ message: "internal error" }]);
       if (settings && m === "GET") {
-        const cfg = deployedConfig
-          ? JSON.parse(stripComments(deployedConfig)).vars
-          : w.worker;
+        const full = deployedConfig
+          ? JSON.parse(stripComments(deployedConfig))
+          : undefined;
+        const cfg = full ? full.vars : w.worker;
         if (!cfg && !secrets)
           return envelope(null, 404, [
             {
@@ -596,6 +673,12 @@ export function world(w: World = {}) {
             text,
           })),
           ...(secrets ?? []).map((name) => ({ type: "secret_text", name })),
+          ...(w.dropSendEmail ? [] : (full?.send_email ?? [])).map(
+            (b: { name: string }) => ({ type: "send_email", name: b.name }),
+          ),
+          ...(full?.browser
+            ? [{ type: "browser", name: full.browser.binding }]
+            : []),
         ];
         return envelope({ bindings });
       }
@@ -633,6 +716,10 @@ export function world(w: World = {}) {
     auths,
     creates,
     zoneQueries,
+    dns,
+    setSubscriptions: (x: Obj[] | undefined) => {
+      subscriptions = x;
+    },
     acct,
     ops,
     values,
@@ -650,4 +737,7 @@ export const HOSTS = [
     "a.b.usercontent.example.com",
   ],
   ...["--owner-email", "owner@example.com", "--yes", "--json"],
+  "--solo",
 ];
+/** HOSTS without --solo: for --team runs and the no-choice cases. */
+export const BASE = HOSTS.filter((a) => a !== "--solo");

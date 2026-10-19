@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import type { Ctx, Step } from "../step.ts";
-import { deployedVars } from "../worker.ts";
+import { deployedVars, workerBindings } from "../worker.ts";
 import { names, stripComments } from "./resources.ts";
 import { ACCESS_SECRET, listSecrets } from "./secrets.ts";
 
@@ -24,6 +24,51 @@ function renderedVars(ctx: Ctx): Record<string, string> {
       `refusing to deploy: ${CONFIG} has empty ${empty.join(", ")}; rerun setup without --upgrade so the access step fills them`,
     );
   return vars;
+}
+
+type Rendered = {
+  browser?: unknown;
+  send_email?: { name: string }[];
+  vars?: Record<string, string>;
+};
+
+/**
+ * Live bindings the rendered config would drop without the matching opt-out
+ * flag: a deploy never removes EMAIL, BROWSER or SERVER_THUMBNAILS silently.
+ * A failed read only warns.
+ */
+async function drops(ctx: Ctx, accountId: string, cfg: Rendered) {
+  let live: Awaited<ReturnType<typeof workerBindings>>;
+  try {
+    live = await workerBindings(ctx, accountId);
+  } catch (e) {
+    ctx.notes.push(
+      `warning: could not read the live Worker's bindings (${(e as Error).message}); deploying without the binding check`,
+    );
+    return [];
+  }
+  const has = (type: string, name: string) =>
+    live?.some((b) => b.type === type && b.name === name) ?? false;
+  const out: string[] = [];
+  if (
+    has("send_email", "EMAIL") &&
+    !cfg.send_email?.some((b) => b.name === "EMAIL") &&
+    !ctx.opts.noEmail
+  )
+    out.push(
+      "EMAIL (send_email): pass --team (and --yes-paid unless the plan reads paid) to keep it, or --no-email to remove it",
+    );
+  const lost = [
+    has("browser", "BROWSER") && !cfg.browser && "BROWSER",
+    has("plain_text", "SERVER_THUMBNAILS") &&
+      !cfg.vars?.SERVER_THUMBNAILS &&
+      "SERVER_THUMBNAILS",
+  ].filter(Boolean);
+  if (lost.length && ctx.opts.browserFlag !== false)
+    out.push(
+      `${lost.join(" and ")} (thumbnails): pass --browser to keep them, or --no-browser to remove them`,
+    );
+  return out;
 }
 
 /** The repo version: root package.json, else the release-please manifest. */
@@ -50,6 +95,14 @@ export const deploy: Step = {
   },
   async apply(state, ctx) {
     const vars = renderedVars(ctx);
+    const cfg = JSON.parse(
+      stripComments(ctx.fs.read(join(ctx.root, CONFIG)) ?? "{}"),
+    ) as Rendered;
+    const dropped = await drops(ctx, state.accountId ?? "", cfg);
+    if (dropped.length)
+      throw new Error(
+        `refusing to deploy: the live Worker has bindings this config would drop: ${dropped.join("; ")}`,
+      );
     const have = await listSecrets(ctx);
     const missing = REQUIRED.filter((n) => !have.has(n));
     if (missing.length)

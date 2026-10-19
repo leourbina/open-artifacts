@@ -7,7 +7,11 @@ import { app, HOSTS, POLICY, STAGING, world } from "./world.ts";
 
 type W = ReturnType<typeof world>;
 const parsed = (w: W) => w.lines.map((l) => JSON.parse(l));
-const statuses = (w: W) => parsed(w).map((j) => `${j.step}:${j.status}`);
+// The final \`state\` line (every successful --json run) is not a step.
+const statuses = (w: W) =>
+  parsed(w)
+    .filter((j) => j.step !== "state")
+    .map((j) => `${j.step}:${j.status}`);
 /** Prompts need a TTY-style run: neither --yes nor --json. */
 const interactive = HOSTS.filter((a) => a !== "--yes" && a !== "--json");
 const SECRETS = [

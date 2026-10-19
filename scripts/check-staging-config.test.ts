@@ -97,6 +97,18 @@ describe("wrangler.staging.jsonc env.staging", () => {
     );
     expect(tpl.browser).toEqual({ binding: "BROWSER" });
   });
+  it("binds EMAIL (send_email) and sends from the onboarded staging domain", () => {
+    expect(env.send_email).toEqual([{ name: "EMAIL" }]);
+    expect(env.vars.EMAIL_FROM).toBe("noreply@mail.open-artifacts.com");
+  });
+  it("turns server-side thumbnails on (Paid only) with BROWSER", () => {
+    expect(env.vars.SERVER_THUMBNAILS).toBe("on");
+    expect(env.browser).toEqual({ binding: "BROWSER" });
+    const tpl = JSON.parse(
+      readFileSync(join(root, "apps/server/wrangler.template.jsonc"), "utf8"),
+    );
+    expect(tpl.vars.SERVER_THUMBNAILS).toBe("on");
+  });
   it("keeps the setup template strict JSON (e2e fixtures JSON.parse it)", () => {
     const raw = readFileSync(
       join(root, "apps/server/wrangler.template.jsonc"),

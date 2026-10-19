@@ -35,7 +35,10 @@ describe("runner", () => {
   it("applies todo steps, persists state, then reports skipped", async () => {
     const c = core();
     expect(await go(c, FLAGS, [marker])).toBe(0);
-    expect(parsed(c).at(-1)).toMatchObject({ step: "marker", status: "ok" });
+    expect(parsed(c).find((j) => j.step === "marker")).toMatchObject({
+      step: "marker",
+      status: "ok",
+    });
     expect(c.state()).toMatchObject({
       name: "open-artifacts",
       appHost: "app.example.com",
@@ -45,6 +48,7 @@ describe("runner", () => {
     expect(await go(c, FLAGS, [marker])).toBe(0);
     expect(parsed(c)).toEqual([
       { step: "marker", status: "skipped", message: "already done" },
+      { step: "state", status: "ok", message: "final", data: {} },
     ]);
   });
 

@@ -8,6 +8,7 @@ import { type Ctx, NeedInput, type Opts, type Step } from "./step.ts";
 import { access } from "./steps/access.ts";
 import { agentConfig } from "./steps/agent-config.ts";
 import { deploy } from "./steps/deploy.ts";
+import { email } from "./steps/email.ts";
 import {
   ownerToken,
   revokeCiTokens,
@@ -23,6 +24,7 @@ export const STEPS: Step[] = [
   resources,
   access,
   secrets,
+  email,
   deploy,
   ownerToken,
   selftest,
@@ -82,7 +84,14 @@ async function resolve(argv: string[], deps: Deps, state: State) {
       json: { type: "boolean", default: false },
       ci: { type: "boolean", default: false },
       "revoke-ci-tokens": { type: "boolean", default: false },
+      browser: { type: "boolean", default: false },
       "no-browser": { type: "boolean", default: false },
+      solo: { type: "boolean", default: false },
+      team: { type: "boolean", default: false },
+      "no-email": { type: "boolean", default: false },
+      "email-domain": { type: "string" },
+      "yes-email-domain": { type: "boolean", default: false },
+      "yes-paid": { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
   });
@@ -107,6 +116,9 @@ async function resolve(argv: string[], deps: Deps, state: State) {
   if (v["revoke-ci-tokens"] && !v.ci)
     throw new Error("--revoke-ci-tokens needs --ci");
   if (v.strict && !v.check) throw new Error("--strict needs --check");
+  if (v.solo && v.team) throw new Error("--solo and --team conflict; pass one");
+  if (v.browser && v["no-browser"])
+    throw new Error("--browser and --no-browser conflict; pass one");
   // Without state, the name is what everything is found by: never guess it.
   if (!v.name && !state.name && (v.upgrade || v.check || v.yes || v.json))
     throw new NeedInput(
@@ -140,19 +152,40 @@ async function resolve(argv: string[], deps: Deps, state: State) {
     ),
     accountId:
       v["account-id"] ?? state.accountId ?? deps.env.CLOUDFLARE_ACCOUNT_ID,
+    // Flag, then saved state; undefined is decided (asked) in prereqs once the plan is known.
+    teamChoice: v.team ? true : v.solo ? false : state.team,
+    teamFlag: v.team,
+    emailDomainFlag: v["email-domain"] !== undefined,
+    team: false,
+    noEmail: v["no-email"],
+    email: false,
+    yesEmailDomain: v["yes-email-domain"],
+    yesPaid: v["yes-paid"],
     yes: v.yes || v.ci,
     upgrade: v.upgrade,
     check: v.check,
     strict: v.strict,
     newOwnerToken: v["new-owner-token"],
-    // Flag, then saved state, then on. Cloudflare cannot tell an opt-out from a
-    // pre-BROWSER deployment, so a stateless run (CI) must repeat --no-browser.
-    browser: v["no-browser"] ? false : (state.browser ?? true),
+    // Decided in prereqs: flag, then the plan (Paid only), then saved state.
+    browser: false,
+    browserFlag: v.browser ? true : v["no-browser"] ? false : undefined,
     interactive,
     json,
     ci: v.ci,
     revokeCi: v["revoke-ci-tokens"],
   };
+  // A saved default follows a changed app host; an explicit domain is kept.
+  // prereqs keeps it only for a team install.
+  const saved =
+    state.emailDomain !== `mail.${state.appHost}`
+      ? state.emailDomain
+      : undefined;
+  if (opts.appHost)
+    opts.emailDomain = valid(
+      "--email-domain",
+      v["email-domain"] ?? saved ?? `mail.${opts.appHost}`,
+      HOST,
+    );
   return opts;
 }
 
@@ -171,6 +204,10 @@ const REPORTED = [
   "teamDomain",
   "ownerTokenId",
   "browser",
+  "plan",
+  "team",
+  "email",
+  "emailDomain",
 ] as const;
 
 /** --check: every step's check(), never apply; the rebuilt state goes in the last line. */
@@ -221,10 +258,22 @@ async function checkOnly(
 export const HELP = `Usage: pnpm oa:setup [options]
   --name <n>  --app-host <h>  --content-host <h>  --owner-email <e>  --account-id <id>
   --yes  --upgrade  --check [--strict]  --json  --ci [--revoke-ci-tokens]  --new-owner-token
-  --no-browser  Omit the BROWSER binding (Browser Run, server-side thumbnails).
-                Default on; free-plan safe (CF caps usage, no billing on Free).
-                Saved in state, so --upgrade keeps it; stateless runs (CI) repeat it.
-                --check/--json report it as browser: true|false.
+  --browser | --no-browser  Server-side thumbnails: the BROWSER binding (Browser Run)
+                and SERVER_THUMBNAILS=on. Paid only: on when the plan reads paid, off
+                on free; on unknown, saved state decides. --browser forces it on
+                (warns on free), --no-browser off. A deploy never drops a live
+                BROWSER without --no-browser. --check/--json report browser.
+  --solo | --team  "Just you, or a team?" Solo sends no email. Required with --json,
+                --yes or --ci when no choice is saved (action_required otherwise).
+                Team turns on the email step: invites via Cloudflare Email Sending
+                (Workers Paid only) and the send_email binding (EMAIL, EMAIL_FROM).
+  --no-email    With --team: omit the send_email binding.
+  --email-domain <d>  Sending domain; default mail.<app host>. Onboard it at
+                https://dash.cloudflare.com/?to=/:account/email-service/sending
+  --yes-email-domain  Accept a sending domain that already has MX/SPF elsewhere.
+  --yes-paid    Confirm Workers Paid when setup reads the plan as free or unknown
+                (prereqs reads it; without Billing Read it is unknown).
+                Saved in state: plan, team, email, emailDomain (--check/--json report them).
   -h, --help`;
 
 /** Runs setup; resolves to the exit code (0 ok, 2 action_required, 1 error). */
@@ -285,7 +334,6 @@ export async function run(
     appHost,
     contentHost,
     ownerEmail,
-    browser: opts.browser,
   });
   const noState = !prev.name;
   // --check: fetch is GET-only and exec runs only read-only wrangler, for every client.
@@ -366,6 +414,17 @@ export async function run(
       }
     }
     writeState(fs, root, state);
+    if (json) {
+      const keys = ["plan", "team", "email", "emailDomain", "browser"] as const;
+      report({
+        step: "state",
+        status: "ok",
+        message: opts.ci ? "final (not written: --ci)" : "final",
+        data: Object.fromEntries(
+          keys.filter((k) => state[k] !== undefined).map((k) => [k, state[k]]),
+        ),
+      });
+    }
     return 0;
   };
   let revokeFailed = false;

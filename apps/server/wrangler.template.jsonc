@@ -6,6 +6,7 @@
   "workers_dev": false,
   "preview_urls": false,
   "browser": { "binding": "BROWSER" },
+  "send_email": [{ "name": "EMAIL" }],
   "assets": {
     "directory": "./dist-assets",
     "binding": "ASSETS",
@@ -44,6 +45,8 @@
     "APP_HOST": "{{APP_HOST}}",
     "CONTENT_HOST": "{{CONTENT_HOST}}",
     "OWNER_EMAIL": "{{OWNER_EMAIL}}",
+    "EMAIL_FROM": "{{EMAIL_FROM}}",
+    "SERVER_THUMBNAILS": "on",
     "ENVIRONMENT": "production",
     "ACCESS_TEAM_DOMAIN": "{{ACCESS_TEAM_DOMAIN}}",
     "ACCESS_CLIENT_ID": "{{ACCESS_CLIENT_ID}}",

@@ -650,8 +650,11 @@ describe("prod and staging tokens never cross", () => {
         expect(s.env?.OA_ACCESS_TOKEN).toBe(tok);
       }
       const sh = readFileSync(join(root, "scripts/ci/prod-setup.sh"), "utf8");
-      expect(sh).toContain("upgrade) mode_args=(--ci --upgrade)");
-      expect(sh).toContain("--check --strict --upgrade");
+      expect(sh).toContain(
+        "upgrade) mode_args=(--ci --upgrade --solo --browser)",
+      );
+      expect(sh).toContain("install) mode_args=(--ci --solo --browser)");
+      expect(sh).toContain("--check --strict --upgrade --solo --browser");
       expect(sh).toContain("--ci --revoke-ci-tokens");
     });
     it("deploy-landing stays independent of deploy-prod", () => {

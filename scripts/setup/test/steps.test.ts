@@ -149,17 +149,20 @@ describe("BROWSER binding (--no-browser)", () => {
     expect(JSON.parse(stripJsonc(off))).not.toHaveProperty("browser");
     expect(off).not.toContain("BROWSER");
   });
-  it("setup writes it by default, --no-browser drops it and --upgrade keeps that", async () => {
-    const on = world();
+  it("setup writes it on Paid, --no-browser drops it and --upgrade keeps that", async () => {
+    const PAID = [{ rate_plan: { id: "WORKERS_PAID" }, state: "Paid" }];
+    const on = world({ subscriptions: PAID });
     expect(await run(HOSTS, on.deps, ROOT)).toBe(0);
     expect(JSON.parse(on.files.get(CONFIG) ?? "").browser).toEqual({
       binding: "BROWSER",
     });
-    const w = world();
+    const w = world({ subscriptions: PAID });
     expect(await run([...HOSTS, "--no-browser"], w.deps, ROOT)).toBe(0);
     expect(w.files.get(CONFIG)).not.toContain("BROWSER");
     expect(JSON.parse(w.files.get(STATE) ?? "").browser).toBe(false);
-    expect(await run([...HOSTS, "--upgrade"], w.deps, ROOT)).toBe(0);
+    expect(
+      await run([...HOSTS, "--upgrade", "--no-browser"], w.deps, ROOT),
+    ).toBe(0);
     expect(w.files.get(CONFIG)).not.toContain("BROWSER");
   });
   it("--check reports browser", async () => {
