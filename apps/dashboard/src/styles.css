@@ -1,11 +1,20 @@
 @import "@oa/ui/tokens.css";
 
-html,
+/* The root keeps the browser's 16px (rem stays rem); the app text size
+   lives on body. */
+html {
+  background: var(--oa-bg);
+}
 body {
   margin: 0;
   background: var(--oa-bg);
   color: var(--oa-text);
   font: 400 var(--oa-text-sm) / 1.45 var(--oa-font-sans);
+}
+/* No preflight: links in the shadcn sidebar take its colors, not the UA's. */
+[data-slot="sidebar"] a {
+  color: inherit;
+  text-decoration: none;
 }
 .oa-edge {
   min-height: 70vh;
