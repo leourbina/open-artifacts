@@ -168,6 +168,12 @@ export const ArtifactSummarySchema = z.object({
   deletedAt: z.string().nullable(),
   lastAgent: AgentRefSchema.nullable(),
   thumbnailUrl: z.string().nullable(),
+  /**
+   * The version the thumbnail depicts (server capture or client upload);
+   * null without a thumbnail or for one stored before versions were tracked.
+   * thumbnailUrl carries it as `?v=` so a new thumbnail busts caches.
+   */
+  thumbnailVersion: z.number().int().positive().nullable(),
   access: AccessLevelSchema,
   capabilities: CapabilitiesSchema,
   allowAnonymousWrites: z.boolean(),
@@ -442,7 +448,15 @@ export const UsageSchema = z.object({
   date: z.string(),
   metrics: z.array(
     z.object({
-      key: z.enum(["requests", "d1_reads", "d1_writes", "do_requests"]),
+      key: z.enum([
+        "requests",
+        "d1_reads",
+        "d1_writes",
+        "do_requests",
+        "cpu_limit_hits",
+        "cpu_p99_ms",
+        "kv_writes",
+      ]),
       used: z.number(),
       limit: z.number(),
     }),

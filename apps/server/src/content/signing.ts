@@ -15,14 +15,18 @@ function signingKey(env: Env): string {
 
 const payload = (id: string, v: number, exp: number) => `${id}:${v}:${exp}`;
 
-/** `now` is epoch ms; returns the prefix and its expiry (epoch seconds). */
+/**
+ * `now` is epoch ms; returns the prefix and its expiry (epoch seconds).
+ * `ttlSec` may only shorten LIMITS.signedUrlTtlSec (verification caps it).
+ */
 export async function signContent(
   env: Env,
   id: string,
   v: number,
   now = Date.now(),
+  ttlSec: number = LIMITS.signedUrlTtlSec,
 ): Promise<{ prefix: string; exp: number }> {
-  const exp = Math.floor(now / 1000) + LIMITS.signedUrlTtlSec;
+  const exp = Math.floor(now / 1000) + Math.min(ttlSec, LIMITS.signedUrlTtlSec);
   const sig = await hmacSign(signingKey(env), payload(id, v, exp));
   return { prefix: `/c/${exp}.${sig}/${id}/v${v}/`, exp };
 }

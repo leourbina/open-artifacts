@@ -8,6 +8,8 @@ export interface Env {
   ASSETS: Fetcher;
   /** Anonymous-write limiter (per IP); unbound in the test pool. */
   RL_ANON?: RateLimit;
+  /** Browser Run, for server-side thumbnails (services/thumbs.ts); optional. */
+  BROWSER?: Fetcher;
   // vars
   APP_HOST: string;
   CONTENT_HOST: string;
@@ -21,4 +23,8 @@ export interface Env {
   CONTENT_SIGNING_KEY: string;
   ANALYTICS_TOKEN?: string;
   CF_ACCOUNT_ID: string;
+  /** This Worker's script name (filters CPU analytics); unset -> no CPU metrics. */
+  WORKER_NAME?: string;
+  /** OAUTH_KV's namespace id (filters KV analytics); unset -> no kv_writes. */
+  OAUTH_KV_ID?: string;
 }

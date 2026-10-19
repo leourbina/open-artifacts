@@ -1,24 +1,12 @@
 // Ported from the B10 adversarial review: injection must not walk every node.
+// Wall-clock budgets: runs serially via vitest.cpu.config.ts (median of 5).
 import { describe, expect, it } from "vitest";
 import { injectRuntime } from "../src/content/inject.js";
+import { medianMs as time } from "./cpu-time.js";
 
 const TAG = '<script src="/_oa/rt.js"></script>';
 const html = (n: number) =>
   `<!doctype html><html><head><title>t</title></head><body>${"<i>a</i>".repeat(n)}</body></html>`;
-/**
- * CPU-ish: wall time is noisy when test files run in parallel, so warm up
- * once and keep the best of five runs.
- */
-async function time(f: () => Promise<unknown>) {
-  await f();
-  let best = Number.POSITIVE_INFINITY;
-  for (let i = 0; i < 5; i++) {
-    const t = performance.now();
-    await f();
-    best = Math.min(best, performance.now() - t);
-  }
-  return best;
-}
 const res = (b: BodyInit) =>
   new Response(b, { headers: { "content-type": "text/html" } });
 const inj = (b: BodyInit) => injectRuntime(res(b), TAG).text();

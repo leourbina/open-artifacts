@@ -26,7 +26,13 @@ import {
 import { test as base, expect, type Page } from "@playwright/test";
 
 export const PORT = Number(process.env.OA_E2E_PORT ?? 8787);
-export const APP_HOST = `app.localhost:${PORT}`;
+// The app on plain `localhost` (an OAuth loopback host): the MCP resource can
+// then be http://localhost:PORT/mcp, matching what the OAuth provider derives
+// from request URLs. `app.localhost` is NOT loopback per
+// @cloudflare/workers-oauth-provider, so its resource must be https and can
+// never match dev's http origin (token audience mismatch). The content host
+// keeps a separate origin for the app/content split.
+export const APP_HOST = `localhost:${PORT}`;
 export const CONTENT_HOST = `content.localhost:${PORT}`;
 export const APP = `http://${APP_HOST}`;
 /** OIDC issuer host: reserved, so the IdP leg of a login never leaves the machine. */

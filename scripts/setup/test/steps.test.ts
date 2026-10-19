@@ -105,6 +105,12 @@ describe("prereqs + resources", () => {
     expect(() => renderConfig(TEMPLATE, {})).toThrow("{{");
   });
 
+  it("the template is strict JSON (e2e fixtures JSON.parse it raw)", () => {
+    const cfg = JSON.parse(TEMPLATE);
+    expect(cfg.vars.WORKER_NAME).toBe("{{WORKER_NAME}}");
+    expect(cfg.vars.OAUTH_KV_ID).toBe("{{KV_ID}}");
+  });
+
   it("a host outside every account zone is action_required, exit 2", async () => {
     const w = world();
     const argv = HOSTS.map((a) =>

@@ -7,6 +7,7 @@
     "build": "node --experimental-strip-types scripts/emit-tool-manifest.ts && node --experimental-strip-types scripts/emit-consent-template.ts && pnpm --filter @oa/dashboard run --if-present build && pnpm --filter @oa/render build --if-present && pnpm --filter @oa/runtime build --if-present && node scripts/assemble-assets.mjs && node scripts/check-worker-size.mjs",
     "dev": "echo \"@oa/server dev: placeholder\"",
     "test": "vitest run --exclude \"test/smoke/**\" --passWithNoTests",
+    "test:cpu": "vitest run -c vitest.cpu.config.ts",
     "bench": "vitest run -c vitest.bench.config.ts",
     "smoke": "pnpm --filter @oa/shared build && vitest run -c vitest.smoke.config.ts --passWithNoTests",
     "typecheck": "tsc --noEmit -p tsconfig.json"
@@ -25,6 +26,7 @@
     "@oa/runtime": "workspace:*"
   },
   "dependencies": {
+    "@cloudflare/puppeteer": "1.4.0",
     "@cloudflare/workers-oauth-provider": "1.2.3",
     "@modelcontextprotocol/server": "2.3.1",
     "@oa/shared": "workspace:*",

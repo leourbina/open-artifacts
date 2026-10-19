@@ -91,14 +91,10 @@ describe("B8 breaker", () => {
   it("all-markup HTML stops reading near the cap (bounded bytes/CPU)", async () => {
     const html = `<!--${"a".repeat(8 * 1024 * 1024)}`;
     const s = chunked(html);
-    const t0 = Date.now();
     await extractText("html", s.st);
-    const ms = Date.now() - t0;
-    console.log(`all-comment 8MB: pulled ${s.pulled()} bytes, ${ms} ms`);
-    // Deterministic bound; wall clock is only a loose regression guard (B17 owns CPU).
+    // Deterministic bound; the time budget is in extract.cpu.test.ts.
     expect(s.pulled()).toBeLessThan(2 * 1024 * 1024);
     expect(s.cancelled()).toBe(true);
-    expect(ms).toBeLessThanOrEqual(100);
   });
 
   it("NUL in list q is not a 500", async () => {
@@ -165,20 +161,10 @@ describe("B8 breaker", () => {
     expect(r.status).toBe(401);
   });
 
-  it("unterminated tag openers (<a<a<a…) stay linear", async () => {
-    const s = chunked("<a".repeat(1_000_000));
-    const t0 = Date.now();
-    await extractText("html", s.st);
-    expect(Date.now() - t0).toBeLessThanOrEqual(100);
-  });
-
   it("8MB of inline tags: bounded", async () => {
     const s = chunked("<b>".repeat(2_800_000));
-    const t0 = Date.now();
     await extractText("html", s.st);
-    console.log(`tags 8MB: ${Date.now() - t0} ms, pulled ${s.pulled()}`);
     expect(s.pulled()).toBeLessThan(2 * 1024 * 1024);
     expect(s.cancelled()).toBe(true);
-    expect(Date.now() - t0).toBeLessThanOrEqual(100);
   });
 });

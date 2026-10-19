@@ -36,6 +36,13 @@
       "when": 1792354890990,
       "tag": "0004_purge_backoff",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1792374069274,
+      "tag": "0005_thumbnail_version",
+      "breakpoints": true
     }
   ]
 }
