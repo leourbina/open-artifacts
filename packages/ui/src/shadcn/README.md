@@ -42,11 +42,15 @@ saved (`^x` becomes the installed version; a test rejects ranges), and runs
   (sidebar state), `noArrayIndexKey` (chart rows) and
   `useExhaustiveDependencies` (sidebar's setter deps).
 
-### To fix when these components are added
+### Local changes to generated components
 
-- **button, badge:** new-york's destructive variant uses `text-white`, which is
-  2.47:1 on dark `--oa-danger`. Switch it to `text-destructive-foreground`
-  (`--oa-bg`, ≥ 4.5:1 on `--destructive` in both themes).
+- **button, badge:** new-york's destructive variant used `text-white` (2.47:1
+  on dark `--oa-danger`) and `dark:bg-destructive/60`. They now use
+  `text-destructive-foreground` (`--oa-accent-text`) on a full
+  `bg-destructive`: 5.81:1 light, 7.4:1 dark, and at least 4.97:1 at the
+  `/90` hover.
+
+### To fix when these components are added
 - **sonner:** it reads the theme from `next-themes`' `useTheme()`, which has no
   provider here and ignores `data-theme`. Replace it with a hook that reads
   `<html data-theme>` (and `prefers-color-scheme`), and drop `next-themes`.
@@ -80,7 +84,7 @@ on a nested element doesn't switch the theme.
 | `--accent` | `--oa-surface-2` | shadcn's hover surface, not our accent |
 | `--accent-foreground` | `--oa-text` | |
 | `--destructive` | `--oa-danger` | |
-| `--destructive-foreground` | `--oa-bg` | |
+| `--destructive-foreground` | `--oa-accent-text` | ≥ 4.5:1 on danger in both themes |
 | `--border` | `--oa-divider` | |
 | `--input` | `--oa-border-strong` | ≥ 3:1 for control boundaries |
 | `--ring` | `--oa-focus` | |

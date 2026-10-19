@@ -53,7 +53,8 @@
   --accent: var(--oa-surface-2);
   --accent-foreground: var(--oa-text);
   --destructive: var(--oa-danger);
-  --destructive-foreground: var(--oa-bg);
+  /* >= 4.5:1 on --oa-danger in both themes (5.81 light, 7.4 dark). */
+  --destructive-foreground: var(--oa-accent-text);
   --border: var(--oa-divider);
   --input: var(--oa-border-strong);
   --ring: var(--oa-focus);
