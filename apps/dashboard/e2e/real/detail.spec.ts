@@ -3,11 +3,23 @@ import { join } from "node:path";
 import type { Page } from "@playwright/test";
 import { artifactFrame, expect, publishViaApi, test, uniq } from "./fixtures";
 
+/**
+ * A thumbnail can 404 while the server is still rendering the new version's
+ * image; the card shows its placeholder, so that is expected, not a problem.
+ */
+const thumbPending = (url: string, status: number) =>
+  status === 404 &&
+  /\/api\/v1\/artifacts\/[^/]+\/thumbnail$/.test(new URL(url).pathname);
+
 /** Console errors and failed /api requests seen during the test. */
 function watch(page: Page) {
   const problems: string[] = [];
   page.on("console", (m) => {
-    if (m.type() === "error") problems.push(`console: ${m.text()}`);
+    if (m.type() !== "error") return;
+    // Chrome's "Failed to load resource" line for a pending thumbnail.
+    const at = m.location().url;
+    if (at && /\/thumbnail(\?|$)/.test(at) && /404/.test(m.text())) return;
+    problems.push(`console: ${m.text()}`);
   });
   page.on("pageerror", (e) => problems.push(`pageerror: ${e.message}`));
   page.on("requestfailed", (r) => {
@@ -17,7 +29,11 @@ function watch(page: Page) {
       problems.push(`failed: ${r.method()} ${r.url()}`);
   });
   page.on("response", (r) => {
-    if (new URL(r.url()).pathname.startsWith("/api/") && r.status() >= 400)
+    if (
+      new URL(r.url()).pathname.startsWith("/api/") &&
+      r.status() >= 400 &&
+      !thumbPending(r.url(), r.status())
+    )
       problems.push(`${r.status()}: ${r.request().method()} ${r.url()}`);
   });
   return problems;
