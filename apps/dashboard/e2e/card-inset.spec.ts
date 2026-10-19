@@ -281,3 +281,21 @@ for (const width of [1280, 390])
         .poll(async () => (await strip(page)).underline.opacity)
         .toBe("1");
     });
+
+test("settings keep a 24px gutter at 800px", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 900 });
+  await page.goto("/settings/agents");
+  await expect(page.locator("[data-slot=card]").first()).toBeVisible();
+  const g = await page.evaluate(() => {
+    const main = document.getElementById("oa-main")?.getBoundingClientRect();
+    const card = document
+      .querySelector("[data-slot=card]")
+      ?.getBoundingClientRect();
+    return {
+      left: (card?.left ?? 0) - (main?.left ?? 0),
+      right: (main?.right ?? 0) - (card?.right ?? 0),
+    };
+  });
+  expect(g.left).toBeGreaterThanOrEqual(24);
+  expect(g.right).toBeGreaterThanOrEqual(24);
+});
