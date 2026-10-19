@@ -28,6 +28,7 @@ const gql = (over: object = {}, acct: object = {}) =>
               dos: [{ sum: { requests: 77 } }],
               cpu: [{ quantiles: { cpuTimeP99: 8500 } }],
               cpuHits: [{ sum: { requests: 2 } }, { sum: { requests: 1 } }],
+              kv: [{ sum: { requests: 40 } }, { sum: { requests: 2 } }],
               ...acct,
             },
           ],
@@ -41,6 +42,7 @@ const gql = (over: object = {}, acct: object = {}) =>
 const withToken = (token?: string) => ({
   ...(env as object),
   WORKER_NAME: "oa-test",
+  OAUTH_KV_ID: "kv-test",
   ANALYTICS_TOKEN: token,
 });
 const graphqlCalls = (spy: { mock: { calls: unknown[][] } }) =>
@@ -85,6 +87,7 @@ describe("usage", () => {
       { key: "do_requests", used: 77, limit: 100000 },
       { key: "cpu_limit_hits", used: 3, limit: 0 },
       { key: "cpu_p99_ms", used: 8.5, limit: 10 },
+      { key: "kv_writes", used: 42, limit: 1000 },
     ]);
     const calls = spy.mock.calls.filter((c) =>
       String(c[0] instanceof Request ? c[0].url : c[0]).includes("graphql"),
@@ -131,12 +134,16 @@ describe("usage", () => {
     );
     expect(body.query).toContain("cpuTimeP99");
     expect(body.variables.s).toBe("oa-test");
+    expect(body.query).toContain(
+      'kvOperationsAdaptiveGroups(limit: 10, filter: { namespaceId: $kv, date: $day, actionType: "write" })',
+    );
+    expect(body.variables.kv).toBe("kv-test");
     expect(body.variables.from).toMatch(/^\d{4}-\d\d-\d\dT00:00:00Z$/);
   });
 
   it("no invocations today -> CPU metrics are 0", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
-      gql({}, { cpu: [], cpuHits: [] }),
+      gql({}, { cpu: [], cpuHits: [], kv: [] }),
     );
     const u = await usageFor({
       ...withToken("tok"),
@@ -145,6 +152,7 @@ describe("usage", () => {
     expect(u.metrics.slice(4)).toEqual([
       { key: "cpu_limit_hits", used: 0, limit: 0 },
       { key: "cpu_p99_ms", used: 0, limit: 10 },
+      { key: "kv_writes", used: 0, limit: 1000 },
     ]);
   });
 
@@ -162,7 +170,35 @@ describe("usage", () => {
       "d1_reads",
       "d1_writes",
       "do_requests",
+      "kv_writes",
     ]);
+  });
+
+  it("KV data missing or malformed -> only kv_writes omitted", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      gql({}, { kv: [{ sum: { requests: -1 } }] }),
+    );
+    const u = await usageFor({
+      ...withToken("tok"),
+      CF_ACCOUNT_ID: "acct-kv-bad",
+    });
+    expect(u.available).toBe(true);
+    expect(u.metrics.map((m) => m.key)).not.toContain("kv_writes");
+    expect(u.metrics).toHaveLength(6);
+  });
+
+  it("no OAUTH_KV_ID -> no KV alias queried, kv_writes omitted", async () => {
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => gql());
+    const u = await usageFor({
+      ...withToken("tok"),
+      OAUTH_KV_ID: undefined,
+      CF_ACCOUNT_ID: "acct-kv-noid",
+    });
+    expect(u.metrics.map((m) => m.key)).not.toContain("kv_writes");
+    const init = graphqlCalls(spy)[0]?.[1] as RequestInit;
+    expect(String(init.body)).not.toContain("kvOperationsAdaptiveGroups");
   });
 
   it("no WORKER_NAME -> no CPU aliases queried, CPU metrics omitted", async () => {
@@ -174,7 +210,8 @@ describe("usage", () => {
       WORKER_NAME: undefined,
       CF_ACCOUNT_ID: "acct-cpu-noname",
     });
-    expect(u.metrics).toHaveLength(4);
+    expect(u.metrics.map((m) => m.key)).not.toContain("cpu_p99_ms");
+    expect(u.metrics).toHaveLength(5);
     const init = graphqlCalls(spy)[0]?.[1] as RequestInit;
     expect(String(init.body)).not.toContain("cpuTimeP99");
   });

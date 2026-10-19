@@ -79,7 +79,8 @@ export const R = {
    * GET -> Usage: today's (UTC) free-plan counts. Also `cpu_limit_hits`
    * (invocations ending exceededCpu or exceededResources; limit 0) and
    * `cpu_p99_ms` (p99 CPU time in ms; limit 10 on Free, 0 when not applicable),
-   * both for this Worker's script and omitted when unavailable.
+   * both for this Worker's script, and `kv_writes` (OAUTH_KV write operations;
+   * limit 1000). Each is omitted when unavailable.
    */
   usage: "/api/v1/usage",
   /** GET -> Page<DataDoc> */

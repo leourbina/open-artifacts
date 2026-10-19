@@ -14,13 +14,16 @@ const CPU_FIELDS = `
     cpuHits: workersInvocationsAdaptive(limit: 10, filter: { scriptName: $s, datetime_geq: $from, datetime_leq: $to, status_in: ["exceededCpu", "exceededResources"] }) { sum { requests } }
     cpu: workersInvocationsAdaptive(limit: 1, filter: { scriptName: $s, datetime_geq: $from, datetime_leq: $to }) { quantiles { cpuTimeP99 } }`;
 
-const buildQuery = (
-  cpu: boolean,
-) => `query($a: String!, $day: Date!, $from: Time!, $to: Time!${cpu ? ", $s: String!" : ""}) {
+/** OAUTH_KV only: today's write operations. */
+const KV_FIELDS = `
+    kv: kvOperationsAdaptiveGroups(limit: 10, filter: { namespaceId: $kv, date: $day, actionType: "write" }) { sum { requests } }`;
+
+const buildQuery = (cpu: boolean, kv: boolean) =>
+  `query($a: String!, $day: Date!, $from: Time!, $to: Time!${cpu ? ", $s: String!" : ""}${kv ? ", $kv: String!" : ""}) {
   viewer { accounts(filter: { accountTag: $a }) {
     workers: workersInvocationsAdaptive(limit: 1000, filter: { datetime_geq: $from, datetime_leq: $to }) { sum { requests } }
     d1: d1AnalyticsAdaptiveGroups(limit: 1000, filter: { date: $day }) { sum { rowsRead rowsWritten } }
-    dos: durableObjectsInvocationsAdaptiveGroups(limit: 1000, filter: { date: $day }) { sum { requests } }${cpu ? CPU_FIELDS : ""}
+    dos: durableObjectsInvocationsAdaptiveGroups(limit: 1000, filter: { date: $day }) { sum { requests } }${cpu ? CPU_FIELDS : ""}${kv ? KV_FIELDS : ""}
   } }
 }`;
 
@@ -31,6 +34,8 @@ type Acct = {
   dos: Rows;
   /** Null when not queried or malformed: the CPU metrics are omitted. */
   cpu: { hits: number; p99Ms: number } | null;
+  /** Null when not queried or malformed: kv_writes is omitted. */
+  kv: Rows | null;
 };
 
 const isObj = (x: unknown): x is Record<string, unknown> =>
@@ -53,7 +58,11 @@ function rows(x: unknown, fields: string[], group = "sum"): Rows | null {
   return out;
 }
 
-function parseResponse(j: unknown, withCpu: boolean): Acct | null {
+function parseResponse(
+  j: unknown,
+  withCpu: boolean,
+  withKv: boolean,
+): Acct | null {
   if (!isObj(j) || (j.errors != null && j.errors !== undefined)) return null;
   const data = j.data;
   if (!isObj(data) || !isObj(data.viewer)) return null;
@@ -74,7 +83,8 @@ function parseResponse(j: unknown, withCpu: boolean): Acct | null {
           p99Ms: Math.round(p99[0]?.cpuTimeP99 ?? 0) / 1000,
         }
       : null;
-  return { workers, d1, dos, cpu };
+  const kv = withKv ? rows(a.kv, ["requests"]) : null;
+  return { workers, d1, dos, cpu, kv };
 }
 
 const total = (xs: Rows, k: string) => xs.reduce((n, x) => n + (x[k] ?? 0), 0);
@@ -82,6 +92,7 @@ const total = (xs: Rows, k: string) => xs.reduce((n, x) => n + (x[k] ?? 0), 0);
 async function query(env: Env, now: Date, date: string): Promise<Usage> {
   const none: Usage = { available: false, date, metrics: [] };
   const withCpu = !!env.WORKER_NAME;
+  const withKv = !!env.OAUTH_KV_ID;
   try {
     const res = await fetch(GRAPHQL, {
       method: "POST",
@@ -90,18 +101,19 @@ async function query(env: Env, now: Date, date: string): Promise<Usage> {
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        query: buildQuery(withCpu),
+        query: buildQuery(withCpu, withKv),
         variables: {
           a: env.CF_ACCOUNT_ID,
           day: date,
           from: `${date}T00:00:00Z`,
           to: now.toISOString(),
           ...(withCpu ? { s: env.WORKER_NAME } : {}),
+          ...(withKv ? { kv: env.OAUTH_KV_ID } : {}),
         },
       }),
     });
     if (!res.ok) return none;
-    const acct = parseResponse(await res.json(), withCpu);
+    const acct = parseResponse(await res.json(), withCpu, withKv);
     if (!acct) return none;
     return {
       available: true,
@@ -134,6 +146,15 @@ async function query(env: Env, now: Date, date: string): Promise<Usage> {
                 key: "cpu_p99_ms" as const,
                 used: acct.cpu.p99Ms,
                 limit: FREE_CPU_MS,
+              },
+            ]
+          : []),
+        ...(acct.kv
+          ? [
+              {
+                key: "kv_writes" as const,
+                used: total(acct.kv, "requests"),
+                limit: 1_000,
               },
             ]
           : []),

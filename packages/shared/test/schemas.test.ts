@@ -369,6 +369,7 @@ describe("UsageSchema", () => {
       metrics: [
         { key: "cpu_limit_hits", used: 3, limit: 0 },
         { key: "cpu_p99_ms", used: 8.5, limit: 10 },
+        { key: "kv_writes", used: 12, limit: 1000 },
       ],
     };
     expect(UsageSchema.parse(u)).toEqual(u);

@@ -449,6 +449,7 @@ export const UsageSchema = z.object({
         "do_requests",
         "cpu_limit_hits",
         "cpu_p99_ms",
+        "kv_writes",
       ]),
       used: z.number(),
       limit: z.number(),
