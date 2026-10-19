@@ -69,6 +69,8 @@
         "EMAIL_FROM": "noreply@mail.open-artifacts.com",
         // Staging is Workers Paid: server-side thumbnails on (BROWSER above).
         "SERVER_THUMBNAILS": "on",
+        // Staging runs on Workers Paid: Paid data-doc and /mcp body limits.
+        "PLAN": "paid",
         "ACCESS_TEAM_DOMAIN": "leourbina.cloudflareaccess.com",
         "CF_ACCOUNT_ID": "26ac346086d4405f7a976d48747a2a75",
         "WORKER_NAME": "open-artifacts-staging",
