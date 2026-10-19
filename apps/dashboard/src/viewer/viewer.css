@@ -365,6 +365,7 @@
 /* Keep the segment focus ring inside the toggle's border. */
 .oa-share [role="radiogroup"] [role="radio"]:focus-visible {
   outline-offset: -2px;
+}
 .oa-share .oa-shared {
   margin-bottom: 16px;
 }
