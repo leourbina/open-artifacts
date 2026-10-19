@@ -1,0 +1,136 @@
+/*
+ * shadcn/ui theme for @oa/ui/shadcn (exported as @oa/ui/shadcn.css).
+ *
+ * shadcn's variables are aliases of the Studio tokens in ../tokens/tokens.css,
+ * which stays the single source of color: tokens.css switches light/dark
+ * (prefers-color-scheme or data-theme), so nothing here repeats per theme.
+ * Mapping table: ./README.md.
+ *
+ * Load the tokens first: `import "@oa/ui/tokens.css"; import "@oa/ui/shadcn.css";`
+ * (tokens.css isn't @imported here: its Google Fonts @import must stay at the
+ * top of a stylesheet, and Tailwind would inline it mid-file.)
+ */
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@source "./";
+
+/* dark: the same rule as tokens.css, which switches only on <html>:
+   <html data-theme="dark">, or prefers-color-scheme unless
+   <html data-theme="light">. Nested data-theme wrappers are not themes. */
+@custom-variant dark {
+  &:where(:root[data-theme="dark"], :root[data-theme="dark"] *) {
+    @slot;
+  }
+  @media (prefers-color-scheme: dark) {
+    &:where(
+        :root:not([data-theme="light"]),
+        :root:not([data-theme="light"]) *
+      ) {
+      @slot;
+    }
+  }
+}
+
+/* Also declared on [data-theme] elements so a wrapper that sets its own
+   --oa-* values inline (Ladle's side-by-side panels) resolves against them. */
+:root,
+[data-theme] {
+  --radius: var(--oa-radius-md);
+
+  --background: var(--oa-bg);
+  --foreground: var(--oa-text);
+  --card: var(--oa-surface);
+  --card-foreground: var(--oa-text);
+  --popover: var(--oa-surface);
+  --popover-foreground: var(--oa-text);
+  --primary: var(--oa-text);
+  --primary-foreground: var(--oa-bg);
+  --secondary: var(--oa-surface-2);
+  --secondary-foreground: var(--oa-text);
+  --muted: var(--oa-sunken);
+  --muted-foreground: var(--oa-text-muted);
+  --accent: var(--oa-surface-2);
+  --accent-foreground: var(--oa-text);
+  --destructive: var(--oa-danger);
+  --destructive-foreground: var(--oa-bg);
+  --border: var(--oa-divider);
+  --input: var(--oa-border-strong);
+  --ring: var(--oa-focus);
+
+  /* Ours, not shadcn's: the Studio accent for state marks (bg-brand,
+     text-brand). shadcn's --accent stays the neutral hover surface. */
+  --brand: var(--oa-accent);
+  --brand-foreground: var(--oa-accent-text);
+
+  --chart-1: var(--oa-accent);
+  --chart-2: var(--oa-success);
+  --chart-3: var(--oa-warning);
+  --chart-4: var(--oa-danger);
+  --chart-5: var(--oa-text-muted);
+
+  --sidebar: var(--oa-chrome);
+  --sidebar-foreground: var(--oa-text);
+  --sidebar-primary: var(--oa-text);
+  --sidebar-primary-foreground: var(--oa-bg);
+  --sidebar-accent: color-mix(in srgb, var(--oa-text) 8%, var(--oa-chrome));
+  --sidebar-accent-foreground: var(--oa-text);
+  --sidebar-border: var(--oa-divider);
+  --sidebar-ring: var(--oa-focus);
+}
+
+@theme inline {
+  --font-sans: var(--oa-font-sans);
+  --font-mono: var(--oa-font-mono);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  /* Studio's scale: sm 4px, md 6px (buttons, inputs), lg 8px (cards). */
+  --radius-sm: var(--oa-radius-sm);
+  --radius-md: var(--oa-radius-md);
+  --radius-lg: var(--oa-radius-lg);
+  --radius-xl: calc(var(--oa-radius-lg) * 1.5);
+  --radius-2xl: calc(var(--oa-radius-lg) * 2);
+  --radius-3xl: calc(var(--oa-radius-lg) * 3);
+  --radius-4xl: calc(var(--oa-radius-lg) * 4);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+}

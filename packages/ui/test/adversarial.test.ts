@@ -41,16 +41,17 @@ function syncTestPassesWith(mutate: (css: string) => string): boolean {
   return r.status === 0;
 }
 
+// Harness tests spawn a vitest subprocess; 5s isn't enough under load.
 describe("adversarial", () => {
   it("harness: unmutated css passes the sync test", () => {
     expect(syncTestPassesWith((css) => css)).toBe(true);
-  });
+  }, 30_000);
 
   it("sync test catches a later :root rule overriding a color", () => {
     expect(
       syncTestPassesWith((css) => `${css}\n:root { --oa-text: #ff0000; }\n`),
     ).toBe(false);
-  });
+  }, 30_000);
 
   it("sync test catches a wrong media condition on the dark block", () => {
     expect(
@@ -61,7 +62,7 @@ describe("adversarial", () => {
         ),
       ),
     ).toBe(false);
-  });
+  }, 30_000);
 
   // WCAG 1.4.11: control boundaries (DIRECTION: border-strong = checkboxes) need 3:1.
   it.each(["light", "dark"] as const)(

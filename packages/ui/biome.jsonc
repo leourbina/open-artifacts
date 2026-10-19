@@ -1,0 +1,29 @@
+{
+  "root": false,
+  "extends": "//",
+  "overrides": [
+    {
+      // Generated shadcn/ui components: off only for rules they break on
+      // purpose. Everything else (format, imports, a11y) still applies.
+      "includes": ["src/shadcn/ui/**"],
+      "linter": {
+        "rules": {
+          "security": {
+            // chart.tsx injects its generated color CSS through a <style> tag.
+            "noDangerouslySetInnerHtml": "off"
+          },
+          "suspicious": {
+            // sidebar.tsx persists its open state in a cookie.
+            "noDocumentCookie": "off",
+            // chart.tsx keys legend and tooltip rows by position.
+            "noArrayIndexKey": "off"
+          },
+          "correctness": {
+            // sidebar.tsx lists stable setters in its hook deps.
+            "useExhaustiveDependencies": "off"
+          }
+        }
+      }
+    }
+  ]
+}
