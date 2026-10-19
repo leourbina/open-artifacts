@@ -77,6 +77,8 @@ type World = {
   };
   /** The signed content URL serves this body instead of the published content. */
   contentBody?: string;
+  /** Body of the render shell's entry file (defaults to the published content). */
+  entryBody?: string;
   /** The signed content URL answers with this status. */
   contentStatus?: number;
   /** Artifact ids that no longer exist (publish with that id → not_found). */
@@ -481,11 +483,18 @@ export function world(w: World = {}) {
       if (u.host === "a.b.usercontent.example.com") {
         hits.push(`GET content ${auth ? "with auth" : "no auth"}`);
         const last = mcpCalls.at(-1)?.arguments?.content ?? "";
+        if (w.contentStatus)
+          return new Response("denied", { status: w.contentStatus });
+        if (w.contentBody !== undefined) return new Response(w.contentBody);
+        // Like the real content host: markdown is a render shell whose
+        // entry file sits next to the signed view URL.
+        if (u.pathname.endsWith("/README.md"))
+          return new Response(w.entryBody ?? last, {
+            headers: { "content-type": "text/markdown; charset=utf-8" },
+          });
         return new Response(
-          w.contentStatus
-            ? "denied"
-            : (w.contentBody ?? `<html><body>${last}</body></html>`),
-          { status: w.contentStatus ?? 200 },
+          `<!doctype html><html><head><meta name="oa-entry" content="README.md"><meta name="oa-format" content="markdown"></head><body></body></html>`,
+          { headers: { "content-type": "text/html; charset=utf-8" } },
         );
       }
       if (u.host.endsWith(".cloudflareaccess.com")) {

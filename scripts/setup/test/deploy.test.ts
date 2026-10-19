@@ -114,6 +114,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
       "mcp tools/call",
       "GET content-url",
       "GET content no auth",
+      "GET content no auth",
     ]);
     expect(w.mcpCalls[0]).toEqual({
       name: "publish_artifact",
