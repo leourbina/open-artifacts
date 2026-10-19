@@ -51,6 +51,12 @@ const ICON = {
   todo: "○",
 };
 
+/** Token env vars whose values are scrubbed from every reported line. */
+const SECRET_ENV = [
+  "CLOUDFLARE_API_TOKEN",
+  "OA_ACCESS_TOKEN",
+  "ANALYTICS_TOKEN",
+] as const;
 const PAT_RE = /oa_pat_[1-9A-HJ-NP-Za-km-z]+/g;
 const HOST = /^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i;
 const EMAIL = /^[^\s@"\\]+@[a-z0-9.-]+\.[a-z]{2,}$/i;
@@ -329,7 +335,8 @@ export const HELP = `Usage: pnpm oa:setup [options]
                 Order: the env var, the flag's file, then ~/.open-artifacts/<name>-
                 cloudflare-token, -access-token, -analytics-token, then the usual
                 fallback (wrangler login). Refused unless mode 0600 (exit 2); a
-                missing flag file is exit 1, an empty one exit 2. Never printed or
+                missing flag file is exit 1, an empty or
+                multi-line one exit 2; symlinks are refused; POSIX only (WSL on Windows). Never printed or
                 stored. --token-links prints the hidden line that saves each one.
   --browser | --no-browser  Server-side thumbnails: the BROWSER binding (Browser Run)
                 and SERVER_THUMBNAILS=on. Paid only: on when the plan reads paid, off
@@ -395,9 +402,20 @@ export async function run(
       : l.data
         ? ` ${JSON.stringify(l.data)}`
         : "";
-    const text = json
+    let text = json
       ? JSON.stringify(l)
       : `${ICON[l.status]} ${l.step}: ${l.message}${extra}`;
+    // Belt and braces: a token echoed by a library or wrangler error never reaches the output.
+    for (const k of SECRET_ENV) {
+      const t = deps.env[k]?.trim();
+      // Short values (test stand-ins) would shred ordinary words.
+      if (t && t.length >= 16)
+        text = text
+          .split(JSON.stringify(t).slice(1, -1))
+          .join("[redacted]")
+          .split(t)
+          .join("[redacted]");
+    }
     // --ci: belt and braces, a PAT echoed by a library error never reaches the output.
     deps.out(ci ? text.replace(PAT_RE, "[redacted]") : text);
   };

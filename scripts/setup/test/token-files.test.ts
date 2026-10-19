@@ -113,7 +113,7 @@ describe("token files", () => {
         status: "action_required",
         message: "/t/cf is readable by others; run chmod 600 /t/cf",
       });
-      expect(w.lines.join("\n")).not.toContain(DEPLOY);
+      expect(w.lines.join("\n").includes(DEPLOY), "token leaked").toBe(false);
       expect(w.ops).toEqual([]);
     }
   });
@@ -177,7 +177,8 @@ describe("token files", () => {
         .map(([, d]) => d),
       ...calls.map((c) => c.args.join(" ")),
     ].join("\n");
-    for (const t of tokensSeen) expect(hay).not.toContain(t);
+    for (const t of tokensSeen)
+      expect(hay.includes(t), "token leaked").toBe(false);
     // Access and analytics never reach a child's env; the deploy token does.
     for (const c of calls) {
       expect(c.env?.OA_ACCESS_TOKEN).toBeUndefined();
@@ -189,10 +190,15 @@ describe("token files", () => {
 describe("token helper: hidden save line", () => {
   it("each token carries a saveCommand named after the install", () => {
     const list = tokens({ name: "staging" });
+    const labels = {
+      cloudflare: "Cloudflare deploy token",
+      access: "Cloudflare Access token",
+      analytics: "Cloudflare analytics token",
+    };
     expect(list.map((t) => t.saveCommand)).toEqual(
-      ["cloudflare", "access", "analytics"].map(
-        (n) =>
-          `bash -c 'set -e; umask 077; d="$HOME/.open-artifacts"; mkdir -p "$d"; read -rsp "staging-${n} token (hidden, then Enter): " T; echo; [ -n "$T" ] || { echo "nothing entered; not saved"; exit 1; }; printf "%s" "$T" > "$d/staging-${n}-token"; echo "saved to $d/staging-${n}-token"'`,
+      Object.entries(labels).map(
+        ([n, label]) =>
+          `bash -c 'set -e; umask 077; d="$HOME/.open-artifacts"; mkdir -p "$d"; chmod 700 "$d"; read -rsp "${label} (hidden, then Enter): " T; echo; [ -n "$T" ] || { echo "nothing entered; not saved"; exit 1; }; printf "%s" "$T" > "$d/staging-${n}-token"; chmod 600 "$d/staging-${n}-token"; echo "saved to $d/staging-${n}-token"'`,
       ),
     );
   });
@@ -231,5 +237,155 @@ describe("token helper: hidden save line", () => {
     expect(out).toContain("read -rsp");
     expect(out).not.toContain("export CLOUDFLARE_API_TOKEN");
     expect(out).toContain("Never paste a token into the chat.");
+  });
+});
+
+describe("token file hardening", () => {
+  const leaks = (hay: string, ...secrets: string[]) =>
+    secrets.some((t) => hay.includes(t));
+  const SECRET = "cf-canary-multi-444";
+
+  it("a token with an inner newline is refused without echoing it", async () => {
+    const w = make({ files: { "/t/cf": `${SECRET}\nsecond-line-555` } });
+    expect(await run([...HOSTS, "--token-file", "/t/cf"], w.deps, ROOT)).toBe(
+      2,
+    );
+    expect(line(w, "args").message).toBe("/t/cf: the token must be one line");
+    expect(leaks(w.lines.join("\n"), SECRET, "second-line-555")).toBe(false);
+  });
+
+  it.each(["has space-666", "tab\tbed-777", "uni\u00e9code-888"])(
+    "a non-printable-ASCII token (%j) is refused",
+    async (tok) => {
+      const w = make({ files: { "/t/cf": tok } });
+      expect(await run([...HOSTS, "--token-file", "/t/cf"], w.deps, ROOT)).toBe(
+        2,
+      );
+      expect(leaks(w.lines.join("\n"), tok)).toBe(false);
+    },
+  );
+
+  it("never echoes a path without a slash (it may be a pasted token)", async () => {
+    const pasted = "cfut_PASTEDtoken1234567890";
+    for (const files of [
+      {} as Record<string, string>,
+      { [pasted]: "" },
+      { [pasted]: "a\nb" },
+    ]) {
+      const w = make({ files });
+      const rc = await run([...HOSTS, "--token-file", pasted], w.deps, ROOT);
+      expect(rc).not.toBe(0);
+      expect(leaks(w.lines.join("\n"), pasted)).toBe(false);
+      expect(w.lines.join("\n")).toContain("the token file you passed");
+    }
+    const w = make({
+      files: { [pasted]: "x-token-999" },
+      fileModes: { [pasted]: 0o644 },
+    });
+    await run([...HOSTS, "--token-file", pasted], w.deps, ROOT);
+    expect(leaks(w.lines.join("\n"), pasted)).toBe(false);
+  });
+
+  it("expands a bare ~ as well as ~/", async () => {
+    const w = make({ files: { [HOME]: DEPLOY, [`${HOME}/cf`]: DEPLOY } });
+    await run([...HOSTS, "--token-file", "~"], w.deps, ROOT);
+    expect(bearers(w)).toContain(DEPLOY);
+    const v = make({ files: { [`${HOME}/cf`]: DEPLOY } });
+    await run([...HOSTS, "--token-file", "~/cf"], v.deps, ROOT);
+    expect(bearers(v)).toContain(DEPLOY);
+  });
+
+  it("refuses when permissions cannot be checked", async () => {
+    const w = make({ files: { "/t/cf": DEPLOY } });
+    const fs = w.deps.fs as { readToken?: unknown };
+    fs.readToken = undefined;
+    expect(await run([...HOSTS, "--token-file", "/t/cf"], w.deps, ROOT)).toBe(
+      2,
+    );
+    expect(line(w, "args").message).toContain("cannot check the permissions");
+  });
+
+  it("refuses a file owned by someone else", async () => {
+    const w = make({ files: { "/t/cf": DEPLOY } });
+    const fs = w.deps.fs as {
+      readToken: (p: string) => { uid: number } | null;
+    };
+    const real = fs.readToken;
+    fs.readToken = (p) => {
+      const f = real(p);
+      return f && { ...f, uid: f.uid + 1 };
+    };
+    expect(await run([...HOSTS, "--token-file", "/t/cf"], w.deps, ROOT)).toBe(
+      2,
+    );
+    expect(line(w, "args").message).toContain("regular file you own");
+  });
+
+  it("a failed wrangler echoing the token is scrubbed from the output", async () => {
+    const w = make({ files: { "/t/cf": DEPLOY } });
+    const exec = w.deps.exec;
+    w.deps.exec = async (cmd, args, opts) =>
+      args.includes("whoami")
+        ? {
+            code: 1,
+            stdout: "",
+            stderr: `bad header Authorization: Bearer ${DEPLOY}`,
+          }
+        : exec(cmd, args, opts);
+    const rc = await run([...HOSTS, "--token-file", "/t/cf"], w.deps, ROOT);
+    expect(rc).toBe(1);
+    expect(leaks(w.lines.join("\n"), DEPLOY)).toBe(false);
+    expect(w.lines.join("\n")).toContain("[redacted]");
+    expect(leaks(JSON.stringify(w.state()), DEPLOY)).toBe(false);
+  });
+
+  it("--ci with token files leaks nothing and writes no state", async () => {
+    const w = make({
+      files: { "/t/cf": DEPLOY, "/t/ac": ACCESS, "/t/an": ANALYTICS },
+    });
+    const calls = spy(w);
+    const ci = HOSTS.filter((a) => a !== "--yes");
+    const argv = [
+      ...ci,
+      "--ci",
+      ...["--token-file", "/t/cf"],
+      ...["--access-token-file", "/t/ac"],
+      ...["--analytics-token-file", "/t/an"],
+    ];
+    expect(await run(argv, w.deps, ROOT)).toBe(0);
+    const hay = [
+      ...w.lines,
+      ...calls.map((c) => c.args.join(" ")),
+      ...[...w.files.entries()]
+        .filter(([p]) => !p.startsWith("/t/"))
+        .map(([, d]) => d),
+    ].join("\n");
+    expect(leaks(hay, DEPLOY, ACCESS, ANALYTICS)).toBe(false);
+    expect(w.files.has("/repo/.openartifacts/state.json")).toBe(false);
+  });
+});
+
+describe("real token file reads", () => {
+  it("refuses a symlink, reads a regular 0600 file, reports a missing one", async () => {
+    const { mkdtempSync, symlinkSync, writeFileSync, chmodSync } = await import(
+      "node:fs"
+    );
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { realFs } = await import("../src/cf.ts");
+    const dir = mkdtempSync(join(tmpdir(), "oa-tok-"));
+    const f = join(dir, "t");
+    writeFileSync(f, "tok\n");
+    chmodSync(f, 0o600);
+    symlinkSync(f, join(dir, "link"));
+    expect(realFs.readToken?.(f)).toMatchObject({
+      text: "tok\n",
+      mode: 0o600,
+      isFile: true,
+      uid: process.getuid?.(),
+    });
+    expect(realFs.readToken?.(join(dir, "link"))?.isFile).toBe(false);
+    expect(realFs.readToken?.(join(dir, "none"))).toBeNull();
+    expect(realFs.readToken?.(dir)?.isFile).toBe(false);
   });
 });

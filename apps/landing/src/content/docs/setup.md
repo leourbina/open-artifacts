@@ -44,13 +44,21 @@ The agent follows the steps below. The only thing you do yourself is approve the
    - **2:** the last line is `action_required`. If its `message` asks you to pass a flag, such as `--account-id` when the login can reach several accounts, add that flag and run again; ask the user for the value if you don't know it. Otherwise relay the `message` to the user verbatim, with `data.url` if it has one, wait until they say it's done, and run the same command again. Setup saves its progress in `.openartifacts/state.json` and picks up where it stopped.
    - **1:** the last line is `error`. Show the user its `message` and stop.
 
-   If the `access` step asks for an Access API token, the user creates one at its `data.url`. Save it with this line in your own terminal (in Claude Code, type `! ` then the line). Never paste a token into the chat. A plain non-interactive shell can't hide input, so use a real terminal if `read` fails.
+   If the `access` step asks for an Access API token, the user creates one at its `data.url`. Save it with this line in your own terminal (in Claude Code, type `! ` then the line). Never paste a token into the chat. If `read` fails, the shell can't hide input, so use a real terminal.
 
    ```sh
-   bash -c 'set -e; umask 077; d="$HOME/.open-artifacts"; mkdir -p "$d"; read -rsp "open-artifacts-access token (hidden, then Enter): " T; echo; [ -n "$T" ] || { echo "nothing entered; not saved"; exit 1; }; printf "%s" "$T" > "$d/open-artifacts-access-token"; echo "saved to $d/open-artifacts-access-token"'
+   bash -c 'set -e; umask 077; d="$HOME/.open-artifacts"; mkdir -p "$d"; chmod 700 "$d"; read -rsp "Cloudflare Access token (hidden, then Enter): " T; echo; [ -n "$T" ] || { echo "nothing entered; not saved"; exit 1; }; printf "%s" "$T" > "$d/open-artifacts-access-token"; chmod 600 "$d/open-artifacts-access-token"; echo "saved to $d/open-artifacts-access-token"'
    ```
 
-   Use your `--name` in place of `open-artifacts` in that line. `pnpm -s oa:setup --token-links --json` prints the exact line for every token as `saveCommand`. Then run the same command again: setup reads the file at `~/.open-artifacts/<name>-access-token` (or the one named by `--access-token-file`), keeps it only in memory, and never prints or saves it. The same goes for the deploy token (`--token-file`, saved as `<name>-cloudflare-token`) and the optional analytics token (`--analytics-token-file`, saved as `<name>-analytics-token`): for each, save it with the line above, in your own terminal, never in the chat. Once Access is set up, runs without the token skip re-checking Access, as long as the app host and Cloudflare account stay the same. The token is needed again only to change the app host or account, or to re-check Access.
+   Use your `--name` in place of `open-artifacts` in that line. `pnpm -s oa:setup --token-links --json` prints the exact line for every token as `saveCommand`. Then run the same setup command again. Setup reads the saved file, keeps the token only in memory, and never prints or saves it.
+
+   The other tokens work the same way, each saved with its own line in your own terminal and never in the chat:
+
+   - Deploy token: `~/.open-artifacts/<name>-cloudflare-token`, or `--token-file <path>`.
+   - Access token: `~/.open-artifacts/<name>-access-token`, or `--access-token-file <path>`.
+   - Analytics token (optional): `~/.open-artifacts/<name>-analytics-token`, or `--analytics-token-file <path>`.
+
+   Once Access is set up, later runs skip re-checking it while the app host and Cloudflare account stay the same. You need the Access token again only to change the app host or account, or to re-check Access.
 
    If the `prereqs` line is `action_required` with "Pass --solo or --team", ask the user "Just you, or a team?" and run again with `--solo` or `--team`.
 
@@ -96,7 +104,7 @@ Setup takes each value from its flag first, then from `.openartifacts/state.json
 | `--token-page` | Open a local page with the same token links and steps, served on `127.0.0.1` only (a random port). Setup prints its URL (`data.tokenPage.url` with `--json`) and stops on Ctrl-C or after 30 minutes idle. The page has no input fields: you create each token in Cloudflare and store it yourself, so it never passes through your agent. |
 | `--no-open` | With `--token-page`: print the URL without opening a browser. |
 | `--repo` | Only with `--token-links` or `--token-page` (otherwise an error, like `--no-open`): store each token as a GitHub secret in this `owner/name` repo (`gh secret set`) instead of an environment variable. |
-| `--token-file` | Read the deploy token (`CLOUDFLARE_API_TOKEN`) from this file. Order: the env var, this file, `~/.open-artifacts/<name>-cloudflare-token`, then `wrangler login`. The file must be mode 0600: a group- or world-readable one is `action_required` (`chmod 600 <path>`), a missing one is an error, an empty one is `action_required`. Never printed or saved. |
+| `--token-file` | Read the deploy token (`CLOUDFLARE_API_TOKEN`) from this file. Order: the env var, this file, `~/.open-artifacts/<name>-cloudflare-token`, then `wrangler login`. The file must be mode 0600: a group- or world-readable one is `action_required` (`chmod 600 <path>`), a missing one is an error, an empty one is `action_required`. Never printed or saved. A symlink, or a file you don't own, is refused. Token files need a POSIX system: on Windows, use WSL. |
 | `--access-token-file` | Read the Access token (`OA_ACCESS_TOKEN`) from this file, else `~/.open-artifacts/<name>-access-token`. Same rules as `--token-file`. |
 | `--analytics-token-file` | Read the optional analytics token (`ANALYTICS_TOKEN`) from this file, else `~/.open-artifacts/<name>-analytics-token`. Same rules as `--token-file`. |
 | `--help` | Print usage and exit (`-h` also works). |
@@ -133,4 +141,4 @@ On Workers Paid (`data.plan` `paid`), `data.warnings` is empty and the `prereqs`
 
 ## Cloudflare Access permissions
 
-The token from `wrangler login` may not be able to manage Zero Trust (Access). If it can't, the `access` step asks for an API token with Access: Apps and Policies Edit and Access: Organizations Read, and links to a pre-filled form for creating one. Set it as `OA_ACCESS_TOKEN`; in an interactive run, you can paste it at the prompt instead. Setup doesn't keep it. Later runs skip re-checking Access without it, unless the app host or account changes. If the account has no Zero Trust organization yet, setup links to the Zero Trust dashboard to turn it on. Zero Trust's free plan is enough.
+The token from `wrangler login` may not be able to manage Zero Trust (Access). If it can't, the `access` step asks for an API token with Access: Apps and Policies Edit and Access: Organizations Read, and links to a pre-filled form for creating one. Save it with the line from `--token-links` (setup reads `~/.open-artifacts/<name>-access-token`); in an interactive run, you can paste it at the prompt instead. Setup doesn't keep it. Later runs skip re-checking Access without it, unless the app host or account changes. If the account has no Zero Trust organization yet, setup links to the Zero Trust dashboard to turn it on. Zero Trust's free plan is enough.

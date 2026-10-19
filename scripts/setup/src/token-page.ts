@@ -31,7 +31,7 @@ export const storeLine = (s: StoreAs) => s.command;
 const STORE_LEAD = {
   "gh-secret":
     "Run the line below. It prompts for the value, so the token never shows on screen or in a transcript:",
-  env: "Save it with this line in your own terminal (in Claude Code, type `! ` then the line). Never paste a token into the chat. A plain non-interactive shell can't hide input, so use a real terminal if `read` fails:",
+  env: "Save it with this line in your own terminal (in Claude Code, type `! ` then the line). Never paste a token into the chat. If `read` fails, the shell can't hide input, so use a real terminal:",
 };
 
 function region(tpl: string, name: string) {

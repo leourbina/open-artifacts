@@ -33,19 +33,32 @@ export function withTokenFiles(argv: string[], deps: Deps, state: State): Deps {
   const home = deps.env.HOME ?? homedir();
   const install =
     (v.name as string | undefined) ?? state.name ?? "open-artifacts";
+  // A path with no "/" may be a token pasted by mistake: never echo it.
+  const shown = (path: string) =>
+    path.includes("/") ? path : "the token file you passed";
   const read = (path: string, explicit: boolean) => {
-    const text = fs.read(path);
-    if (text === null) {
-      if (explicit) throw new Error(`token file not found: ${path}`);
+    const at = shown(path);
+    const f = fs.readToken?.(path);
+    if (f === null) {
+      if (explicit) throw new Error(`token file not found: ${at}`);
       return undefined;
     }
-    const mode = fs.mode?.(path);
-    if (mode !== undefined && mode !== null && mode & 0o077)
+    if (f === undefined || process.getuid === undefined)
       throw new NeedInput(
-        `${path} is readable by others; run chmod 600 ${path}`,
+        `cannot check the permissions of ${at} on this platform (use WSL on Windows)`,
       );
-    const token = text.trim();
-    if (!token) throw new NeedInput(`${path} is empty; save the token again`);
+    if (!f.isFile || f.uid !== process.getuid())
+      throw new NeedInput(
+        `${at} must be a regular file you own (symlinks are refused)`,
+      );
+    if (f.mode & 0o077)
+      throw new NeedInput(
+        `${at} is readable by others; run chmod 600 ${path.includes("/") ? path : "on it"}`,
+      );
+    const token = f.text.trim();
+    if (!token) throw new NeedInput(`${at} is empty; save the token again`);
+    if (!/^[\x21-\x7e]+$/.test(token))
+      throw new NeedInput(`${at}: the token must be one line`);
     return token;
   };
   const env = { ...deps.env };
@@ -54,7 +67,7 @@ export function withTokenFiles(argv: string[], deps: Deps, state: State): Deps {
     if (env[name]?.trim()) continue;
     const given = v[flag];
     const path =
-      typeof given === "string" ? given.replace(/^~(?=\/)/, home) : undefined;
+      typeof given === "string" ? given.replace(/^~(?=\/|$)/, home) : undefined;
     const token = path
       ? read(path, true)
       : read(`${home}/.open-artifacts/${install}-${kind}-token`, false);

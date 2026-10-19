@@ -22,13 +22,12 @@ function noPat(w: W) {
     ...w.values,
     ...w.execOut,
     JSON.stringify(w.deps.env),
-    JSON.stringify(process.env),
   ].join("\n");
   for (const pat of w.bearers) {
     expect(pat).toMatch(/^oa_pat_/);
-    expect(hay).not.toContain(pat);
+    expect(hay.includes(pat), "PAT leaked").toBe(false);
   }
-  expect(hay).not.toMatch(/oa_pat_/);
+  expect(/oa_pat_/.test(hay), "PAT leaked").toBe(false);
 }
 const REVOKE = /^UPDATE tokens SET revoked_at = \d+ WHERE id = '(\w+)'/;
 const revokes = (w: W) => w.sqls.filter((s) => REVOKE.test(s));

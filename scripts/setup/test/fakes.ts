@@ -42,7 +42,15 @@ export function core(o: Core = {}) {
     fs: {
       read: (p) => files.get(p) ?? null,
       write: (p, d) => void files.set(p, d),
-      mode: (p) => (files.has(p) ? (o.modes?.[p] ?? 0o600) : null),
+      readToken: (p) =>
+        files.has(p)
+          ? {
+              text: files.get(p) as string,
+              mode: o.modes?.[p] ?? 0o600,
+              uid: process.getuid?.() ?? 0,
+              isFile: true,
+            }
+          : null,
     },
     out: (l) => void lines.push(l),
     prompt: async (q, opts) => {

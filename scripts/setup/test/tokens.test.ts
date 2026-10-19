@@ -271,7 +271,7 @@ describe("--token-page", () => {
   });
   it("store lines follow storeAs; optional tokens say so", () => {
     expect(html).toContain(
-      "read -rsp &quot;open-artifacts-cloudflare token (hidden, then Enter): &quot; T",
+      "read -rsp &quot;Cloudflare deploy token (hidden, then Enter): &quot; T",
     );
     expect(html).toMatch(
       /Token 3 of 3 · about 1 minute · read-only · optional/,

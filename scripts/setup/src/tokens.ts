@@ -79,8 +79,8 @@ export const ENV_NAME = {
 } as const;
 
 /** The one line the user runs in their own terminal: reads the token hidden, saves it 0600. */
-export const saveCommand = (file: string) =>
-  `bash -c 'set -e; umask 077; d="$HOME/.open-artifacts"; mkdir -p "$d"; read -rsp "${file} token (hidden, then Enter): " T; echo; [ -n "$T" ] || { echo "nothing entered; not saved"; exit 1; }; printf "%s" "$T" > "$d/${file}-token"; echo "saved to $d/${file}-token"'`;
+export const saveCommand = (file: string, label: string) =>
+  `bash -c 'set -e; umask 077; d="$HOME/.open-artifacts"; mkdir -p "$d"; chmod 700 "$d"; read -rsp "${label} (hidden, then Enter): " T; echo; [ -n "$T" ] || { echo "nothing entered; not saved"; exit 1; }; printf "%s" "$T" > "$d/${file}-token"; chmod 600 "$d/${file}-token"; echo "saved to $d/${file}-token"'`;
 
 export type TokenOpts = {
   /** Install name, the token name prefix; default open-artifacts. */
@@ -94,15 +94,16 @@ export function tokens(o: TokenOpts = {}): Token[] {
   const prefix = o.name || "open-artifacts";
   // The name sits inside a single-quoted bash line: keep it to shell-safe characters.
   const safe = prefix.replace(/[^\w.-]/g, "_");
-  const save = (kind: string) => saveCommand(`${safe}-${kind}`);
-  const store = (name: string, kind: string): StoreAs =>
+  const save = (kind: string, label: string) =>
+    saveCommand(`${safe}-${kind}`, label);
+  const store = (name: string, kind: string, label: string): StoreAs =>
     o.repo
       ? {
           kind: "gh-secret",
           name,
           command: `gh secret set ${name} -R ${o.repo}`,
         }
-      : { kind: "env", name, command: save(kind) };
+      : { kind: "env", name, command: save(kind, label) };
   return [
     {
       id: "deploy",
@@ -110,8 +111,8 @@ export function tokens(o: TokenOpts = {}): Token[] {
       purpose:
         "Setup uses this to create the Worker, database, file storage and routes on your Cloudflare account, and to read your Workers plan. It's only needed while setting up and updating.",
       permissions: DEPLOY,
-      storeAs: store(ENV_NAME.deploy, "cloudflare"),
-      saveCommand: save("cloudflare"),
+      storeAs: store(ENV_NAME.deploy, "cloudflare", "Cloudflare deploy token"),
+      saveCommand: save("cloudflare", "Cloudflare deploy token"),
       next: "Rerun setup: it reads the saved file, then checks each permission. Without it, setup uses your `wrangler login`.",
       required: true,
     },
@@ -121,8 +122,8 @@ export function tokens(o: TokenOpts = {}): Token[] {
       purpose:
         "Setup uses this to put Cloudflare Access sign-in in front of your instance, so only people you allow can open it.",
       permissions: ACCESS,
-      storeAs: store(ENV_NAME.access, "access"),
-      saveCommand: save("access"),
+      storeAs: store(ENV_NAME.access, "access", "Cloudflare Access token"),
+      saveCommand: save("access", "Cloudflare Access token"),
       next: "Rerun setup: the access step uses it for every Access call.",
       required: true,
     },
@@ -132,8 +133,12 @@ export function tokens(o: TokenOpts = {}): Token[] {
       purpose:
         "The dashboard's Usage page reads Cloudflare analytics to show requests and database use against your plan's limits. This token is read-only and does nothing else.",
       permissions: ANALYTICS,
-      storeAs: store(ENV_NAME.analytics, "analytics"),
-      saveCommand: save("analytics"),
+      storeAs: store(
+        ENV_NAME.analytics,
+        "analytics",
+        "Cloudflare analytics token",
+      ),
+      saveCommand: save("analytics", "Cloudflare analytics token"),
       next: "Rerun setup: the secrets step stores it as the Worker secret ANALYTICS_TOKEN.",
       required: false,
     },

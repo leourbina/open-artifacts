@@ -1,5 +1,13 @@
 import { execFile } from "node:child_process";
-import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
@@ -13,8 +21,19 @@ export type Exec = (
 export type Fs = {
   read: (path: string) => string | null;
   write: (path: string, data: string) => void;
-  /** Permission bits of a file; null when it does not exist. */
-  mode?: (path: string) => number | null;
+  /**
+   * A token file, opened without following symlinks and read from the same
+   * descriptor that was checked: null when it does not exist.
+   */
+  readToken?: (path: string) => TokenFile | null;
+};
+export type TokenFile = {
+  text: string;
+  /** Permission bits. */
+  mode: number;
+  uid: number;
+  /** A regular file (a symlink, directory or device is not). */
+  isFile: boolean;
 };
 export type Deps = {
   exec: Exec;
@@ -45,11 +64,24 @@ export const realFs: Fs = {
     mkdirSync(dirname(p), { recursive: true });
     writeFileSync(p, d);
   },
-  mode: (p) => {
+  // POSIX only: Windows is supported through WSL.
+  readToken: (p) => {
+    let fd: number | undefined;
     try {
-      return statSync(p).mode & 0o777;
-    } catch {
-      return null;
+      fd = openSync(p, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const st = fstatSync(fd);
+      return {
+        text: st.isFile() ? readFileSync(fd, "utf8") : "",
+        mode: st.mode & 0o777,
+        uid: st.uid,
+        isFile: st.isFile(),
+      };
+    } catch (e) {
+      if ((e as { code?: string }).code === "ENOENT") return null;
+      // A symlink (ELOOP) or anything unreadable is refused, never followed.
+      return { text: "", mode: 0o777, uid: -1, isFile: false };
+    } finally {
+      if (fd !== undefined) closeSync(fd);
     }
   },
 };
