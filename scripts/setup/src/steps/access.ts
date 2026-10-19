@@ -6,6 +6,7 @@ import {
   NeedInput,
   type Step,
 } from "../step.ts";
+import { linkFor, tokenById } from "../tokens.ts";
 import { deployedVars, PINNED } from "../worker.ts";
 import { writeConfig } from "./resources.ts";
 import { ACCESS_SECRET, listSecrets, putSecret } from "./secrets.ts";
@@ -23,12 +24,14 @@ const POLICY_BODY = {
   purpose_justification_required: false,
 };
 const CARRY_OVER = ["session_duration"] as const;
-const perms = [
-  { key: "access", type: "edit" }, // Access: Apps and Policies Edit
-  { key: "access_acct", type: "read" }, // Access: Organizations Read
-  { key: "dns", type: "read" }, // Zone: DNS Read
-];
-export const TOKEN_URL = `https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=${encodeURIComponent(JSON.stringify(perms))}&accountId=*&zoneId=all&name=${encodeURIComponent("Open Artifacts setup")}`;
+/** The access token's pre-filled link and permission labels, from the token table. */
+const accessToken = (ctx: Ctx) => tokenById("access", { name: ctx.opts.name });
+export const accessUrl = (ctx: Ctx, accountId?: string) =>
+  linkFor(accessToken(ctx), { accountId });
+const accessLabels = (ctx: Ctx) =>
+  accessToken(ctx)
+    .permissions.map((p) => p.label)
+    .join("; ");
 const ZERO_TRUST = "https://one.dash.cloudflare.com/";
 
 // biome-ignore lint/suspicious/noExplicitAny: untyped API objects
@@ -239,7 +242,8 @@ async function lookupWithToken(ctx: Ctx, accountId: string) {
   const how = ctx.opts.interactive
     ? "run `read -rs OA_ACCESS_TOKEN; export OA_ACCESS_TOKEN`, or rerun interactively and paste it (kept in memory only)"
     : "the user must run `read -rs OA_ACCESS_TOKEN; export OA_ACCESS_TOKEN` in the shell that launches setup (an agent cannot answer a hidden prompt) (non-interactive/--json)";
-  const create = `Create one (Access: Apps and Policies Edit; Access: Organizations Read; Zone: DNS Read), then ${how}`;
+  const url = accessUrl(ctx, accountId);
+  const create = `Create one (${accessLabels(ctx)}) at ${url}, then ${how}`;
   const lower = `${create[0].toLowerCase()}${create.slice(1)}`;
   const deny = (e: unknown) => {
     const x = e as { teamDomain?: boolean; noApps?: boolean };
@@ -251,7 +255,7 @@ async function lookupWithToken(ctx: Ctx, accountId: string) {
             ? `This token cannot read the Access organization and sees no Access app named ${ctx.opts.name} (a token without Access scopes sees none). ${create}.`
             : `This token cannot read the Access organization and sees no Access app named ${ctx.opts.name}. A fresh install needs a token with Access: Organizations Read, or OA_TEAM_DOMAIN=<team>.cloudflareaccess.com. ${create}.`
           : `This token cannot read Access. ${create}. (OA_TEAM_DOMAIN can stand in for Organizations Read.)`,
-      { url: TOKEN_URL },
+      { url },
     );
   };
   try {
@@ -259,7 +263,7 @@ async function lookupWithToken(ctx: Ctx, accountId: string) {
   } catch (e) {
     if (status(e) !== 403) throw e;
     if (!ctx.opts.interactive) return deny(e);
-    const q = `Paste an OA_ACCESS_TOKEN (input hidden; create one at ${TOKEN_URL}):`;
+    const q = `Paste an OA_ACCESS_TOKEN (input hidden; create one at ${url}):`;
     const token = await ctx.deps.prompt(q, { secret: true });
     if (!token) return deny(e);
     ctx.accessApi = makeApi(ctx.deps, ctx.wrangler, token);
@@ -273,12 +277,14 @@ async function lookupWithToken(ctx: Ctx, accountId: string) {
 }
 
 /** An Access write answered 403: the token lacks Access: Apps and Policies Edit. */
-const writeScope = (what: string) => (e: unknown) => {
-  if (status(e) !== 403) throw e;
-  throw new NeedInput(
-    `${what}: 403, this token cannot write Access. Use an OA_ACCESS_TOKEN with Access: Apps and Policies Edit (create one at ${TOKEN_URL}), then rerun.`,
-  );
-};
+const writeScope =
+  (ctx: Ctx, accountId: string | undefined, what: string) => (e: unknown) => {
+    if (status(e) !== 403) throw e;
+    const edit = accessToken(ctx).permissions.find((p) => p.type === "edit");
+    throw new NeedInput(
+      `${what}: 403, this token cannot write Access. Use an OA_ACCESS_TOKEN with ${edit?.label} (create one at ${accessUrl(ctx, accountId)}), then rerun.`,
+    );
+  };
 
 /** POST the app and put its client secret as one interruption-safe unit. */
 async function create(
@@ -316,7 +322,7 @@ async function create(
           scopes: ["openid", "email", "profile"],
         },
       })
-      .catch(writeScope("POST Access app"));
+      .catch(writeScope(ctx, state.accountId, "POST Access app"));
     state.pendingAccessAppId = created.id;
     writeState(ctx.fs, ctx.root, state);
     try {
@@ -468,7 +474,7 @@ export const access: Step = {
       policyId = (
         await ctx
           .accessApi<Obj>("POST", `${l.a}/policies`, POLICY_BODY)
-          .catch(writeScope("POST Access policy"))
+          .catch(writeScope(ctx, state.accountId, "POST Access policy"))
       ).id;
     else if (!policyMatches(l.policy)) {
       const kept = Object.fromEntries(
@@ -482,7 +488,7 @@ export const access: Step = {
           ...kept,
           ...POLICY_BODY,
         })
-        .catch(writeScope("PUT Access policy"));
+        .catch(writeScope(ctx, state.accountId, "PUT Access policy"));
     }
     if (!app) await create(state, ctx, l.a, policyId, l.domain, l.unverified);
     return undefined;

@@ -1,12 +1,10 @@
 import { randomBytes } from "node:crypto";
 import type { Ctx, Step } from "../step.ts";
+import { linkFor, tokenById } from "../tokens.ts";
 
 export const ACCESS_SECRET = "ACCESS_CLIENT_SECRET";
 const GENERATED = ["SESSION_SECRET", "CONTENT_SIGNING_KEY"];
 const OPTIONAL = "ANALYTICS_TOKEN";
-/** A read-only Account Analytics token: the dashboard's create form, pre-filled. */
-const analyticsUrl = (accountId?: string) =>
-  `https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=${encodeURIComponent(JSON.stringify([{ key: "account_analytics", type: "read" }]))}&accountId=${encodeURIComponent(accountId ?? "*")}&name=${encodeURIComponent("Open Artifacts analytics")}`;
 /** ANALYTICS_TOKEN from the environment (a dedicated token; never CLOUDFLARE_API_TOKEN). */
 const envAnalytics = (ctx: Ctx) => ctx.deps.env.ANALYTICS_TOKEN?.trim() || "";
 
@@ -93,7 +91,7 @@ export const secrets: Step = {
       state.analyticsSkipped
     )
       return undefined;
-    const q = `${OPTIONAL} for the Usage page (optional). Create a read-only token: ${analyticsUrl(state.accountId)}\nPaste it (input hidden; Enter to skip):`;
+    const q = `${OPTIONAL} for the Usage page (optional). Create a read-only token: ${linkFor(tokenById("analytics", { name: ctx.opts.name }), { accountId: state.accountId })}\nPaste it (input hidden; Enter to skip):`;
     const v = await ctx.deps.prompt(q, { secret: true });
     if (v) await putSecret(ctx, OPTIONAL, v);
     else state.analyticsSkipped = true;

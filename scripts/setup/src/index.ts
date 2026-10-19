@@ -18,6 +18,7 @@ import { prereqs } from "./steps/prereqs.ts";
 import { resources } from "./steps/resources.ts";
 import { secrets } from "./steps/secrets.ts";
 import { selftest } from "./steps/selftest.ts";
+import { isTokenCommand, tokenCommand } from "./token-page.ts";
 
 export const STEPS: Step[] = [
   prereqs,
@@ -92,6 +93,11 @@ async function resolve(argv: string[], deps: Deps, state: State) {
       "email-domain": { type: "string" },
       "yes-email-domain": { type: "boolean", default: false },
       "yes-paid": { type: "boolean", default: false },
+      // Handled before resolve() by tokenCommand (src/token-page.ts).
+      "token-links": { type: "boolean", default: false },
+      "token-page": { type: "boolean", default: false },
+      "no-open": { type: "boolean", default: false },
+      repo: { type: "string" },
       help: { type: "boolean", short: "h", default: false },
     },
   });
@@ -274,6 +280,16 @@ export const HELP = `Usage: pnpm oa:setup [options]
   --yes-paid    Confirm Workers Paid when setup reads the plan as free or unknown
                 (prereqs reads it; without Billing Read it is unknown).
                 Saved in state: plan, team, email, emailDomain (--check/--json report them).
+  --token-links [--json]  Print each Cloudflare token setup needs (deploy, access,
+                analytics) with its permissions and a link that pre-fills the
+                dashboard form; account and zone come from --account-id/--app-host
+                or saved state. Prereqs also prints the link for a token that is
+                missing or lacks a permission.
+  --token-page [--no-open] [--json]  Serve the same links as a page on
+                127.0.0.1 (random port), print its URL (json: tokenPage.url) and
+                open it unless --no-open. Stops on Ctrl-C or after 30 min idle.
+  --repo <owner/name>  With --token-links/--token-page: store each token as a
+                GitHub secret there (gh secret set) instead of an env var.
   -h, --help`;
 
 /** Runs setup; resolves to the exit code (0 ok, 2 action_required, 1 error). */
@@ -287,6 +303,7 @@ export async function run(
     deps.out(HELP);
     return 0;
   }
+  if (isTokenCommand(argv)) return tokenCommand(argv, deps, root);
   const ci = argv.includes("--ci");
   const json = argv.includes("--json") || ci;
   let human: string | undefined;

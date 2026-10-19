@@ -83,11 +83,16 @@ Setup takes each value from its flag first, then from `.openartifacts/state.json
 | `--email-domain` | The Email Sending domain. Defaults to `mail.<app host>`, a subdomain, so your existing mail is untouched. Onboard it in the Cloudflare dashboard under Email Service, Email Sending, Onboard Domain; setup checks its `cf-bounce` MX, SPF and DKIM records and `_dmarc`, and re-checks on every run. |
 | `--yes-email-domain` | Confirm a sending domain that already has MX or SPF records for another provider. Onboarding adds `_dmarc` with `p=reject`, which can break existing mail at a zone apex. Without it, setup asks interactively or returns `action_required`. |
 | `--yes-paid` | Confirm the account is on Workers Paid when `prereqs` reads the plan as `free` or `unknown`. Setup reads the plan from the account subscriptions, which needs Billing Read; the `wrangler login` token doesn't have it, so the plan is usually `unknown`. Without this flag, a team install on a plan that isn't `paid` keeps email off. Saved as `email: true` once confirmed. |
+| `--token-links` | Print each Cloudflare API token setup needs (deploy, access, and the optional analytics token), with its permissions, where to store it, and a link that opens the Cloudflare token form already filled in. The account and zone come from `--account-id` and `--app-host`, or saved state. With `--json`, one `token-links` line whose `data.tokens` lists each token and its `url`. The `prereqs` line also lists a token that is missing or lacks a permission, with its link, in `data.tokens`. Reads nothing secret and writes nothing. |
+| `--token-page` | Open a local page with the same token links and steps, served on `127.0.0.1` only (a random port). Setup prints its URL (`data.tokenPage.url` with `--json`) and stops on Ctrl-C or after 30 minutes idle. The page has no input fields: you create each token in Cloudflare and store it yourself, so it never passes through your agent. |
+| `--no-open` | With `--token-page`: print the URL without opening a browser. |
+| `--repo` | With `--token-links` or `--token-page`: store each token as a GitHub secret in this `owner/name` repo (`gh secret set`) instead of an environment variable. |
 | `--help` | Print usage and exit (`-h` also works). |
 
 | Environment variable | Meaning |
 |---|---|
 | `OA_ACCESS_TOKEN` | A Cloudflare API token for Access, needed on the first run when the `wrangler login` token can't manage Access, and again to change the app host or account. |
+| `ANALYTICS_TOKEN` | A read-only token (Account Analytics: Read) for the dashboard's Usage page. When set, the `secrets` step stores it as the Worker secret on every run. Never your deploy token. |
 | `CLOUDFLARE_ACCOUNT_ID` | The default for `--account-id`. |
 | `OA_TEAM_DOMAIN` | The Zero Trust team domain (`<team>.cloudflareaccess.com`), used when rebuilding state if the token can't read the Access organization. Setup verifies it before use. |
 

@@ -1,5 +1,8 @@
+import { type Api, makeApi } from "../cf.ts";
 import { decide, detectPlan, warnings } from "../plan.ts";
+import type { State } from "../state.ts";
 import { type Ctx, NeedInput, type Step } from "../step.ts";
+import { ENV_NAME, linkFor, type Token, tokens } from "../tokens.ts";
 
 /** Hosts lacking a zone, found by check and reported by apply. */
 const missingFor = new WeakMap<Ctx, string[]>();
@@ -23,10 +26,106 @@ export async function zoneOf(ctx: Ctx, accountId: string, host: string) {
 async function missingHosts(ctx: Ctx, accountId: string) {
   const { appHost, contentHost } = ctx.opts;
   const missing: string[] = [];
-  for (const h of [appHost, contentHost])
-    if (!(await zoneOf(ctx, accountId, h))) missing.push(h);
-  return missing;
+  let zoneId: string | undefined;
+  for (const h of [appHost, contentHost]) {
+    const z = await zoneOf(ctx, accountId, h);
+    if (!z) missing.push(h);
+    else zoneId ??= z.id;
+  }
+  return { missing, zoneId };
 }
+
+type Ids = { a: string; z?: string };
+/**
+ * The token checks: one read-only GET per permission in the token table
+ * (src/tokens.ts), keyed `key:type`; a 401/403 means the token lacks it. A GET
+ * proves read access only, so an Edit is confirmed when its step writes.
+ * Account Analytics has no GET probe (GraphQL is POST): verify the token only.
+ */
+export const PROBES: Record<string, (i: Ids) => string | undefined> = {
+  "workers_scripts:edit": ({ a }) => `/accounts/${a}/workers/scripts`,
+  "workers_kv_storage:edit": ({ a }) =>
+    `/accounts/${a}/storage/kv/namespaces?per_page=1`,
+  "workers_r2:edit": ({ a }) => `/accounts/${a}/r2/buckets?per_page=1`,
+  "d1:edit": ({ a }) => `/accounts/${a}/d1/database?per_page=1`,
+  "billing:read": ({ a }) => `/accounts/${a}/subscriptions`,
+  "zone:read": ({ a }) => `/zones?account.id=${a}&per_page=1`,
+  "workers_routes:edit": ({ z }) => z && `/zones/${z}/workers/routes`,
+  "dns:edit": ({ z }) => z && `/zones/${z}/dns_records?per_page=1`,
+  "access:edit": ({ a }) => `/accounts/${a}/access/apps?per_page=1`,
+  "access_acct:read": ({ a }) => `/accounts/${a}/access/organizations`,
+  "dns:read": ({ z }) => z && `/zones/${z}/dns_records?per_page=1`,
+  "account_analytics:read": () => "/user/tokens/verify",
+};
+
+export type TokenIssue = {
+  id: Token["id"];
+  name: string;
+  status: "missing" | "lacks";
+  env: string;
+  missing?: string[];
+  required: boolean;
+  url: string;
+};
+
+/** Which client checks a token; undefined when it isn't set (and isn't needed). */
+function clientFor(t: Token, ctx: Ctx): Api | "missing" | undefined {
+  const env = ctx.deps.env;
+  if (t.id === "deploy")
+    // Unset is fine: setup then uses the `wrangler login` token.
+    return env.CLOUDFLARE_API_TOKEN ? ctx.api : undefined;
+  if (t.id === "access")
+    return env.OA_ACCESS_TOKEN || env.CLOUDFLARE_API_TOKEN
+      ? ctx.accessApi
+      : "missing";
+  const v = env.ANALYTICS_TOKEN?.trim();
+  return v ? makeApi(ctx.deps, ctx.wrangler, v) : "missing";
+}
+
+/** Tokens that are missing or lack a permission, each with its pre-filled link. */
+export async function tokenIssues(
+  state: State,
+  ctx: Ctx,
+  ids: Ids,
+): Promise<TokenIssue[]> {
+  const out: TokenIssue[] = [];
+  for (const t of tokens({ name: ctx.opts.name })) {
+    const base = {
+      id: t.id,
+      name: t.name,
+      env: ENV_NAME[t.id],
+      required: t.required,
+      url: linkFor(t, { accountId: ids.a, zoneId: ids.z }),
+    };
+    const client = clientFor(t, ctx);
+    if (client === "missing") {
+      // Access is only needed until the app exists; analytics until declined.
+      const needed =
+        t.id === "access" ? !state.accessClientId : !state.analyticsSkipped;
+      if (needed) out.push({ ...base, status: "missing" });
+      continue;
+    }
+    if (!client) continue;
+    const missing: string[] = [];
+    for (const p of t.permissions) {
+      const path = PROBES[`${p.key}:${p.type}`]?.(ids);
+      if (!path) continue;
+      try {
+        await client("GET", path);
+      } catch (e) {
+        const s = (e as { status?: number }).status;
+        if (s === 401 || s === 403) missing.push(p.label);
+      }
+    }
+    if (missing.length) out.push({ ...base, status: "lacks", missing });
+  }
+  return out;
+}
+
+const issueNote = (i: TokenIssue) =>
+  i.status === "missing"
+    ? `${i.name} token not set (${i.env}${i.required ? "" : ", optional"}); create it: ${i.url}`
+    : `${i.name} token (${i.env}) lacks ${i.missing?.join(", ")}; create one: ${i.url}`;
 
 /** A pure verification: `done` (skipped) when every prerequisite holds. */
 export const prereqs: Step = {
@@ -63,8 +162,14 @@ export const prereqs: Step = {
     const warns = [...warnings(plan), ...(await decide(state, ctx, plan))];
     if (plan === "paid") ctx.notes.unshift("Workers Paid detected");
     ctx.notes.push(...warns.map((w) => w.message));
-    ctx.data = { plan, warnings: warns };
-    const missing = await missingHosts(ctx, id);
+    const { missing, zoneId } = await missingHosts(ctx, id);
+    const issues = await tokenIssues(state, ctx, { a: id, z: zoneId });
+    ctx.notes.push(...issues.map(issueNote));
+    ctx.data = {
+      plan,
+      warnings: warns,
+      ...(issues.length ? { tokens: issues } : {}),
+    };
     missingFor.set(ctx, missing);
     return missing.length ? "todo" : "done";
   },
