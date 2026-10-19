@@ -32,10 +32,10 @@ The agent follows the steps below. The only thing you do yourself is approve the
    If `TAG` comes back empty or `curl` fails, stop and tell the user: "Open Artifacts has no stable release yet; check back later."
 3. **Install dependencies:** `pnpm install`.
 4. **Ask the user to log in to Cloudflare.** Ask them to run `npx wrangler login` and approve access in the browser. On a remote machine or in a container, use `npx wrangler login --device` instead. This is the one step a person has to do.
-5. **Run setup.** Use the user's hostnames and email:
+5. **Run setup.** First ask the user: "Just you, or a team?" Don't guess. Pass `--solo` for just them, or `--team` for a team, which also sets up invite email on Workers Paid (detected, or confirmed with `--yes-paid`). Use the user's hostnames and email:
 
    ```sh
-   pnpm -s oa:setup --json --app-host artifacts.example.com --content-host artifacts-content.example.com --owner-email you@example.com --name open-artifacts
+   pnpm -s oa:setup --json --app-host artifacts.example.com --content-host artifacts-content.example.com --owner-email you@example.com --name open-artifacts --solo
    ```
 
    `-s` keeps pnpm's own output off stdout, so every line is JSON. With `--json`, setup never prompts. Setup prints one JSON object per line, `{"step", "status", "message", "data"}`, where `status` is `ok`, `skipped`, `action_required`, or `error`. It stops at the first `action_required` or `error`. Then go by the exit code:
@@ -52,9 +52,17 @@ The agent follows the steps below. The only thing you do yourself is approve the
 
    Then run the same command again. Never put the token on a command line, where shell history keeps it. Setup never saves it. Once Access is set up, runs without the token skip re-checking Access, as long as the app host and Cloudflare account stay the same. The token is needed again only to change the app host or account, or to re-check Access.
 
-   The `prereqs` line reports the Workers plan as `data.plan` (`free`, `paid` or `unknown`) and `data.warnings`, a list of `{code, plan, message}`. On `free` or `unknown`, relay each warning's `message` to the user as written: the codes are `cpu-limit`, `kv-writes`, `no-email` and `individual-use`, plus `plan-unknown` when setup can't read the plan. On `paid` the list is empty. Then ask the user "Just you, or a team?" For just them, add `--solo`. With `--json`, setup never guesses: without `--solo` or `--team` (and no saved choice) the `prereqs` line is `action_required` with "Pass --solo or --team". For a team, add `--team`: the `email` step then sets up invite email through Cloudflare Email Sending, which needs Workers Paid. If the plan isn't `paid` but the user confirms they're on Workers Paid, also add `--yes-paid`; otherwise email stays off. The `email` step's `action_required` asks the user to onboard the sending domain (`mail.<app host>` by default) in the Cloudflare dashboard: relay its `message` and `data.records`, wait, and run again. If the domain already has mail records, setup asks for `--yes-email-domain` first; relay its warning to the user before passing it.
+   If the `prereqs` line is `action_required` with "Pass --solo or --team", ask the user "Just you, or a team?" and run again with `--solo` or `--team`.
+
+   **The Workers plan.** The `prereqs` line has `data.plan` (`free`, `paid`, or `unknown`) and `data.warnings`. If it stops because a hostname isn't in a zone on the account, the line carries only `data.missing`, with no plan or warnings; once the zone is added and setup runs again, the plan appears. Relay every `data.warnings[].message` to the user verbatim, and say nothing else about the plan: don't paraphrase the warnings or add free-plan notes of your own.
+
+   - **`unknown`** is the common case. `wrangler login` has no billing access, so setup couldn't read the plan and relays the Workers Free notes to be safe. The first warning explains this.
+   - **`paid`**, with no warnings: tell the user Workers Paid was detected. If they chose `--solo`, offer the team path: run setup again with `--team`. Invite emails need an email sending domain (below).
+   - **A team on a plan that isn't `paid`:** invite email stays off, except on an `unknown` plan where an earlier run saved `email: true`; then it stays on. Otherwise, if the user confirms the account is on Workers Paid, run again with `--team --yes-paid`.
+
+   **Invite email (teams only).** The `email` step checks the sending domain, `mail.<app-host>` unless you pass `--email-domain`. When it returns `action_required`, give the user its `message`, the dashboard link in `data.dashboard`, and the DNS records in `data.records`, verbatim. Wait until they've onboarded the domain in the dashboard, then run setup again; the records can take 5 to 15 minutes to appear. If the domain already has mail records from another provider, setup asks first: relay that `action_required` message, and pass `--yes-email-domain` only if the user agrees. Otherwise pick another `--email-domain`.
 6. **Connect yourself.** The `owner-token` line's `data.token` is the owner's personal access token (`oa_pat_…`). It's shown only once, by the run that mints it, so keep it. The `agent-config` line's `data.url` is the MCP URL, and its `data.snippets` holds MCP configs for `claudeCode`, `codex`, `cursor`, `opencode`, and a generic `json`. They don't contain the token: most read it from the `OA_TOKEN` environment variable, and `json` has a `<YOUR_TOKEN>` placeholder to replace, in a file kept out of git. Add the one for *this* agent to your MCP config, and make the token available as `OA_TOKEN` to its client. If you've lost the token, run setup again with `--new-owner-token`, which mints a new one and revokes the old one. Connect agents shows each client's config format.
-7. **Open the Welcome page.** Setup publishes a Welcome artifact to test the connection. Give the user its link, `data.welcomeUrl` on the `selftest` and `agent-config` lines, so they can sign in and see it. Only a run that mints the owner token publishes it; if there's no `welcomeUrl`, give the user `https://<app-host>/` instead.
+7. **Open the Welcome page.** Setup publishes a Welcome artifact to test the connection. Give the user its link, `data.welcomeUrl` on the `selftest` and `agent-config` lines, so they can sign in and see it. Only a run that mints the owner token publishes it; if there's no `welcomeUrl`, give the user `https://<app-host>/` instead. When setup finishes, its last line is `{"step": "state", "status": "ok", "message": "final"}` with `data.plan`, `data.team`, `data.email`, and `data.emailDomain`. Tell the user whether invite emails are on: with `email: true`, invites are sent from `noreply@<emailDomain>`; otherwise they share invite links themselves.
 
 ## Setup flags
 
@@ -105,6 +113,14 @@ Exit codes: `0` when every step is done, `2` when a step needs the user or a mis
 6. **`owner-token`:** mints a personal access token for the owner, unless setup already minted one that's still valid.
 7. **`selftest`:** checks `/healthz` and the OIDC discovery document. When this run minted a token, it also publishes the Welcome artifact over MCP and checks that its content is served.
 8. **`agent-config`:** prints the MCP URL and config snippets.
+
+## Plan warnings
+
+The `prereqs` line's `data.warnings` holds one `{ code, plan, message }` per note below, and agents relay each `message` verbatim. With `data.plan` `unknown`, setup sends the first five; with `free`, the same minus `plan-unknown`. `browser-free` appears only with `--browser` on a plan that isn't `paid`.
+
+{PLAN_WARNINGS_TABLE}
+
+On Workers Paid (`data.plan` `paid`), `data.warnings` is empty and the `prereqs` message is "Workers Paid detected". When `prereqs` stops because a hostname isn't in a zone, its `action_required` line carries only `data.missing`: no plan, no warnings, and no "Workers Paid detected".
 
 ## Cloudflare Access permissions
 

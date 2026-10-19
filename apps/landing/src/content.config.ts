@@ -3,11 +3,14 @@ import { REPO_URL } from "@oa/shared";
 import { glob, type Loader } from "astro/loaders";
 import { z } from "astro/zod";
 import { LIMIT_PLACEHOLDERS } from "./lib/limits";
+import { planWarningsTable } from "./lib/plan-warnings";
 
 // Docs write {REPO_URL} (and {LATEST_RELEASE_API}, derived from it) so the
-// repo URL is defined only in @oa/shared, and {LIMIT_*} for LIMITS.
+// repo URL is defined only in @oa/shared, {LIMIT_*} for LIMITS, and
+// {PLAN_WARNINGS_TABLE} for scripts/setup's warning strings.
 const PLACEHOLDERS: Record<string, string> = {
   ...LIMIT_PLACEHOLDERS,
+  "{PLAN_WARNINGS_TABLE}": await planWarningsTable(),
   "{REPO_URL}": REPO_URL,
   "{LATEST_RELEASE_API}": `${REPO_URL.replace("https://github.com/", "https://api.github.com/repos/")}/releases/latest`,
 };
