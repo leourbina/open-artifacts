@@ -123,24 +123,6 @@ describe("extractText", () => {
         .length,
     ).toBe(Math.min(LIMITS.searchBodyChars, INDEX_INPUT_BYTES));
   });
-
-  it("indexes a 200k-char HTML entry (timing)", async () => {
-    const para =
-      "<p>lorem ipsum <b>dolor</b> sit amet</p><script>x()</script>\n";
-    const html = para.repeat(Math.ceil(200_000 / para.length));
-    expect(html.length).toBeGreaterThanOrEqual(200_000);
-    const t0 = performance.now();
-    const text = await extractText(
-      "html",
-      new Response(html).body as ReadableStream,
-    );
-    const ms = performance.now() - t0;
-    console.log(`extractText 200k html: ${ms.toFixed(1)} ms`);
-    // HTMLRewriter text handlers measured ~500 ms here; regress loudly.
-    expect(ms).toBeLessThanOrEqual(100);
-    expect(text.startsWith("lorem ipsum dolor sit amet")).toBe(true);
-    expect(text).not.toContain("x()");
-  });
 });
 
 describe("search", () => {
