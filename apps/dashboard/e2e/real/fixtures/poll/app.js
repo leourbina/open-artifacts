@@ -39,9 +39,17 @@ async function vote(choice) {
   viewer = await openArtifacts.viewer.get();
   $("#who").textContent = viewer ? viewer.email : "anonymous";
   await render();
-  openArtifacts.db.collection("votes").subscribe(() => {
-    render();
-  });
+  openArtifacts.db.collection("votes").subscribe(
+    () => {
+      render();
+    },
+    {
+      // Readiness marker: e2e waits for live delivery to be armed before voting.
+      onReady: () => {
+        document.documentElement.dataset.oaSubscribed = "";
+      },
+    },
+  );
   for (const b of document.querySelectorAll("button.vote")) {
     b.addEventListener("click", () => vote(b.dataset.choice));
   }
