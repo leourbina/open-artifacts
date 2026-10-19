@@ -5,6 +5,7 @@ const APP = "Open Artifacts";
 
 /** The server's `<meta name="oa-instance">`, for visitors not signed in. */
 function metaName(): string {
+  if (typeof document === "undefined") return "";
   return (
     document
       .querySelector('meta[name="oa-instance"]')
