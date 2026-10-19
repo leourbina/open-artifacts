@@ -40,7 +40,11 @@ let owner: Member;
 let cookie: string;
 const app = createApp();
 /** env with a BROWSER binding (a placeholder; captures pass their fake's). */
-const withBrowser = { ...(env as Env), BROWSER: {} as Fetcher } as Env;
+const withBrowser = {
+  ...(env as Env),
+  BROWSER: {} as Fetcher,
+  SERVER_THUMBNAILS: "on",
+} as Env;
 const key = (id: string) => `thumbs/${id}.webp`;
 
 const webp = (n: number) => {
@@ -300,7 +304,8 @@ const next = () => {
   clock += THUMB.launchGapMs;
   return clock;
 };
-const on = (f: Fake) => ({ ...(env as Env), BROWSER: f.binding }) as Env;
+const on = (f: Fake) =>
+  ({ ...(env as Env), BROWSER: f.binding, SERVER_THUMBNAILS: "on" }) as Env;
 const capture = (id: string, v: number, f: Fake, e: Env = on(f)) =>
   captureThumbnail(e, id, v, { now: next() });
 
@@ -323,6 +328,21 @@ describe("captureThumbnail", () => {
     const f = fake();
     expect(await capture(id, 1, f, env as Env)).toBe("skipped");
     expect(f.launched).toBe(0);
+  });
+
+  it('off unless SERVER_THUMBNAILS is "on": a bound BROWSER alone is never called', async () => {
+    for (const v of [undefined, "off", "ON", ""]) {
+      const id = await pub();
+      const f = fake();
+      const e = {
+        ...(env as Env),
+        BROWSER: f.binding,
+        SERVER_THUMBNAILS: v,
+      } as Env;
+      expect(await capture(id, 1, f, e)).toBe("skipped");
+      expect(f.launched).toBe(0);
+      expect(f.methods).toEqual([]);
+    }
   });
 
   it("screenshots the signed content URL at 1280×800 as webp and stores it", async () => {
@@ -628,6 +648,27 @@ describe("thumbnail job on the artifact DO", () => {
     const other = await pub();
     await inDo(other, (i) => i.scheduleIndex(other, 1), withBrowser);
     expect(await inDo(other, (i) => i.pendingThumbnail())).toBeNull();
+  });
+
+  it("with BROWSER bound but SERVER_THUMBNAILS unset, publish and restore schedule nothing", async () => {
+    const id = await pub();
+    const f = fake();
+    const gated = { ...(env as Env), BROWSER: f.binding } as Env;
+    await inDo(id, () => {}, gated);
+    await publish(
+      gated,
+      owner,
+      { id, title: `t ${tag}`, format: "html", content: "<p>2</p>" } as never,
+      null,
+      undefined,
+      "version",
+    );
+    await restoreVersion(gated, owner, id, 1, null);
+    expect(await inDo(id, (i) => i.pendingThumbnail(), gated)).toBeNull();
+    expect(await inDo(id, (i) => i.thumbnailJob(), gated)).toBeNull();
+    // The index job is still queued; running the alarm calls no browser.
+    await inDo(id, (i) => i.alarm(), gated);
+    expect(f.launched).toBe(0);
   });
 
   it("restoreVersion enqueues a thumbnail job for the new version", async () => {

@@ -21,6 +21,7 @@ import { ApiError } from "../http/errors.js";
 import { indexVersionOrThrow } from "../services/search.js";
 import {
   captureThumbnail,
+  serverThumbnails,
   THUMB,
   type ThumbResult,
 } from "../services/thumbs.js";
@@ -901,7 +902,7 @@ export class ArtifactRuntime extends DurableObject<Env> {
    * A newer version replaces the job (attempts reset, due INDEX_DELAY_MS from
    * now); the same version only bumps `seq` (keeping any retry backoff), so a
    * re-enqueue while the alarm runs it is never dropped; an older one is
-   * ignored. With `thumb` (publish, restore) and a BROWSER binding, the same
+   * ignored. With `thumb` (publish, restore) and serverThumbnails(env), the same
    * debounce queues a server-side thumbnail of the newest version.
    */
   async scheduleIndex(
@@ -926,7 +927,7 @@ export class ArtifactRuntime extends DurableObject<Env> {
       version,
       due,
     );
-    if (thumb && this.env.BROWSER)
+    if (thumb && serverThumbnails(this.env))
       this.sql.exec(
         `insert into thumb_job (id, artifact_id, version, attempts, due, state)
          values (1, ?, ?, 0, ?, 'pending')

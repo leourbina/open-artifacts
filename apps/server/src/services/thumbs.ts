@@ -28,6 +28,11 @@ export const THUMB = {
   launchGapMs: 20_000,
 } as const;
 
+/** Server thumbnails run only with a BROWSER binding AND SERVER_THUMBNAILS "on". */
+export const serverThumbnails = (
+  env: Pick<Env, "BROWSER" | "SERVER_THUMBNAILS">,
+): boolean => !!env.BROWSER && env.SERVER_THUMBNAILS === "on";
+
 /**
  * What the job did. "deferred": the launch slot was taken (no browser used);
  * "launch_failed": the browser did not start for a reason other than the
@@ -127,7 +132,7 @@ export async function captureThumbnail(
   } = {},
 ): Promise<ThumbResult> {
   const binding = env.BROWSER;
-  if (!binding) return "skipped";
+  if (!binding || !serverThumbnails(env)) return "skipped";
   const now = o.now ?? Date.now();
   const row = await env.DB.prepare(
     "select current_version v, thumbnail_version t, format f from artifacts where id = ? and deleted_at is null",
