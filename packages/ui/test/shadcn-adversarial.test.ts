@@ -54,21 +54,24 @@ describe("shadcn foundation: adversarial", () => {
         throw new Error(`non-token value: ${value}`);
   });
 
-  // new-york's destructive button/badge use text-white (2.47:1 on dark
-  // --oa-danger). Documented in the README for the component PRs; the
-  // replacement, --destructive-foreground, must hold 4.5:1 in both themes.
-  it("destructive-foreground (--oa-bg) is ≥ 4.5:1 on --oa-danger", () => {
-    expect(theme).toMatch(/--destructive-foreground:\s*var\(--oa-bg\)/);
+  // new-york's destructive button/badge used text-white (2.47:1 on dark
+  // --oa-danger); they now use --destructive-foreground, which must hold
+  // 4.5:1 in both themes. (Hover states: shadcn-core.test.tsx.)
+  it("destructive-foreground is ≥ 4.5:1 on --oa-danger", () => {
+    const fg = /--destructive-foreground:\s*var\(--oa-([\w-]+)\)/.exec(
+      theme,
+    )?.[1] as string;
+    expect(fg).toBeDefined();
     expect(readme).toMatch(/text-white/);
     expect(
-      contrast(hex(darkToken("bg")), hex(darkToken("danger"))),
+      contrast(hex(darkToken(fg)), hex(darkToken("danger"))),
     ).toBeGreaterThanOrEqual(4.5);
     const light = (name: string) =>
       tokens.match(
         new RegExp(`--oa-${name}:\\s*(#[0-9a-f]{6})`),
       )?.[1] as string;
     expect(
-      contrast(hex(light("bg")), hex(light("danger"))),
+      contrast(hex(light(fg)), hex(light("danger"))),
     ).toBeGreaterThanOrEqual(4.5);
   });
 

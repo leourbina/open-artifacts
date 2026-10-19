@@ -5,5 +5,12 @@
     "jsx": "react-jsx",
     "lib": ["ES2022", "DOM", "DOM.Iterable"]
   },
-  "include": ["src", "test", "ladle", "vitest.config.ts"]
+  "include": [
+    "src",
+    "test",
+    "test-browser",
+    "ladle",
+    "vitest.config.ts",
+    "vitest.browser.config.ts"
+  ]
 }
