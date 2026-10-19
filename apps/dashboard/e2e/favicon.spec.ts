@@ -12,8 +12,15 @@ test("document head declares the icons and theme color", async ({ page }) => {
   await expect(
     head.locator('link[rel="apple-touch-icon"][href="/apple-touch-icon.png"]'),
   ).toHaveCount(1);
-  await expect(head.locator('meta[name="theme-color"]')).toHaveAttribute(
-    "content",
-    "#2350D0",
-  );
+  // Neutral browser bar per theme: Studio keeps blue for state.
+  await expect(
+    head.locator(
+      'meta[name="theme-color"][content="#EEF0F3"][media="(prefers-color-scheme: light)"]',
+    ),
+  ).toHaveCount(1);
+  await expect(
+    head.locator(
+      'meta[name="theme-color"][content="#131518"][media="(prefers-color-scheme: dark)"]',
+    ),
+  ).toHaveCount(1);
 });
