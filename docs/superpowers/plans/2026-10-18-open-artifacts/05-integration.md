@@ -121,7 +121,7 @@ Earlier releases go out the same way at M1 (expected 0.1.0) and M2. Use Steps 1â
 - [ ] **Step 3: Merge the release PR.**
   - Run: `gh pr merge <release-pr> --squash`.
   - Expected: release-please creates the release tag and a GitHub release, and `release-please.yml` deploys `apps/landing` to `open-artifacts.com`.
-  - Verify with `curl -s https://open-artifacts.com/llms.txt`. It must contain the setup procedure, and `git ls-remote --tags https://github.com/leourbina/open-artifacts 'v*'` must show the new tag.
+  - Verify with `curl -s https://open-artifacts.com/llms.txt`. It must contain the setup procedure, and `git ls-remote --tags https://github.com/open-artifacts-ai/open-artifacts 'v*'` must show the new tag.
 - [ ] **Step 4: Verify the release from a stranger's point of view.**
   - Follow `https://open-artifacts.com/llms.txt` from a clean directory, installing the new tag into a scratch instance.
   - Expected: green, with no local state.

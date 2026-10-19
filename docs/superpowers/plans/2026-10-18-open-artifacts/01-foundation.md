@@ -37,14 +37,14 @@ This track creates the repo and the **contract** (`packages/shared`) that all th
   - `tsconfig.base.json`: `strict`, `module: "ESNext"`, `moduleResolution: "Bundler"`, `target: "ES2022"`, `verbatimModuleSyntax: true`.
   - `biome.json`: recommended rules, 2-space indent, double quotes.
   - `LICENSE`: MIT, © 2026 Open Artifacts contributors.
-  - `README.md`: one paragraph, plus a link to the docs. Link the repo at `https://github.com/leourbina/open-artifacts`.
+  - `README.md`: one paragraph, plus a link to the docs. Link the repo at `https://github.com/open-artifacts-ai/open-artifacts`.
   - `.nvmrc`: `22`.
 - [ ] **Step 4: Run it and confirm it passes.**
   - Run: `pnpm install && pnpm vitest run scripts/check-workspace.test.ts`
   - Expected: PASS.
 - [ ] **Step 5: Bootstrap commit, pushed straight to `main`.** This is the only direct push in the whole plan. The repo is empty and has no branch protection yet.
   - Run: `git add -A && git commit -m "chore: scaffold pnpm monorepo"`
-  - Then: `git branch -M main && git remote add origin https://github.com/leourbina/open-artifacts.git && git push -u origin main`
+  - Then: `git branch -M main && git remote add origin https://github.com/open-artifacts-ai/open-artifacts.git && git push -u origin main`
   - From F4 on, every change goes through a PR (see the overview, *Delivery*).
 
 ---
@@ -63,7 +63,7 @@ This track creates the repo and the **contract** (`packages/shared`) that all th
 
 ```ts
 // meta.ts
-export const REPO_URL = "https://github.com/leourbina/open-artifacts";
+export const REPO_URL = "https://github.com/open-artifacts-ai/open-artifacts";
 export const PRODUCT_NAME = "Open Artifacts";
 export const API_VERSION = "v1";
 
@@ -352,7 +352,7 @@ export const METHOD_CAPABILITY: Record<RuntimeMethod, keyof Capabilities> = { "d
   - Its own D1 (`open-artifacts-staging`), R2 (`open-artifacts-staging`), and KV.
   - `ENVIRONMENT = "production"`. Staging is never dev mode, and dev-login stays off.
 - **No Access gate on staging.** Staging is public from day one (user decision). It's protected only by the app's own auth, as that auth lands.
-- **Branch protection on `main`**, set through `gh api -X PUT repos/leourbina/open-artifacts/branches/main/protection`:
+- **Branch protection on `main`**, set through `gh api -X PUT repos/open-artifacts-ai/open-artifacts/branches/main/protection`:
   - Required checks: `lint`, `typecheck`, `test`, `build`, `e2e`.
   - Branches must be up to date before merging.
   - `enforce_admins: true`.
@@ -372,8 +372,8 @@ export const METHOD_CAPABILITY: Record<RuntimeMethod, keyof Capabilities> = { "d
     - Account: Workers Scripts Edit, D1 Edit, Workers R2 Storage Edit, Workers KV Storage Edit, Access: Apps and Policies Edit (for the OIDC app in B4), Account Analytics Read.
     - Zone `open-artifacts.com`: Workers Routes Edit, DNS Edit.
   - The commands for the user to run themselves, with `!`:
-    - `! gh secret set CLOUDFLARE_API_TOKEN -R leourbina/open-artifacts`
-    - `! gh secret set CLOUDFLARE_ACCOUNT_ID -R leourbina/open-artifacts`
+    - `! gh secret set CLOUDFLARE_API_TOKEN -R open-artifacts-ai/open-artifacts`
+    - `! gh secret set CLOUDFLARE_ACCOUNT_ID -R open-artifacts-ai/open-artifacts`
   - A check that Zero Trust is enabled on the account, with a link if it isn't.
   - **Wait for the user to confirm.**
 - [ ] **Step 4: Bootstrap staging once, following `docs/ops/staging.md`.**

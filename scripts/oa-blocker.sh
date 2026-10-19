@@ -6,7 +6,7 @@
 #   e.g. scripts/oa-blocker.sh "OpenArtifacts Platform" "Approve Access app" "B4 needs …"
 set -euo pipefail
 
-REPO="leourbina/open-artifacts"
+REPO="open-artifacts-ai/open-artifacts"
 OWNER="leourbina"
 PROJECT_NUMBER=1
 PROJECT_ID="PVT_kwHOAAafZM4BnnbZ"

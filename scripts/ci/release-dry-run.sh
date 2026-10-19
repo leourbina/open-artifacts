@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Dry-run release-please against the repo and prove biome accepts what it would write.
 # Env: RELEASE_PLEASE (cmd, default release-please), BIOME_CMD (default "pnpm biome check"),
-#      RD_ROOT (repo root, default git toplevel), RD_TOKEN, RD_REPO (default leourbina/open-artifacts).
+#      RD_ROOT (repo root, default git toplevel), RD_TOKEN, RD_REPO (default open-artifacts-ai/open-artifacts).
 set -euo pipefail
 
 root="${RD_ROOT:-$(git rev-parse --show-toplevel)}"
 rp="${RELEASE_PLEASE:-release-please}"
 biome="${BIOME_CMD:-pnpm biome check}"
-repo="${RD_REPO:-leourbina/open-artifacts}"
+repo="${RD_REPO:-open-artifacts-ai/open-artifacts}"
 cd "$root"
 
 out=$("$rp" release-pr --dry-run --repo-url="$repo" --token="${RD_TOKEN:-}" \
