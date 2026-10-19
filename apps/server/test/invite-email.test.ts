@@ -10,7 +10,9 @@ import { createApp } from "../src/app.js";
 import { createPat } from "../src/auth/pat.js";
 import {
   MAX_EMAILS_PER_DAY,
+  MAX_EMAILS_PER_RECIPIENT_PER_DAY,
   MAX_EMAILS_PER_USER_PER_DAY,
+  sweepEmailCounters,
 } from "../src/email/send.js";
 import { publish } from "../src/services/artifacts.js";
 import { getUser } from "../src/services/users.js";
@@ -141,6 +143,23 @@ describe("invite email", () => {
     const o2 = await newOwner();
     const r2 = await invite(e, o2.cookie);
     expect(((await r2.json()) as { emailed: boolean }).emailed).toBe(true);
+  });
+
+  it("30 concurrent invites from one owner send exactly the per-user cap", async () => {
+    const o = await newOwner();
+    const m = mailer();
+    const e = { ...m, EMAIL_FROM: FROM };
+    const rs = await Promise.all(
+      Array.from({ length: 30 }, () => invite(e, o.cookie)),
+    );
+    const bodies = (await Promise.all(rs.map((r) => r.json()))) as {
+      emailed: boolean;
+    }[];
+    expect(rs.every((r) => r.status === 201)).toBe(true);
+    expect(bodies.filter((b) => b.emailed).length).toBe(
+      MAX_EMAILS_PER_USER_PER_DAY,
+    );
+    expect(m.sent).toHaveLength(MAX_EMAILS_PER_USER_PER_DAY);
   });
 
   it("yesterday's count does not apply today", async () => {
@@ -278,4 +297,69 @@ describe("share email", () => {
     expect(textOf(r2)).toContain("No email sent.");
     await client.close();
   });
+
+  it("removing and re-adding a share 3 times sends one email", async () => {
+    const { o, id } = await setup();
+    const m = mailer();
+    const e = { ...m, EMAIL_FROM: FROM };
+    const email = fresh();
+    const emailed: boolean[] = [];
+    for (let i = 0; i < 3; i++) {
+      const r = await call(e, R.shares(id), o.cookie, "PUT", {
+        email,
+        role: "viewer",
+      });
+      emailed.push(((await r.json()) as { emailed: boolean }).emailed);
+      const d = await call(
+        e,
+        R.share(id, email),
+        o.cookie,
+        "DELETE",
+        undefined,
+      );
+      expect(d.status).toBe(204);
+    }
+    expect(emailed).toEqual([true, false, false]);
+    expect(m.sent).toHaveLength(1);
+  });
+
+  it(`emails one address at most ${MAX_EMAILS_PER_RECIPIENT_PER_DAY} times a day across artifacts`, async () => {
+    const m = mailer();
+    const e = { ...m, EMAIL_FROM: FROM };
+    const email = fresh();
+    const emailed: boolean[] = [];
+    for (let i = 0; i <= MAX_EMAILS_PER_RECIPIENT_PER_DAY; i++) {
+      const { o, id } = await setup();
+      const r = await call(e, R.shares(id), o.cookie, "PUT", {
+        email,
+        role: "viewer",
+      });
+      expect(r.status).toBe(200);
+      emailed.push(((await r.json()) as { emailed: boolean }).emailed);
+    }
+    expect(emailed.filter(Boolean).length).toBe(
+      MAX_EMAILS_PER_RECIPIENT_PER_DAY,
+    );
+    expect(emailed.at(-1)).toBe(false);
+    expect(m.sent).toHaveLength(MAX_EMAILS_PER_RECIPIENT_PER_DAY);
+  });
+});
+
+it("the cron sweep drops only past days' email counters", async () => {
+  await env.DB.batch([
+    env.DB.prepare(
+      "insert into counters (key, n, day) values ('email:old', 1, '2000-01-01')",
+    ),
+    env.DB.prepare(
+      "insert into counters (key, n, day) values ('email:new', 1, ?)",
+    ).bind(today()),
+    env.DB.prepare(
+      "insert or replace into counters (key, n, day) values ('client:keep', 0, '2000-01-01')",
+    ),
+  ]);
+  await sweepEmailCounters(env as never);
+  const { results } = await env.DB.prepare(
+    "select key from counters where key in ('email:old', 'email:new', 'client:keep') order by key",
+  ).all<{ key: string }>();
+  expect(results.map((r) => r.key)).toEqual(["client:keep", "email:new"]);
 });

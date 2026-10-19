@@ -10,6 +10,8 @@ import type { EmailContent } from "./templates.js";
 export const MAX_EMAILS_PER_USER_PER_DAY = 20;
 /** Emails per UTC day, instance-wide (protects the monthly sending quota). */
 export const MAX_EMAILS_PER_DAY = 100;
+/** Emails one recipient address may receive per UTC day, instance-wide. */
+export const MAX_EMAILS_PER_RECIPIENT_PER_DAY = 5;
 export const EMAIL_TIMEOUT_MS = 3000;
 const ALL_KEY = "email:*";
 
@@ -24,44 +26,64 @@ const TAKE = `insert into counters (key, n, day) values (?1, 1, ?2)
   where counters.day <> excluded.day or counters.n < ?3
   returning n`;
 
+/** Daily cron: drops email counters from before today (they reset anyway). */
+export async function sweepEmailCounters(env: Env, now = Date.now()) {
+  await env.DB.prepare(
+    "delete from counters where key like 'email:%' and day < ?",
+  )
+    .bind(utcDay(now))
+    .run();
+}
+
 /** True if EMAIL and EMAIL_FROM are both configured. */
 export const emailEnabled = (env: Env): boolean =>
   !!env.EMAIL && !!env.EMAIL_FROM;
 
 /**
- * Takes a slot under both daily caps (one D1 batch). A send refused by one cap
- * may still use a slot of the other; that only errs towards sending less.
+ * Takes a slot under every daily cap (one D1 batch, each an atomic conditional
+ * upsert). A send refused by one cap may still use a slot of another; that
+ * only errs towards sending less.
  */
-async function takeSlot(env: Env, userId: string, now: number) {
+async function takeSlot(
+  env: Env,
+  caps: [key: string, max: number][],
+  now: number,
+) {
   const day = utcDay(now);
-  const [u, all] = await env.DB.batch<{ n: number }>([
-    stmt(env.DB, TAKE).bind(
-      `email:${userId}`,
-      day,
-      MAX_EMAILS_PER_USER_PER_DAY,
-    ),
-    stmt(env.DB, TAKE).bind(ALL_KEY, day, MAX_EMAILS_PER_DAY),
-  ]);
-  return !!u?.results.length && !!all?.results.length;
+  const rows = await env.DB.batch<{ n: number }>(
+    caps.map(([key, max]) => stmt(env.DB, TAKE).bind(key, day, max)),
+  );
+  return rows.every((r) => r.results.length > 0);
 }
 
 /**
  * Sends `render()` to the (already validated) address `to` on behalf of
  * `userId`. Rendering runs inside the guard, so a template error is `false`.
+ * With `artifactId`, one email per (artifact, recipient) per day, so removing
+ * and re-adding a share can't re-mail.
  */
 export async function sendEmail(
   env: Env,
   userId: string,
   to: string,
   render: () => EmailContent,
-  now = Date.now(),
+  opts: { artifactId?: string; now?: number } = {},
 ): Promise<boolean> {
+  const now = opts.now ?? Date.now();
   const { EMAIL, EMAIL_FROM } = env;
   if (!EMAIL || !EMAIL_FROM) return false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const content = render();
-    if (!(await takeSlot(env, userId, now))) return false;
+    const caps: [string, number][] = [
+      [`email:${userId}`, MAX_EMAILS_PER_USER_PER_DAY],
+      [ALL_KEY, MAX_EMAILS_PER_DAY],
+      [`email:to:${to}`, MAX_EMAILS_PER_RECIPIENT_PER_DAY],
+    ];
+    if (opts.artifactId) caps.push([`email:a:${opts.artifactId}:${to}`, 1]);
+    if (!(await takeSlot(env, caps, now))) return false;
+    // On timeout we report false, but delivery is only unconfirmed: the
+    // email may still arrive.
     await Promise.race([
       EMAIL.send({ from: EMAIL_FROM, to, ...content }),
       new Promise((_, reject) => {

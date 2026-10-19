@@ -34,6 +34,10 @@ export function mountMembers(app: AppType): void {
     return c.json(await listMembers(c.env));
   });
 
+  /**
+   * Invite; 201 with `emailed`. `emailed:false` after the 3 s send timeout
+   * means delivery isn't confirmed: the email may still arrive.
+   */
   app.post(R.members, async (c) => {
     const inviter = requireManager(c);
     const input = await jsonBody(c, MemberInviteSchema);

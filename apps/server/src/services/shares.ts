@@ -106,17 +106,22 @@ async function emailShare(
       getSettings(env),
     ]);
     if (member) return false;
-    return await sendEmail(env, user.id, email, () =>
-      shareEmail({
-        inviter: user.name || user.email,
-        instance: settings.name,
-        recipient: email,
-        appHost: env.APP_HOST,
-        title: artifact.title,
-        path: viewerPath(artifact.id),
-        format: artifact.format as Format,
-        role,
-      }),
+    return await sendEmail(
+      env,
+      user.id,
+      email,
+      () =>
+        shareEmail({
+          inviter: user.name || user.email,
+          instance: settings.name,
+          recipient: email,
+          appHost: env.APP_HOST,
+          title: artifact.title,
+          path: viewerPath(artifact.id),
+          format: artifact.format as Format,
+          role,
+        }),
+      { artifactId: artifact.id },
     );
   } catch {
     return false;
