@@ -1,8 +1,328 @@
 ---
-// Variation 3 (Editorial scroll). Owned by one agent: keep its components, styles and
+// Variation 3 (Terminal first). Owned by one agent: keep its components, styles and
 // scripts inside this folder.
+import { REPO_URL } from "@oa/shared";
+import { tools } from "../../lib/tools";
+import "./v3.css";
+
+const prompt = "set up open-artifacts.com/llms.txt";
+const id = "4kTq9mWzR2bXc8Hf";
+const host = "artifacts.example.com";
+const url = `https://${host}/a/${id}`;
+const title = "API latency, last 7 days";
+const ask =
+  "Chart p95 latency for the last 7 days from bench/latency.csv, add a poll on which fix ships first, and publish it for the team.";
+
+const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const series = {
+  p50: [88, 84, 97, 121, 115, 79, 76],
+  p95: [212, 198, 241, 305, 288, 176, 168],
+  p99: [410, 388, 472, 618, 590, 341, 322],
+};
+const slo = 250;
+const p95Top = Math.max(...series.p95, slo) * 1.12;
+
+const options = [
+  "Cache the auth lookup",
+  "Batch the audit writes",
+  "Both, behind a flag",
+];
+const seed = [4, 2, 1];
+const seedTotal = seed.reduce((a, b) => a + b, 0);
+
+// Group the real tool manifest; anything new lands under "More".
+const groups: [string, RegExp][] = [
+  ["Publish", /^(publish_artifact|create_upload)$/],
+  ["Read", /^(get_artifact|list_artifacts|search_artifacts|list_versions)$/],
+  [
+    "Change",
+    /^(restore_version|share_artifact|unshare_artifact|set_visibility|delete_artifact)$/,
+  ],
+  ["Live data", /^artifact_data_/],
+];
+const esc = (s: string) =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+// First sentence of a tool description, with `code` spans kept as code.
+const firstSentence = (s: string) =>
+  esc(s.split(/(?<=\.)\s/)[0]).replace(/`([^`]+)`/g, "<code>$1</code>");
+const grouped = groups
+  .map(([label, re]) => ({
+    label,
+    items: tools.filter((t) => re.test(t.name)),
+  }))
+  .filter((g) => g.items.length > 0);
+const other = tools.filter((t) => !groups.some(([, re]) => re.test(t.name)));
+if (other.length) grouped.push({ label: "More", items: other });
+
+const releaseApi = `${REPO_URL.replace("https://github.com/", "https://api.github.com/repos/")}/releases/latest`;
+const steps = [
+  {
+    note: "Clone the latest release and install.",
+    cmd: `TAG=$(curl -fsSL ${releaseApi} | sed -n 's/.*"tag_name": *"\\([^"]*\\)".*/\\1/p')\ngit clone --depth 1 --branch "$TAG" ${REPO_URL} open-artifacts\ncd open-artifacts && pnpm install`,
+  },
+  {
+    note: "Log in to Cloudflare. This is the one step a person does.",
+    cmd: "npx wrangler login",
+  },
+  {
+    note: "Create D1, R2, KV and the Access app, then deploy. It asks for your hostnames, your email, and just you or a team.",
+    cmd: "pnpm oa:setup",
+  },
+  {
+    note: "Connect Claude Code. Clients with MCP OAuth need only the URL.",
+    cmd: `claude mcp add --transport http open-artifacts https://${host}/mcp`,
+  },
+];
 ---
 
-<section class="wrap" style="padding:64px 0">
-  <p>Variation 3, Editorial scroll: in progress.</p>
-</section>
+<div class="v3">
+  <section class="v3-hero" aria-labelledby="v3-h1">
+    <div class="wrap">
+      <p class="v3-eyebrow mono">open-artifacts · one MCP server for any AI agent</p>
+      <h1 id="v3-h1">One tool call from your terminal to a working link.</h1>
+      <p class="v3-lede">
+        Any AI agent calls <code>publish_artifact</code>. Open Artifacts keeps the page on your own
+        Cloudflare account, versioned and private, and hands back a link to the real thing.
+      </p>
+
+      <div class="v3-stage" data-stage>
+        <script is:inline>
+          matchMedia("(prefers-reduced-motion: reduce)").matches ||
+            document.currentScript.parentElement.setAttribute("data-play", "");
+        </script>
+        <figure class="v3-term" aria-labelledby="v3-term-cap">
+          <div class="v3-bar">
+            <span class="v3-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+            <span class="v3-bar-title mono" id="v3-term-cap">claude · ~/acme-api</span>
+            <button class="v3-replay mono" type="button" data-replay hidden>Replay</button>
+          </div>
+          <div class="v3-screen mono">
+            <p class="v3-ln dim" data-s="200">~/acme-api $ claude</p>
+            <p class="v3-ln v3-ask" data-s="500">
+              <span class="v3-mark" aria-hidden="true">›</span>
+              <span class="sr-only">{ask}</span>
+              <span class="v3-typed" aria-hidden="true" data-type><span>{ask}</span><span></span></span>
+            </p>
+            <div class="v3-call" data-s="600">
+              <p class="v3-ln"><span class="v3-dot ok" aria-hidden="true">●</span> Read bench/latency.csv</p>
+              <p class="v3-ln dim v3-out"><span aria-hidden="true">└ </span>7 rows · day, p50, p95, p99</p>
+            </div>
+            <div class="v3-call" data-s="900">
+              <p class="v3-ln"><span class="v3-dot ok" aria-hidden="true">●</span> Write latency.html</p>
+              <p class="v3-ln dim v3-out">
+                <span aria-hidden="true">└ </span>chart and poll, votes kept with openArtifacts.db
+              </p>
+            </div>
+            <div class="v3-call" data-s="900">
+              <p class="v3-ln">
+                <span class="v3-dot tool" aria-hidden="true">●</span>
+                open-artifacts · <b>publish_artifact</b>
+              </p>
+              <dl class="v3-args">
+                <div><dt>title</dt><dd>"{title}"</dd></div>
+                <div><dt>format</dt><dd>"html"</dd></div>
+                <div><dt>content</dt><dd>latency.html, 6.2 KB</dd></div>
+                <div><dt>visibility</dt><dd>"team"</dd></div>
+                <div><dt>capabilities</dt><dd>{"{ db: true }"}</dd></div>
+              </dl>
+            </div>
+            <p class="v3-ln v3-out v3-result" data-s="1400" data-spin>
+              <span class="v3-tick" aria-hidden="true">✓</span>
+              <span>Published "{title}" {id} v1: <span class="v3-link">{url}</span></span>
+            </p>
+            <p class="v3-ln v3-reply" data-s="500">
+              Done. Your team can open it at the link above. The poll keeps votes as shared data, so
+              everyone sees the same count, and I can read them back.
+            </p>
+            <div class="v3-follow" data-follow hidden>
+              <p class="v3-ln v3-ask">
+                <span class="v3-mark" aria-hidden="true">›</span> how is the poll going?
+              </p>
+              <div class="v3-call">
+                <p class="v3-ln">
+                  <span class="v3-dot tool" aria-hidden="true">●</span>
+                  open-artifacts · <b>artifact_data_list</b>
+                </p>
+                <p class="v3-ln dim v3-out">
+                  <span aria-hidden="true">└ </span>collection "votes" · <span data-docs></span> documents
+                </p>
+              </div>
+              <p class="v3-ln v3-reply" aria-live="polite" data-summary></p>
+            </div>
+            <p class="v3-ln v3-idle" data-s="0" aria-hidden="true">› <span class="v3-cursor"></span></p>
+          </div>
+        </figure>
+
+        <figure class="v3-art" data-s="300" data-unfold aria-label={`The published artifact: ${title}`}>
+          <div class="v3-bar v3-urlbar">
+            <svg class="v3-lock" aria-hidden="true" viewBox="0 0 16 16" width="12" height="12"
+              ><rect x="3" y="7" width="10" height="7" rx="1.5" fill="currentColor"></rect><path
+                d="M5 7V5a3 3 0 0 1 6 0v2"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.6"></path></svg
+            >
+            <span class="v3-addr mono">{host}/a/{id}</span>
+            <span class="v3-chip team">Team</span>
+            <span class="v3-chip">v1</span>
+          </div>
+
+          <div class="v3-doc">
+            <div class="v3-doc-head">
+              <h2>{title}</h2>
+              <p class="dim">From bench/latency.csv, in milliseconds. SLO is {slo} ms at p95.</p>
+            </div>
+
+            <div class="v3-seg" role="group" aria-label="Percentile">
+              {
+                Object.keys(series).map((k) => (
+                  <button type="button" data-metric={k} aria-pressed={k === "p95" ? "true" : "false"}>
+                    {k}
+                  </button>
+                ))
+              }
+            </div>
+
+            <div class="v3-chart" data-chart data-series={JSON.stringify(series)} data-slo={slo}>
+              <span class="v3-slo" style={`--y:${slo / p95Top}`} data-slo-line aria-hidden="true"
+                ><span class="v3-slo-label">SLO {slo}</span></span
+              >
+              <ol aria-label="Latency by day, in milliseconds">
+                {
+                  days.map((d, i) => {
+                    const v = series.p95[i];
+                    return (
+                      <li class={v > slo ? "over" : undefined} style={`--h:${(v / p95Top) * 100}%`}>
+                        <span class="v3-val">{v}</span>
+                        <span class="v3-col" aria-hidden="true" />
+                        <span class="v3-day">{d}</span>
+                      </li>
+                    );
+                  })
+                }
+              </ol>
+            </div>
+
+            <div class="v3-poll">
+              <h3 id="v3-poll-q">Which fix ships first?</h3>
+              <ul aria-labelledby="v3-poll-q">
+                {
+                  options.map((o, i) => (
+                    <li>
+                      <button
+                        type="button"
+                        aria-pressed="false"
+                        data-vote={i}
+                        data-seed={seed[i]}
+                        style={`--w:${(seed[i] / seedTotal) * 100}%`}
+                      >
+                        <span class="v3-opt">{o}</span>
+                        <span class="v3-count">{seed[i]}</span>
+                      </button>
+                    </li>
+                  ))
+                }
+              </ul>
+              <p class="v3-poll-foot dim">
+                <span data-total>{seedTotal} votes</span> · <span data-hint>tap one to vote</span>
+              </p>
+            </div>
+          </div>
+        </figure>
+      </div>
+      <p class="v3-note">
+        The artifact above runs its real code. Published, a vote goes to the artifact's shared data for
+        every viewer; on this page it stays in your browser.
+      </p>
+    </div>
+  </section>
+
+  <section class="wrap v3-sec" aria-labelledby="v3-tools-h">
+    <div class="v3-sec-head">
+      <h2 id="v3-tools-h">Every tool your agent gets</h2>
+      <p>
+        One MCP server at <code>https://{host}/mcp</code> over Streamable HTTP. This is its tool list,
+        read from the server at build time.
+      </p>
+    </div>
+    <div class="v3-box">
+      <p class="v3-box-head mono">tools/list · {tools.length} tools</p>
+      <div class="v3-groups">
+        {
+          grouped.map((g) => (
+            <div class="v3-group">
+              <h3>{g.label}</h3>
+              <dl>
+                {g.items.map((t) => (
+                  <div>
+                    <dt class="mono">{t.name}</dt>
+                    <dd set:html={firstSentence(t.description)} />
+                  </div>
+                ))}
+              </dl>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap v3-sec" aria-labelledby="v3-setup-h">
+    <div class="v3-sec-head">
+      <h2 id="v3-setup-h">Set up from your shell</h2>
+      <p>
+        You need Node.js 22 with pnpm, git, a Cloudflare account and a domain on it. Workers Free is
+        enough for one person.
+      </p>
+    </div>
+
+    <div class="v3-setup">
+      <div class="v3-easy">
+        <p class="v3-cmd-note">Easiest: tell your agent. It runs the four steps below for you.</p>
+        <div class="v3-cmd">
+          <pre><code><span class="v3-ps" aria-hidden="true">› </span>{prompt}</code></pre>
+          <button class="v3-copy mono" type="button" data-copy={prompt} hidden aria-label="Copy the setup prompt">
+            Copy
+          </button>
+        </div>
+      </div>
+
+      <ol class="v3-steps">
+        {
+          steps.map((s, i) => (
+            <li>
+              <p class="v3-cmd-note">
+                <span class="v3-num mono" aria-hidden="true">
+                  {i + 1}
+                </span>
+                {s.note}
+              </p>
+              <div class="v3-cmd">
+                <pre><code>{s.cmd}</code></pre>
+                <button
+                  class="v3-copy mono"
+                  type="button"
+                  data-copy={s.cmd}
+                  hidden
+                  aria-label={`Copy step ${i + 1}`}
+                >
+                  Copy
+                </button>
+              </div>
+            </li>
+          ))
+        }
+      </ol>
+      <p class="v3-more">
+        Codex CLI, Cursor, OpenCode or another client? See <a href="/docs/connect-agents/">Connect agents</a>.
+        Every flag is in the <a href="/docs/setup/">setup docs</a>.
+      </p>
+      <p class="sr-only" role="status" aria-live="polite" data-copied></p>
+    </div>
+  </section>
+</div>
+
+<script>
+  import { run } from "./play";
+  run();
+</script>
