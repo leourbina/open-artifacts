@@ -229,18 +229,23 @@ describe("data docs: 256 KB on Free, 1 MB on Paid", () => {
     const free = await art(FREE);
     const paid = await art(PAID);
     const big = "x".repeat(300 * 1024);
-    await expect(
-      runtimeStub(FREE, free).set("c", "a", big, "u:1"),
-    ).rejects.toThrow(FREE_MSG);
-    await expect(
-      runtimeStub(FREE, free).setRaw("c", "a", JSON.stringify(big), "u:1"),
-    ).rejects.toThrow(FREE_MSG);
-    await expect(
-      runtimeStub(FREE, free).update("c", "b", { big }, "u:1"),
-    ).rejects.toThrow(FREE_MSG);
-    await expect(
-      runtimeStub(PAID, paid).set("c", "a", big, "u:1"),
-    ).resolves.toBeTruthy();
+    /** The RPC's outcome, caught on the call itself (no stray rejection). */
+    const outcome = (p: Promise<unknown>) =>
+      p.then(
+        () => "ok",
+        (e: unknown) => String((e as Error)?.message ?? e),
+      );
+    const fs = runtimeStub(FREE, free);
+    expect(await outcome(fs.set("c", "a", big, "u:1"))).toContain(FREE_MSG);
+    expect(
+      await outcome(fs.setRaw("c", "a", JSON.stringify(big), "u:1")),
+    ).toContain(FREE_MSG);
+    expect(await outcome(fs.update("c", "b", { big }, "u:1"))).toContain(
+      FREE_MSG,
+    );
+    expect(
+      await outcome(runtimeStub(PAID, paid).set("c", "a", big, "u:1")),
+    ).toBe("ok");
   });
 });
 
