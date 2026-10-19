@@ -1,6 +1,0 @@
-/* Stands in for `@import "tailwindcss"` (vite.config.ts aliases it here):
-   Tailwind without preflight, whose element resets would restyle the
-   existing dashboard pages. */
-@layer theme, base, components, utilities;
-@import "tailwindcss/theme.css" layer(theme);
-@import "tailwindcss/utilities.css" layer(utilities);
