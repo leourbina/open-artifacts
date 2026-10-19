@@ -189,3 +189,59 @@ export async function runPublishBench(): Promise<string> {
   lines.push(`(LIMITS.inlineBytes = ${LIMITS.inlineBytes / 1024} KB)`);
   return lines.join("\n");
 }
+
+/**
+ * Inline publish CPU per size (32–128 KB), escape-heavy (worst case) and
+ * plain HTML: request p50/p95 (worker CPU, as bench.ts), and the median CPU
+ * of the request's body work measured alone on the same body: UTF-8 decode +
+ * JSON.parse, and the PublishInput schema parse. Publish does no hashing.
+ */
+export async function runInlineCandidates(): Promise<string> {
+  const { PublishInputSchema } = await import("@oa/shared");
+  const { cpuMicros } = await import("./bench-env.js");
+  const c = await setup();
+  const { env, token } = c;
+  const dec = new TextDecoder();
+  const medianUs = (f: () => void, n = 50) => {
+    for (let i = 0; i < 5; i++) f();
+    const xs: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const t = cpuMicros();
+      f();
+      xs.push(cpuMicros() - t);
+    }
+    xs.sort((a, b) => a - b);
+    return xs[Math.floor(n / 2)] ?? 0;
+  };
+  const rows = [
+    "| size | content | body KB | p50 ms | p95 ms | decode+JSON.parse ms | schema ms | rest ms (p50) |",
+    "|---|---|---|---|---|---|---|---|",
+  ];
+  for (const kb of [32, 64, 96, 128])
+    for (const [kind, content] of [
+      ["escape-heavy", escapeHeavy(kb * 1024 - 64)],
+      ["plain html", htmlDoc(kb * 1024 - 64)],
+    ] as const) {
+      const body = new TextEncoder().encode(
+        JSON.stringify({ title: "Bench", format: "html", content }),
+      );
+      const s: Scenario = {
+        name: `${kb} KB ${kind}`,
+        budgetMs: 10,
+        bucket: "worker",
+        info: true,
+        prepare: async () => {
+          const req = apiReq(token, "/api/v1/artifacts", "POST", body);
+          return () => call(env, req).then((r) => ok(r, s.name));
+        },
+      };
+      const r = summarize(s, await sample(s));
+      const parseMs = medianUs(() => JSON.parse(dec.decode(body))) / 1000;
+      const obj = JSON.parse(dec.decode(body));
+      const schemaMs = medianUs(() => PublishInputSchema.safeParse(obj)) / 1000;
+      rows.push(
+        `| ${kb} KB | ${kind} | ${(body.length / 1024).toFixed(0)} | ${r.p50.toFixed(2)} | ${r.p95.toFixed(2)} | ${parseMs.toFixed(2)} | ${schemaMs.toFixed(2)} | ${(r.p50 - parseMs - schemaMs).toFixed(2)} |`,
+      );
+    }
+  return rows.join("\n");
+}
