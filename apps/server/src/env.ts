@@ -21,4 +21,6 @@ export interface Env {
   CONTENT_SIGNING_KEY: string;
   ANALYTICS_TOKEN?: string;
   CF_ACCOUNT_ID: string;
+  /** This Worker's script name (filters CPU analytics); unset -> no CPU metrics. */
+  WORKER_NAME?: string;
 }

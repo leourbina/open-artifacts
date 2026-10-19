@@ -15,6 +15,7 @@ import {
   PublishToolInputSchema,
   R,
   STATUS_FOR,
+  UsageSchema,
   viewerPath,
 } from "../src/index.js";
 
@@ -357,5 +358,25 @@ describe("VersionInfoSchema format (C2)", () => {
     expect(VersionInfoSchema.safeParse({ ...v, format: "doc" }).success).toBe(
       false,
     );
+  });
+});
+
+describe("UsageSchema", () => {
+  it("accepts the CPU-limit metric keys", () => {
+    const u = {
+      available: true,
+      date: "2026-10-19",
+      metrics: [
+        { key: "cpu_limit_hits", used: 3, limit: 0 },
+        { key: "cpu_p99_ms", used: 8.5, limit: 10 },
+      ],
+    };
+    expect(UsageSchema.parse(u)).toEqual(u);
+    expect(
+      UsageSchema.safeParse({
+        ...u,
+        metrics: [{ key: "cpu_nope", used: 1, limit: 0 }],
+      }).success,
+    ).toBe(false);
   });
 });
