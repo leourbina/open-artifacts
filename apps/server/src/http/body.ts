@@ -1,16 +1,6 @@
-import { LIMITS } from "@oa/shared";
 import type { Context } from "hono";
 import { utf8Decoder } from "../util/text.js";
 import { ApiError } from "./errors.js";
-
-/**
- * The largest legitimate publish body, REST or MCP: JSON escaping at most
- * doubles inline text (`"` and `\`; base64 is 4/3), plus 64 KB for the rest.
- * Past it, a publish can only be oversize inline content (413 / too_large
- * with the upload hint), answered before the body is parsed. Text of control
- * characters (escaped 6×) can be refused under the limit; uploads take it.
- */
-export const MAX_PUBLISH_BODY = 2 * LIMITS.inlineBytes + 64 * 1024;
 
 type Parser<T> = {
   safeParse(

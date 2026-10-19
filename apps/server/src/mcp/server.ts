@@ -1,7 +1,6 @@
 import { type CallToolResult, McpServer } from "@modelcontextprotocol/server";
 import {
   type AgentRef,
-  INLINE_TOO_LARGE_MESSAGE,
   LIMITS,
   MCP_PATH,
   type Member,
@@ -10,7 +9,6 @@ import {
 import { createMcpHandler } from "agents/mcp/server";
 import type { Caller } from "../auth/authz.js";
 import type { Env } from "../env.js";
-import { MAX_PUBLISH_BODY } from "../http/body.js";
 import {
   ApiError,
   appOrigin,
@@ -138,70 +136,19 @@ export const MAX_MCP_BODY =
 const tooLarge = () =>
   errorJson(413, "too_large", `Request body exceeds ${MAX_MCP_BODY} bytes`);
 
-/** How much of an oversize body is read to recognize a publish_artifact call. */
-const PEEK_BYTES = 4 * 1024;
-
-/**
- * An oversize publish_artifact, recognized from the body's first bytes: a
- * single JSON-RPC `tools/call` whose `params.name` (and `id`) come before
- * `params.arguments`, as SDK clients write it. The head up to `"arguments"` is
- * closed and parsed, so the match is structural. The answer is the tool's own
- * too_large result, without the rest of the body being read or parsed.
- * undefined: undecided yet (no `"arguments"` in the prefix); null: not one.
- */
-function oversizePublish(prefix: string): Response | null | undefined {
-  const t = prefix.trimStart();
-  if (!t.startsWith("{")) return null;
-  const at = t.indexOf('"arguments"');
-  if (at < 0) return undefined;
-  let head: {
-    jsonrpc?: unknown;
-    id?: unknown;
-    method?: unknown;
-    params?: { name?: unknown };
-  };
-  try {
-    head = JSON.parse(`${t.slice(0, at).replace(/,\s*$/, "")}}}`);
-  } catch {
-    return null;
-  }
-  const id = head?.id;
-  if (
-    head?.jsonrpc !== "2.0" ||
-    head.method !== "tools/call" ||
-    head.params?.name !== "publish_artifact" ||
-    (typeof id !== "string" && typeof id !== "number")
-  )
-    return null;
-  return Response.json({
-    jsonrpc: "2.0",
-    id,
-    result: {
-      isError: true,
-      content: [
-        { type: "text", text: `too_large: ${INLINE_TOO_LARGE_MESSAGE}` },
-      ],
-    },
-  });
-}
-
 /**
  * Reads an MCP request body once, into one buffer, with a running cap: 413 on a
  * declared or streamed size over MAX_MCP_BODY. Returns a new Request carrying the
  * buffer, so every era (including the 2025 fallback, which reads the body
  * itself) sees a bounded body and nothing reads the stream twice.
- * A declared size over MAX_PUBLISH_BODY first gets a peek (at most PEEK_BYTES):
- * an oversize publish_artifact is answered from it (oversizePublish) and the
- * rest of the body is cancelled; anything else is read and parsed as usual.
  */
 export async function capMcpBody(req: Request): Promise<Request | Response> {
-  const declared = Number(req.headers.get("content-length") ?? 0);
-  if (declared > MAX_MCP_BODY) return tooLarge();
+  if (Number(req.headers.get("content-length") ?? 0) > MAX_MCP_BODY)
+    return tooLarge();
   if (!req.body) return req;
   const reader = req.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
-  let peeking = declared > MAX_PUBLISH_BODY;
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -211,22 +158,6 @@ export async function capMcpBody(req: Request): Promise<Request | Response> {
       return tooLarge();
     }
     chunks.push(value);
-    if (peeking) {
-      const prefix = new Uint8Array(Math.min(size, PEEK_BYTES));
-      let off = 0;
-      for (const c of chunks) {
-        if (off >= prefix.length) break;
-        const part = c.subarray(0, prefix.length - off);
-        prefix.set(part, off);
-        off += part.byteLength;
-      }
-      const early = oversizePublish(new TextDecoder().decode(prefix));
-      if (early) {
-        await reader.cancel().catch(() => {});
-        return early;
-      }
-      if (early === null || size >= PEEK_BYTES) peeking = false;
-    }
   }
   const buf = new Uint8Array(size);
   let off = 0;

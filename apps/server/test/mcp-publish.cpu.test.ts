@@ -1,8 +1,8 @@
-// MCP publish_artifact over the inline limit. The MCP body cap (MAX_MCP_BODY)
-// is set by the 1 MB artifact_data_set document, so an oversize publish body
-// is recognized from a 4 KB peek (capMcpBody) and answered too_large without
-// being parsed; that path is asserted. The report logs the other medians,
-// including the fallback (arguments before name), which is fully parsed.
+// Report only (no assertion): MCP publish_artifact over the inline limit.
+// The MCP body cap (MAX_MCP_BODY) is set by the 1 MB artifact_data_set
+// document, so an oversize escape-heavy publish_artifact is read and fully
+// JSON-parsed (JSON-RPC envelope, then the tool's input schema) before
+// planFiles answers too_large. These medians size that cost.
 // Runs serially via vitest.cpu.config.ts (median of 5); the medians are
 // annotations: pnpm test:cpu -- test/mcp-publish.cpu.test.ts --reporter=verbose
 import { env } from "cloudflare:workers";
@@ -16,14 +16,12 @@ import { callWorker, MCP_URL } from "./mcp-helpers.js";
 let pat: string;
 const escapeHeavy = (bytes: number) =>
   `<p class="a\\b">${'"\\'.repeat(bytes / 2)}</p>`.slice(0, bytes);
-const call = (args: Record<string, unknown>, argumentsFirst = false) => {
+const call = (args: Record<string, unknown>) => {
   const body = JSON.stringify({
     jsonrpc: "2.0",
     id: 1,
     method: "tools/call",
-    params: argumentsFirst
-      ? { arguments: args, name: "publish_artifact" }
-      : { name: "publish_artifact", arguments: args },
+    params: { name: "publish_artifact", arguments: args },
   });
   return () =>
     callWorker(
@@ -45,21 +43,8 @@ beforeAll(async () => {
   pat = (await createPat(env, l.userId, "cpu")).token;
 });
 
-describe("MCP publish_artifact CPU", () => {
-  it("an oversize publish (SDK order) is answered from the peek in < 2 ms", async () => {
-    const over = call({
-      title: "cpu",
-      format: "html",
-      content: escapeHeavy(250 * 1024),
-    });
-    expect(await over()).toContain("too_large");
-    // Wall time includes the PAT lookup (local D1 I/O, off-isolate in
-    // production): measure it with a call refused before any tool runs.
-    const auth = await medianMs(call({ format: "html", content: "<p>x</p>" }));
-    expect((await medianMs(over)) - auth).toBeLessThan(2);
-  });
-
-  it("report: logs medians, oversize escape-heavy vs baselines", async ({
+describe("MCP publish_artifact CPU (report)", () => {
+  it("logs medians: oversize escape-heavy vs baselines", async ({
     annotate,
   }) => {
     const big = escapeHeavy(250 * 1024);
@@ -67,18 +52,9 @@ describe("MCP publish_artifact CPU", () => {
     const out = await over();
     expect(out).toContain("too_large");
     const rows: [string, number][] = [
+      ["250 KB escape-heavy (~500 KB body) → too_large", await medianMs(over)],
       [
-        "250 KB escape-heavy (~500 KB body) → too_large (peek)",
-        await medianMs(over),
-      ],
-      [
-        "250 KB escape-heavy, arguments before name → too_large (full parse)",
-        await medianMs(
-          call({ title: "cpu", format: "html", content: big }, true),
-        ),
-      ],
-      [
-        "500 KB escape-heavy (~1 MB body) → too_large (peek)",
+        "500 KB escape-heavy (~1 MB body) → too_large",
         await medianMs(
           call({
             title: "cpu",
