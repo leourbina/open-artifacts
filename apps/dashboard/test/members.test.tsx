@@ -274,13 +274,20 @@ describe("members: failures and edge cases", () => {
     ).toBe("page");
   });
 
-  it("shows Unknown for an invalid last-seen and Never for null", async () => {
-    as(owner, [owner, { ...other, lastSeenAt: "garbage" }, { ...guest }]);
+  it("labels last seen inline: Active …, Never signed in, Last active unknown", async () => {
+    const recent = new Date(Date.now() - 3 * 3600_000).toISOString();
+    as(owner, [
+      { ...owner, lastSeenAt: recent },
+      { ...other, lastSeenAt: "garbage" },
+      { ...guest },
+    ]);
     mount("/settings/members");
+    const me = await rowOf(owner.email);
+    expect(within(me).getByText(/^Active \S.*ago$/)).toBeTruthy();
     const row = await rowOf(other.email);
-    expect(within(row).getByText("Unknown")).toBeTruthy();
+    expect(within(row).getByText("Last active unknown")).toBeTruthy();
     const g = await rowOf(guest.email);
-    expect(within(g).getByText("Never")).toBeTruthy();
+    expect(within(g).getByText("Never signed in")).toBeTruthy();
   });
 
   it("a guest row offers no owner option", async () => {

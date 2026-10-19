@@ -217,9 +217,15 @@ function InviteDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
+const lastSeen = (iso: string | null) => {
+  if (!iso) return "Never signed in";
+  const when = relativeTime(iso);
+  return when ? `Active ${when}` : "Last active unknown";
+};
+
 /** Who, role, last seen, action; at <= 600px, who and role, then the rest. */
 const ROW =
-  "grid min-h-[52px] grid-cols-[minmax(0,1fr)_112px_104px_72px] items-center gap-[10px] border-0 border-t border-solid border-border py-[var(--oa-space-2)] max-[600px]:grid-cols-[minmax(0,1fr)_112px]";
+  "grid min-h-[52px] grid-cols-[minmax(0,1fr)_112px_136px_72px] items-center gap-[10px] border-0 border-t border-solid border-border py-[var(--oa-space-2)] max-[600px]:grid-cols-[minmax(0,1fr)_112px]";
 
 function Row({ m, you }: { m: Member; you: boolean }) {
   const patch = usePatchMember();
@@ -242,7 +248,7 @@ function Row({ m, you }: { m: Member; you: boolean }) {
         </div>
       </div>
       {m.role === "owner" || you ? (
-        <Badge variant="secondary" className="justify-self-start">
+        <Badge variant="outline" className="justify-self-start">
           {ROLE_LABEL[m.role]}
         </Badge>
       ) : (
@@ -253,9 +259,8 @@ function Row({ m, you }: { m: Member; you: boolean }) {
           onChange={(role) => patch.mutate({ id: m.id, role })}
         />
       )}
-      <span className={muted}>
-        {m.lastSeenAt ? relativeTime(m.lastSeenAt) || "Unknown" : "Never"}
-      </span>
+      {/* Labelled inline: there is no column header at any width. */}
+      <span className={muted}>{lastSeen(m.lastSeenAt)}</span>
       {locked ? (
         <span />
       ) : (
