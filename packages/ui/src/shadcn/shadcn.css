@@ -1,0 +1,11 @@
+/*
+ * Tailwind v4 (with its preflight reset) + the shadcn theme, exported as
+ * @oa/ui/shadcn.css. Without preflight: ./shadcn-utilities.css.
+ *
+ * Load the tokens first: `import "@oa/ui/tokens.css"; import "@oa/ui/shadcn.css";`
+ * (tokens.css isn't @imported here: its Google Fonts @import must stay at the
+ * top of a stylesheet, and Tailwind would inline it mid-file.)
+ */
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "./theme.css";

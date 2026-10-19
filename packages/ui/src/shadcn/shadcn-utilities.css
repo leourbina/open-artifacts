@@ -1,0 +1,13 @@
+/*
+ * Tailwind v4 without preflight + the shadcn theme, exported as
+ * @oa/ui/shadcn-utilities.css. For apps migrating page by page: preflight
+ * would restyle their hand-written pages (heading margins, borders,
+ * box-sizing). Switch to @oa/ui/shadcn.css once every page is on shadcn.
+ *
+ * Load the tokens first, as with shadcn.css.
+ */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+@import "tw-animate-css";
+@import "./theme.css";

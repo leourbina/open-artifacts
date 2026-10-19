@@ -12,8 +12,37 @@ import { cn } from "@oa/ui/shadcn";
 ```
 
 `shadcn.css` imports `tailwindcss`, so it includes Tailwind's preflight reset.
-It doesn't `@import` tokens.css itself, because the Google Fonts `@import` in
-tokens.css must stay at the top of a stylesheet.
+Neither entry `@import`s tokens.css itself, because the Google Fonts `@import`
+in tokens.css must stay at the top of a stylesheet.
+
+### Which entry
+
+| Entry | Preflight | Use when |
+|---|---|---|
+| `@oa/ui/shadcn.css` (`shadcn.css`) | yes | every page of the app is on shadcn |
+| `@oa/ui/shadcn-utilities.css` (`shadcn-utilities.css`) | no | migrating page by page |
+
+```ts
+import "@oa/ui/tokens.css";
+import "@oa/ui/shadcn-utilities.css"; // same theme, no preflight
+```
+
+Preflight resets heading sizes and margins, borders, `box-sizing` and form
+controls on every element, which restyles hand-written pages. The
+no-preflight entry imports only `tailwindcss/theme.css` and
+`tailwindcss/utilities.css` (Tailwind v4's documented split), plus
+`tw-animate-css`, with the same theme, `dark` variant and utilities. The
+dashboard uses it until all 7 of its areas are migrated, then flips to
+`shadcn.css`.
+
+Both entries import `theme.css`, the shared body: the variable mapping, the
+`dark` variant, `@theme inline` and one base rule, `* { border-color;
+outline-color }`. That rule stays in both: the components rely on it for
+their border and outline colors, and it sets nothing else (no widths,
+margins or fonts). The theme has no rule for `body` or headings, so nothing
+restyles bare elements. Without preflight, a component that assumes its
+resets (`border-style: solid`, zero margins, inherited fonts on buttons)
+needs them from the app until the flip.
 
 ## Adding components
 
@@ -35,7 +64,7 @@ saved (`^x` becomes the installed version; a test rejects ranges), and runs
   Components import `cn` from the `cn` package, per shadcn's 2026-09 change;
   `lib/utils.ts` re-exports it.
 - **CSS.** The CLI's CSS target is `cli-sink.css`, which nothing imports, so
-  `add` never edits `theme.css` (it appends neutral `:root`/`.dark` variable
+  `add` never edits the theme (it appends neutral `:root`/`.dark` variable
   blocks, e.g. for `sidebar`). The script prints whatever the CLI wrote to
   the sink (new variables, keyframes) and then resets it, so map anything a
   component needs into `theme.css` by hand.

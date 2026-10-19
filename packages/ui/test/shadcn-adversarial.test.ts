@@ -42,6 +42,8 @@ describe("shadcn foundation: adversarial", () => {
     expect(config.tailwind.css).toBe("src/shadcn/cli-sink.css");
     const sinkUsers = [
       theme,
+      readFileSync(`${pkg}/src/shadcn/shadcn.css`, "utf8"),
+      readFileSync(`${pkg}/src/shadcn/shadcn-utilities.css`, "utf8"),
       readFileSync(`${pkg}/src/shadcn/index.ts`, "utf8"),
     ];
     for (const src of sinkUsers) expect(src).not.toContain("cli-sink");

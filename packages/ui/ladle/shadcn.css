@@ -1,4 +1,4 @@
-/* The shadcn theme, plus the stories as a Tailwind source (theme.css only
+/* The shadcn theme, plus the stories as a Tailwind source (the theme only
    scans src/shadcn, so story-only classes would otherwise be missing). */
-@import "../src/shadcn/theme.css";
+@import "../src/shadcn/shadcn.css";
 @source "./";

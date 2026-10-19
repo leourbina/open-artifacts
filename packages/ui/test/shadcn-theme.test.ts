@@ -6,7 +6,33 @@ import { describe, expect, it } from "vitest";
 const dir = `${import.meta.dirname}/../src`;
 const themePath = `${dir}/shadcn/theme.css`;
 const theme = readFileSync(themePath, "utf8");
+// The two CSS entries, both importing theme.css.
+const ENTRIES = ["shadcn.css", "shadcn-utilities.css"];
 const tokensCss = readFileSync(`${dir}/tokens/tokens.css`, "utf8");
+
+// CSS packages resolve through their "style" export (or a subpath file, as
+// in tailwindcss/theme.css), as bundlers do.
+const resolveCss = (id: string) => {
+  const [name, ...sub] = id.split("/");
+  // Direct deps of @oa/ui are linked under its node_modules.
+  const pkg = resolve(dir, "../node_modules", name as string, "package.json");
+  if (sub.length) return resolve(dirname(pkg), sub.join("/"));
+  const { exports, style } = JSON.parse(readFileSync(pkg, "utf8"));
+  return resolve(dirname(pkg), exports?.["."]?.style ?? style);
+};
+const loadStylesheet = async (id: string, base: string) => {
+  const path = id.startsWith(".") ? resolve(base, id) : resolveCss(id);
+  return { path, base: dirname(path), content: readFileSync(path, "utf8") };
+};
+const build = async (entry: string, candidates: string[]) => {
+  const from = `${dir}/shadcn/${entry}`;
+  const compiler = await compile(readFileSync(from, "utf8"), {
+    base: dirname(from),
+    from,
+    loadStylesheet,
+  });
+  return compiler.build(candidates);
+};
 
 // Theme minus comments, so prose can't satisfy or break a check.
 const code = theme.replace(/\/\*[\s\S]*?\*\//g, "");
@@ -82,24 +108,8 @@ describe("shadcn theme.css", () => {
     expect(code.match(/--background\s*:/g)).toHaveLength(1);
   });
 
-  it("compiles with Tailwind and themes the shadcn utilities", async () => {
-    // CSS packages resolve through their "style" export, as bundlers do.
-    const resolveCss = (id: string) => {
-      // Direct deps of @oa/ui are linked under its node_modules.
-      const pkg = resolve(dir, "../node_modules", id, "package.json");
-      const { exports, style } = JSON.parse(readFileSync(pkg, "utf8"));
-      return resolve(dirname(pkg), exports?.["."]?.style ?? style);
-    };
-    const loadStylesheet = async (id: string, base: string) => {
-      const path = id.startsWith(".") ? resolve(base, id) : resolveCss(id);
-      return { path, base: dirname(path), content: readFileSync(path, "utf8") };
-    };
-    const compiler = await compile(theme, {
-      base: dirname(themePath),
-      from: themePath,
-      loadStylesheet,
-    });
-    const css = compiler.build([
+  it.each(ENTRIES)("%s compiles and themes the shadcn utilities", async (e) => {
+    const css = await build(e, [
       "bg-background",
       "text-primary-foreground",
       "border-input",
@@ -118,9 +128,32 @@ describe("shadcn theme.css", () => {
       /:root, \[data-theme\] \{[^}]*--background: var\(--oa-bg\)/,
     );
     expect(css).not.toContain("@import url(");
-    expect(css).toContain('[data-theme="dark"]');
+    expect(css).toMatch(
+      /\.dark\\:bg-card:where\(:root\[data-theme="dark"\][^{]*\{[^}]*var\(--card\)/,
+    );
     expect(css).toContain("prefers-color-scheme: dark");
     expect(css).toMatch(/\.animate-in/);
+    // The shared base rule: border and outline colors only.
+    expect(css).toMatch(/\* \{\s*border-color: var\(--border\);/);
+  });
+
+  it("shadcn.css includes preflight; shadcn-utilities.css doesn't", async () => {
+    const full = await build("shadcn.css", []);
+    const bare = await build("shadcn-utilities.css", []);
+    for (const css of [full, bare])
+      expect(css).toMatch(/^@layer theme, base, components, utilities;/m);
+    // Preflight's tells: its box-sizing reset, heading resets, form resets.
+    const preflight = [
+      /\*, ::after, ::before, ::backdrop, ::file-selector-button \{\s*box-sizing: border-box;/,
+      /h1, h2, h3, h4, h5, h6 \{\s*font-size: inherit;/,
+      /margin: 0;/,
+      /box-sizing/,
+      /^\s*(html|body|h1|button|input)\b[^{]*\{/m,
+    ];
+    for (const re of preflight) {
+      expect(full).toMatch(re);
+      expect(bare).not.toMatch(re);
+    }
   });
 });
 
