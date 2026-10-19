@@ -34,8 +34,8 @@ A screen a role can't reach renders the `edge-pages.html?page=not-found` 404 in 
 
 | File | Screen | Extra params | Notes |
 |---|---|---|---|
-| `library.html` | Library | `layout=grid\|list`, `overlay=none\|drop\|filter\|drawer`, `state=hover\|focus\|active` | Scope tabs, filters, search, drop-zone overlay. Cards and rows are fully clickable (the title link is stretched over them). `state=hover\|focus\|active` forces that interaction state on the first card, or the first row with `layout=list` |
-| `artifact-view.html` | Artifact view | `tab=versions\|share\|details`, `panel=open\|closed`, `menu=none\|version\|more` | Title bar, version picker, side panel, raw-open |
+| `library.html` | Library | `layout=grid\|list`, `overlay=none\|drop\|filter\|drawer`, `state=hover\|focus\|active`, `banner=none\|cpu` | Scope tabs, filters, search, drop-zone overlay. `banner=cpu` shows the CPU-limit warning (See plans for owner and admin only; members get "Ask your instance owner about upgrading."). Cards and rows are fully clickable (the title link is stretched over them). `state=hover\|focus\|active` forces that interaction state on the first card, or the first row with `layout=list` |
+| `artifact-view.html` | Artifact view | `tab=versions\|share\|details`, `panel=open\|closed`, `menu=none\|version\|more`, `notice=none\|slow\|cpu`, `reloads=0\|2` | Title bar, version picker, side panel, raw-open. `notice=slow\|cpu` shows a dismissible info strip above the frame while the artifact stays visible (the shell can't prove a failure); `reloads=2` adds the Workers Paid hint, with See plans for owner and admin only |
 | `version-diff.html` | Version diff | `menu=none\|a\|b` | Source diff plus rendered previews side by side |
 | `public-viewer.html` | Anonymous public viewer | none | Minimal chrome, no sign-in |
 | `share-dialog.html` | Share dialog | `as=creator\|editor\|viewer`, `vis=team\|private\|public` | Visibility segmented control, invites with role, copy link. Non-creators see everything read-only except Copy link |

@@ -192,6 +192,12 @@ textarea.control{height:auto;min-height:72px;padding:6px var(--oa-space-2);resiz
 .tasks li.done span{color:var(--oa-text-muted);text-decoration:line-through;text-decoration-color:var(--oa-border)}
 .doc-sk{max-width:680px;margin:0 auto;display:flex;flex-direction:column;gap:10px}
 .doc-sk .sk{height:10px}
+.notice{max-width:680px;margin:0 auto 24px;padding:6px 6px 6px 12px;gap:10px}
+.notice > .ic{color:var(--oa-accent-fg)}
+.notice .text a{color:var(--oa-text);font-weight:500;text-underline-offset:2px}
+.notice .nacts{display:flex;align-items:center;gap:6px;flex:none}
+.notice .nacts .btn{background:var(--oa-surface)}
+@media (max-width:560px){.notice{flex-wrap:wrap}.notice .text{flex:1 1 calc(100% - 60px)}.notice .nacts{margin-left:26px}}
 .state-box{max-width:560px;margin:24px auto 0;display:flex;flex-direction:column;gap:16px}
 
 /* ---------- Side panel ---------- */
@@ -395,6 +401,19 @@ textarea.control{height:auto;min-height:72px;padding:6px var(--oa-space-2);resiz
 
   <div class="split" id="split">
     <main class="docpane" aria-label="Artifact content">
+      <!-- ?notice=slow|cpu: the shell can't prove the artifact failed, so it hints above the frame and leaves the artifact visible. -->
+      <div class="banner info notice" id="notice" role="status" hidden>
+        <svg class="ic sm"><use href="#i-alert"/></svg>
+        <div class="text">
+          <span data-notice="slow">This artifact hasn't responded yet. If it looks wrong, reload it.</span>
+          <span data-notice="cpu">This artifact may have hit your instance's CPU limit. Reloading usually works.<span data-reloads> Workers Paid raises the limit.</span> <a href="#">Learn more</a></span>
+        </div>
+        <div class="nacts">
+          <span data-reloads data-notice="cpu"><a class="btn sm" data-role="owner admin" href="https://www.cloudflare.com/plans/developer-platform/" target="_blank" rel="noopener">See plans<svg class="ic sm"><use href="#i-ext"/></svg></a></span>
+          <button class="btn sm" id="notice-reload"><svg class="ic sm"><use href="#i-retry"/></svg>Reload</button>
+          <button class="btn ghost icon sm" id="notice-dismiss" aria-label="Dismiss"><svg class="ic sm"><use href="#i-x"/></svg></button>
+        </div>
+      </div>
       <article class="doc" data-when="default">
         <div class="docmeta">
           <span class="avatar" style="--hue:215">MC</span><span>Maya Chen</span>
@@ -613,7 +632,7 @@ textarea.control{height:auto;min-height:72px;padding:6px var(--oa-space-2);resiz
   </div>
 </div>
 
-<script>window.OA_PARAMS = { tab: ['versions', 'share', 'details'], panel: ['open', 'closed'], menu: ['none', 'version', 'more'], as: ['creator', 'editor', 'viewer'], role: ['owner', 'admin', 'member', 'guest'] };</script>
+<script>window.OA_PARAMS = { tab: ['versions', 'share', 'details'], panel: ['open', 'closed'], menu: ['none', 'version', 'more'], as: ['creator', 'editor', 'viewer'], role: ['owner', 'admin', 'member', 'guest'], notice: ['none', 'slow', 'cpu'], reloads: ['0', '2'] };</script>
 <script>
 /* Mockup plumbing: ?theme=light|dark, ?state=default|empty|loading|error, plus per-page params. */
 const OA = (() => {
@@ -700,7 +719,15 @@ document.getElementById('share-btn').onclick = () => { OA.S.tab = 'share'; OA.S.
 pt.onclick = document.getElementById('panel-close').onclick = () => { OA.S.panel = OA.S.panel === 'open' ? 'closed' : 'open'; OA.apply(); };
 document.getElementById('retry').onclick = e => { const b = e.currentTarget; b.innerHTML = '<span class="spinner"></span>Retrying'; setTimeout(() => { OA.S.state = 'default'; OA.apply(); b.innerHTML = '<svg class="ic sm"><use href="#i-retry"/></svg>Retry'; }, 900); };
 document.getElementById('load-older').onclick = e => { const b = e.currentTarget; b.disabled = true; b.setAttribute('aria-busy', 'true'); b.innerHTML = '<span class="spinner" style="width:12px;height:12px"></span>Loading older versions'; setTimeout(() => { b.disabled = false; b.removeAttribute('aria-busy'); b.innerHTML = '<svg class="ic sm"><use href="#i-down"/></svg>Load older versions'; }, 1200); };
+const notice = document.getElementById('notice');
+document.getElementById('notice-dismiss').onclick = () => { OA.S.notice = 'none'; OA.apply(); };
+document.getElementById('notice-reload').onclick = e => { const b = e.currentTarget, h = b.innerHTML; b.innerHTML = '<span class="spinner"></span>Reloading'; setTimeout(() => { OA.S.notice = 'none'; OA.apply(); b.innerHTML = h; }, 900); };
 OA.on(S => {
+  notice.hidden = S.notice === 'none' || S.state !== 'default';
+  /* &reloads=2 adds the upgrade hint after repeated reloads (cpu notice only). */
+  notice.querySelectorAll('[data-notice],[data-reloads]').forEach(el => {
+    el.hidden = (el.dataset.notice && el.dataset.notice !== S.notice) || (el.hasAttribute('data-reloads') && S.reloads !== '2');
+  });
   if (S.role === 'guest' && S.as === 'creator') { S.as = 'viewer'; return OA.apply(); }
   document.querySelectorAll('[data-lock]').forEach(el => { el.disabled = !el.dataset.lock.split(' ').includes(S.as); });
   setTab(S.tab);

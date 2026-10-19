@@ -256,6 +256,14 @@ textarea.control{height:auto;min-height:72px;padding:6px var(--oa-space-2);resiz
 .grid.list .card:active,.grid.list .card.is-active{background:var(--oa-sunken)}
 @media (prefers-reduced-motion:reduce){.grid .card{transition:none !important;transform:none !important}}
 
+/* CPU-limit banner (?banner=cpu) */
+.cpu-banner{align-items:flex-start;padding:var(--oa-space-3) var(--oa-space-3) var(--oa-space-3) var(--oa-space-4)}
+.cpu-banner > .ic{color:var(--oa-warning);margin-top:2px}
+.cpu-banner p{margin:2px 0 0;color:var(--oa-text-2)}
+.cpu-banner .bacts{display:flex;align-items:center;gap:12px;margin-top:8px;flex-wrap:wrap}
+.cpu-banner .blink{color:var(--oa-text);font-weight:500;text-underline-offset:2px}
+.cpu-banner #cpu-dismiss{color:var(--oa-text-2)}
+
 /* skeleton cards */
 .skc .thumb{background:var(--oa-surface-2)}
 .skc .thumb .sk{height:100%;border-radius:4px 4px 0 0}
@@ -389,6 +397,19 @@ textarea.control{height:auto;min-height:72px;padding:6px var(--oa-space-2);resiz
     </header>
 
     <section class="lib">
+      <!-- ?banner=cpu: sits where the quota banner sits on edge-pages.html?page=quota -->
+      <div class="banner warning cpu-banner" id="cpu-banner" role="status" hidden>
+        <svg class="ic"><use href="#i-gauge"/></svg>
+        <div class="text">
+          <strong>Some requests hit Cloudflare's free CPU limit</strong>
+          <p>Your instance hit the limit 4 times today, usually from bursts of large publishes. Retrying generally works. Workers Paid ($5 a month) raises the limit to 30 seconds.<span data-role="member"> Ask your instance owner about upgrading.</span></p>
+          <div class="bacts">
+            <a class="btn primary sm" data-role="owner admin" href="https://www.cloudflare.com/plans/developer-platform/" target="_blank" rel="noopener">See plans<svg class="ic sm"><use href="#i-ext"/></svg></a>
+            <a class="blink" href="#">Learn more</a>
+          </div>
+        </div>
+        <button class="btn ghost icon sm" id="cpu-dismiss" aria-label="Dismiss"><svg class="ic sm"><use href="#i-x"/></svg></button>
+      </div>
       <div class="lib-head">
         <h1 data-role="owner admin member">Library</h1>
         <h1 data-role="guest">Shared with me</h1>
@@ -493,7 +514,7 @@ textarea.control{height:auto;min-height:72px;padding:6px var(--oa-space-2);resiz
   </div>
 </div>
 
-<script>window.OA_PARAMS = { state: ['default', 'empty', 'loading', 'error', 'hover', 'focus', 'active'], layout: ['grid', 'list'], overlay: ['none', 'drop', 'filter', 'drawer'], role: ['owner', 'admin', 'member', 'guest'] };</script>
+<script>window.OA_PARAMS = { state: ['default', 'empty', 'loading', 'error', 'hover', 'focus', 'active'], layout: ['grid', 'list'], overlay: ['none', 'drop', 'filter', 'drawer'], role: ['owner', 'admin', 'member', 'guest'], banner: ['none', 'cpu'] };</script>
 <script>
 /* Mockup plumbing: ?theme=light|dark, ?state=default|empty|loading|error, plus per-page params. */
 const OA = (() => {
@@ -623,7 +644,10 @@ addEventListener('dragover', e => e.preventDefault());
 addEventListener('drop', e => { e.preventDefault(); depth = 0; drop.hidden = true; });
 drop.onclick = () => { OA.S.overlay = 'none'; OA.apply(); };
 document.getElementById('retry').onclick = e => { const b = e.currentTarget; b.innerHTML = '<span class="spinner"></span>Retrying'; setTimeout(() => { OA.S.state = 'default'; OA.apply(); b.innerHTML = '<svg class="ic sm"><use href="#i-retry"/></svg>Retry'; }, 900); };
+document.getElementById('cpu-dismiss').onclick = () => { OA.S.banner = 'none'; OA.apply(); };
 OA.on(S => {
+  /* Guests never see instance-level limits. */
+  document.getElementById('cpu-banner').hidden = S.banner !== 'cpu' || S.role === 'guest' || S.state === 'loading';
   setLayout(S.layout);
   const first = grid.querySelector('.card');
   ['hover', 'focus', 'active'].forEach(k => first.classList.toggle('is-' + k, S.state === k));
