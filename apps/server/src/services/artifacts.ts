@@ -38,6 +38,7 @@ import { type ManifestEntry, materialize, planFiles } from "./manifest.js";
 import { getSettings } from "./members.js";
 import { ftsFilter, seedSearchStmt, syncTitleStmt } from "./search.js";
 import { writeThumbnail } from "./thumbs.js";
+import { toUserRef } from "./users.js";
 
 type Ctx = Pick<ExecutionContext, "waitUntil">;
 const CAPS = { db: false, viewer: false, storage: false };
@@ -428,19 +429,27 @@ export function toSummary(
   };
 }
 
-/** Anonymous callers never see member emails. */
-export function redact(ref: UserRef, caller: Caller): UserRef {
-  return caller.kind === "user" ? ref : { ...ref, email: null };
+/** Anonymous callers never see member emails (not even as a name fallback). */
+export function redact(
+  u: { id: string; email: string; name: string; displayName: string | null },
+  caller: Caller,
+): UserRef {
+  return toUserRef(u, caller.kind === "user");
 }
 
-async function ownerRef(env: Env, ownerId: string): Promise<UserRef> {
+async function ownerRef(env: Env, ownerId: string, caller: Caller) {
   const u = await env.DB.prepare(
-    "select id, email, name from users where id = ?",
+    "select id, email, name, display_name as displayName from users where id = ?",
   )
     .bind(ownerId)
-    .first<UserRef>();
+    .first<{
+      id: string;
+      email: string;
+      name: string;
+      displayName: string | null;
+    }>();
   if (!u) throw notFound();
-  return u;
+  return redact(u, caller);
 }
 
 /** Viewer+; otherwise 404. Deleted artifacts are 404 (see list includeDeleted). */
@@ -454,7 +463,7 @@ export async function getSummary(
   return toSummary(
     env,
     r.artifact,
-    redact(await ownerRef(env, r.artifact.ownerId), caller),
+    await ownerRef(env, r.artifact.ownerId, caller),
     r.level,
   );
 }
@@ -536,6 +545,7 @@ export function listQuery(env: Env, caller: Caller, q: ListQuery) {
       a: artifacts,
       ownerEmail: users.email,
       ownerName: users.name,
+      ownerDisplayName: users.displayName,
       shareRole: shares.role,
     })
     .from(artifacts)
@@ -569,7 +579,15 @@ export async function list(
       toSummary(
         env,
         r.a,
-        { id: r.a.ownerId, email: r.ownerEmail, name: r.ownerName },
+        redact(
+          {
+            id: r.a.ownerId,
+            email: r.ownerEmail,
+            name: r.ownerName,
+            displayName: r.ownerDisplayName,
+          },
+          caller,
+        ),
         r.a.ownerId === me
           ? "owner"
           : r.shareRole === "editor" || r.shareRole === "viewer"
@@ -600,6 +618,7 @@ type VersionRow = {
   format: Format;
   email: string;
   name: string | null;
+  displayName: string | null;
 };
 
 /** A versions page stops once its manifests' cumulative length passes this. */
@@ -629,7 +648,8 @@ export async function listVersions(
      )
      select v.version, v.entry, v.manifest, v.language, v.message, v.agent_name,
        v.agent_version, v.created_by, v.created_at, v.text_indexed,
-       coalesce(v.format, a.format) as format, u.email, u.name
+       coalesce(v.format, a.format) as format, u.email, u.name,
+       u.display_name as displayName
      from cut
      join versions v on v.artifact_id = ?1 and v.version = cut.version
      join artifacts a on a.id = v.artifact_id
@@ -652,7 +672,12 @@ export async function listVersions(
         ? null
         : { name: v.agent_name, version: v.agent_version },
     createdBy: redact(
-      { id: v.created_by, email: v.email, name: v.name },
+      {
+        id: v.created_by,
+        email: v.email,
+        name: v.name ?? "",
+        displayName: v.displayName,
+      },
       caller,
     ),
     createdAt: iso(v.created_at),
