@@ -12,6 +12,12 @@ export interface Env {
   BROWSER?: Fetcher;
   /** Optional Email Service send binding; invite/share emails are off without it. */
   EMAIL?: SendEmail;
+  /**
+   * "on" enables server thumbnails (with BROWSER bound); anything else, unset
+   * included, is off. Setup sets it from the plan (Paid): a Free account's
+   * alarm CPU (10 ms) can't afford a capture.
+   */
+  SERVER_THUMBNAILS?: string;
   // vars
   APP_HOST: string;
   CONTENT_HOST: string;

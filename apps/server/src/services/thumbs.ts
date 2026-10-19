@@ -3,6 +3,7 @@ import { signContent } from "../content/signing.js";
 import type { Env } from "../env.js";
 import { contentOrigin } from "../http/errors.js";
 import { decodeBase64 } from "../util/base64.js";
+import { type Cdp, connectCdp, LaunchError } from "./cdp.js";
 
 // Server-side thumbnails (spec §6.9 stretch) through Browser Run, run from the
 // artifact DO's alarm (runtime/do.ts), never on a request, and strictly
@@ -12,10 +13,16 @@ import { decodeBase64 } from "../util/base64.js";
 // stored thumbnail at the newest version written.
 
 export const THUMB = {
-  width: 1280,
-  height: 800,
+  /**
+   * The viewport and image size: the client's (packages/runtime snapshot.ts
+   * WIDTH × HEIGHT), so server and client thumbnails look alike. `scale` 1:
+   * a full-size image costs no measurable CPU over 0.5 (bench-thumbs.ts).
+   */
+  width: 1200,
+  height: 750,
+  scale: 1,
   /** webp quality steps, highest first, until it fits LIMITS.thumbnailBytes. */
-  qualities: [80, 60, 40, 25] as const,
+  qualities: [60, 45, 30, 20] as const,
   /** Whole capture, launch to last screenshot. */
   totalMs: 15_000,
   navigationMs: 8_000,
@@ -24,6 +31,11 @@ export const THUMB = {
   /** Free plan: 1 new browser per 20 s per account; one launch per gap here. */
   launchGapMs: 20_000,
 } as const;
+
+/** Server thumbnails run only with a BROWSER binding AND SERVER_THUMBNAILS "on". */
+export const serverThumbnails = (
+  env: Pick<Env, "BROWSER" | "SERVER_THUMBNAILS">,
+): boolean => !!env.BROWSER && env.SERVER_THUMBNAILS === "on";
 
 /**
  * What the job did. "deferred": the launch slot was taken (no browser used);
@@ -38,59 +50,11 @@ export type ThumbResult =
   | "launch_failed"
   | "failed";
 
-// The slice of @cloudflare/puppeteer this uses (tests pass a fake).
-type ThumbRequest = {
-  url(): string;
-  isNavigationRequest(): boolean;
-  frame(): unknown;
-  isInterceptResolutionHandled(): boolean;
-  abort(reason?: string): Promise<void>;
-  continue(): Promise<void>;
-};
-type ThumbPage = {
-  setViewport(v: { width: number; height: number }): Promise<void>;
-  setRequestInterception(on: boolean): Promise<void>;
-  on(event: string, handler: (x: never) => void): unknown;
-  mainFrame(): unknown;
-  url(): string;
-  goto(
-    url: string,
-    o: { waitUntil: "load"; timeout: number },
-  ): Promise<unknown>;
-  waitForFunction(fn: string, o: { timeout: number }): Promise<unknown>;
-  waitForNetworkIdle(o: {
-    concurrency: number;
-    idleTime: number;
-    timeout: number;
-  }): Promise<void>;
-  screenshot(o: {
-    type: "webp";
-    quality: number;
-    encoding: "base64";
-  }): Promise<string>;
-};
-type ThumbBrowser = { newPage(): Promise<ThumbPage>; close(): Promise<void> };
-export type ThumbLaunch = (binding: Fetcher) => Promise<ThumbBrowser>;
-
-/** Lazy: puppeteer (~350 KB) is only evaluated in an alarm that captures. */
-const puppeteerLaunch: ThumbLaunch = async (binding) => {
-  const { default: puppeteer } = await import("@cloudflare/puppeteer");
-  return (await puppeteer.launch(binding)) as unknown as ThumbBrowser;
-};
-
 const STOP_KEY = "browser_stop";
 const SLOT_KEY = "browser_slot";
 const utcDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 const thumbKey = (id: string) => `thumbs/${id}.webp`;
 
-class LaunchError extends Error {
-  /** The launch error's HTTP status, if it carried one (Browser Run's 429). */
-  status: unknown;
-  constructor(e: unknown) {
-    super(String((e as Error)?.message ?? e));
-    this.status = (e as { status?: unknown })?.status;
-  }
-}
 class TimeoutError extends Error {}
 
 /** Browser Run's 429 (status or text) or its daily "time limit exceeded": stop for the UTC day. */
@@ -166,14 +130,13 @@ export async function captureThumbnail(
   id: string,
   version: number,
   o: {
-    launch?: ThumbLaunch;
     now?: number;
     totalMs?: number;
     navigationMs?: number;
   } = {},
 ): Promise<ThumbResult> {
   const binding = env.BROWSER;
-  if (!binding) return "skipped";
+  if (!binding || !serverThumbnails(env)) return "skipped";
   const now = o.now ?? Date.now();
   const row = await env.DB.prepare(
     "select current_version v, thumbnail_version t, format f from artifacts where id = ? and deleted_at is null",
@@ -209,7 +172,6 @@ export async function captureThumbnail(
     bytes = await shoot(
       binding,
       `${contentOrigin(env)}${prefix}__view`,
-      o.launch ?? puppeteerLaunch,
       o.totalMs ?? THUMB.totalMs,
       o.navigationMs ?? THUMB.navigationMs,
       READY[row.f] ?? null,
@@ -244,99 +206,195 @@ export async function captureThumbnail(
     : "skipped";
 }
 
+/** In-page poll of `cond` every 50 ms for up to `ms`; resolves true once it holds. */
+const pollFor = (cond: string, ms: number) =>
+  `new Promise((r) => { const end = Date.now() + ${ms}; (function f() {
+    let ok = false; try { ok = !!(${cond}); } catch {}
+    if (ok) return r(true); if (Date.now() >= end) return r(false); setTimeout(f, 50);
+  })(); })`;
+
 /**
- * Launches one browser, loads `url` with every top-level navigation (and
- * redirect) pinned to its origin, and screenshots the 1280×800 viewport as
- * webp, lowering the quality until it fits. Subresources are left to the
- * content host's CSP. The browser is fresh (no cookies or storage) and always
- * closed, at `totalMs` at the latest. null: too large at every quality.
+ * networkidle2-style settle without the Network domain: resolves once the
+ * page's resource-timing count has not grown for 500 ms, at most 2 s.
+ */
+const SETTLE = `new Promise((r) => { const end = Date.now() + 2000; let n = -1, at = Date.now();
+  (function f() { const c = performance.getEntriesByType("resource").length;
+    if (c !== n) { n = c; at = Date.now(); }
+    if (Date.now() - at >= 500 || Date.now() >= end) return r(true); setTimeout(f, 100);
+  })(); })`;
+
+/**
+ * Opens one browser (cdp.ts), loads `url` with every top-level navigation
+ * (and redirect) of the page pinned to its origin, and screenshots the
+ * THUMB.width × THUMB.height layout at THUMB.scale as webp, lowering the quality until it fits.
+ * Only document requests are intercepted (Fetch domain); subresources are
+ * left to the content host's CSP, and the Network domain is never enabled.
+ * Popups are closed before they run (auto-attach) and dialogs dismissed. The browser is fresh (no cookies
+ * or storage) and always closed, at `totalMs` at the latest. null: too large
+ * at every quality.
  */
 async function shoot(
   binding: Fetcher,
   url: string,
-  launch: ThumbLaunch,
   totalMs: number,
   navigationMs: number,
   ready: string | null,
 ): Promise<Uint8Array | null> {
   const origin = new URL(url).origin;
-  let browser: ThumbBrowser | null = null;
+  let cdp: Cdp | null = null;
   let done = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new TimeoutError("thumbnail capture timed out")),
-      totalMs,
-    );
+  const timers: ReturnType<typeof setTimeout>[] = [];
+  const sleep = (ms: number) =>
+    new Promise<void>((r) => {
+      timers.push(setTimeout(r, ms));
+    });
+  const deadline = sleep(totalMs).then(() => {
+    throw new TimeoutError("thumbnail capture timed out");
   });
   const run = async (): Promise<Uint8Array | null> => {
-    let b: ThumbBrowser;
-    try {
-      b = await launch(binding);
-    } catch (e) {
-      throw new LaunchError(e);
-    }
-    // Launched after the deadline: close it here, nobody else will.
+    const c = await connectCdp(binding);
+    // Connected after the deadline: close it here, nobody else will.
     if (done) {
-      await b.close().catch(() => {});
+      await c.close();
       throw new TimeoutError("thumbnail capture timed out");
     }
-    browser = b;
-    const page = await b.newPage();
-    await page.setViewport({ width: THUMB.width, height: THUMB.height });
-    await page.setRequestInterception(true);
+    cdp = c;
+    let target = "";
     let left = false;
-    page.on("request", (req: ThumbRequest) => {
-      if (req.isInterceptResolutionHandled()) return;
-      const top = req.isNavigationRequest() && req.frame() === page.mainFrame();
-      if (top && !sameOrigin(req.url(), origin)) {
+    ({ targetId: target } = await c.send<{ targetId: string }>(
+      "Target.createTarget",
+      { url: "about:blank" },
+    ));
+    const { sessionId: s } = await c.send<{ sessionId: string }>(
+      "Target.attachToTarget",
+      { targetId: target, flatten: true },
+    );
+    // Targets the page starts attach paused (setAutoAttach below): a popup
+    // (or a popup's popup, attached through it) is closed before it runs;
+    // frames and workers resume and load like any subresource.
+    c.on("Target.attachedToTarget", (p) => {
+      const t = p.targetInfo as { targetId: string; type: string };
+      if (t.type === "page")
+        void c
+          .send("Target.closeTarget", { targetId: t.targetId })
+          .catch(() => {});
+      else
+        void c
+          .send("Runtime.runIfWaitingForDebugger", {}, String(p.sessionId))
+          .catch(() => {});
+    });
+    c.on("Fetch.requestPaused", (p, sid) => {
+      if (sid !== s) return;
+      const reqUrl = (p.request as { url?: string } | undefined)?.url ?? "";
+      // A page target's main frame id is its target id.
+      if (p.frameId === target && !sameOrigin(reqUrl, origin)) {
         left = true;
-        void req.abort("blockedbyclient").catch(() => {});
-      } else void req.continue().catch(() => {});
+        void c
+          .send(
+            "Fetch.failRequest",
+            { requestId: p.requestId, errorReason: "BlockedByClient" },
+            s,
+          )
+          .catch(() => {});
+      } else
+        void c
+          .send("Fetch.continueRequest", { requestId: p.requestId }, s)
+          .catch(() => {});
     });
-    page.on("popup", (p: { close(): Promise<void> }) => {
-      void p.close().catch(() => {});
+    c.on("Page.javascriptDialogOpening", (_p, sid) => {
+      void c
+        .send("Page.handleJavaScriptDialog", { accept: false }, sid)
+        .catch(() => {});
     });
-    page.on("dialog", (d: { dismiss(): Promise<void> }) => {
-      void d.dismiss().catch(() => {});
+    let loaded = () => {};
+    const load = new Promise<void>((r) => {
+      loaded = r;
     });
+    c.on("Page.loadEventFired", (_p, sid) => {
+      if (sid === s) loaded();
+    });
+    await Promise.all([
+      c.send(
+        "Target.setAutoAttach",
+        { autoAttach: true, waitForDebuggerOnStart: true, flatten: true },
+        s,
+      ),
+      c.send("Page.enable", {}, s),
+      c.send(
+        "Fetch.enable",
+        { patterns: [{ urlPattern: "*", resourceType: "Document" }] },
+        s,
+      ),
+      c.send(
+        "Emulation.setDeviceMetricsOverride",
+        {
+          width: THUMB.width,
+          height: THUMB.height,
+          deviceScaleFactor: 1,
+          mobile: false,
+        },
+        s,
+      ),
+    ]);
     const t0 = Date.now();
-    try {
-      await page.goto(url, { waitUntil: "load", timeout: navigationMs });
-    } catch (e) {
-      // A slow page is shot as it is; anything else (or leaving) fails.
-      if (left || (e as Error)?.name !== "TimeoutError") throw e;
-    }
-    if (left || !sameOrigin(page.url(), origin))
-      throw new Error("navigation left the content host");
-    // The page's readiness signal, within the same 8 s; else a short
-    // networkidle2-style settle (≤ 2 inflight requests for 500 ms). With the
-    // budget spent, shoot as it is: puppeteer reads timeout 0 as "no timeout".
+    const nav = await c.send<{ errorText?: string }>(
+      "Page.navigate",
+      { url },
+      s,
+    );
+    const offHost = () => new Error("navigation left the content host");
+    if (left) throw offHost();
+    if (nav.errorText) throw new Error(`navigation failed: ${nav.errorText}`);
+    // A slow page is shot as it is.
+    await Promise.race([load, sleep(navigationMs)]);
+    if (left) throw offHost();
+    // The page's readiness signal, within the same 8 s; else the settle.
+    // With the budget spent, shoot as it is. Each poll is also bounded here,
+    // Worker-side: the page owns its Date and setTimeout and can stall them.
     const leftMs = navigationMs - (Date.now() - t0);
     if (leftMs > 0) {
+      const evaluate = (expression: string, ms: number) =>
+        Promise.race([
+          c
+            .send<{ result?: { value?: unknown } }>(
+              "Runtime.evaluate",
+              { expression, awaitPromise: true, returnByValue: true },
+              s,
+            )
+            .then((r) => r.result?.value === true),
+          sleep(ms).then(() => false),
+        ]);
       const signalled =
-        ready !== null &&
-        (await page
-          .waitForFunction(ready, { timeout: Math.max(1, leftMs) })
-          .then(
-            () => true,
-            () => false,
-          ));
-      if (!signalled)
-        await page
-          .waitForNetworkIdle({ concurrency: 2, idleTime: 500, timeout: 2_000 })
-          .catch(() => {});
+        ready !== null && (await evaluate(pollFor(ready, leftMs), leftMs));
+      // No signal: settle, within what is left of the same budget (a poll
+      // that timed out has spent it, so the page is shot as it is).
+      const settleMs = Math.min(2_000, navigationMs - (Date.now() - t0));
+      if (!signalled && settleMs > 0) await evaluate(SETTLE, settleMs);
     }
-    if (left || !sameOrigin(page.url(), origin))
-      throw new Error("navigation left the content host");
+    if (left) throw offHost();
+    // Defense in depth beside `left`: where the main frame is, per the browser.
+    const { frameTree } = await c.send<{
+      frameTree: { frame: { url: string } };
+    }>("Page.getFrameTree", {}, s);
+    if (!sameOrigin(frameTree.frame.url, origin)) throw offHost();
     for (const quality of THUMB.qualities) {
-      // base64 straight from CDP, decoded natively (decodeBase64).
-      const b64 = await page.screenshot({
-        type: "webp",
-        quality,
-        encoding: "base64",
-      });
-      const shot = decodeBase64(b64);
+      const { data } = await c.send<{ data: string }>(
+        "Page.captureScreenshot",
+        {
+          format: "webp",
+          quality,
+          clip: {
+            x: 0,
+            y: 0,
+            width: THUMB.width,
+            height: THUMB.height,
+            scale: THUMB.scale,
+          },
+          captureBeyondViewport: false,
+        },
+        s,
+      );
+      const shot = decodeBase64(data);
       if (!shot) throw new Error("screenshot is not base64");
       if (shot.byteLength <= LIMITS.thumbnailBytes) return shot;
     }
@@ -346,7 +404,7 @@ async function shoot(
     return await Promise.race([run(), deadline]);
   } finally {
     done = true;
-    clearTimeout(timer);
-    await (browser as ThumbBrowser | null)?.close().catch(() => {});
+    for (const t of timers) clearTimeout(t);
+    await (cdp as Cdp | null)?.close();
   }
 }
