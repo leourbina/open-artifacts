@@ -7,7 +7,12 @@ import { sandbox, script } from "./stubs.ts";
 const FAKE = `oa_pat_${"A".repeat(32)}`;
 const ok = (step: string) => `{"step":"${step}","status":"ok"}`;
 
-const install = (lines: string[], pnpmExit = 0, mode = "install") => {
+const install = (
+  lines: string[],
+  pnpmExit = 0,
+  mode = "install",
+  extra: Record<string, string> = {},
+) => {
   const body = `cat <<'EOF_FIXTURE'\n${lines.join("\n")}\nEOF_FIXTURE\nexit ${pnpmExit}`;
   const sb = sandbox({ pnpm: body });
   const summary = join(mkdtempSync(join(tmpdir(), "sum-")), "summary.md");
@@ -18,6 +23,7 @@ const install = (lines: string[], pnpmExit = 0, mode = "install") => {
       PROD_APP_HOST: "app.example.com",
       PROD_CONTENT_HOST: "content.example.com",
       PROD_OWNER_EMAIL: "o@example.com",
+      ...extra,
     },
   });
   let sum = "";
@@ -50,6 +56,22 @@ describe("prod-setup.sh", () => {
     const r = install([ok("a"), `{"step":"b","status":"ok","note":"${FAKE}"}`]);
     expect(r.code).not.toBe(0);
     expect(r.out + r.err + r.sum).not.toContain(FAKE);
+    expect(r.out + r.err).toContain("token pattern found in output; aborting");
+  });
+  it("passes ANALYTICS_TOKEN through env, never argv; aborts if it is echoed", () => {
+    const a = "analytics-SECRET-value";
+    const env = { ANALYTICS_TOKEN: a };
+    const fine = install([ok("secrets")], 0, "install", env);
+    expect(fine.code).toBe(0);
+    expect(fine.calls.join("\n")).not.toContain(a);
+    const r = install(
+      [`{"step":"x","status":"ok","m":"${a}"}`],
+      0,
+      "install",
+      env,
+    );
+    expect(r.code).not.toBe(0);
+    expect(r.out + r.err + r.sum).not.toContain(a);
     expect(r.out + r.err).toContain("token pattern found in output; aborting");
   });
   it("fails when setup exits non-zero", () => {

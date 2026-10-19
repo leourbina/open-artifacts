@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Production setup via @oa/setup. Never prints the owner token.
+# Production setup via @oa/setup. Never prints the owner token or ANALYTICS_TOKEN
+# (read by the setup secrets step from env, when set).
 # Usage: prod-setup.sh <install|preflight|upgrade|cleanup>
 set -uo pipefail
 
@@ -34,7 +35,7 @@ bad=0
 } >>"$summary"
 
 while IFS= read -r line; do
-  if [[ "$line" =~ $pat ]]; then
+  if [[ "$line" =~ $pat ]] || [[ -n "${ANALYTICS_TOKEN:-}" && "$line" == *"$ANALYTICS_TOKEN"* ]]; then
     echo "token pattern found in output; aborting" >&2
     exit 1
   fi

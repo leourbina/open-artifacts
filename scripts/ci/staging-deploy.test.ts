@@ -86,3 +86,38 @@ describe("ensure-dashboard-dist.sh", () => {
     expect(readFileSync(join(dist, "index.html"), "utf8")).toBe("real");
   });
 });
+
+describe("staging-analytics-token.sh", () => {
+  const secret = "analytics-SECRET-value";
+  // pnpm stub: record stdin so the test sees what `secret put` received.
+  const pnpm = 'cat > "$STUB_LOG.stdin"';
+  it("puts ANALYTICS_TOKEN on the staging Worker via stdin, never argv or output", () => {
+    const sb = sandbox({ pnpm });
+    const r = sb.run(["bash", script("staging-analytics-token.sh")], {
+      env: { ANALYTICS_TOKEN: secret },
+    });
+    expect(r.code).toBe(0);
+    expect(sb.log()).toEqual([
+      "pnpm exec wrangler secret put ANALYTICS_TOKEN -c wrangler.staging.jsonc --env staging",
+    ]);
+    expect(readFileSync(join(sb.dir, "calls.log.stdin"), "utf8")).toBe(secret);
+    expect(r.out + r.err).not.toContain(secret);
+  });
+  it("skips cleanly when the secret is empty", () => {
+    const sb = sandbox({ pnpm });
+    const r = sb.run(["bash", script("staging-analytics-token.sh")], {
+      env: { ANALYTICS_TOKEN: "" },
+    });
+    expect(r.code).toBe(0);
+    expect(sb.log()).toEqual([]);
+    expect(r.out).toContain("skipping");
+  });
+  it("fails when wrangler fails", () => {
+    const sb = sandbox({ pnpm: "cat >/dev/null; exit 1" });
+    const r = sb.run(["bash", script("staging-analytics-token.sh")], {
+      env: { ANALYTICS_TOKEN: secret },
+    });
+    expect(r.code).not.toBe(0);
+    expect(r.out + r.err).not.toContain(secret);
+  });
+});

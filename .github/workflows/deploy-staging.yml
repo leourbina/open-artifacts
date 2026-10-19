@@ -31,6 +31,11 @@ jobs:
         run: bash ../../scripts/ci/staging-clear-conflicts.sh
       - run: pnpm --filter @oa/server exec wrangler d1 migrations apply open-artifacts-staging --remote -c wrangler.staging.jsonc --env staging
       - run: pnpm --filter @oa/server exec wrangler deploy -c wrangler.staging.jsonc --env staging
+      - name: set ANALYTICS_TOKEN (dedicated read-only token; skipped when unset)
+        working-directory: apps/server
+        env:
+          ANALYTICS_TOKEN: ${{ secrets.ANALYTICS_TOKEN }}
+        run: bash ../../scripts/ci/staging-analytics-token.sh
   smoke:
     needs: [deploy]
     runs-on: ubuntu-latest

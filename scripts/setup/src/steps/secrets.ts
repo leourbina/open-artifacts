@@ -4,6 +4,11 @@ import type { Ctx, Step } from "../step.ts";
 export const ACCESS_SECRET = "ACCESS_CLIENT_SECRET";
 const GENERATED = ["SESSION_SECRET", "CONTENT_SIGNING_KEY"];
 const OPTIONAL = "ANALYTICS_TOKEN";
+/** A read-only Account Analytics token: the dashboard's create form, pre-filled. */
+const analyticsUrl = (accountId?: string) =>
+  `https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=${encodeURIComponent(JSON.stringify([{ key: "account_analytics", type: "read" }]))}&accountId=${encodeURIComponent(accountId ?? "*")}&name=${encodeURIComponent("Open Artifacts analytics")}`;
+/** ANALYTICS_TOKEN from the environment (a dedicated token; never CLOUDFLARE_API_TOKEN). */
+const envAnalytics = (ctx: Ctx) => ctx.deps.env.ANALYTICS_TOKEN?.trim() || "";
 
 /** Worker secret names. A Worker that doesn't exist yet has none. */
 export async function listSecrets(ctx: Ctx): Promise<Set<string>> {
@@ -57,6 +62,8 @@ const random = () => randomBytes(32).toString("base64url");
 export const secrets: Step = {
   name: "secrets",
   async check(state, ctx) {
+    // A provided token is put every run, so rotating the source rotates the Worker.
+    if (envAnalytics(ctx)) return "todo";
     const have = await listSecrets(ctx);
     const quiet =
       !ctx.opts.interactive || ctx.opts.upgrade || state.analyticsSkipped;
@@ -74,6 +81,11 @@ export const secrets: Step = {
       };
     for (const n of GENERATED)
       if (!have.has(n)) await putSecret(ctx, n, random());
+    const provided = envAnalytics(ctx);
+    if (provided) {
+      await putSecret(ctx, OPTIONAL, provided);
+      return undefined;
+    }
     if (
       have.has(OPTIONAL) ||
       !ctx.opts.interactive ||
@@ -81,7 +93,7 @@ export const secrets: Step = {
       state.analyticsSkipped
     )
       return undefined;
-    const q = `${OPTIONAL} (optional, input hidden; Enter to skip):`;
+    const q = `${OPTIONAL} for the Usage page (optional). Create a read-only token: ${analyticsUrl(state.accountId)}\nPaste it (input hidden; Enter to skip):`;
     const v = await ctx.deps.prompt(q, { secret: true });
     if (v) await putSecret(ctx, OPTIONAL, v);
     else state.analyticsSkipped = true;
