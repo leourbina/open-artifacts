@@ -63,6 +63,9 @@
         "APP_HOST": "staging.open-artifacts.com",
         "CONTENT_HOST": "staging-content.open-artifacts.com",
         "OWNER_EMAIL": "me@leourbina.com",
+        // Pending: mail.open-artifacts.com is not onboarded for Email Sending
+        // yet, and the send_email binding is held back (docs/ops/staging.md).
+        "EMAIL_FROM": "noreply@mail.open-artifacts.com",
         "ACCESS_TEAM_DOMAIN": "leourbina.cloudflareaccess.com",
         "CF_ACCOUNT_ID": "26ac346086d4405f7a976d48747a2a75",
         "ACCESS_CLIENT_ID": "e332570b66c35883120a21ccfe376f6394aa4089c08cb73c6224b96fab1da7e2"

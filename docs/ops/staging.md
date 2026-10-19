@@ -150,7 +150,7 @@ Setup asks "Just you, or a team?" (`--solo` / `--team`; `--json`, `--yes` and `-
 
 **Paid only.** Email Sending to arbitrary recipients needs Workers Paid; Free can only send to verified destination addresses. Setup reads `GET /accounts/{id}/subscriptions` (`rate_plan.id == "workers_paid"`), which needs Billing Read. The `wrangler login` token lacks it, so normally setup asks (interactive) or needs `--yes-paid` (non-interactive). Not confirmed: setup warns that invites can't be sent and turns email off (saved; `--team` turns it back on). Plans: https://dash.cloudflare.com/?to=/:account/workers/plans
 
-**Sending domain.** Default `mail.<app host>` (e.g. `mail.staging.open-artifacts.com`), override with `--email-domain`. Use a subdomain: each subdomain is its own sending domain, and onboarding adds `_dmarc.<domain>` with `p=reject`, which at a zone apex can break the mail an existing provider (e.g. Google Workspace) sends. Before onboarding, setup checks the domain: MX or SPF for another provider (at the apex, any MX) needs confirmation (prompt, or `--yes-email-domain`; else `action_required`), with a strong warning when the apex has such MX and no `_dmarc`.
+**Sending domain.** Default `mail.<app host>` (e.g. `mail.artifacts.example.com`), override with `--email-domain`. Use a subdomain: each subdomain is its own sending domain, and onboarding adds `_dmarc.<domain>` with `p=reject`, which at a zone apex can break the mail an existing provider (e.g. Google Workspace) sends. Before onboarding, setup checks the domain: MX or SPF for another provider (at the apex, any MX) needs confirmation (prompt, or `--yes-email-domain`; else `action_required`), with a strong warning when the apex has such MX and no `_dmarc`.
 
 **Onboarding is a human step** (no API): https://dash.cloudflare.com/?to=/:account/email-service/sending, Onboard Domain, pick the domain. It adds:
 
@@ -165,12 +165,12 @@ Until all four resolve, the step is `action_required` (with the link and the rec
 
 **Config.** With email on, the rendered config has `"send_email": [{ "name": "EMAIL" }]` and `vars.EMAIL_FROM = "noreply@<domain>"`. The template stays strict JSON; `EMAIL_FROM` is never the last var, so dropping its line keeps valid JSON. Selftest checks the deployed Worker's settings for the `EMAIL` `send_email` binding.
 
-**Staging (pending).** `mail.staging.open-artifacts.com` is not onboarded yet, so `wrangler.staging.jsonc` is unchanged. Once it is onboarded, add to `env.staging`:
+**Staging (pending).** Staging sends from `mail.open-artifacts.com` (not the default `mail.<app host>`); `vars.EMAIL_FROM` is `noreply@mail.open-artifacts.com`. That domain is not onboarded yet, so the binding is not in `wrangler.staging.jsonc`. Once it is onboarded, add to `env.staging`:
 
 ```jsonc
 "send_email": [{ "name": "EMAIL" }],
-// in vars:
-"EMAIL_FROM": "noreply@mail.staging.open-artifacts.com"
 ```
+
+Prod passes `--email-domain mail.leourbina.com` (a subdomain, not the apex).
 
 The binding is held back because the docs don't say whether `wrangler deploy` accepts a `send_email` binding before the account has an onboarded domain (the older Email Routing docs required Email Routing to be enabled first).
