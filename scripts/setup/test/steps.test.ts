@@ -2,7 +2,10 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { run } from "../src/index.ts";
-import { renderConfig } from "../src/steps/resources.ts";
+import {
+  renderConfig,
+  stripComments as stripJsonc,
+} from "../src/steps/resources.ts";
 import { ROOT, STATE } from "./fakes.ts";
 import { filler, HOSTS, STAGING, world } from "./world.ts";
 
@@ -115,5 +118,54 @@ describe("prereqs + resources", () => {
       data: { missing: ["app.other.dev"] },
     });
     expect(w.creates).toEqual([]);
+  });
+});
+
+describe("BROWSER binding (--no-browser)", () => {
+  const VARS = {
+    WORKER_NAME: "w",
+    APP_HOST: "a.example.com",
+    CONTENT_HOST: "c.example.com",
+    OWNER_EMAIL: "o@example.com",
+    D1_NAME: "d",
+    D1_ID: "1",
+    R2_BUCKET: "r",
+    KV_ID: "k",
+    CF_ACCOUNT_ID: "acc",
+    ACCESS_TEAM_DOMAIN: "t",
+    ACCESS_CLIENT_ID: "i",
+  };
+  it("renders the binding by default and omits it when off", () => {
+    expect(
+      JSON.parse(stripJsonc(renderConfig(TEMPLATE, VARS))).browser,
+    ).toEqual({ binding: "BROWSER" });
+    const off = renderConfig(TEMPLATE, VARS, false);
+    expect(JSON.parse(stripJsonc(off))).not.toHaveProperty("browser");
+    expect(off).not.toContain("BROWSER");
+  });
+  it("setup writes it by default, --no-browser drops it and --upgrade keeps that", async () => {
+    const on = world();
+    expect(await run(HOSTS, on.deps, ROOT)).toBe(0);
+    expect(JSON.parse(on.files.get(CONFIG) ?? "").browser).toEqual({
+      binding: "BROWSER",
+    });
+    const w = world();
+    expect(await run([...HOSTS, "--no-browser"], w.deps, ROOT)).toBe(0);
+    expect(w.files.get(CONFIG)).not.toContain("BROWSER");
+    expect(JSON.parse(w.files.get(STATE) ?? "").browser).toBe(false);
+    expect(await run([...HOSTS, "--upgrade"], w.deps, ROOT)).toBe(0);
+    expect(w.files.get(CONFIG)).not.toContain("BROWSER");
+  });
+  it("--check reports browser", async () => {
+    const w = world();
+    await run([...HOSTS, "--no-browser"], w.deps, ROOT);
+    w.lines.length = 0;
+    await run([...HOSTS.filter((a) => a !== "--yes"), "--check"], w.deps, ROOT);
+    expect(JSON.parse(w.lines.at(-1) ?? "").data.browser).toBe(false);
+  });
+  it("--help lists --no-browser", async () => {
+    const w = world();
+    expect(await run(["--help"], w.deps, ROOT)).toBe(0);
+    expect(w.lines.join("\n")).toContain("--no-browser");
   });
 });

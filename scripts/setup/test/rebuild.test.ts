@@ -226,6 +226,7 @@ describe("--check is read-only", () => {
       "state:ok",
     ]);
     expect(line(w, "state").data).toEqual({
+      browser: true,
       name: "open-artifacts",
       accountId: "acc1",
       appHost: "app.example.com",

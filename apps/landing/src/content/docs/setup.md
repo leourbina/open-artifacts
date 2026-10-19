@@ -73,6 +73,8 @@ Setup takes each value from its flag first, then from `.openartifacts/state.json
 | `--json` | Print one JSON object per line instead of text, and never prompt: a missing value is an `action_required` line naming the flag to pass. The optional `ANALYTICS_TOKEN` is skipped. |
 | `--ci` | CI mode: implies `--json`; the owner token is used only for selftest, never printed, and revoked at the end of the run (also on SIGTERM or SIGINT). Requires `--name`; not with `--new-owner-token`. It keeps no `state.json`, so it reuses the welcome artifact by title instead of tracking its id. A SIGKILL or out-of-memory kill can leave a `setup-ci` token live; it is never printed. Find it by the label `setup-ci` in Settings → Tokens. The next `--ci` run revokes it before minting, or run `--ci --revoke-ci-tokens` as an `if: always()` cleanup step. |
 | `--revoke-ci-tokens` | Only with `--ci`: revoke every live `setup-ci` token of the owner and exit. Needs `--name` and the owner email, not the hosts. |
+| `--no-browser` | Omit the `BROWSER` binding (Browser Run, used for server-side thumbnails). Default is on and free-plan safe: Cloudflare caps Free usage (10 browser-minutes/day) and does not bill it, and no extra token permission is needed. The choice is saved in `state.json`, so `--upgrade` keeps it; stateless runs (`--ci`) must repeat the flag. `--check` and `--json` report `browser: true` or `false`. |
+| `--help` | Print usage and exit (`-h` also works). |
 
 | Environment variable | Meaning |
 |---|---|

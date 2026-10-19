@@ -130,3 +130,12 @@ gh workflow run release-please.yml -f tag=vX.Y.Z
 3. `cleanup` (`always()`): `oa:setup --ci --revoke-ci-tokens`. Revokes any leaked setup-ci token.
 
 A failed preflight skips the upgrade; cleanup still runs.
+
+## Browser Run binding (`BROWSER`)
+
+Server-side thumbnails use the Workers `browser` binding (Browser Run). Staging config and the setup template both declare it; setup renders it by default.
+
+- No extra API token permission: Workers edit is enough to deploy.
+- Workers Free limits: 10 browser-minutes/day, 3 concurrent sessions, 1 new browser per 20 s, Quick Actions 1 req per 10 s. Over the limit Cloudflare returns 429 until the next UTC day. Not billed on Free.
+- Opt out with `--no-browser` (renders no binding). The choice is saved in `.openartifacts/state.json`, so `--upgrade` keeps it. State is otherwise rebuilt from Cloudflare, which cannot tell an opt-out from a pre-BROWSER deploy, so stateless runs (`--ci`) must pass `--no-browser` every time. `--check` and `--json` report `browser: true|false`.
+- `.quickAction()` needs `compatibility_date` >= 2026-03-24. The template's is 2026-01-01 (unchanged); staging's is 2026-10-01.

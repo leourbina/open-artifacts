@@ -82,6 +82,8 @@ async function resolve(argv: string[], deps: Deps, state: State) {
       json: { type: "boolean", default: false },
       ci: { type: "boolean", default: false },
       "revoke-ci-tokens": { type: "boolean", default: false },
+      "no-browser": { type: "boolean", default: false },
+      help: { type: "boolean", short: "h", default: false },
     },
   });
   const json = v.json || v.ci;
@@ -143,6 +145,9 @@ async function resolve(argv: string[], deps: Deps, state: State) {
     check: v.check,
     strict: v.strict,
     newOwnerToken: v["new-owner-token"],
+    // Flag, then saved state, then on. Cloudflare cannot tell an opt-out from a
+    // pre-BROWSER deployment, so a stateless run (CI) must repeat --no-browser.
+    browser: v["no-browser"] ? false : (state.browser ?? true),
     interactive,
     json,
     ci: v.ci,
@@ -165,6 +170,7 @@ const REPORTED = [
   "accessClientId",
   "teamDomain",
   "ownerTokenId",
+  "browser",
 ] as const;
 
 /** --check: every step's check(), never apply; the rebuilt state goes in the last line. */
@@ -212,6 +218,15 @@ async function checkOnly(
   return ctx.opts.strict && todo ? 2 : 0;
 }
 
+export const HELP = `Usage: pnpm oa:setup [options]
+  --name <n>  --app-host <h>  --content-host <h>  --owner-email <e>  --account-id <id>
+  --yes  --upgrade  --check [--strict]  --json  --ci [--revoke-ci-tokens]  --new-owner-token
+  --no-browser  Omit the BROWSER binding (Browser Run, server-side thumbnails).
+                Default on; free-plan safe (CF caps usage, no billing on Free).
+                Saved in state, so --upgrade keeps it; stateless runs (CI) repeat it.
+                --check/--json report it as browser: true|false.
+  -h, --help`;
+
 /** Runs setup; resolves to the exit code (0 ok, 2 action_required, 1 error). */
 export async function run(
   argv: string[],
@@ -219,6 +234,10 @@ export async function run(
   root: string,
   steps: Step[] = STEPS,
 ): Promise<number> {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    deps.out(HELP);
+    return 0;
+  }
   const ci = argv.includes("--ci");
   const json = argv.includes("--json") || ci;
   let human: string | undefined;
@@ -261,7 +280,13 @@ export async function run(
     appHost: state.appHost,
     accountId: state.accountId,
   };
-  Object.assign(state, { name, appHost, contentHost, ownerEmail });
+  Object.assign(state, {
+    name,
+    appHost,
+    contentHost,
+    ownerEmail,
+    browser: opts.browser,
+  });
   const noState = !prev.name;
   // --check: fetch is GET-only and exec runs only read-only wrangler, for every client.
   if (opts.check) deps = readOnlyDeps(deps);
