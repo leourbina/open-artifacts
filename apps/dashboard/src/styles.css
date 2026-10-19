@@ -11,6 +11,16 @@ body {
   color: var(--oa-text);
   font: 400 var(--oa-text-sm) / 1.45 var(--oa-font-sans);
 }
+/* The one page gutter in the shell; pages add no side padding of their own. */
+.oa-page {
+  --oa-page-gutter: var(--oa-space-6);
+  padding: var(--oa-page-gutter);
+}
+@media (max-width: 600px) {
+  .oa-page {
+    --oa-page-gutter: var(--oa-space-4);
+  }
+}
 /* No preflight: links in the shadcn sidebar take its colors, not the UA's. */
 [data-slot="sidebar"] a {
   color: inherit;

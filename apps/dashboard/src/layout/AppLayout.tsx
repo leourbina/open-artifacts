@@ -132,7 +132,9 @@ export function AppLayout() {
         <main id="oa-main" className="min-w-0 flex-1">
           <QuotaBanner />
           <CpuBanner role={me?.user.role} />
-          <Outlet />
+          <div className="oa-page">
+            <Outlet />
+          </div>
         </main>
       </div>
       {me && <DisplayNamePrompt key={me.user.id} me={me} />}

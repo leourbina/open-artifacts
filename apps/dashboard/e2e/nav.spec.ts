@@ -118,3 +118,35 @@ test("phone: a 288px sheet that navigates, closes and returns focus", async ({
   await expect(page).toHaveURL(/\/team$/);
   await expect(page.getByRole("dialog")).toHaveCount(0);
 });
+
+// One shell gutter: 24px, 16px at <= 600px. Library has no side padding of
+// its own; Settings centers its 880px column inside the gutter.
+for (const [width, gutter] of [
+  [1280, 24],
+  [800, 24],
+  [600, 16],
+  [390, 16],
+] as const)
+  test(`page gutter is ${gutter}px at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    const gap = (sel: string) =>
+      page.evaluate((sel) => {
+        const main = document
+          .getElementById("oa-main")
+          ?.getBoundingClientRect();
+        const el = document.querySelector(sel)?.getBoundingClientRect();
+        return {
+          left: (el?.left ?? 0) - (main?.left ?? 0),
+          right: (main?.right ?? 0) - (el?.right ?? 0),
+        };
+      }, sel);
+    await page.goto("/");
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    expect(await gap(".lib")).toEqual({ left: gutter, right: gutter });
+    await page.goto("/settings/agents");
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    const s = await gap(".oa-settings");
+    expect(s.left).toBeGreaterThanOrEqual(gutter);
+    expect(Math.abs(s.left - s.right)).toBeLessThanOrEqual(1);
+    if (width < 880 + 2 * gutter + 256) expect(s.left).toBe(gutter);
+  });
