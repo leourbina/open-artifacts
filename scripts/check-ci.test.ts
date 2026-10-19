@@ -429,7 +429,9 @@ describe("release-please", () => {
     const raw = read(".github/workflows/release-please.yml");
     expect(raw).not.toContain("release-pr-dispatch");
     expect(raw).not.toContain("gh workflow run");
-    expect(existsSync(join(root, "scripts/ci/release-pr-dispatch.sh"))).toBe(false);
+    expect(existsSync(join(root, "scripts/ci/release-pr-dispatch.sh"))).toBe(
+      false,
+    );
     expect(wf("release-please.yml").permissions.actions).toBeUndefined();
   });
   it("deploy-landing uses no scripts/ci files (older tags lack them)", () => {
