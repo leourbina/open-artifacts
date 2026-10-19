@@ -1,5 +1,5 @@
 import type { ArtifactSummary } from "@oa/shared";
-import { Button, Dialog, displayName, Input, Textarea, toast } from "@oa/ui";
+import { Button, Dialog, displayName, Input, Textarea } from "@oa/ui";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { ApiClientError } from "../../api/client";
@@ -9,6 +9,7 @@ import {
   useVersionInfo,
 } from "../../api/queries";
 import { useSingleFlight } from "../../api/useSingleFlight";
+import { toast } from "../../layout/toast";
 import { useOfferUndo } from "../useOfferUndo";
 
 const fmtSize = (n: number) =>

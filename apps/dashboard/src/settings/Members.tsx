@@ -3,12 +3,6 @@ import { Avatar, displayName } from "@oa/ui";
 import {
   Badge,
   Button,
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
   Input,
   Select,
   SelectContent,
@@ -16,8 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@oa/ui/shadcn";
-import type { ReactNode } from "react";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { ApiClientError } from "../api/client";
 import {
   useInviteMember,
@@ -28,6 +21,7 @@ import {
 import { emailEnabled } from "../auth/emailEnabled";
 import { useMe } from "../auth/useMe";
 import { CopyLink } from "../layout/CopyLink";
+import { Modal } from "../layout/Modal";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { relativeTime } from "../library/time";
 import { errorText, muted, SettingsCard } from "./ui";
@@ -54,52 +48,6 @@ export const parseInviteEmail = (raw: string) => {
   const r = MemberInviteSchema.shape.email.safeParse(v);
   return r.success ? r.data : null;
 };
-
-/** Header, body and footer of a settings dialog. */
-function Modal({
-  open = true,
-  onClose,
-  title,
-  description,
-  footer,
-  children,
-}: {
-  open?: boolean;
-  onClose: () => void;
-  title: string;
-  description: string;
-  footer: ReactNode;
-  children?: ReactNode;
-}) {
-  const opener = useRef<HTMLElement | null>(null);
-  return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent
-        className="gap-[var(--oa-space-4)] sm:max-w-[440px]"
-        // No Radix Trigger (the dialog is controlled), so put focus back on
-        // whatever opened it, as a trigger would.
-        onOpenAutoFocus={() => {
-          opener.current = document.activeElement as HTMLElement | null;
-        }}
-        onCloseAutoFocus={(e) => {
-          e.preventDefault();
-          opener.current?.focus();
-        }}
-      >
-        <DialogHeader>
-          <DialogTitle className="text-[length:var(--oa-text-lg)]">
-            {title}
-          </DialogTitle>
-          <DialogDescription className="text-[length:var(--oa-text-sm)]">
-            {description}
-          </DialogDescription>
-        </DialogHeader>
-        {children}
-        <DialogFooter>{footer}</DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 function RoleSelect({
   label,

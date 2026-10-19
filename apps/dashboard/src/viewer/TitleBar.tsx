@@ -5,7 +5,7 @@ import {
   type UserRef,
   viewerPath,
 } from "@oa/shared";
-import { Button, Dialog, FormatIcon, toast } from "@oa/ui";
+import { Button, Dialog, FormatIcon } from "@oa/ui";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -30,6 +30,7 @@ import {
   useVersionInfo,
   useVersions,
 } from "../api/queries";
+import { toast } from "../layout/toast";
 import { ICON, SM, TXT, VisibilityBadge } from "./ui";
 import { useOfferUndo } from "./useOfferUndo";
 

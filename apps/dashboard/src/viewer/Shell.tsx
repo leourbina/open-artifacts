@@ -1,5 +1,5 @@
 import { type ArtifactSummary, type Me, viewerPath } from "@oa/shared";
-import { Button, toast } from "@oa/ui";
+import { Button } from "@oa/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -20,6 +20,7 @@ import { useArtifactSideEffects } from "./useArtifactSideEffects";
 import { useContentUrl } from "./useContentUrl";
 import { useTheme } from "./useTheme";
 import "./viewer.css";
+import { toast } from "../layout/toast";
 
 type Bridge = ReturnType<typeof createBridge>;
 
