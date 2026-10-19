@@ -133,6 +133,8 @@ export function createRuntime(opts: RuntimeOptions = {}): OpenArtifacts {
   const kind = pageKind();
   const themeCbs = new Set<(t: Theme) => void>();
   const subs = new Map<string, Set<(e: ChangeEvent) => void>>();
+  /** One subscription ack per collection; every subscriber chains on it. */
+  const ackReady = new Map<string, Promise<unknown>>();
   const queues = new Map<string, Promise<void>>();
   let welcomed: () => void = () => {};
   const ready = new Promise<void>((r) => {
@@ -226,20 +228,39 @@ export function createRuntime(opts: RuntimeOptions = {}): OpenArtifacts {
         set = new Set();
         subs.set(name, set);
         const mine = set;
-        bridge
-          .call("db.subscribe", { collection: name })
-          .then(() => opts?.onReady?.())
-          .catch((e) => {
-            // Drop the entry so the next subscribe() retries.
-            if (subs.get(name) === mine) subs.delete(name);
-            ignore(e);
-          });
-      } else if (opts?.onReady) queueMicrotask(() => opts.onReady?.());
+        // One ack per collection: every caller chains on the same promise, so a
+        // later subscriber's onReady can never fire before the subscription.
+        const ack = bridge.call("db.subscribe", { collection: name });
+        ackReady.set(name, ack);
+        void ack.catch((e) => {
+          // Drop the entries so the next subscribe() retries.
+          if (subs.get(name) === mine) subs.delete(name);
+          if (ackReady.get(name) === ack) ackReady.delete(name);
+          ignore(e);
+        });
+      }
       set.add(cb);
       const own = set;
+      let live = true;
+      void ackReady.get(name)?.then(
+        () => {
+          if (!live) return;
+          // A throwing onReady is the caller's bug: it must not reach the
+          // subscribe-failure path (which would drop every live subscriber).
+          try {
+            opts?.onReady?.();
+          } catch (e) {
+            ignore(e);
+          }
+        },
+        // The ack failed; the catch above drops the entry for a retry.
+        () => {},
+      );
       return () => {
+        live = false;
         if (!own.delete(cb) || own.size > 0 || subs.get(name) !== own) return;
         subs.delete(name);
+        ackReady.delete(name);
         bridge.call("db.unsubscribe", { collection: name }).catch(ignore);
       };
     },

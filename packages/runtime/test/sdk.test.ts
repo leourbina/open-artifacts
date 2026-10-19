@@ -323,6 +323,95 @@ describe("subscribe", () => {
     await flush();
     expect(cb).toHaveBeenCalledWith({ docs: [], deleted: ["big"] });
   });
+
+  it("holds every onReady until the one subscription ack arrives", async () => {
+    const oa = start();
+    const col = oa.db.collection("votes");
+    const readyA = vi.fn();
+    const readyB = vi.fn();
+    col.subscribe(() => {}, { onReady: readyA });
+    col.subscribe(() => {}, { onReady: readyB });
+    await flush();
+    expect(calls("db.subscribe")).toHaveLength(1);
+    expect(readyA).not.toHaveBeenCalled();
+    expect(readyB).not.toHaveBeenCalled();
+    reply(calls("db.subscribe")[0]?.id ?? "", null);
+    await flush();
+    expect(readyA).toHaveBeenCalledTimes(1);
+    expect(readyB).toHaveBeenCalledTimes(1);
+  });
+
+  it("isolates a throwing onReady: delivery keeps working", async () => {
+    const oa = start();
+    const col = oa.db.collection("votes");
+    const first = vi.fn();
+    const second = vi.fn();
+    col.subscribe(first, {
+      onReady: () => {
+        throw new Error("caller bug");
+      },
+    });
+    await flush();
+    reply(calls("db.subscribe")[0]?.id ?? "", null);
+    await flush();
+    fromShell({
+      oa: 1,
+      type: "event",
+      event: "db.change",
+      collection: "votes",
+      docs: [doc("a", 1)],
+      deleted: [],
+    });
+    await flush();
+    expect(first).toHaveBeenCalled();
+    // The throwing callback did not drop the set: a later subscriber joins it.
+    col.subscribe(second);
+    await flush();
+    fromShell({
+      oa: 1,
+      type: "event",
+      event: "db.change",
+      collection: "votes",
+      docs: [doc("b", 2)],
+      deleted: [],
+    });
+    await flush();
+    expect(second).toHaveBeenCalled();
+    // A second subscribe after the ack doesn't issue another db.subscribe.
+    expect(calls("db.subscribe")).toHaveLength(1);
+  });
+
+  it("never fires onReady after an unsubscribe before the ack", async () => {
+    const oa = start();
+    const onReady = vi.fn();
+    const off = oa.db.collection("votes").subscribe(() => {}, { onReady });
+    await flush();
+    off();
+    reply(calls("db.subscribe")[0]?.id ?? "", null);
+    await flush();
+    expect(onReady).not.toHaveBeenCalled();
+  });
+
+  it("a failed ack never fires onReady and the next subscribe retries", async () => {
+    const oa = start();
+    const col = oa.db.collection("votes");
+    const onReady = vi.fn();
+    col.subscribe(() => {}, { onReady });
+    await flush();
+    fromShell({
+      oa: 1,
+      type: "result",
+      id: calls("db.subscribe")[0]?.id ?? "",
+      ok: false,
+      error: { code: "internal", message: "no subscription" },
+    });
+    await flush();
+    expect(onReady).not.toHaveBeenCalled();
+    expect(calls("db.subscribe")).toHaveLength(1);
+    col.subscribe(() => {});
+    await flush();
+    expect(calls("db.subscribe")).toHaveLength(2);
+  });
 });
 
 describe("C4: db.resync", () => {
