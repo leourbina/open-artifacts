@@ -196,6 +196,106 @@ describe("data docs: 256 KB on Free, 1 MB on Paid", () => {
     expect((await errOf(s)).message).toBe(FREE_MSG);
   });
 
+  it("REST counts the body as sent: a pretty-printed doc over the limit is 413", async () => {
+    const id = await art(FREE);
+    const data = {
+      rows: Array.from({ length: 9000 }, (_, i) => ({ i, v: "x".repeat(8) })),
+    };
+    const minified = JSON.stringify(data);
+    const pretty = JSON.stringify(data, null, 2);
+    expect(minified.length).toBeLessThan(LIMITS.dataDocBytesFree);
+    expect(pretty.length).toBeGreaterThan(LIMITS.dataDocBytesFree);
+    const r = await rest("PUT", R.dataDoc(id, "c", "p"), pretty, FREE).res;
+    expect(r.status).toBe(413);
+    expect((await errOf(r)).message).toBe(FREE_MSG);
+    const ok = await rest("PUT", R.dataDoc(id, "c", "p"), minified, FREE).res;
+    expect(ok.status).toBe(200);
+  });
+
+  it("the exact boundary: a body of the limit is accepted, one byte more is 413", async () => {
+    const id = await art(FREE);
+    const at = JSON.stringify("x".repeat(LIMITS.dataDocBytesFree - 2));
+    expect(at.length).toBe(LIMITS.dataDocBytesFree);
+    expect(
+      (await rest("PUT", R.dataDoc(id, "c", "b"), at, FREE).res).status,
+    ).toBe(200);
+    const over = JSON.stringify("x".repeat(LIMITS.dataDocBytesFree - 1));
+    const { res, state } = rest("PUT", R.dataDoc(id, "c", "b"), over, FREE);
+    const r = await res;
+    expect(r.status).toBe(413);
+    expect((await errOf(r)).message).toBe(FREE_MSG);
+    expect(state.read).toBe(0);
+  });
+
+  it("a merge that overflows (two 200 KB patches) is 413", async () => {
+    const id = await art(FREE);
+    const patch = (k: string) =>
+      JSON.stringify({ [k]: "x".repeat(200 * 1024) });
+    expect(
+      (await rest("PATCH", R.dataDoc(id, "c", "m"), patch("a"), FREE).res)
+        .status,
+    ).toBe(200);
+    const r = await rest("PATCH", R.dataDoc(id, "c", "m"), patch("b"), FREE)
+      .res;
+    expect(r.status).toBe(413);
+    expect((await errOf(r)).message).toBe(FREE_MSG);
+  });
+
+  it("UTF-8 bytes count: 70 K emoji (280 KB) is 413 on set, setRaw and storageSet", async () => {
+    const id = await art(FREE);
+    const emoji = "😀".repeat(70 * 1024);
+    expect(JSON.stringify(emoji).length).toBeLessThan(LIMITS.dataDocBytesFree);
+    const s = runtimeStub(FREE, id);
+    const outcome = (p: Promise<unknown>) =>
+      p.then(
+        () => "ok",
+        (e: unknown) => String((e as Error)?.message ?? e),
+      );
+    expect(await outcome(s.set("c", "e", emoji, "u:1"))).toContain(FREE_MSG);
+    expect(
+      await outcome(s.setRaw("c", "e", JSON.stringify(emoji), "u:1")),
+    ).toContain(FREE_MSG);
+    expect(await outcome(s.storageSet("u:1", "k", emoji))).toContain(FREE_MSG);
+  });
+
+  it("a legacy 600 KB doc on Free: readable, a shrinking PATCH works, one that stays over is 413", async () => {
+    const id = await art(PAID);
+    const big = JSON.stringify({ keep: "y", big: "x".repeat(600 * 1024) });
+    expect(
+      (await rest("PUT", R.dataDoc(id, "c", "l"), big, PAID).res).status,
+    ).toBe(200);
+    // The instance moves to Free (its DO too).
+    await runInDurableObject(
+      runtimeStub(FREE, id) as unknown as DurableObjectStub<ArtifactRuntime>,
+      (i) => {
+        (i as unknown as { env: Env }).env = FREE;
+      },
+    );
+    const get = await fetchAndWait(
+      app,
+      new Request(`http://app.localhost${R.dataDoc(id, "c", "l")}`, {
+        headers: { cookie: owner.cookie, "x-oa-request": "1" },
+      }),
+      FREE,
+    );
+    expect(get.status).toBe(200);
+    const stays = await rest(
+      "PATCH",
+      R.dataDoc(id, "c", "l"),
+      JSON.stringify({ keep: "z" }),
+      FREE,
+    ).res;
+    expect(stays.status).toBe(413);
+    expect((await errOf(stays)).message).toBe(FREE_MSG);
+    const shrink = await rest(
+      "PATCH",
+      R.dataDoc(id, "c", "l"),
+      JSON.stringify({ big: "small" }),
+      FREE,
+    ).res;
+    expect(shrink.status).toBe(200);
+  });
+
   it("Paid: a ~1 MB doc is accepted over REST", async () => {
     const id = await art(PAID);
     const r = await rest(
@@ -309,7 +409,8 @@ describe("/healthz", () => {
     for (const [e, plan] of [
       [FREE, "free"],
       [E({ PLAN: "paid" }), "paid"],
-      [E({ PLAN: "PAID" }), "free"],
+      [E({ PLAN: " Paid\n" }), "paid"],
+      [E({ PLAN: "pro" }), "free"],
     ] as const) {
       const r = await fetchAndWait(
         app,

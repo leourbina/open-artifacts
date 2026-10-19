@@ -89,7 +89,7 @@ export const R = {
   /** POST DataQuery -> Page<DataDoc> */
   dataQuery: (id: string, col: string) =>
     `${A}/${seg(id)}/data/${seg(col)}/query`,
-  /** GET -> DataDoc; PUT DataSetBody (raw JSON doc) -> DataDoc; PATCH DataPatchBody (merge) -> DataDoc; DELETE -> 204. A doc (after a merge too) is ≤ dataDocLimit(plan): 256 KB on Workers Free, 1 MB on Paid (env PLAN); over it, or a body over that + 64 KB (checked before it is read), 413 too_large with dataDocTooLargeMessage(plan). */
+  /** GET -> DataDoc; PUT DataSetBody (raw JSON doc) -> DataDoc; PATCH DataPatchBody (merge) -> DataDoc; DELETE -> 204. A doc (after a merge too) is ≤ dataDocLimit(plan): 256 KB on Workers Free, 1 MB on Paid (env PLAN), counting the body's bytes as sent (whitespace included; a merge counts the merged doc serialized). Over it, 413 too_large with dataDocTooLargeMessage(plan), from Content-Length before the body is read when declared. */
   dataDoc: (id: string, col: string, doc: string) =>
     `${A}/${seg(id)}/data/${seg(col)}/${seg(doc)}`,
   /** GET Upgrade: websocket; frames are DataChange */

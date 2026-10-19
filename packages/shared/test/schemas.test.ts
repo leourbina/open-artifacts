@@ -389,9 +389,9 @@ describe("UsageSchema", () => {
 });
 
 describe("plan-aware limits", () => {
-  it('PLAN: only "paid" is paid; unset or anything else is free', () => {
-    expect(planOf("paid")).toBe("paid");
-    for (const v of [undefined, null, "", "free", "PAID", "Paid", 1])
+  it('PLAN: "paid" (trimmed, any case) is paid; unset or anything else is free', () => {
+    for (const v of ["paid", "PAID", " Paid\n"]) expect(planOf(v)).toBe("paid");
+    for (const v of [undefined, null, "", "free", "pro", "paid-ish", 1])
       expect(planOf(v)).toBe("free");
   });
   it("data docs: 256 KB on Free, 1 MB on Paid; docBytes is the Paid alias", () => {
@@ -413,6 +413,8 @@ describe("plan-aware limits", () => {
     const m = mcpTooLargeMessage("free");
     expect(m).toContain("320 KB");
     expect(m).toContain("create_upload({ path, size, contentType })");
-    expect(m).toContain("Data docs are limited to 256 KB");
+    expect(m).toContain(
+      "Data docs on this instance are limited to 256 KB; clients that escape non-ASCII as \\u inflate the request, so send UTF-8 or use the REST data API. Workers Paid allows 1 MB.",
+    );
   });
 });

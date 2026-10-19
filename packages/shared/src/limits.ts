@@ -16,12 +16,14 @@ export const LIMITS = {
    */
   inlineBytes: INLINE_BYTES,
   /**
-   * One data doc (or per-viewer storage value), as minified JSON UTF-8 bytes,
-   * on Workers Free: a write's JSON work must fit the 10 ms CPU budget.
-   * Per instance via dataDocLimit(plan).
+   * One data doc (or per-viewer storage value) on Workers Free: UTF-8 bytes
+   * of the JSON as received (REST: the raw body, whitespace included) or
+   * serialized (MCP and the runtime bridge: JSON.stringify of the value).
+   * A write's JSON work must fit the 10 ms CPU budget. Per instance via
+   * dataDocLimit(plan).
    */
   dataDocBytesFree: DATA_DOC_FREE,
-  /** One data doc on Workers Paid (no 10 ms CPU cap). */
+  /** One data doc on Workers Paid (no 10 ms CPU cap); measured as dataDocBytesFree. */
   dataDocBytesPaid: DATA_DOC_PAID,
   /** @deprecated use dataDocLimit(plan). The Paid data-doc limit (1 MB). */
   docBytes: DATA_DOC_PAID,
@@ -53,9 +55,10 @@ export const LIMITS = {
 /** The 413 too_large message for inline publish content over LIMITS.inlineBytes (REST and MCP). */
 export const INLINE_TOO_LARGE_MESSAGE = `Inline content is limited to ${LIMITS.inlineBytes / 1024} KB per publish. For larger files: create_upload({ path, size, contentType }), PUT the bytes to the returned url, then publish_artifact({ id: artifactId, title, files: { "<path>": { uploadId } } }).`;
 
-/** The instance's Workers plan (env PLAN): "paid", else "free" (unset or anything else). */
+/** The instance's Workers plan (env PLAN): "paid" (trimmed, any case), else "free" (unset or anything else). */
 export type Plan = "free" | "paid";
-export const planOf = (v: unknown): Plan => (v === "paid" ? "paid" : "free");
+export const planOf = (v: unknown): Plan =>
+  typeof v === "string" && v.trim().toLowerCase() === "paid" ? "paid" : "free";
 
 /** Max bytes of one data doc (or storage value) on `plan`. */
 export const dataDocLimit = (plan: Plan): number =>
@@ -69,6 +72,10 @@ export const mcpBodyLimit = (plan: Plan): number =>
 export const dataDocTooLargeMessage = (plan: Plan): string =>
   `Data docs are limited to ${dataDocLimit(plan) / 1024} KB on this instance; Workers Paid allows ${LIMITS.dataDocBytesPaid / 1024 / 1024} MB.`;
 
-/** The /mcp 413 message: the upload path for files, and the data-doc limit. */
+/**
+ * The /mcp 413 message, for both ways to get there: a large file (use the
+ * upload path) and a large data doc (the plan's limit; JSON-RPC escaping
+ * inflates non-ASCII sent as \u, so UTF-8 or the REST data API fits more).
+ */
 export const mcpTooLargeMessage = (plan: Plan): string =>
-  `Request body exceeds ${mcpBodyLimit(plan) / 1024} KB on this instance. For a large file: create_upload({ path, size, contentType }), PUT the bytes to the returned url, then publish_artifact({ id: artifactId, title, files: { "<path>": { uploadId } } }). ${dataDocTooLargeMessage(plan)}`;
+  `Request body exceeds ${mcpBodyLimit(plan) / 1024} KB on this instance. Large files: create_upload({ path, size, contentType }), PUT the bytes to the returned url, then publish_artifact({ id: artifactId, title, files: { "<path>": { uploadId } } }). Data docs on this instance are limited to ${dataDocLimit(plan) / 1024} KB; clients that escape non-ASCII as \\u inflate the request, so send UTF-8 or use the REST data API. Workers Paid allows ${LIMITS.dataDocBytesPaid / 1024 / 1024} MB.`;

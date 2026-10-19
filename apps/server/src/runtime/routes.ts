@@ -31,17 +31,15 @@ const STORAGE = `${ART}/storage`;
 const KEY = `${STORAGE}/:key`;
 
 /**
- * Raw write bodies (doc, patch, {value}): ≤ the plan's data-doc limit once
- * minified (the DO enforces it exactly); allow 64 KB of whitespace slack. Over
- * it, 413 with the plan message, before the body is read.
+ * Raw write bodies (doc, patch, {value}) are measured as sent, whitespace
+ * included: the DO checks the raw bytes against the plan's data-doc limit
+ * without re-serializing (which would cost CPU). So the cap here is the limit
+ * itself: over it, 413 with the plan message from Content-Length, before the
+ * body is read.
  */
 const readDocBody = (c: C): Promise<Uint8Array> => {
   const plan = planOf(c.env.PLAN);
-  return readCapped(
-    c,
-    dataDocLimit(plan) + 64 * 1024,
-    dataDocTooLargeMessage(plan),
-  );
+  return readCapped(c, dataDocLimit(plan), dataDocTooLargeMessage(plan));
 };
 const MAX_QUERY_BODY = 64 * 1024;
 /** CF-Connecting-IP: IPv4 or IPv6 text form. */
