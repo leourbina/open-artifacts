@@ -25,6 +25,7 @@ import {
   usePatchMember,
   useRemoveMember,
 } from "../api/queries";
+import { emailEnabled } from "../auth/emailEnabled";
 import { useMe } from "../auth/useMe";
 import { CopyLink } from "../layout/CopyLink";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
@@ -139,11 +140,17 @@ function RoleSelect({
 }
 
 function InviteDialog({ onClose }: { onClose: () => void }) {
+  const state = useMe();
+  const me = state.status === "authed" ? state.me : null;
+  const sends = emailEnabled(me);
   const invite = useInviteMember();
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<Assignable>("member");
   const [error, setError] = useState<string | null>(null);
-  const [added, setAdded] = useState<string | null>(null);
+  const [added, setAdded] = useState<{
+    email: string;
+    emailed: boolean;
+  } | null>(null);
   const submit = () => {
     if (invite.isPending) return;
     const parsed = parseInviteEmail(email);
@@ -152,7 +159,7 @@ function InviteDialog({ onClose }: { onClose: () => void }) {
     invite.mutate(
       { email: parsed, role },
       {
-        onSuccess: () => setAdded(parsed),
+        onSuccess: (r) => setAdded({ email: parsed, emailed: r.emailed }),
         onError: (e) =>
           setError(e instanceof ApiClientError ? e.message : "Couldn't add."),
       },
@@ -164,10 +171,23 @@ function InviteDialog({ onClose }: { onClose: () => void }) {
     return (
       <Modal
         onClose={onClose}
-        title={`${added} can now sign in`}
-        description={`Send them this link. They'll sign in at ${url} with a one-time code sent to that address.`}
+        title={
+          added.emailed
+            ? `Invitation sent to ${added.email}`
+            : `${added.email} can now sign in`
+        }
+        description={
+          added.emailed
+            ? `They can also sign in at ${url} with a one-time code.`
+            : `Send them this link. They'll sign in at ${url} with a one-time code sent to that address.`
+        }
         footer={<Button onClick={onClose}>Done</Button>}
       >
+        {sends && !added.emailed && (
+          <p role="status" className={errorText}>
+            The email didn't send. Copy the link and share it yourself.
+          </p>
+        )}
         <CopyLink link={url} label="Sign-in link" />
       </Modal>
     );
@@ -176,7 +196,11 @@ function InviteDialog({ onClose }: { onClose: () => void }) {
     <Modal
       onClose={onClose}
       title="Add a member"
-      description="Open Artifacts doesn't send invitations. Add their email here, then send them the sign-in link yourself."
+      description={
+        sends
+          ? `We'll email them a link to ${me?.instance.name}. They'll sign in with a one-time code.`
+          : "Open Artifacts doesn't send invitations. Add their email here, then send them the sign-in link yourself."
+      }
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>

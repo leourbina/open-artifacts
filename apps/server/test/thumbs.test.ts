@@ -863,7 +863,7 @@ describe("thumbnail job on the artifact DO", () => {
     expect(f.launched).toBe(0);
   });
 
-  it("a job queued before the gate turned off is dropped without counting an attempt", async () => {
+  it("gate off: a job queued while it was on stays dormant (unread, no attempt, no alarm)", async () => {
     const id = await pub();
     let calls = 0;
     await inDo(
@@ -890,9 +890,14 @@ describe("thumbnail job on the artifact DO", () => {
         await i.alarm();
         expect(calls).toBe(0);
         expect(i.thumbnailJob()).toMatchObject({
-          state: "no_thumb",
+          state: "pending",
           attempts: 0,
         });
+        expect(
+          await (
+            i as unknown as { ctx: DurableObjectState }
+          ).ctx.storage.getAlarm(),
+        ).toBeNull();
       },
       off,
     );

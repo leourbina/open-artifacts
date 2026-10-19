@@ -1054,7 +1054,10 @@ export class ArtifactRuntime extends DurableObject<Env> {
   override async alarm(): Promise<void> {
     const sockets = this.ctx.getWebSockets();
     const job = this.pendingIndex();
-    const thumb = this.pendingThumbnail();
+    // Gate off: no thumbnail bookkeeping at all (a job queued while it was
+    // on stays dormant, unread and unattempted).
+    const thumbs = serverThumbnails(this.env);
+    const thumb = thumbs ? this.pendingThumbnail() : null;
     if (!job && !thumb && sockets.length === 0) return;
     const now = this.now();
     let next = Number.POSITIVE_INFINITY;
@@ -1101,7 +1104,7 @@ export class ArtifactRuntime extends DurableObject<Env> {
       await this.runThumbnail(thumb);
     const pending = this.pendingIndex();
     if (pending) next = Math.min(next, pending.due);
-    const pendingThumb = this.pendingThumbnail();
+    const pendingThumb = thumbs ? this.pendingThumbnail() : null;
     if (pendingThumb)
       next = Math.min(
         next,
@@ -1134,11 +1137,6 @@ export class ArtifactRuntime extends DurableObject<Env> {
         state,
         job.version,
       );
-    // Queued before the gate turned off: drop it, no attempt written.
-    if (!serverThumbnails(this.env)) {
-      end("no_thumb");
-      return;
-    }
     if (job.attempts >= THUMB_MAX_ATTEMPTS) {
       console.error(
         JSON.stringify({
