@@ -5,7 +5,7 @@ import {
   R,
   ShareResultSchema,
 } from "@oa/shared";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import { createPat } from "../src/auth/pat.js";
 import {
@@ -414,9 +414,104 @@ describe("one recipient per send", () => {
     const e = { ...(env as object), ...m, EMAIL_FROM: FROM } as never;
     const content = () => ({ subject: "s", text: "t", html: "h" });
     for (const addr of SPECIAL)
-      expect(await sendEmail(e, "u-special", addr, content), addr).toBe(false);
+      expect(
+        await sendEmail(e, "u-special", addr, content, { kind: "invite" }),
+        addr,
+      ).toBe(false);
     expect(m.sent).toHaveLength(0);
-    expect(await sendEmail(e, "u-special", "a+b@x.com", content)).toBe(true);
+    expect(
+      await sendEmail(e, "u-special", "a+b@x.com", content, {
+        kind: "invite",
+      }),
+    ).toBe(true);
     expect(m.sent.map((s) => s.to)).toEqual(["a+b@x.com"]);
+  });
+});
+
+describe("email logs", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  /** Every console line written while `fn` runs. */
+  async function captured(fn: () => Promise<unknown>): Promise<string[]> {
+    const lines: string[] = [];
+    for (const level of ["log", "info", "warn", "error", "debug"] as const)
+      vi.spyOn(console, level).mockImplementation((...a: unknown[]) => {
+        lines.push(
+          a
+            .map((x) => (typeof x === "string" ? x : JSON.stringify(x)))
+            .join(" "),
+        );
+      });
+    await fn();
+    return lines;
+  }
+  const content = () => ({
+    subject: "Secret subject",
+    text: "victim body",
+    html: "<p>victim body</p>",
+  });
+  const leaks = (lines: string[]) =>
+    lines.filter((l) => /@|victim|example\.com|Secret|noreply/i.test(l));
+
+  it("logs email_sent with the messageId and nothing identifying", async () => {
+    const e = {
+      ...(env as object),
+      EMAIL_FROM: "Open Artifacts <noreply@mail.example.com>",
+      EMAIL: { send: async () => ({ messageId: "msg-123abc" }) },
+    } as never;
+    const lines = await captured(() =>
+      sendEmail(e, "u-log1", "victim@example.com", content, { kind: "share" }),
+    );
+    const sent = lines.find((l) => l.includes('"email_sent"'));
+    expect(sent).toBeDefined();
+    expect(JSON.parse(sent as string)).toEqual({
+      evt: "email_sent",
+      kind: "share",
+      messageId: "msg-123abc",
+    });
+    expect(leaks(lines)).toEqual([]);
+  });
+
+  it("logs email_failed with a short reason and no address", async () => {
+    const err = Object.assign(
+      new Error("rejected victim@example.com: sender not verified"),
+      { code: "E_SENDER_NOT_VERIFIED" },
+    );
+    const e = {
+      ...(env as object),
+      EMAIL_FROM: FROM,
+      EMAIL: {
+        send: async () => {
+          throw err;
+        },
+      },
+    } as never;
+    const lines = await captured(() =>
+      sendEmail(e, "u-log2", "victim@example.com", content, { kind: "invite" }),
+    );
+    const failed = lines.find((l) => l.includes('"email_failed"'));
+    expect(JSON.parse(failed as string)).toEqual({
+      evt: "email_failed",
+      kind: "invite",
+      reason: "E_SENDER_NOT_VERIFIED",
+    });
+    expect(leaks(lines)).toEqual([]);
+    // An error without a code-like `code` falls back to a generic reason.
+    const e2 = {
+      ...(env as object),
+      EMAIL_FROM: FROM,
+      EMAIL: {
+        send: async () => {
+          throw new Error("victim@example.com bounced");
+        },
+      },
+    } as never;
+    const lines2 = await captured(() =>
+      sendEmail(e2, "u-log3", "victim@example.com", content, {
+        kind: "invite",
+      }),
+    );
+    expect(lines2.some((l) => l.includes('"reason":"send_error"'))).toBe(true);
+    expect(leaks(lines2)).toEqual([]);
   });
 });

@@ -19,6 +19,25 @@ const ALL_KEY = "email:*";
 // or whitespace, so the binding can never read `to` as a list or display name.
 const SINGLE_ADDRESS = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+$/;
 
+export type EmailKind = "invite" | "share";
+const ERROR_CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
+
+class EmailTimeout extends Error {}
+
+/** A short code for logs; never the message, which may name the recipient. */
+function failReason(e: unknown): string {
+  if (e instanceof EmailTimeout) return "timeout";
+  const code = (e as { code?: unknown } | null)?.code;
+  return typeof code === "string" && ERROR_CODE.test(code)
+    ? code
+    : "send_error";
+}
+
+// Structured logs carry the kind and messageId or reason only: never the
+// recipient, sender, subject or body.
+const logFailed = (kind: EmailKind, reason: string) =>
+  console.warn(JSON.stringify({ evt: "email_failed", kind, reason }));
+
 const utcDay = (now: number) => new Date(now).toISOString().slice(0, 10);
 
 // Counts one email unless today's count is already at the cap (the row resets
@@ -71,34 +90,44 @@ export async function sendEmail(
   userId: string,
   to: string,
   render: () => EmailContent,
-  opts: { artifactId?: string; now?: number } = {},
+  opts: { kind: EmailKind; artifactId?: string; now?: number },
 ): Promise<boolean> {
   const now = opts.now ?? Date.now();
   const { EMAIL, EMAIL_FROM } = env;
   if (!EMAIL || !EMAIL_FROM || !SINGLE_ADDRESS.test(to)) return false;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let content: EmailContent;
   try {
-    const content = render();
+    content = render();
+  } catch {
+    logFailed(opts.kind, "render");
+    return false;
+  }
+  try {
     const caps: [string, number][] = [
       [`email:${userId}`, MAX_EMAILS_PER_USER_PER_DAY],
       [ALL_KEY, MAX_EMAILS_PER_DAY],
       [`email:to:${to}`, MAX_EMAILS_PER_RECIPIENT_PER_DAY],
     ];
     if (opts.artifactId) caps.push([`email:a:${opts.artifactId}:${to}`, 1]);
-    if (!(await takeSlot(env, caps, now))) return false;
+    if (!(await takeSlot(env, caps, now))) {
+      logFailed(opts.kind, "rate_limited");
+      return false;
+    }
     // On timeout we report false, but delivery is only unconfirmed: the
     // email may still arrive.
-    await Promise.race([
+    const { messageId } = await Promise.race([
       EMAIL.send({ from: EMAIL_FROM, to, ...content }),
-      new Promise((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error("email timeout")),
-          EMAIL_TIMEOUT_MS,
-        );
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new EmailTimeout()), EMAIL_TIMEOUT_MS);
       }),
     ]);
+    console.log(
+      JSON.stringify({ evt: "email_sent", kind: opts.kind, messageId }),
+    );
     return true;
-  } catch {
+  } catch (e) {
+    logFailed(opts.kind, failReason(e));
     return false;
   } finally {
     clearTimeout(timer);

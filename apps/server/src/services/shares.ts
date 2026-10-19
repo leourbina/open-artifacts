@@ -121,7 +121,7 @@ async function emailShare(
           format: artifact.format as Format,
           role,
         }),
-      { artifactId: artifact.id },
+      { kind: "share", artifactId: artifact.id },
     );
   } catch {
     return false;

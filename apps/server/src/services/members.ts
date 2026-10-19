@@ -64,13 +64,18 @@ export async function inviteMember(
   if (emailEnabled(env)) {
     const instance = (await getSettings(env).catch(() => DEFAULT_SETTINGS))
       .name;
-    emailed = await sendEmail(env, inviter.id, email, () =>
-      inviteEmail({
-        inviter: inviter.name || inviter.email,
-        instance,
-        recipient: email,
-        appHost: env.APP_HOST,
-      }),
+    emailed = await sendEmail(
+      env,
+      inviter.id,
+      email,
+      () =>
+        inviteEmail({
+          inviter: inviter.name || inviter.email,
+          instance,
+          recipient: email,
+          appHost: env.APP_HOST,
+        }),
+      { kind: "invite" },
     );
   }
   return { ...toMember(row), emailed };
