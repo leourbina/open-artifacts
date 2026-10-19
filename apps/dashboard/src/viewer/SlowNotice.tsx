@@ -1,7 +1,7 @@
 import { Button } from "@oa/ui/shadcn";
 import { ExtIcon } from "../layout/CpuBanner";
 import { CPU_DOC, PLANS_URL } from "../layout/cpu";
-import { LINK_BTN, SM } from "./ui";
+import { ICON, LINK_BTN, SM } from "./ui";
 
 const svg = (d: string) => (
   <svg
@@ -91,7 +91,7 @@ export function SlowNotice({
         <Button
           variant="ghost"
           size="icon-xs"
-          className="flex-none"
+          className={`flex-none ${ICON}`}
           aria-label="Dismiss"
           onClick={onDismiss}
         >

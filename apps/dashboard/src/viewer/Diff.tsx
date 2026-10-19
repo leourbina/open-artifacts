@@ -25,7 +25,7 @@ import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { NotFound } from "../pages/NotFound";
 import { Crumbs } from "./Crumbs";
 import { SANDBOX, safeContentUrl } from "./frame";
-import { SM } from "./ui";
+import { SM, TXT } from "./ui";
 import { useContentUrl } from "./useContentUrl";
 import "./viewer.css";
 
@@ -268,12 +268,14 @@ const LABEL: Record<Status, string> = {
   same: "No size change",
 };
 
-function Preview({ id, v }: { id: string; v: number }) {
+function Preview({ id, v, label }: { id: string; v: number; label: string }) {
   const c = useContentUrl(id, v);
   const url = safeContentUrl(c.url);
   return (
     <figure>
-      <figcaption>v{v}</figcaption>
+      <figcaption>
+        {label} (v{v})
+      </figcaption>
       {url && (
         <iframe
           src={url}
@@ -361,7 +363,7 @@ function Compare({
           <TabsTrigger
             key={v}
             value={v as string}
-            className={`h-[34px] flex-none rounded-sm px-3 ${SM}`}
+            className={`h-[34px] flex-none rounded-sm px-3 ${TXT}`}
           >
             {label}
           </TabsTrigger>
@@ -372,8 +374,8 @@ function Compare({
       </TabsContent>
       <TabsContent value="preview" className="pt-3">
         <div className="oa-dpreview">
-          <Preview id={id} v={from} />
-          <Preview id={id} v={to} />
+          <Preview id={id} v={from} label="Before" />
+          <Preview id={id} v={to} label="After" />
         </div>
       </TabsContent>
     </Tabs>

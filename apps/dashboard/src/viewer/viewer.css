@@ -165,3 +165,12 @@
 .oa-vmain .oa-vframe {
   min-height: 0;
 }
+@media (max-width: 600px) {
+  .oa-dpreview {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+  .oa-dpreview figure {
+    height: 60vh;
+  }
+}

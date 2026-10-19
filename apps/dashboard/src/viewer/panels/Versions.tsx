@@ -38,8 +38,10 @@ export function Versions({ artifact }: { artifact: ArtifactSummary }) {
           <li key={x.version} className="flex flex-col gap-2">
             {i > 0 && <Separator className="mb-1" />}
             <div className="flex flex-wrap items-center gap-2">
-              <strong>v{x.version}</strong>
-              {x.version === currentVersion && <span> · Current</span>}
+              <span className="inline-flex gap-1">
+                <strong>v{x.version}</strong>
+                {x.version === currentVersion && <span>· Current</span>}
+              </span>
               <span className="ml-auto text-muted-foreground">
                 {relativeTime(x.createdAt)}
               </span>

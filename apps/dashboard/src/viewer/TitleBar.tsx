@@ -30,7 +30,7 @@ import {
   useVersionInfo,
   useVersions,
 } from "../api/queries";
-import { SM, VisibilityBadge } from "./ui";
+import { ICON, SM, TXT, VisibilityBadge } from "./ui";
 import { useOfferUndo } from "./useOfferUndo";
 
 const TITLE_MAX = 200;
@@ -220,7 +220,7 @@ export function TitleBar({
                 {label}
               </ShButton>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className={SM}>
+            <DropdownMenuContent align="end" className={TXT}>
               {(versions.data ?? []).map((x) => (
                 <DropdownMenuItem
                   key={x.version}
@@ -237,7 +237,7 @@ export function TitleBar({
           <ShButton
             variant="outline"
             size="xs"
-            className={SM}
+            className={`${SM} max-[600px]:hidden`}
             disabled={rawBusy}
             onClick={onOpenRaw}
           >
@@ -248,7 +248,7 @@ export function TitleBar({
           <ShButton
             variant="outline"
             size="xs"
-            className={SM}
+            className={`${SM} max-[600px]:hidden`}
             aria-expanded={panelOpen}
             onClick={onPanel}
           >
@@ -278,7 +278,23 @@ export function TitleBar({
                 </TooltipTrigger>
                 <TooltipContent>More actions</TooltipContent>
               </Tooltip>
-              <DropdownMenuContent align="end" className={SM}>
+              <DropdownMenuContent align="end" className={TXT}>
+                {rawUrl && (
+                  <DropdownMenuItem
+                    className="min-[601px]:hidden"
+                    disabled={rawBusy}
+                    onSelect={() => onOpenRaw?.()}
+                  >
+                    Open raw
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem
+                  className="min-[601px]:hidden"
+                  onSelect={onPanel}
+                >
+                  Versions
+                </DropdownMenuItem>
+                <DropdownMenuSeparator className="min-[601px]:hidden" />
                 {items.map((it) =>
                   it === "separator" ? (
                     <DropdownMenuSeparator key="separator" />

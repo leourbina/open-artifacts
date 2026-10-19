@@ -12,7 +12,7 @@ import {
   TooltipTrigger,
 } from "@oa/ui/shadcn";
 import { useEffect, useRef } from "react";
-import { SM } from "../ui";
+import { ICON, TXT } from "../ui";
 import { Details } from "./Details";
 import { Share } from "./Share";
 import { Versions } from "./Versions";
@@ -28,6 +28,10 @@ const LABELS: Record<PanelTab, string> = {
   details: "Details",
 };
 
+/** Focus moved in on open is programmatic, so :focus-visible may not match. */
+const PROGRAMMATIC =
+  "data-[focus=programmatic]:focus:outline-2 data-[focus=programmatic]:focus:outline-offset-2 data-[focus=programmatic]:focus:outline-solid data-[focus=programmatic]:focus:outline-ring";
+
 export function SidePanel({
   artifact,
   tab,
@@ -42,12 +46,21 @@ export function SidePanel({
   const ref = useRef<HTMLElement>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
-  // Focus moves in on open and back to whatever opened it on close.
+  // Focus moves to the active tab on open (the container itself shows no ring)
+  // and back to whatever opened the panel on close.
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null;
-    // Marks this focus as programmatic so the ring shows even after a pointer open.
-    if (ref.current) ref.current.dataset.focus = "programmatic";
-    ref.current?.focus();
+    const target =
+      ref.current?.querySelector<HTMLElement>(
+        '[role="tab"][data-state="active"]',
+      ) ?? ref.current;
+    if (target) {
+      target.dataset.focus = "programmatic";
+      target.addEventListener("blur", () => delete target.dataset.focus, {
+        once: true,
+      });
+      target.focus();
+    }
     return () => {
       if (opener?.isConnected) opener.focus();
     };
@@ -56,13 +69,9 @@ export function SidePanel({
     <aside
       ref={ref}
       tabIndex={-1}
-      // Below 960px the panel covers the frame. Focus moved here on open is
-      // programmatic, so :focus-visible may not match; data-focus covers it.
-      className="relative box-border flex w-[353px] flex-none flex-col overflow-hidden border-0 border-l border-solid border-border bg-card focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-solid focus-visible:outline-ring data-[focus=programmatic]:focus:outline-2 data-[focus=programmatic]:focus:-outline-offset-2 data-[focus=programmatic]:focus:outline-solid data-[focus=programmatic]:focus:outline-ring max-[959.98px]:absolute max-[959.98px]:inset-0 max-[959.98px]:z-10 max-[959.98px]:w-auto max-[959.98px]:border-l-0"
+      // Below 960px the panel covers the frame.
+      className="relative box-border flex w-[353px] flex-none flex-col overflow-hidden border-0 border-l border-solid border-l-[var(--oa-border)] bg-card outline-none max-[959.98px]:absolute max-[959.98px]:inset-0 max-[959.98px]:z-10 max-[959.98px]:w-auto max-[959.98px]:border-l-0"
       aria-label="Side panel"
-      onBlur={(e) => {
-        if (e.target === e.currentTarget) delete e.currentTarget.dataset.focus;
-      }}
       onKeyDown={(e) => {
         if (e.key === "Escape" && !e.defaultPrevented) onClose();
       }}
@@ -73,7 +82,7 @@ export function SidePanel({
             <Button
               variant="outline"
               size="icon-xs"
-              className={`absolute top-2 right-2 z-10 size-7 ${SM}`}
+              className={`absolute top-2 right-2 z-10 size-7 ${ICON} ${TXT}`}
               aria-label="Close panel"
               onClick={onClose}
             >
@@ -94,7 +103,7 @@ export function SidePanel({
                 <TabsTrigger
                   key={t}
                   value={t}
-                  className={`h-[34px] flex-none rounded-sm px-3 ${SM}`}
+                  className={`h-[34px] flex-none rounded-sm px-3 ${TXT} ${PROGRAMMATIC}`}
                 >
                   {LABELS[t]}
                 </TabsTrigger>

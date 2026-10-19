@@ -2,8 +2,12 @@
 import type { Visibility } from "@oa/shared";
 import { Badge, cn } from "@oa/ui/shadcn";
 
-/** Buttons and menu items run at the app's 13px chrome size. */
-export const SM = "text-[length:var(--oa-text-sm)]";
+/** The app's 13px chrome text size. */
+export const TXT = "text-[length:var(--oa-text-sm)]";
+/** Chrome buttons are xs (24px); below 600px they grow to 32px to tap. */
+export const SM = `${TXT} max-[600px]:h-8 max-[600px]:px-3`;
+/** Icon-only buttons grow the same way. */
+export const ICON = "max-[600px]:size-8";
 /** A link rendered as a shadcn button: no underline, the button's own color. */
 export const LINK_BTN = `${SM} text-foreground no-underline hover:text-accent-foreground`;
 

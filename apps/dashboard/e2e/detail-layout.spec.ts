@@ -87,3 +87,93 @@ test("detail: no upload-version control and the old chrome classes are gone", as
   for (const c of [".oa-vt-title", ".oa-vpanel", ".oa-top", ".oa-btn"])
     await expect(page.locator(c)).toHaveCount(0);
 });
+
+const MOBILE = { width: 390, height: 800 };
+const DESKTOP = { width: 1280, height: 800 };
+
+test("detail: xs buttons (24px) at 1280, 32px and a More menu at 390", async ({
+  page,
+}) => {
+  await page.setViewportSize(DESKTOP);
+  await page.goto(`/a/${ID}`);
+  const share = page.getByRole("button", { name: "Share", exact: true });
+  await expect(share).toBeVisible();
+  expect((await share.boundingBox())?.height).toBe(24);
+  await expect(page.getByRole("button", { name: "Open raw" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Versions" })).toBeVisible();
+
+  await page.setViewportSize(MOBILE);
+  expect((await share.boundingBox())?.height).toBe(32);
+  await expect(page.getByRole("button", { name: "Open raw" })).toBeHidden();
+  await expect(page.getByRole("button", { name: "Versions" })).toBeHidden();
+  // One row: the version picker, Share and More share a line.
+  const ys = await Promise.all(
+    [/^Version:/, /^Share$/, /^More actions$/].map(async (name) =>
+      Math.round(
+        (await page.getByRole("button", { name }).boundingBox())?.y ?? -1,
+      ),
+    ),
+  );
+  expect(new Set(ys).size).toBe(1);
+  await page.getByRole("button", { name: "More actions" }).click();
+  await expect(page.getByRole("menuitem", { name: "Open raw" })).toBeVisible();
+  await page.getByRole("menuitem", { name: "Versions" }).click();
+  await expect(
+    page.getByRole("complementary", { name: "Side panel" }),
+  ).toBeVisible();
+});
+
+test("diff preview: side by side at 1280, Before over After at 390", async ({
+  page,
+}) => {
+  for (const [vp, stacked] of [
+    [DESKTOP, false],
+    [MOBILE, true],
+  ] as const) {
+    await page.setViewportSize(vp);
+    await page.goto(`/a/${ID}/diff/1/2`);
+    await page.getByRole("tab", { name: "Preview" }).click();
+    const before = page.locator("figure", { hasText: "Before (v1)" });
+    const after = page.locator("figure", { hasText: "After (v2)" });
+    await expect(before).toBeVisible();
+    const [b, a] = await Promise.all([
+      before.boundingBox(),
+      after.boundingBox(),
+    ]);
+    if (stacked) {
+      expect(a?.y ?? 0).toBeGreaterThanOrEqual((b?.y ?? 0) + (b?.height ?? 0));
+      expect(Math.round(a?.x ?? -1)).toBe(Math.round(b?.x ?? -2));
+    } else {
+      expect(Math.round(a?.y ?? -1)).toBe(Math.round(b?.y ?? -2));
+      expect(a?.x ?? 0).toBeGreaterThan((b?.x ?? 0) + (b?.width ?? 0) - 1);
+    }
+  }
+});
+
+test("panel: no ring on the container, the active tab holds the focus, 1px border", async ({
+  page,
+}) => {
+  await page.setViewportSize(DESKTOP);
+  await page.goto(`/a/${ID}`);
+  await page.getByRole("button", { name: "Versions" }).click();
+  const panel = page.getByRole("complementary", { name: "Side panel" });
+  const tab = page.getByRole("tab", { name: "Versions" });
+  await expect(tab).toBeFocused();
+  const ring = (el: import("@playwright/test").Locator) =>
+    el.evaluate((n) => {
+      const s = getComputedStyle(n);
+      return [s.outlineStyle, s.outlineWidth];
+    });
+  expect((await ring(panel))[0]).toBe("none");
+  expect(await ring(tab)).toEqual(["solid", "2px"]);
+  const edge = await panel.evaluate((n) => {
+    const s = getComputedStyle(n);
+    const probe = document.createElement("i");
+    probe.style.color = "var(--oa-border)";
+    document.body.append(probe);
+    const want = getComputedStyle(probe).color;
+    probe.remove();
+    return [s.borderLeftWidth, s.borderLeftStyle, s.borderLeftColor === want];
+  });
+  expect(edge).toEqual(["1px", "solid", true]);
+});
