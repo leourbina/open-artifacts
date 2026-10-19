@@ -71,10 +71,6 @@
 .oa-settings .oa-card p {
   margin: 0;
 }
-/* Full-width controls (width: 100%) must count their border and padding. */
-.oa-settings .oa-card :is(input, textarea) {
-  box-sizing: border-box;
-}
 /* Grid items stretch; a segmented control keeps its intrinsic width. */
 .oa-settings .oa-card > [role="radiogroup"] {
   justify-self: start;
