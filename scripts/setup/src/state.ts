@@ -24,6 +24,8 @@ export type State = {
   analyticsSkipped?: boolean;
   /** Browser Run binding on/off; absent means on. Set by --no-browser, kept across --upgrade. */
   browser?: boolean;
+  /** Workers plan read by prereqs: free, paid, or unknown (unreadable). */
+  plan?: "free" | "paid" | "unknown";
   /** "Just you, or a team?": team turns the email step on. Absent means solo. */
   team?: boolean;
   /** send_email binding on/off; off for solo, --no-email, or a Free fallback. */

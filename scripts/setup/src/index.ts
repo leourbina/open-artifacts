@@ -149,18 +149,11 @@ async function resolve(argv: string[], deps: Deps, state: State) {
     ),
     accountId:
       v["account-id"] ?? state.accountId ?? deps.env.CLOUDFLARE_ACCOUNT_ID,
-    // Flag, then saved state, then the question; non-interactive (and --check) default to solo.
-    team:
-      v.team ||
-      (!v.solo &&
-        (state.team ??
-          (interactive && !v.check && !v["revoke-ci-tokens"]
-            ? /^t(eam)?$/i.test(
-                await deps.prompt(
-                  "Just you, or a team? [solo/team] (team sends invite email; needs Workers Paid):",
-                ),
-              )
-            : false))),
+    // Flag, then saved state; undefined is decided (asked) in prereqs once the plan is known.
+    teamChoice: v.team ? true : v.solo ? false : state.team,
+    teamFlag: v.team,
+    team: false,
+    noEmail: v["no-email"],
     email: false,
     yesEmailDomain: v["yes-email-domain"],
     yesPaid: v["yes-paid"],
@@ -177,20 +170,18 @@ async function resolve(argv: string[], deps: Deps, state: State) {
     ci: v.ci,
     revokeCi: v["revoke-ci-tokens"],
   };
-  if (opts.team) {
-    // Flag, then saved state, then on. --team re-enables it after a Free fallback.
-    opts.email = !v["no-email"] && (v.team || (state.email ?? true));
-    // A saved default follows a changed app host; an explicit domain is kept.
-    const saved =
-      state.emailDomain !== `mail.${state.appHost}`
-        ? state.emailDomain
-        : undefined;
+  // A saved default follows a changed app host; an explicit domain is kept.
+  // prereqs keeps it only for a team install.
+  const saved =
+    state.emailDomain !== `mail.${state.appHost}`
+      ? state.emailDomain
+      : undefined;
+  if (opts.appHost)
     opts.emailDomain = valid(
       "--email-domain",
       v["email-domain"] ?? saved ?? `mail.${opts.appHost}`,
       HOST,
     );
-  }
   return opts;
 }
 
@@ -209,6 +200,7 @@ const REPORTED = [
   "teamDomain",
   "ownerTokenId",
   "browser",
+  "plan",
   "team",
   "email",
   "emailDomain",
@@ -273,8 +265,9 @@ export const HELP = `Usage: pnpm oa:setup [options]
   --email-domain <d>  Sending domain; default mail.<app host>. Onboard it at
                 https://dash.cloudflare.com/?to=/:account/email-service/sending
   --yes-email-domain  Accept a sending domain that already has MX/SPF elsewhere.
-  --yes-paid    Confirm the account is on Workers Paid (setup can't always read the plan).
-                Saved in state: team, email, emailDomain (--check/--json report them).
+  --yes-paid    Confirm Workers Paid when setup reads the plan as free or unknown
+                (prereqs reads it; without Billing Read it is unknown).
+                Saved in state: plan, team, email, emailDomain (--check/--json report them).
   -h, --help`;
 
 /** Runs setup; resolves to the exit code (0 ok, 2 action_required, 1 error). */
@@ -336,9 +329,6 @@ export async function run(
     contentHost,
     ownerEmail,
     browser: opts.browser,
-    team: opts.team,
-    email: opts.email,
-    emailDomain: opts.emailDomain,
   });
   const noState = !prev.name;
   // --check: fetch is GET-only and exec runs only read-only wrangler, for every client.

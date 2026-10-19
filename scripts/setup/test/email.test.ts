@@ -20,6 +20,8 @@ const line = (lines: string[], step: string) =>
 const cfg = (w: { files: Map<string, string> }) =>
   JSON.parse(w.files.get(CONFIG) ?? "");
 const interactive = HOSTS.filter((a) => a !== "--yes" && a !== "--json");
+const PAID = [{ rate_plan: { id: "WORKERS_PAID" }, state: "Paid" }];
+const FREE_CODES = ["cpu-limit", "kv-writes", "no-email", "individual-use"];
 
 describe("team/solo and the email step", () => {
   it("solo (the non-interactive default) omits the binding and EMAIL_FROM", async () => {
@@ -115,7 +117,7 @@ describe("team/solo and the email step", () => {
     expect(l.message).toContain("apex");
     expect(l.message).toContain("aspmx.l.google.com");
     // Interactive: a "no" stops; nothing is reported as onboarding.
-    const no = world({ dns, answers: ["team", "", "y", "n"] });
+    const no = world({ dns, subscriptions: PAID, answers: ["team", "", "n"] });
     const ia = [...interactive, "--email-domain", "example.com"];
     expect(await run(ia, no.deps, ROOT)).toBe(2);
     expect(no.prompts.join("\n")).toContain("p=reject");
@@ -128,10 +130,10 @@ describe("team/solo and the email step", () => {
     expect(w.state()).toMatchObject({ team: true, email: false });
   });
 
-  it("team on Free (no --yes-paid, plan unknown) warns and falls back to email off", async () => {
+  it("team with the plan unknown (no --yes-paid) warns and keeps email off", async () => {
     const w = world();
     expect(await run([...HOSTS, "--team"], w.deps, ROOT)).toBe(0);
-    const l = line(w.lines, "email");
+    const l = line(w.lines, "prereqs");
     expect(l.message).toContain("invites can't be sent");
     expect(l.message).toContain("--yes-paid");
     expect(cfg(w)).not.toHaveProperty("send_email");
@@ -167,10 +169,10 @@ describe("team/solo and the email step", () => {
   });
 
   it("asks 'Just you, or a team?' interactively", async () => {
-    const w = world({ dns: onboarded(D), answers: ["team", "", "y"] });
-    expect(await run(interactive, w.deps, ROOT)).toBe(0);
+    const w = world({ dns: onboarded(D), answers: ["team", "y", ""] });
+    expect(await run([...interactive, "--yes-paid"], w.deps, ROOT)).toBe(0);
     expect(w.prompts[0]).toContain("Just you, or a team?");
-    expect(w.prompts.join("\n")).toContain("Workers Paid");
+    expect(w.prompts[1]).toContain("Workers Free");
     expect(w.state()).toMatchObject({ team: true, email: true });
   });
 
@@ -259,5 +261,101 @@ describe("state file", () => {
     await run(TEAM, w.deps, ROOT);
     const s = JSON.parse(w.files.get(STATE) ?? "");
     expect(s).toMatchObject({ team: true, email: true, emailDomain: D });
+  });
+});
+
+describe("plan detection (prereqs)", () => {
+  const pre = (w: { lines: string[] }) => line(w.lines, "prereqs");
+  /** data.plan and the warning codes, each warning tagged with that plan. */
+  const planOf = (w: { lines: string[] }) => {
+    const { plan, warnings } = pre(w).data;
+    for (const x of warnings) {
+      expect(x.plan).toBe(plan);
+      expect(x.message).not.toMatch(/\u2014/);
+    }
+    return { plan, codes: warnings.map((x: { code: string }) => x.code) };
+  };
+
+  it("paid: Workers Paid detected, no free warnings, team gets email without --yes-paid", async () => {
+    const w = world({ subscriptions: PAID, dns: onboarded(D) });
+    expect(await run([...HOSTS, "--team"], w.deps, ROOT)).toBe(0);
+    expect(pre(w).data).toEqual({ plan: "paid", warnings: [] });
+    expect(pre(w).message).toBe("Workers Paid detected");
+    expect(cfg(w).send_email).toEqual([{ name: "EMAIL" }]);
+  });
+
+  it("free: warnings shown, solo by default", async () => {
+    const w = world({ subscriptions: [{ rate_plan: { id: "free" } }] });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    expect(planOf(w)).toEqual({ plan: "free", codes: FREE_CODES });
+    expect(pre(w).message).toContain("10 ms of CPU");
+    expect(pre(w).message).toContain("1,000 KV writes per day");
+    expect(w.state()).toMatchObject({ plan: "free", team: false });
+  });
+
+  it("a cancelled WORKERS_PAID subscription is free", async () => {
+    const w = world({
+      subscriptions: [
+        { rate_plan: { id: "WORKERS_PAID" }, state: "Cancelled" },
+      ],
+    });
+    await run(HOSTS, w.deps, ROOT);
+    expect(planOf(w)).toEqual({ plan: "free", codes: FREE_CODES });
+  });
+
+  it("unknown on a 403 or an unparseable result, with the warnings", async () => {
+    const forbidden = world();
+    await run(HOSTS, forbidden.deps, ROOT);
+    const UNKNOWN = { plan: "unknown", codes: ["plan-unknown", ...FREE_CODES] };
+    expect(planOf(forbidden)).toEqual(UNKNOWN);
+    for (const bad of [{ not: "a list" }, [{ rate_plan: "x" }], ["x"]]) {
+      const w = world({ subscriptions: bad as never });
+      await run(HOSTS, w.deps, ROOT);
+      expect(planOf(w), JSON.stringify(bad)).toEqual(UNKNOWN);
+    }
+  });
+
+  it("team on free keeps email off unless --yes-paid", async () => {
+    const free = [{ rate_plan: { id: "free" } }];
+    const w = world({ subscriptions: free });
+    expect(await run([...HOSTS, "--team"], w.deps, ROOT)).toBe(0);
+    expect(pre(w).message).toContain("invites can't be sent");
+    expect(w.state()).toMatchObject({ team: true, email: false });
+    const y = world({ subscriptions: free, dns: onboarded(D) });
+    expect(await run([...HOSTS, "--team", "--yes-paid"], y.deps, ROOT)).toBe(0);
+    expect(y.state()).toMatchObject({ team: true, email: true });
+  });
+
+  it("interactive on free: Enter is solo; team needs a confirmation", async () => {
+    const free = [{ rate_plan: { id: "free" } }];
+    const solo = world({ subscriptions: free, answers: [""] });
+    expect(await run(interactive, solo.deps, ROOT)).toBe(0);
+    expect(solo.state()).toMatchObject({ team: false });
+    const no = world({ subscriptions: free, answers: ["team", "n", ""] });
+    expect(await run(interactive, no.deps, ROOT)).toBe(0);
+    expect(no.prompts[1]).toContain("Workers Free");
+    expect(no.state()).toMatchObject({ team: false });
+    const yes = world({ subscriptions: free, answers: ["team", "y", ""] });
+    expect(await run(interactive, yes.deps, ROOT)).toBe(0);
+    expect(yes.state()).toMatchObject({ team: true, email: false });
+  });
+
+  it("interactive on paid offers team plus email, no confirmation", async () => {
+    const w = world({
+      subscriptions: PAID,
+      dns: onboarded(D),
+      answers: ["team", ""],
+    });
+    expect(await run(interactive, w.deps, ROOT)).toBe(0);
+    expect(w.prompts[0]).toContain("Workers Paid detected");
+    expect(w.state()).toMatchObject({ team: true, email: true });
+  });
+
+  it("--check reports the plan in state", async () => {
+    const w = world({ subscriptions: PAID });
+    await run(HOSTS, w.deps, ROOT);
+    w.lines.length = 0;
+    await run([...HOSTS.filter((a) => a !== "--yes"), "--check"], w.deps, ROOT);
+    expect(parse(w.lines).at(-1).data.plan).toBe("paid");
   });
 });

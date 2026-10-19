@@ -1,3 +1,4 @@
+import { decideTeam, detectPlan, warnings } from "../plan.ts";
 import { type Ctx, NeedInput, type Step } from "../step.ts";
 
 /** Hosts lacking a zone, found by check and reported by apply. */
@@ -58,6 +59,15 @@ export const prereqs: Step = {
     if (!accounts.some((a) => a.id === id))
       throw new Error(`--account-id ${id} is not in \`wrangler whoami\``);
     state.accountId = id;
+    const plan = await detectPlan(ctx, id);
+    const warns = warnings(plan);
+    ctx.notes.push(
+      ...(plan === "paid"
+        ? ["Workers Paid detected"]
+        : warns.map((w) => w.message)),
+    );
+    ctx.data = { plan, warnings: warns };
+    await decideTeam(state, ctx, plan);
     const missing = await missingHosts(ctx, id);
     missingFor.set(ctx, missing);
     return missing.length ? "todo" : "done";

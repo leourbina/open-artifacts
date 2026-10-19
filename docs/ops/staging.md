@@ -145,10 +145,10 @@ Server-side thumbnails use the Workers `browser` binding (Browser Run). Staging 
 Setup asks "Just you, or a team?" (`--solo` / `--team`; `--json`, `--yes` and `--ci` default to solo). Product split: Free = Individual, Paid = Team.
 
 - **Solo:** no email. The template's `send_email` line and `EMAIL_FROM` var are dropped from the rendered config.
-- **Team:** the `email` step runs (after `secrets`, before `deploy`). `--no-email` turns it off.
-- State: `team`, `email`, `emailDomain` in `.openartifacts/state.json`, kept by `--upgrade`, reported by `--check`/`--json`.
+- **Team:** the `email` step runs (after `secrets`, before `deploy`). `--no-email` turns it off. The question is asked in `prereqs`, after the plan is read.
+- State: `plan`, `team`, `email`, `emailDomain` in `.openartifacts/state.json`, kept by `--upgrade`, reported by `--check`/`--json`.
 
-**Paid only.** Email Sending to arbitrary recipients needs Workers Paid; Free can only send to verified destination addresses. Setup reads `GET /accounts/{id}/subscriptions` (`rate_plan.id == "workers_paid"`), which needs Billing Read. The `wrangler login` token lacks it, so normally setup asks (interactive) or needs `--yes-paid` (non-interactive). Not confirmed: setup warns that invites can't be sent and turns email off (saved; `--team` turns it back on). Plans: https://dash.cloudflare.com/?to=/:account/workers/plans
+**Plan (prereqs).** Prereqs reads `GET /accounts/{id}/subscriptions` (read-only, via the cf client). The plan is `paid` when an item has `rate_plan.id` in `WORKERS_PAID` / `PARTNERS_WORKERS_SS` / `PARTNERS_WORKERS_ENT` (case-insensitive; the documented Workers rate plan ids) and `state` is `Paid`, `Provisioned` or `Trial` (or absent). It is `free` when the list parses with no such item, and `unknown` on any error (403 without Billing Read, which the `wrangler login` token lacks) or an unexpected shape. `rate_plan.id` is the machine id the billing API sets; `public_name` is display text, so it is not used. The prereqs line carries `data.plan` and `data.warnings` (`[{code, plan, message}]`: `cpu-limit`, `kv-writes`, `no-email`, `individual-use`, plus `plan-unknown`; `[]` on paid, with the note "Workers Paid detected"). `--check` reports `plan` in its state line. Free or unknown: solo by default, team only with confirmation (the prompt, or `--team`), and email off unless `--yes-paid`. Email Sending to arbitrary recipients needs Workers Paid; Free can only send to verified destination addresses. Plans: https://dash.cloudflare.com/?to=/:account/workers/plans
 
 **Sending domain.** Default `mail.<app host>` (e.g. `mail.artifacts.example.com`), override with `--email-domain`. Use a subdomain: each subdomain is its own sending domain, and onboarding adds `_dmarc.<domain>` with `p=reject`, which at a zone apex can break the mail an existing provider (e.g. Google Workspace) sends. Before onboarding, setup checks the domain: MX or SPF for another provider (at the apex, any MX) needs confirmation (prompt, or `--yes-email-domain`; else `action_required`), with a strong warning when the apex has such MX and no `_dmarc`.
 
@@ -165,12 +165,4 @@ Until all four resolve, the step is `action_required` (with the link and the rec
 
 **Config.** With email on, the rendered config has `"send_email": [{ "name": "EMAIL" }]` and `vars.EMAIL_FROM = "noreply@<domain>"`. The template stays strict JSON; `EMAIL_FROM` is never the last var, so dropping its line keeps valid JSON. Selftest checks the deployed Worker's settings for the `EMAIL` `send_email` binding.
 
-**Staging (pending).** Staging sends from `mail.open-artifacts.com` (not the default `mail.<app host>`); `vars.EMAIL_FROM` is `noreply@mail.open-artifacts.com`. That domain is not onboarded yet, so the binding is not in `wrangler.staging.jsonc`. Once it is onboarded, add to `env.staging`:
-
-```jsonc
-"send_email": [{ "name": "EMAIL" }],
-```
-
-Prod passes `--email-domain mail.leourbina.com` (a subdomain, not the apex).
-
-The binding is held back because the docs don't say whether `wrangler deploy` accepts a `send_email` binding before the account has an onboarded domain (the older Email Routing docs required Email Routing to be enabled first).
+**Staging.** Staging sends from `mail.open-artifacts.com` (onboarded; not the default `mail.<app host>`): `wrangler.staging.jsonc` has `"send_email": [{ "name": "EMAIL" }]` and `vars.EMAIL_FROM = "noreply@mail.open-artifacts.com"`, asserted by `scripts/check-staging-config.test.ts`. Prod passes `--email-domain mail.leourbina.com` (a subdomain, not the apex).

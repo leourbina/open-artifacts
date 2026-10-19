@@ -16,15 +16,21 @@ export type Opts = {
   newOwnerToken: boolean;
   /** Render the BROWSER binding (Browser Run). Default on; --no-browser or saved state turns it off. */
   browser: boolean;
-  /** Team install (--team, or "team" at the prompt): turns the email step on. */
+  /** --team/--solo, else saved state; undefined: prereqs asks (or defaults to solo). */
+  teamChoice?: boolean;
+  /** --team was passed. */
+  teamFlag: boolean;
+  /** Team install, decided by prereqs: turns the email step on. */
   team: boolean;
-  /** Render the send_email binding and EMAIL_FROM. Team only; --no-email turns it off. */
+  /** --no-email. */
+  noEmail: boolean;
+  /** Render the send_email binding and EMAIL_FROM: team, not --no-email, and Paid (detected, --yes-paid, or saved). */
   email: boolean;
   /** The Email Sending domain: --email-domain, saved state, else mail.<app host>. */
   emailDomain?: string;
   /** --yes-email-domain: accept a domain with existing mail records non-interactively. */
   yesEmailDomain: boolean;
-  /** --yes-paid: the account is on Workers Paid (setup usually can't read the plan). */
+  /** --yes-paid: the account is on Workers Paid though setup read free or unknown. */
   yesPaid: boolean;
   /** False under --yes or --json: never prompt. */
   interactive: boolean;

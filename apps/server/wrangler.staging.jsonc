@@ -41,6 +41,9 @@
       ],
       // Browser Run (server-side thumbnails). Workers edit suffices to deploy.
       "browser": { "binding": "BROWSER" },
+      // Email Sending (team invites) from the onboarded mail.open-artifacts.com;
+      // EMAIL_FROM below must stay on that domain.
+      "send_email": [{ "name": "EMAIL" }],
       "assets": {
         "binding": "ASSETS",
         "directory": "./dist-assets",
@@ -63,8 +66,6 @@
         "APP_HOST": "staging.open-artifacts.com",
         "CONTENT_HOST": "staging-content.open-artifacts.com",
         "OWNER_EMAIL": "me@leourbina.com",
-        // Pending: mail.open-artifacts.com is not onboarded for Email Sending
-        // yet, and the send_email binding is held back (docs/ops/staging.md).
         "EMAIL_FROM": "noreply@mail.open-artifacts.com",
         "ACCESS_TEAM_DOMAIN": "leourbina.cloudflareaccess.com",
         "CF_ACCOUNT_ID": "26ac346086d4405f7a976d48747a2a75",

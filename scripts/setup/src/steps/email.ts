@@ -1,12 +1,8 @@
-import type { State } from "../state.ts";
 import type { Ctx, Step } from "../step.ts";
 import { zoneOf } from "./prereqs.ts";
-import { writeConfig } from "./resources.ts";
 
 export const DASH_SENDING =
   "https://dash.cloudflare.com/?to=/:account/email-service/sending";
-export const DASH_PLANS =
-  "https://dash.cloudflare.com/?to=/:account/workers/plans";
 const DOH = "https://cloudflare-dns.com/dns-query";
 const CF_MX = /^route[123]\.mx\.cloudflare\.net$/i;
 const CF_SPF = "include:_spf.mx.cloudflare.net";
@@ -91,29 +87,13 @@ async function zone(ctx: Ctx, accountId: string, d: string) {
   return z;
 }
 
-/**
- * Workers Paid, from `GET /accounts/{id}/subscriptions` (`rate_plan.id`).
- * Needs Billing Read, which wrangler's OAuth login lacks: false then, and the
- * user is asked instead. Never reports Paid on a guess.
- */
-async function detectPaid(ctx: Ctx, accountId: string) {
-  type Sub = { rate_plan?: { id?: string; public_name?: string } };
-  const subs = await ctx
-    .api<Sub[]>("GET", `/accounts/${accountId}/subscriptions`)
-    .catch(() => undefined);
-  return (subs ?? []).some(
-    (s) =>
-      s.rate_plan?.id === "workers_paid" ||
-      /^workers paid$/i.test(s.rate_plan?.public_name ?? ""),
-  );
-}
-
 const yes = (a: string) => /^y(es)?$/i.test(a);
 
 /**
- * Team installs send invites with Email Sending (Workers Paid only). The
- * domain is onboarded by a human in the dashboard (no API); this step checks
- * for a conflict with existing mail first, then verifies the onboarding DNS.
+ * Team installs send invites with Email Sending (Workers Paid only; prereqs
+ * decides whether email is on). The domain is onboarded by a human in the
+ * dashboard (no API); this step checks for a conflict with existing mail
+ * first, then verifies the onboarding DNS.
  */
 export const email: Step = {
   name: "email",
@@ -137,18 +117,6 @@ export const email: Step = {
   async apply(state, ctx) {
     const d = ctx.opts.emailDomain ?? "";
     const accountId = state.accountId ?? "";
-    if (await detectPaid(ctx, accountId))
-      ctx.notes.push("Workers Paid detected from the account subscriptions");
-    else if (!ctx.opts.yesPaid) {
-      const q = `Team invites need Email Sending, which is Workers Paid only; setup can't read the plan with this token (check ${DASH_PLANS}). Is this account on Workers Paid? [y/N]`;
-      if (!ctx.opts.interactive || !yes(await ctx.deps.prompt(q))) {
-        offline(state, ctx);
-        ctx.notes.push(
-          `email off: Workers Paid not confirmed, so invites can't be sent (Free sends only to verified addresses). Check ${DASH_PLANS}, then rerun with --team --yes-paid`,
-        );
-        return undefined;
-      }
-    }
     const z = await zone(ctx, accountId, d);
     const conflict = await conflictOf(ctx, z, d);
     if (conflict && !ctx.opts.yesEmailDomain) {
@@ -180,12 +148,6 @@ export const email: Step = {
     };
   },
 };
-
-/** Turns email off for this install and re-renders the config without it. */
-function offline(state: State, ctx: Ctx) {
-  ctx.opts.email = state.email = false;
-  writeConfig(state, ctx);
-}
 
 /** Existing mail at `d` that onboarding could disturb; undefined when clear. */
 async function conflictOf(
