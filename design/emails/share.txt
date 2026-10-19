@@ -11,6 +11,6 @@ Open {{instanceName}}:
 
 --
 
-You got this because {{inviterName}} added {{recipientEmail}} on {{instanceName}}. If you weren't expecting it, you can ignore this email.
+You got this because {{inviterName}} shared an artifact with {{recipientEmail}} on {{instanceName}}. If you weren't expecting it, you can ignore this email.
 
 Sent by Open Artifacts, self-hosted at {{appHost}}.
