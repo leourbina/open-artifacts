@@ -1,5 +1,6 @@
 import { type ArtifactSummary, LIMITS, R } from "@oa/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiClientError } from "../src/api/client";
 import { createBridge } from "../src/viewer/bridge";
 import {
   createSideEffects,
@@ -13,6 +14,7 @@ const art = (o: Partial<ArtifactSummary> = {}) =>
     format: "html",
     currentVersion: 3,
     thumbnailUrl: null,
+    thumbnailVersion: null,
     access: "editor",
     capabilities: { db: true, viewer: true, storage: false },
     ...o,
@@ -49,10 +51,34 @@ describe("thumbnails", () => {
     fx.onHello();
     expect(requestThumbnail).toHaveBeenCalledTimes(1);
   });
-  it("does not request when thumbnailUrl is set", () => {
-    const { fx, requestThumbnail } = setup(art({ thumbnailUrl: "/t" }));
+  it("does not request when the thumbnail is current", () => {
+    const { fx, requestThumbnail } = setup(
+      art({ thumbnailUrl: "/t?v=3", thumbnailVersion: 3 }),
+    );
     fx.onHello();
     expect(requestThumbnail).not.toHaveBeenCalled();
+  });
+  it("requests when the thumbnail is stale", () => {
+    const { fx, requestThumbnail } = setup(
+      art({ thumbnailUrl: "/t?v=2", thumbnailVersion: 2 }),
+    );
+    fx.onHello();
+    expect(requestThumbnail).toHaveBeenCalledTimes(1);
+  });
+  it("does not request while viewing an older version", () => {
+    const { fx, requestThumbnail } = setup(art(), { version: 2 });
+    fx.onHello();
+    expect(requestThumbnail).not.toHaveBeenCalled();
+  });
+  it("treats 409 as up to date: refreshes, no log", async () => {
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
+    const { fx, put, invalidate } = setup(art());
+    put.mockRejectedValue(new ApiClientError("conflict", "stale", 409));
+    fx.onThumb(blob(10));
+    await flush();
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    expect(debug).not.toHaveBeenCalled();
+    debug.mockRestore();
   });
   it("does not request for a viewer", () => {
     const { fx, requestThumbnail } = setup(art({ access: "viewer" }));
@@ -71,7 +97,11 @@ describe("thumbnails", () => {
     const b = blob(10);
     fx.onThumb(b);
     await flush();
-    expect(put).toHaveBeenCalledWith(R.thumbnail(a.id), b, "image/webp");
+    expect(put).toHaveBeenCalledWith(
+      `${R.thumbnail(a.id)}?v=3`,
+      b,
+      "image/webp",
+    );
     expect(invalidate).toHaveBeenCalledTimes(1);
   });
   it("fails silently", async () => {
