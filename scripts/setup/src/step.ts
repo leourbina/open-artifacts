@@ -38,10 +38,8 @@ export type Opts = {
   yesPaid: boolean;
   /** --plan paid|free: the PLAN var to render, overriding detection. */
   planFlag?: "free" | "paid";
-  /** The PLAN var rendered into the Worker config, decided by prereqs. */
+  /** The PLAN var rendered into the Worker config, decided by prereqs; saved to state only after a successful deploy. */
   planVar: "free" | "paid";
-  /** The PLAN var saved by an earlier run, read before this run overwrites it. */
-  savedPlanVar?: "free" | "paid";
   /** False under --yes or --json: never prompt. */
   interactive: boolean;
   json: boolean;

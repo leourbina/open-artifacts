@@ -14,6 +14,7 @@ async function until200(
   url: string,
   init?: RequestInit,
   shown = url,
+  verify?: (res: Response) => Promise<string | undefined>,
 ) {
   const sleep =
     ctx.deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
@@ -21,8 +22,11 @@ async function until200(
     let last: string;
     try {
       const res = await ctx.deps.fetch(url, init);
-      if (res.status === 200) return res;
-      last = `HTTP ${res.status}`;
+      if (res.status === 200) {
+        const bad = await verify?.(res.clone());
+        if (!bad) return res;
+        last = bad;
+      } else last = `HTTP ${res.status}`;
     } catch (e) {
       last = (e as Error).message;
     }
@@ -181,13 +185,22 @@ export const selftest: Step = {
   check: async () => "todo",
   async apply(state, ctx) {
     const app = `https://${ctx.opts.appHost}`;
-    const hz = await until200(ctx, "healthz", `${app}/healthz`);
-    const served = ((await hz.json().catch(() => ({}))) as { plan?: unknown })
-      .plan;
-    if (served !== ctx.opts.planVar)
-      throw new Error(
-        `healthz reports plan ${JSON.stringify(served)} but setup rendered PLAN ${JSON.stringify(ctx.opts.planVar)}; the deployed Worker does not match, rerun setup (or pass --plan paid|free)`,
-      );
+    // The plan is checked inside the wait: the old version may still serve for a moment.
+    await until200(
+      ctx,
+      "healthz",
+      `${app}/healthz`,
+      undefined,
+      undefined,
+      async (r) => {
+        const served = (
+          (await r.json().catch(() => ({}))) as { plan?: unknown }
+        ).plan;
+        return served === ctx.opts.planVar
+          ? undefined
+          : `plan ${JSON.stringify(served)} but setup rendered PLAN ${JSON.stringify(ctx.opts.planVar)}; the deployed Worker does not match, rerun setup (or pass --plan paid|free)`;
+      },
+    );
     const oidc = `https://${state.teamDomain}/cdn-cgi/access/sso/oidc/${state.accessClientId}/.well-known/openid-configuration`;
     await until200(ctx, "OIDC discovery", oidc);
     if (ctx.opts.email) {

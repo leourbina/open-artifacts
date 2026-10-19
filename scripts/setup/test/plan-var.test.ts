@@ -151,3 +151,90 @@ describe("selftest checks /healthz plan", () => {
     expect(l.message).toContain("paid");
   });
 });
+
+describe("fix round 1", () => {
+  const paidInstall = async (extra: object = {}) => {
+    const opts: Record<string, unknown> = { subscriptions: PAID, ...extra };
+    const w = world(opts);
+    expect(await run([...BASE, "--solo"], w.deps, ROOT)).toBe(0);
+    return { w, opts };
+  };
+
+  it("M1: a refused run does not overwrite the saved planVar", async () => {
+    const { w, opts } = await paidInstall();
+    w.setSubscriptions(undefined);
+    expect(await run([...BASE, "--solo"], w.deps, ROOT)).toBe(2);
+    expect(w.state().planVar).toBe("paid");
+    opts.settingsFail = true;
+    w.lines.length = 0;
+    await run([...BASE, "--solo", "--upgrade"], w.deps, ROOT);
+    expect(planOf(w)).toBe("paid");
+  });
+
+  it("M1: a failed live read with no saved planVar over a deployed Worker is action_required", async () => {
+    const { w, opts } = await paidInstall();
+    const st = JSON.parse(w.files.get(STATE) ?? "{}");
+    st.planVar = undefined;
+    w.files.set(STATE, JSON.stringify(st));
+    w.setSubscriptions(undefined);
+    opts.settingsFail = true;
+    w.lines.length = 0;
+    expect(await run([...BASE, "--solo", "--upgrade"], w.deps, ROOT)).toBe(2);
+    expect(line(w, "deploy").status).toBe("action_required");
+    expect(line(w, "deploy").message).toContain("--plan");
+  });
+
+  it("M2: selftest waits out an old version still serving another plan", async () => {
+    const w = world({
+      subscriptions: PAID,
+      healthPlanFirst: ["free", undefined],
+    });
+    expect(await run([...BASE, "--solo"], w.deps, ROOT)).toBe(0);
+    expect(line(w, "selftest").status).toBe("ok");
+  });
+
+  it("m1: the guard message does not say could-not-confirm for a read free plan", async () => {
+    const { w } = await paidInstall();
+    w.setSubscriptions(FREE);
+    w.lines.length = 0;
+    expect(
+      await run([...BASE, "--solo", "--upgrade", "--browser"], w.deps, ROOT),
+    ).toBe(2);
+    expect(line(w, "deploy").message).not.toContain("could not confirm");
+  });
+
+  it("m2: --check --strict flags a pending guard refusal", async () => {
+    const { w } = await paidInstall();
+    w.setSubscriptions(undefined);
+    w.lines.length = 0;
+    const c = [...BASE, "--solo", "--check", "--strict", "--json"];
+    expect(await run(c, w.deps, ROOT)).toBe(2);
+    expect(line(w, "deploy").message).toContain("--plan");
+  });
+
+  it("m3: the final --json state line carries planVar", async () => {
+    const w = world({ subscriptions: PAID });
+    expect(await run([...BASE, "--solo", "--json"], w.deps, ROOT)).toBe(0);
+    expect(line(w, "state").data).toHaveProperty("planVar", "paid");
+  });
+
+  it("m5: precedence table", async () => {
+    const free = world({ subscriptions: PAID });
+    expect(
+      await run(
+        [...BASE, "--solo", "--plan", "free", "--yes-paid"],
+        free.deps,
+        ROOT,
+      ),
+    ).toBe(0);
+    expect(planOf(free)).toBe("free");
+    const yp = world({ subscriptions: FREE });
+    expect(await run([...BASE, "--solo", "--yes-paid"], yp.deps, ROOT)).toBe(0);
+    expect(planOf(yp)).toBe("paid");
+    const noUp = world({ subscriptions: PAID });
+    expect(await run([...BASE, "--solo"], noUp.deps, ROOT)).toBe(0);
+    noUp.setSubscriptions(undefined);
+    expect(await run([...BASE, "--solo"], noUp.deps, ROOT)).toBe(2);
+    expect(planOf(noUp)).toBe("free");
+  });
+});

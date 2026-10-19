@@ -144,7 +144,6 @@ export async function decide(
       : plan === "unknown" && o.upgrade && state.planVar
         ? state.planVar
         : "free");
-  o.savedPlanVar = state.planVar;
   o.planVar = planVar;
   o.team = Boolean(team);
   o.email = email;
@@ -153,7 +152,6 @@ export async function decide(
   // --check without a saved choice only reports: it leaves `team` unset.
   Object.assign(state, {
     plan,
-    planVar,
     ...(team === undefined ? {} : { team }),
     email,
     emailDomain: o.emailDomain,

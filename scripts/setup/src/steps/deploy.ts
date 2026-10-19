@@ -2,7 +2,7 @@ import { join } from "node:path";
 import type { State } from "../state.ts";
 import type { Ctx, Step } from "../step.ts";
 import { deployedVars, workerBindings } from "../worker.ts";
-import { names, stripComments } from "./resources.ts";
+import { names, renderedConfig, stripComments } from "./resources.ts";
 import { ACCESS_SECRET, listSecrets } from "./secrets.ts";
 
 const CONFIG = "apps/server/wrangler.jsonc";
@@ -38,16 +38,19 @@ type Rendered = {
  * flag: a deploy never removes EMAIL, BROWSER or SERVER_THUMBNAILS silently.
  * A failed read only warns.
  */
-async function drops(ctx: Ctx, accountId: string, cfg: Rendered) {
-  let live: Awaited<ReturnType<typeof workerBindings>>;
+async function readLive(ctx: Ctx, accountId: string): Promise<Live> {
   try {
-    live = await workerBindings(ctx, accountId);
+    return await workerBindings(ctx, accountId);
   } catch (e) {
     ctx.notes.push(
       `warning: could not read the live Worker's bindings (${(e as Error).message}); deploying without the binding check`,
     );
-    return [];
+    return "unreadable";
   }
+}
+
+function drops(ctx: Ctx, live: Live, cfg: Rendered) {
+  if (live === "unreadable") return [];
   const has = (type: string, name: string) =>
     live?.some((b) => b.type === type && b.name === name) ?? false;
   const out: string[] = [];
@@ -72,23 +75,44 @@ async function drops(ctx: Ctx, accountId: string, cfg: Rendered) {
   return out;
 }
 
+type Live = Awaited<ReturnType<typeof workerBindings>> | "unreadable";
+
 /**
- * A deploy never turns a live (or saved) paid PLAN into free unless asked with
- * --plan free: an unreadable plan (stateless CI) must not downgrade prod.
+ * A deploy never turns a live (or last-deployed) paid PLAN into free unless
+ * asked with --plan free: an unreadable plan must not downgrade prod. The live
+ * PLAN var wins; with an unreadable Worker only the saved value (written after
+ * a successful deploy) counts, and with neither over a deployed Worker, refuse.
  */
-async function planGuard(
+function planGuard(
   state: State,
   ctx: Ctx,
   vars: Record<string, string>,
-): Promise<string | undefined> {
+  live: Live,
+): string | undefined {
   if (vars.PLAN === "paid" || ctx.opts.planFlag === "free") return undefined;
-  let live: string | undefined;
-  try {
-    live = (await deployedVars(ctx, state.accountId ?? ""))?.get("PLAN");
-  } catch {}
-  if (live?.trim().toLowerCase() !== "paid" && ctx.opts.savedPlanVar !== "paid")
+  const fix =
+    "Pass --plan paid to keep it, or --plan free to downgrade on purpose";
+  const why =
+    state.plan === "unknown"
+      ? "from a plan setup could not confirm"
+      : `plan read as ${state.plan}`;
+  const refuse = (what: string) =>
+    `refusing to deploy: ${what} but this run would render PLAN ${JSON.stringify(vars.PLAN)} (${why}). ${fix}`;
+  if (live === "unreadable") {
+    if (state.planVar === "paid")
+      return refuse(
+        "the saved PLAN is paid and the live Worker could not be read",
+      );
+    if (state.planVar === undefined && state.deployedVersion)
+      return refuse(
+        "the live Worker's PLAN could not be read and none is saved",
+      );
     return undefined;
-  return `refusing to deploy: the Worker's PLAN is paid but this run would render ${JSON.stringify(vars.PLAN)} (plan ${ctx.opts.planVar}, from a plan setup could not confirm). Pass --plan paid to keep it, or --plan free to downgrade on purpose`;
+  }
+  const lp = live?.find((b) => b.type === "plain_text" && b.name === "PLAN");
+  if (lp?.text?.trim().toLowerCase() === "paid" || state.planVar === "paid")
+    return refuse("the Worker's PLAN is paid");
+  return undefined;
 }
 
 /** The repo version: root package.json, else the release-please manifest. */
@@ -111,6 +135,22 @@ export const deploy: Step = {
       ctx.mustRun = true;
       ctx.notes.push(`Worker ${ctx.opts.name} never deployed`);
     }
+    // A pending downgrade refusal is drift too: report it instead of a clean check.
+    if (ctx.opts.check) {
+      try {
+        const vars = JSON.parse(stripComments(renderedConfig(state, ctx))).vars;
+        const g = planGuard(
+          state,
+          ctx,
+          vars,
+          await readLive(ctx, state.accountId ?? ""),
+        );
+        if (g) {
+          ctx.mustRun = true;
+          ctx.notes.push(g);
+        }
+      } catch {}
+    }
     return "todo";
   },
   async apply(state, ctx) {
@@ -118,12 +158,13 @@ export const deploy: Step = {
     const cfg = JSON.parse(
       stripComments(ctx.fs.read(join(ctx.root, CONFIG)) ?? "{}"),
     ) as Rendered;
-    const dropped = await drops(ctx, state.accountId ?? "", cfg);
+    const live = await readLive(ctx, state.accountId ?? "");
+    const dropped = drops(ctx, live, cfg);
     if (dropped.length)
       throw new Error(
         `refusing to deploy: the live Worker has bindings this config would drop: ${dropped.join("; ")}`,
       );
-    const guard = await planGuard(state, ctx, vars);
+    const guard = planGuard(state, ctx, vars, live);
     if (guard) return { status: "action_required", message: guard };
     const have = await listSecrets(ctx);
     const missing = REQUIRED.filter((n) => !have.has(n));
@@ -146,6 +187,7 @@ export const deploy: Step = {
     await ctx.wrangler(["d1", "migrations", "apply", d1, "--remote"]);
     await ctx.wrangler(["deploy"]);
     state.deployedVersion = repoVersion(ctx);
+    state.planVar = ctx.opts.planVar;
     ctx.notes.push(`deployed ${state.deployedVersion}`);
     ctx.data = { deployedVersion: state.deployedVersion };
     return undefined;

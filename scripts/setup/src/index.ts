@@ -451,7 +451,14 @@ export async function run(
     }
     writeState(fs, root, state);
     if (json) {
-      const keys = ["plan", "team", "email", "emailDomain", "browser"] as const;
+      const keys = [
+        "plan",
+        "planVar",
+        "team",
+        "email",
+        "emailDomain",
+        "browser",
+      ] as const;
       report({
         step: "state",
         status: "ok",

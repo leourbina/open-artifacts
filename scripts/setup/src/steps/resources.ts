@@ -108,17 +108,22 @@ function sync(state: State, ctx: Ctx, found: Awaited<ReturnType<typeof find>>) {
   writeConfig(state, ctx);
 }
 
-/** Renders `apps/server/wrangler.jsonc` from the template and current state. */
-export function writeConfig(state: State, ctx: Ctx) {
+/** The config text the template and current state render to (nothing written). */
+export function renderedConfig(state: State, ctx: Ctx): string {
   const template = ctx.fs.read(join(ctx.root, TEMPLATE));
   if (template === null) throw new Error(`missing ${TEMPLATE}`);
-  const text = renderConfig(
+  return renderConfig(
     template,
     configVars(state, ctx),
     ctx.opts.browser,
     ctx.opts.email,
     ctx.opts.planVar,
   );
+}
+
+/** Renders `apps/server/wrangler.jsonc` from the template and current state. */
+export function writeConfig(state: State, ctx: Ctx) {
+  const text = renderedConfig(state, ctx);
   if (ctx.fs.read(join(ctx.root, CONFIG)) !== text)
     ctx.fs.write(join(ctx.root, CONFIG), text);
 }

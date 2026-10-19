@@ -61,6 +61,8 @@ type World = {
   noResultInfo?: boolean;
   /** /healthz answers 503 this many times first (propagation). */
   healthFails?: number;
+  /** The first /healthz answers report these plans (an old version still serving). */
+  healthPlanFirst?: (string | undefined)[];
   /** /healthz reports this plan instead of the deployed PLAN var. */
   healthPlan?: string;
   /** tools/list omits publish_artifact. */
@@ -437,7 +439,12 @@ export function world(w: World = {}) {
           const live = deployedConfig
             ? JSON.parse(stripComments(deployedConfig)).vars?.PLAN
             : undefined;
-          return Response.json({ ok: true, plan: w.healthPlan ?? live });
+          const early = w.healthPlanFirst?.length ? 1 : 0;
+          const first = w.healthPlanFirst?.shift();
+          return Response.json({
+            ok: true,
+            plan: early ? first : (w.healthPlan ?? live),
+          });
         }
         if (u.pathname === "/mcp") {
           const tok = auth?.replace(/^Bearer /, "") ?? "";

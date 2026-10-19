@@ -710,7 +710,9 @@ describe("prod and staging tokens never cross", () => {
       expect(sh).toContain(
         "install) mode_args=(--ci --solo --browser --plan paid)",
       );
-      expect(sh).toContain("--check --strict --upgrade --solo --browser");
+      expect(sh).toContain(
+        "preflight) mode_args=(--check --strict --upgrade --solo --browser --plan paid)",
+      );
       expect(sh).toContain("--ci --revoke-ci-tokens");
     });
     it("passes ANALYTICS_TOKEN to the upgrade step only", () => {
