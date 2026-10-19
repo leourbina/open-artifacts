@@ -7,7 +7,7 @@ import {
   newId,
   R,
 } from "@oa/shared";
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import type { Env } from "../src/env.js";
 import { contentOrigin } from "../src/http/errors.js";
@@ -79,6 +79,14 @@ type Fake = {
   idled: number;
   /** Every CDP method the capture sent, in order. */
   methods: string[];
+  /** Every CDP command with its params and session. */
+  calls: {
+    method: string;
+    params: Record<string, unknown>;
+    sessionId?: string;
+  }[];
+  /** How often the capture closed the websocket. */
+  wsClosed: number;
 };
 
 /**
@@ -101,6 +109,24 @@ function fake(
     onShot?: () => Promise<void>;
     /** false: the readiness signal never comes. */
     ready?: boolean;
+    /** Runtime.evaluate never answers (a page stalling its own timers). */
+    evalHang?: boolean;
+    /** After load, these targets auto-attach (popups, frames…), each on `on`'s session. */
+    attach?: {
+      targetId: string;
+      type: string;
+      sessionId: string;
+      on?: string;
+    }[];
+    /** After load, the page opens an alert. */
+    dialog?: boolean;
+    /** Page.getFrameTree reports this main-frame URL (default: the last one loaded). */
+    frameUrl?: string;
+    /** The websocket upgrade answers without a socket. */
+    upgradeFail?: boolean;
+    /** At the screenshot, the browser sends a non-JSON message / closes the socket. */
+    garbageAtShot?: boolean;
+    closeAtShot?: boolean;
   } = {},
 ): Fake {
   const sizes = [...(o.sizes ?? [10_000])];
@@ -130,12 +156,19 @@ function fake(
       });
     });
   const reply = (id: number, result: unknown) => emit({ id, result });
+  let mainUrl = "about:blank";
   const onCommand = async (m: {
     id: number;
     method: string;
     params: Record<string, unknown>;
+    sessionId?: string;
   }) => {
     f.methods.push(m.method);
+    f.calls.push({
+      method: m.method,
+      params: m.params,
+      sessionId: m.sessionId,
+    });
     const p = m.params;
     switch (m.method) {
       case "Target.createTarget":
@@ -168,11 +201,28 @@ function fake(
         for (const r of docs) {
           const failed = await pause(r);
           (failed ? f.aborted : f.continued).push(r.url);
+          if (!failed && r.main) mainUrl = r.url;
           if (first && failed)
             return reply(m.id, { errorText: "net::ERR_BLOCKED_BY_CLIENT" });
           if (first) reply(m.id, { frameId: TARGET });
           first = false;
         }
+        for (const t of o.attach ?? [])
+          emit({
+            method: "Target.attachedToTarget",
+            sessionId: t.on ?? SESSION,
+            params: {
+              sessionId: t.sessionId,
+              targetInfo: { targetId: t.targetId, type: t.type },
+              waitingForDebugger: true,
+            },
+          });
+        if (o.dialog)
+          emit({
+            method: "Page.javascriptDialogOpening",
+            sessionId: SESSION,
+            params: { type: "alert", message: "hi" },
+          });
         if (!o.noLoad)
           emit({
             method: "Page.loadEventFired",
@@ -181,7 +231,12 @@ function fake(
           });
         return;
       }
+      case "Page.getFrameTree":
+        return reply(m.id, {
+          frameTree: { frame: { id: TARGET, url: o.frameUrl ?? mainUrl } },
+        });
       case "Runtime.evaluate": {
+        if (o.evalHang) return;
         const e = String(p.expression);
         if (e.includes("getEntriesByType")) {
           f.idled++;
@@ -193,6 +248,19 @@ function fake(
       case "Page.captureScreenshot": {
         f.shots.push(p as never);
         await o.onShot?.();
+        if (o.garbageAtShot) {
+          setTimeout(() => {
+            for (const h of listeners.get("message") ?? [])
+              h({ data: "{not json" });
+          }, 0);
+          return;
+        }
+        if (o.closeAtShot) {
+          setTimeout(() => {
+            for (const h of listeners.get("close") ?? []) h({ data: "" });
+          }, 0);
+          return;
+        }
         return reply(m.id, { data: b64(webp(sizes.shift() ?? 10_000)) });
       }
       case "Browser.close":
@@ -210,7 +278,9 @@ function fake(
     send(msg: string) {
       void onCommand(JSON.parse(msg));
     },
-    close() {},
+    close() {
+      f.wsClosed++;
+    },
   };
   const f: Fake = {
     launched: 0,
@@ -224,6 +294,8 @@ function fake(
     waited: [],
     idled: 0,
     methods: [],
+    calls: [],
+    wsClosed: 0,
     binding: {
       fetch: async (url: string, init?: RequestInit) => {
         if (init?.method === "POST") {
@@ -236,6 +308,7 @@ function fake(
         }
         expect(url).toBe("https://fake.host/v1/devtools/browser/sess-1");
         expect(new Headers(init?.headers).get("upgrade")).toBe("websocket");
+        if (o.upgradeFail) return new Response("no", { status: 502 });
         return { status: 101, webSocket: socket } as unknown as Response;
       },
     } as unknown as Fetcher,
@@ -464,6 +537,125 @@ describe("captureThumbnail", () => {
     expect(f.closed).toBe(1);
   });
 
+  it("a page that stalls its own timers can't hold the capture: evaluate is bounded Worker-side", async () => {
+    const id = await pub("markdown", "x");
+    const f = fake({ evalHang: true });
+    const t0 = Date.now();
+    expect(
+      await captureThumbnail(on(f), id, 1, {
+        now: next(),
+        navigationMs: 50,
+        totalMs: 1_500,
+      }),
+    ).toBe("stored");
+    expect(Date.now() - t0).toBeLessThan(1_500);
+    expect(f.shots.length).toBeGreaterThan(0);
+  });
+
+  it("popups (and popups of popups) are closed before they run; frames are resumed", async () => {
+    const id = await pub();
+    const f = fake({
+      attach: [
+        { targetId: "P1", type: "page", sessionId: "PS1" },
+        { targetId: "P2", type: "page", sessionId: "PS2", on: "PS1" },
+        { targetId: "F1", type: "iframe", sessionId: "FS1" },
+      ],
+    });
+    expect(await capture(id, 1, f)).toBe("stored");
+    const auto = f.calls.filter((c) => c.method === "Target.setAutoAttach");
+    expect(auto).toEqual([
+      {
+        method: "Target.setAutoAttach",
+        params: {
+          autoAttach: true,
+          waitForDebuggerOnStart: true,
+          flatten: true,
+        },
+        sessionId: "S1",
+      },
+    ]);
+    const closedTargets = f.calls
+      .filter((c) => c.method === "Target.closeTarget")
+      .map((c) => c.params.targetId);
+    expect(closedTargets.sort()).toEqual(["P1", "P2"]);
+    expect(
+      f.calls.filter((c) => c.method === "Runtime.runIfWaitingForDebugger"),
+    ).toEqual([
+      {
+        method: "Runtime.runIfWaitingForDebugger",
+        params: {},
+        sessionId: "FS1",
+      },
+    ]);
+    // No target discovery: its targetInfoChanged events are a flood.
+    expect(f.methods).not.toContain("Target.setDiscoverTargets");
+  });
+
+  it("checks the main frame's URL (browser-side) before the screenshot", async () => {
+    const id = await pub();
+    const f = fake({ frameUrl: "https://evil.example/" });
+    expect(await capture(id, 1, f)).toBe("failed");
+    expect(f.methods).toContain("Page.getFrameTree");
+    expect(f.shots).toHaveLength(0);
+    expect(f.closed).toBe(1);
+  });
+
+  it("a JavaScript dialog is dismissed", async () => {
+    const id = await pub();
+    const f = fake({ dialog: true });
+    expect(await capture(id, 1, f)).toBe("stored");
+    expect(
+      f.calls.find((c) => c.method === "Page.handleJavaScriptDialog"),
+    ).toEqual({
+      method: "Page.handleJavaScriptDialog",
+      params: { accept: false },
+      sessionId: "S1",
+    });
+  });
+
+  it("a failed websocket upgrade after the acquire is a launch failure and is logged", async () => {
+    const id = await pub();
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const f = fake({ upgradeFail: true });
+      expect(await capture(id, 1, f)).toBe("launch_failed");
+      expect(f.launched).toBe(1);
+      const logged = err.mock.calls.map((c) => String(c[0]));
+      expect(
+        logged.some(
+          (l) =>
+            l.includes('"evt":"thumbnail_session_orphaned"') &&
+            l.includes('"sessionId":"sess-1"'),
+        ),
+      ).toBe(true);
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  it("a malformed CDP message fails the capture cleanly and the browser is still closed", async () => {
+    const id = await pub();
+    const f = fake({ garbageAtShot: true });
+    const t0 = Date.now();
+    expect(
+      await captureThumbnail(on(f), id, 1, { now: next(), totalMs: 3_000 }),
+    ).toBe("failed");
+    expect(Date.now() - t0).toBeLessThan(1_000);
+    expect(f.closed).toBe(1);
+    expect(f.wsClosed).toBe(1);
+  });
+
+  it("the socket closing mid-capture rejects the capture at once; the socket is closed", async () => {
+    const id = await pub();
+    const f = fake({ closeAtShot: true });
+    const t0 = Date.now();
+    expect(
+      await captureThumbnail(on(f), id, 1, { now: next(), totalMs: 3_000 }),
+    ).toBe("failed");
+    expect(Date.now() - t0).toBeLessThan(1_000);
+    expect(f.wsClosed).toBe(1);
+  });
+
   it("a launch error that is not the quota does not stop the day", async () => {
     const id = await pub();
     const f = fake({ launchError: new Error("WebSocket connection failed") });
@@ -669,6 +861,37 @@ describe("thumbnail job on the artifact DO", () => {
     // The index job is still queued; running the alarm calls no browser.
     await inDo(id, (i) => i.alarm(), gated);
     expect(f.launched).toBe(0);
+  });
+
+  it("a job queued before the gate turned off is dropped without counting an attempt", async () => {
+    const id = await pub();
+    let calls = 0;
+    await inDo(
+      id,
+      async (i) => {
+        await i.scheduleIndex(id, 1, true);
+        i.indexer = async () => {};
+        await i.alarm(); // indexes only
+      },
+      withBrowser,
+    );
+    const off = { ...withBrowser, SERVER_THUMBNAILS: "off" } as Env;
+    await inDo(
+      id,
+      async (i) => {
+        i.thumbnailer = async () => {
+          calls++;
+          return "stored";
+        };
+        await i.alarm();
+        expect(calls).toBe(0);
+        expect(i.thumbnailJob()).toMatchObject({
+          state: "no_thumb",
+          attempts: 0,
+        });
+      },
+      off,
+    );
   });
 
   it("restoreVersion enqueues a thumbnail job for the new version", async () => {

@@ -229,7 +229,7 @@ const SETTLE = `new Promise((r) => { const end = Date.now() + 2000; let n = -1, 
  * THUMB.width × THUMB.height layout at THUMB.scale as webp, lowering the quality until it fits.
  * Only document requests are intercepted (Fetch domain); subresources are
  * left to the content host's CSP, and the Network domain is never enabled.
- * Popups are closed and dialogs dismissed. The browser is fresh (no cookies
+ * Popups are closed before they run (auto-attach) and dialogs dismissed. The browser is fresh (no cookies
  * or storage) and always closed, at `totalMs` at the latest. null: too large
  * at every quality.
  */
@@ -261,18 +261,6 @@ async function shoot(
     cdp = c;
     let target = "";
     let left = false;
-    c.on("Target.targetCreated", (p) => {
-      const t = p.targetInfo as {
-        targetId: string;
-        type: string;
-        openerId?: string;
-      };
-      if (target && t.type === "page" && t.openerId === target)
-        void c
-          .send("Target.closeTarget", { targetId: t.targetId })
-          .catch(() => {});
-    });
-    await c.send("Target.setDiscoverTargets", { discover: true });
     ({ targetId: target } = await c.send<{ targetId: string }>(
       "Target.createTarget",
       { url: "about:blank" },
@@ -281,6 +269,20 @@ async function shoot(
       "Target.attachToTarget",
       { targetId: target, flatten: true },
     );
+    // Targets the page starts attach paused (setAutoAttach below): a popup
+    // (or a popup's popup, attached through it) is closed before it runs;
+    // frames and workers resume and load like any subresource.
+    c.on("Target.attachedToTarget", (p) => {
+      const t = p.targetInfo as { targetId: string; type: string };
+      if (t.type === "page")
+        void c
+          .send("Target.closeTarget", { targetId: t.targetId })
+          .catch(() => {});
+      else
+        void c
+          .send("Runtime.runIfWaitingForDebugger", {}, String(p.sessionId))
+          .catch(() => {});
+    });
     c.on("Fetch.requestPaused", (p, sid) => {
       if (sid !== s) return;
       const reqUrl = (p.request as { url?: string } | undefined)?.url ?? "";
@@ -312,6 +314,11 @@ async function shoot(
       if (sid === s) loaded();
     });
     await Promise.all([
+      c.send(
+        "Target.setAutoAttach",
+        { autoAttach: true, waitForDebuggerOnStart: true, flatten: true },
+        s,
+      ),
       c.send("Page.enable", {}, s),
       c.send(
         "Fetch.enable",
@@ -342,22 +349,34 @@ async function shoot(
     await Promise.race([load, sleep(navigationMs)]);
     if (left) throw offHost();
     // The page's readiness signal, within the same 8 s; else the settle.
-    // With the budget spent, shoot as it is.
+    // With the budget spent, shoot as it is. Each poll is also bounded here,
+    // Worker-side: the page owns its Date and setTimeout and can stall them.
     const leftMs = navigationMs - (Date.now() - t0);
     if (leftMs > 0) {
-      const evaluate = async (expression: string) =>
-        (
-          await c.send<{ result?: { value?: unknown } }>(
-            "Runtime.evaluate",
-            { expression, awaitPromise: true, returnByValue: true },
-            s,
-          )
-        ).result?.value === true;
+      const evaluate = (expression: string, ms: number) =>
+        Promise.race([
+          c
+            .send<{ result?: { value?: unknown } }>(
+              "Runtime.evaluate",
+              { expression, awaitPromise: true, returnByValue: true },
+              s,
+            )
+            .then((r) => r.result?.value === true),
+          sleep(ms).then(() => false),
+        ]);
       const signalled =
-        ready !== null && (await evaluate(pollFor(ready, leftMs)));
-      if (!signalled) await evaluate(SETTLE);
+        ready !== null && (await evaluate(pollFor(ready, leftMs), leftMs));
+      // No signal: settle, within what is left of the same budget (a poll
+      // that timed out has spent it, so the page is shot as it is).
+      const settleMs = Math.min(2_000, navigationMs - (Date.now() - t0));
+      if (!signalled && settleMs > 0) await evaluate(SETTLE, settleMs);
     }
     if (left) throw offHost();
+    // Defense in depth beside `left`: where the main frame is, per the browser.
+    const { frameTree } = await c.send<{
+      frameTree: { frame: { url: string } };
+    }>("Page.getFrameTree", {}, s);
+    if (!sameOrigin(frameTree.frame.url, origin)) throw offHost();
     for (const quality of THUMB.qualities) {
       const { data } = await c.send<{ data: string }>(
         "Page.captureScreenshot",

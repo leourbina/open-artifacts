@@ -51,8 +51,18 @@ export async function connectCdp(binding: Fetcher): Promise<Cdp> {
       `${HOST}/v1/devtools/browser/${encodeURIComponent(sessionId)}`,
       { headers: { Upgrade: "websocket" } },
     );
-    if (!up.webSocket)
+    if (!up.webSocket) {
+      // The binding has no release call for an acquired session: Browser
+      // Run reclaims it after its idle timeout (60 s). Log it so it shows.
+      console.error(
+        JSON.stringify({
+          evt: "thumbnail_session_orphaned",
+          sessionId,
+          status: up.status,
+        }),
+      );
       throw new LaunchError(`Unable to connect: code: ${up.status}`, up.status);
+    }
     ws = up.webSocket;
     ws.accept();
   } catch (e) {
@@ -61,17 +71,33 @@ export async function connectCdp(binding: Fetcher): Promise<Cdp> {
   }
 
   let seq = 0;
-  let closed: Error | null = null;
+  /** Set once the capture can't go on: every pending and later send rejects. */
+  let failed: Error | null = null;
+  /** The socket itself closed: nothing more can be sent, Browser.close included. */
+  let socketClosed = false;
   const pending = new Map<number, Pending>();
   const handlers = new Map<string, (p: Params, s?: string) => void>();
   const fail = (e: Error) => {
-    closed ??= e;
+    failed ??= e;
     for (const p of pending.values()) p.reject(e);
     pending.clear();
   };
+  const raw = <T>(method: string, params: Params, session?: string) => {
+    const id = ++seq;
+    return new Promise<T>((resolve, reject) => {
+      pending.set(id, { resolve: resolve as (r: Params) => void, reject });
+      ws.send(
+        JSON.stringify(
+          session
+            ? { id, method, params, sessionId: session }
+            : { id, method, params },
+        ),
+      );
+    });
+  };
   ws.addEventListener("message", (ev) => {
     if (typeof ev.data !== "string") return;
-    const m = JSON.parse(ev.data) as {
+    let m: {
       id?: number;
       method?: string;
       params?: Params;
@@ -79,6 +105,12 @@ export async function connectCdp(binding: Fetcher): Promise<Cdp> {
       error?: { message?: string };
       sessionId?: string;
     };
+    try {
+      m = JSON.parse(ev.data);
+    } catch {
+      fail(new Error("malformed CDP message"));
+      return;
+    }
     if (m.id !== undefined) {
       const p = pending.get(m.id);
       if (!p) return;
@@ -87,33 +119,35 @@ export async function connectCdp(binding: Fetcher): Promise<Cdp> {
       else p.resolve(m.result ?? {});
     } else if (m.method) handlers.get(m.method)?.(m.params ?? {}, m.sessionId);
   });
-  ws.addEventListener("close", () => fail(new Error("CDP socket closed")));
+  ws.addEventListener("close", () => {
+    socketClosed = true;
+    fail(new Error("CDP socket closed"));
+  });
   ws.addEventListener("error", () => fail(new Error("CDP socket error")));
 
   const cdp: Cdp = {
     send<T>(method: string, params: Params = {}, session?: string) {
-      if (closed) return Promise.reject(closed);
-      const id = ++seq;
-      return new Promise<T>((resolve, reject) => {
-        pending.set(id, { resolve: resolve as (r: Params) => void, reject });
-        ws.send(
-          JSON.stringify(
-            session
-              ? { id, method, params, sessionId: session }
-              : { id, method, params },
-          ),
-        );
-      });
+      if (failed) return Promise.reject(failed);
+      return raw<T>(method, params, session);
     },
     on(method, h) {
       handlers.set(method, h);
     },
     async close() {
-      if (!closed)
+      // Even after a failure (a bad message, a timeout), close the browser
+      // while the socket is up: it ends the session's billing.
+      if (!socketClosed) {
+        const t = {
+          id: undefined as ReturnType<typeof setTimeout> | undefined,
+        };
         await Promise.race([
-          cdp.send("Browser.close").catch(() => {}),
-          new Promise((r) => setTimeout(r, 1_000)),
+          raw("Browser.close", {}).catch(() => {}),
+          new Promise((r) => {
+            t.id = setTimeout(r, 1_000);
+          }),
         ]);
+        clearTimeout(t.id);
+      }
       fail(new Error("CDP closed"));
       try {
         ws.close();

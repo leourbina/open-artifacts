@@ -1119,6 +1119,11 @@ export class ArtifactRuntime extends DurableObject<Env> {
         state,
         job.version,
       );
+    // Queued before the gate turned off: drop it, no attempt written.
+    if (!serverThumbnails(this.env)) {
+      end("no_thumb");
+      return;
+    }
     if (job.attempts >= THUMB_MAX_ATTEMPTS) {
       console.error(
         JSON.stringify({
