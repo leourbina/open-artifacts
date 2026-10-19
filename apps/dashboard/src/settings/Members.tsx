@@ -1,6 +1,23 @@
 import { type Member, MemberInviteSchema, type Role } from "@oa/shared";
-import { Avatar, Button, Dialog, displayName, Input, Select } from "@oa/ui";
-import { useState } from "react";
+import { Avatar, displayName } from "@oa/ui";
+import {
+  Badge,
+  Button,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@oa/ui/shadcn";
+import type { ReactNode } from "react";
+import { useRef, useState } from "react";
 import { ApiClientError } from "../api/client";
 import {
   useInviteMember,
@@ -12,6 +29,7 @@ import { useMe } from "../auth/useMe";
 import { CopyLink } from "../layout/CopyLink";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { relativeTime } from "../library/time";
+import { errorText, muted, SettingsCard } from "./ui";
 
 type Assignable = "admin" | "member";
 /** Owner is never offered, to anyone. */
@@ -35,6 +53,90 @@ export const parseInviteEmail = (raw: string) => {
   const r = MemberInviteSchema.shape.email.safeParse(v);
   return r.success ? r.data : null;
 };
+
+/** Header, body and footer of a settings dialog. */
+function Modal({
+  open = true,
+  onClose,
+  title,
+  description,
+  footer,
+  children,
+}: {
+  open?: boolean;
+  onClose: () => void;
+  title: string;
+  description: string;
+  footer: ReactNode;
+  children?: ReactNode;
+}) {
+  const opener = useRef<HTMLElement | null>(null);
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent
+        className="gap-[var(--oa-space-4)] sm:max-w-[440px]"
+        // No Radix Trigger (the dialog is controlled), so put focus back on
+        // whatever opened it, as a trigger would.
+        onOpenAutoFocus={() => {
+          opener.current = document.activeElement as HTMLElement | null;
+        }}
+        onCloseAutoFocus={(e) => {
+          e.preventDefault();
+          opener.current?.focus();
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle className="text-[length:var(--oa-text-lg)]">
+            {title}
+          </DialogTitle>
+          <DialogDescription className="text-[length:var(--oa-text-sm)]">
+            {description}
+          </DialogDescription>
+        </DialogHeader>
+        {children}
+        <DialogFooter>{footer}</DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function RoleSelect({
+  label,
+  value,
+  placeholder,
+  onChange,
+}: {
+  label: string;
+  value: Assignable | undefined;
+  placeholder?: string;
+  onChange: (role: Assignable) => void;
+}) {
+  return (
+    <Select
+      value={value ?? ""}
+      onValueChange={(v) => onChange(v as Assignable)}
+    >
+      <SelectTrigger
+        aria-label={label}
+        size="sm"
+        className="w-full text-[length:var(--oa-text-sm)]"
+      >
+        <SelectValue placeholder={placeholder} />
+      </SelectTrigger>
+      <SelectContent position="popper">
+        {ROLES.map((r) => (
+          <SelectItem
+            key={r.value}
+            value={r.value}
+            className="text-[length:var(--oa-text-sm)]"
+          >
+            {r.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
 
 function InviteDialog({ onClose }: { onClose: () => void }) {
   const invite = useInviteMember();
@@ -60,25 +162,19 @@ function InviteDialog({ onClose }: { onClose: () => void }) {
     // location.origin is the app host, where sign-in starts.
     const url = location.origin;
     return (
-      <Dialog
-        open
-        onOpenChange={(o) => !o && onClose()}
+      <Modal
+        onClose={onClose}
         title={`${added} can now sign in`}
         description={`Send them this link. They'll sign in at ${url} with a one-time code sent to that address.`}
-        footer={
-          <Button variant="primary" onClick={onClose}>
-            Done
-          </Button>
-        }
+        footer={<Button onClick={onClose}>Done</Button>}
       >
         <CopyLink link={url} label="Sign-in link" />
-      </Dialog>
+      </Modal>
     );
   }
   return (
-    <Dialog
-      open
-      onOpenChange={(o) => !o && onClose()}
+    <Modal
+      onClose={onClose}
       title="Add a member"
       description="Open Artifacts doesn't send invitations. Add their email here, then send them the sign-in link yourself."
       footer={
@@ -86,11 +182,7 @@ function InviteDialog({ onClose }: { onClose: () => void }) {
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button
-            variant="primary"
-            disabled={invite.isPending}
-            onClick={submit}
-          >
+          <Button disabled={invite.isPending} onClick={submit}>
             Add member
           </Button>
         </>
@@ -98,7 +190,7 @@ function InviteDialog({ onClose }: { onClose: () => void }) {
     >
       <form
         id="oa-invite-form"
-        className="oa-form"
+        className="grid gap-[var(--oa-space-3)]"
         onSubmit={(e) => {
           e.preventDefault();
           submit();
@@ -110,24 +202,24 @@ function InviteDialog({ onClose }: { onClose: () => void }) {
           autoComplete="off"
           aria-label="Email"
           placeholder="name@example.com"
+          className="text-[length:var(--oa-text-sm)]"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
         />
-        <Select
-          aria-label="Role"
-          options={ROLES}
-          value={role}
-          onChange={setRole}
-        />
+        <RoleSelect label="Role" value={role} onChange={setRole} />
         {error && (
-          <p role="alert" className="oa-err">
+          <p role="alert" className={errorText}>
             {error}
           </p>
         )}
       </form>
-    </Dialog>
+    </Modal>
   );
 }
+
+/** Who, role, last seen, action; at <= 600px, who and role, then the rest. */
+const ROW =
+  "grid min-h-[52px] grid-cols-[minmax(0,1fr)_112px_104px_72px] items-center gap-[10px] border-0 border-t border-solid border-border py-[var(--oa-space-2)] max-[600px]:grid-cols-[minmax(0,1fr)_112px]";
 
 function Row({ m, you }: { m: Member; you: boolean }) {
   const patch = usePatchMember();
@@ -136,31 +228,32 @@ function Row({ m, you }: { m: Member; you: boolean }) {
   const label = displayName(m);
   const locked = m.role === "owner" || you;
   return (
-    <li className="oa-member">
-      <div className="oa-who">
+    <li className={ROW}>
+      <div className="flex min-w-0 items-center gap-[10px]">
         <Avatar name={m.name} email={m.email} />
-        <div>
-          <b>
+        <div className="min-w-0">
+          <b className="block truncate font-medium">
             <span>{label}</span>
-            {you && <span className="oa-seen"> (you)</span>}
+            {you && <span className="text-muted-foreground"> (you)</span>}
           </b>
-          {m.name && <small>{m.email}</small>}
+          {m.name && (
+            <small className={`block truncate ${muted}`}>{m.email}</small>
+          )}
         </div>
       </div>
-      {m.role === "owner" ? (
-        <span>Owner</span>
-      ) : you ? (
-        <span>{ROLE_LABEL[m.role]}</span>
+      {m.role === "owner" || you ? (
+        <Badge variant="secondary" className="justify-self-start">
+          {ROLE_LABEL[m.role]}
+        </Badge>
       ) : (
-        <Select
-          aria-label={`Role for ${label}`}
-          options={ROLES}
+        <RoleSelect
+          label={`Role for ${label}`}
           value={m.role === "admin" || m.role === "member" ? m.role : undefined}
           placeholder="Guest"
           onChange={(role) => patch.mutate({ id: m.id, role })}
         />
       )}
-      <span className="oa-seen">
+      <span className={muted}>
         {m.lastSeenAt ? relativeTime(m.lastSeenAt) || "Unknown" : "Never"}
       </span>
       {locked ? (
@@ -168,15 +261,17 @@ function Row({ m, you }: { m: Member; you: boolean }) {
       ) : (
         <Button
           variant="ghost"
+          size="sm"
+          className="justify-self-end text-[length:var(--oa-text-sm)]"
           aria-label={`Remove ${label}`}
           onClick={() => setConfirm(true)}
         >
           Remove
         </Button>
       )}
-      <Dialog
+      <Modal
         open={confirm}
-        onOpenChange={setConfirm}
+        onClose={() => setConfirm(false)}
         title={`Remove ${label}?`}
         description="Their artifacts will be transferred to you (owner)."
         footer={
@@ -185,7 +280,6 @@ function Row({ m, you }: { m: Member; you: boolean }) {
               Cancel
             </Button>
             <Button
-              variant="primary"
               onClick={() => {
                 setConfirm(false);
                 remove.mutate(m.id);
@@ -207,25 +301,31 @@ export function Members() {
   const [inviting, setInviting] = useState(false);
   const me = state.status === "authed" ? state.me.user : null;
   return (
-    <section className="oa-card" aria-labelledby="oa-members-h">
-      <div className="oa-card-head">
-        <h2 id="oa-members-h">Members</h2>
-        <Button variant="primary" onClick={() => setInviting(true)}>
+    <SettingsCard
+      id="oa-members-h"
+      title="Members"
+      action={
+        <Button
+          size="sm"
+          className="text-[length:var(--oa-text-sm)]"
+          onClick={() => setInviting(true)}
+        >
           Add member
         </Button>
-      </div>
+      }
+    >
       {q.isError ? (
-        <p role="alert" className="oa-err" style={{ padding: "0 18px 16px" }}>
+        <p role="alert" className={errorText}>
           Couldn't load members.
         </p>
       ) : (
-        <ul className="oa-members">
+        <ul className="m-0 grid list-none p-0">
           {q.data?.map((m) => (
             <Row key={m.id} m={m} you={m.id === me?.id} />
           ))}
         </ul>
       )}
       {inviting && <InviteDialog onClose={() => setInviting(false)} />}
-    </section>
+    </SettingsCard>
   );
 }

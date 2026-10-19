@@ -278,9 +278,9 @@ describe("members: failures and edge cases", () => {
     as(owner, [owner, { ...other, lastSeenAt: "garbage" }, { ...guest }]);
     mount("/settings/members");
     const row = await rowOf(other.email);
-    expect(row.querySelector(":scope > .oa-seen")?.textContent).toBe("Unknown");
+    expect(within(row).getByText("Unknown")).toBeTruthy();
     const g = await rowOf(guest.email);
-    expect(g.querySelector(":scope > .oa-seen")?.textContent).toBe("Never");
+    expect(within(g).getByText("Never")).toBeTruthy();
   });
 
   it("a guest row offers no owner option", async () => {

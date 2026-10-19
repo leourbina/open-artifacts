@@ -185,7 +185,7 @@ for (const [width, gutter] of [
     expect(await gap(".lib")).toEqual({ left: gutter, right: gutter });
     await page.goto("/settings/agents");
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-    const s = await gap(".oa-settings");
+    const s = await gap(".oa-page > div");
     expect(s.left).toBeGreaterThanOrEqual(gutter);
     expect(Math.abs(s.left - s.right)).toBeLessThanOrEqual(1);
     if (width < 880 + 2 * gutter + 256) expect(s.left).toBe(gutter);
