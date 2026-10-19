@@ -1,0 +1,67 @@
+---
+// Figure 4: the share panel. Visibility is a radio group (no script); inviting
+// and copying the link are wired in Page.astro's script.
+const vis = [
+  ["private", "Private", "Only you can open it."],
+  [
+    "team",
+    "Team",
+    "Anyone you invite by email, signed in through Cloudflare Access.",
+  ],
+  [
+    "link",
+    "Public link",
+    "Anyone with the link. Search engines don't index it.",
+  ],
+] as const;
+---
+
+<figure class="fig" id="fig-4">
+  <div class="win share" data-share>
+    <div class="win-bar">
+      <span class="url"><span class="lock" aria-hidden="true">●</span> artifacts.example.com/a/7Kq2mX</span>
+    </div>
+    <div class="share-body">
+      <h3 class="share-h">Share “Runway calculator”</h3>
+      <fieldset class="vis">
+        <legend>Who can open it</legend>
+        {
+          vis.map(([id, label, help], i) => (
+            <>
+              <input type="radio" name="vis" id={`vis-${id}`} value={id} checked={i === 1} />
+              <label for={`vis-${id}`}>
+                <span class="vis-l">{label}</span>
+                <span class="vis-d">{help}</span>
+              </label>
+            </>
+          ))
+        }
+      </fieldset>
+      <div class="people">
+        <p class="people-h" id="people-h">People</p>
+        <ul aria-labelledby="people-h" data-people>
+          <li>
+            <span class="av" aria-hidden="true">Y</span>
+            <span class="who">You</span>
+            <span class="role">Owner</span>
+          </li>
+          <li>
+            <span class="av" aria-hidden="true">P</span>
+            <span class="who">priya@example.com</span>
+            <select aria-label="Role for priya@example.com"><option>Editor</option><option>Viewer</option></select>
+          </li>
+        </ul>
+        <form class="invite" data-invite>
+          <label class="sr-only" for="invite-email">Invite by email</label>
+          <input id="invite-email" type="email" required placeholder="name@example.com" autocomplete="off" />
+          <button type="submit" class="btn-sm">Invite</button>
+        </form>
+      </div>
+      <div class="share-foot">
+        <button type="button" class="btn-sm primary" data-copy="https://artifacts.example.com/a/7Kq2mX">Copy link</button>
+        <p class="share-status" role="status" data-share-status></p>
+      </div>
+    </div>
+  </div>
+  <figcaption><b>Fig. 4</b> Sharing, on your terms. Pick who can open it, invite someone by email, copy the link.</figcaption>
+</figure>

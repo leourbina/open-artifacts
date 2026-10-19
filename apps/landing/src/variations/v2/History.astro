@@ -1,0 +1,55 @@
+---
+// Figure 3: a version history you can step through and restore from.
+import { diff, versions } from "./history";
+
+const latest = versions.length;
+const list = [...versions].reverse();
+---
+
+<figure class="fig fig-wide" id="fig-3">
+  <div class="win hist" data-hist>
+    <div class="win-bar">
+      <span class="url"><span class="lock" aria-hidden="true">●</span> artifacts.example.com/a/Q4mig8</span>
+      <span class="pill team">Team</span>
+    </div>
+    <div class="hist-body">
+      <div class="hist-side">
+        <p class="hist-h" id="hist-h">History</p>
+        <ol class="vlist" aria-labelledby="hist-h">
+          {
+            list.map((v) => (
+              <li>
+                <button type="button" data-v={v.v} aria-pressed={v.v === latest ? "true" : "false"} aria-controls="hist-view">
+                  <span class="vn">v{v.v}</span>
+                  <span class="va">{v.agent}</span>
+                  <span class="vw">{v.when}</span>
+                </button>
+              </li>
+            ))
+          }
+        </ol>
+      </div>
+      <div class="hist-view" id="hist-view">
+        <label class="changes"><input type="checkbox" checked /> Show changes</label>
+        {
+          versions.map((v, i) => (
+            <div class="vpanel" data-p={v.v} hidden={v.v !== latest}>
+              <p class="vmeta">
+                <b>v{v.v}</b> · {v.agent} · {v.when} · {v.note}
+              </p>
+              <h3>Q4 data migration plan</h3>
+              {v.body.map((p, k) => (
+                <p set:html={i ? diff(versions[i - 1].body[k], p) : p} />
+              ))}
+              <button type="button" class="btn-sm" data-restore={v.v} hidden={v.v === latest}>
+                Restore this version
+              </button>
+            </div>
+          ))
+        }
+        <p class="sr-only" role="status" data-hist-status></p>
+      </div>
+    </div>
+  </div>
+  <figcaption><b>Fig. 3</b> Four agents, four versions of one memo. Step back through them, then restore one: it becomes the newest version, and nothing is lost.</figcaption>
+</figure>
