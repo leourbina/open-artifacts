@@ -187,6 +187,61 @@ describe("usage", () => {
     expect(u.metrics).toHaveLength(6);
   });
 
+  it("GraphQL error on the kv alias -> only kv_writes omitted", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      gql(
+        { errors: [{ message: "no", path: ["viewer", "accounts", 0, "kv"] }] },
+        { kv: null },
+      ),
+    );
+    const u = await usageFor({
+      ...withToken("tok"),
+      CF_ACCOUNT_ID: "acct-kv-err",
+    });
+    expect(u.available).toBe(true);
+    expect(u.metrics.map((m) => m.key)).toEqual([
+      "requests",
+      "d1_reads",
+      "d1_writes",
+      "do_requests",
+      "cpu_limit_hits",
+      "cpu_p99_ms",
+    ]);
+  });
+
+  it("GraphQL error on cpuHits -> CPU metrics omitted, base and kv stay", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      gql({
+        errors: [{ message: "no", path: ["viewer", "accounts", 0, "cpuHits"] }],
+      }),
+    );
+    const u = await usageFor({
+      ...withToken("tok"),
+      CF_ACCOUNT_ID: "acct-cpu-err",
+    });
+    expect(u.available).toBe(true);
+    expect(u.metrics.map((m) => m.key)).toEqual([
+      "requests",
+      "d1_reads",
+      "d1_writes",
+      "do_requests",
+      "kv_writes",
+    ]);
+  });
+
+  it("GraphQL error on a base alias -> available:false", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      gql({
+        errors: [{ message: "no", path: ["viewer", "accounts", 0, "d1"] }],
+      }),
+    );
+    const u = await usageFor({
+      ...withToken("tok"),
+      CF_ACCOUNT_ID: "acct-base-err",
+    });
+    expect(u.available).toBe(false);
+  });
+
   it("no OAUTH_KV_ID -> no KV alias queried, kv_writes omitted", async () => {
     const spy = vi
       .spyOn(globalThis, "fetch")
@@ -245,6 +300,20 @@ describe("MCP CPU-limit nudge", () => {
     expect(graphqlCalls(spy)).toHaveLength(0);
     return r;
   };
+
+  it("a guest's PAT is refused at /mcp (no tool results, no nudge)", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      gql({}, { cpuHits: [{ sum: { requests: 5 } }] }),
+    );
+    await usageFor({ ...withToken("tok"), CF_ACCOUNT_ID: "acct-nudge-g" });
+    vi.restoreAllMocks();
+    const g = await login(
+      `us-g-${newId().slice(0, 6).toLowerCase()}@x.com`,
+      "guest",
+    );
+    const gpat = (await createPat(env, g.userId, "g")).token;
+    await expect(connect(gpat, { env: E(withToken("tok")) })).rejects.toThrow();
+  });
 
   it("2 hits today -> no nudge", async () => {
     const r = await listWith(2, "acct-nudge-2");

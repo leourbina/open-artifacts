@@ -27,6 +27,9 @@ const buildQuery = (cpu: boolean, kv: boolean) =>
   } }
 }`;
 
+/** Aliases whose errors drop only their own metrics (`errors[].path[3]`). */
+const OPTIONAL = new Set(["cpuHits", "cpu", "kv"]);
+
 type Rows = Record<string, number>[];
 type Acct = {
   workers: Rows;
@@ -63,7 +66,20 @@ function parseResponse(
   withCpu: boolean,
   withKv: boolean,
 ): Acct | null {
-  if (!isObj(j) || (j.errors != null && j.errors !== undefined)) return null;
+  if (!isObj(j)) return null;
+  // Errors confined to the optional aliases null out only those groups.
+  const failed = new Set<unknown>();
+  if (j.errors != null) {
+    if (!Array.isArray(j.errors)) return null;
+    for (const e of j.errors) {
+      const path = isObj(e) && Array.isArray(e.path) ? e.path : [];
+      const alias =
+        path[0] === "viewer" && path[1] === "accounts" ? path[3] : undefined;
+      if (typeof alias !== "string" || !OPTIONAL.has(alias)) return null;
+      failed.add(alias);
+    }
+  }
+  const ok = (alias: string) => !failed.has(alias);
   const data = j.data;
   if (!isObj(data) || !isObj(data.viewer)) return null;
   const accts = data.viewer.accounts;
@@ -73,8 +89,9 @@ function parseResponse(
   const d1 = rows(a.d1, ["rowsRead", "rowsWritten"]);
   const dos = rows(a.dos, ["requests"]);
   if (!workers || !d1 || !dos) return null;
-  const hits = withCpu ? rows(a.cpuHits, ["requests"]) : null;
-  const p99 = withCpu ? rows(a.cpu, ["cpuTimeP99"], "quantiles") : null;
+  const cpuOk = withCpu && ok("cpuHits") && ok("cpu");
+  const hits = cpuOk ? rows(a.cpuHits, ["requests"]) : null;
+  const p99 = cpuOk ? rows(a.cpu, ["cpuTimeP99"], "quantiles") : null;
   const cpu =
     hits && p99
       ? {
@@ -83,7 +100,7 @@ function parseResponse(
           p99Ms: Math.round(p99[0]?.cpuTimeP99 ?? 0) / 1000,
         }
       : null;
-  const kv = withKv ? rows(a.kv, ["requests"]) : null;
+  const kv = withKv && ok("kv") ? rows(a.kv, ["requests"]) : null;
   return { workers, d1, dos, cpu, kv };
 }
 
