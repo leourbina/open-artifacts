@@ -57,6 +57,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
+      # Wall-clock CPU budgets, serial (not under the parallel suite's load).
+      - run: pnpm --filter @oa/server test:cpu
   build:
     runs-on: ubuntu-latest
     steps:
