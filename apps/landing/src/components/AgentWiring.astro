@@ -15,9 +15,9 @@ const layout = (w: number, tileW: number, tileH: number, hubTop: number) => {
     return `M${x} ${tileH}C${x} ${mid + 8} ${hx} ${mid - 8} ${hx} ${hubTop}`;
   });
 };
-// Wide: 720 x 176, hub 52px. Phone: 340 x 150, hub 46px.
+// Wide: 720 x 176, hub 52px. Phone: 288 x 138, hub 44px (fits a 320px screen).
 const wide = layout(720, 124, 40, 124);
-const phone = layout(340, 64, 44, 104);
+const phone = layout(288, 54, 40, 94);
 ---
 
 <figure class="wire" data-wire>
@@ -25,7 +25,7 @@ const phone = layout(340, 64, 44, 104);
     <svg class="wire-lines wide" width="720" height="176" viewBox="0 0 720 176">
       {wide.map((d) => <path d={d} />)}
     </svg>
-    <svg class="wire-lines phone" width="340" height="150" viewBox="0 0 340 150">
+    <svg class="wire-lines phone" width="288" height="138" viewBox="0 0 288 138">
       {phone.map((d) => <path d={d} />)}
     </svg>
     <ul class="wire-tiles">
@@ -61,12 +61,12 @@ const phone = layout(340, 64, 44, 104);
     margin: 8px 0 0;
   }
   .wire-stage {
-    --w: 340px;
-    --h: 150px;
-    --tile-w: 64px;
-    --tile-h: 44px;
-    --hub: 46px;
-    --hub-top: 104px;
+    --w: 288px;
+    --h: 138px;
+    --tile-w: 54px;
+    --tile-h: 40px;
+    --hub: 44px;
+    --hub-top: 94px;
     position: relative;
     width: var(--w);
     height: var(--h);
@@ -80,13 +80,6 @@ const phone = layout(340, 64, 44, 104);
       --tile-h: 40px;
       --hub: 52px;
       --hub-top: 124px;
-      margin: 0;
-    }
-  }
-  /* Narrower than 372px: shrink the whole stage, paths included. */
-  @media (max-width: 371px) {
-    .wire-stage {
-      zoom: 0.85;
     }
   }
   .wire-lines {
@@ -125,12 +118,12 @@ const phone = layout(340, 64, 44, 104);
     place-items: center;
     width: var(--tile-w);
     height: var(--tile-h);
-    padding: 0 4px;
+    padding: 0 2px;
     border-radius: var(--oa-radius-md);
     background: var(--oa-surface);
     box-shadow: var(--oa-shadow-1);
     color: var(--oa-text);
-    font-size: 11px;
+    font-size: 10.5px;
     font-weight: 500;
     line-height: 1.2;
     text-align: center;
@@ -186,6 +179,7 @@ const phone = layout(340, 64, 44, 104);
   @media (min-width: 800px) {
     .wire figcaption {
       max-width: 720px;
+      margin-inline: auto;
     }
   }
   /* Each tile owns a 2s slot of the 10s loop: glow, send, land. */

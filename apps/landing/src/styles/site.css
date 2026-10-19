@@ -229,6 +229,25 @@ code,
   font-weight: 500;
   overflow-wrap: anywhere;
 }
+/* The hero sits on one centered axis: headline, copy, the prompt box, the
+   agent wiring and the screenshot. */
+.hero {
+  text-align: center;
+}
+.hero h1,
+.hero .lede {
+  margin-inline: auto;
+}
+.hero .cta {
+  max-width: 600px;
+  margin-inline: auto;
+}
+.hero .cta-row {
+  text-align: left;
+}
+.hero .cta-prompt {
+  font-size: clamp(15px, 2vw, 20px);
+}
 .cta-note {
   min-height: 1.5em;
   margin-top: 8px;
