@@ -10,7 +10,8 @@
     ".": "./src/index.ts",
     "./tokens.css": "./src/tokens/tokens.css",
     "./shadcn": "./src/shadcn/index.ts",
-    "./shadcn.css": "./src/shadcn/theme.css",
+    "./shadcn.css": "./src/shadcn/shadcn.css",
+    "./shadcn-utilities.css": "./src/shadcn/shadcn-utilities.css",
     "./brand": "./src/brand/index.ts",
     "./brand/*": "./src/brand/*"
   },

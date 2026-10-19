@@ -1,18 +1,14 @@
 /*
- * shadcn/ui theme for @oa/ui/shadcn (exported as @oa/ui/shadcn.css).
+ * shadcn/ui theme for @oa/ui/shadcn: the shared body of both CSS entries,
+ * ./shadcn.css (@oa/ui/shadcn.css, with preflight) and
+ * ./shadcn-utilities.css (@oa/ui/shadcn-utilities.css, without). Each entry
+ * imports Tailwind its own way, then this file.
  *
  * shadcn's variables are aliases of the Studio tokens in ../tokens/tokens.css,
  * which stays the single source of color: tokens.css switches light/dark
  * (prefers-color-scheme or data-theme), so nothing here repeats per theme.
  * Mapping table: ./README.md.
- *
- * Load the tokens first: `import "@oa/ui/tokens.css"; import "@oa/ui/shadcn.css";`
- * (tokens.css isn't @imported here: its Google Fonts @import must stay at the
- * top of a stylesheet, and Tailwind would inline it mid-file.)
  */
-@import "tailwindcss";
-@import "tw-animate-css";
-
 @source "./";
 
 /* dark: the same rule as tokens.css, which switches only on <html>:
@@ -136,6 +132,10 @@
   --color-sidebar-ring: var(--sidebar-ring);
 }
 
+/* The only base rule, kept in both entries: shadcn's components rely on it
+   for their border and outline colors. It sets colors only (no width, style,
+   margin or font), and never restyles body or headings, so pages without
+   preflight keep their look. */
 @layer base {
   * {
     @apply border-border outline-ring/50;
