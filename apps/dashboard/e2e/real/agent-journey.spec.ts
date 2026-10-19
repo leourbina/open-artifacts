@@ -89,6 +89,13 @@ function bigPdf(): Uint8Array {
 }
 
 test.describe.configure({ mode: "serial" });
+// Step 1 needs the OAuth provider's `__Host-…; Secure` consent-transaction
+// cookie, which WebKit refuses to send over the plain-http dev origin (Chromium
+// treats localhost as trustworthy; WebKit does not). Every step depends on it.
+test.skip(
+  ({ browserName }) => browserName === "webkit",
+  "WebKit drops the provider's Secure consent cookie over http; chromium covers the journey",
+);
 
 test("1. the agent connects through OAuth and publishes the poll", async ({
   page,

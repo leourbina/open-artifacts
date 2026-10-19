@@ -13,7 +13,7 @@ async function render() {
   for (const d of page.items) {
     const li = document.createElement("li");
     li.dataset.voter = d.id;
-    li.textContent = `${d.id} voted ${d.data && d.data.choice}`;
+    li.textContent = `${d.id} voted ${d.data?.choice}`;
     ul.appendChild(li);
   }
 }
@@ -29,7 +29,7 @@ async function vote(choice) {
     await render();
   } catch (e) {
     $("#err").textContent = `vote failed: ${
-      e && e.message ? e.message : String(e)
+      e?.message ? e.message : String(e)
     }`;
   }
 }
