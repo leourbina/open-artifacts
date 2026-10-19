@@ -53,15 +53,6 @@ for (const width of [1280, 390]) {
     expect(await misaligned(page)).toEqual([]);
     expect(await sideScroll(page)).toBe(0);
 
-    // Copy URL shares the input's row.
-    const input = await page
-      .getByRole("textbox", { name: "MCP server URL" })
-      .boundingBox();
-    const copy = await page
-      .getByRole("button", { name: "Copy URL" })
-      .boundingBox();
-    expect(Math.abs((copy?.y ?? 0) - (input?.y ?? 0))).toBeLessThan(4);
-
     // The snippet's Copy button sits beside the code, not over it.
     const pre = await page.locator(".oa-code pre").first().boundingBox();
     const btn = await page

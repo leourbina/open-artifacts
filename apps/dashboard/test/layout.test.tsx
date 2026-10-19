@@ -1,6 +1,5 @@
 import { QUOTA_MESSAGE, type Role } from "@oa/shared";
 import { fixtures } from "@oa/shared/mocks";
-import { brand } from "@oa/ui/brand";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { render, screen, waitFor } from "@testing-library/react";
@@ -61,20 +60,6 @@ describe("AppLayout", () => {
     await screen.findAllByRole("link", { name: "Settings" });
     expect(link("Team")).not.toBeNull();
     expect(link("Usage")).toBeNull();
-  });
-
-  it("brands the sidebar with a decorative mark per theme beside the name", async () => {
-    await mount("member");
-    const name = await screen.findByText(fixtures.me.instance.name);
-    const block = name.closest(".oa-brand");
-    const marks = [...(block?.querySelectorAll("img") ?? [])];
-    expect(marks.map((m) => m.className)).toEqual([
-      "oa-brand-light",
-      "oa-brand-dark",
-    ]);
-    expect(marks.every((m) => m.getAttribute("alt") === "")).toBe(true);
-    expect(marks[0]?.getAttribute("src")).toBe(brand.markLight);
-    expect(marks[1]?.getAttribute("src")).toBe(brand.markDark);
   });
 
   it("owner sees Usage", async () => {

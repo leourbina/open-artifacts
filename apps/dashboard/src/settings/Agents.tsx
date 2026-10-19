@@ -363,7 +363,7 @@ export function Agents() {
           <div className="oa-card-head">
             <h2 id="oa-mcp-h">MCP server</h2>
           </div>
-          <div className="oa-form oa-url">
+          <div className="oa-form">
             <Input readOnly aria-label="MCP server URL" value={mcpUrl} />
             <Button
               variant="secondary"

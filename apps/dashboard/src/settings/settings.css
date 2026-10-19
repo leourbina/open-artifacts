@@ -168,17 +168,6 @@
   align-items: center;
   gap: 8px;
 }
-/* One row: the input takes the slack, the button keeps its size. */
-.oa-settings .oa-url {
-  flex-wrap: nowrap;
-}
-.oa-settings .oa-url input {
-  flex: 1;
-  min-width: 0;
-}
-.oa-settings .oa-url button {
-  flex: none;
-}
 .oa-settings .oa-card {
   min-width: 0;
 }
@@ -312,9 +301,6 @@
   }
   .oa-meters {
     grid-template-columns: minmax(0, 1fr);
-  }
-  .oa-settings .oa-card {
-    --oa-card-pad: 14px;
   }
   /* Name on its own line; meta and actions wrap beneath it. */
   .oa-settings .oa-row {
