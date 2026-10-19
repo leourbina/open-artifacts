@@ -126,6 +126,18 @@
   display: block;
   word-break: break-all;
 }
+@media (max-width: 600px) {
+  .oa-settings .oa-row {
+    flex-wrap: wrap;
+  }
+  .oa-settings .oa-row b {
+    flex-basis: 100%;
+  }
+  .oa-code pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+}
 .oa-code button {
   position: absolute;
   top: 6px;

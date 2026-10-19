@@ -35,10 +35,21 @@ const copyText = (text: string, ok: string) => {
 
 const when = (iso: string) => relativeTime(iso) || "Unknown";
 
-function Code({ code, label }: { code: string; label: string }) {
+function Code({
+  code,
+  label,
+  agent,
+}: {
+  code: string;
+  label: string;
+  agent: string;
+}) {
   return (
     <div className="oa-code">
-      <pre>
+      {/* Focusable so keyboard users can scroll it where it still overflows. */}
+      {/* biome-ignore lint/a11y/useSemanticElements: a scrollable <pre> region */}
+      {/* biome-ignore lint/a11y/noNoninteractiveTabindex: scrollable region */}
+      <pre tabIndex={0} role="region" aria-label={`${agent} snippet`}>
         <code>{code}</code>
       </pre>
       <Button
@@ -71,6 +82,7 @@ function SnippetTabs({
             {s.hint && <p className="oa-seen">{s.hint}</p>}
             {s.file && <p className="oa-seen">{s.file}</p>}
             <Code
+              agent={s.agent}
               code={s.code}
               label={s.language === "bash" ? "Copy command" : "Copy config"}
             />
