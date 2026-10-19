@@ -64,6 +64,7 @@ describe("GET /api/v1/me", () => {
       defaultVisibility: expect.stringMatching(/^(private|team)$/),
       appUrl: "http://app.localhost",
       mcpUrl: "http://app.localhost/mcp",
+      emailEnabled: false,
     });
   });
 });

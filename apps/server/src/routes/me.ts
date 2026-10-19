@@ -1,6 +1,7 @@
 import { MCP_PATH, type Me, type Member, MePatchSchema, R } from "@oa/shared";
 import type { Context } from "hono";
 import { requireUser } from "../auth/authz.js";
+import { emailEnabled } from "../email/send.js";
 import { jsonBody } from "../http/body.js";
 import { appOrigin } from "../http/errors.js";
 import type { AppEnv } from "../http/middleware.js";
@@ -22,6 +23,7 @@ async function toMe(
       defaultVisibility: s.defaultVisibility,
       appUrl,
       mcpUrl: appUrl + MCP_PATH,
+      emailEnabled: emailEnabled(c.env),
     },
     ...profile,
   };

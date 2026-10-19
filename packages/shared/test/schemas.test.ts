@@ -308,6 +308,7 @@ describe("fix round 3", () => {
         defaultVisibility: "public",
         appUrl: "a",
         mcpUrl: "b",
+        emailEnabled: false,
       },
       displayName: null,
       suggestedName: null,

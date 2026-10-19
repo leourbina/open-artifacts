@@ -290,6 +290,19 @@ const rows: Row[] = [
   ],
 ];
 
+describe("emailEnabled option", () => {
+  it("defaults to false; createHandlers({ emailEnabled: true }) flips it", async () => {
+    fresh();
+    expect((await json(await call("GET", R.me))).instance.emailEnabled).toBe(
+      false,
+    );
+    fresh({ emailEnabled: true });
+    expect((await json(await call("GET", R.me))).instance.emailEnabled).toBe(
+      true,
+    );
+  });
+});
+
 describe("fixtures", () => {
   it("parse with their schemas and cover the brief", () => {
     MeSchema.parse(fixtures.me);

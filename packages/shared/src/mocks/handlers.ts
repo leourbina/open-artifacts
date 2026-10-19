@@ -13,6 +13,7 @@
  *   public-artifact reads stay anonymous-OK, and so do data doc writes on a public artifact
  *   with allowAnonymousWrites (updatedBy "anon"), as on the server (B13).
  * - quotaExceeded: every /api/v1 route answers 503 quota_exceeded.
+ * - emailEnabled: sets Me.instance.emailEnabled (default false, from the fixtures).
  */
 import { delay, type HttpHandler, HttpResponse, http } from "msw";
 import type { z } from "zod";
@@ -52,7 +53,11 @@ import {
 } from "../schemas.js";
 import { fixtures } from "./fixtures.js";
 
-export type MockOptions = { latencyMs?: number; quotaExceeded?: boolean };
+export type MockOptions = {
+  latencyMs?: number;
+  quotaExceeded?: boolean;
+  emailEnabled?: boolean;
+};
 
 const err = (code: ErrorCode, message: string, details?: unknown) =>
   HttpResponse.json(
@@ -163,6 +168,8 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
   const { latencyMs = 0, quotaExceeded = false } = opts;
   const f = structuredClone(fixtures);
   const me = f.me;
+  if (opts.emailEnabled !== undefined)
+    me.instance.emailEnabled = opts.emailEnabled;
   const artifacts: ArtifactSummary[] = f.artifacts;
   const versions = f.versions;
   const files = new Map(Object.entries(f.files));

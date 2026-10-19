@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import {
   MemberInviteResultSchema,
+  MeSchema,
   newId,
   R,
   ShareResultSchema,
@@ -81,6 +82,30 @@ async function newOwner() {
 
 beforeEach(async () => {
   await env.DB.prepare("delete from counters where key like 'email:%'").run();
+});
+
+describe("Me.instance.emailEnabled", () => {
+  it("true only when EMAIL and EMAIL_FROM are both set", async () => {
+    const o = await newOwner();
+    const { EMAIL } = mailer();
+    const cases: [object, boolean][] = [
+      [{ EMAIL, EMAIL_FROM: FROM }, true],
+      [{ EMAIL_FROM: FROM }, false],
+      [{ EMAIL }, false],
+      [{}, false],
+    ];
+    for (const [e, want] of cases) {
+      const r = await app.fetch(
+        new Request(`http://app.localhost${R.me}`, {
+          headers: { cookie: o.cookie },
+        }),
+        { ...(env as object), ...e } as never,
+        ctx,
+      );
+      expect(r.status).toBe(200);
+      expect(MeSchema.parse(await r.json()).instance.emailEnabled).toBe(want);
+    }
+  });
 });
 
 describe("invite email", () => {
