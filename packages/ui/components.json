@@ -5,7 +5,7 @@
   "tsx": true,
   "tailwind": {
     "config": "",
-    "css": "src/shadcn/theme.css",
+    "css": "src/shadcn/cli-sink.css",
     "baseColor": "neutral",
     "cssVariables": true,
     "prefix": ""

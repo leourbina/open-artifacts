@@ -15,21 +15,25 @@
 
 @source "./";
 
-/* dark: honors data-theme="dark", else prefers-color-scheme unless the
-   nearest data-theme is "light" (same rule as tokens.css). */
+/* dark: the same rule as tokens.css, which switches only on <html>:
+   <html data-theme="dark">, or prefers-color-scheme unless
+   <html data-theme="light">. Nested data-theme wrappers are not themes. */
 @custom-variant dark {
-  &:where([data-theme="dark"], [data-theme="dark"] *) {
+  &:where(:root[data-theme="dark"], :root[data-theme="dark"] *) {
     @slot;
   }
   @media (prefers-color-scheme: dark) {
-    &:where(:not([data-theme="light"], [data-theme="light"] *)) {
+    &:where(
+        :root:not([data-theme="light"]),
+        :root:not([data-theme="light"]) *
+      ) {
       @slot;
     }
   }
 }
 
-/* Declared on every data-theme element too, so a nested theme wrapper
-   resolves these against its own --oa-* values. */
+/* Also declared on [data-theme] elements so a wrapper that sets its own
+   --oa-* values inline (Ladle's side-by-side panels) resolves against them. */
 :root,
 [data-theme] {
   --radius: var(--oa-radius-md);

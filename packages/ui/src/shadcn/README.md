@@ -17,23 +17,51 @@ tokens.css must stay at the top of a stylesheet.
 
 ## Adding components
 
-From `packages/ui`:
+From `packages/ui`, always through the script:
 
 ```sh
-pnpm dlx shadcn@4.22.1 add <name>
+pnpm shadcn:add <name…>
 ```
 
-`components.json` sends files to `src/shadcn/ui/` through the package imports
-in `package.json` (`#shadcn/ui/*`, `#shadcn/lib/*`, …). Components import `cn`
-from the `cn` package, per shadcn's 2026-09 change. `lib/utils.ts` re-exports
-it.
+It runs the pinned CLI (`shadcn@4.22.1`), pins any dependency ranges the CLI
+saved (`^x` becomes the installed version; a test rejects ranges), and runs
+`biome check --write` on `src/shadcn`.
+
+- **Paths.** `components.json` sends files to `src/shadcn/ui/` through the
+  package imports in `package.json` (`#shadcn/ui/*`, `#shadcn/lib/*`, …).
+  Components import `cn` from the `cn` package, per shadcn's 2026-09 change;
+  `lib/utils.ts` re-exports it.
+- **CSS.** The CLI's CSS target is `cli-sink.css`, which nothing imports, so
+  `add` never edits `theme.css` (it appends neutral `:root`/`.dark` variable
+  blocks, e.g. for `sidebar`). The script resets the sink afterwards.
+- **Lint.** `packages/ui/biome.jsonc` turns off, for `src/shadcn/ui/**` only,
+  the rules shadcn breaks on purpose, each with its reason:
+  `noDangerouslySetInnerHtml` (chart's `<style>`), `noDocumentCookie`
+  (sidebar state), `noArrayIndexKey` (chart rows) and
+  `useExhaustiveDependencies` (sidebar's setter deps).
+
+### To fix when these components are added
+
+- **button, badge:** new-york's destructive variant uses `text-white`, which is
+  2.47:1 on dark `--oa-danger`. Switch it to `text-destructive-foreground`
+  (`--oa-bg`, ≥ 4.5:1 on `--destructive` in both themes).
+- **sonner:** it reads the theme from `next-themes`' `useTheme()`, which has no
+  provider here and ignores `data-theme`. Replace it with a hook that reads
+  `<html data-theme>` (and `prefers-color-scheme`), and drop `next-themes`.
+- **chart:** it scopes dark colors to `.dark`, which nothing sets. Change its
+  `THEMES.dark` selector to ours: `:root[data-theme="dark"]` (plus the
+  `prefers-color-scheme` case).
 
 ## Theme mapping
 
 `theme.css` defines shadcn's variables as references to `--oa-*` tokens, so
 `packages/ui/src/tokens/tokens.css` stays the single source of color. Dark mode
-comes from the tokens switching (by `prefers-color-scheme` or `data-theme`);
-nothing is redefined per theme. The `dark:` variant follows the same rule.
+comes from the tokens switching; nothing is redefined per theme.
+
+The theme follows `<html data-theme>` only, like tokens.css: `dark` when
+`<html data-theme="dark">`, or when the OS prefers dark and `<html>` isn't
+`data-theme="light"`. The `dark:` variant uses the same rule. A `data-theme`
+on a nested element doesn't switch the theme.
 
 | shadcn variable | Studio token | Note |
 |---|---|---|
@@ -73,5 +101,6 @@ nothing is redefined per theme. The `dark:` variant follows the same rule.
 | `--radius-sm`, `-md`, `-lg` | `--oa-radius-sm` (4px), `--oa-radius-md` (6px), `--oa-radius-lg` (8px) |
 | `--radius-xl` … `-4xl` | multiples of `--oa-radius-lg` |
 
-The variables are declared on `:root` and on every `[data-theme]` element, so a
-nested theme wrapper resolves them against its own tokens.
+The variables are declared on `:root`, and also on `[data-theme]` elements so a
+wrapper that sets its own `--oa-*` values inline (Ladle's side-by-side light
+and dark panels) resolves against them.
