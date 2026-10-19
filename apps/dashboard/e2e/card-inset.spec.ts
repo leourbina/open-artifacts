@@ -2,13 +2,25 @@
 // content edge and nothing pokes past it or scrolls the page sideways.
 import { expect, type Page, test } from "@playwright/test";
 
-/** Child boxes that don't line up with, or overflow, their card's content box. */
-const misaligned = (page: Page) =>
-  page.evaluate(() => {
+/** Spacing token for the card inset at a viewport width. */
+const inset = (width: number) =>
+  width <= 600 ? "--oa-space-4" : "--oa-space-5";
+
+/** Cards not inset by the token, and child boxes that don't line up with, or
+    overflow, their card's content box. */
+const misaligned = (page: Page, token: string) =>
+  page.evaluate((token) => {
     const bad: string[] = [];
+    const want = getComputedStyle(document.documentElement)
+      .getPropertyValue(token)
+      .trim();
     for (const card of document.querySelectorAll<HTMLElement>(".oa-card")) {
       const c = getComputedStyle(card);
       const r = card.getBoundingClientRect();
+      if (c.paddingLeft !== want || c.paddingRight !== want)
+        bad.push(
+          `${card.className} padding ${c.paddingLeft} != ${token} ${want}`,
+        );
       const left =
         r.left + parseFloat(c.borderLeftWidth) + parseFloat(c.paddingLeft);
       const right =
@@ -34,7 +46,7 @@ const misaligned = (page: Page) =>
       }
     }
     return bad;
-  });
+  }, token);
 
 const sideScroll = (page: Page) =>
   page.evaluate(
@@ -50,7 +62,7 @@ for (const width of [1280, 390]) {
     await expect(
       page.getByRole("radiogroup", { name: "Auth method" }),
     ).toBeVisible();
-    expect(await misaligned(page)).toEqual([]);
+    expect(await misaligned(page, inset(width))).toEqual([]);
     expect(await sideScroll(page)).toBe(0);
 
     // The snippet's Copy button sits beside the code, not over it.
@@ -59,6 +71,36 @@ for (const width of [1280, 390]) {
       .getByRole("button", { name: "Copy command" })
       .boundingBox();
     expect((btn?.x ?? 0) >= (pre?.x ?? 0) + (pre?.width ?? 0)).toBe(true);
+
+    if (width <= 600) {
+      // Stacked rows: the name alone on one ellipsized line, 8px above the
+      // meta, with Revoke right-aligned on the meta line.
+      const row = await page
+        .locator(".oa-row", { hasText: "laptop" })
+        .evaluate((li) => {
+          const box = (el: Element | null) => el?.getBoundingClientRect();
+          const name = li.querySelector("b");
+          const meta = box(li.querySelector("span"));
+          const btn = box(li.querySelector("button"));
+          const n = box(name);
+          return {
+            nowrap: name ? getComputedStyle(name).whiteSpace : "",
+            ellipsis: name ? getComputedStyle(name).textOverflow : "",
+            gap: (meta?.top ?? 0) - (n?.bottom ?? 0),
+            sameLine: Math.abs((btn?.top ?? 0) - (meta?.top ?? 0)) < 12,
+            flushRight:
+              Math.abs((btn?.right ?? 0) - li.getBoundingClientRect().right) <
+              0.5,
+          };
+        });
+      expect(row).toMatchObject({
+        nowrap: "nowrap",
+        ellipsis: "ellipsis",
+        sameLine: true,
+        flushRight: true,
+      });
+      expect(row.gap).toBeGreaterThanOrEqual(8);
+    }
 
     // Empty states line up too.
     for (const name of ["Example MCP client", "laptop"]) {
@@ -72,7 +114,7 @@ for (const width of [1280, 390]) {
       page.getByText("No agents connected yet.", { exact: false }),
     ).toBeVisible();
     await expect(page.getByText("No tokens.", { exact: false })).toBeVisible();
-    expect(await misaligned(page)).toEqual([]);
+    expect(await misaligned(page, inset(width))).toEqual([]);
   });
 
   test(`token-created dialog keeps code and Copy inside at ${width}px`, async ({
@@ -100,14 +142,20 @@ for (const width of [1280, 390]) {
   });
 }
 
-test("Members and Instance cards inset their content at 390px", async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 390, height: 900 });
-  for (const path of ["/settings/members", "/settings/instance"]) {
-    await page.goto(path);
-    await expect(page.locator(".oa-card").first()).toBeVisible();
-    expect(await misaligned(page)).toEqual([]);
-    expect(await sideScroll(page)).toBe(0);
-  }
-});
+for (const width of [1280, 390]) {
+  test(`Members, Instance and Usage cards inset their content at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    for (const path of [
+      "/settings/members",
+      "/settings/instance",
+      "/settings/usage",
+    ]) {
+      await page.goto(path);
+      await expect(page.locator(".oa-card").first()).toBeVisible();
+      expect(await misaligned(page, inset(width))).toEqual([]);
+      expect(await sideScroll(page)).toBe(0);
+    }
+  });
+}

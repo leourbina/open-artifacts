@@ -58,7 +58,7 @@
 /* The card owns the inset and the vertical rhythm; children never pad
    themselves horizontally, so bare components line up with the heading. */
 .oa-settings .oa-card {
-  --oa-card-pad: 18px;
+  --oa-card-pad: var(--oa-space-5);
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   align-content: start;
@@ -302,12 +302,24 @@
   .oa-meters {
     grid-template-columns: minmax(0, 1fr);
   }
-  /* Name on its own line; meta and actions wrap beneath it. */
+  .oa-settings .oa-card {
+    --oa-card-pad: var(--oa-space-4);
+  }
+  /* Name on its own line (one line, ellipsized); meta left, actions right. */
   .oa-settings .oa-row {
     flex-wrap: wrap;
+    row-gap: var(--oa-space-2);
+    min-height: 0;
+    padding: 0;
+  }
+  .oa-settings .oa-row + .oa-row {
+    margin-top: var(--oa-space-3);
   }
   .oa-settings .oa-row b {
     flex-basis: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .oa-settings .oa-row button {
     margin-left: auto;
