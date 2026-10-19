@@ -231,7 +231,25 @@ code{font:400 12px var(--oa-font-mono);background:var(--oa-surface-2);border:1px
 .steps .codeblock{margin-top:6px}
 .perm{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:6px}
 .setupFoot{grid-column:2;display:flex;gap:8px;flex-wrap:wrap;margin-top:18px}
-.ghostMeters{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;opacity:.8}
+.ghostMeters{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px;opacity:.8}
+
+/* CPU: per-request limit, not a daily quota */
+.cpu{padding:16px 18px;display:flex;flex-direction:column;gap:14px}
+.cpuHead{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.cpuHead h2{font-size:var(--oa-text-sm);font-weight:500}
+.cpuHead span{color:var(--oa-text-muted);font-size:var(--oa-text-xs)}
+.cpuRows{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px 32px}
+.cpuRow{display:flex;flex-direction:column;gap:8px;min-width:0}
+.cpuRow h3{font-size:var(--oa-text-xs);font-weight:500;color:var(--oa-text-2)}
+.cpuRow .big{font-size:var(--oa-text-2xl);font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.2}
+.cpuRow .big small{font-size:var(--oa-text-sm);font-weight:400;color:var(--oa-text-muted);letter-spacing:0}
+.cpuRow .sub{margin:0;color:var(--oa-text-muted);font-size:var(--oa-text-xs)}
+.cpuRow.warn .big{color:var(--oa-warning)}
+.cpu .track.thin{height:4px}
+.cpu .track.warn i{background:var(--oa-warning)}
+.cpu .track.danger i{background:var(--oa-danger)}
+.cpuFoot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-top:12px;border-top:1px solid var(--oa-divider);color:var(--oa-text-muted);font-size:var(--oa-text-xs)}
+.cpuFoot a{color:var(--oa-text-2);display:inline-flex;align-items:center;gap:4px}
 .ghostMeters .card{padding:14px 16px;display:flex;flex-direction:column;gap:8px}
 .ghostMeters b{font-weight:500}
 .ghostMeters span{font-size:var(--oa-text-xl);font-weight:600;color:var(--oa-text-muted)}
@@ -239,7 +257,8 @@ code{font:400 12px var(--oa-font-mono);background:var(--oa-surface-2);border:1px
 @media (max-width:720px){
   .meters{grid-template-columns:minmax(0,1fr)}
   .guide{grid-template-columns:minmax(0,1fr)}
-  .meter,.guide{padding:14px}
+  .meter,.guide,.cpu{padding:14px}
+  .cpuRows{grid-template-columns:minmax(0,1fr)}
   .setup{grid-template-columns:minmax(0,1fr);padding:18px 16px}
   .setup .emptyIcon{grid-row:auto}
   .steps,.setupFoot{grid-column:1}
@@ -364,12 +383,23 @@ code{font:400 12px var(--oa-font-mono);background:var(--oa-surface-2);border:1px
         <!-- Meters -->
         <div class="meters" id="meters" data-when="default empty"></div>
 
+        <!-- CPU (default, empty) -->
+        <section class="card cpu" id="cpu" data-when="default empty" aria-labelledby="cpuH"></section>
+
         <!-- Loading -->
         <div class="meters" data-when="loading" aria-busy="true" aria-label="Loading usage">
           <div class="card meter"><span class="sk" style="width:46%;height:12px"></span><span class="sk" style="width:58%;height:24px"></span><span class="sk" style="height:8px;border-radius:999px"></span><span class="sk" style="width:70%;height:10px"></span></div>
           <div class="card meter"><span class="sk" style="width:30%;height:12px"></span><span class="sk" style="width:64%;height:24px"></span><span class="sk" style="height:8px;border-radius:999px"></span><span class="sk" style="width:62%;height:10px"></span></div>
           <div class="card meter"><span class="sk" style="width:36%;height:12px"></span><span class="sk" style="width:52%;height:24px"></span><span class="sk" style="height:8px;border-radius:999px"></span><span class="sk" style="width:66%;height:10px"></span></div>
           <div class="card meter"><span class="sk" style="width:42%;height:12px"></span><span class="sk" style="width:56%;height:24px"></span><span class="sk" style="height:8px;border-radius:999px"></span><span class="sk" style="width:58%;height:10px"></span></div>
+        </div>
+
+        <div class="card cpu" data-when="loading" aria-hidden="true">
+          <span class="sk" style="width:60px;height:12px"></span>
+          <div class="cpuRows">
+            <div class="cpuRow"><span class="sk" style="width:55%;height:11px"></span><span class="sk" style="width:32px;height:24px"></span></div>
+            <div class="cpuRow"><span class="sk" style="width:48%;height:11px"></span><span class="sk" style="width:40%;height:24px"></span><span class="sk" style="height:4px;border-radius:999px"></span></div>
+          </div>
         </div>
 
         <!-- Guidance -->
@@ -401,10 +431,11 @@ code{font:400 12px var(--oa-font-mono);background:var(--oa-surface-2);border:1px
           <div class="setupFoot"><button class="btn primary" onclick="location.reload()"><svg class="ic sm"><use href="#i-refresh"/></svg>I've added it, check again</button><a class="btn ghost" href="#">Setup guide<svg class="ic sm"><use href="#i-ext"/></svg></a></div>
         </section>
         <div class="ghostMeters" data-when="not-configured" aria-hidden="true">
-          <div class="card"><b>Worker requests</b><span>—</span><p class="note">of 100,000</p></div>
-          <div class="card"><b>D1 rows read</b><span>—</span><p class="note">of 5,000,000</p></div>
-          <div class="card"><b>D1 rows written</b><span>—</span><p class="note">of 100,000</p></div>
-          <div class="card"><b>DO requests</b><span>—</span><p class="note">of 100,000</p></div>
+          <div class="card"><b>Worker requests</b><span>–</span><p class="note">of 100,000</p></div>
+          <div class="card"><b>D1 rows read</b><span>–</span><p class="note">of 5,000,000</p></div>
+          <div class="card"><b>D1 rows written</b><span>–</span><p class="note">of 100,000</p></div>
+          <div class="card"><b>DO requests</b><span>–</span><p class="note">of 100,000</p></div>
+          <div class="card"><b>CPU</b><span>–</span><p class="note">10 ms per request</p></div>
         </div>
       </div>
     </main>
@@ -412,7 +443,7 @@ code{font:400 12px var(--oa-font-mono);background:var(--oa-surface-2);border:1px
 </div>
 
 <script>
-window.OA_MOCK = { roles: ['owner', 'admin'], states: ['default', 'empty', 'loading', 'error', 'not-configured'] };
+window.OA_MOCK = { roles: ['owner', 'admin'], extra: [{ key: 'cpu', opts: [['default', 'CPU ok'], ['hits', 'CPU hits']] }], states: ['default', 'empty', 'loading', 'error', 'not-configured'] };
 /* Mockup plumbing: ?theme, ?state (+ page extras), switcher, drawer, copy. */
 (function () {
   const q = new URLSearchParams(location.search);
@@ -538,6 +569,29 @@ document.getElementById('meters').innerHTML = METERS.map((m) => {
     <div class="mFoot"><span class="what">${m.what}</span><span class="left num">${fmt(m.limit - used)} left</span></div>
   </section>`;
 }).join('');
+
+// CPU: ?cpu=hits shows requests stopped at the limit.
+const CPU = OA.extra.cpu === 'hits' ? { hits: 4, p99: 9.6 } : { hits: 0, p99: 4.1 };
+const CPU_LIMIT = 10;
+const empty = OA.state === 'empty';
+const hits = empty ? 0 : CPU.hits;
+const hitsLvl = hits >= 3 ? 'warn' : '';
+const barLvl = CPU.p99 >= 10 ? 'danger' : CPU.p99 >= 8 ? 'warn' : '';
+document.getElementById('cpu').innerHTML = `
+  <div class="cpuHead"><h2 id="cpuH">CPU</h2><span>A per-request limit, not a daily quota</span></div>
+  <div class="cpuRows">
+    <div class="cpuRow ${hitsLvl}">
+      <h3>Requests over the CPU limit today</h3>
+      <div class="big">${hits}</div>
+      <p class="sub">${hits ? 'These requests were stopped with Cloudflare error 1102. Retrying usually works.' : 'No request was stopped for using too much CPU.'}</p>
+    </div>
+    <div class="cpuRow">
+      <h3>Typical busy request (p99)</h3>
+      ${empty ? '<div class="big"><small>No requests yet today</small></div>' : `<div class="big">${CPU.p99} ms <small>of ${CPU_LIMIT} ms</small></div>
+      <div class="track thin ${barLvl}" role="meter" aria-valuemin="0" aria-valuemax="${CPU_LIMIT}" aria-valuenow="${CPU.p99}" aria-label="p99 CPU time"><i style="width:${Math.min(100, (CPU.p99 / CPU_LIMIT) * 100)}%"></i></div>`}
+    </div>
+  </div>
+  <div class="cpuFoot"><span>Free plan requests get 10 ms of CPU. Workers Paid raises it to 30 seconds.</span><a href="https://open-artifacts.com/docs/self-hosting-costs/#hitting-the-cpu-limit">Learn more<svg class="ic sm"><use href="#i-ext"/></svg></a></div>`;
 </script>
 </body>
 </html>
