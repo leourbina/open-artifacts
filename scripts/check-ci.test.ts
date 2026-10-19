@@ -65,6 +65,9 @@ describe("ci.yml", () => {
     expect(w.on.push.branches).toContain("main");
     expect("workflow_dispatch" in w.on).toBe(true);
   });
+  it("runs on merge_group so the merge queue gets its required checks", () => {
+    expect(triggers(w)).toContain("merge_group");
+  });
   it("defines at least the five required jobs", () => {
     expect(Object.keys(w.jobs)).toEqual(
       expect.arrayContaining(["build", "e2e", "lint", "test", "typecheck"]),
