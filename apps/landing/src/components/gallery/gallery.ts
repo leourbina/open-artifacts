@@ -108,15 +108,45 @@ if (root) {
     $("[data-saved]", check).textContent = "Saved for the team · just now";
   });
 
-  // Phones show compact previews: the tile opens the viewer, and the
-  // preview's controls stay out of the tab order until then.
-  const tiles = $$("[data-tile]");
-  const narrow = matchMedia("(max-width: 639px)");
-  const compact = () => {
-    for (const t of tiles) $(".t-body", t).inert = narrow.matches;
+  // Carousel: one row, prev/next, a count, arrow keys on the track.
+  const wall = $("[data-wall]");
+  const tiles = $$("[data-tile]", wall);
+  const count = $("[data-g-count]");
+  const steps = $$<HTMLButtonElement>("[data-g-step]");
+  const first = () => {
+    const x = wall.getBoundingClientRect().left;
+    const i = tiles.findIndex((t) => t.getBoundingClientRect().left >= x - 8);
+    return i < 0 ? tiles.length - 1 : i;
   };
-  narrow.addEventListener("change", compact);
-  compact();
+  const sync = () => {
+    const end = wall.scrollLeft + wall.clientWidth >= wall.scrollWidth - 2;
+    steps[0].disabled = wall.scrollLeft <= 2;
+    steps[1].disabled = end;
+    count.textContent = `${end ? tiles.length : first() + 1} / ${tiles.length}`;
+  };
+  const go = (d: number) => {
+    const i = Math.max(0, Math.min(tiles.length - 1, first() + d));
+    wall.scrollTo({
+      left: tiles[i].offsetLeft - tiles[0].offsetLeft,
+      behavior: reduce.matches ? "auto" : "smooth",
+    });
+  };
+  let tick = 0;
+  wall.addEventListener("scroll", () => {
+    clearTimeout(tick);
+    tick = window.setTimeout(sync, 80);
+  });
+  for (const b of steps)
+    b.addEventListener("click", () => go(Number(b.dataset.gStep)));
+  wall.addEventListener("keydown", (e) => {
+    if (e.target !== wall) return;
+    const d = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
+    if (!d) return;
+    e.preventDefault();
+    go(d);
+  });
+  $("[data-nav]").hidden = false;
+  sync();
 
   // The viewer.
   const dlg = $<HTMLDialogElement>("[data-viewer]");
@@ -196,7 +226,6 @@ if (root) {
   dlg.addEventListener("close", () => {
     if (!cur) return;
     $(".t-body", cur).append(art);
-    compact();
     hist.hidden = true;
     cur.append(hist);
     $("[data-open]", cur).focus();

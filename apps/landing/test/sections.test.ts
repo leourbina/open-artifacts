@@ -68,10 +68,24 @@ describe("landing sections", () => {
       expect(gallery).toContain(`aria-label="Open ${title}"`);
   });
 
-  it("the hero's title block links open source to the repo", () => {
+  it("the hero headline is three fixed lines, and the subcopy links the repo", () => {
     expect(index).toMatch(
-      /class="hero-tag"[^>]*>Free and <a href="https:\/\/github\.com\/open-artifacts-ai\/open-artifacts"[^>]*>open source<\/a>, on your own Cloudflare\.<\/p>/,
+      /<h1[^>]*>\s*<span[^>]*>Bring any agent\.<\/span>\s*<span[^>]*>Keep every artifact\.<\/span>\s*<span[^>]*>For Free\. Seriously\.<\/span>\s*<\/h1>/,
     );
+    const lede = index.slice(
+      index.indexOf('class="lede"'),
+      index.indexOf("</p>", index.indexOf('class="lede"')),
+    );
+    expect(lede).toMatch(
+      /<a href="https:\/\/github\.com\/open-artifacts-ai\/open-artifacts"[^>]*>open source<\/a>/,
+    );
+    expect(lede).toContain("on your own Cloudflare");
+  });
+
+  it("the gallery is a carousel with labeled prev and next", () => {
+    expect(index).toMatch(/data-wall[^>]*tabindex="0"[^>]*role="region"/);
+    expect(index).toContain('aria-label="Previous artifacts"');
+    expect(index).toContain('aria-label="Next artifacts"');
   });
 
   it("the hero keeps the library screenshot", () => {

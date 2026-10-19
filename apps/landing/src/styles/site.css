@@ -191,27 +191,17 @@ code,
   line-height: 1.06;
   letter-spacing: -0.03em;
 }
-@media (max-width: 639px) {
-  .hero h1 br {
-    display: none;
-  }
+/* Three fixed lines at every width. */
+.hero h1 span {
+  display: block;
 }
-/* Attached to the h1: one title block. */
-.hero-tag {
-  margin-top: 12px;
-  color: var(--oa-text-2);
-  font-size: clamp(19px, 2.2vw, 26px);
-  font-weight: 500;
-  line-height: 1.25;
-  letter-spacing: -0.015em;
-}
-.hero .hero-tag a {
+.hero .lede a {
   color: var(--oa-text);
   text-decoration: underline;
   text-decoration-thickness: 1.5px;
-  text-underline-offset: 4px;
+  text-underline-offset: 3px;
 }
-.hero .hero-tag a:hover {
+.hero .lede a:hover {
   text-decoration-color: var(--oa-accent);
 }
 .lede {

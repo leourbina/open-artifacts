@@ -1,9 +1,8 @@
 ---
 // "What any AI agent makes": six working artifacts, each usable in its tile,
 // that open in place in a viewer with their link, versions and sharing.
-// Adapted from variation 4 (Gallery). Wide screens use the artifacts in their
-// tiles; phones show compact previews in two columns, and a tap opens the
-// working artifact in the viewer.
+// Adapted from variation 4 (Gallery). One row that scrolls sideways, with
+// prev/next, a count, arrow keys and swipe; no auto-advance.
 import Tile from "./Tile.astro";
 import "./gallery.css";
 
@@ -108,7 +107,20 @@ const hl = code
 ---
 
 <div class="gallery" data-gallery>
-  <div class="g-wall" data-wall>
+  <div class="g-nav" data-nav hidden>
+    <span class="g-count" data-g-count aria-live="polite">1 / 6</span>
+    <button type="button" data-g-step="-1" aria-label="Previous artifacts" disabled>
+      <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"
+        ><path d="M10 3 5 8l5 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg
+      >
+    </button>
+    <button type="button" data-g-step="1" aria-label="Next artifacts">
+      <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"
+        ><path d="m6 3 5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg
+      >
+    </button>
+  </div>
+  <div class="g-wall" data-wall tabindex="0" role="region" aria-label="Artifacts, scroll sideways">
       <Tile
         title="Publishing dashboard"
         kind="HTML"
@@ -236,7 +248,7 @@ const hl = code
           { v: "v1", by: "Codex", note: "First draft", when: "Oct 14" },
         ]}
       >
-        <article class="art doc" tabindex="0" aria-label="RFC 014, rendered Markdown">
+        <article class="art doc" aria-label="RFC 014, rendered Markdown">
           <h4>RFC 014: Build log retention</h4>
           <p class="doc-meta">Status: In review · Owner: Platform</p>
           <h5>Summary</h5>
@@ -315,7 +327,7 @@ const hl = code
             <span class="mono">Python · 23 lines</span>
             <button type="button" data-copy={code} hidden>Copy</button>
           </div>
-          <pre tabindex="0" aria-label="backfill.py source"><code set:html={hl} /></pre>
+          <pre aria-label="backfill.py source"><code set:html={hl} /></pre>
         </div>
       </Tile>
   </div>

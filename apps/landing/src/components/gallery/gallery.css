@@ -43,31 +43,74 @@ html:has(.gallery .viewer[open]) {
   border-color: var(--oa-border-strong);
   color: var(--oa-text);
 }
-.gallery .g-wall {
+/* One row that scrolls sideways: about 3.2 cards wide on desktop, 2.2 on
+   tablets and 1.2 on phones, so the next card peeks in. */
+.gallery .g-nav {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: var(--oa-text-muted);
+  font-size: var(--oa-text-sm);
+}
+.gallery .g-count {
+  margin-right: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.gallery .g-nav button {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  grid-auto-flow: dense;
-  gap: 16px;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--oa-border);
+  border-radius: 999px;
+  background: var(--oa-surface);
+  color: var(--oa-text);
+  cursor: pointer;
+}
+.gallery .g-nav button:hover:not(:disabled) {
+  border-color: var(--oa-border-strong);
+}
+.gallery .g-nav button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.gallery .g-wall {
+  --peek: 1.2;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: calc((100% - (var(--peek) - 0.2) * 12px) / var(--peek));
+  gap: 12px;
+  padding: 4px 4px 12px;
+  margin: -4px -4px 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory;
+  scroll-padding-inline: 4px;
+  scrollbar-width: thin;
 }
 @media (min-width: 640px) {
   .gallery .g-wall {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .gallery .tile.wide {
-    grid-column: span 2;
+    --peek: 2.2;
+    gap: 16px;
   }
 }
 @media (min-width: 1024px) {
   .gallery .g-wall {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    --peek: 3.2;
   }
+}
+.gallery .g-wall:focus-visible {
+  outline-offset: 0;
 }
 .gallery .tile {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  height: 380px;
+  height: 340px;
   overflow: hidden;
+  scroll-snap-align: start;
   background: var(--oa-surface);
   border-radius: var(--oa-radius-lg);
   box-shadow: var(--oa-shadow-1);
@@ -476,7 +519,7 @@ html:has(.gallery .viewer[open]) {
 .gallery .doc {
   display: block;
   padding: 14px 16px 20px;
-  overflow: auto;
+  overflow: hidden;
   line-height: 1.55;
 }
 .gallery .doc h4 {
@@ -546,13 +589,16 @@ html:has(.gallery .viewer[open]) {
   flex: 1;
   margin: 0;
   padding: 10px 0;
-  overflow: auto;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   font: 12px / 1.6 var(--oa-font-mono);
   counter-reset: ln;
 }
 .gallery .code .ln {
   display: block;
-  padding-right: 16px;
+  padding: 0 16px 0 3.2em;
+  text-indent: -3.2em;
 }
 .gallery .code .ln::before {
   content: counter(ln);
@@ -715,6 +761,10 @@ html:has(.gallery .viewer[open]) {
 .gallery .vw-stage .dash {
   padding-bottom: 40px;
 }
+.gallery .vw-stage .doc,
+.gallery .vw-stage .code pre {
+  overflow: auto;
+}
 .gallery .vw-stage .code pre {
   font-size: 13px;
 }
@@ -863,43 +913,18 @@ html:has(.gallery .viewer[open]) {
   }
 }
 /* Closing */
-/* Phones: two columns of compact previews; a tap opens the working artifact. */
-@media (max-width: 639px) {
-  .gallery .g-wall {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
-  }
-  .gallery .tile {
-    height: 196px;
-  }
-  .gallery .t-head {
-    min-height: 36px;
-    padding: 0 0 0 10px;
-  }
-  .gallery .t-kind,
-  .gallery .t-meta .share,
-  .gallery .t-meta [data-ver] {
-    display: none;
-  }
-  .gallery .t-title {
-    font-size: var(--oa-text-sm);
-  }
-  .gallery .t-open {
-    width: 32px;
-    height: 32px;
-  }
-  .gallery .t-body {
-    overflow: hidden;
-    pointer-events: none;
-  }
-  .gallery .t-body .art {
-    zoom: 0.55;
-    height: calc(100% / 0.55);
-  }
-  .gallery .t-meta {
-    min-height: 30px;
-    padding: 0 10px;
-  }
+/* In a tile, long artifacts are clipped with a fade; the viewer scrolls them. */
+.gallery .t-body {
+  position: relative;
+  overflow: hidden;
+}
+.gallery .t-body:has(.doc, .code, .check)::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: 56px;
+  background: linear-gradient(transparent, var(--oa-surface));
+  pointer-events: none;
 }
 @media (prefers-reduced-motion: reduce) {
   .gallery *,
