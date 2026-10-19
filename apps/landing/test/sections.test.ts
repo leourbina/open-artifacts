@@ -29,6 +29,19 @@ describe("landing sections", () => {
     expect(wire).toMatch(/<figcaption[^>]*>\s*Any AI agent sends/);
   });
 
+  it("the chat demo has six keyboard tabs and real prompt text", () => {
+    const tabs = index.match(/<button[^>]*role="tab"[^>]*>/g) ?? [];
+    expect(tabs).toHaveLength(6);
+    expect(index).toMatch(/role="tablist"[^>]*aria-label="Examples"/);
+    expect(index).toMatch(/id="demo-panel"[^>]*role="tabpanel"/);
+    expect(
+      /<span class="sr-only"[^>]*>publish this as an artifact<\/span>/.test(
+        index,
+      ),
+    ).toBe(true);
+    expect(index.match(/data-k="/g)).toHaveLength(16);
+  });
+
   it("the hero keeps the library screenshot", () => {
     expect(index).toMatch(/class="frame hero-shot"/);
   });

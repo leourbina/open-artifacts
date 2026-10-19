@@ -1,6 +1,7 @@
 ---
 import { REPO_URL } from "@oa/shared";
 import AgentWiring from "../components/AgentWiring.astro";
+import ChatDemo from "../components/ChatDemo.astro";
 import Shot from "../components/Shot.astro";
 import Base from "../layouts/Base.astro";
 import { gatesFor } from "../lib/release";
@@ -84,6 +85,15 @@ const plans = [
         alt="The Open Artifacts library: a grid of artifacts with thumbnails, the agent that made each one, and its visibility."
       />
     </figure>
+  </section>
+
+  <section class="wrap demo-section" aria-labelledby="demo-h">
+    <h2 id="demo-h">Ask in chat. Get a link.</h2>
+    <p class="section-lede">
+      Ask any AI agent to publish. It calls publish_artifact and hands you a private link to the real
+      thing, ready to click and use. Try each example.
+    </p>
+    <ChatDemo />
   </section>
 
   <section class="band" aria-labelledby="steps-h">

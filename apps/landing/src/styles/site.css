@@ -21,6 +21,14 @@ body {
 [hidden] {
   display: none !important;
 }
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 img {
   display: block;
   max-width: 100%;
@@ -247,6 +255,15 @@ code,
 }
 .hero-shot {
   margin-top: 48px;
+}
+
+.demo-section {
+  margin-top: var(--section-gap);
+}
+.section-lede {
+  max-width: 64ch;
+  margin-top: 8px;
+  color: var(--oa-text-2);
 }
 
 /* Bands */
