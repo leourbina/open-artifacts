@@ -41,12 +41,13 @@ function syncTestPassesWith(mutate: (css: string) => string): boolean {
   return r.status === 0;
 }
 
+// Harness tests spawn a vitest subprocess; 5s isn't enough under load.
 describe("adversarial round 2", () => {
   it("sync test catches an override whose last declaration has no semicolon", () => {
     expect(
       syncTestPassesWith((css) => `${css}\n:root { --oa-text: #ff0000 }\n`),
     ).toBe(false);
-  });
+  }, 30_000);
 
   // DIRECTION: surface-2 = raised rows, accent-soft = tinted row backgrounds; rows hold checkboxes.
   it.each([

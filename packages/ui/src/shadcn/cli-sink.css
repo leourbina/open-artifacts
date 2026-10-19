@@ -1,0 +1,6 @@
+/*
+ * CLI writes vars here; ignored. components.json points the shadcn CLI's
+ * `tailwind.css` at this file so `shadcn add` never edits theme.css (it
+ * appends neutral :root/.dark blocks, e.g. for sidebar, that would override
+ * the Studio mapping). Nothing imports this file. Discard what lands here.
+ */
