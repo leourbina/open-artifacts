@@ -34,8 +34,13 @@ export interface Collection {
   set(id: string, data: unknown): Promise<DataDoc>;
   update(id: string, patch: Record<string, unknown>): Promise<DataDoc>;
   delete(id: string): Promise<void>;
-  /** Live changes; refetch your data when `e.resync` is true (after a reconnect). */
-  subscribe(cb: (e: ChangeEvent) => void): () => void;
+  /** Live changes; refetch your data when `e.resync` is true (after a reconnect).
+   *  `onReady` runs once the shell has acknowledged the subscription, so callers
+   *  can wait for live delivery to be armed before depending on it. */
+  subscribe(
+    cb: (e: ChangeEvent) => void,
+    opts?: { onReady?: () => void },
+  ): () => void;
 }
 
 export interface OpenArtifacts {
@@ -215,18 +220,21 @@ export function createRuntime(opts: RuntimeOptions = {}): OpenArtifacts {
     delete: async (id) => {
       await bridge.call("db.delete", { collection: name, id });
     },
-    subscribe(cb) {
+    subscribe(cb, opts) {
       let set = subs.get(name);
       if (!set) {
         set = new Set();
         subs.set(name, set);
         const mine = set;
-        bridge.call("db.subscribe", { collection: name }).catch((e) => {
-          // Drop the entry so the next subscribe() retries.
-          if (subs.get(name) === mine) subs.delete(name);
-          ignore(e);
-        });
-      }
+        bridge
+          .call("db.subscribe", { collection: name })
+          .then(() => opts?.onReady?.())
+          .catch((e) => {
+            // Drop the entry so the next subscribe() retries.
+            if (subs.get(name) === mine) subs.delete(name);
+            ignore(e);
+          });
+      } else if (opts?.onReady) queueMicrotask(() => opts.onReady?.());
       set.add(cb);
       const own = set;
       return () => {
