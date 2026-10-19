@@ -54,6 +54,8 @@ nothing is redefined per theme. The `dark:` variant follows the same rule.
 | `--border` | `--oa-divider` | |
 | `--input` | `--oa-border-strong` | ≥ 3:1 for control boundaries |
 | `--ring` | `--oa-focus` | |
+| `--brand` | `--oa-accent` | Ours, not shadcn's: `bg-brand`/`text-brand` for state marks |
+| `--brand-foreground` | `--oa-accent-text` | Text on a brand fill |
 | `--radius` | `--oa-radius-md` | |
 | `--chart-1` … `--chart-5` | `--oa-accent`, `--oa-success`, `--oa-warning`, `--oa-danger`, `--oa-text-muted` | |
 | `--sidebar` | `--oa-chrome` | |

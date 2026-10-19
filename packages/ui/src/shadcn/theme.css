@@ -54,6 +54,11 @@
   --input: var(--oa-border-strong);
   --ring: var(--oa-focus);
 
+  /* Ours, not shadcn's: the Studio accent for state marks (bg-brand,
+     text-brand). shadcn's --accent stays the neutral hover surface. */
+  --brand: var(--oa-accent);
+  --brand-foreground: var(--oa-accent-text);
+
   --chart-1: var(--oa-accent);
   --chart-2: var(--oa-success);
   --chart-3: var(--oa-warning);
@@ -93,6 +98,8 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);

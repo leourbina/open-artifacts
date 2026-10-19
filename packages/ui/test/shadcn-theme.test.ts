@@ -49,6 +49,9 @@ const SHADCN_VARS = [
     "sidebar-accent-foreground",
     "sidebar-border",
     "sidebar-ring",
+    // Ours: the Studio accent for state marks.
+    "brand",
+    "brand-foreground",
   ],
 ];
 
@@ -101,10 +104,13 @@ describe("shadcn theme.css", () => {
       "ring-ring",
       "rounded-md",
       "dark:bg-card",
+      "bg-brand",
+      "text-brand-foreground",
       "animate-in",
     ]);
     // @theme inline: utilities point straight at shadcn's vars and our tokens.
     expect(css).toMatch(/\.bg-background\s*\{[^}]*var\(--background\)/);
+    expect(css).toMatch(/\.bg-brand\s*\{[^}]*var\(--brand\)/);
     expect(css).toMatch(/\.rounded-md\s*\{[^}]*var\(--oa-radius-md\)/);
     expect(css).toMatch(
       /:root, \[data-theme\] \{[^}]*--background: var\(--oa-bg\)/,
