@@ -96,18 +96,44 @@ test("library tabs keep a visible underline on the strip's edge", async ({
   });
 });
 
-test("a card drops its motion under prefers-reduced-motion", async ({
+test("under reduced motion a card keeps the hover shadow but not the lift", async ({
   page,
 }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/");
   const card = page.locator(".lib-card").first();
   await expect(card).toBeVisible();
-  expect(
-    await card.evaluate((c) => getComputedStyle(c).transitionProperty),
-  ).toBe("none");
+  const style = () =>
+    card.evaluate((c) => {
+      const s = getComputedStyle(c);
+      return {
+        transition: s.transitionProperty,
+        transform: s.transform,
+        shadow: s.boxShadow,
+      };
+    });
+  const rest = await style();
+  expect(rest.transition).toBe("none");
   await card.hover();
-  expect(await card.evaluate((c) => getComputedStyle(c).transform)).toBe(
-    "none",
-  );
+  const hover = await style();
+  expect(hover.transform).toBe("none");
+  expect(hover.shadow).not.toBe(rest.shadow);
+});
+
+test("keyboard focus rings the whole card: solid 2px at offset 2", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const card = page.locator(".lib-card").first();
+  const title = card.locator("a.lib-title");
+  await expect(title).toBeVisible();
+  await title.focus();
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Tab");
+  await expect(title).toBeFocused();
+  const ring = await card.evaluate((c) => {
+    const s = getComputedStyle(c);
+    return [s.outlineStyle, s.outlineWidth, s.outlineOffset];
+  });
+  expect(ring).toEqual(["solid", "2px", "2px"]);
 });
