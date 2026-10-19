@@ -318,6 +318,7 @@ export async function runThumbBench(
   installGlobals();
   const env = makeEnv() as ReturnType<typeof makeEnv> & { BROWSER?: Fetcher };
   (env as { ASSETS: unknown }).ASSETS = assets;
+  (env as { SERVER_THUMBNAILS?: string }).SERVER_THUMBNAILS = "on";
   const userId = newId();
   await getDb(env).insert(users).values({
     id: userId,

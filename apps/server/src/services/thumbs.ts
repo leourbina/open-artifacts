@@ -13,10 +13,14 @@ import { type Cdp, connectCdp, LaunchError } from "./cdp.js";
 // stored thumbnail at the newest version written.
 
 export const THUMB = {
-  /** The layout viewport; the image is this × `scale` (640×400). */
-  width: 1280,
-  height: 800,
-  scale: 0.5,
+  /**
+   * The viewport and image size: the client's (packages/runtime snapshot.ts
+   * WIDTH × HEIGHT), so server and client thumbnails look alike. `scale` 1:
+   * a full-size image costs no measurable CPU over 0.5 (bench-thumbs.ts).
+   */
+  width: 1200,
+  height: 750,
+  scale: 1,
   /** webp quality steps, highest first, until it fits LIMITS.thumbnailBytes. */
   qualities: [60, 45, 30, 20] as const,
   /** Whole capture, launch to last screenshot. */
@@ -222,7 +226,7 @@ const SETTLE = `new Promise((r) => { const end = Date.now() + 2000; let n = -1, 
 /**
  * Opens one browser (cdp.ts), loads `url` with every top-level navigation
  * (and redirect) of the page pinned to its origin, and screenshots the
- * 1280×800 layout at THUMB.scale as webp, lowering the quality until it fits.
+ * THUMB.width × THUMB.height layout at THUMB.scale as webp, lowering the quality until it fits.
  * Only document requests are intercepted (Fetch domain); subresources are
  * left to the content host's CSP, and the Network domain is never enabled.
  * Popups are closed and dialogs dismissed. The browser is fresh (no cookies

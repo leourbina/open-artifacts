@@ -345,7 +345,7 @@ describe("captureThumbnail", () => {
     }
   });
 
-  it("screenshots the signed content URL at 1280×800 as webp and stores it", async () => {
+  it("screenshots the signed content URL at 1200×750 (the client's size) as webp and stores it", async () => {
     for (const format of ["html", "markdown", "code", "pdf"]) {
       const id = await pub(format, format === "pdf" ? "%PDF-1.4" : "x");
       const f = fake();
@@ -360,10 +360,10 @@ describe("captureThumbnail", () => {
       // Short-lived: well under the viewer's LIMITS.signedUrlTtlSec.
       const exp = Number(/\/c\/(\d+)\./.exec(u.pathname)?.[1]);
       expect(exp * 1000 - clock).toBeLessThanOrEqual(THUMB.urlTtlSec * 1000);
-      expect(f.viewport).toEqual({ width: 1280, height: 800 });
+      expect(f.viewport).toEqual({ width: 1200, height: 750 });
       expect(f.shots[0]).toMatchObject({
         format: "webp",
-        clip: { width: 1280, height: 800, scale: THUMB.scale },
+        clip: { width: 1200, height: 750, scale: 1 },
       });
       expect(f.shots[0]?.quality).toBeLessThanOrEqual(60);
       // No Network domain: its per-request events are most of puppeteer's CPU.
