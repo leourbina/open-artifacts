@@ -178,7 +178,7 @@ const isTokenRequest = (req: Request) =>
 
 /**
  * /oauth/token before the provider: bodies over 16 KB → 413 (a body without
- * Content-Length is read through a capped reader and re-attached), then
+ * a numeric Content-Length is read through a capped reader and re-attached), then
  * RL_ANON per IP (`tok:ip:<ipKey>`) on every request, revocations included:
  * keyed on the caller, it cannot drain anyone else's bucket. Without RL_ANON
  * it fails closed outside dev. The per-client limit runs inside the provider,
@@ -195,9 +195,9 @@ async function tokenGate(req: Request, env: Env): Promise<Request | Response> {
   const tooLarge = () =>
     tokenError(413, "invalid_request", "Token request body is too large");
   let gated = req;
-  if (req.headers.has("content-length")) {
-    if (Number(req.headers.get("content-length")) > MAX_TOKEN_BODY)
-      return tooLarge();
+  const declared = req.headers.get("content-length") ?? "";
+  if (/^\d+$/.test(declared)) {
+    if (Number(declared) > MAX_TOKEN_BODY) return tooLarge();
   } else {
     try {
       const body = await readCappedRequest(req, MAX_TOKEN_BODY);

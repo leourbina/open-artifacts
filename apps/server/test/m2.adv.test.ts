@@ -423,6 +423,34 @@ describe("M2 whole-track adversarial", () => {
     expect(statuses.slice(3)).toEqual([429, 429]);
   });
 
+  it("F3k a streamed token body under 16 KB without content-length reaches the provider", async () => {
+    const o = await oauth(`o3k-${tag}@x.com`);
+    const body = new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: o.refresh_token,
+      client_id: o.clientId,
+    }).toString();
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode(body));
+        c.close();
+      },
+    });
+    const r = new Request(`${APP}/oauth/token`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "cf-connecting-ip": nextIp(),
+      },
+      body: stream,
+      duplex: "half",
+    } as RequestInit);
+    expect(r.headers.get("content-length")).toBeNull();
+    const res = await w(r, E({ RL_ANON: limiter().RL_ANON }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toHaveProperty("refresh_token");
+  });
+
   it("F3j token bodies over 16 KB → 413, with or without content-length", async () => {
     const big = `grant_type=refresh_token&pad=${"x".repeat(17 * 1024)}`;
     const declared = await w(
