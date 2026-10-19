@@ -7,10 +7,13 @@ import {
   DataPatchBodySchema,
   type DataQueryInput,
   DataQuerySchema,
+  dataDocLimit,
+  dataDocTooLargeMessage,
   ERROR_CODES,
   type ErrorCode,
   LIMITS,
   type Page,
+  planOf,
   type StorageEntry,
   type StorageKey,
   StorageKeyNameSchema,
@@ -137,8 +140,11 @@ function limitOf(v: unknown): number {
   return v;
 }
 
-/** JSON text of a value and its UTF-8 size, enforcing LIMITS.docBytes. */
-function serialize(v: unknown): { json: string; bytes: number } {
+/** JSON text of a value and its UTF-8 size, enforcing the plan's data-doc `limit`. */
+function serialize(
+  v: unknown,
+  limit: DocLimit,
+): { json: string; bytes: number } {
   let json: string | undefined;
   try {
     json = JSON.stringify(v);
@@ -147,11 +153,14 @@ function serialize(v: unknown): { json: string; bytes: number } {
   }
   if (json === undefined) fail("bad_request", "value is not JSON-serializable");
   // UTF-16 length is a lower bound on UTF-8 bytes: skip encoding obviously oversize docs.
-  if (json.length > LIMITS.docBytes) fail("too_large", "document exceeds 1 MB");
+  if (json.length > limit.bytes) fail("too_large", limit.message);
   const bytes = enc.encode(json).length;
-  if (bytes > LIMITS.docBytes) fail("too_large", "document exceeds 1 MB");
+  if (bytes > limit.bytes) fail("too_large", limit.message);
   return { json, bytes };
 }
+
+/** A data doc's (or storage value's) byte limit and its 413 message. */
+type DocLimit = { bytes: number; message: string };
 
 /** A raw request body: UTF-8 bytes (preferred: no decode in the Worker) or text. */
 export type RawBody = ArrayBuffer | Uint8Array | string;
@@ -270,6 +279,12 @@ type SocketMeta = { t: number };
  */
 export class ArtifactRuntime extends DurableObject<Env> {
   private ready = false;
+
+  /** The data-doc limit of this instance's plan (env PLAN). */
+  private get docLimit(): DocLimit {
+    const plan = planOf(this.env.PLAN);
+    return { bytes: dataDocLimit(plan), message: dataDocTooLargeMessage(plan) };
+  }
 
   /** Clock; overridable in tests. */
   now: () => number = () => Date.now();
@@ -470,7 +485,7 @@ export class ArtifactRuntime extends DurableObject<Env> {
     data: unknown,
     actor: string,
   ): { doc: DataDoc; json: string } {
-    const { json, bytes } = serialize(data);
+    const { json, bytes } = serialize(data, this.docLimit);
     const updatedAt = this.writeJson(collection, id, json, bytes, actor);
     // The caller's value (already a structured-clone copy) is returned as-is: no re-parse.
     return {
@@ -482,12 +497,12 @@ export class ArtifactRuntime extends DurableObject<Env> {
   /**
    * Validates raw JSON text with SQLite's json_valid (one C pass; RFC 8259;
    * nesting capped at 1000) and returns it unchanged with its UTF-8 size.
-   * Too deep or malformed → bad_request; over LIMITS.docBytes → too_large.
+   * Too deep or malformed → bad_request; over the plan's doc limit → too_large.
    */
   private rawJson(body: RawBody): { json: string; bytes: number } {
     const bytes =
       typeof body === "string" ? enc.encode(body).length : body.byteLength;
-    if (bytes > LIMITS.docBytes) fail("too_large", "document exceeds 1 MB");
+    if (bytes > this.docLimit.bytes) fail("too_large", this.docLimit.message);
     const json = decodeBody(body);
     let ok = 0;
     try {
@@ -794,7 +809,7 @@ export class ArtifactRuntime extends DurableObject<Env> {
   ): { entry: StorageEntry; json: string } {
     const v = actorOf(viewer, "viewer");
     const k = storageKey(key);
-    const { json, bytes } = serialize(value);
+    const { json, bytes } = serialize(value, this.docLimit);
     const size = bytes + v.length + k.length + ROW_OVERHEAD;
     const updatedAt = this.iso();
     this.countWrite(v);

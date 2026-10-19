@@ -153,7 +153,7 @@ This mirrors how Claude Artifacts works.
   - `viewer.get()` returns `{ email, name }` or `null` for anonymous viewers.
   - `storage` holds per-viewer documents keyed by the viewer's identity. It's for things like "my checklist ticks".
 - **Write rules:** signed-in viewers with view access can read and write. Anonymous viewers of public artifacts can **read** shared data. They can write only if the publisher sets `allowAnonymousWrites`, and those writes are rate-limited per IP.
-- **Limits** (configurable): 1 MB per document, 50 MB per artifact database, 100 writes per minute per viewer.
+- **Limits** (configurable): one document is at most 256 KB on Workers Free and 1 MB on Paid (`dataDocLimit(plan)`, env `PLAN`), 50 MB per artifact database, 100 writes per minute per viewer.
 - **Versions and data:** data belongs to the artifact, not a version. A new version sees the same data.
 
 ### 6.8 Rendering by format
@@ -255,7 +255,8 @@ One master plan covers the whole system: `docs/superpowers/plans/2026-10-18-open
 - **Rate limits:**
   - Per-viewer write counters live in the artifact's Durable Object.
   - Anonymous per-IP limits use the Workers rate-limit binding.
-  - Defaults: 1 MB per doc, 50 MB per artifact, 100 writes per minute per viewer, 30 writes per minute per anonymous IP.
+  - Defaults: 256 KB per doc on Free, 1 MB on Paid, 50 MB per artifact, 100 writes per minute per viewer, 30 writes per minute per anonymous IP. Over the doc limit: 413 `too_large`, "Data docs are limited to 256 KB on this instance; Workers Paid allows 1 MB." Size is the UTF-8 bytes of the JSON as received (REST, whitespace included) or serialized (MCP, runtime bridge, merges).
+  - `/mcp` request bodies are capped before any parse: 320 KB on Free (`LIMITS.mcpBodyBytesFree`, 2 × the inline limit + 64 KB) and 1 MB + 64 KB on Paid (`mcpBodyBytesPaid`). Over it: HTTP 413 with a JSON-RPC error (-32000) giving the create_upload steps and the data-doc limit. `/healthz` reports `plan`.
 - **Releases:** llms.txt installs the **latest tagged release**, not `main`.
 - **Repo URL:** `https://github.com/open-artifacts-ai/open-artifacts` (user decision), defined once in `packages/shared/src/meta.ts`.
 

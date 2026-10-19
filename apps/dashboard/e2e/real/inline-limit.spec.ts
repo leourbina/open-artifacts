@@ -1,23 +1,24 @@
 /// <reference types="node" />
-// The inline publish limit (LIMITS.inlineBytes, 128 KB): an agent's 200 KB HTML
-// page is refused inline with the upload steps, then goes through them
-// (create_upload, PUT, publish_artifact with uploadId) and renders.
+// The inline publish limit (LIMITS.inlineBytes): an agent's HTML page 64 KB
+// over it is refused inline with the upload steps, then goes through them
+// (create_upload, PUT, publish_artifact with uploadId) and renders. Sized
+// from LIMITS, so the test follows the limit if it moves.
 import { LIMITS } from "@oa/shared";
 import { artifactFrame, expect, test, uniq } from "./fixtures";
 import { mcpWithToken } from "./mcp-client";
 
 /** About `bytes` of HTML with a known heading. */
-const page200k = (bytes: number) => {
+const htmlOf = (bytes: number) => {
   const head = '<!doctype html><meta charset="utf-8"><h1 id="t">Big page</h1>';
   const para = "<p>Quarterly figures, by region and by month.</p>\n";
   return head + para.repeat(Math.ceil((bytes - head.length) / para.length));
 };
 
-test("an agent's 200 KB HTML page goes through create_upload and renders", async ({
+test("an agent's HTML page over the inline limit goes through create_upload and renders", async ({
   page,
   member,
 }) => {
-  const html = page200k(200 * 1024);
+  const html = htmlOf(LIMITS.inlineBytes + 64 * 1024);
   const bytes = new TextEncoder().encode(html);
   expect(bytes.length).toBeGreaterThan(LIMITS.inlineBytes);
   const agent = await mcpWithToken(member.pat);

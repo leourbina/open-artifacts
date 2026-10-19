@@ -15,7 +15,7 @@ describe("skeleton", () => {
   it("GET /healthz on app host", async () => {
     const res = await call(`${APP}/healthz`);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true });
+    expect(await res.json()).toEqual({ ok: true, plan: "free" });
   });
 
   for (const base of [APP, CONTENT]) {

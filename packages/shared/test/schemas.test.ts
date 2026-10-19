@@ -6,13 +6,18 @@ import {
   ArtifactPatchSchema,
   CapabilitiesPatchSchema,
   DataQuerySchema,
+  dataDocLimit,
+  dataDocTooLargeMessage,
   ERROR_CODES,
   INLINE_TOO_LARGE_MESSAGE,
   LIMITS,
   ListQuerySchema,
+  mcpBodyLimit,
+  mcpTooLargeMessage,
   PageSchema,
   PublishInputSchema,
   PublishToolInputSchema,
+  planOf,
   R,
   STATUS_FOR,
   UsageSchema,
@@ -380,5 +385,36 @@ describe("UsageSchema", () => {
         metrics: [{ key: "cpu_nope", used: 1, limit: 0 }],
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("plan-aware limits", () => {
+  it('PLAN: "paid" (trimmed, any case) is paid; unset or anything else is free', () => {
+    for (const v of ["paid", "PAID", " Paid\n"]) expect(planOf(v)).toBe("paid");
+    for (const v of [undefined, null, "", "free", "pro", "paid-ish", 1])
+      expect(planOf(v)).toBe("free");
+  });
+  it("data docs: 256 KB on Free, 1 MB on Paid; docBytes is the Paid alias", () => {
+    expect(LIMITS.dataDocBytesFree).toBe(256 * 1024);
+    expect(LIMITS.dataDocBytesPaid).toBe(1024 * 1024);
+    expect(LIMITS.docBytes).toBe(LIMITS.dataDocBytesPaid);
+    expect(dataDocLimit("free")).toBe(256 * 1024);
+    expect(dataDocLimit("paid")).toBe(1024 * 1024);
+    expect(dataDocTooLargeMessage("free")).toBe(
+      "Data docs are limited to 256 KB on this instance; Workers Paid allows 1 MB.",
+    );
+  });
+  it("/mcp body: Free = 2 × inline + 64 KB (320 KB), Paid = Paid doc + 64 KB", () => {
+    expect(LIMITS.mcpBodyBytesFree).toBe(2 * LIMITS.inlineBytes + 64 * 1024);
+    expect(LIMITS.mcpBodyBytesFree).toBe(320 * 1024);
+    expect(LIMITS.mcpBodyBytesPaid).toBe(LIMITS.dataDocBytesPaid + 64 * 1024);
+    expect(mcpBodyLimit("free")).toBe(LIMITS.mcpBodyBytesFree);
+    expect(mcpBodyLimit("paid")).toBe(LIMITS.mcpBodyBytesPaid);
+    const m = mcpTooLargeMessage("free");
+    expect(m).toContain("320 KB");
+    expect(m).toContain("create_upload({ path, size, contentType })");
+    expect(m).toContain(
+      "Data docs on this instance are limited to 256 KB; clients that escape non-ASCII as \\u inflate the request, so send UTF-8 or use the REST data API. Workers Paid allows 1 MB.",
+    );
   });
 });

@@ -1,6 +1,11 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { DataChangeSchema, type DataDoc, LIMITS } from "@oa/shared";
+import {
+  DataChangeSchema,
+  type DataDoc,
+  dataDocLimit,
+  LIMITS,
+} from "@oa/shared";
 import { describe, expect, it } from "vitest";
 import { ApiError } from "../src/http/errors.js";
 import {
@@ -11,6 +16,7 @@ import {
   runtimeStub,
   toRuntimeApiError,
 } from "../src/runtime/do.js";
+import { doAsPaid } from "./helpers.js";
 
 let seq = 0;
 const stubFor = (name = `rt-${++seq}-${Math.random()}`) =>
@@ -150,16 +156,21 @@ describe("ArtifactRuntime docs", () => {
 });
 
 describe("ArtifactRuntime limits", () => {
-  it("doc over 1 MB (UTF-8) is too_large; exactly 1 MB is ok", async () => {
-    const s = stubFor();
-    // JSON.stringify("x...") adds 2 quote bytes.
-    const ok = "x".repeat(LIMITS.docBytes - 2);
-    await s.set("v", "ok", ok, "u:1");
-    expect(await codeOf(s.set("v", "big", `${ok}x`, "u:1"))).toBe("too_large");
-    // Multibyte: 2-byte chars count as 2.
-    const mb = "é".repeat(LIMITS.docBytes / 2);
-    expect(await codeOf(s.set("v", "mb", mb, "u:1"))).toBe("too_large");
-  });
+  for (const plan of ["free", "paid"] as const)
+    it(`${plan}: a doc over ${dataDocLimit(plan) / 1024} KB (UTF-8) is too_large; exactly at it is ok`, async () => {
+      const s = stubFor();
+      if (plan === "paid") await doAsPaid(s);
+      const limit = dataDocLimit(plan);
+      // JSON.stringify("x...") adds 2 quote bytes.
+      const ok = "x".repeat(limit - 2);
+      await s.set("v", "ok", ok, "u:1");
+      expect(await codeOf(s.set("v", "big", `${ok}x`, "u:1"))).toBe(
+        "too_large",
+      );
+      // Multibyte: 2-byte chars count as 2.
+      const mb = "é".repeat(limit / 2);
+      expect(await codeOf(s.set("v", "mb", mb, "u:1"))).toBe("too_large");
+    });
 
   it("tracks total bytes transactionally and rejects over artifactDataBytes", async () => {
     const s = stubFor();

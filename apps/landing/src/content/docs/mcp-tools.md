@@ -52,6 +52,8 @@ Inline `content` and `files` are capped at {LIMIT_INLINE} in total. Send anythin
 
 An upload is used once. One that's never published is deleted by the daily cleanup once it's older than {LIMIT_UPLOAD_TTL}.
 
+On Workers Free, an MCP request larger than {LIMIT_MCP_BODY_FREE} is refused before it's read, with a message pointing to `create_upload` (Workers Paid allows {LIMIT_MCP_BODY_PAID}). This also affects live-page data written with `artifact_data_set` or `artifact_data_update`. JSON escaping can double a quote- or backslash-heavy document, so one close to the {LIMIT_DATA_DOC_FREE} data-document limit can push the MCP request over {LIMIT_MCP_BODY_FREE}, even though the REST API accepts the same document.
+
 ## Search freshness
 
 Search indexes each publish asynchronously, so a new version becomes searchable with `search_artifacts` within about {LIMIT_INDEX_LAG} of being published. Until then, search matches the previous version's text. Only the first {LIMIT_INDEX_TEXT} of an artifact's entry file is indexed; text past that isn't searchable. To find something you just published, use `get_artifact` or `list_artifacts`.
