@@ -5,7 +5,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { extname, join, resolve } from "node:path";
-import { type Browser, chromium, webkit } from "playwright";
+import { type Browser, type BrowserType, chromium, webkit } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const dist = resolve(import.meta.dirname, "../dist");
@@ -18,6 +18,26 @@ const TYPES: Record<string, string> = {
   ".png": "image/png",
 };
 const WIDTHS = [390, 1280, 1440, 1920];
+
+// Mirrors packages/ui/test-browser/harness.ts: the browser runs as a server so
+// teardown has its process. Closing can stall on a loaded runner, so it gets
+// 5s before the process is killed; afterAll allows 15s.
+async function launch(engine: BrowserType) {
+  const server = await engine.launchServer();
+  const browser = await engine.connect(server.wsEndpoint());
+  const close = async () => {
+    let timer: NodeJS.Timeout | undefined;
+    const closed = await Promise.race([
+      server.close().then(() => true),
+      new Promise<false>((r) => {
+        timer = setTimeout(() => r(false), 5_000);
+      }),
+    ]);
+    clearTimeout(timer);
+    if (!closed) await server.kill();
+  };
+  return { browser, close };
+}
 
 let server: Server;
 let base: string;
@@ -43,10 +63,11 @@ describe.each([
   ["webkit", webkit],
 ])("%s: no horizontal overflow on the index", (_, engine) => {
   let browser: Browser;
+  let close = async () => {};
   beforeAll(async () => {
-    browser = await engine.launch();
+    ({ browser, close } = await launch(engine));
   });
-  afterAll(() => browser?.close());
+  afterAll(() => close(), 15_000);
 
   for (const scheme of ["light", "dark"] as const)
     it.each(WIDTHS)(`${scheme} at %ipx`, async (width) => {
