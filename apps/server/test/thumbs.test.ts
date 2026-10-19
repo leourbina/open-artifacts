@@ -26,7 +26,6 @@ import {
 import {
   captureThumbnail,
   THUMB,
-  type ThumbLaunch,
   type ThumbResult,
 } from "../src/services/thumbs.js";
 import { getUser } from "../src/services/users.js";
@@ -40,8 +39,8 @@ const tag = newId().slice(0, 6).toLowerCase();
 let owner: Member;
 let cookie: string;
 const app = createApp();
-const BROWSER = {} as Fetcher;
-const withBrowser = { ...(env as Env), BROWSER } as Env;
+/** env with a BROWSER binding (a placeholder; captures pass their fake's). */
+const withBrowser = { ...(env as Env), BROWSER: {} as Fetcher } as Env;
 const key = (id: string) => `thumbs/${id}.webp`;
 
 const webp = (n: number) => {
@@ -60,131 +59,182 @@ const b64 = (b: Uint8Array) => {
 
 type Req = { url: string; nav: boolean; main: boolean };
 type Fake = {
-  launch: ThumbLaunch;
+  /** The BROWSER binding: Browser Run's acquire + DevTools websocket. */
+  binding: Fetcher;
   launched: number;
   closed: number;
   goto: string[];
   viewport: unknown;
-  shots: { type: string; quality: number; encoding: string }[];
+  /** Fetch.enable patterns: which requests the capture intercepts. */
+  patterns: unknown;
+  shots: { format: string; quality: number; clip: { scale: number } }[];
   aborted: string[];
   continued: string[];
-  /** waitForFunction predicates, then how often the idle fallback ran. */
+  /** Readiness polls (Runtime.evaluate), then how often the settle fallback ran. */
   waited: string[];
   idled: number;
+  /** Every CDP method the capture sent, in order. */
+  methods: string[];
 };
 
 /**
- * A puppeteer-shaped browser. `goto` replays `requests` (the first is the
- * navigation itself) through the page's request handler, then `afterGoto`.
+ * A Browser Run binding speaking enough CDP for a capture. Page.navigate
+ * replays `requests` (the first is the navigation itself) as Fetch.requestPaused
+ * for documents (all the capture intercepts), waiting for each answer.
  */
 function fake(
   o: {
     requests?: (url: string) => Req[];
     sizes?: number[];
-    launchError?: Error;
+    /** The acquire answers with this status, or the binding throws it. */
+    launchError?: Error | { status: number; text: string };
+    /** Page.navigate answers with this CDP error. */
     gotoError?: Error;
-    /** goto takes this long, then times out (like puppeteer past its timeout). */
-    gotoTimeoutAfterMs?: number;
+    /** The load event never comes (navigation runs past its budget). */
+    noLoad?: boolean;
+    /** Page.navigate never answers. */
     hang?: boolean;
     onShot?: () => Promise<void>;
-    /** false: the readiness signal never comes (waitForFunction times out). */
+    /** false: the readiness signal never comes. */
     ready?: boolean;
   } = {},
 ): Fake {
+  const sizes = [...(o.sizes ?? [10_000])];
+  const listeners = new Map<string, ((e: { data: string }) => void)[]>();
+  const emit = (m: unknown) =>
+    setTimeout(() => {
+      for (const h of listeners.get("message") ?? [])
+        h({ data: JSON.stringify(m) });
+    }, 0);
+  const waiting = new Map<string, (failed: boolean) => void>();
+  const TARGET = "T1";
+  const SESSION = "S1";
+  let req = 0;
+  const pause = (r: Req) =>
+    new Promise<boolean>((resolve) => {
+      const requestId = `r${++req}`;
+      waiting.set(requestId, resolve);
+      emit({
+        method: "Fetch.requestPaused",
+        sessionId: SESSION,
+        params: {
+          requestId,
+          request: { url: r.url },
+          frameId: r.main ? TARGET : "F2",
+          resourceType: r.nav ? "Document" : "Script",
+        },
+      });
+    });
+  const reply = (id: number, result: unknown) => emit({ id, result });
+  const onCommand = async (m: {
+    id: number;
+    method: string;
+    params: Record<string, unknown>;
+  }) => {
+    f.methods.push(m.method);
+    const p = m.params;
+    switch (m.method) {
+      case "Target.createTarget":
+        return reply(m.id, { targetId: TARGET });
+      case "Target.attachToTarget":
+        return reply(m.id, { sessionId: SESSION });
+      case "Emulation.setDeviceMetricsOverride":
+        f.viewport = { width: p.width, height: p.height };
+        return reply(m.id, {});
+      case "Fetch.enable":
+        f.patterns = p.patterns;
+        return reply(m.id, {});
+      case "Fetch.continueRequest":
+      case "Fetch.failRequest": {
+        const failed = m.method === "Fetch.failRequest";
+        waiting.get(String(p.requestId))?.(failed);
+        return reply(m.id, {});
+      }
+      case "Page.navigate": {
+        const u = String(p.url);
+        f.goto.push(u);
+        if (o.hang) return;
+        if (o.gotoError)
+          return emit({ id: m.id, error: { message: o.gotoError.message } });
+        const reqs = (
+          o.requests ?? ((x) => [{ url: x, nav: true, main: true }])
+        )(u);
+        const docs = reqs.filter((r) => r.nav);
+        let first = true;
+        for (const r of docs) {
+          const failed = await pause(r);
+          (failed ? f.aborted : f.continued).push(r.url);
+          if (first && failed)
+            return reply(m.id, { errorText: "net::ERR_BLOCKED_BY_CLIENT" });
+          if (first) reply(m.id, { frameId: TARGET });
+          first = false;
+        }
+        if (!o.noLoad)
+          emit({
+            method: "Page.loadEventFired",
+            sessionId: SESSION,
+            params: {},
+          });
+        return;
+      }
+      case "Runtime.evaluate": {
+        const e = String(p.expression);
+        if (e.includes("getEntriesByType")) {
+          f.idled++;
+          return reply(m.id, { result: { value: true } });
+        }
+        f.waited.push(e);
+        return reply(m.id, { result: { value: o.ready !== false } });
+      }
+      case "Page.captureScreenshot": {
+        f.shots.push(p as never);
+        await o.onShot?.();
+        return reply(m.id, { data: b64(webp(sizes.shift() ?? 10_000)) });
+      }
+      case "Browser.close":
+        f.closed++;
+        return reply(m.id, {});
+      default:
+        return reply(m.id, {});
+    }
+  };
+  const socket = {
+    accept() {},
+    addEventListener(t: string, h: (e: { data: string }) => void) {
+      listeners.set(t, [...(listeners.get(t) ?? []), h]);
+    },
+    send(msg: string) {
+      void onCommand(JSON.parse(msg));
+    },
+    close() {},
+  };
   const f: Fake = {
     launched: 0,
     closed: 0,
     goto: [],
     viewport: null,
+    patterns: null,
     shots: [],
     aborted: [],
     continued: [],
     waited: [],
     idled: 0,
-    launch: async (b) => {
-      expect(b).toBe(BROWSER);
-      if (o.launchError) throw o.launchError;
-      f.launched++;
-      return browser;
-    },
-  };
-  const sizes = [...(o.sizes ?? [10_000])];
-  const handlers = new Map<string, (x: never) => void>();
-  const main = {};
-  let url = "about:blank";
-  const page = {
-    setViewport: async (v: unknown) => {
-      f.viewport = v;
-    },
-    setRequestInterception: async () => {},
-    setJavaScriptEnabled: async () => {},
-    on: (ev: string, h: (x: never) => void) => {
-      handlers.set(ev, h);
-      return page;
-    },
-    mainFrame: () => main,
-    url: () => url,
-    goto: async (u: string) => {
-      f.goto.push(u);
-      let blocked = false;
-      for (const r of (
-        o.requests ?? ((x) => [{ url: x, nav: true, main: true }])
-      )(u)) {
-        handlers.get("request")?.({
-          url: () => r.url,
-          isNavigationRequest: () => r.nav,
-          frame: () => (r.main ? main : {}),
-          isInterceptResolutionHandled: () => false,
-          abort: async () => {
-            f.aborted.push(r.url);
-            if (r.nav && r.main) blocked = true;
-          },
-          continue: async () => {
-            f.continued.push(r.url);
-            if (r.nav && r.main) url = r.url;
-          },
-        } as never);
-      }
-      if (blocked) throw new Error("net::ERR_BLOCKED_BY_CLIENT");
-      if (o.hang) await new Promise(() => {});
-      if (o.gotoError) throw o.gotoError;
-      if (o.gotoTimeoutAfterMs !== undefined) {
-        await new Promise((r) => setTimeout(r, o.gotoTimeoutAfterMs));
-        const e = new Error("Navigation timeout");
-        e.name = "TimeoutError";
-        throw e;
-      }
-      return null;
-    },
-    waitForFunction: async (fn: string, w: { timeout: number }) => {
-      f.waited.push(fn);
-      expect(w.timeout).toBeLessThanOrEqual(THUMB.navigationMs);
-      // puppeteer: timeout 0 disables the timeout, so it waits forever.
-      if (w.timeout === 0) await new Promise(() => {});
-      if (o.ready === false) {
-        const e = new Error("Waiting failed");
-        e.name = "TimeoutError";
-        throw e;
-      }
-    },
-    waitForNetworkIdle: async () => {
-      f.idled++;
-    },
-    screenshot: async (opts: {
-      type: string;
-      quality: number;
-      encoding: string;
-    }) => {
-      f.shots.push(opts);
-      await o.onShot?.();
-      return b64(webp(sizes.shift() ?? 10_000));
-    },
-  };
-  const browser = {
-    newPage: async () => page,
-    close: async () => {
-      f.closed++;
-    },
+    methods: [],
+    binding: {
+      fetch: async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST") {
+          expect(url).toBe("https://fake.host/v1/devtools/browser");
+          const err = o.launchError;
+          if (err instanceof Error) throw err;
+          if (err) return new Response(err.text, { status: err.status });
+          f.launched++;
+          return Response.json({ sessionId: "sess-1" });
+        }
+        expect(url).toBe("https://fake.host/v1/devtools/browser/sess-1");
+        expect(new Headers(init?.headers).get("upgrade")).toBe("websocket");
+        return { status: 101, webSocket: socket } as unknown as Response;
+      },
+    } as unknown as Fetcher,
   };
   return f;
 }
@@ -250,8 +300,9 @@ const next = () => {
   clock += THUMB.launchGapMs;
   return clock;
 };
-const capture = (id: string, v: number, f: Fake, e: Env = withBrowser) =>
-  captureThumbnail(e, id, v, { launch: f.launch, now: next() });
+const on = (f: Fake) => ({ ...(env as Env), BROWSER: f.binding }) as Env;
+const capture = (id: string, v: number, f: Fake, e: Env = on(f)) =>
+  captureThumbnail(e, id, v, { now: next() });
 
 beforeAll(async () => {
   const l = await login(`thumbs-${tag}@x.com`);
@@ -290,7 +341,13 @@ describe("captureThumbnail", () => {
       const exp = Number(/\/c\/(\d+)\./.exec(u.pathname)?.[1]);
       expect(exp * 1000 - clock).toBeLessThanOrEqual(THUMB.urlTtlSec * 1000);
       expect(f.viewport).toEqual({ width: 1280, height: 800 });
-      expect(f.shots[0]).toMatchObject({ type: "webp", encoding: "base64" });
+      expect(f.shots[0]).toMatchObject({
+        format: "webp",
+        clip: { width: 1280, height: 800, scale: THUMB.scale },
+      });
+      expect(f.shots[0]?.quality).toBeLessThanOrEqual(60);
+      // No Network domain: its per-request events are most of puppeteer's CPU.
+      expect(f.methods.some((m) => m.startsWith("Network."))).toBe(false);
       expect(f.closed).toBe(1);
       expect(await hasThumb(id)).toBe(1);
       const obj = await env.FILES.head(key(id));
@@ -311,8 +368,10 @@ describe("captureThumbnail", () => {
     });
     expect(await capture(id, 1, f)).toBe("failed");
     expect(f.aborted).toEqual(["https://evil.example/"]);
-    expect(f.continued).toContain("https://cdn.example/x.js");
+    // Only documents are intercepted: subresources follow the CSP untouched.
+    expect(f.patterns).toEqual([{ urlPattern: "*", resourceType: "Document" }]);
     expect(f.continued).toContain("https://frame.example/");
+    expect(f.continued).not.toContain("https://cdn.example/x.js");
     expect(f.shots).toHaveLength(0);
     expect(f.closed).toBe(1);
     expect(await hasThumb(id)).toBe(0);
@@ -324,11 +383,7 @@ describe("captureThumbnail", () => {
     const f = fake({ hang: true });
     const t0 = Date.now();
     expect(
-      await captureThumbnail(withBrowser, id, 1, {
-        launch: f.launch,
-        now: next(),
-        totalMs: 50,
-      }),
+      await captureThumbnail(on(f), id, 1, { now: next(), totalMs: 50 }),
     ).toBe("failed");
     expect(Date.now() - t0).toBeLessThan(2_000);
     expect(f.closed).toBe(1);
@@ -357,11 +412,8 @@ describe("captureThumbnail", () => {
   });
 
   it("stops the day on each quota signal: 429 status, 429 text, time limit exceeded", async () => {
-    const status429 = Object.assign(new Error("Unable to create new browser"), {
-      status: 429,
-    });
     for (const err of [
-      status429,
+      { status: 429, text: "Too Many Requests" },
       new Error("code: 429: Too Many Requests"),
       new Error("Browser time limit exceeded for today"),
     ]) {
@@ -378,10 +430,9 @@ describe("captureThumbnail", () => {
 
   it("a goto that uses up the navigation budget is shot as it is (no 0 ms = endless wait)", async () => {
     const id = await pub("markdown", "x");
-    const f = fake({ gotoTimeoutAfterMs: 30 });
+    const f = fake({ noLoad: true });
     expect(
-      await captureThumbnail(withBrowser, id, 1, {
-        launch: f.launch,
+      await captureThumbnail(on(f), id, 1, {
         now: next(),
         navigationMs: 20,
         totalMs: 3_000,
@@ -544,15 +595,10 @@ describe("captureThumbnail", () => {
     const b = await pub();
     const t = next();
     const f = fake();
-    expect(
-      await captureThumbnail(withBrowser, a, 1, { launch: f.launch, now: t }),
-    ).toBe("stored");
-    expect(
-      await captureThumbnail(withBrowser, b, 1, {
-        launch: f.launch,
-        now: t + 1_000,
-      }),
-    ).toBe("deferred");
+    expect(await captureThumbnail(on(f), a, 1, { now: t })).toBe("stored");
+    expect(await captureThumbnail(on(f), b, 1, { now: t + 1_000 })).toBe(
+      "deferred",
+    );
     expect(f.launched).toBe(1);
   });
 });
