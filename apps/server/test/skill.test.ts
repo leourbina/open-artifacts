@@ -195,6 +195,14 @@ describe("skill.md drift", () => {
     });
   }
 
+  it("says artifacts can link to each other, in the skill and INSTRUCTIONS", async () => {
+    const line =
+      'Artifacts can link to each other: use the other artifact\'s view URL (<origin>/a/<id>, the url publish_artifact returns, also shown by get_artifact) with target="_blank" rel="noopener". It opens in a new tab in the viewer, where live data works. Whether a visitor can open it depends on that artifact\'s own visibility.';
+    expect(await skill()).toContain(line);
+    expect(INSTRUCTIONS("free")).toContain(line);
+    expect(line).not.toContain("\u2014");
+  });
+
   it("states the effective data-doc limit when DATA_DOC_BYTES overrides it", async () => {
     const md = await skill(
       E({ PLAN: "paid", DATA_DOC_BYTES: String(1536 * 1024) }),

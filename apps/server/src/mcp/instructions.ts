@@ -71,6 +71,7 @@ export const SECTIONS = {
 - Several files: publish_artifact { title, entry: "index.html", files: { "index.html": "...", "app.js": "...", "img/logo.png": { "base64": "..." } } }.
 - Paths are relative, use "/" and are case-sensitive; link between files with relative URLs.
 - Open outbound links with target="_blank" rel="noopener"; links can't navigate the viewer page.
+- Artifacts can link to each other: use the other artifact's view URL (<origin>/a/<id>, the url publish_artifact returns, also shown by get_artifact) with target="_blank" rel="noopener". It opens in a new tab in the viewer, where live data works. Whether a visitor can open it depends on that artifact's own visibility.
 - Text files are plain strings; binary files are { "base64": "..." }.
 - To publish a new version, pass the artifact's id; every publish creates a version and the URL stays the same.
 - Add a short message describing the change. New artifacts get the instance's default visibility (private unless an admin chose team).`,
