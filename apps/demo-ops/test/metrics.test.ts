@@ -329,21 +329,18 @@ describe("hourlyNext", () => {
     });
   });
 
-  it("treats an invalid doc as fresh (adds 0, overwritten)", () => {
+  it("a bad h resets the whole day: fresh baseline, adds 0, overwritten", () => {
     const good = () => doc({ votes: 1 });
     const bad: unknown[] = [
       {},
       "x",
+      null,
       { ...good(), h: Array(25).fill(0) },
       { ...good(), h: Array(23).fill(0) },
       { ...good(), h: zero().map((_, i) => (i === 3 ? -1 : 0)) },
       { ...good(), h: zero().map((_, i) => (i === 3 ? 1.5 : 0)) },
       { ...good(), h: zero().map((_, i) => (i === 3 ? 1e7 + 1 : 0)) },
-      { ...good(), last: { votes: -1 } },
-      { ...good(), last: { votes: 1.5 } },
-      { ...good(), last: { votes: Number.NaN } },
-      { ...good(), last: "x" },
-      { ...good(), last: null },
+      { ...good(), h: "x" },
     ];
     for (const b of bad) {
       const n = hourlyNext(b, D, H, { votes: 500 });
@@ -356,6 +353,46 @@ describe("hourlyNext", () => {
     // 1e7 itself is allowed
     const edge = { ...good(), h: zero().map((_, i) => (i === 3 ? 1e7 : 0)) };
     expect(hourlyNext(edge, D, H, { votes: 2 })?.h[3]).toBe(1e7);
+  });
+
+  it("a valid h with a bad last keeps h and resets only the baselines (adds 0)", () => {
+    const h = zero().map((_, i) => i * 3);
+    const bad: unknown[] = [
+      { h, last: { votes: -1 }, lastDay: D },
+      { h, last: { votes: 1.5 }, lastDay: D },
+      { h, last: { votes: Number.NaN }, lastDay: D },
+      { h, last: "x", lastDay: D },
+      { h, last: null, lastDay: D },
+      { h, lastDay: D }, // last missing
+      { h, last: [1, 2], lastDay: D },
+    ];
+    for (const b of bad) {
+      const n = hourlyNext(b, D, H, { votes: 500, pins: 4 });
+      expect(n, JSON.stringify(b)).toEqual({
+        h,
+        last: { votes: 500, pins: 4 },
+        lastDay: D,
+      });
+    }
+    // with nothing available the repaired doc is still written (last emptied)
+    expect(hourlyNext({ h, last: "x", lastDay: D }, D, H, {})).toEqual({
+      h,
+      last: {},
+      lastDay: D,
+    });
+  });
+
+  it("a valid h under another day's lastDay still resets the day", () => {
+    const h = zero().map(() => 4);
+    expect(
+      hourlyNext({ h, last: { votes: 1 }, lastDay: "20261019" }, D, H, {
+        votes: 5,
+      }),
+    ).toEqual({
+      h: zero(),
+      last: { votes: 5 },
+      lastDay: D,
+    });
   });
 
   it("sum helper sanity", () => {

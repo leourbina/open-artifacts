@@ -665,17 +665,30 @@ describe("hourly", () => {
     ).toHaveLength(1);
   });
 
-  it("treats an invalid stored doc as fresh and overwrites it", async () => {
+  it("a bad stored h resets the day; a bad last keeps h and resets only the baselines", async () => {
     for (const bad of [
       { h: Array(25).fill(0), last: { votes: 1 }, lastDay: DAY },
       { h: Array(24).fill(2e7), last: { votes: 1 }, lastDay: DAY },
-      { h: Array(24).fill(0), last: { votes: -4 }, lastDay: DAY },
     ]) {
       const w = full();
       w.doc(DASH, "stats", `hourly-${DAY}`, bad);
       await run(w);
       expect(hourly(w).h).toEqual(Array(24).fill(0));
       expect(hourly(w).last.votes).toBe(7);
+    }
+    const h = Array.from({ length: 24 }, (_, i) => i);
+    for (const last of [{ votes: -4 }, "x", { votes: 1.5 }]) {
+      const w = full();
+      w.doc(DASH, "stats", `hourly-${DAY}`, { h, last, lastDay: DAY });
+      await run(w);
+      expect(hourly(w).h).toEqual(h); // history kept, nothing added
+      expect(hourly(w).last).toEqual({
+        votes: 7,
+        tictactoe: 3,
+        chess: 2,
+        pixels: 3,
+        pins: 5,
+      });
     }
   });
 

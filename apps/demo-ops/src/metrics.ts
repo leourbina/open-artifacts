@@ -133,21 +133,22 @@ export const DELTA_CAP = 5000;
 const isNat = (v: unknown): v is number =>
   typeof v === "number" && Number.isInteger(v) && v >= 0;
 
-const validHourly = (v: unknown, day: string): v is Hourly =>
-  isObj(v) &&
-  v.lastDay === day &&
-  Array.isArray(v.h) &&
-  v.h.length === 24 &&
-  v.h.every((x) => isNat(x) && x <= HOURLY_CELL_MAX) &&
-  isObj(v.last) &&
-  Object.values(v.last).every(isNat);
+/** `h` is exactly 24 non-negative ints, each at most HOURLY_CELL_MAX. */
+const validH = (v: unknown): v is number[] =>
+  Array.isArray(v) &&
+  v.length === 24 &&
+  v.every((x) => isNat(x) && x <= HOURLY_CELL_MAX);
+
+const validLast = (v: unknown): v is Hourly["last"] =>
+  isObj(v) && Object.values(v).every(isNat);
 
 /**
  * The next hourly doc. Each metric adds its own change since the last tick to the current
  * UTC hour (clamped at 0, capped at DELTA_CAP), but only when it is available now and was
  * in the previous doc: a metric that was down has no baseline when it returns, so there is
- * no spike. A missing, invalid or other-day doc is a fresh baseline (adds nothing).
- * Returns null when there is nothing to write (a valid doc and no metric available).
+ * no spike. A missing doc, another day, or a bad `h` resets the day (fresh baseline, adds
+ * nothing). A good `h` with bad `last` baselines keeps the history and only resets the
+ * baselines. Returns null when there is nothing to write (a valid doc, no metric available).
  */
 export function hourlyNext(
   prev: unknown,
@@ -157,14 +158,15 @@ export function hourlyNext(
 ): Hourly | null {
   const last: Hourly["last"] = {};
   for (const m of METRICS) if (cur[m] !== undefined) last[m] = cur[m];
-  const valid = validHourly(prev, day);
-  if (!valid) return { h: Array(24).fill(0), last, lastDay: day };
+  if (!isObj(prev) || prev.lastDay !== day || !validH(prev.h))
+    return { h: Array(24).fill(0), last, lastDay: day };
+  if (!validLast(prev.last)) return { h: [...prev.h], last, lastDay: day };
   if (!Object.keys(last).length) return null;
   const h = [...prev.h];
   let add = 0;
   for (const m of METRICS) {
     const now = cur[m];
-    const was = prev.last[m];
+    const was = (prev.last as Hourly["last"])[m];
     if (now === undefined || was === undefined) continue;
     add += Math.min(DELTA_CAP, Math.max(0, now - was));
   }
