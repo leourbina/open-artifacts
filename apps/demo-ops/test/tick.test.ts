@@ -44,6 +44,7 @@ class World {
   fail = new Set<string>(); // path substrings that answer 500
   hang = new Set<string>(); // path substrings that never answer
   big = new Set<string>(); // path substrings that answer over 512 KB
+  noAccess = new Set<string>(); // artifact ids that answer 404 to everything
   calls: Call[] = [];
   set(id: string, col: string, docs: Doc[]) {
     this.cols.set(`${id}/${col}`, docs);
@@ -90,9 +91,21 @@ class World {
             return new Response("{}", {
               headers: { "content-length": String(600 * 1024) },
             });
+        const cm = u.pathname.match(
+          /^\/api\/v1\/artifacts\/([^/]+)\/data-count\/([^/]+)$/,
+        );
+        if (cm) {
+          if (!this.count || this.noAccess.has(cm[1] as string))
+            return new Response("nf", { status: 404 });
+          return Response.json({
+            count: this.cols.get(`${cm[1]}/${cm[2]}`)?.length ?? 0,
+          });
+        }
         const m = u.pathname.match(
           /^\/api\/v1\/artifacts\/([^/]+)\/data\/([^/]+)(?:\/([^/]+))?$/,
         );
+        if (m && this.noAccess.has(m[1] as string))
+          return new Response("nf", { status: 404 });
         if (!m) return new Response("nope", { status: 404 });
         const [, id, col, doc] = m as [
           string,
@@ -110,10 +123,6 @@ class World {
           return Response.json({ ok: true });
         }
         const list = this.cols.get(k);
-        if (doc === "count") {
-          if (!this.count) return new Response("nf", { status: 404 });
-          return Response.json({ count: list?.length ?? 0 });
-        }
         if (doc) {
           const d = list?.find((x) => x.id === doc);
           return d
@@ -307,21 +316,62 @@ describe("counting", () => {
     await run(w);
     expect((w.stat("today") as { votes: number }).votes).toBe(7);
     expect(
-      w.gets().some((c) => c.path.endsWith(`/data/votes-${DAY}/count`)),
+      w.gets().some((c) => c.path.endsWith(`/data-count/votes-${DAY}`)),
     ).toBe(true);
     expect(w.gets().some((c) => c.path.endsWith(`/data/votes-${DAY}`))).toBe(
       false,
     );
   });
 
-  it("falls back to paging when the count endpoint is absent (404), probing once", async () => {
+  it("falls back to paging when the count endpoint answers 404", async () => {
     const w = full();
     await run(w);
     expect((w.stat("today") as { votes: number }).votes).toBe(7);
-    expect(w.gets().filter((c) => c.path.endsWith("/count"))).toHaveLength(1);
+    expect(
+      w.gets().filter((c) => c.path.includes("/data-count/")),
+    ).toHaveLength(2); // votes, pins
     expect(w.gets().some((c) => c.path.endsWith(`/data/votes-${DAY}`))).toBe(
       true,
     );
+  });
+
+  it("re-probes the count endpoint every tick (an absence is not cached)", async () => {
+    const w = full();
+    await run(w);
+    await run(w);
+    expect(
+      w.gets().filter((c) => c.path.includes("/data-count/")),
+    ).toHaveLength(4);
+    w.count = true;
+    const before = w.calls.length;
+    await run(w);
+    const t = w.stat("today") as { votes: number };
+    expect(t.votes).toBe(7);
+    expect(
+      w.calls.slice(before).some((c) => c.path.endsWith(`/data/votes-${DAY}`)),
+    ).toBe(false);
+  });
+
+  it("when count and paging both 404, the metric is missing (not a real 0), logged once", async () => {
+    const w = full();
+    w.noAccess.add(POLL);
+    w.noAccess.add(MAP);
+    const logs = quiet();
+    await run(w);
+    const t = w.stat("today") as {
+      votes: number;
+      pins: number;
+      missing: string[];
+      failed: string[];
+    };
+    expect(t.votes).toBe(0);
+    expect(t.pins).toBe(0);
+    expect([...t.missing].sort()).toEqual(["map", "poll"]);
+    expect(t.failed).toEqual([]);
+    expect(
+      logs.filter((l) => l.includes("not found or no access")),
+    ).toHaveLength(1);
+    for (const l of logs) expect(l).not.toContain(TOKEN);
   });
 
   it("pages at most 2 x 200 and marks the metric truncated", async () => {

@@ -69,8 +69,6 @@ type Ctx = {
   signal: AbortSignal;
   /** Reads left (the writes' share is already reserved). */
   budget: number;
-  /** undefined until probed; false when the count endpoint is absent. */
-  countApi?: boolean;
   truncated: Set<string>;
 };
 
@@ -136,7 +134,7 @@ async function listDocs(
   id: string,
   col: string,
   pages = MAX_PAGES,
-): Promise<{ docs: Doc[]; capped: boolean }> {
+): Promise<{ docs: Doc[]; capped: boolean; notFound: boolean }> {
   const docs: Doc[] = [];
   let cursor: string | null = null;
   for (let i = 0; i < pages; i++) {
@@ -145,34 +143,30 @@ async function listDocs(
     try {
       page = (await get(t, `${data(id, col)}?${q}`)) as typeof page;
     } catch (e) {
-      if (e instanceof TooLarge) return { docs, capped: true };
+      if (e instanceof TooLarge) return { docs, capped: true, notFound: false };
       throw e;
     }
+    if (page === null && i === 0)
+      return { docs, capped: false, notFound: true };
     for (const d of page?.items ?? [])
       if (d && typeof d.id === "string") docs.push(d);
     cursor = page?.nextCursor ?? null;
-    if (!cursor) return { docs, capped: false };
+    if (!cursor) return { docs, capped: false, notFound: false };
   }
-  return { docs, capped: true };
+  return { docs, capped: true, notFound: false };
 }
 
-/** Exact doc count from the count endpoint, or undefined when it is absent. */
+/**
+ * Exact doc count from `GET /api/v1/artifacts/:id/data-count/:collection` -> `{ count }`, or
+ * undefined on a 404 (endpoint absent, or no access: the caller then pages) or another
+ * shape. Probed per metric on every tick, never cached.
+ */
 async function countApi(t: Ctx, id: string, col: string) {
-  if (t.countApi === false) return undefined;
-  const r = (await get(t, data(id, col, "count"))) as {
+  const r = (await get(t, `/api/v1/artifacts/${id}/data-count/${col}`)) as {
     count?: unknown;
   } | null;
-  if (
-    r &&
-    typeof r.count === "number" &&
-    Number.isInteger(r.count) &&
-    r.count >= 0
-  ) {
-    t.countApi = true;
-    return r.count;
-  }
-  t.countApi = false;
-  return undefined;
+  const n = r?.count;
+  return typeof n === "number" && Number.isInteger(n) && n >= 0 ? n : undefined;
 }
 
 type Sources = {
@@ -206,6 +200,7 @@ export async function tick(
   };
   const missing: string[] = [];
   const failed: string[] = [];
+  const noAccess: string[] = [];
   const ids = {
     poll: env.POLL_ID,
     canvas: env.CANVAS_ID,
@@ -219,6 +214,11 @@ export async function tick(
     if (id) console.warn(`demo-ops: ignoring invalid ${name} id`);
     missing.push(name);
     return undefined;
+  };
+  /** A paged read that 404s means no access or no artifact: the source is missing, not 0. */
+  const absent = (name: string) => {
+    if (!missing.includes(name)) missing.push(name);
+    noAccess.push(name);
   };
   const none: GameState = { moves: 0, inProgress: 0 };
   const s: Sources = {
@@ -263,11 +263,13 @@ export async function tick(
         return;
       }
       const r = await listDocs(t, id, col);
+      if (r.notFound) return absent("poll");
       s.votes = r.docs.length;
       if (r.capped) t.truncated.add("votes");
     });
     await source("pixels", canvas, async (id) => {
       const r = await listDocs(t, id, `canvas-${day}`, 1);
+      if (r.notFound) return absent("canvas");
       s.pixels = pixelCount(r.docs);
       if (r.capped) t.truncated.add("pixels");
     });
@@ -275,6 +277,7 @@ export async function tick(
       const col = `pins-${day}`;
       const exact = await countApi(t, id, col);
       const r = await listDocs(t, id, col);
+      if (r.notFound) return absent("map");
       s.countries = countries(r.docs);
       s.pins = exact ?? r.docs.length;
       if (r.capped) {
@@ -290,6 +293,7 @@ export async function tick(
       const g = (table as { g?: unknown } | undefined)?.g;
       if (typeof g !== "string") return;
       const r = await listDocs(t, id, "moves");
+      if (r.notFound) return absent("chess");
       s.chess = chessState(table, r.docs, now);
       if (r.capped) t.truncated.add("moves.chess");
     });
@@ -307,6 +311,10 @@ export async function tick(
     clearTimeout(timer);
   }
 
+  if (noAccess.length)
+    console.warn(
+      `demo-ops: not found or no access: ${noAccess.join(", ")}; treated as missing`,
+    );
   const today: TodayStats = {
     day,
     updatedAt: now,
