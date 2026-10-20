@@ -272,6 +272,8 @@
       if (o === null) votes.delete(d.id); else votes.set(d.id, o);
     }
     for (const id of e.deleted) votes.delete(id);
+    // Your own vote from another window updates the pressed state here too.
+    if (pending === null && !inFlight) mine = votes.has(me.id) ? votes.get(me.id) : null;
     render();
   }
 

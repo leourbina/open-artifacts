@@ -1,1 +1,10 @@
-{ "staging": {} }
+{
+  "staging": {},
+  "review": {
+    "poll": {
+      "instance": "artifacts.leourbina.com",
+      "id": "DKfXiKC1qb7Knqrr",
+      "visibility": "private"
+    }
+  }
+}
