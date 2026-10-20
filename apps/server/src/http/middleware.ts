@@ -5,7 +5,7 @@ import { verifyPat } from "../auth/pat.js";
 import { readSession, sessionCookieName } from "../auth/session.js";
 import type { Env } from "../env.js";
 import { getUser } from "../services/users.js";
-import { frameOpts } from "./embed.js";
+import { frameOpts, isEmbedRequest } from "./embed.js";
 import { ApiError, appOrigin, toErrorResponse } from "./errors.js";
 
 /** Hono Variables set by `session()`; use as `Hono<{ Bindings: Env; Variables: AppVariables }>`. */
@@ -22,8 +22,8 @@ export const CONTENT_CSP =
 
 /**
  * `frameAncestors` (a pre-validated source list from frameOpts) replaces
- * X-Frame-Options with `Content-Security-Policy: frame-ancestors …`; it wins
- * over `frameDeny`.
+ * X-Frame-Options with `Content-Security-Policy: frame-ancestors …` (merged
+ * into `csp`, when given, as one header); it wins over `frameDeny`.
  */
 type SecurityOpts = {
   frameDeny?: boolean;
@@ -56,7 +56,8 @@ function setSecurityHeaders(h: Headers, opts: SecurityOpts): void {
   h.set("Referrer-Policy", "strict-origin-when-cross-origin");
   if (opts.frameAncestors) {
     h.delete("X-Frame-Options");
-    h.set("Content-Security-Policy", `frame-ancestors ${opts.frameAncestors}`);
+    const fa = `frame-ancestors ${opts.frameAncestors}`;
+    h.set("Content-Security-Policy", opts.csp ? `${opts.csp}; ${fa}` : fa);
   } else {
     if (opts.frameDeny) h.set("X-Frame-Options", "DENY");
     if (opts.csp) h.set("Content-Security-Policy", opts.csp);
@@ -82,11 +83,14 @@ const BEARER = /^\s*Bearer(?:\s+(.*?))?\s*$/i;
  * user, anything else yields null with no cookie fallback. Any other (or no)
  * Authorization header falls through to the session cookie (sessionCookieName). The user row is
  * loaded on every request, so deleted users resolve to null.
+ * `X-OA-Embed: 1` or `?embed=1` (isEmbedRequest) forces anonymous.
  */
 export const session = (): MiddlewareHandler<AppEnv> => async (c, next) => {
   c.set("user", null);
   c.set("tokenLabel", null);
   c.set("tokenId", null);
+  // Embed mode: anonymous regardless of cookie or Bearer (a downgrade only).
+  if (isEmbedRequest(c.req.raw)) return next();
   const bearer = BEARER.exec(c.req.header("authorization") ?? "");
   if (bearer) {
     let ctx: Pick<ExecutionContext, "waitUntil"> | undefined;

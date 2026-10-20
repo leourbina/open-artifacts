@@ -1,12 +1,16 @@
 import { env } from "cloudflare:workers";
-import { type Member, newId, viewerPath } from "@oa/shared";
+import { type Member, newId, R, viewerPath } from "@oa/shared";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createApp } from "../src/app.js";
+import { createPat } from "../src/auth/pat.js";
+import { publicPrefix, signContentPrefix } from "../src/content/signing.js";
 import { embedOrigins, frameOpts } from "../src/http/embed.js";
+import { withSecurityHeaders } from "../src/http/middleware.js";
 import worker from "../src/index.js";
 import { publish } from "../src/services/artifacts.js";
 import { getUser } from "../src/services/users.js";
 import { ctx, fakeAssets } from "./assets-stub.js";
-import { login } from "./helpers.js";
+import { api, login } from "./helpers.js";
 
 const G = "https://open-artifacts.com";
 const CONTENT_CSP =
@@ -26,8 +30,13 @@ const call = (url: string, extra: object = {}, init?: RequestInit) =>
   );
 const app = (path: string, extra: object = {}, init?: RequestInit) =>
   call(`http://app.localhost${path}`, extra, init);
-const content = (extra: object = {}) =>
-  call(`http://content.localhost/${newId()}/index.html`, extra);
+const cAssets = fakeAssets().fetcher;
+/** Content host; by default the public /p/ view of `id`. */
+const content = (extra: object = {}, path?: string) =>
+  call(`http://content.localhost${path ?? `${publicPrefix(id, 1)}__view`}`, {
+    ASSETS: cAssets,
+    ...extra,
+  });
 
 const prod = (v: string) =>
   embedOrigins({ EMBED_ORIGINS: v, ENVIRONMENT: "production" });
@@ -35,9 +44,12 @@ const dev = (v: string) =>
   embedOrigins({ EMBED_ORIGINS: v, ENVIRONMENT: "dev" });
 
 let id: string;
+let cookie: string;
+let owner: Member;
 beforeAll(async () => {
   const l = await login(`em-${newId().slice(0, 6).toLowerCase()}@x.com`);
-  const owner = (await getUser(env, l.userId)) as Member;
+  cookie = l.cookie;
+  owner = (await getUser(env, l.userId)) as Member;
   id = (
     await publish(
       env,
@@ -187,9 +199,50 @@ describe("EMBED_ORIGINS headers", () => {
     }
     const post = await app(`${viewerPath(id)}/full`, extra, { method: "POST" });
     expect(post.headers.get("x-frame-options")).toBe("DENY");
-    expect((await content(extra)).headers.get("content-security-policy")).toBe(
+    const pub = await content(extra);
+    expect(pub.status).toBe(200);
+    expect(pub.headers.get("content-security-policy")).toBe(
       `${CONTENT_CSP}; frame-ancestors http://app.localhost ${G} https://b.example.com`,
     );
+    // Signed (private-capable) content and errors stay app-only.
+    const appOnly = `${CONTENT_CSP}; frame-ancestors http://app.localhost`;
+    const signed = await content(
+      extra,
+      `${await signContentPrefix(env, id, 1)}__view`,
+    );
+    expect(signed.status).toBe(200);
+    expect(signed.headers.get("content-security-policy")).toBe(appOnly);
+    for (const p of [`/p/${newId()}/v1/__view`, "/robots.txt", "/nope"]) {
+      const r = await content(extra, p);
+      expect(r.headers.get("content-security-policy"), p).toBe(appOnly);
+    }
+  });
+
+  it("merges frameAncestors into an existing csp option (one header)", () => {
+    const r = withSecurityHeaders(new Response("x"), {
+      csp: "default-src 'none'",
+      frameAncestors: `'self' ${G}`,
+    });
+    expect(r.headers.get("content-security-policy")).toBe(
+      `default-src 'none'; frame-ancestors 'self' ${G}`,
+    );
+    expect(r.headers.get("x-frame-options")).toBeNull();
+  });
+
+  it("warns about same-site embed origins (last two labels)", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const e = {
+      ENVIRONMENT: "production" as const,
+      APP_HOST: "artifacts.open-artifacts.com",
+    };
+    expect(
+      embedOrigins({
+        ...e,
+        EMBED_ORIGINS: `${G} https://gallery.example.org`,
+      }),
+    ).toEqual([G, "https://gallery.example.org"]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain(`${G} is same-site`);
   });
 
   it("injection attempts never reach a header", async () => {
@@ -213,5 +266,123 @@ describe("EMBED_ORIGINS headers", () => {
         await content({ EMBED_ORIGINS: "'self' * http://evil.com" })
       ).headers.get("content-security-policy"),
     ).toBe(`${CONTENT_CSP}; frame-ancestors http://app.localhost`);
+  });
+});
+
+const pubArt = async (extra: Record<string, unknown>) =>
+  (
+    await publish(
+      env,
+      owner,
+      {
+        title: "Live",
+        format: "html",
+        content: "<p>x</p>",
+        capabilities: { db: true },
+        ...extra,
+      } as never,
+      null,
+      undefined,
+      "create",
+    )
+  ).id;
+const EMBED = { "x-oa-embed": "1" };
+const META = `<meta name="oa-embed" content="1">`;
+const inner = createApp();
+
+describe("embed mode (anonymous inside a framed /full)", () => {
+  it("framed /full with a valid cookie and NO hint renders signed-out (+ embed meta); top-level has no meta", async () => {
+    const full = `${viewerPath(id)}/full`;
+    const framed = await (
+      await app(full, {}, { headers: { cookie, "sec-fetch-dest": "iframe" } })
+    ).text();
+    const framedAnon = await (
+      await app(full, {}, { headers: { "sec-fetch-dest": "iframe" } })
+    ).text();
+    expect(framed).toContain(META);
+    expect(framed).toBe(framedAnon);
+    for (const dest of ["document", null]) {
+      const h: Record<string, string> = { cookie };
+      if (dest) h["sec-fetch-dest"] = dest;
+      const r = await app(full, {}, { headers: h });
+      expect(r.headers.get("vary")).toBe("Sec-Fetch-Dest");
+      expect(await r.text()).not.toContain(META);
+    }
+    expect(
+      await (
+        await app(
+          viewerPath(id),
+          {},
+          { headers: { "sec-fetch-dest": "iframe" } },
+        )
+      ).text(),
+    ).not.toContain(META);
+    // Top-level: the cookie still signs the SPA in.
+    expect((await api(inner, R.me, cookie)).status).toBe(200);
+  });
+
+  it("X-OA-Embed: cookie and PAT are ignored", async () => {
+    const pat = (await createPat(env, owner.id, "em")).token;
+    const priv = await pubArt({ visibility: "private" });
+    for (const auth of [cookie, pat]) {
+      expect((await api(inner, R.me, auth)).status).toBe(200);
+      expect((await api(inner, R.me, auth, { headers: EMBED })).status).toBe(
+        401,
+      );
+      expect((await api(inner, R.artifact(priv), auth)).status).toBe(200);
+      expect(
+        (await api(inner, R.artifact(priv), auth, { headers: EMBED })).status,
+      ).toBe(404);
+      expect(
+        (await api(inner, R.artifact(id), auth, { headers: EMBED })).status,
+      ).toBe(200);
+      expect(
+        (await api(inner, `${R.me}?embed=1`, auth)).status,
+        "?embed=1",
+      ).toBe(401);
+    }
+    // Only exactly "1" switches embed mode on.
+    expect(
+      (await api(inner, R.me, cookie, { headers: { "x-oa-embed": "0" } }))
+        .status,
+    ).toBe(200);
+  });
+
+  it("anonymous write rules apply under X-OA-Embed", async () => {
+    const ip = { "cf-connecting-ip": `198.51.100.${(Date.now() % 250) + 1}` };
+    const closed = await pubArt({ visibility: "public" });
+    const put = (art: string, headers: Record<string, string>) =>
+      api(inner, R.dataDoc(art, "c", "a"), cookie, {
+        method: "PUT",
+        body: 1,
+        headers: { ...ip, ...headers },
+      });
+    expect((await put(closed, {})).status).toBe(200);
+    expect((await put(closed, EMBED)).status).toBe(401);
+    const open = await pubArt({
+      visibility: "public",
+      allowAnonymousWrites: true,
+    });
+    const w = await put(open, EMBED);
+    expect(w.status).toBe(200);
+    expect(((await w.json()) as { updatedBy: string }).updatedBy).toBe("anon");
+  });
+
+  it("WebSocket with ?embed=1 is anonymous", async () => {
+    const team = await pubArt({ visibility: "team" });
+    const up = { upgrade: "websocket" };
+    const signed = await api(inner, R.dataSubscribe(team, "c"), cookie, {
+      headers: up,
+    });
+    expect(signed.status).toBe(101);
+    signed.webSocket?.accept();
+    signed.webSocket?.close();
+    const embedded = await api(
+      inner,
+      `${R.dataSubscribe(team, "c")}&embed=1`,
+      cookie,
+      { headers: up },
+    );
+    expect(embedded.status).toBe(404);
   });
 });
