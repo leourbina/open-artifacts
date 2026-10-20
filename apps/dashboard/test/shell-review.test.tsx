@@ -16,13 +16,20 @@ import { RedirectProvider } from "../src/auth/redirect";
 import { createAppRouter } from "../src/router";
 import { installHarness, seen, server, wait } from "./harness";
 
-vi.mock("../src/viewer/bridge", () => ({
-  createBridge: () => ({
-    dispose: () => {},
-    requestThumbnail: () => {},
-    setTheme: () => {},
-  }),
-}));
+// Like the real bridge, the mock loads the frame (Shell ignores earlier loads).
+vi.mock("../src/viewer/bridge", async () => {
+  const { loadArtifactFrame } = await import("../src/viewer/frame");
+  return {
+    createBridge: (o: { iframe: HTMLIFrameElement; url: string }) => {
+      loadArtifactFrame(o.iframe, o.url);
+      return {
+        dispose: () => {},
+        requestThumbnail: () => {},
+        setTheme: () => {},
+      };
+    },
+  };
+});
 
 installHarness();
 afterEach(() => vi.useRealTimers());

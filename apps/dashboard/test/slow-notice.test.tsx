@@ -4,20 +4,33 @@ import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { recordCpuLimit } from "../src/api/client";
+import { loadArtifactFrame } from "../src/viewer/frame";
 import { installHarness, mount, server } from "./harness";
 
-type Opts = { onHello?: () => void };
+type Opts = { onHello?: () => void; iframe: HTMLIFrameElement; url: string };
 const createBridge = vi.fn((_: Opts) => ({
   dispose: vi.fn(),
   requestThumbnail: vi.fn(),
   setTheme: vi.fn(),
 }));
-vi.mock("../src/viewer/bridge", () => ({
-  createBridge: (o: Opts) => createBridge(o),
-}));
+/** When set, the mock bridge doesn't load the frame (it stays at about:blank). */
+const hold = { load: false };
+// Like the real bridge, the mock loads the frame (Shell ignores earlier loads).
+vi.mock("../src/viewer/bridge", async () => {
+  const { loadArtifactFrame } = await import("../src/viewer/frame");
+  return {
+    createBridge: (o: Opts) => {
+      if (!hold.load) loadArtifactFrame(o.iframe, o.url);
+      return createBridge(o);
+    },
+  };
+});
 
 installHarness();
-beforeEach(() => createBridge.mockClear());
+beforeEach(() => {
+  createBridge.mockClear();
+  hold.load = false;
+});
 afterEach(() => vi.useRealTimers());
 
 const ID = (
@@ -79,6 +92,22 @@ const reloadAndWait = async () => {
 };
 
 describe("viewer slow notice", () => {
+  it("the frame's initial about:blank load (before loadArtifactFrame) arms nothing", async () => {
+    hold.load = true;
+    mount(viewerPath(ID));
+    await waitFor(() => expect(createBridge).toHaveBeenCalled());
+    const f = await loaded(); // about:blank: no loadArtifactFrame yet
+    expect(f.getAttribute("src")).toBeNull();
+    await advance(10_000);
+    expect(text()).toBeNull();
+    // The bridge's own load does arm it.
+    const o = createBridge.mock.calls.at(-1)?.[0] as Opts;
+    loadArtifactFrame(o.iframe, o.url);
+    fireEvent.load(f);
+    await advance(8_000);
+    expect(text()).toBe(GENERIC);
+  });
+
   it("appears 8 s after load without hello, above the frame, frame kept", async () => {
     usage(0);
     mount(viewerPath(ID));

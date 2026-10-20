@@ -16,7 +16,7 @@ import {
 } from "@oa/ui/shadcn";
 import { useQuery } from "@tanstack/react-query";
 import { diffLines } from "diff";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ApiClientError, api } from "../api/client";
 import { useArtifact, useVersionInfo } from "../api/queries";
 import { useLoginRedirect } from "../auth/redirect";
@@ -24,7 +24,7 @@ import { useMe } from "../auth/useMe";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { NotFound } from "../pages/NotFound";
 import { Crumbs } from "./Crumbs";
-import { SANDBOX, safeContentUrl } from "./frame";
+import { loadArtifactFrame, SANDBOX, safeContentUrl } from "./frame";
 import { SM, TXT } from "./ui";
 import { useContentUrl } from "./useContentUrl";
 import "./viewer.css";
@@ -266,6 +266,11 @@ const LABEL: Record<Status, string> = {
 function Preview({ id, v, label }: { id: string; v: number; label: string }) {
   const c = useContentUrl(id, v);
   const url = safeContentUrl(c.url);
+  // No bridge here, but every artifact frame loads through loadArtifactFrame.
+  const [el, setEl] = useState<HTMLIFrameElement | null>(null);
+  useEffect(() => {
+    if (el && url) loadArtifactFrame(el, url);
+  }, [el, url]);
   return (
     <figure>
       <figcaption>
@@ -273,7 +278,7 @@ function Preview({ id, v, label }: { id: string; v: number; label: string }) {
       </figcaption>
       {url && (
         <iframe
-          src={url}
+          ref={setEl}
           title={`Preview of v${v}`}
           sandbox={SANDBOX}
           referrerPolicy="no-referrer"

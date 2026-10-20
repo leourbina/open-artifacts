@@ -1,11 +1,12 @@
-import type {
-  ArtifactToShell,
-  ErrorCode,
-  Format,
-  RuntimeMethod,
-  RuntimeParams,
-  RuntimeResult,
-  ShellToArtifact,
+import {
+  type ArtifactToShell,
+  type ErrorCode,
+  type Format,
+  type RuntimeMethod,
+  type RuntimeParams,
+  type RuntimeResult,
+  type ShellToArtifact,
+  shellNonce,
 } from "@oa/shared";
 
 export const CALL_TIMEOUT_MS = 15_000;
@@ -45,6 +46,8 @@ export type Listener = (m: ShellToArtifact) => void;
 export interface Bridge {
   /** True in the raw view (no parent shell): every call rejects with no_shell. */
   readonly raw: boolean;
+  /** This load's nonce from the frame URL (`#oa=`), sent on every message. */
+  readonly nonce: string | undefined;
   call<M extends RuntimeMethod>(
     method: M,
     params: RuntimeParams<M>,
@@ -70,10 +73,15 @@ const newCallId = (): string => {
  * postMessage link to the parent shell. Only messages whose source is
  * `window.parent` and that parse (parseShellMessage) are accepted, in arrival
  * order; params and results are validated with RUNTIME_PARAMS / RUNTIME_RESULTS.
+ * Every message to the shell carries the per-load nonce read (and stripped) from
+ * location.hash at boot. Framed without one, the shell drops our messages, so
+ * calls go unanswered and fail with no_shell after HANDSHAKE_MS.
  */
 export function createBridge(loadSchemas: () => Promise<Schemas>): Bridge {
   const win = window;
   const raw = win.parent === win;
+  // Read now, before any artifact script runs or the hash changes.
+  const nonce = shellNonce();
   /** Set by the first shell message; a late shell is still accepted. */
   let shell = false;
   const noShell = () => new RuntimeError("no_shell", RAW_VIEW_MESSAGE);
@@ -125,13 +133,15 @@ export function createBridge(loadSchemas: () => Promise<Schemas>): Bridge {
   };
   win.addEventListener("message", onMessage);
 
-  const post = (s: Schemas, msg: ArtifactToShell) => s.sendToShell(msg);
+  const post = (s: Schemas, msg: ArtifactToShell) =>
+    s.sendToShell(nonce ? { ...msg, nonce } : msg);
   const send = (msg: ArtifactToShell) => {
     void schemas.then((s) => s && post(s, msg));
   };
 
   return {
     raw,
+    nonce,
     call(method, params) {
       if (raw) return Promise.reject(noShell());
       const id = newCallId();

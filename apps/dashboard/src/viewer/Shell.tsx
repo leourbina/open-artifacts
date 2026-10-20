@@ -2,7 +2,13 @@ import { type ArtifactSummary, type Me, viewerPath } from "@oa/shared";
 import { Button } from "@oa/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  type SyntheticEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { ApiClientError } from "../api/client";
 import { qk, useArtifact, useVersionInfo } from "../api/queries";
 import { useLoginRedirect } from "../auth/redirect";
@@ -13,7 +19,7 @@ import { NotFound } from "../pages/NotFound";
 import { createBridge } from "./bridge";
 import { Crumbs } from "./Crumbs";
 import { FullScreenEscape } from "./FullScreenEscape";
-import { SANDBOX, safeContentUrl } from "./frame";
+import { frameLoad, SANDBOX, safeContentUrl } from "./frame";
 import { isPanelTab, type PanelTab, SidePanel } from "./panels/SidePanel";
 import { SlowNotice } from "./SlowNotice";
 import { TitleBar } from "./TitleBar";
@@ -124,15 +130,22 @@ function Viewer({
     setSlow(false);
   }, []);
   const contentLoaded = content.onLoad;
-  const onFrameLoad = useCallback(() => {
-    contentLoaded();
-    reloading.current = false;
-    clearTimeout(slowTimer.current);
-    if (helloSeen.current || dismissed.current) return;
-    slowTimer.current = setTimeout(() => {
-      if (!helloSeen.current) setSlow(true);
-    }, SLOW_MS);
-  }, [contentLoaded]);
+  const onFrameLoad = useCallback(
+    (e: SyntheticEvent<HTMLIFrameElement>) => {
+      // No src prop, so a new frame first loads about:blank, before the bridge
+      // calls loadArtifactFrame. That load isn't the artifact: it must neither
+      // freeze the content URL nor arm the slow timer.
+      if (!frameLoad(e.currentTarget)) return;
+      contentLoaded();
+      reloading.current = false;
+      clearTimeout(slowTimer.current);
+      if (helloSeen.current || dismissed.current) return;
+      slowTimer.current = setTimeout(() => {
+        if (!helloSeen.current) setSlow(true);
+      }, SLOW_MS);
+    },
+    [contentLoaded],
+  );
   useEffect(() => () => clearTimeout(slowTimer.current), []);
   const reload = () => {
     if (reloading.current) return;
@@ -149,10 +162,14 @@ function Viewer({
     );
   };
 
+  // Every intentional load (first load, a refreshed URL before the first load,
+  // Reload) gets a fresh bridge, which loads the frame with a fresh nonce.
+  const src = frame.src ?? url;
   useEffect(() => {
-    if (!el) return;
+    if (!el || !src) return;
     const b = createBridge({
       iframe: el,
+      url: src,
       ...latest.current,
       version,
       formatOf: () => formatRef.current,
@@ -171,7 +188,7 @@ function Viewer({
       b.dispose();
       bridge.current = null;
     };
-  }, [el, version, qc, artifact.id, onHello]);
+  }, [el, src, version, qc, artifact.id, onHello]);
 
   useEffect(() => bridge.current?.setTheme(theme), [theme]);
 
@@ -213,11 +230,11 @@ function Viewer({
                 }}
               />
             )}
+            {/* No src prop: the bridge sets it (loadArtifactFrame). */}
             <iframe
               key={frame.key}
               ref={setEl}
               className="oa-vframe"
-              src={frame.src ?? url}
               onLoad={onFrameLoad}
               title={artifact.title}
               sandbox={SANDBOX}
