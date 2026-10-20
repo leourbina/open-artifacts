@@ -3,10 +3,11 @@ import { join, relative } from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
-// P3 T5: access is decided in src/auth/ only. Outside it, no comparison on a
-// `.role` or `.ownerId`, no TEAM_ROLES, and no requireAccess(..., "owner")
-// except single transfer (managers must go through can(), and the exact-owner
-// rule refuses them there).
+// P3 T5: access is decided in src/auth/ only. Outside it: no comparison,
+// switch or includes on a `.role`, `.ownerId` or `.level`; no TEAM_ROLES or
+// isTeamRole; no requireAccess (use authorize(action) and can(); single
+// transfer, when it lands, joins ALLOWED); no literal { kind: "user", user }
+// Caller (use callerOf, which carries the cap).
 
 const SRC = join(import.meta.dirname, "../../src");
 
@@ -42,6 +43,8 @@ function findAdHocChecks(root: string): string[] {
     };
     const prop = (n: ts.Node, name: string) =>
       ts.isPropertyAccessExpression(n) && n.name.text === name;
+    const guarded = (n: ts.Node) =>
+      prop(n, "role") || prop(n, "ownerId") || prop(n, "level");
     const visit = (n: ts.Node): void => {
       if (ts.isBinaryExpression(n)) {
         const k = n.operatorToken.kind;
@@ -50,20 +53,42 @@ function findAdHocChecks(root: string): string[] {
           k === ts.SyntaxKind.ExclamationEqualsEqualsToken ||
           k === ts.SyntaxKind.EqualsEqualsToken ||
           k === ts.SyntaxKind.ExclamationEqualsToken;
-        if (
-          cmp &&
-          [n.left, n.right].some((s) => prop(s, "role") || prop(s, "ownerId"))
-        )
-          report(n);
+        if (cmp && [n.left, n.right].some(guarded)) report(n);
       }
-      if (ts.isIdentifier(n) && n.text === "TEAM_ROLES") report(n);
+      // switch (x.role), ROLES.includes(x.role)
+      if (ts.isSwitchStatement(n) && guarded(n.expression))
+        report(n.expression);
+      if (
+        ts.isCallExpression(n) &&
+        prop(n.expression, "includes") &&
+        n.arguments.some(guarded)
+      )
+        report(n);
+      if (
+        ts.isIdentifier(n) &&
+        (n.text === "TEAM_ROLES" || n.text === "isTeamRole")
+      )
+        report(n);
       if (
         ts.isCallExpression(n) &&
         ts.isIdentifier(n.expression) &&
         n.expression.text === "requireAccess"
-      ) {
-        const min = n.arguments[3];
-        if (min && ts.isStringLiteral(min) && min.text === "owner") report(n);
+      )
+        report(n);
+      // Callers are built by callerOf(), never a literal { kind: "user", user }.
+      if (ts.isObjectLiteralExpression(n)) {
+        const names = n.properties.map((p) =>
+          p.name && ts.isIdentifier(p.name) ? p.name.text : "",
+        );
+        const kindUser = n.properties.some(
+          (p) =>
+            ts.isPropertyAssignment(p) &&
+            ts.isIdentifier(p.name) &&
+            p.name.text === "kind" &&
+            ts.isStringLiteral(p.initializer) &&
+            p.initializer.text === "user",
+        );
+        if (kindUser && names.includes("user")) report(n);
       }
       ts.forEachChild(n, visit);
     };
@@ -84,6 +109,11 @@ describe("authz lint", () => {
       "bad.ts: a.ownerId !== me",
       "bad.ts: TEAM_ROLES",
       'bad.ts: requireAccess(env, c, id, "owner")',
+      'bad.ts: r.level !== "viewer"',
+      "bad.ts: user.role",
+      "bad.ts: ROLES.includes(user.role)",
+      "bad.ts: isTeamRole",
+      'bad.ts: { kind: "user", user }',
     ])
       expect(hits).toContain(h);
   });

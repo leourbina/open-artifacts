@@ -555,25 +555,30 @@ export async function search(
   return {
     // Built in SearchHitSchema's key order (summary fields, then snippet);
     // validated by the tests, not per hit in production.
-    items: page.map(
-      (r): SearchHit => ({
-        ...toSummary(
-          env,
-          r.a,
-          redact(
-            {
-              id: r.a.ownerId,
-              email: r.ownerEmail,
-              name: r.ownerName,
-              displayName: r.ownerDisplayName,
-            },
-            caller,
+    // Rows the policy denies are dropped (belt and braces with listFilterSql).
+    items: page.flatMap((r): SearchHit[] => {
+      const level = rowLevel(caller, r.a, r.shareRole);
+      if (!level) return [];
+      return [
+        {
+          ...toSummary(
+            env,
+            r.a,
+            redact(
+              {
+                id: r.a.ownerId,
+                email: r.ownerEmail,
+                name: r.ownerName,
+                displayName: r.ownerDisplayName,
+              },
+              caller,
+            ),
+            level,
           ),
-          rowLevel(caller, r.a, r.shareRole) ?? "viewer",
-        ),
-        snippet: pickSnippet(r.sb ?? "", r.sd ?? "", r.st ?? ""),
-      }),
-    ),
+          snippet: pickSnippet(r.sb ?? "", r.sd ?? "", r.st ?? ""),
+        },
+      ];
+    }),
     nextCursor:
       rows.length > limit && next <= MAX_OFFSET ? encodeOffset(next) : null,
   };

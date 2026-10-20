@@ -26,11 +26,11 @@ import {
   type Caller,
   callerOf,
   canCtx,
+  firstThumbnailEligible,
   listFilterSql,
-  requireAccess,
   rowLevel,
 } from "../auth/authz.js";
-import { can, isTeamRole } from "../auth/policy.js";
+import { can } from "../auth/policy.js";
 import { getDb } from "../db/client.js";
 import { normEmail } from "../db/email.js";
 import { artifacts, shares, users } from "../db/schema.js";
@@ -593,8 +593,13 @@ export async function list(
   const rows = await listQuery(env, caller, q);
   const page = rows.slice(0, q.limit);
   const last = page[page.length - 1];
-  return {
-    items: page.map((r) =>
+  // Belt and braces with listFilterSql: a row the policy denies is dropped,
+  // never shown with a guessed level. The cursor still follows the SQL page.
+  const items: ArtifactSummary[] = [];
+  for (const r of page) {
+    const level = rowLevel(caller, r.a, r.shareRole, { allowDeleted: true });
+    if (!level) continue;
+    items.push(
       toSummary(
         env,
         r.a,
@@ -607,9 +612,12 @@ export async function list(
           },
           caller,
         ),
-        rowLevel(caller, r.a, r.shareRole, { allowDeleted: true }) ?? "viewer",
+        level,
       ),
-    ),
+    );
+  }
+  return {
+    items,
     nextCursor:
       rows.length > q.limit && last
         ? encodeCursor({ u: last.a.updatedAt, i: last.a.id })
@@ -652,7 +660,7 @@ export async function listVersions(
   id: string,
   before?: number,
 ): Promise<VersionInfo[]> {
-  await requireAccess(env, caller, id, "viewer");
+  await authorize(env, caller, id, "versions");
   const { results } = await env.DB.prepare(
     `with page as (
        select version, length(manifest) as len from versions
@@ -714,7 +722,7 @@ export async function readVersionFile(
   v: number,
   path: string,
 ): Promise<{ body: R2ObjectBody; contentType: string }> {
-  await requireAccess(env, caller, id, "viewer");
+  await authorize(env, caller, id, "version.file");
   const row = await env.DB.prepare(
     "select manifest from versions where artifact_id = ? and version = ?",
   )
@@ -736,7 +744,7 @@ export async function readThumbnail(
   caller: Caller,
   id: string,
 ): Promise<R2ObjectBody> {
-  const a = await requireAccess(env, caller, id, "viewer");
+  const { artifact: a } = await authorize(env, caller, id, "thumbnail.read");
   const body = a.hasThumbnail ? await env.FILES.get(`thumbs/${id}.webp`) : null;
   if (!body) throw notFound();
   return body;
@@ -775,8 +783,7 @@ export async function putThumbnail(
           .bind(id, email)
           .first()
       : null;
-    const team = r.artifact.visibility === "team" && isTeamRole(user.role);
-    firstThumbnail = !!shared || team;
+    firstThumbnail = firstThumbnailEligible(who, r.artifact, !!shared);
   }
   if (
     !can(r.level, "thumbnail.write", {
@@ -829,7 +836,7 @@ export async function restoreVersion(
   agent: AgentRef | null,
   _ctx?: Ctx,
 ): Promise<PublishResult> {
-  await requireAccess(env, asUser(user), id, "editor");
+  await authorize(env, asUser(user), id, "restore");
   const src = await env.DB.prepare(
     `select v.entry, v.manifest, v.language, coalesce(v.format, a.format) as format
      from versions v join artifacts a on a.id = v.artifact_id

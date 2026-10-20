@@ -1,9 +1,30 @@
+import { isId } from "@oa/shared";
 import type { Context, MiddlewareHandler } from "hono";
 import { matchedRoutes } from "hono/route";
 import { ApiError } from "../http/errors.js";
-import type { AppEnv } from "../http/middleware.js";
-import { authorize, type Caller, caller, withAccessCache } from "./authz.js";
+import { type AppEnv, resolveSession } from "../http/middleware.js";
+import {
+  accessLevel,
+  authorize,
+  type Caller,
+  caller,
+  capOfCaller,
+  withAccessCache,
+} from "./authz.js";
 import { type OrgAction, orgCan, type PolicyAction } from "./policy.js";
+
+/**
+ * Real middleware, tagged at registration (`mw`). The gate skips exactly
+ * these when it looks for the route that will answer; anything else matched
+ * is a handler and needs a policy.
+ */
+const MIDDLEWARE = new WeakSet<object>();
+export function mw<T extends object>(handler: T): T {
+  MIDDLEWARE.add(handler);
+  return handler;
+}
+export const isMiddleware = (handler: object): boolean =>
+  MIDDLEWARE.has(handler);
 
 /**
  * Every route's access rule, enforced by `enforcePolicy` before its handler
@@ -22,7 +43,10 @@ export type Policy =
       artifact: PolicyAction;
       signedIn?: true;
       allowDeleted?: true;
-      param?: string;
+      /** Anonymous callers who can view get this 401 instead of 404 (the handler's order). */
+      anon401?: string;
+      /** Floor context for viewer thumbnails (the handler applies the exact rule). */
+      ctx?: { firstThumbnail?: boolean };
     }
   | { org: OrgAction }
   | { user: string }
@@ -31,8 +55,14 @@ export type Policy =
 
 const art = (
   action: PolicyAction,
-  extra: { signedIn?: true; allowDeleted?: true } = {},
+  extra: {
+    signedIn?: true;
+    allowDeleted?: true;
+    anon401?: string;
+    ctx?: { firstThumbnail?: boolean };
+  } = {},
 ): Policy => ({ artifact: action, ...extra });
+const SAVE = "Sign in to save changes";
 const ARTS = "/api/v1/artifacts/:id";
 const signedIn = { signedIn: true } as const;
 
@@ -76,8 +106,12 @@ export const ROUTE_POLICY: Readonly<Record<string, Policy>> = {
   [`POST ${ARTS}/versions/:v/restore`]: art("restore", signedIn),
   [`PUT ${ARTS}/versions/:v/text`]: art("version.text", signedIn),
   [`GET ${ARTS}/thumbnail`]: art("thumbnail.read"),
-  // Viewers may set only the first thumbnail: the handler applies that rule.
-  [`PUT ${ARTS}/thumbnail`]: art("view", signedIn),
+  // Viewers may set only the first thumbnail: the floor lets an eligible
+  // viewer through and putThumbnail applies the exact rule.
+  [`PUT ${ARTS}/thumbnail`]: art("thumbnail.write", {
+    signedIn: true,
+    ctx: { firstThumbnail: true },
+  }),
   [`GET ${ARTS}/shares`]: art("share", signedIn),
   [`PUT ${ARTS}/shares`]: art("share", signedIn),
   [`DELETE ${ARTS}/shares/:email`]: art("unshare", signedIn),
@@ -91,16 +125,16 @@ export const ROUTE_POLICY: Readonly<Record<string, Policy>> = {
   [`GET ${ARTS}/data-count/:col`]: art("data.read"),
   [`POST ${ARTS}/data/:col/query`]: art("data.read"),
   [`GET ${ARTS}/data/:col/:doc`]: art("data.read"),
-  [`PUT ${ARTS}/data/:col/:doc`]: art("data.read"),
-  [`PATCH ${ARTS}/data/:col/:doc`]: art("data.read"),
-  [`DELETE ${ARTS}/data/:col/:doc`]: art("data.read"),
+  [`PUT ${ARTS}/data/:col/:doc`]: art("data.write", { anon401: SAVE }),
+  [`PATCH ${ARTS}/data/:col/:doc`]: art("data.write", { anon401: SAVE }),
+  [`DELETE ${ARTS}/data/:col/:doc`]: art("data.write", { anon401: SAVE }),
   [`PUT ${ARTS}/data`]: art("data.reset"),
   [`GET ${ARTS}/data-subscribe`]: art("subscribe"),
   [`GET ${ARTS}/events`]: art("events"),
-  [`GET ${ARTS}/storage`]: art("view"),
-  [`GET ${ARTS}/storage/:key`]: art("view"),
-  [`PUT ${ARTS}/storage/:key`]: art("view"),
-  [`DELETE ${ARTS}/storage/:key`]: art("view"),
+  [`GET ${ARTS}/storage`]: art("storage", { anon401: SAVE }),
+  [`GET ${ARTS}/storage/:key`]: art("storage", { anon401: SAVE }),
+  [`PUT ${ARTS}/storage/:key`]: art("storage", { anon401: SAVE }),
+  [`DELETE ${ARTS}/storage/:key`]: art("storage", { anon401: SAVE }),
   "GET /api/v1/tokens": { user: "the caller's tokens" },
   "POST /api/v1/tokens": { org: "tokens.create" },
   "DELETE /api/v1/tokens/:id": { user: "the caller's tokens" },
@@ -172,7 +206,7 @@ export function targetRoute(c: Context): Target | null {
   for (let i = c.req.routeIndex + 1; i < routes.length; i++) {
     const r = routes[i];
     if (!r) continue;
-    if (r.method === "ALL" && r.handler.length >= 2) continue;
+    if (isMiddleware(r.handler)) continue;
     return { method: r.method, path: r.path, index: i };
   }
   return null;
@@ -202,15 +236,32 @@ export async function enforce(
   if ("artifact" in p) {
     if (p.signedIn && who.kind !== "user")
       throw new ApiError("unauthorized", "Sign in required");
-    await authorize(env, who, artifactId(), p.artifact, {
-      allowDeleted: p.allowDeleted,
-      prefetch: true,
-    });
+    const id = artifactId();
+    // Malformed ids never reach D1.
+    if (!isId(id)) throw notFound();
+    try {
+      await authorize(env, who, id, p.artifact, {
+        allowDeleted: p.allowDeleted,
+        prefetch: true,
+        ctx: p.ctx,
+      });
+    } catch (e) {
+      // Keep the handler's order: an anonymous caller who may view gets 401.
+      if (
+        p.anon401 &&
+        who.kind !== "user" &&
+        e instanceof ApiError &&
+        e.code === "not_found" &&
+        (await accessLevel(env, who, id))
+      )
+        throw new ApiError("unauthorized", p.anon401);
+      throw e;
+    }
     return;
   }
   if (who.kind !== "user")
     throw new ApiError("unauthorized", "Sign in required");
-  if ("org" in p && !orgCan(who.user, p.org, { cap: who.cap ?? null }))
+  if ("org" in p && !orgCan(who.user, p.org, { cap: capOfCaller(who) }))
     throw notFound();
 }
 
@@ -218,27 +269,30 @@ export async function enforce(
  * Content-host gate: every route is public or signed (the handlers verify
  * tokens and visibility), so this only refuses a route with no entry.
  */
-export const enforceContentPolicy =
-  (): MiddlewareHandler => async (c, next) => {
+export const enforceContentPolicy = (): MiddlewareHandler =>
+  mw(async (c, next) => {
     const t = targetRoute(c);
     if (t && !CONTENT_POLICY[`${t.method} ${t.path}`]) throw notFound();
     await next();
-  };
+  });
 
 /** App-host gate: looks the answering route up in `table` and enforces it. */
-export const enforcePolicy =
-  (
-    table: Readonly<Record<string, Policy>> = ROUTE_POLICY,
-  ): MiddlewareHandler<AppEnv> =>
-  async (c, next) => {
+export const enforcePolicy = (
+  table: Readonly<Record<string, Policy>> = ROUTE_POLICY,
+): MiddlewareHandler<AppEnv> =>
+  mw(async (c, next) => {
     const t = targetRoute(c);
     // No answering route: the app's notFound handler answers 404.
     if (!t) return next();
     const p = table[`${t.method} ${t.path}`];
+    if (!p) throw notFound();
+    // Registered first, so it reads the session itself when a rule needs a
+    // caller (session() later is then a no-op).
+    if (!("public" in p || "signed" in p)) await resolveSession(c);
     const who: Caller =
       c.req.header("x-oa-embed") === "1" ? { kind: "anonymous" } : caller(c);
     await withAccessCache(async () => {
       await enforce(p, who, c.env, () => paramAt(c, t.index, "id"));
       await next();
     });
-  };
+  });

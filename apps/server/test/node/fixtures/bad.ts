@@ -9,3 +9,16 @@ export const x = user.role === "admin";
 export const y = a.ownerId !== me;
 export const z = TEAM_ROLES;
 requireAccess(env, c, id, "owner");
+declare const r: { level: string };
+declare const ROLES: string[];
+declare function isTeamRole(x: string): boolean;
+export const l = r.level !== "viewer";
+export function sw() {
+  switch (user.role) {
+    default:
+      return 1;
+  }
+}
+export const inc = ROLES.includes(user.role);
+export const t = isTeamRole(user.role);
+export const lit = { kind: "user", user };

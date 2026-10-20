@@ -29,6 +29,7 @@ import {
   type CanCtx,
   can,
   decide,
+  isTeamRole,
   type PolicyAction,
   TEAM_ROLES,
 } from "./policy.js";
@@ -185,6 +186,19 @@ export function rowLevel(
   });
 }
 
+/**
+ * A viewer's first-thumbnail right (can "thumbnail.write" with
+ * firstThumbnail): through a share, or team access on a team artifact.
+ */
+export function firstThumbnailEligible(
+  c: Caller,
+  a: ArtifactRow,
+  shared: boolean,
+): boolean {
+  if (c.kind !== "user") return false;
+  return shared || (a.visibility === "team" && isTeamRole(c.user.role));
+}
+
 /** The caller's cap: the one source both decide() and can() read. */
 export const capOfCaller = (c: Caller): CapReason | null =>
   c.kind === "user" ? (c.cap ?? null) : null;
@@ -214,14 +228,19 @@ export async function authorize(
   c: Caller,
   artifactId: string,
   action: PolicyAction,
-  opts: { allowDeleted?: boolean; prefetch?: boolean } = {},
+  opts: {
+    allowDeleted?: boolean;
+    prefetch?: boolean;
+    /** The policy gate's floor for viewer thumbnails (never widens anything else). */
+    ctx?: { firstThumbnail?: boolean };
+  } = {},
 ): Promise<{ level: AccessLevel; artifact: ArtifactRow }> {
   let r: Access | null;
   if (opts.prefetch) {
     r = await loadAccess(env, c, artifactId, opts);
     prefetched.getStore()?.set(accessKey(c, artifactId, opts), r);
   } else r = await accessLevel(env, c, artifactId, opts);
-  if (!r || !can(r.level, action, canCtx(c, r.artifact)))
+  if (!r || !can(r.level, action, { ...canCtx(c, r.artifact), ...opts.ctx }))
     throw new ApiError("not_found", "Not found");
   return r;
 }
@@ -270,9 +289,11 @@ export function listFilterSql(
   const sharedWithMe = email
     ? and(ne(artifacts.ownerId, user.id), sharedIds(email))
     : undefined;
-  const team = TEAM_ROLES.includes(user.role)
-    ? inArray(artifacts.visibility, ["team", "public"])
-    : undefined;
+  // Capped callers see team artifacts only through a share (decide()).
+  const team =
+    TEAM_ROLES.includes(user.role) && capOfCaller(c) == null
+      ? inArray(artifacts.visibility, ["team", "public"])
+      : undefined;
   const parts =
     scope === "mine"
       ? [mine]

@@ -1,8 +1,9 @@
 import { env } from "cloudflare:workers";
-import { R } from "@oa/shared";
+import { AUTH, R } from "@oa/shared";
 import type { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
+import { mw } from "../src/auth/route-policy.js";
 import {
   clearSessionCookie,
   sessionCookie,
@@ -46,7 +47,7 @@ describe("__Host- session cookie", () => {
         Bindings: Env;
         Variables: AppVariables;
       }>;
-      g.use("/probe", session());
+      g.use("/probe", mw(session()));
       g.get("/probe", (c) => c.json({ user: c.var.user }));
     },
     { "GET /probe": { public: "test probe" } },
@@ -76,7 +77,8 @@ describe("__Host- session cookie", () => {
     const app = createApp();
     const post = (cookie: string) =>
       app.fetch(
-        new Request(`http://app.localhost${R.members}`, {
+        // Logout: public to the policy gate, guarded by CSRF.
+        new Request(`http://app.localhost${AUTH.logout}`, {
           method: "POST",
           headers: { cookie, "content-type": "application/json" },
           body: "{}",

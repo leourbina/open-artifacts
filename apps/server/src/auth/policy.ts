@@ -291,6 +291,26 @@ export function orgCan(
 }
 
 /**
+ * Whether an artifact may be served without a signed token (/p/ and public
+ * downloads): public, live, and in a personal space or a shared space that
+ * allows public links. Unknown kinds count as shared (fail closed). Until
+ * spaces exist (P3 T1) every artifact is personal.
+ */
+export function isPubliclyServable(a: {
+  visibility: string;
+  deleted: boolean;
+  spaceKind?: SpaceKind;
+  publicLinks?: boolean;
+}): boolean {
+  const personal = a.spaceKind === undefined || a.spaceKind === "personal";
+  return (
+    a.visibility === "public" &&
+    a.deleted === false &&
+    (personal || a.publicLinks === true)
+  );
+}
+
+/**
  * Whether an events-socket subscriber sees publisher names: team members,
  * and anyone whose access is more than a public link.
  */

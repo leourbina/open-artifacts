@@ -10,7 +10,7 @@ import {
   R,
 } from "@oa/shared";
 import type { Context } from "hono";
-import { caller, callerOf, requireAccess, requireUser } from "../auth/authz.js";
+import { authorize, caller, callerOf, requireUser } from "../auth/authz.js";
 import { publicPrefix, signContent } from "../content/signing.js";
 import { readCapped } from "../http/body.js";
 import { ApiError, contentOrigin } from "../http/errors.js";
@@ -168,7 +168,12 @@ export function mountArtifacts(app: AppType): void {
   // Viewer+. Defaults to the current version; ?v= must exist (else 404).
   app.get(`${ARTIFACT}/content-url`, async (c) => {
     const id = idParam(c);
-    const a = await requireAccess(c.env, caller(c), id, "viewer");
+    const { artifact: a } = await authorize(
+      c.env,
+      caller(c),
+      id,
+      "content.mint",
+    );
     const q = c.req.query("v");
     if (q !== undefined && !VERSION_NUM.test(q)) throw notFound();
     const v = q === undefined ? a.currentVersion : Number(q);

@@ -53,12 +53,19 @@ describe("csrf", () => {
       });
       expect(x.status).toBe(403);
     }
-    // Even an unauthenticated (bogus) cookie is checked before routing.
+    // A bogus cookie on a guarded route: the policy gate runs first, so it's
+    // 401 (not signed in) before CSRF; on a public cookie route (logout)
+    // CSRF still answers 403.
     const bogus = await call(R.members, {
       method: "POST",
       headers: { cookie: `${sessionCookieName(env)}=junk` },
     });
-    expect(await errCode(bogus)).toBe("csrf");
+    expect(await errCode(bogus)).toBe("unauthorized");
+    const logout = await call(AUTH.logout, {
+      method: "POST",
+      headers: { cookie: `${sessionCookieName(env)}=junk` },
+    });
+    expect(await errCode(logout)).toBe("csrf");
   });
 
   it("cookie POST with the header passes", async () => {

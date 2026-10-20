@@ -3,6 +3,7 @@ import { type Context, Hono, type MiddlewareHandler } from "hono";
 import { getCookie } from "hono/cookie";
 import {
   enforcePolicy,
+  mw,
   type Policy,
   ROUTE_POLICY,
 } from "./auth/route-policy.js";
@@ -73,7 +74,10 @@ export function createApp(
   extraPolicy: Readonly<Record<string, Policy>> = {},
 ) {
   const app: AppType = new Hono<AppEnv>();
-  app.use(securityHeaders());
+  app.use(mw(securityHeaders()));
+  // Every route's access rule (auth/route-policy.ts), before any other
+  // middleware or handler: an unlisted route is 404 before anything runs.
+  app.use("*", enforcePolicy({ ...ROUTE_POLICY, ...extraPolicy }));
   app.onError((e) => toErrorResponse(e));
   app.notFound(() => toErrorResponse(new ApiError("not_found", "Not found")));
 
@@ -93,12 +97,10 @@ export function createApp(
 
   // c.var.user (Bearer PAT wins over the cookie) for Worker routes only, so
   // SPA/asset requests never touch D1 (beyond the shell's instance-name read). Elsewhere caller() sees anonymous.
-  for (const p of SESSION_PATHS) app.use(p, unlessSigned(session()));
+  for (const p of SESSION_PATHS) app.use(p, mw(unlessSigned(session())));
   // Cookie-authenticated mutations need X-OA-Request: 1 (PATs exempt).
-  app.use("/api/v1/*", unlessSigned(csrf()));
-  app.use(AUTH.logout, sameOrigin(), csrf());
-  // Every route's access rule (auth/route-policy.ts), before any handler.
-  app.use("*", enforcePolicy({ ...ROUTE_POLICY, ...extraPolicy }));
+  app.use("/api/v1/*", mw(unlessSigned(csrf())));
+  app.use(AUTH.logout, mw(sameOrigin()), mw(csrf()));
 
   mount(app);
 

@@ -1,7 +1,8 @@
 import { type Format, isId, normalizePath, viewerPath } from "@oa/shared";
 import { type Context, Hono } from "hono";
 import { methodNotAllowed, ROBOTS } from "../app.js";
-import { enforceContentPolicy } from "../auth/route-policy.js";
+import { isPubliclyServable } from "../auth/policy.js";
+import { enforceContentPolicy, mw } from "../auth/route-policy.js";
 import type { Env } from "../env.js";
 import { contentFrameAncestors } from "../http/embed.js";
 import { ApiError, appOrigin, toErrorResponse } from "../http/errors.js";
@@ -373,7 +374,14 @@ async function serve(
   if (!got) throw notFound();
   const { row, data } = got;
   if (row.deleted_at != null) throw notFound();
-  if (signed === null && row.visibility !== "public") throw notFound();
+  if (
+    signed === null &&
+    !isPubliclyServable({
+      visibility: row.visibility,
+      deleted: row.deleted_at != null,
+    })
+  )
+    throw notFound();
   // The content host never renders top level: a browser's top-level visit
   // goes to the viewer on the app host (fixed origin, validated id and v).
   // The one exception is server-side thumbnail capture, proven by a MAC'd
@@ -445,34 +453,36 @@ const entryLocation = (entry: string) =>
 export const contentApp = new Hono<CEnv>();
 
 // On every response, errors included (onError/notFound run inside compose).
-contentApp.use(async (c, next) => {
-  await next();
-  c.res = new Response(c.res.body, c.res);
-  const h = c.res.headers;
-  // Embed origins may frame only served public content, never signed/private.
-  const publicOk =
-    (c.req.method === "GET" || c.req.method === "HEAD") &&
-    c.res.ok &&
-    PUBLIC.test(new URL(c.req.url).pathname);
-  h.delete("Set-Cookie");
-  h.set(
-    "Content-Security-Policy",
-    `${CONTENT_CSP}; frame-ancestors ${contentFrameAncestors(c.env, appOrigin(c.env), publicOk)}`,
-  );
-  h.set("Cross-Origin-Resource-Policy", "cross-origin");
-  // Sandboxed (opaque-origin) frames send `Origin: null`: allow any origin,
-  // never with credentials, and never vary on Origin. A top-level visit gets
-  // a redirect instead of the content (unless it's a capture): caches must
-  // key on both.
-  h.set("Access-Control-Allow-Origin", "*");
-  h.delete("Access-Control-Allow-Credentials");
-  h.set("Vary", `Sec-Fetch-Dest, ${CAPTURE_HEADER}`);
-  h.set("X-Robots-Tag", "noindex, nofollow");
-  h.set("X-Content-Type-Options", "nosniff");
-  h.set("Referrer-Policy", "no-referrer");
-  if (c.res.status >= 400 || !h.has("Cache-Control"))
-    h.set("Cache-Control", "no-store");
-});
+contentApp.use(
+  mw(async (c, next) => {
+    await next();
+    c.res = new Response(c.res.body, c.res);
+    const h = c.res.headers;
+    // Embed origins may frame only served public content, never signed/private.
+    const publicOk =
+      (c.req.method === "GET" || c.req.method === "HEAD") &&
+      c.res.ok &&
+      PUBLIC.test(new URL(c.req.url).pathname);
+    h.delete("Set-Cookie");
+    h.set(
+      "Content-Security-Policy",
+      `${CONTENT_CSP}; frame-ancestors ${contentFrameAncestors(c.env, appOrigin(c.env), publicOk)}`,
+    );
+    h.set("Cross-Origin-Resource-Policy", "cross-origin");
+    // Sandboxed (opaque-origin) frames send `Origin: null`: allow any origin,
+    // never with credentials, and never vary on Origin. A top-level visit gets
+    // a redirect instead of the content (unless it's a capture): caches must
+    // key on both.
+    h.set("Access-Control-Allow-Origin", "*");
+    h.delete("Access-Control-Allow-Credentials");
+    h.set("Vary", `Sec-Fetch-Dest, ${CAPTURE_HEADER}`);
+    h.set("X-Robots-Tag", "noindex, nofollow");
+    h.set("X-Content-Type-Options", "nosniff");
+    h.set("Referrer-Policy", "no-referrer");
+    if (c.res.status >= 400 || !h.has("Cache-Control"))
+      h.set("Cache-Control", "no-store");
+  }),
+);
 contentApp.use(enforceContentPolicy());
 contentApp.onError((e) => toErrorResponse(e));
 contentApp.notFound(() => toErrorResponse(notFound()));

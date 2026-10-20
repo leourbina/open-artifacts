@@ -14,6 +14,8 @@ export type AppVariables = {
   /** PAT label when authenticated by Bearer token (agent attribution), else null. */
   tokenLabel: string | null;
   tokenId: string | null;
+  /** Set once the session has been read (the policy gate may read it first). */
+  sessionResolved?: boolean;
 };
 export type AppEnv = { Bindings: Env; Variables: AppVariables };
 
@@ -116,11 +118,19 @@ const BEARER = /^\s*Bearer(?:\s+(.*?))?\s*$/i;
  * `X-OA-Embed: 1` or `?embed=1` (isEmbedRequest) forces anonymous.
  */
 export const session = (): MiddlewareHandler<AppEnv> => async (c, next) => {
+  await resolveSession(c);
+  await next();
+};
+
+/** Reads the session once per request (idempotent); see `session()`. */
+export async function resolveSession(c: Context<AppEnv>): Promise<void> {
+  if (c.get("sessionResolved")) return;
+  c.set("sessionResolved", true);
   c.set("user", null);
   c.set("tokenLabel", null);
   c.set("tokenId", null);
   // Embed mode: anonymous regardless of cookie or Bearer (a downgrade only).
-  if (isEmbedRequest(c.req.raw)) return next();
+  if (isEmbedRequest(c.req.raw)) return;
   const bearer = BEARER.exec(c.req.header("authorization") ?? "");
   if (bearer) {
     let ctx: Pick<ExecutionContext, "waitUntil"> | undefined;
@@ -140,8 +150,7 @@ export const session = (): MiddlewareHandler<AppEnv> => async (c, next) => {
     const s = await readSession(c.env, getCookie(c, sessionCookieName(c.env)));
     if (s) c.set("user", await getUser(c.env, s.uid));
   }
-  await next();
-};
+}
 
 export const CSRF_HEADER = "X-OA-Request";
 

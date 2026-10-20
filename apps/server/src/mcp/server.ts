@@ -272,38 +272,36 @@ export function mcpHandler(env: Env, factory: () => McpServer) {
 }
 
 /**
- * Wraps registerTool so every tool runs its TOOL_POLICY entry first (P3 T5):
- * a tool without an entry can't be registered, and an `artifact` policy
- * authorizes the tool's `id` input (404 otherwise) before the handler, which
- * reuses that access row.
+ * Enforces TOOL_POLICY at tools/call dispatch (P3 T5): the SDK runs every
+ * tool through executeToolHandler, whichever way it was registered or later
+ * updated, so this is the one choke point. A tool without an entry fails;
+ * an `artifact` policy authorizes the tool's `id` input (404 otherwise)
+ * before the handler, which reuses that access row.
  */
+type Dispatch = {
+  _registeredTools: Record<string, unknown>;
+  executeToolHandler: (tool: unknown, args: unknown, ctx: unknown) => unknown;
+};
 function enforceToolPolicy(server: McpServer, t: ToolEnv): void {
-  const register = server.registerTool.bind(server) as (
-    name: string,
-    config: unknown,
-    handler: (input: unknown, extra: unknown) => unknown,
-  ) => unknown;
-  const wrapped = (
-    name: string,
-    config: unknown,
-    handler: (input: unknown, extra: unknown) => unknown,
-  ) => {
-    const p = TOOL_POLICY[name];
-    if (!p) throw new Error(`MCP tool ${name} has no TOOL_POLICY entry`);
-    return register(name, config, (input, extra) =>
-      withAccessCache(async () => {
-        const id = (input as { id?: unknown } | undefined)?.id;
-        try {
-          await enforce(p, t.caller, t.env, () =>
-            typeof id === "string" ? id : "",
-          );
-        } catch (e) {
-          return guard(() => Promise.reject(e));
-        }
-        return handler(input, extra);
-      }),
-    );
+  const d = server as unknown as Dispatch;
+  const run = d.executeToolHandler.bind(server);
+  d.executeToolHandler = (tool, args, ctx) => {
+    const name = Object.entries(d._registeredTools).find(
+      ([, v]) => v === tool,
+    )?.[0];
+    const p = name === undefined ? undefined : TOOL_POLICY[name];
+    return withAccessCache(async () => {
+      try {
+        if (!p)
+          throw new Error(`MCP tool ${name ?? "?"} has no TOOL_POLICY entry`);
+        const id = (args as { id?: unknown } | undefined)?.id;
+        await enforce(p, t.caller, t.env, () =>
+          typeof id === "string" ? id : "",
+        );
+      } catch (e) {
+        return guard(() => Promise.reject(e));
+      }
+      return run(tool, args, ctx);
+    });
   };
-  (server as unknown as { registerTool: typeof wrapped }).registerTool =
-    wrapped;
 }

@@ -14,6 +14,7 @@ import {
 import { createApp } from "../src/app.js";
 import { accessIssuer, safeNext } from "../src/auth/oidc.js";
 import { createPat } from "../src/auth/pat.js";
+import { mw } from "../src/auth/route-policy.js";
 import { readSession, sessionCookieName } from "../src/auth/session.js";
 import type { Env } from "../src/env.js";
 import { FAVICON_TAGS } from "../src/http/head.js";
@@ -470,7 +471,7 @@ describe("session middleware", () => {
         Bindings: Env;
         Variables: AppVariables;
       }>;
-      g.use("/probe", session());
+      g.use("/probe", mw(session()));
       g.get("/probe", (c) =>
         c.json({ user: c.var.user, tokenLabel: c.var.tokenLabel }),
       );
