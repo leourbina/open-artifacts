@@ -159,6 +159,14 @@
     .bar { fill: CanvasText; }
     .tile.flash { background-color: Canvas; }
   }
+  .demo-links { margin: 20px auto 0; text-align: center; font-size: 12.5px; }
+  .demo-links a { color: var(--oa-text-muted); text-decoration: none; border-radius: 2px; }
+  .demo-links a:hover { color: var(--oa-text-2); text-decoration: underline; text-underline-offset: 2px; }
+  .demo-links a:focus-visible { outline: 2px solid var(--oa-focus); outline-offset: 2px; }
+  .tile h2 a, .tile-links a { color: inherit; text-decoration: underline; text-decoration-color: var(--oa-divider); text-underline-offset: 3px; border-radius: 2px; }
+  .tile h2 a:hover, .tile-links a:hover { color: var(--oa-text); text-decoration-color: currentColor; }
+  .tile h2 a:focus-visible, .tile-links a:focus-visible { outline: 2px solid var(--oa-focus); outline-offset: 2px; }
+  .tile-links { display: flex; flex-wrap: wrap; gap: 2px 10px; margin: 4px 0 0; font-size: 12px; color: var(--oa-text-muted); }
 </style>
 </head>
 <body>
@@ -170,11 +178,11 @@
   </header>
 
   <ul class="tiles" id="tiles" aria-label="Today's counts" hidden>
-    <li class="card tile" data-key="votes"><h2>Poll votes</h2><span class="value">0</span><p class="detail"></p></li>
-    <li class="card tile" data-key="games"><h2>Games in progress</h2><span class="value">0</span><p class="detail"></p></li>
-    <li class="card tile" data-key="moves"><h2>Moves played</h2><span class="value">0</span><p class="detail"></p></li>
-    <li class="card tile" data-key="pixels"><h2>Pixels painted</h2><span class="value">0</span><p class="detail"></p></li>
-    <li class="card tile" data-key="countries"><h2>Countries</h2><span class="value">0</span><p class="detail"></p></li>
+    <li class="card tile" data-key="votes"><h2 data-demo-link="poll">Poll votes</h2><span class="value">0</span><p class="detail"></p></li>
+    <li class="card tile" data-key="games"><h2>Games in progress</h2><span class="value">0</span><p class="detail"></p><p class="tile-links" data-demo-links="chess tictactoe" hidden></p></li>
+    <li class="card tile" data-key="moves"><h2>Moves played</h2><span class="value">0</span><p class="detail"></p><p class="tile-links" data-demo-links="chess tictactoe" hidden></p></li>
+    <li class="card tile" data-key="pixels"><h2 data-demo-link="pixels">Pixels painted</h2><span class="value">0</span><p class="detail"></p></li>
+    <li class="card tile" data-key="countries"><h2 data-demo-link="map">Countries</h2><span class="value">0</span><p class="detail"></p></li>
   </ul>
 
   <section class="card chart" id="chart" aria-labelledby="chart-title" hidden>
@@ -182,6 +190,7 @@
       <h2 id="chart-title">Activity by hour today, UTC</h2>
       <p class="summary" id="summary"></p>
     </div>
+    <!-- biome-ignore lint/a11y/noNoninteractiveTabindex: the chart takes focus so the arrow keys can read each hour aloud -->
     <div class="plot" id="plot" tabindex="0" role="img" aria-labelledby="chart-title" aria-describedby="summary chart-help">
       <svg id="svg" aria-hidden="true" focusable="false"></svg>
       <div class="tip" id="tip" hidden></div>
@@ -207,6 +216,7 @@
   <p class="note" id="note">Counts of things done in the demos today, refreshed about once a minute. Writes are every change any demo saved.</p>
   <p class="sr" id="announce" aria-live="polite"></p>
 </main>
+<footer class="demo-links" data-demo-links="gallery" hidden></footer>
 
 <script>
 (() => {
@@ -302,7 +312,7 @@
     if (!parts.length) return { n: null, cut: false, failed: false };
     return { n: parts.reduce((a, x) => a + x.v, 0), cut: parts.some((x) => x.cut), failed: parts.some((x) => x.failed) };
   }
-  const valueOf = (t, k) => tileOf(t, k).n;
+  const valueFor = (t, k) => tileOf(t, k).n;
   const DASH = "–";
   const plus = (n, cut) => big(n) + (cut ? "+" : "");
   const part = (x) => (x.missing ? DASH : plus(x.v, x.cut));
@@ -582,7 +592,7 @@
     renderTiles(next, old);
     renderFresh();
     if (old) queueAnnounce();
-    else for (const k of Object.keys(NAMES)) spoken[k] = valueOf(next, k);
+    else for (const k of Object.keys(NAMES)) spoken[k] = valueFor(next, k);
     if (next.day !== hourlyDay) loadHourly(next.day).catch(() => {});
     else renderChart();
   }
@@ -640,6 +650,54 @@
       ? "Open this dashboard from its view link to see live numbers."
       : "Could not load the numbers. Reload to try again.";
   });
+})();
+</script>
+<script>
+/* Links to the other demos. The publish script fills APP_ORIGIN and each id from
+   ops/demo/ids.json; a link whose id is still a placeholder is never made. */
+(() => {
+  "use strict";
+  const APP_ORIGIN = "{{origin}}";
+  const IDS = { gallery: "{{id:gallery}}", poll: "{{id:poll}}", tictactoe: "{{id:tictactoe}}", chess: "{{id:chess}}", pixels: "{{id:pixels}}", map: "{{id:map}}" };
+  const resolved = (v) => typeof v === "string" && !v.startsWith("{" + "{");
+  const VALID_ID = /^[A-Za-z0-9_-]{4,64}$/;
+  function appOrigin() {
+    if (resolved(APP_ORIGIN) && /^https?:\/\/[^/]+$/.test(APP_ORIGIN)) return APP_ORIGIN;
+    try {
+      const anc = window.location.ancestorOrigins;
+      if (anc && anc.length && anc[anc.length - 1] !== "null") return anc[anc.length - 1];
+    } catch {}
+    return "";
+  }
+  const base = appOrigin();
+  const LABELS = { gallery: "All demos", tictactoe: "Tic-tac-toe", chess: "Chess" };
+  /* Links are built here, never in the markup, so an unfilled id leaves no link behind. */
+  function link(slug, text) {
+    const id = IDS[slug];
+    if (!resolved(id) || !VALID_ID.test(id)) return null;
+    const a = document.createElement("a");
+    a.href = `${base}/a/${id}`;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.dataset.demo = slug;
+    a.textContent = text;
+    if (slug === "gallery") a.insertAdjacentHTML("beforeend", '<span aria-hidden="true"> ↗</span>');
+    a.insertAdjacentHTML("beforeend", '<span class="sr"> (opens in new tab)</span>');
+    return a;
+  }
+  /* data-demo-link: the element's own text becomes the link. */
+  for (const el of document.querySelectorAll("[data-demo-link]")) {
+    const a = link(el.dataset.demoLink, el.textContent);
+    if (a) el.replaceChildren(a);
+  }
+  /* data-demo-links: a hidden list of links, shown once at least one resolves. */
+  for (const el of document.querySelectorAll("[data-demo-links]")) {
+    for (const slug of el.dataset.demoLinks.split(" ")) {
+      const a = link(slug, LABELS[slug]);
+      if (a) el.append(a);
+    }
+    el.hidden = !el.children.length;
+  }
 })();
 </script>
 </body>

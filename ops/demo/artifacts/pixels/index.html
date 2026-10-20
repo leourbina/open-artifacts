@@ -131,6 +131,10 @@
   @media (prefers-reduced-motion: reduce) {
     .ring[data-run="true"] rect { transition: none; }
   }
+  .demo-links { margin: 20px auto 0; text-align: center; font-size: 12.5px; }
+  .demo-links a { color: var(--oa-text-muted); text-decoration: none; border-radius: 2px; }
+  .demo-links a:hover { color: var(--oa-text-2); text-decoration: underline; text-underline-offset: 2px; }
+  .demo-links a:focus-visible { outline: 2px solid var(--oa-focus); outline-offset: 2px; }
 </style>
 </head>
 <body>
@@ -138,6 +142,7 @@
   <p class="kicker">Today's canvas · resets 00:00 UTC</p>
   <h1 id="title">Pixel canvas</h1>
   <div class="frame" id="frame">
+    <!-- biome-ignore lint/a11y/useSemanticElements: an ARIA grid of gridcell buttons with arrow-key focus; no native element does this -->
     <div class="board" id="board" role="grid" aria-labelledby="title" aria-describedby="help"></div>
   </div>
   <div class="palette" id="palette" role="radiogroup" aria-label="Color"></div>
@@ -146,6 +151,7 @@
   <p class="error" id="error" role="alert"></p>
   <p class="sr" id="announce" aria-live="polite"></p>
 </main>
+<footer class="demo-links" data-demo-links="gallery" hidden></footer>
 
 <script>
 (() => {
@@ -421,7 +427,8 @@
     const r = Math.floor(i / SIZE), c = i % SIZE;
     if (viewColor(i) === color) { say(`Row ${r + 1}, column ${c + 1} is already ${PALETTE[color][0]}.`); return; }
 
-    const mine = { color, seq: (seq += 1) };
+    seq += 1;
+    const mine = { color, seq };
     pending.set(i, mine);
     paintCell(i);
     renderCount();
@@ -508,6 +515,54 @@
   }
   setTimeout(() => { if (!ready && !failText) fail("Could not connect. Reload to try again."); }, 10000);
   boot().catch(() => fail());
+})();
+</script>
+<script>
+/* Links to the other demos. The publish script fills APP_ORIGIN and each id from
+   ops/demo/ids.json; a link whose id is still a placeholder is never made. */
+(() => {
+  "use strict";
+  const APP_ORIGIN = "{{origin}}";
+  const IDS = { gallery: "{{id:gallery}}" };
+  const resolved = (v) => typeof v === "string" && !v.startsWith("{" + "{");
+  const VALID_ID = /^[A-Za-z0-9_-]{4,64}$/;
+  function appOrigin() {
+    if (resolved(APP_ORIGIN) && /^https?:\/\/[^/]+$/.test(APP_ORIGIN)) return APP_ORIGIN;
+    try {
+      const anc = window.location.ancestorOrigins;
+      if (anc && anc.length && anc[anc.length - 1] !== "null") return anc[anc.length - 1];
+    } catch {}
+    return "";
+  }
+  const base = appOrigin();
+  const LABELS = { gallery: "All demos", tictactoe: "Tic-tac-toe", chess: "Chess" };
+  /* Links are built here, never in the markup, so an unfilled id leaves no link behind. */
+  function link(slug, text) {
+    const id = IDS[slug];
+    if (!resolved(id) || !VALID_ID.test(id)) return null;
+    const a = document.createElement("a");
+    a.href = `${base}/a/${id}`;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.dataset.demo = slug;
+    a.textContent = text;
+    if (slug === "gallery") a.insertAdjacentHTML("beforeend", '<span aria-hidden="true"> ↗</span>');
+    a.insertAdjacentHTML("beforeend", '<span class="sr"> (opens in new tab)</span>');
+    return a;
+  }
+  /* data-demo-link: the element's own text becomes the link. */
+  for (const el of document.querySelectorAll("[data-demo-link]")) {
+    const a = link(el.dataset.demoLink, el.textContent);
+    if (a) el.replaceChildren(a);
+  }
+  /* data-demo-links: a hidden list of links, shown once at least one resolves. */
+  for (const el of document.querySelectorAll("[data-demo-links]")) {
+    for (const slug of el.dataset.demoLinks.split(" ")) {
+      const a = link(slug, LABELS[slug]);
+      if (a) el.append(a);
+    }
+    el.hidden = !el.children.length;
+  }
 })();
 </script>
 </body>

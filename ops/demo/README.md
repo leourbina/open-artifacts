@@ -58,6 +58,10 @@ placeholders that the publish script fills before it uploads the page:
 | `{{origin}}` | the app origin with no trailing slash, for example `https://demo.open-artifacts.com` | the instance being published to |
 
 Publish the other demos first, write their ids to `ids.json`, then publish the gallery.
+The other demos use the same placeholders for their cross-links (an "All demos" footer link to
+the gallery, and the dashboard's tile labels to each demo), each hidden or left as plain text
+until its id is filled. They need the gallery's id, so publish the gallery once, then republish
+the demos with every id in `ids.json`.
 The page links to `<origin>/a/<id>`. A card whose id is still a placeholder (or not a valid
 id) is left out, so a demo that is not published yet never shows a dead link. If `{{origin}}`
 is left unfilled the page falls back to `location.ancestorOrigins` (Chromium and Safari only),
