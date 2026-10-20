@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.14.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.13.0...v0.14.0) (2026-10-20)
+
+
+### Features
+
+* **content:** new-tab links escape the sandbox; no top navigation ([#313](https://github.com/open-artifacts-ai/open-artifacts/issues/313)) ([872674c](https://github.com/open-artifacts-ai/open-artifacts/commit/872674c0235ede6b46be1b83f45f55334ba25252))
+* **dashboard:** artifact popups escape the sandbox (fixes blank /a/&lt;id&gt; P0; needs user yes) ([#311](https://github.com/open-artifacts-ai/open-artifacts/issues/311)) ([cc2297d](https://github.com/open-artifacts-ai/open-artifacts/commit/cc2297d6d55c001758778edda5d1aa050174634d))
+
 ## [0.13.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.12.0...v0.13.0) (2026-10-20)
 
 
