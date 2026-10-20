@@ -1,0 +1,46 @@
+export type InstallId = string;
+
+export interface CreateInput {
+  slug: string;
+  ownerEmail: string;
+  plan: "paid";
+  vars?: Record<string, string>;
+  testHooks?: boolean;
+  resumeId?: InstallId;
+}
+
+export interface Install {
+  id: InstallId;
+  slug: string;
+  appHost: string;
+  contentHost: string;
+  version: string;
+  patFile: string;
+}
+
+export interface Release {
+  version: string;
+  bundleKey: string;
+}
+
+export interface UpgradeResult {
+  id: InstallId;
+  from: string;
+  to: string;
+  ok: boolean;
+  rolledBack: boolean;
+  reason?: string;
+}
+
+export class NotInM1 extends Error {
+  override name = "NotInM1";
+}
+
+export interface Provisioner {
+  create(i: CreateInput): Promise<Install>;
+  upgrade(id: InstallId, to: Release): Promise<UpgradeResult>;
+  rollback(id: InstallId): Promise<UpgradeResult>;
+  delete(id: InstallId, confirm: string): Promise<void>;
+  export(id: InstallId, dest: string): Promise<never>;
+  import(src: string, i: CreateInput): Promise<never>;
+}
