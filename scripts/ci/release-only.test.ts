@@ -1,9 +1,18 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// Every test shells out to git and node; give them room when the machine is loaded.
+vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const script = join(root, "scripts/ci/release-only.ts");
@@ -22,22 +31,21 @@ const PKG = (extra: Record<string, unknown> = {}, version = "0.4.0") =>
     2,
   )}\n`;
 
-/** A throwaway git repo seeded with the files a release PR touches. */
-function repo() {
-  const dir = mkdtempSync(join(tmpdir(), "ro-"));
-  const git = (...args: string[]) => {
-    const r = spawnSync("git", args, { cwd: dir, encoding: "utf8" });
-    if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
-    return r.stdout.trim();
-  };
-  const write = (path: string, data: string | Buffer) => {
+const gitIn = (dir: string, ...args: string[]) => {
+  const r = spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+  if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
+  return r.stdout.trim();
+};
+
+/** The seeded repo is built once (git is slow under load) and copied per test. */
+let template: { dir: string; base: string } | undefined;
+function seeded() {
+  if (template) return template;
+  const dir = mkdtempSync(join(tmpdir(), "ro-template-"));
+  const git = (...args: string[]) => gitIn(dir, ...args);
+  const write = (path: string, data: string) => {
     mkdirSync(dirname(join(dir, path)), { recursive: true });
     writeFileSync(join(dir, path), data);
-  };
-  const commit = (msg = "c") => {
-    git("add", "-A");
-    git("commit", "-q", "--allow-empty", "-m", msg);
-    return git("rev-parse", "HEAD");
   };
   git("init", "-q", "-b", "main");
   git("config", "user.email", "t@example.com");
@@ -48,7 +56,28 @@ function repo() {
   write(".release-please-manifest.json", '{".":"0.4.0"}\n');
   write("CHANGELOG.md", "# Changelog\n\n## [0.4.0] (2026-10-20)\n");
   write("src/index.ts", "export {};\n");
-  const base = commit("base");
+  git("add", "-A");
+  git("commit", "-q", "-m", "base");
+  template = { dir, base: git("rev-parse", "HEAD") };
+  return template;
+}
+
+/** A throwaway copy of the seeded git repo (the files a release PR touches). */
+function repo() {
+  const t = seeded();
+  const dir = mkdtempSync(join(tmpdir(), "ro-"));
+  cpSync(t.dir, dir, { recursive: true });
+  const git = (...args: string[]) => gitIn(dir, ...args);
+  const write = (path: string, data: string | Buffer) => {
+    mkdirSync(dirname(join(dir, path)), { recursive: true });
+    writeFileSync(join(dir, path), data);
+  };
+  const commit = (msg = "c") => {
+    git("add", "-A");
+    git("commit", "-q", "--allow-empty", "-m", msg);
+    return git("rev-parse", "HEAD");
+  };
+  const base = t.base;
   const check = (head: string, from = base) => {
     const r = spawnSync(
       "node",
