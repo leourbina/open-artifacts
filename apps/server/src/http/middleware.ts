@@ -5,6 +5,7 @@ import { verifyPat } from "../auth/pat.js";
 import { readSession, sessionCookieName } from "../auth/session.js";
 import type { Env } from "../env.js";
 import { getUser } from "../services/users.js";
+import { frameOpts, isEmbedRequest } from "./embed.js";
 import { ApiError, appOrigin, toErrorResponse } from "./errors.js";
 
 /** Hono Variables set by `session()`; use as `Hono<{ Bindings: Env; Variables: AppVariables }>`. */
@@ -19,7 +20,16 @@ export type AppEnv = { Bindings: Env; Variables: AppVariables };
 export const CONTENT_CSP =
   "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads";
 
-type SecurityOpts = { frameDeny?: boolean; csp?: string };
+/**
+ * `frameAncestors` (a pre-validated source list from frameOpts) replaces
+ * X-Frame-Options with `Content-Security-Policy: frame-ancestors …` (merged
+ * into `csp`, when given, as one header); it wins over `frameDeny`.
+ */
+type SecurityOpts = {
+  frameDeny?: boolean;
+  frameAncestors?: string;
+  csp?: string;
+};
 
 /** `res` with the standard security headers; a copy when its headers are immutable. */
 export function withSecurityHeaders(
@@ -44,16 +54,25 @@ function setSecurityHeaders(h: Headers, opts: SecurityOpts): void {
   h.set("X-Robots-Tag", "noindex, nofollow");
   h.set("X-Content-Type-Options", "nosniff");
   h.set("Referrer-Policy", "strict-origin-when-cross-origin");
-  if (opts.frameDeny) h.set("X-Frame-Options", "DENY");
-  if (opts.csp) h.set("Content-Security-Policy", opts.csp);
+  if (opts.frameAncestors) {
+    h.delete("X-Frame-Options");
+    const fa = `frame-ancestors ${opts.frameAncestors}`;
+    h.set("Content-Security-Policy", opts.csp ? `${opts.csp}; ${fa}` : fa);
+  } else {
+    if (opts.frameDeny) h.set("X-Frame-Options", "DENY");
+    if (opts.csp) h.set("Content-Security-Policy", opts.csp);
+  }
 }
 
+/** App-host security headers; framing per frameOpts (DENY except /a/:id/full with EMBED_ORIGINS). */
 export const securityHeaders =
-  (opts: SecurityOpts = {}): MiddlewareHandler =>
-  async (c, next) => {
+  (): MiddlewareHandler<AppEnv> => async (c, next) => {
     await next();
     // Responses from fetch()/Response.redirect() have immutable headers: re-wrap.
-    c.res = withSecurityHeaders(c.res, opts);
+    c.res = withSecurityHeaders(
+      c.res,
+      frameOpts(c.env, c.req.method, new URL(c.req.url).pathname),
+    );
   };
 
 const BEARER = /^\s*Bearer(?:\s+(.*?))?\s*$/i;
@@ -64,11 +83,14 @@ const BEARER = /^\s*Bearer(?:\s+(.*?))?\s*$/i;
  * user, anything else yields null with no cookie fallback. Any other (or no)
  * Authorization header falls through to the session cookie (sessionCookieName). The user row is
  * loaded on every request, so deleted users resolve to null.
+ * `X-OA-Embed: 1` or `?embed=1` (isEmbedRequest) forces anonymous.
  */
 export const session = (): MiddlewareHandler<AppEnv> => async (c, next) => {
   c.set("user", null);
   c.set("tokenLabel", null);
   c.set("tokenId", null);
+  // Embed mode: anonymous regardless of cookie or Bearer (a downgrade only).
+  if (isEmbedRequest(c.req.raw)) return next();
   const bearer = BEARER.exec(c.req.header("authorization") ?? "");
   if (bearer) {
     let ctx: Pick<ExecutionContext, "waitUntil"> | undefined;

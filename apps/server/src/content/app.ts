@@ -2,6 +2,7 @@ import { type Format, isId, normalizePath, viewerPath } from "@oa/shared";
 import { type Context, Hono } from "hono";
 import { methodNotAllowed, ROBOTS } from "../app.js";
 import type { Env } from "../env.js";
+import { contentFrameAncestors } from "../http/embed.js";
 import { ApiError, appOrigin, toErrorResponse } from "../http/errors.js";
 import { CONTENT_CSP } from "../http/middleware.js";
 import { injectRuntime } from "./inject.js";
@@ -447,10 +448,15 @@ contentApp.use(async (c, next) => {
   await next();
   c.res = new Response(c.res.body, c.res);
   const h = c.res.headers;
+  // Embed origins may frame only served public content, never signed/private.
+  const publicOk =
+    (c.req.method === "GET" || c.req.method === "HEAD") &&
+    c.res.ok &&
+    PUBLIC.test(new URL(c.req.url).pathname);
   h.delete("Set-Cookie");
   h.set(
     "Content-Security-Policy",
-    `${CONTENT_CSP}; frame-ancestors ${appOrigin(c.env)}`,
+    `${CONTENT_CSP}; frame-ancestors ${contentFrameAncestors(c.env, appOrigin(c.env), publicOk)}`,
   );
   h.set("Cross-Origin-Resource-Policy", "cross-origin");
   // Sandboxed (opaque-origin) frames send `Origin: null`: allow any origin,

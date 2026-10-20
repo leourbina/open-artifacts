@@ -11,7 +11,10 @@
  * - Auth: a request with no cookie and no Bearer gets 401 on every authed route (all mutations
  *   except signed-URL upload PUT, plus me/members/tokens/oauth-clients/settings/usage/list/search);
  *   public-artifact reads stay anonymous-OK, and so do data doc writes on a public artifact
- *   with allowAnonymousWrites (updatedBy "anon"), as on the server (B13).
+ *   with allowAnonymousWrites (updatedBy "anon"), as on the server (B13). An anonymous read
+ *   of a non-public artifact (GET, content-url, versions, data list/query/doc) gets 404, and
+ *   so does an anonymous data/storage write to one (the server checks access first).
+ *   `X-OA-Embed: 1` (or `?embed=1`) counts as anonymous even with a cookie or Bearer.
  * - quotaExceeded: every /api/v1 route answers 503 quota_exceeded.
  * - emailEnabled: sets Me.instance.emailEnabled (default false, from the fixtures).
  * - update: sets Me.instance.update (default null, from the fixtures).
@@ -99,10 +102,16 @@ const DEFAULT_ENTRY = {
   pdf: "document.pdf",
 } as const;
 
-/** Anonymous = no cookie and no Bearer token. */
+/**
+ * Anonymous = no cookie and no Bearer token, or the embed-mode hint
+ * (`X-OA-Embed: 1`, or `?embed=1` on the data-subscribe socket), which drops
+ * both, as on the server.
+ */
 const isAnon = (req: Request) =>
-  !req.headers.has("cookie") &&
-  !/^bearer\s/i.test(req.headers.get("authorization") ?? "");
+  req.headers.get("x-oa-embed") === "1" ||
+  new URL(req.url).searchParams.get("embed") === "1" ||
+  (!req.headers.has("cookie") &&
+    !/^bearer\s/i.test(req.headers.get("authorization") ?? ""));
 const hideEmail = (u: UserRef): UserRef => ({ ...u, email: null });
 const redactArt = (a: ArtifactSummary, req: Request): ArtifactSummary =>
   a.visibility === "public" && isAnon(req)
@@ -224,6 +233,8 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
     (ctx: Ctx) => {
       const a = artifacts.find((x) => x.id === ctx.params.id);
       if (!a || a.deletedAt !== null) return notFound();
+      // Anonymous callers see only public artifacts; anything else is 404.
+      if (a.visibility !== "public" && isAnon(ctx.request)) return notFound();
       if (need === "owner" && a.access !== "owner") return notFound();
       if (need === "write" && a.access === "viewer") return notFound();
       return fn(a, ctx);
@@ -359,7 +370,18 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
         : /^\/(me|members|tokens|oauth-clients|settings|usage|artifacts|search)\/?$/.test(
             path,
           );
-      if (needsAuth && isAnon(request) && !anonDataWrite(path))
+      // Runtime routes (data/storage) check access first, as on the server:
+      // an anonymous caller gets 404 on a non-public artifact, then 401 for a
+      // write it may not make; a data query is a read.
+      const rt = /^\/artifacts\/([^/]+)\/(data|storage)(?:\/|$)/.exec(path);
+      if (needsAuth && isAnon(request) && rt) {
+        const a = artifacts.find((x) => x.id === rt[1]);
+        if (!a || a.deletedAt !== null || a.visibility !== "public")
+          return notFound();
+        const query = rt[2] === "data" && /\/query$/.test(path);
+        if (!query && !anonDataWrite(path))
+          return err("unauthorized", "Authentication required");
+      } else if (needsAuth && isAnon(request) && !anonDataWrite(path))
         return err("unauthorized", "Authentication required");
       if (
         mutating &&

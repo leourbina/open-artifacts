@@ -64,7 +64,7 @@ const unlessSigned =
 
 export function createApp(mount: (app: AppType) => void = mountRoutes) {
   const app: AppType = new Hono<AppEnv>();
-  app.use(securityHeaders({ frameDeny: true }));
+  app.use(securityHeaders());
   app.onError((e) => toErrorResponse(e));
   app.notFound(() => toErrorResponse(new ApiError("not_found", "Not found")));
 
