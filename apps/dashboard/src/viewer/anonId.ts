@@ -1,12 +1,13 @@
 /**
- * The signed anonymous-id token ("<id>.<sig>") for this browser on this
+ * The signed anonymous-id token ("<id>.<iat>.<sig>"; the legacy 2-part v1
+ * "<id>.<sig>" is still accepted until the server renews it) for this browser on this
  * instance. One localStorage key on the app origin (each instance has its
  * own); with storage blocked (private mode, partitioned or disabled) it lives
  * in memory for the session. Never throws. The token stays in the shell: it is
  * never posted into the artifact frame.
  */
 export const ANON_ID_KEY = "oa.anonId";
-const TOKEN_RE = /^[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}$/;
+const TOKEN_RE = /^[A-Za-z0-9_-]{22}\.(?:[0-9a-z]{1,10}\.)?[A-Za-z0-9_-]{43}$/;
 
 let memory: string | null = null;
 
