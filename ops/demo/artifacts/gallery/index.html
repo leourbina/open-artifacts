@@ -212,6 +212,13 @@
       id: "{{id:tictactoe}}",
       thumb: "tictactoe",
     },
+    {
+      slug: "chess",
+      title: "Chess",
+      pitch: "Two players, any number of spectators. Every window checks each move against the rules.",
+      id: "{{id:chess}}",
+      thumb: "chess",
+    },
   ];
 
   const THUMBS = {
@@ -272,6 +279,36 @@
         <text class="t-text" x="100" y="180" font-size="9.5">You win.</text>
         <rect x="160" y="168" width="60" height="18" rx="4" style="fill: var(--oa-accent)"/>
         <text x="190" y="180" font-size="8.5" font-weight="500" text-anchor="middle" style="fill: var(--oa-accent-text); font-family: var(--oa-font-sans)">Start over</text>
+      </svg>`,
+    chess: `
+      <svg viewBox="0 0 320 200" role="img" aria-hidden="true" focusable="false">
+        <defs>
+          <pattern id="t-chess-sq" width="36" height="36" patternUnits="userSpaceOnUse" x="88" y="28">
+            <rect width="36" height="36" style="fill: #e3e7ed"/>
+            <rect width="18" height="18" x="18" style="fill: #9ba7b8"/>
+            <rect width="18" height="18" y="18" style="fill: #9ba7b8"/>
+          </pattern>
+        </defs>
+        <rect class="t-bg" width="320" height="200"/>
+        <rect x="88" y="28" width="144" height="144" fill="url(#t-chess-sq)" style="stroke: var(--oa-border-strong)"/>
+        <rect class="t-soft" x="160" y="118" width="18" height="18" style="fill: var(--oa-accent); fill-opacity: 0.28"/>
+        <rect class="t-soft" x="160" y="82" width="18" height="18" style="fill: var(--oa-accent); fill-opacity: 0.28"/>
+        <g font-size="16.5" text-anchor="middle" transform="translate(0 1)" style="font-family: 'Apple Symbols', 'Segoe UI Symbol', 'Noto Sans Symbols 2', sans-serif; paint-order: stroke fill; stroke-width: 0.8">
+          <g style="fill: #1b1e22; stroke: #f1f3f6">
+            <text x="97" y="42">&#x265C;&#xFE0E;</text><text x="151" y="42">&#x265B;&#xFE0E;</text><text x="169" y="42">&#x265A;&#xFE0E;</text><text x="223" y="42">&#x265C;&#xFE0E;</text>
+            <text x="97" y="60">&#x265F;&#xFE0E;</text><text x="115" y="60">&#x265F;&#xFE0E;</text><text x="187" y="60">&#x265F;&#xFE0E;</text><text x="205" y="60">&#x265F;&#xFE0E;</text>
+            <text x="133" y="78">&#x265E;&#xFE0E;</text><text x="169" y="96">&#x265F;&#xFE0E;</text>
+          </g>
+          <g style="fill: #fbfcfd; stroke: #1b1e22">
+            <text x="169" y="132">&#x265F;&#xFE0E;</text><text x="187" y="114">&#x265E;&#xFE0E;</text><text x="133" y="114">&#x265D;&#xFE0E;</text>
+            <text x="97" y="150">&#x265F;&#xFE0E;</text><text x="115" y="150">&#x265F;&#xFE0E;</text><text x="205" y="150">&#x265F;&#xFE0E;</text><text x="223" y="150">&#x265F;&#xFE0E;</text>
+            <text x="97" y="168">&#x265C;&#xFE0E;</text><text x="151" y="168">&#x265B;&#xFE0E;</text><text x="205" y="168">&#x265A;&#xFE0E;</text>
+          </g>
+        </g>
+        <text class="t-muted" x="240" y="42" font-size="8">1. e4 e5</text>
+        <text class="t-muted" x="240" y="56" font-size="8">2. Nf3 Nc6</text>
+        <text class="t-muted" x="240" y="70" font-size="8">3. Bc4</text>
+        <text class="t-text" x="88" y="188" font-size="9.5">Your move.</text>
       </svg>`,
   };
 

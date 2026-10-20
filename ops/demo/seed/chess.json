@@ -1,0 +1,10 @@
+{
+  "artifact": "chess",
+  "collections": {
+    "table": {
+      "table": { "g": "g0", "white": null, "black": null }
+    },
+    "moves": {}
+  },
+  "notes": "table/table holds the current game id g and the seats; seats are { id, at } and free 5 minutes after the later of at and the game's last move. moves/<g>-<nnn> holds { g, n, m, by, at } with m in UCI (e2e4, e7e8q). The reset opens both seats on game g0 and deletes every move."
+}

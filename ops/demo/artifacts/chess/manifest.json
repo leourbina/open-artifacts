@@ -1,0 +1,10 @@
+{
+  "title": "Chess",
+  "visibility": "public",
+  "allowAnonymousWrites": true,
+  "capabilities": {
+    "db": true,
+    "viewer": true
+  },
+  "description": "Two players, any number of spectators. Every window checks each move against the rules."
+}
