@@ -208,6 +208,17 @@ describe("prod-setup.sh demo modes", () => {
       run("demo-install", [`{"step":"x","status":"error"}`]).code,
     ).not.toBe(0);
   });
+  it("refuses the production Worker name or host without running setup", () => {
+    for (const bad of [
+      { DEMO_NAME: "open-artifacts-prod" },
+      { DEMO_APP_HOST: "artifacts.leourbina.com" },
+      { DEMO_NAME: "custom-prod", PROD_NAME: "custom-prod" },
+    ]) {
+      const r = run("demo-install", [ok("a")], { ...demoEnv, ...bad });
+      expect(r.code, JSON.stringify(bad)).toBe(2);
+      expect(r.calls).toEqual([]);
+    }
+  });
   it("requires the DEMO_* values", () => {
     expect(run("demo-install", [ok("a")], {} as never).code).not.toBe(0);
   });

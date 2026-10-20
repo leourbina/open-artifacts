@@ -8,6 +8,12 @@ set -uo pipefail
 
 case "${1:-}" in
   demo-*)
+    # The demo must never target the production Worker or its hosts.
+    if [[ "${DEMO_NAME:-}" == "open-artifacts-prod" || "${DEMO_NAME:-}" == "${PROD_NAME:-@}" ||
+      "${DEMO_APP_HOST:-}" == "artifacts.leourbina.com" ]]; then
+      echo "demo setup refuses the production name or host" >&2
+      exit 2
+    fi
     PROD_NAME="${DEMO_NAME:-}" PROD_APP_HOST="${DEMO_APP_HOST:-}"
     PROD_CONTENT_HOST="${DEMO_CONTENT_HOST:-}" PROD_OWNER_EMAIL="${DEMO_OWNER_EMAIL:-}"
     ;;

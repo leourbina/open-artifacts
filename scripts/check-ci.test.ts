@@ -1123,4 +1123,33 @@ describe("demo instance workflows", () => {
     });
     // TODO: once ci/release-cadence merges, assert verify-release `needs` deploy-demo.
   });
+
+  describe("prod-setup.sh modes by workflow", () => {
+    const modesIn = (f: string) =>
+      [...JSON.stringify(wf(f)).matchAll(/prod-setup\.sh ([a-z-]+)/g)].map(
+        (m) => m[1] as string,
+      );
+    const demoJob = (f: string, job: string) =>
+      [
+        ...JSON.stringify(wf(f).jobs[job]).matchAll(
+          /prod-setup\.sh ([a-z-]+)/g,
+        ),
+      ].map((m) => m[1] as string);
+    it("demo workflows call only demo-* modes", () => {
+      for (const f of demoFiles)
+        for (const m of modesIn(f)) expect(m, f).toMatch(/^demo-/);
+      expect(
+        demoJob("release-please.yml", "deploy-demo").length,
+      ).toBeGreaterThan(0);
+      for (const m of demoJob("release-please.yml", "deploy-demo"))
+        expect(m).toMatch(/^demo-/);
+    });
+    it("deploy-prod and ops-prod-* call only prod modes", () => {
+      const prod = new Set(["install", "preflight", "upgrade", "cleanup"]);
+      for (const m of demoJob("release-please.yml", "deploy-prod"))
+        expect(prod.has(m), m).toBe(true);
+      for (const f of readdirSync(dir).filter((n) => /^ops-prod-/.test(n)))
+        for (const m of modesIn(f)) expect(prod.has(m), `${f} ${m}`).toBe(true);
+    });
+  });
 });
