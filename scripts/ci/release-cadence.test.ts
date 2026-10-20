@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { arm, blocker, type Exec, RELEASE_BRANCH } from "./release-cadence.ts";
+import {
+  arm,
+  blocker,
+  DRAIN_CAP_MS,
+  type Exec,
+  RELEASE_BRANCH,
+  willWrite,
+} from "./release-cadence.ts";
 
 const REPO = "open-artifacts-ai/open-artifacts";
 const NOW = Date.parse("2026-10-21T15:00:00Z");
@@ -7,6 +14,8 @@ const hoursAgo = (h: number) => new Date(NOW - h * 3600_000).toISOString();
 
 type Ctx = {
   __typename: string;
+  completedAt?: string;
+  createdAt?: string;
   name?: string;
   conclusion?: string;
   detailsUrl?: string;
@@ -21,6 +30,7 @@ type Fixture = {
     state?: string;
     queued?: boolean;
     armed?: boolean;
+    oid?: string;
     contexts?: Ctx[];
   };
   queue?: { headRefName: string; number: number }[] | null;
@@ -49,6 +59,7 @@ function fake(f: Fixture) {
                 nodes: [
                   {
                     commit: {
+                      oid: f.pr.oid ?? "abc123",
                       statusCheckRollup: {
                         state: f.pr.state ?? "SUCCESS",
                         contexts: { nodes: f.pr.contexts ?? [] },
@@ -98,6 +109,133 @@ const logs = () => {
   return { log: (s: string) => out.push(s), out };
 };
 
+const arm_ = (g: ReturnType<typeof fake>, extra: { capMs?: number } = {}) =>
+  arm({ exec: g.exec, repo: REPO, log: logs().log, now: () => NOW, ...extra });
+const green = (minutesAgo: number): Ctx[] => [
+  {
+    __typename: "CheckRun",
+    name: "a",
+    conclusion: "SUCCESS",
+    completedAt: new Date(NOW - minutesAgo * 60_000).toISOString(),
+  },
+  {
+    __typename: "CheckRun",
+    name: "b",
+    conclusion: "SUCCESS",
+    completedAt: new Date(NOW - (minutesAgo + 20) * 60_000).toISOString(),
+  },
+];
+const QUEUED = [{ number: 11, headRefName: "feat/a" }];
+
+describe("drain cap and head pinning", () => {
+  it("the cap is 30 minutes", () => {
+    expect(DRAIN_CAP_MS).toBe(30 * 60_000);
+  });
+
+  it("waits while green for less than the cap and code PRs are queued", async () => {
+    const g = fake({ pr: { contexts: green(29) }, queue: QUEUED });
+    expect((await arm_(g)).action).toBe("waiting");
+    expect(g.wrote("pr merge")).toEqual([]);
+  });
+
+  it("arms and logs 'cap hit' once the latest check completed 30 minutes ago", async () => {
+    const g = fake({
+      pr: { contexts: green(30), oid: "def456" },
+      queue: QUEUED,
+    });
+    const l = logs();
+    const r = await arm({
+      exec: g.exec,
+      repo: REPO,
+      log: l.log,
+      now: () => NOW,
+    });
+    expect(r.action).toBe("armed");
+    expect(l.out.join("\n")).toContain("cap hit");
+    expect(g.wrote("pr merge")).toHaveLength(1);
+  });
+
+  it("measures from the LATEST check, not the first", async () => {
+    // latest check finished 10 minutes ago, an older one 50 minutes ago
+    const g = fake({ pr: { contexts: green(10) }, queue: QUEUED });
+    expect((await arm_(g)).action).toBe("waiting");
+  });
+
+  it("the cap is injectable", async () => {
+    const g = fake({ pr: { contexts: green(5) }, queue: QUEUED });
+    expect((await arm_(g, { capMs: 60_000 * 5 })).action).toBe("armed");
+  });
+
+  it("arms with --match-head-commit <sha>", async () => {
+    const g = fake({ pr: { oid: "def456" } });
+    await arm_(g);
+    const [m] = g.wrote("pr merge");
+    expect(m?.[m.indexOf("--match-head-commit") + 1]).toBe("def456");
+    expect(m).toContain("--auto");
+  });
+
+  it("disables auto-merge when armed (not queued), code PRs are queued and the cap is not hit", async () => {
+    const g = fake({ pr: { armed: true, contexts: green(5) }, queue: QUEUED });
+    expect((await arm_(g)).action).toBe("disarmed");
+    expect(g.wrote("pr merge")).toEqual([
+      ["gh", "pr", "merge", "301", "--disable-auto", "--repo", REPO],
+    ]);
+  });
+
+  it("leaves an armed PR alone when the queue is only release PRs, the cap is hit, or it is queued", async () => {
+    for (const f of [
+      { pr: { armed: true }, queue: [] },
+      { pr: { armed: true, contexts: green(31) }, queue: QUEUED },
+      { pr: { armed: true, queued: true }, queue: QUEUED },
+    ]) {
+      const g = fake(f);
+      expect((await arm_(g)).action).toBe("already");
+      expect(g.wrote("pr merge")).toEqual([]);
+    }
+  });
+
+  it("willWrite says whether the run would touch the PR", async () => {
+    expect(
+      await willWrite({ exec: fake({}).exec, repo: REPO, now: () => NOW }),
+    ).toBe(false);
+    expect(
+      await willWrite({
+        exec: fake({ pr: {} }).exec,
+        repo: REPO,
+        now: () => NOW,
+      }),
+    ).toBe(true);
+    expect(
+      await willWrite({
+        exec: fake({ pr: {}, queue: QUEUED }).exec,
+        repo: REPO,
+        now: () => NOW,
+      }),
+    ).toBe(false);
+    expect(
+      await willWrite({
+        exec: fake({ pr: { state: "PENDING" } }).exec,
+        repo: REPO,
+        now: () => NOW,
+      }),
+    ).toBe(false);
+    expect(
+      await willWrite({
+        exec: fake({ pr: { armed: true }, queue: QUEUED }).exec,
+        repo: REPO,
+        now: () => NOW,
+      }),
+    ).toBe(true);
+    expect(
+      await willWrite({
+        exec: fake({ pr: { armed: true } }).exec,
+        repo: REPO,
+        now: () => NOW,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("arm", () => {
   it("does nothing when there is no release PR", async () => {
     const g = fake({});
@@ -124,7 +262,18 @@ describe("arm", () => {
       pr: 301,
     });
     expect(g.wrote("pr merge")).toEqual([
-      ["gh", "pr", "merge", "301", "--auto", "--squash", "--repo", REPO],
+      [
+        "gh",
+        "pr",
+        "merge",
+        "301",
+        "--auto",
+        "--squash",
+        "--match-head-commit",
+        "abc123",
+        "--repo",
+        REPO,
+      ],
     ]);
   });
 
@@ -345,15 +494,30 @@ describe("blocker", () => {
     expect(g.wrote("issue close")).toEqual([]);
   });
 
-  it("keeps the issue open while a release PR is still open", async () => {
-    const { g } = await run({
+  it("closes an older blocker on every run, even while a new release PR is open and healthy", async () => {
+    const { r, g } = await run({
       pr: { createdAt: hoursAgo(1) },
       issues: [
         { number: 7, title: "Release blocked: x", createdAt: hoursAgo(30) },
       ],
       release: { tag_name: "v0.6.0", published_at: hoursAgo(2) },
     });
-    expect(g.wrote("issue close")).toEqual([]);
+    expect(r).toEqual({ action: "closed", issues: [7] });
+    const [close] = g.wrote("issue close");
+    expect(close?.[close.indexOf("--comment") + 1]).toContain("v0.6.0");
+  });
+
+  it("does not refresh an issue it just closed, and leaves one opened after the release", async () => {
+    const { g } = await run({
+      pr: { state: "FAILURE" },
+      issues: [
+        { number: 7, title: "Release blocked: x", createdAt: hoursAgo(30) },
+        { number: 8, title: "Release blocked: y", createdAt: hoursAgo(1) },
+      ],
+      release: { tag_name: "v0.6.0", published_at: hoursAgo(2) },
+    });
+    expect(g.wrote("issue close").map((c) => c[3])).toEqual(["7"]);
+    expect(g.wrote("issue edit").map((c) => c[3])).toEqual(["8"]);
   });
 
   it("never touches issues whose title lacks the prefix", async () => {

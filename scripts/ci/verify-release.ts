@@ -9,6 +9,26 @@ const SITE = "https://open-artifacts.com/";
 const TIMEOUT_MS = 180_000;
 const INTERVAL_MS = 10_000;
 
+const SEMVER = "\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z]+(?:\\.[0-9A-Za-z]+)*)?";
+const SEMVER_RE = new RegExp(`^${SEMVER}$`);
+const TAG_RE = new RegExp(`^v${SEMVER}$`);
+const NOT_LIVE_RE = new RegExp(`^Release v(${SEMVER}) not live(?::|$)`);
+
+/** Remote text may only enter a message as a validated semver. */
+const safeVersion = (v: unknown): string =>
+  typeof v === "string" && SEMVER_RE.test(v) ? v : "no valid version";
+
+const triple = (v: string) =>
+  v.split("-")[0]?.split(".").map(Number) as [number, number, number];
+function cmp(a: string, b: string): number {
+  const [x, y] = [triple(a), triple(b)];
+  for (let i = 0; i < 3; i++) {
+    const d = (x[i] as number) - (y[i] as number);
+    if (d) return d;
+  }
+  return 0;
+}
+
 export type ExecResult = { code: number; stdout: string; stderr: string };
 export type Exec = (
   cmd: string,
@@ -40,8 +60,8 @@ async function healthVersion(
   let res: Response;
   try {
     res = await d.fetch(`${base}/healthz`);
-  } catch (e) {
-    return `${label} healthz unreachable (${(e as Error).message})`;
+  } catch {
+    return `${label} healthz unreachable`;
   }
   if (!res.ok) return `${label} healthz answered HTTP ${res.status}`;
   let version: unknown;
@@ -52,7 +72,7 @@ async function healthVersion(
   }
   return version === want
     ? undefined
-    : `${label} healthz reports ${typeof version === "string" ? version : "no version"}, expected ${want}`;
+    : `${label} healthz reports ${safeVersion(version)}, expected ${want}`;
 }
 
 async function landingVersion(
@@ -62,15 +82,15 @@ async function landingVersion(
   let res: Response;
   try {
     res = await d.fetch(SITE);
-  } catch (e) {
-    return `landing unreachable (${(e as Error).message})`;
+  } catch {
+    return "landing unreachable";
   }
   if (!res.ok) return `landing answered HTTP ${res.status}`;
   const v = metaVersion(await res.text());
   if (v === null) return "landing has no oa-version meta tag";
   return v === want
     ? undefined
-    : `landing oa-version is ${v}, expected ${want}`;
+    : `landing oa-version is ${safeVersion(v)}, expected ${want}`;
 }
 
 /** Polls (up to 3 minutes by default) until every target shows the tag's version. */
@@ -82,7 +102,7 @@ export async function verifyRelease(
     intervalMs?: number;
   },
 ): Promise<{ ok: boolean; problems: string[] }> {
-  if (!/^v\d+\.\d+\.\d+$/.test(o.tag))
+  if (!TAG_RE.test(o.tag))
     throw new Error(`tag must look like vX.Y.Z, got ${JSON.stringify(o.tag)}`);
   const want = o.tag.slice(1);
   const checks: [string, () => Promise<string | undefined>][] = [
@@ -135,8 +155,11 @@ export async function reportNotLive(o: {
   tag: string;
   problems: string[];
 }): Promise<void> {
+  if (!TAG_RE.test(o.tag))
+    throw new Error(`tag must look like vX.Y.Z, got ${JSON.stringify(o.tag)}`);
   const prefix = `Release ${o.tag} not live:`;
-  const title = `${prefix} ${o.problems.join("; ")}`;
+  const clean = (p: string) => p.replace(/[^\w .,;:()'-]/g, "?").slice(0, 200);
+  const title = `${prefix} ${o.problems.map(clean).join("; ")}`;
   const body = [
     `${o.tag} was released and deployed, but the live checks do not show it:`,
     "",
@@ -197,6 +220,48 @@ export async function reportNotLive(o: {
   ]);
 }
 
+/** Closes the open "Release vX not live" issues for this tag or an older one, once this tag is verified live. */
+export async function closeNotLive(o: {
+  exec: Exec;
+  repo: string;
+  tag: string;
+}): Promise<number[]> {
+  if (!TAG_RE.test(o.tag))
+    throw new Error(`tag must look like vX.Y.Z, got ${JSON.stringify(o.tag)}`);
+  const open: { number: number; title: string }[] = JSON.parse(
+    await gh(o.exec, [
+      "issue",
+      "list",
+      "--repo",
+      o.repo,
+      "--label",
+      "blocker",
+      "--state",
+      "open",
+      "--json",
+      "number,title",
+      "--limit",
+      "50",
+    ]),
+  );
+  const closed: number[] = [];
+  for (const i of open) {
+    const v = NOT_LIVE_RE.exec(i.title)?.[1];
+    if (!v || cmp(v, o.tag.slice(1)) > 0) continue;
+    await gh(o.exec, [
+      "issue",
+      "close",
+      String(i.number),
+      "--repo",
+      o.repo,
+      "--comment",
+      `${o.tag} verified live. Closing.`,
+    ]);
+    closed.push(i.number);
+  }
+  return closed;
+}
+
 const realExec: Exec = (cmd, args) => {
   const r = spawnSync(cmd, args, { encoding: "utf8" });
   return {
@@ -228,6 +293,9 @@ async function main(argv: string[]) {
   });
   if (r.ok) {
     console.log(`${tag} is live`);
+    const closed = await closeNotLive({ exec: realExec, repo, tag });
+    if (closed.length)
+      console.log(`closed not-live issues: ${closed.join(", ")}`);
     return 0;
   }
   for (const p of r.problems) console.error(`not live: ${p}`);

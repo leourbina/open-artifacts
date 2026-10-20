@@ -139,10 +139,10 @@ jobs:
         run: bash scripts/ci/prod-setup.sh cleanup
   # Runs once a release was created, after both deploys (whatever their result): the
   # live prod healthz and the landing meta must show the released version, else a
-  # `blocker` issue is opened and this job fails.
+  # `blocker` issue is opened and this job fails. Skipped for pre-release tags.
   verify-release:
     needs: [release-please, deploy-prod, deploy-landing]
-    if: ${{ always() && needs.release-please.outputs.release_created == 'true' }}
+    if: ${{ always() && needs.release-please.outputs.release_created == 'true' && !contains(needs.release-please.outputs.tag_name, '-') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

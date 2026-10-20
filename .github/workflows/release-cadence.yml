@@ -3,14 +3,13 @@ name: release-cadence
 # keeps one `blocker` issue open while a release is stuck. A manual cut still works:
 # arm the release PR yourself at any time.
 on:
+  # The retry loop: every 10 minutes (also covers the daily 15:00 pass), plus right
+  # after CI and release-please finish. (check_suite does not fire for Actions suites.)
   schedule:
-    - cron: "0 15 * * *"
+    - cron: "*/10 * * * *"
   workflow_dispatch:
   workflow_run:
-    workflows: [release-please]
-    types: [completed]
-  # A retry when checks finish (for example when the queue drains).
-  check_suite:
+    workflows: [release-please, CI]
     types: [completed]
 permissions: {}
 concurrency:
@@ -27,17 +26,29 @@ jobs:
       statuses: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
-      # The App token exists only for the arm step: merging with GITHUB_TOKEN would
-      # trigger no workflows on the merge commit.
+      # Read-only: does arming need to touch the release PR at all?
+      - id: plan
+        name: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node --experimental-strip-types scripts/ci/release-cadence.ts plan --repo "$GITHUB_REPOSITORY" >> "$GITHUB_OUTPUT"
+      # The App token exists only right before arming, scoped to the PR merge:
+      # merging with GITHUB_TOKEN would trigger no workflows on the merge commit.
       - id: app
+        if: ${{ steps.plan.outputs.write == 'true' }}
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-pull-requests: write
+          permission-contents: write
       - name: arm
+        if: ${{ steps.plan.outputs.write == 'true' }}
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: node --experimental-strip-types scripts/ci/release-cadence.ts arm --repo "$GITHUB_REPOSITORY"

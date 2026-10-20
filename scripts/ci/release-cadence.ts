@@ -1,6 +1,7 @@
 // Release cadence: arm the release-please PR when it is green and the merge
 // queue has drained, and keep one `blocker` issue open while a release is stuck.
-// Usage: node --experimental-strip-types scripts/ci/release-cadence.ts <arm|blocker> --repo owner/name
+// Usage: node --experimental-strip-types scripts/ci/release-cadence.ts <plan|arm|blocker> --repo owner/name
+// `plan` prints `write=true|false` (does arm need the App token?).
 // Needs GH_TOKEN in the environment. `arm` runs with the release App's token
 // (so the merge triggers workflows); `blocker` runs with GITHUB_TOKEN.
 import { spawnSync } from "node:child_process";
@@ -10,6 +11,8 @@ export const RELEASE_BRANCH =
   "release-please--branches--main--components--open-artifacts";
 const BLOCKED = "Release blocked:";
 const DAY_MS = 24 * 3600_000;
+/** Once the release PR has been green this long, arm it even if code PRs are still queued. */
+export const DRAIN_CAP_MS = 30 * 60_000;
 
 export type ExecResult = { code: number; stdout: string; stderr: string };
 export type Exec = (
@@ -30,13 +33,14 @@ const QUERY = `query($owner: String!, $name: String!, $head: String!, $branch: S
         commits(last: 1) {
           nodes {
             commit {
+              oid
               statusCheckRollup {
                 state
                 contexts(first: 100) {
                   nodes {
                     __typename
-                    ... on CheckRun { name conclusion status detailsUrl }
-                    ... on StatusContext { context state targetUrl }
+                    ... on CheckRun { name conclusion status detailsUrl completedAt }
+                    ... on StatusContext { context state targetUrl createdAt }
                   }
                 }
               }
@@ -62,6 +66,8 @@ type Context = {
   context?: string;
   state?: string;
   targetUrl?: string;
+  completedAt?: string | null;
+  createdAt?: string | null;
 };
 export type ReleasePr = {
   number: number;
@@ -72,6 +78,9 @@ export type ReleasePr = {
   armed: boolean;
   rollup: string;
   contexts: Context[];
+  oid: string;
+  /** When the latest check on the current head finished (ms), if known. */
+  settledAt?: number;
 };
 type Snapshot = { pr?: ReleasePr; others: number };
 
@@ -109,7 +118,12 @@ async function snapshot(exec: Exec, repo: string): Promise<Snapshot> {
       !String(e.pullRequest?.headRefName ?? "").startsWith("release-please--"),
   ).length;
   if (!n) return { others };
-  const rollup = n.commits?.nodes?.[0]?.commit?.statusCheckRollup;
+  const commit = n.commits?.nodes?.[0]?.commit;
+  const rollup = commit?.statusCheckRollup;
+  const contexts: Context[] = rollup?.contexts?.nodes ?? [];
+  const times = contexts
+    .map((c) => Date.parse(String(c.completedAt ?? c.createdAt ?? "")))
+    .filter((t) => !Number.isNaN(t));
   return {
     others,
     pr: {
@@ -120,7 +134,9 @@ async function snapshot(exec: Exec, repo: string): Promise<Snapshot> {
       queued: Boolean(n.isInMergeQueue),
       armed: Boolean(n.autoMergeRequest),
       rollup: rollup?.state ?? "NONE",
-      contexts: rollup?.contexts?.nodes ?? [],
+      contexts,
+      oid: String(commit?.oid ?? ""),
+      settledAt: times.length ? Math.max(...times) : undefined,
     },
   };
 }
@@ -130,44 +146,116 @@ export type ArmResult =
   | { action: "already"; pr: number }
   | { action: "not-green"; pr: number; state: string }
   | { action: "waiting"; entries: number }
+  | { action: "disarmed"; pr: number }
   | { action: "armed"; pr: number };
 
-/** Arms auto-merge on the release PR once it is green and the queue holds nothing but release PRs. */
-export async function arm(o: {
+type Opts = {
   exec: Exec;
   repo: string;
-  log: (line: string) => void;
-}): Promise<ArmResult> {
-  const { pr, others } = await snapshot(o.exec, o.repo);
-  if (!pr) {
-    o.log("no open release PR");
-    return { action: "none" };
+  now?: () => number;
+  capMs?: number;
+};
+type Plan =
+  | { do: "none"; result: ArmResult; msg: string }
+  | { do: "disarm"; pr: ReleasePr }
+  | { do: "arm"; pr: ReleasePr; capHit: boolean };
+
+function plan(s: Snapshot, now: number, capMs: number): Plan {
+  const { pr, others } = s;
+  if (!pr)
+    return {
+      do: "none",
+      result: { action: "none" },
+      msg: "no open release PR",
+    };
+  const capHit =
+    pr.rollup === "SUCCESS" &&
+    pr.settledAt !== undefined &&
+    now - pr.settledAt >= capMs;
+  if (pr.queued)
+    return {
+      do: "none",
+      result: { action: "already", pr: pr.number },
+      msg: `release PR #${pr.number} is already queued`,
+    };
+  if (pr.armed) {
+    // A fresh head must re-qualify under the drain rule.
+    if (others > 0 && !capHit) return { do: "disarm", pr };
+    return {
+      do: "none",
+      result: { action: "already", pr: pr.number },
+      msg: `release PR #${pr.number} is already armed`,
+    };
   }
-  if (pr.queued || pr.armed) {
+  if (pr.rollup !== "SUCCESS")
+    return {
+      do: "none",
+      result: { action: "not-green", pr: pr.number, state: pr.rollup },
+      msg: `release PR #${pr.number} checks are ${pr.rollup}, not arming`,
+    };
+  if (others > 0 && !capHit)
+    return {
+      do: "none",
+      result: { action: "waiting", entries: others },
+      msg: `waiting for the queue to drain (${others} entries)`,
+    };
+  return { do: "arm", pr, capHit: others > 0 };
+}
+
+/** True when `arm` would change the release PR (so it needs the App token). Read-only. */
+export async function willWrite(o: Opts): Promise<boolean> {
+  const p = plan(
+    await snapshot(o.exec, o.repo),
+    (o.now ?? Date.now)(),
+    o.capMs ?? DRAIN_CAP_MS,
+  );
+  return p.do !== "none";
+}
+
+/** Arms auto-merge on the release PR once it is green and the queue holds nothing but release PRs (or the drain cap is hit). */
+export async function arm(
+  o: Opts & { log: (line: string) => void },
+): Promise<ArmResult> {
+  const p = plan(
+    await snapshot(o.exec, o.repo),
+    (o.now ?? Date.now)(),
+    o.capMs ?? DRAIN_CAP_MS,
+  );
+  if (p.do === "none") {
+    o.log(p.msg);
+    return p.result;
+  }
+  if (p.do === "disarm") {
+    await gh(o.exec, [
+      "pr",
+      "merge",
+      String(p.pr.number),
+      "--disable-auto",
+      "--repo",
+      o.repo,
+    ]);
     o.log(
-      `release PR #${pr.number} is already ${pr.queued ? "queued" : "armed"}`,
+      `disabled auto-merge on release PR #${p.pr.number} to re-check the drain on its current head`,
     );
-    return { action: "already", pr: pr.number };
+    return { action: "disarmed", pr: p.pr.number };
   }
-  if (pr.rollup !== "SUCCESS") {
-    o.log(`release PR #${pr.number} checks are ${pr.rollup}, not arming`);
-    return { action: "not-green", pr: pr.number, state: pr.rollup };
-  }
-  if (others > 0) {
-    o.log(`waiting for the queue to drain (${others} entries)`);
-    return { action: "waiting", entries: others };
-  }
+  if (p.capHit)
+    o.log(
+      `cap hit: release PR #${p.pr.number} has been green for 30 minutes or more, arming despite queued PRs`,
+    );
   await gh(o.exec, [
     "pr",
     "merge",
-    String(pr.number),
+    String(p.pr.number),
     "--auto",
     "--squash",
+    "--match-head-commit",
+    p.pr.oid,
     "--repo",
     o.repo,
   ]);
-  o.log(`armed auto-merge on release PR #${pr.number}`);
-  return { action: "armed", pr: pr.number };
+  o.log(`armed auto-merge on release PR #${p.pr.number}`);
+  return { action: "armed", pr: p.pr.number };
 }
 
 const FAILED = new Set([
@@ -203,7 +291,7 @@ export async function blocker(o: {
   log: (line: string) => void;
 }): Promise<BlockerResult> {
   const { pr } = await snapshot(o.exec, o.repo);
-  const issues: { number: number; title: string; createdAt: string }[] =
+  let issues: { number: number; title: string; createdAt: string }[] =
     JSON.parse(
       await gh(o.exec, [
         "issue",
@@ -221,10 +309,42 @@ export async function blocker(o: {
       ]),
     ).filter((i: { title: string }) => i.title.startsWith(BLOCKED));
 
+  // Close stale blockers on every run: a release newer than the issue means it shipped.
+  const closed: number[] = [];
+  if (issues.length) {
+    const latest = await o.exec("gh", [
+      "api",
+      `repos/${o.repo}/releases/latest`,
+    ]);
+    if (latest.code === 0) {
+      const rel: { tag_name?: string; published_at?: string } = JSON.parse(
+        latest.stdout,
+      );
+      const shipped = Date.parse(rel.published_at ?? "");
+      for (const i of issues) {
+        if (!(shipped > Date.parse(i.createdAt))) continue;
+        await gh(o.exec, [
+          "issue",
+          "close",
+          String(i.number),
+          "--repo",
+          o.repo,
+          "--comment",
+          `Released ${rel.tag_name}. Closing.`,
+        ]);
+        closed.push(i.number);
+      }
+      issues = issues.filter((i) => !closed.includes(i.number));
+    }
+  }
+
   if (pr) {
     const bad = pr.rollup === "FAILURE" || pr.rollup === "ERROR";
     const old = o.now() - Date.parse(pr.createdAt) > DAY_MS;
-    if (!bad && !old) return { action: "none" };
+    if (!bad && !old)
+      return closed.length
+        ? { action: "closed", issues: closed }
+        : { action: "none" };
     const reasons = [
       ...(bad ? [`release PR #${pr.number} has failing checks`] : []),
       ...(old
@@ -291,27 +411,6 @@ export async function blocker(o: {
     return { action: "opened" };
   }
 
-  if (!issues.length) return { action: "none" };
-  const latest = await o.exec("gh", ["api", `repos/${o.repo}/releases/latest`]);
-  if (latest.code !== 0) return { action: "none" };
-  const rel: { tag_name?: string; published_at?: string } = JSON.parse(
-    latest.stdout,
-  );
-  const shipped = Date.parse(rel.published_at ?? "");
-  const closed: number[] = [];
-  for (const i of issues) {
-    if (!(shipped > Date.parse(i.createdAt))) continue;
-    await gh(o.exec, [
-      "issue",
-      "close",
-      String(i.number),
-      "--repo",
-      o.repo,
-      "--comment",
-      `Released ${rel.tag_name}; no release PR is open. Closing.`,
-    ]);
-    closed.push(i.number);
-  }
   return closed.length
     ? { action: "closed", issues: closed }
     : { action: "none" };
@@ -328,9 +427,20 @@ const realExec: Exec = (cmd, args) => {
 
 async function main(argv: string[]) {
   const [mode, flag, repo] = argv;
-  if ((mode !== "arm" && mode !== "blocker") || flag !== "--repo" || !repo) {
-    console.error("usage: release-cadence.ts <arm|blocker> --repo owner/name");
+  if (
+    (mode !== "arm" && mode !== "blocker" && mode !== "plan") ||
+    flag !== "--repo" ||
+    !repo
+  ) {
+    console.error(
+      "usage: release-cadence.ts <arm|blocker|plan> --repo owner/name",
+    );
     return 2;
+  }
+  if (mode === "plan") {
+    // stdout is appended to $GITHUB_OUTPUT: `write=true` when arm needs the App token
+    console.log(`write=${await willWrite({ exec: realExec, repo })}`);
+    return 0;
   }
   const log = (s: string) => console.log(s);
   const r =

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { type Exec, reportNotLive, verifyRelease } from "./verify-release.ts";
+import {
+  closeNotLive,
+  type Exec,
+  reportNotLive,
+  verifyRelease,
+} from "./verify-release.ts";
 
 const PROD = "https://artifacts.leourbina.com";
 const SITE = "https://open-artifacts.com/";
@@ -188,7 +193,110 @@ describe("verifyRelease", () => {
   });
 });
 
+describe("verifyRelease hardening", () => {
+  it("accepts pre-release tags like v0.5.0-rc.1 without throwing", async () => {
+    const w = world(good("0.5.0-rc.1"));
+    expect((await verifyRelease({ tag: "v0.5.0-rc.1", ...w.deps })).ok).toBe(
+      true,
+    );
+  });
+
+  it("still rejects tags that are not semver", async () => {
+    const w = world(good("0.5.0"));
+    for (const tag of ["0.5.0", "v1", "v1.2.3 x", "v1.2.3-"])
+      await expect(verifyRelease({ tag, ...w.deps })).rejects.toThrow(/tag/);
+  });
+
+  it("never echoes remote text that is not a semver into a problem", async () => {
+    const evil = "0.4.0`\n@everyone [x](http://evil)";
+    const w = world({
+      prod: () => ({ body: { version: evil } }),
+      site: () => ({ body: page(evil) }),
+    });
+    const r = await verifyRelease({
+      tag: "v0.5.0",
+      ...w.deps,
+      timeoutMs: 20_000,
+    });
+    expect(r.problems.join(" ")).not.toMatch(/evil|everyone|`/);
+    expect(r.problems).toHaveLength(2);
+  });
+
+  it("does not echo a fetch error message", async () => {
+    const w = world({
+      prod: () => new Error("boom @everyone"),
+      site: () => ({ body: page("0.5.0") }),
+    });
+    const r = await verifyRelease({
+      tag: "v0.5.0",
+      ...w.deps,
+      timeoutMs: 20_000,
+    });
+    expect(r.problems.join(" ")).not.toContain("everyone");
+  });
+});
+
+describe("closeNotLive", () => {
+  const REPO = "open-artifacts-ai/open-artifacts";
+  it("closes 'not live' issues for this or an older tag, with a comment, and leaves newer and other issues", async () => {
+    const calls: string[][] = [];
+    const issues = [
+      { number: 1, title: "Release v0.4.0 not live: prod healthz unreachable" },
+      {
+        number: 2,
+        title: "Release v0.5.0 not live: landing has no oa-version meta tag",
+      },
+      { number: 3, title: "Release v0.6.0 not live: x" },
+      { number: 4, title: "Release blocked: checks failing" },
+      { number: 5, title: "Release vevil not live: x" },
+    ];
+    const exec: Exec = (cmd, args) => {
+      calls.push([cmd, ...args]);
+      return {
+        code: 0,
+        stdout:
+          args[0] === "issue" && args[1] === "list"
+            ? JSON.stringify(issues)
+            : "",
+        stderr: "",
+      };
+    };
+    expect(await closeNotLive({ exec, repo: REPO, tag: "v0.5.0" })).toEqual([
+      1, 2,
+    ]);
+    const closes = calls.filter((c) => c[1] === "issue" && c[2] === "close");
+    expect(closes.map((c) => c[3])).toEqual(["1", "2"]);
+    expect(closes[0]?.[closes[0].indexOf("--comment") + 1]).toContain("v0.5.0");
+  });
+});
+
 describe("reportNotLive", () => {
+  it("builds the title only from safe characters", async () => {
+    const calls: string[][] = [];
+    const exec: Exec = (cmd, args) => {
+      calls.push([cmd, ...args]);
+      return { code: 0, stdout: args[1] === "list" ? "[]" : "", stderr: "" };
+    };
+    await reportNotLive({
+      exec,
+      repo: "o/r",
+      tag: "v0.5.0",
+      problems: ["bad `x` @everyone\nnewline [l](http://e)"],
+    });
+    const create =
+      calls.find((c) => c[2] === "create" && c[1] === "issue") ?? [];
+    expect(create[create.indexOf("--title") + 1]).toMatch(/^[\w .,;:()'?-]+$/);
+  });
+
+  it("refuses a tag that is not semver", async () => {
+    const exec: Exec = () => ({ code: 0, stdout: "[]", stderr: "" });
+    await expect(
+      reportNotLive({ exec, repo: "o/r", tag: "v1 @x", problems: ["x"] }),
+    ).rejects.toThrow(/tag/);
+  });
+});
+
+describe("reportNotLive (issues)", () => {
   const REPO = "open-artifacts-ai/open-artifacts";
   const fakeExec = (existing: { number: number; title: string }[] = []) => {
     const calls: string[][] = [];

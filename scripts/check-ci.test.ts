@@ -960,20 +960,46 @@ describe("release cadence", () => {
   const job = w.jobs.cadence;
   const steps: Step[] = job.steps;
 
-  it("runs daily at 15:00 UTC, on dispatch, after release-please and on check_suite", () => {
-    expect(w.on.schedule).toEqual([{ cron: "0 15 * * *" }]);
-    expect(triggers(w)).toEqual(
-      expect.arrayContaining([
-        "schedule",
-        "workflow_dispatch",
-        "workflow_run",
-        "check_suite",
-      ]),
+  it("runs every 10 minutes, on dispatch, and after release-please and CI (no check_suite)", () => {
+    expect(w.on.schedule).toEqual([{ cron: "*/10 * * * *" }]);
+    expect(triggers(w).sort()).toEqual(
+      ["schedule", "workflow_dispatch", "workflow_run"].sort(),
     );
-    expect(w.on.workflow_run.workflows).toEqual(["release-please"]);
+    expect(w.on.workflow_run.workflows).toEqual(["release-please", "CI"]);
     expect(w.on.workflow_run.types).toEqual(["completed"]);
-    expect(w.on.check_suite.types).toEqual(["completed"]);
     expect(w.concurrency.group).toBe("release-cadence");
+  });
+
+  it("checks out the default branch only, without persisting credentials", () => {
+    const co = steps.filter((s) =>
+      String(s.uses).startsWith("actions/checkout@"),
+    );
+    expect(co).toHaveLength(1);
+    expect(co[0].with["persist-credentials"]).toBe(false);
+    expect(co[0].with?.ref).toBeUndefined();
+  });
+
+  it("mints a narrowly scoped App token only in a conditional step before arming", () => {
+    const app = steps.find((s) => s.id === "app");
+    expect(String(app.if)).toContain("steps.plan.outputs.write == 'true'");
+    expect(
+      Object.fromEntries(
+        Object.entries(app.with).filter(([k]) => k.startsWith("permission-")),
+      ),
+    ).toEqual({
+      "permission-pull-requests": "write",
+      "permission-contents": "write",
+    });
+    const i = steps.indexOf(app);
+    expect(steps[i + 1].name).toBe("arm");
+    expect(String(steps[i + 1].if)).toContain(
+      "steps.plan.outputs.write == 'true'",
+    );
+    const plan = steps.find((s) => s.id === "plan");
+    expect(steps.indexOf(plan)).toBeLessThan(i);
+    expect(plan.run).toContain("release-cadence.ts plan");
+    expect(plan.run).toContain("$GITHUB_OUTPUT");
+    expect(JSON.stringify(plan)).not.toContain("steps.app");
   });
 
   it("uses the App token only in the arm step", () => {
@@ -1040,6 +1066,11 @@ describe("release cadence", () => {
       expect(run.run).toContain("--tag");
       expect(JSON.stringify(v)).not.toMatch(/secrets\./);
       expect(v.steps[0].with.ref).toContain("tag_name");
+    });
+    it("is skipped for pre-release tags", () => {
+      expect(String(v.if)).toMatch(
+        /!contains\(needs\.release-please\.outputs\.tag_name, '-'\)/,
+      );
     });
   });
 });
