@@ -86,7 +86,15 @@ for (const width of [1280, 390])
             .slice(1)
             .map((c, i) => Math.round(c.left - (row[i]?.right ?? 0)));
         });
+        const banner = document
+          .querySelector(".oa-cpu-banner")
+          ?.getBoundingClientRect();
         return {
+          banner: banner ? [banner.left, banner.right] : null,
+          cardsX: [
+            Math.min(...per.map((c) => c.left)),
+            Math.max(...per.map((c) => c.right)),
+          ],
           h1: [px(h1.fontSize), h1.fontWeight],
           columnWidth: column?.width ?? 0,
           per,
@@ -99,6 +107,14 @@ for (const width of [1280, 390])
       });
 
       expect(g.h1).toEqual([20, "600"]);
+      // The shell's CPU banner sits in the same column as the cards.
+      expect(g.banner).not.toBeNull();
+      expect(
+        Math.abs((g.banner?.[0] ?? 0) - (g.cardsX[0] ?? 0)),
+      ).toBeLessThanOrEqual(0.5);
+      expect(
+        Math.abs((g.banner?.[1] ?? 0) - (g.cardsX[1] ?? 0)),
+      ).toBeLessThanOrEqual(0.5);
       expect(g.sideScroll).toBe(0);
       expect(g.columnWidth).toBeLessThanOrEqual(880);
       expect(g.per.length).toBe(5); // four meters and the CPU card

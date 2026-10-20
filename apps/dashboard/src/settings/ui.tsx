@@ -11,6 +11,8 @@ import {
 import type { ReactNode } from "react";
 import { toast } from "../layout/toast";
 
+/** The settings pages' 880px measure, centered in the shell gutter. */
+export const MEASURE = "mx-auto max-w-[880px]";
 /** The card: its vertical padding and the header-to-body gap. */
 export const CARD =
   "gap-[var(--oa-space-3)] py-[var(--oa-space-5)] shadow-none max-[600px]:py-[var(--oa-space-4)]";

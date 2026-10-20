@@ -16,6 +16,13 @@ test("owner: the CPU banner shows today's hits and stays dismissed for the day",
     "href",
     "https://dash.cloudflare.com/?to=/:account/workers/plans",
   );
+  // At 1280 the banner lines up with the page's content column.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const [b, h1] = await Promise.all([
+    banner(page).boundingBox(),
+    page.getByRole("heading", { name: "Library", level: 1 }).boundingBox(),
+  ]);
+  expect(Math.abs((b?.x ?? 0) - (h1?.x ?? -1))).toBeLessThanOrEqual(0.5);
   await banner(page).getByRole("button", { name: "Dismiss" }).click();
   await expect(banner(page)).toHaveCount(0);
   await page.reload();

@@ -14,7 +14,16 @@ import { useMe } from "../auth/useMe";
 import { ExtIcon } from "../layout/CpuBanner";
 import { COSTS_DOC } from "../layout/cpu";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
-import { CARD, Code, GAP, INSET, muted, SettingsCard, STACK } from "./ui";
+import {
+  CARD,
+  Code,
+  GAP,
+  INSET,
+  MEASURE,
+  muted,
+  SettingsCard,
+  STACK,
+} from "./ui";
 
 type Tone = "normal" | "warning" | "danger";
 type Metric = UsageData["metrics"][number];
@@ -347,7 +356,7 @@ export function Usage() {
   const q = useUsage();
   return (
     // The 880px measure of the other settings pages.
-    <div className={`mx-auto max-w-[880px] ${STACK}`}>
+    <div className={`${MEASURE} ${STACK}`}>
       <div className="flex items-center gap-[var(--oa-space-3)]">
         <h1 className="m-0 flex-none text-[length:var(--oa-text-xl)] font-semibold">
           Usage
