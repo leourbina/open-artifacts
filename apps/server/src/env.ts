@@ -48,6 +48,11 @@ export interface Env {
    * 10,000). Clamped to 10,000 on Free, 1,000,000 on Paid.
    */
   DATA_DAILY_WRITES?: string;
+  /**
+   * Hosted installs: the central scheduler's raw 32-byte Ed25519 public key
+   * (base64url) for POST /__oa/nightly. Unset or empty: the route 404s.
+   */
+  NIGHTLY_PUBKEY?: string;
   // vars
   APP_HOST: string;
   CONTENT_HOST: string;

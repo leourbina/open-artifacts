@@ -16,6 +16,7 @@ import {
   securityHeaders,
   session,
 } from "./http/middleware.js";
+import { NIGHTLY_PATH, nightly } from "./http/nightly.js";
 import { SKILL_PATH, serveSkill } from "./mcp/skill.js";
 import { serveUpgrade, UPGRADE_PATH } from "./mcp/upgrade.js";
 import { type AppType, mountRoutes } from "./routes/index.js";
@@ -31,8 +32,9 @@ export const methodNotAllowed = () =>
 
 // Paths owned by the Worker; never served by the SPA fallback.
 // (/a/*, /no-access and /search are SPA routes and fall through to ASSETS.)
-// /_oa/* (render bundles) is content-host only: a JSON 404 here.
-const WORKER_PREFIX = /^\/(api|auth|oauth|\.well-known|mcp|_oa)(\/|$)/;
+// /_oa/* (render bundles) is content-host only: a JSON 404 here. /__oa/* is
+// the hosted-install control surface (NIGHTLY_PATH).
+const WORKER_PREFIX = /^\/(api|auth|oauth|\.well-known|mcp|_oa|__oa)(\/|$)/;
 
 // Decode, collapse slashes and resolve dot segments; null if malformed.
 function normalizedPath(url: string): string | null {
@@ -94,6 +96,9 @@ export function createApp(
   app.all("/robots.txt", methodNotAllowed);
   app.all(SKILL_PATH, methodNotAllowed);
   app.all(UPGRADE_PATH, methodNotAllowed);
+  // Signed nightly trigger (hosted installs): public, before session, no D1
+  // until the signature verifies. Any method; every failure is the 404 below.
+  app.all(NIGHTLY_PATH, nightly);
 
   // c.var.user (Bearer PAT wins over the cookie) for Worker routes only, so
   // SPA/asset requests never touch D1 (beyond the shell's instance-name read). Elsewhere caller() sees anonymous.

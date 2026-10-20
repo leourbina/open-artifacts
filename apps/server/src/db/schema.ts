@@ -248,3 +248,15 @@ export const loginCodes = sqliteTable(
   },
   (t) => [primaryKey({ columns: [t.emailKey, t.requestId] })],
 );
+
+// Signed nightly trigger (/__oa/nightly) nonces, keyed by the UTC day of the
+// signed ts so a replay maps to the same row. The nightly job drops rows older
+// than 2 days. WITHOUT ROWID is hand-edited into the migration.
+export const nightlyRuns = sqliteTable(
+  "nightly_runs",
+  {
+    day: text("day").notNull(),
+    nonce: text("nonce").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.day, t.nonce] })],
+);

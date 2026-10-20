@@ -107,6 +107,7 @@ describe("purgeDeleted", () => {
       "fulfilled", // sweepEmailCounters
       "fulfilled", // sweepLoginCodes (P2)
       "fulfilled", // checkLatestRelease (B3)
+      "fulfilled", // sweepNightlyRuns
     ]);
     expect(
       await count("select count(*) n from artifacts where id = ?", gone),
