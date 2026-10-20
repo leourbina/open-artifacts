@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { realFs } from "../src/cf.ts";
 import { run } from "../src/index.ts";
+import { agentConfig } from "../src/steps/agent-config.ts";
 import { homeOf, hostSlug, patTokenFile } from "../src/secret-file.ts";
 import { ROOT } from "./fakes.ts";
 import { HOSTS, world } from "./world.ts";
@@ -144,6 +145,23 @@ describe("#2: the minted PAT goes to a file, not stdout", () => {
     expect(l.message).toContain(FILE);
     expect(l.message).toContain("previous token is unchanged");
     expect(w.lines.join("\n")).not.toMatch(/oa_pat_/);
+  });
+});
+
+describe("#2: agent-config needs no token", () => {
+  it("without a token file it prints the OAuth snippets and says the fallback comes later", async () => {
+    const w = world({ env: { HOME } });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    w.files.delete(FILE);
+    w.lines.length = 0;
+    expect(await run(HOSTS, w.deps, ROOT, [agentConfig])).toBe(0);
+    const cfg = line(w, "agent-config").data;
+    expect(cfg.snippets.claudeCode).toBe(
+      "claude mcp add --transport http open-artifacts https://app.example.com/mcp",
+    );
+    expect(cfg.snippets).not.toHaveProperty("opencodeToken");
+    expect(cfg).not.toHaveProperty("tokenFile");
+    expect(cfg.tokenNote).toMatch(/fallback snippets appear once/);
   });
 });
 

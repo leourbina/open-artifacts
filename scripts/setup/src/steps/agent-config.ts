@@ -153,9 +153,13 @@ export const agentConfig: Step = {
   async apply(_state, ctx) {
     const url = `https://${ctx.opts.appHost}/mcp`;
     const ci = ctx.opts.ci;
-    const tokenFile = ci
-      ? undefined
-      : patTokenFile(homeOf(ctx.deps.env), ctx.opts.appHost);
+    const file = patTokenFile(homeOf(ctx.deps.env), ctx.opts.appHost);
+    // The token-file fallbacks only appear once the token exists.
+    const tokenFile =
+      !ci && (ctx.pat || ctx.fs.read(file) !== null) ? file : undefined;
+    const pending = !ci && !tokenFile;
+    const pendingNote =
+      "no agent token yet; the token-file fallback snippets appear once setup has saved it";
     const all = fileSnippets(ctx.opts.name, url, tokenFile);
     const snippets = Object.fromEntries(
       Object.entries(all).map(([k, v]) => [k, v.text]),
@@ -171,7 +175,9 @@ export const agentConfig: Step = {
       url,
       ...(ci
         ? { tokenNote: "create a token in the dashboard (Settings → Tokens)" }
-        : {}),
+        : pending
+          ? { tokenNote: pendingNote }
+          : {}),
       ...(tokenFile ? { tokenFile } : {}),
       snippets,
       configs,
@@ -182,7 +188,9 @@ export const agentConfig: Step = {
       welcome +
       (ci
         ? "\n  Token: create a token in the dashboard (Settings → Tokens); snippets never embed it."
-        : `\n  Sign in with OAuth where the client supports it. A token is saved to ${tokenFile} (don't read or print it); snippets never embed it.`) +
+        : pending
+          ? `\n  Sign in with OAuth where the client supports it; ${pendingNote}.`
+          : `\n  Sign in with OAuth where the client supports it. A token is saved to ${tokenFile} (don't read or print it); snippets never embed it.`) +
       Object.values(all)
         .map(
           (v) =>
