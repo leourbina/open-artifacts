@@ -9,7 +9,7 @@ import type {
 } from "@oa/shared";
 
 export const CALL_TIMEOUT_MS = 15_000;
-/** With a parent but no shell message this long after load: no shell. */
+/** Framed, before any shell message: a call waiting this long rejects with no_shell. */
 export const HANDSHAKE_MS = 3_000;
 export const RAW_VIEW_MESSAGE =
   "Open this artifact in Open Artifacts to use live data";
@@ -36,15 +36,15 @@ type Pending = {
   resolve: (v: unknown) => void;
   reject: (e: RuntimeError) => void;
   timer: ReturnType<typeof setTimeout>;
+  /** The handshake bound, set while no shell message has arrived. */
+  hs?: ReturnType<typeof setTimeout>;
 };
 
 export type Listener = (m: ShellToArtifact) => void;
 
 export interface Bridge {
-  /** True in the raw view (no parent shell): every call rejects. */
+  /** True in the raw view (no parent shell): every call rejects with no_shell. */
   readonly raw: boolean;
-  /** Runs once when there is no shell (at once in the raw view). */
-  onNoShell(cb: () => void): void;
   call<M extends RuntimeMethod>(
     method: M,
     params: RuntimeParams<M>,
@@ -74,10 +74,8 @@ const newCallId = (): string => {
 export function createBridge(loadSchemas: () => Promise<Schemas>): Bridge {
   const win = window;
   const raw = win.parent === win;
-  /** null until the shell speaks or the handshake bound passes. */
-  let shell: boolean | null = raw ? false : null;
-  let handshake: ReturnType<typeof setTimeout> | undefined;
-  const goneCbs: (() => void)[] = [];
+  /** Set by the first shell message; a late shell is still accepted. */
+  let shell = false;
   const noShell = () => new RuntimeError("no_shell", RAW_VIEW_MESSAGE);
   const pending = new Map<string, Pending>();
   const listeners = new Set<Listener>();
@@ -88,25 +86,12 @@ export function createBridge(loadSchemas: () => Promise<Schemas>): Bridge {
         return null;
       });
   let inbox: Promise<unknown> = schemas;
-  const gone = () => {
-    if (shell !== null) return;
-    shell = false;
-    for (const [id, p] of pending) {
-      pending.delete(id);
-      clearTimeout(p.timer);
-      p.reject(noShell());
-    }
-    for (const cb of goneCbs.splice(0)) cb();
-  };
-  void schemas.then((s) => {
-    if (s && shell === null) handshake = setTimeout(gone, HANDSHAKE_MS);
-  });
-
   const settle = (id: string): Pending | undefined => {
     const p = pending.get(id);
     if (p) {
       pending.delete(id);
       clearTimeout(p.timer);
+      clearTimeout(p.hs);
     }
     return p;
   };
@@ -114,9 +99,7 @@ export function createBridge(loadSchemas: () => Promise<Schemas>): Bridge {
   const handle = (s: Schemas | null, data: unknown) => {
     const m = s?.parseShellMessage(data);
     if (!s || !m) return;
-    if (shell === false) return;
     shell = true;
-    clearTimeout(handshake);
     if (m.type !== "result") {
       for (const l of [...listeners]) {
         try {
@@ -149,12 +132,8 @@ export function createBridge(loadSchemas: () => Promise<Schemas>): Bridge {
 
   return {
     raw,
-    onNoShell(cb) {
-      if (shell === false) cb();
-      else goneCbs.push(cb);
-    },
     call(method, params) {
-      if (shell === false) return Promise.reject(noShell());
+      if (raw) return Promise.reject(noShell());
       const id = newCallId();
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
@@ -166,6 +145,11 @@ export function createBridge(loadSchemas: () => Promise<Schemas>): Bridge {
           resolve: resolve as (v: unknown) => void,
           reject,
           timer,
+          hs: shell
+            ? undefined
+            : setTimeout(() => {
+                if (!shell) settle(id)?.reject(noShell());
+              }, HANDSHAKE_MS),
         });
         const fail = (code: ErrorCode, message: string) =>
           settle(id)?.reject(new RuntimeError(code, message));
@@ -198,9 +182,10 @@ export function createBridge(loadSchemas: () => Promise<Schemas>): Bridge {
     },
     dispose() {
       win.removeEventListener("message", onMessage);
-      clearTimeout(handshake);
-      goneCbs.length = 0;
-      for (const p of pending.values()) clearTimeout(p.timer);
+      for (const p of pending.values()) {
+        clearTimeout(p.timer);
+        clearTimeout(p.hs);
+      }
       pending.clear();
       listeners.clear();
     },

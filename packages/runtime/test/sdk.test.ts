@@ -231,7 +231,7 @@ describe("bridge", () => {
     await expect(oa.viewer.get()).rejects.toBeInstanceOf(RuntimeError);
   });
 
-  it("a parent that never answers: no_shell after HANDSHAKE_MS, then at once", async () => {
+  it("framed, no shell yet: a call waiting past HANDSHAKE_MS rejects with no_shell; a late shell revives", async () => {
     vi.useFakeTimers();
     const oa = start();
     const p = oa.viewer.get();
@@ -249,16 +249,22 @@ describe("bridge", () => {
       code: "no_shell",
       message: RAW_VIEW_MESSAGE,
     });
-    expect(ready).toBe(true);
-    parent.postMessage.mockClear();
-    await expect(oa.storage.get("k")).rejects.toMatchObject({
-      code: "no_shell",
+    expect(ready).toBe(false);
+    // The shell arrives late: it is accepted and later calls work.
+    fromShell({
+      oa: 1,
+      type: "welcome",
+      capabilities: { db: true, viewer: false, storage: true },
+      viewer: null,
+      theme: oa.theme === "dark" ? "light" : "dark",
     });
-    expect(parent.postMessage).not.toHaveBeenCalled();
-    // A late shell is ignored: the runtime already settled on no shell.
-    fromShell({ oa: 1, type: "theme", theme: "dark" });
     await flush();
-    expect(oa.theme).not.toBe("dark");
+    expect(ready).toBe(true);
+    const q = oa.storage.get("k");
+    await flush();
+    await vi.advanceTimersByTimeAsync(HANDSHAKE_MS * 2);
+    reply(calls("storage.get")[0]?.id ?? "", 7);
+    await expect(q).resolves.toBe(7);
   });
 
   it("a shell that welcomes in time keeps calls alive past HANDSHAKE_MS", async () => {

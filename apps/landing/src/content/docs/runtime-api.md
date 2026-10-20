@@ -8,7 +8,7 @@ An HTML artifact can keep data with `window.openArtifacts`. Polls, trackers, and
 
 ## Ready and theme
 
-`openArtifacts.ready` is a promise that resolves once the viewer shell has connected; wait for it before your first call. In the raw view, with no shell, it resolves at once (or after a few seconds if no shell answers).
+`openArtifacts.ready` is a promise that resolves once the viewer shell has connected; wait for it before your first call. In the raw view, with no shell, it resolves at once.
 
 `openArtifacts.theme` is `"light"` or `"dark"`. It starts from the viewer's system setting and follows the shell's theme once it connects. `onTheme(callback)` calls back whenever it changes and returns a function that stops listening.
 
@@ -88,7 +88,7 @@ Every call returns a promise. A failed call rejects with an error that has a `co
 
 | `code` | Meaning |
 |---|---|
-| `no_shell` | No viewer shell to reach the server: the page is open in the raw view, or nothing answered within a few seconds. Calls fail at once from then on. |
+| `no_shell` | No viewer shell to reach the server. In the raw view every call fails at once; in a frame, a call fails if no shell has answered within a few seconds. |
 | `capability_denied` | The artifact didn't declare that capability, or the viewer isn't allowed (for example, an anonymous write). |
 | `bad_request` | Invalid parameters, such as a bad collection name or a value that can't be sent. |
 | `rate_limited`, `too_large`, `quota_exceeded` | A limit was reached. |

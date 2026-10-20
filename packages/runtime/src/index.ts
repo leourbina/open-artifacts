@@ -44,7 +44,7 @@ export interface Collection {
 }
 
 export interface OpenArtifacts {
-  /** Resolves on the shell's `welcome` (at once in the raw view, or when no shell answers). */
+  /** Resolves on the shell's `welcome` (at once in the raw view). */
   ready: Promise<void>;
   viewer: { get(): Promise<Viewer | null> };
   db: { collection(name: string): Collection };
@@ -318,9 +318,9 @@ export function createRuntime(opts: RuntimeOptions = {}): OpenArtifacts {
   };
 
   opts.signal?.addEventListener("abort", () => bridge.dispose());
-  bridge.onNoShell(welcomed);
+  if (bridge.raw) welcomed();
   // Renderer pages (markdown/code/pdf) send their own hello.
-  if (!bridge.raw && kind === "html") bridge.hello(kind);
+  else if (kind === "html") bridge.hello(kind);
   return api;
 }
 
