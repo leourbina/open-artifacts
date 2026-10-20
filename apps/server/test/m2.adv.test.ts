@@ -202,7 +202,7 @@ describe("M2 whole-track adversarial", () => {
     expect(await closed).toBe(4403);
   });
 
-  it('F2 anonymous writer\'s IP is never returned to other viewers (updatedBy "anon")', async () => {
+  it('F2 anonymous writer\'s IP is never returned to other viewers (updatedBy "anon:<anonId>")', async () => {
     const owner = await login(`o2-${tag}@x.com`);
     const id = await create(owner.cookie, {
       visibility: "public",
@@ -221,7 +221,10 @@ describe("M2 whole-track adversarial", () => {
       await w(req(R.dataCollection(id, "c"), { ip: "198.51.100.1" }))
     ).text();
     expect(list).not.toContain("203.0.113.77");
-    expect(JSON.parse(list).items[0].updatedBy).toBe("anon");
+    // "anon:<short>": the signed anonId, never derived from the IP.
+    expect(JSON.parse(list).items[0].updatedBy).toMatch(
+      /^anon:[A-Za-z0-9_-]{8}$/,
+    );
   });
 
   it("F3 refresh_token storms are rate-limited per client_id", async () => {

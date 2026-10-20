@@ -1,4 +1,6 @@
 import {
+  ANON_ID_HEADER,
+  AnonViewerSchema,
   type ArtifactSummary,
   type ArtifactToShell,
   DataChangeSchema,
@@ -18,7 +20,8 @@ import {
   type StorageSetBody,
 } from "@oa/shared";
 import type { z } from "zod";
-import { ApiClientError, api } from "../api/client";
+import { ApiClientError, api, type RequestExtra } from "../api/client";
+import { isAnonToken, loadAnonToken, saveAnonToken } from "./anonId";
 
 type Viewer = { email: string; name: string | null };
 type Theme = "light" | "dark";
@@ -93,6 +96,12 @@ export function createBridge(opts: BridgeOptions) {
   } = opts;
   const id = artifact.id; // the only artifact id any route is ever built from
   const viewer = artifact.capabilities.viewer ? opts.viewer : null;
+  // The anonId header rides only on anonymous calls (viewer null for any
+  // reason: signed out, or embed mode) to artifacts that allow anonymous
+  // writes; never signed in, never into the frame.
+  const anon = opts.viewer === null && artifact.allowAnonymousWrites === true;
+  /** The first token-less call that mints (writes, anon-id); others wait so one id is minted. */
+  let minting: Promise<void> | null = null;
   const subs = new Map<string, Sub>();
   let disposed = false;
   let thumbPending = false;
@@ -203,16 +212,51 @@ export function createBridge(opts: BridgeOptions) {
     }
   };
 
+  const anonCall = async <T>(
+    mints: boolean,
+    go: (extra?: RequestExtra) => Promise<T>,
+  ): Promise<T> => {
+    if (!anon) return go();
+    // Re-check after each wait: a failed mint leaves no token, and only one
+    // waiter may become the next minter.
+    if (mints) while (!loadAnonToken() && minting) await minting;
+    const token = loadAnonToken();
+    const p = go({
+      ...(token ? { headers: { [ANON_ID_HEADER]: token } } : {}),
+      onResponse: (res) => {
+        const t = res.headers.get(ANON_ID_HEADER);
+        if (isAnonToken(t)) saveAnonToken(t);
+      },
+    });
+    if (mints && !token && !minting) {
+      const done: Promise<void> = p.then(
+        () => {},
+        () => {},
+      );
+      minting = done.then(() => {
+        minting = null;
+      });
+    }
+    return p;
+  };
+
   // Aborted on dispose so in-flight calls stop and never reply.
   const http = {
     get: <T>(path: string, schema: z.ZodType<T>) =>
-      api.get(path, schema, abort.signal),
+      anonCall(path === R.anonId(id), (x) =>
+        api.get(path, schema, abort.signal, x),
+      ),
     send: <T = void>(
       method: "POST" | "PUT" | "PATCH" | "DELETE",
       path: string,
       body: unknown,
       schema?: z.ZodType<T>,
-    ) => api.send(method, path, body, schema, abort.signal),
+    ) =>
+      // POST is only db.query, a read: writes are PUT/PATCH/DELETE and mint
+      // (bridge.test.ts "write methods" pins this).
+      anonCall(method !== "POST", (x) =>
+        api.send(method, path, body, schema, abort.signal, x),
+      ),
   };
 
   async function run(
@@ -263,6 +307,11 @@ export function createBridge(opts: BridgeOptions) {
         return null;
       case "viewer.get":
         return viewer;
+      case "viewer.anonId":
+        // Only the per-artifact short id; the signed token stays here.
+        return anon
+          ? (await http.get(R.anonId(id), AnonViewerSchema)).anonId
+          : null;
       case "storage.get": {
         const e = await nullIfNotFound(
           http.get(R.storageKey(id, p.key), StorageEntrySchema),

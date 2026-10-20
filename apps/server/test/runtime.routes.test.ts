@@ -226,7 +226,7 @@ describe("anonymous access", () => {
     expect((await put(id, null, "a", 1)).status).toBe(404);
   });
 
-  it('allowAnonymousWrites: updatedBy "anon" (ip:{ip} rate key); the 31st write per minute → 429', async () => {
+  it('allowAnonymousWrites: updatedBy "anon:{short}" (ip:{ip} rate key); the 31st write per minute → 429', async () => {
     const id = await pub({ visibility: "public", allowAnonymousWrites: true });
     // Deterministic: the DO's minute window is pinned (no rollover mid-test),
     // and the RL_ANON stub counts per key for this test only (no wall clock).
@@ -248,8 +248,8 @@ describe("anonymous access", () => {
       const r = await write(`d${i}`, ip, rl);
       expect(r.status).toBe(200);
       if (i === 0)
-        expect(((await r.json()) as { updatedBy: string }).updatedBy).toBe(
-          "anon",
+        expect(((await r.json()) as { updatedBy: string }).updatedBy).toMatch(
+          /^anon:[A-Za-z0-9_-]{8}$/,
         );
     }
     const r = await write("x", ip, rl);

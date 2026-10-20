@@ -32,6 +32,12 @@ export interface Env {
    * missing or deleted leaves "/" unchanged.
    */
   PUBLIC_HOME?: string;
+  /**
+   * Anonymous writes per IP per artifact per minute, enforced in the DO
+   * (anonWritesPerMin: 1..600, default LIMITS.anonWritesPerMinPerIp). The
+   * RL_ANON binding's own per-IP limit (wrangler `ratelimits`) applies first.
+   */
+  ANON_WRITES_PER_MIN?: string;
   // vars
   APP_HOST: string;
   CONTENT_HOST: string;

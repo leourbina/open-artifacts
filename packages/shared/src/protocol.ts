@@ -28,6 +28,7 @@ export const RUNTIME_METHODS = [
   "db.subscribe",
   "db.unsubscribe",
   "viewer.get",
+  "viewer.anonId",
   "storage.get",
   "storage.set",
   "storage.delete",
@@ -41,6 +42,22 @@ const THUMB_MAX_LEN =
 const THUMB_RE = /^data:image\/webp;base64,[A-Za-z0-9+/]*={0,2}$/;
 
 const Theme = ThemeSchema;
+
+/**
+ * Anonymous id (artifacts with allowAnonymousWrites): the shell sends its
+ * signed token "<id>.<sig>" in this request header on anonymous runtime calls,
+ * and the server returns a new one in the same response header whenever it
+ * mints one (anonymous writes and R.anonId only; missing, malformed or forged
+ * token). The token never enters the artifact frame.
+ */
+export const ANON_ID_HEADER = "X-OA-Anon-Id";
+/** Length of the per-artifact public anonId (updatedBy "anon:<short>"). */
+export const ANON_ID_SHORT_LEN = 8;
+/** A per-artifact public anonId (viewer.anonId(), updatedBy "anon:<anonId>"). */
+export const AnonIdSchema = z.string().regex(/^[A-Za-z0-9_-]{8}$/);
+/** Body of GET R.anonId, which serves viewer.anonId() for anonymous viewers. */
+export const AnonViewerSchema = z.strictObject({ anonId: AnonIdSchema });
+export type AnonViewer = z.infer<typeof AnonViewerSchema>;
 
 export const ArtifactToShellSchema = z.union([
   z.strictObject({
@@ -142,6 +159,7 @@ export const METHOD_CAPABILITY: Record<RuntimeMethod, keyof Capabilities> = {
   "db.subscribe": "db",
   "db.unsubscribe": "db",
   "viewer.get": "viewer",
+  "viewer.anonId": "viewer",
   "storage.get": "storage",
   "storage.set": "storage",
   "storage.delete": "storage",
@@ -186,6 +204,7 @@ export const RUNTIME_PARAMS = {
   "db.subscribe": z.strictObject(col),
   "db.unsubscribe": z.strictObject(col),
   "viewer.get": z.strictObject({}),
+  "viewer.anonId": z.strictObject({}),
   "storage.get": z.strictObject({ key: StorageKeyNameSchema }),
   "storage.set": z.strictObject({
     key: StorageKeyNameSchema,
@@ -215,6 +234,7 @@ export const RUNTIME_RESULTS = {
   "viewer.get": z
     .object({ email: z.string(), name: z.string().nullable() })
     .nullable(),
+  "viewer.anonId": AnonIdSchema.nullable(),
   "storage.get": z.unknown(),
   "storage.set": z.null(),
   "storage.delete": z.null(),

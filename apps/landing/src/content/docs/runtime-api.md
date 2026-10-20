@@ -63,6 +63,20 @@ await votes.set(crypto.randomUUID(), { option: "Lisbon" });
 
 `viewer.get()` returns `{ email, name }`, or `null` for an anonymous viewer of a public artifact.
 
+`viewer.anonId()` returns an anonymous viewer's id on an artifact that allows anonymous writes, and `null` otherwise (signed-in viewers included).
+
+### Anonymous ids
+
+On an artifact that allows anonymous writes, each anonymous browser gets an id from `viewer.anonId()`, so a game or poll can tell two anonymous players apart. Their documents carry `updatedBy: "anon:<anonId>"`. Only documents written before anonymous ids existed still say `"anon"`.
+
+- It belongs to one browser on one device. Another browser or device gets a different id, and clearing site data resets it.
+- Each artifact sees a different id for the same browser, so ids can't be matched across artifacts.
+- It is not a person or an account, so don't treat it as proof of who someone is.
+- It is signed by the server: no one can forge someone else's id, but anyone can reset their own.
+- It is only issued on artifacts that allow anonymous writes. Signed-in viewers never get one.
+
+An `anonId` is a label, not a permission. Any anonymous viewer can still overwrite or delete any document, so use it to show who did what (for example, a seat claimed by `anonId`) and expect conflicts.
+
 ## Per-viewer data: `storage`
 
 `storage` keeps documents keyed to the current viewer, such as which boxes they ticked, with `get(key)`, `set(key, value)`, `delete(key)`, and `list()`, which returns the viewer's keys.
