@@ -23,6 +23,21 @@
 | Cloudflare API | 1,200 requests per 5 minutes per token. | Upgrade waves (M2) must budget calls; a create costs ~15. |
 | Unsupported in user Workers | `caches.default`, `request.cf`, gradual deployments. The server uses neither API (verified: no matches in `apps/server/src`). | Each upgrade goes to 100% at once. |
 
+## KV cap: inventory and the M2 move (Manager: note for M2, not built in M1)
+
+The 1,000-namespace KV cap matters only because each install gets its own namespace. Inventory on `origin/main`:
+
+| Binding | Used by | Operations | Holds customer data |
+|---|---|---|---|
+| `OAUTH_KV` (one per install) | `@cloudflare/workers-oauth-provider` (reads `env.OAUTH_KV` directly: 19 get, 9 put with `expirationTtl`, 6 delete, 7 prefix `list` with cursor); `services/usage.ts` reads its id for KV analytics | MCP OAuth clients, grants, tokens (hashed) | Yes |
+| Platform `HOSTS` (this plan, one total) | dispatch Worker | host → install ID | No (metadata only) |
+
+Nothing else in `apps/server/src` uses KV. Spec 3 rules out the obvious fix (one shared KV with per-install key prefixes): it would be a shared store holding customer data.
+
+**Proposal (M2, Backend-owned code, Platform provisioning):** replace the per-install KV namespace with a KV-compatible shim backed by the install's own D1. A table `oauth_kv(key TEXT PRIMARY KEY, value TEXT NOT NULL, expires_at INTEGER)` and a `d1Kv(db): KVNamespace`-shaped object implementing `get` (text and json, filtering out expired rows), `put` (with `expirationTtl`), `delete`, and `list({ prefix, cursor, limit })` as a key-range scan (`key >= prefix AND key < prefix || char(0x10FFFF)`), swept by the existing nightly job. `serveAppHost` passes `{ ...env, OAUTH_KV: d1Kv(env.DB) }` to the provider. Each install keeps its own store, so the red line holds, and the cap goes away. Durable Objects were the alternative; D1 wins because the data is small, already per install, and needs no new class or migration tag. Costs to check in M2: D1 rows written per token refresh (2 KV writes become 2 D1 rows, inside the Paid allowance) and the CPU budget on `/mcp` (one indexed read). Migration for live installs: dual-read (D1 first, then KV) for one release, then drop the KV binding. Self-hosted installs get the same change, so the code stays identical.
+
+**Ratelimit namespaces, found while checking:** `RL_ANON` uses `namespace_id: "1001"`. A namespace ID is account-wide, so every hosted install would share one per-IP counter, and one tenant's traffic would throttle another's. That isn't a data leak, but it is a cross-tenant effect. Fixed in M1: Task 3 gives each install its own `namespace_id` (Task 4 allocates it as `installs.rl_ns`, unique), and Task 1 checks whether there's a per-account cap on ratelimit namespaces.
+
 Still unconfirmed (Task 1 spike, needs the subscription): `Fetcher.scheduled()` through a dispatch namespace binding, and whether `send_email`, `browser` and `ratelimit` bindings and static assets work on user Workers.
 
 ## Global Constraints
@@ -56,7 +71,7 @@ Still unconfirmed (Task 1 spike, needs the subscription): `Fetcher.scheduled()` 
 
 - [ ] **Step 1:** Ask the Manager to get the user's approval for the Workers for Platforms subscription. Stop until it's on.
 - [ ] **Step 2:** In a `oa-spike` namespace, upload a 20-line user Worker exporting `fetch` and `scheduled` (writes a timestamp to a KV binding), a dispatch Worker with a namespace binding, and call `env.DISPATCHER.get("spike").scheduled({ cron: "17 3 * * *" })`. Record whether the handler ran (KV timestamp).
-- [ ] **Step 3:** Upload the real `apps/server` bundle once to the spike namespace with all template bindings plus its static assets (Task 3's metadata, by hand). Record which bindings the API accepts: `send_email`, `browser`, `ratelimit`, `assets`, `durable_object_namespace` with `new_sqlite_classes` migration.
+- [ ] **Step 3:** Upload the real `apps/server` bundle once to the spike namespace with all template bindings plus its static assets (Task 3's metadata, by hand). Record which bindings the API accepts: `send_email`, `browser`, `ratelimit` (and any cap on ratelimit namespaces per account), `service` to an account Worker (P2's auth broker asks), `assets`, `durable_object_namespace` with `new_sqlite_classes` migration.
 - [ ] **Step 4:** Write the results into `docs/ops/hosted.md`. Rule on each failure in the doc: `scheduled()` unsupported means Task 7 uses the signed route in its fallback; a rejected binding is listed as excluded in Task 3's table with the user-visible effect.
 - [ ] **Step 5:** Delete the spike namespace and its resources; commit the doc.
 
@@ -110,12 +125,14 @@ it("rejects reserved, uppercase, dotted and too-long slugs", () => {
   - `buildBundle(root: string): Promise<{ modules: { name: string; type: "esm" | "wasm"; bytes: Uint8Array }[]; mainModule: string; assetsDir: string; version: string }>`
   - `userWorkerMetadata(i: { id; appHost; contentHost; ownerEmail; vars }, r: { d1Id; kvId; version }, opts: { firstUpload: boolean }): UploadMetadata` — bindings mirror `apps/server/wrangler.template.jsonc` with values from `names(id)`; `observability: { enabled: true, logs: { enabled: true, invocation_logs: true, head_sampling_rate: 1 } }`; `tags: [id, "v" + version]`; `migrations` only when `firstUpload` (`new_sqlite_classes: ["ArtifactRuntime"]`, tag `v1`); no `routes`, no `triggers`.
   - `opts.testHooks?: boolean` (default false): when true adds var `TEST_HOOKS="1"` (P5's contract); only `oa:hosted create --test-hooks` sets it, and `upgrade` keeps the install's saved value.
+  - `ratelimits[].namespace_id` = the install's own `rl_ns` (never the template's `1001`).
   - `TEMPLATE_BINDINGS_EXCLUDED: Record<string, string>`: binding name → reason (filled from Task 1; `routes` and `crons` are always excluded).
 
 - [ ] **Step 1: Write the failing tests**
   - `every template binding is mapped or explicitly excluded`: parse `apps/server/wrangler.template.jsonc`, collect binding names and var names; each must appear in `userWorkerMetadata(...).bindings` or in `TEMPLATE_BINDINGS_EXCLUDED`. This is the drift guard: a new server binding fails this test until hosted handles it.
   - `vars carry the install's own hosts`: `APP_HOST`, `CONTENT_HOST`, `OWNER_EMAIL`, `WORKER_NAME === names(id).script`, `PLAN === "paid"`, `ENVIRONMENT === "production"`.
   - `migrations only on the first upload`.
+  - `each install gets its own ratelimit namespace_id`: two installs' metadata never share a `namespace_id`, and neither is `1001`.
   - `no secret names appear in bindings` (`SESSION_SECRET`, `CONTENT_SIGNING_KEY`, `ACCESS_CLIENT_SECRET`, `ANALYTICS_TOKEN`).
 - [ ] **Step 2:** Run; expect FAIL.
 - [ ] **Step 3:** Implement. `buildBundle` runs the dry-run build once per release, not per install.
@@ -133,7 +150,7 @@ it("rejects reserved, uppercase, dotted and too-long slugs", () => {
 - Consumes: Tasks 2 and 3.
 - Produces:
   - `cfClient(o: { accountId: string; token: string; fetch?: typeof fetch }): Cf` with typed calls: `d1Create/d1Get/d1Query/d1Delete`, `r2Create/r2Delete`, `kvCreate/kvDelete/kvPut/kvGet/kvDeleteKey`, `nsScriptUpload(ns, script, metadata, modules)`, `nsScriptDelete(ns, script)`, `nsSecretPut(ns, script, name, value)`, `nsAssetsUpload(ns, script, dir)` (assets upload session, then completion JWT into metadata). Retries 429 and 5xx with backoff (3 tries); never includes request bodies in errors.
-  - Platform D1 table `installs(id TEXT PRIMARY KEY, slug TEXT UNIQUE, app_host TEXT UNIQUE, content_host TEXT UNIQUE, owner_email TEXT, d1_id TEXT, kv_id TEXT, version TEXT, previous_version TEXT, state TEXT CHECK(state IN ('creating','active','upgrading','deleting')), created_at INTEGER, updated_at INTEGER)`. No customer data.
+  - Platform D1 table `installs(id TEXT PRIMARY KEY, slug TEXT UNIQUE, app_host TEXT UNIQUE, content_host TEXT UNIQUE, owner_email TEXT, d1_id TEXT, kv_id TEXT, version TEXT, previous_version TEXT, rl_ns INTEGER UNIQUE, state TEXT CHECK(state IN ('creating','active','upgrading','deleting')), created_at INTEGER, updated_at INTEGER)`. No customer data.
   - Platform KV `HOSTS`: key = lowercase host, value = install ID. Written last on create, removed first on delete.
   - `new WfpProvisioner(o: { cf: Cf; namespace: string; platformDb: string; hostsKv: string; domains; releases: R2BucketName; patDir: string })`.
 - Create order, each step idempotent by checking first: insert `installs` row (`creating`) → D1 → R2 → KV → apply `apps/server/migrations/*.sql` in order via `d1Query`, recording applied names in a `d1_migrations` table the same way wrangler does → secrets (`SESSION_SECRET`, `CONTENT_SIGNING_KEY`: 48 random bytes base64url) only when the script doesn't exist yet → upload script with assets → `HOSTS` keys → `/healthz` until `{ ok: true }` (60 s) → mint owner PAT by SQL insert (reuse the `owner-token.ts` SQL and hashing; `newPat()` from `@oa/shared`) into `<patDir>/<appHost>-pat-token`, mode 0600, O_NOFOLLOW → MCP selftest (publish and read back a private Welcome artifact, as setup's `selftest.ts`) → row `active`.
