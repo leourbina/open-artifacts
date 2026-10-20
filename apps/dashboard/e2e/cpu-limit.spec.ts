@@ -26,7 +26,11 @@ test("owner: the CPU banner shows today's hits and stays dismissed for the day",
   await banner(page).getByRole("button", { name: "Dismiss" }).click();
   await expect(banner(page)).toHaveCount(0);
   await page.reload();
-  await expect(page.getByRole("article").first()).toBeVisible();
+  // The mock answers the first two library requests of every load with a 1102,
+  // so the list arrives after the library's retry backoff.
+  await expect(page.getByRole("article").first()).toBeVisible({
+    timeout: 30_000,
+  });
   await expect(banner(page)).toHaveCount(0);
 });
 
@@ -54,7 +58,23 @@ test("no CPU banner without CPU trouble", async ({ page }) => {
 test("viewer: a silent frame gets the CPU notice above it, upsell after 2 reloads", async ({
   page,
 }) => {
-  test.setTimeout(60_000);
+  // The notice fires SLOW_MS after the frame loads. A fake clock replaces the
+  // wait, and a counter of frame loads says when the timer is armed: the load
+  // listener (React's onLoad) runs in the same dispatch as ours, so once the
+  // count is seen the timer exists and one fast-forward fires it. No retries,
+  // no sleeps, and nothing depends on how long the machine takes.
+  await page.clock.install();
+  await page.addInitScript(() => {
+    const w = window as unknown as { __frameLoads: number };
+    w.__frameLoads = 0;
+    document.addEventListener(
+      "load",
+      (e) => {
+        if ((e.target as Element).tagName === "IFRAME") w.__frameLoads++;
+      },
+      true,
+    );
+  });
   // A frame that loads but never says hello.
   await page.route("https://content.example.com/**", (r) =>
     r.fulfill({ contentType: "text/html", body: "<p>No runtime here</p>" }),
@@ -64,16 +84,27 @@ test("viewer: a silent frame gets the CPU notice above it, upsell after 2 reload
   const frame = page.locator("iframe.oa-vframe");
   await expect(frame).toBeVisible();
   await expect(notice).toHaveCount(0);
+  let loads = 0;
+  const slow = async () => {
+    loads++;
+    await page.waitForFunction(
+      (n) => (window as unknown as { __frameLoads: number }).__frameLoads >= n,
+      loads,
+    );
+    await page.clock.fastForward(8_000);
+    await expect(notice).toBeVisible();
+  };
+  await slow();
+  // Usage (the CPU signal) can land after the notice; wait on it, not on time.
   await expect(notice).toContainText(
     "This artifact may have hit your instance's CPU limit. Reloading usually works.",
-    { timeout: 12_000 },
   );
   await expect(frame).toBeVisible();
   await expect(notice).not.toContainText("Workers Paid");
   for (let i = 0; i < 2; i++) {
     await notice.getByRole("button", { name: "Reload" }).click();
     await expect(notice).toHaveCount(0);
-    await expect(notice).toBeVisible({ timeout: 12_000 });
+    await slow();
   }
   await expect(notice).toContainText("Workers Paid raises the limit.");
   await expect(notice.getByRole("link", { name: /See plans/ })).toBeVisible();
