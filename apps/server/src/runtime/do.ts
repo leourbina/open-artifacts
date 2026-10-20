@@ -27,6 +27,7 @@ import {
 } from "@oa/shared";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
+import { logError } from "../log.js";
 import { indexVersionOrThrow } from "../services/search.js";
 import {
   captureThumbnail,
@@ -1334,15 +1335,11 @@ export class ArtifactRuntime extends DurableObject<Env> {
       } catch (e) {
         const attempts = job.attempts + 1;
         if (attempts >= INDEX_MAX_ATTEMPTS) {
-          console.error(
-            JSON.stringify({
-              evt: "index_failed",
-              artifactId: job.artifactId,
-              version: job.version,
-              attempts,
-              error: String((e as Error)?.message ?? e).slice(0, 300),
-            }),
-          );
+          logError("index_failed", e, {
+            artifactId: job.artifactId,
+            version: job.version,
+            attempts,
+          });
           this.sql.exec(`delete from index_job ${same}`, ...key);
         } else
           this.sql.exec(
@@ -1414,14 +1411,10 @@ export class ArtifactRuntime extends DurableObject<Env> {
     try {
       result = await this.thumbnailer(this.env, job.artifactId, job.version);
     } catch (e) {
-      console.error(
-        JSON.stringify({
-          evt: "thumbnail_failed",
-          artifactId: job.artifactId,
-          version: job.version,
-          error: String((e as Error)?.message ?? e).slice(0, 300),
-        }),
-      );
+      logError("thumbnail_failed", e, {
+        artifactId: job.artifactId,
+        version: job.version,
+      });
       result = "failed";
     }
     const retryIn =

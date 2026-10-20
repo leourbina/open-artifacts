@@ -1,5 +1,6 @@
 import { sweepEmailCounters } from "./email/send.js";
 import type { Env } from "./env.js";
+import { logError } from "./log.js";
 import { sweepUngrantedClients } from "./mcp/registrations.js";
 import { purgeDeleted, reindexStale } from "./services/artifacts.js";
 import { checkLatestRelease } from "./services/release.js";
@@ -24,7 +25,7 @@ export async function scheduled(
       checkLatestRelease(env, now),
     ]).then((rs) => {
       for (const r of rs)
-        if (r.status === "rejected") console.error("cron", r.reason);
+        if (r.status === "rejected") logError("cron_task_failed", r.reason);
       return rs;
     }),
   );
