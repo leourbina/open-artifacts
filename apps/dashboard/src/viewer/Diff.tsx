@@ -103,8 +103,7 @@ function Unified({ rows }: { rows: Row[] }) {
     if (hidden) out.push({ gap: hidden });
     return { shown: out.slice(0, limit), truncated: out.length > limit };
   }, [rows, all, limit]);
-  if (!rows.some((r) => r.kind !== "ctx"))
-    return <p className="m-0">No changes.</p>;
+  if (!rows.some((r) => r.kind !== "ctx")) return <p>No changes.</p>;
   const hiddenAny = all || shown.some((r) => "gap" in r);
   return (
     <>
@@ -223,33 +222,29 @@ function FileDiff({
         : null,
     [q.data],
   );
-  if (q.error)
-    return (
-      <p role="alert" className="m-0">
-        Couldn't load this file.
-      </p>
-    );
-  if (!q.data)
-    return (
-      <p aria-busy="true" className="m-0">
-        Loading…
-      </p>
-    );
-  if (q.data.some((s) => s.binary))
-    return <p className="m-0">Binary file changed</p>;
-  if (q.data.some((s) => s.big))
-    return <p className="m-0">File too large to diff</p>;
+  if (q.error) return <p role="alert">Couldn't load this file.</p>;
+  if (!q.data) return <p aria-busy="true">Loading…</p>;
+  if (q.data.some((s) => s.binary)) return <p>Binary file changed</p>;
+  if (q.data.some((s) => s.big)) return <p>File too large to diff</p>;
   if (!rows)
     return (
-      <p className="m-0">
+      <p>
         Too many differences to display. Download both:{" "}
         {a && (
-          <a href={R.versionFile(id, from, a.path)} download>
+          <a
+            className="underline underline-offset-2"
+            href={R.versionFile(id, from, a.path)}
+            download
+          >
             v{from}
           </a>
         )}{" "}
         {b && (
-          <a href={R.versionFile(id, to, b.path)} download>
+          <a
+            className="underline underline-offset-2"
+            href={R.versionFile(id, to, b.path)}
+            download
+          >
             v{to}
           </a>
         )}
@@ -312,7 +307,7 @@ function Compare({
   const path = picked ?? b.entry;
   const source = (
     <div className="flex flex-col gap-3">
-      <ul className="m-0 flex list-none flex-col gap-1 p-0" aria-label="Files">
+      <ul className="flex flex-col gap-1 p-0" aria-label="Files">
         {paths.map((p) => {
           const s = status(find(a, p), find(b, p));
           return (
@@ -354,7 +349,7 @@ function Compare({
     <Tabs defaultValue="source">
       <TabsList
         variant="line"
-        className="h-auto w-full justify-start gap-1 border-0 border-b border-solid border-border p-0"
+        className="h-auto w-full justify-start gap-1 border-0 border-b border-border p-0"
       >
         {[
           ["source", "Source diff"],
@@ -426,7 +421,7 @@ export function Diff({
     <div className="oa-viewer">
       <Crumbs title={art.data.title} />
       <div className={DIFF}>
-        <h1 className="m-0 text-[length:var(--oa-text-xl)] leading-tight font-semibold">
+        <h1 className="text-[length:var(--oa-text-xl)] leading-tight font-semibold">
           Compare v{from} → v{to}
         </h1>
         <Compare id={id} from={from} to={to} a={a.data} b={b.data} />

@@ -24,9 +24,8 @@ export const GAP = "gap-[var(--oa-space-3)]";
 /** Cards stack 16px apart. */
 export const STACK = "grid min-w-0 grid-cols-1 gap-[var(--oa-space-4)]";
 
-export const muted =
-  "m-0 text-[length:var(--oa-text-xs)] text-muted-foreground";
-export const errorText = "m-0 text-[length:var(--oa-text-sm)] text-destructive";
+export const muted = "text-[length:var(--oa-text-xs)] text-muted-foreground";
+export const errorText = "text-[length:var(--oa-text-sm)] text-destructive";
 
 export function SettingsCard({
   id,
@@ -48,7 +47,7 @@ export function SettingsCard({
           <CardTitle>
             <h2
               id={id}
-              className="m-0 text-[length:var(--oa-text-md)] font-semibold"
+              className="text-[length:var(--oa-text-md)] font-semibold"
             >
               {title}
             </h2>
@@ -110,7 +109,7 @@ export function Code({ code, label }: { code: string; label: string }) {
         // Focusable so keyboard users can scroll a long line.
         // biome-ignore lint/a11y/noNoninteractiveTabindex: scrollable region
         tabIndex={0}
-        className="m-0 min-w-0 flex-1 overflow-x-auto p-[var(--oa-space-3)] font-mono text-[length:var(--oa-text-xs)]"
+        className="min-w-0 flex-1 overflow-x-auto p-[var(--oa-space-3)] font-mono text-[length:var(--oa-text-xs)]"
       >
         <code>{code}</code>
       </pre>

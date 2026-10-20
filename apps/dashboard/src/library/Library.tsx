@@ -59,7 +59,7 @@ const EMPTY: Record<Scope, [string, React.ReactNode]> = {
     "Ask your agent to publish something",
     <>
       Artifacts you publish show up here.{" "}
-      <AppLink href="/settings/agents">
+      <AppLink href="/settings/agents" className="underline underline-offset-2">
         Connect an agent in Settings → Agents
       </AppLink>
       .

@@ -190,6 +190,6 @@ export function Instance() {
 /** Label and hint beside the control; stacked at <= 600px. Rows are divided
     by a hairline and 16px above and below it. */
 const FIELD =
-  "grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] items-start gap-x-[var(--oa-space-6)] gap-y-[var(--oa-space-3)] border-0 border-b border-solid border-border py-[var(--oa-space-4)] first:pt-0 last:border-b-0 last:pb-0 max-[600px]:grid-cols-1";
+  "grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] items-start gap-x-[var(--oa-space-6)] gap-y-[var(--oa-space-3)] border-0 border-b border-border py-[var(--oa-space-4)] first:pt-0 last:border-b-0 last:pb-0 max-[600px]:grid-cols-1";
 const HINT = "grid gap-[2px]";
 const LABEL = "text-[length:var(--oa-text-sm)] font-medium";
