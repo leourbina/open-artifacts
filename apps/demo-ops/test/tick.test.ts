@@ -1,63 +1,183 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import worker, { type Env } from "../src/index.js";
+import worker, { type Env, MAX_REQUESTS, tick } from "../src/index.js";
 
-const A = "A1b2c3d4E5f6g7h8";
-const B = "B1b2c3d4E5f6g7h8";
-const DASH = "D1b2c3d4E5f6g7h8";
+const ID = (c: string) => `${c}1b2c3d4E5f6g7h8`;
+const POLL = ID("P");
+const CANVAS = ID("C");
+const MAP = ID("M");
+const TTT = ID("T");
+const CHESS = ID("H");
+const DASH = ID("D");
 const BASE = "https://demo.example.test";
 const TOKEN = "oat_super-secret-token";
+const NOW = Date.UTC(2026, 9, 20, 13, 30, 0);
+const DAY = "20261020";
+const MIN = 60_000;
 
 const env = (over: Partial<Env> = {}): Env => ({
   DEMO_OA_TOKEN: TOKEN,
   DEMO_BASE_URL: BASE,
   DASHBOARD_ARTIFACT_ID: DASH,
-  SOURCE_ARTIFACT_IDS: `${A},${B}`,
-  SOURCE_COLLECTIONS: "events",
+  POLL_ID: POLL,
+  CANVAS_ID: CANVAS,
+  MAP_ID: MAP,
+  TICTACTOE_ID: TTT,
+  CHESS_ID: CHESS,
   ...over,
 });
 
-const tick = (e: Env) =>
-  worker.scheduled({} as never, e, { waitUntil() {} } as never);
-
+type Doc = { id: string; data: unknown };
 type Call = {
-  url: string;
   method: string;
+  path: string;
+  query: URLSearchParams;
   body?: string;
-  signal?: AbortSignal | null;
   headers?: Record<string, string>;
-};
-type Handler = (url: URL, call: Call) => Response | undefined;
-
-const stub = (h: Handler): { calls: Call[] } => {
-  const calls: Call[] = [];
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: string | URL, init?: RequestInit) => {
-      const call: Call = {
-        url: String(input),
-        method: init?.method ?? "GET",
-        body: init?.body as string | undefined,
-        signal: init?.signal,
-        headers: init?.headers as Record<string, string>,
-      };
-      calls.push(call);
-      if (call.method === "PUT") return new Response("{}", { status: 200 });
-      return (
-        h(new URL(call.url), call) ?? new Response("boom", { status: 500 })
-      );
-    }),
-  );
-  return { calls };
+  signal?: AbortSignal | null;
 };
 
-const page = (n: number, nextCursor: string | null = null) =>
-  Response.json({
-    items: Array.from({ length: n }, (_, i) => ({ id: `d${i}`, data: {} })),
-    nextCursor,
+/** An in-memory instance: collections per artifact, a count endpoint switch, failures. */
+class World {
+  cols = new Map<string, Doc[]>();
+  count = false;
+  fail = new Set<string>(); // path substrings that answer 500
+  hang = new Set<string>(); // path substrings that never answer
+  big = new Set<string>(); // path substrings that answer over 512 KB
+  calls: Call[] = [];
+  set(id: string, col: string, docs: Doc[]) {
+    this.cols.set(`${id}/${col}`, docs);
+  }
+  doc(id: string, col: string, doc: string, data: unknown) {
+    const k = `${id}/${col}`;
+    this.cols.set(k, [...(this.cols.get(k) ?? []), { id: doc, data }]);
+  }
+  stat(name: string): unknown {
+    return this.cols.get(`${DASH}/stats`)?.find((d) => d.id === name)?.data;
+  }
+  puts() {
+    return this.calls.filter((c) => c.method === "PUT");
+  }
+  gets() {
+    return this.calls.filter((c) => c.method === "GET");
+  }
+  install() {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL, init?: RequestInit) => {
+        const u = new URL(String(input));
+        const call: Call = {
+          method: init?.method ?? "GET",
+          path: u.pathname,
+          query: u.searchParams,
+          body: init?.body as string | undefined,
+          headers: init?.headers as Record<string, string>,
+          signal: init?.signal,
+        };
+        this.calls.push(call);
+        for (const h of this.hang)
+          if (u.pathname.includes(h))
+            return new Promise<Response>((_, rej) =>
+              init?.signal?.addEventListener("abort", () =>
+                rej(new Error("aborted")),
+              ),
+            );
+        for (const f of this.fail)
+          if (u.pathname.includes(f))
+            return new Response("boom", { status: 500 });
+        for (const b of this.big)
+          if (u.pathname.includes(b))
+            return new Response("{}", {
+              headers: { "content-length": String(600 * 1024) },
+            });
+        const m = u.pathname.match(
+          /^\/api\/v1\/artifacts\/([^/]+)\/data\/([^/]+)(?:\/([^/]+))?$/,
+        );
+        if (!m) return new Response("nope", { status: 404 });
+        const [, id, col, doc] = m as [
+          string,
+          string,
+          string,
+          string | undefined,
+        ];
+        const k = `${id}/${col}`;
+        if (call.method === "PUT") {
+          const list = this.cols.get(k) ?? [];
+          this.cols.set(k, [
+            ...list.filter((d) => d.id !== doc),
+            { id: doc as string, data: JSON.parse(call.body as string) },
+          ]);
+          return Response.json({ ok: true });
+        }
+        const list = this.cols.get(k);
+        if (doc === "count") {
+          if (!this.count) return new Response("nf", { status: 404 });
+          return Response.json({ count: list?.length ?? 0 });
+        }
+        if (doc) {
+          const d = list?.find((x) => x.id === doc);
+          return d
+            ? Response.json({ id: d.id, data: d.data })
+            : new Response("nf", { status: 404 });
+        }
+        if (!list) return Response.json({ items: [], nextCursor: null });
+        const start = Number(call.query.get("cursor") ?? 0);
+        const limit = Number(call.query.get("limit") ?? 25);
+        const items = list.slice(start, start + limit);
+        const next = start + limit < list.length ? String(start + limit) : null;
+        return Response.json({ items, nextCursor: next });
+      }),
+    );
+  }
+}
+
+const seat = (ago: number) => ({ id: "u", at: NOW - ago });
+const full = (): World => {
+  const w = new World();
+  for (let i = 0; i < 7; i++) w.doc(POLL, `votes-${DAY}`, `v${i}`, { v: i });
+  w.doc(CANVAS, `canvas-${DAY}`, "r00", { c0: 1, c1: 2, c2: 0 });
+  w.doc(CANVAS, `canvas-${DAY}`, "r01", { c5: 1 });
+  for (const c of ["US", "US", "FR", "xx", "DE"])
+    w.doc(
+      MAP,
+      `pins-${DAY}`,
+      `p${w.cols.get(`${MAP}/pins-${DAY}`)?.length ?? 0}`,
+      { c },
+    );
+  w.doc(TTT, "game", "game", {
+    board: "XO.X.....".split("").map((c) => (c === "." ? "" : c)),
+    x: seat(MIN),
+    o: seat(MIN),
   });
-const idOf = (u: URL) => u.pathname.split("/")[4] as string;
-const puts = (calls: Call[]) => calls.filter((c) => c.method === "PUT");
+  w.doc(CHESS, "table", "table", {
+    g: "g3",
+    white: seat(MIN),
+    black: seat(MIN),
+  });
+  w.doc(CHESS, "moves", "g3-001", {
+    g: "g3",
+    n: 1,
+    m: "e4",
+    by: "u",
+    at: NOW - MIN,
+  });
+  w.doc(CHESS, "moves", "g3-002", {
+    g: "g3",
+    n: 2,
+    m: "e5",
+    by: "u",
+    at: NOW - MIN,
+  });
+  w.doc(CHESS, "moves", "g2-001", {
+    g: "g2",
+    n: 1,
+    m: "d4",
+    by: "u",
+    at: NOW - 99 * MIN,
+  });
+  return w;
+};
+
 const quiet = () => {
   const logs: string[] = [];
   for (const m of ["log", "warn", "error", "info", "debug"] as const)
@@ -70,196 +190,353 @@ const quiet = () => {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
-describe("demo-ops tick", () => {
-  it("reads only the listed ids and collections, paged, and writes once to stats/summary", async () => {
-    const { calls } = stub((u) => (idOf(u) === A ? page(3) : page(1)));
-    await tick(env());
-    const gets = calls.filter((c) => c.method === "GET").map((c) => c.url);
-    expect(gets.sort()).toEqual(
-      [
-        `${BASE}/api/v1/artifacts/${A}/data/events?limit=200`,
-        `${BASE}/api/v1/artifacts/${B}/data/events?limit=200`,
-      ].sort(),
-    );
-    const w = puts(calls);
-    expect(w).toHaveLength(1);
-    expect(w[0]?.url).toBe(
-      `${BASE}/api/v1/artifacts/${DASH}/data/stats/summary`,
-    );
-    const body = JSON.parse(w[0]?.body as string);
-    expect(body.counts).toEqual({ [A]: 3, [B]: 1 });
-    expect(typeof body.updatedAt).toBe("string");
-  });
+const run = async (
+  w: World,
+  e: Env = env(),
+  opts: { now?: number; budget?: number } = {},
+) => {
+  w.install();
+  await tick(e, { now: NOW, ...opts });
+};
 
-  it("never calls the atomic reset PUT /data", async () => {
-    const { calls } = stub(() => page(1));
-    await tick(env());
-    for (const c of calls)
-      expect(new URL(c.url).pathname).not.toMatch(/\/data$/);
-  });
-
-  it("caps at 2 pages of 200 per collection", async () => {
-    const { calls } = stub((u) =>
-      page(200, u.searchParams.get("cursor") === "c2" ? "c3" : "c2"),
-    );
-    await tick(env({ SOURCE_ARTIFACT_IDS: A }));
-    const gets = calls.filter((c) => c.method === "GET");
-    expect(gets).toHaveLength(2);
-    expect(gets[1]?.url).toContain("cursor=c2");
-    expect(JSON.parse(puts(calls)[0]?.body as string).counts[A]).toBe(400);
-  });
-
-  it("skips a failed source but still writes the others", async () => {
-    const { calls } = stub((u) => (idOf(u) === A ? undefined : page(2)));
+describe("today", () => {
+  it("writes every metric", async () => {
+    const w = full();
     quiet();
-    await tick(env());
-    expect(puts(calls)).toHaveLength(1);
-    expect(JSON.parse(puts(calls)[0]?.body as string).counts).toEqual({
-      [B]: 2,
+    await run(w);
+    expect(w.stat("today")).toEqual({
+      day: DAY,
+      updatedAt: NOW,
+      votes: 7,
+      gamesInProgress: { tictactoe: 1, chess: 1 },
+      moves: { tictactoe: 3, chess: 2 },
+      pixels: 3,
+      countries: 3,
+      pins: 5,
+      truncated: [],
+      missing: [],
+      failed: [],
     });
   });
 
-  it("validates ids with isId and collection names before fetching", async () => {
-    const { calls } = stub(() => page(1));
-    quiet();
-    await tick(
-      env({
-        SOURCE_ARTIFACT_IDS: `${A},../x,${DASH}/../..,,not an id,l0O0l0O0l0O0l0O0`,
-        SOURCE_COLLECTIONS: "events,../x,bad name",
-      }),
-    );
-    expect(calls.filter((c) => c.method === "GET").map((c) => c.url)).toEqual([
-      `${BASE}/api/v1/artifacts/${A}/data/events?limit=200`,
+  it("writes one doc per call to stats/<doc>, never PUT /data", async () => {
+    const w = full();
+    await run(w);
+    expect(
+      w
+        .puts()
+        .map((c) => c.path)
+        .sort(),
+    ).toEqual([
+      `/api/v1/artifacts/${DASH}/data/stats/hourly-${DAY}`,
+      `/api/v1/artifacts/${DASH}/data/stats/today`,
     ]);
+    for (const c of w.calls) expect(c.path).not.toMatch(/\/data$/);
   });
 
-  it("caps ids at 10 and collections at 5", async () => {
-    const ids = Array.from(
-      { length: 14 },
-      (_, i) => `${String.fromCharCode(65 + i)}1b2c3d4E5f6g7h8`,
-    );
-    const { calls } = stub(() => page(0));
-    await tick(
-      env({
-        SOURCE_ARTIFACT_IDS: ids.join(","),
-        SOURCE_COLLECTIONS: "c1,c2,c3,c4,c5,c6,c7",
-      }),
-    );
-    const gets = calls.filter((c) => c.method === "GET");
-    const per = new Map<string, Set<string>>();
-    for (const c of gets) {
-      const u = new URL(c.url);
-      const set = per.get(idOf(u)) ?? new Set<string>();
-      set.add(u.pathname.split("/")[6] as string);
-      per.set(idOf(u), set);
-    }
-    expect(per.size).toBeLessThanOrEqual(10);
-    expect(Math.max(...[...per.values()].map((x) => x.size))).toBe(5);
-    // 10 ids x 5 collections is 50 reads, over the 44 that the budget leaves.
-    expect(gets).toHaveLength(44);
-  });
-
-  it("is a silent no-op with no ids or no collections", async () => {
-    const { calls } = stub(() => page(1));
-    const logs = quiet();
-    await tick(env({ SOURCE_ARTIFACT_IDS: " , " }));
-    await tick(env({ SOURCE_COLLECTIONS: "" }));
-    expect(calls).toHaveLength(0);
-    expect(logs).toEqual([]);
-  });
-
-  it("refuses an invalid dashboard id without any fetch", async () => {
-    const { calls } = stub(() => page(1));
+  it("unknown or missing docs count as 0, not errors", async () => {
+    const w = new World();
     quiet();
-    await tick(env({ DASHBOARD_ARTIFACT_ID: "../etc" }));
-    expect(calls).toHaveLength(0);
+    await run(w);
+    expect(w.stat("today")).toMatchObject({
+      votes: 0,
+      pixels: 0,
+      pins: 0,
+      countries: 0,
+      gamesInProgress: { tictactoe: 0, chess: 0 },
+      moves: { tictactoe: 0, chess: 0 },
+      failed: [],
+    });
+  });
+
+  it("an empty id skips that source: value 0 and its name in missing", async () => {
+    const w = full();
+    quiet();
+    await run(w, env({ POLL_ID: "", MAP_ID: "", CHESS_ID: "" }));
+    const t = w.stat("today") as Record<string, unknown>;
+    expect(t.votes).toBe(0);
+    expect(t.pins).toBe(0);
+    expect(t.countries).toBe(0);
+    expect(t.missing).toEqual(["poll", "map", "chess"]);
+    expect(
+      w.calls.some(
+        (c) =>
+          c.path.includes(POLL) ||
+          c.path.includes(MAP) ||
+          c.path.includes(CHESS),
+      ),
+    ).toBe(false);
+  });
+
+  it("an invalid non-empty id is skipped and reported missing", async () => {
+    const w = full();
+    quiet();
+    await run(w, env({ POLL_ID: "../x" }));
+    expect((w.stat("today") as { missing: string[] }).missing).toEqual([
+      "poll",
+    ]);
+    expect(w.calls.some((c) => c.path.includes(".."))).toBe(false);
+  });
+
+  it("an invalid dashboard id does nothing", async () => {
+    const w = full();
+    quiet();
+    await run(w, env({ DASHBOARD_ARTIFACT_ID: "bad" }));
+    expect(w.calls).toEqual([]);
+  });
+
+  it("a failing source is 0 and listed in failed; the others are still written", async () => {
+    const w = full();
+    w.fail.add(`/${POLL}/`);
+    quiet();
+    await run(w);
+    const t = w.stat("today") as Record<string, unknown>;
+    expect(t.votes).toBe(0);
+    expect(t.failed).toEqual(["votes"]);
+    expect(t.pixels).toBe(3);
+  });
+});
+
+describe("counting", () => {
+  it("uses the count endpoint when present (no listing of votes)", async () => {
+    const w = full();
+    w.count = true;
+    await run(w);
+    expect((w.stat("today") as { votes: number }).votes).toBe(7);
+    expect(
+      w.gets().some((c) => c.path.endsWith(`/data/votes-${DAY}/count`)),
+    ).toBe(true);
+    expect(w.gets().some((c) => c.path.endsWith(`/data/votes-${DAY}`))).toBe(
+      false,
+    );
+  });
+
+  it("falls back to paging when the count endpoint is absent (404), probing once", async () => {
+    const w = full();
+    await run(w);
+    expect((w.stat("today") as { votes: number }).votes).toBe(7);
+    expect(w.gets().filter((c) => c.path.endsWith("/count"))).toHaveLength(1);
+    expect(w.gets().some((c) => c.path.endsWith(`/data/votes-${DAY}`))).toBe(
+      true,
+    );
+  });
+
+  it("pages at most 2 x 200 and marks the metric truncated", async () => {
+    const w = full();
+    w.set(
+      POLL,
+      `votes-${DAY}`,
+      Array.from({ length: 450 }, (_, i) => ({ id: `v${i}`, data: {} })),
+    );
+    await run(w);
+    const t = w.stat("today") as { votes: number; truncated: string[] };
+    expect(t.votes).toBe(400);
+    expect(t.truncated).toEqual(["votes"]);
+    expect(
+      w.gets().filter((c) => c.path.endsWith(`/data/votes-${DAY}`)),
+    ).toHaveLength(2);
+  });
+
+  it("with the count endpoint, votes are exact (not truncated) at any size", async () => {
+    const w = full();
+    w.count = true;
+    w.set(
+      POLL,
+      `votes-${DAY}`,
+      Array.from({ length: 450 }, (_, i) => ({ id: `v${i}`, data: {} })),
+    );
+    await run(w);
+    const t = w.stat("today") as { votes: number; truncated: string[] };
+    expect(t.votes).toBe(450);
+    expect(t.truncated).not.toContain("votes");
+  });
+
+  it("countries and chess moves read at most 2 pages, then are truncated", async () => {
+    const w = full();
+    w.count = true;
+    w.set(
+      MAP,
+      `pins-${DAY}`,
+      Array.from({ length: 450 }, (_, i) => ({
+        id: `p${i}`,
+        data: { c: "US" },
+      })),
+    );
+    w.set(
+      CHESS,
+      "moves",
+      Array.from({ length: 450 }, (_, i) => ({
+        id: `g3-${String(i).padStart(3, "0")}`,
+        data: { at: NOW },
+      })),
+    );
+    await run(w);
+    const t = w.stat("today") as {
+      pins: number;
+      truncated: string[];
+      moves: { chess: number };
+    };
+    expect(t.pins).toBe(450); // exact via the count endpoint
+    expect(t.moves.chess).toBe(400);
+    expect([...t.truncated].sort()).toEqual(["countries", "moves.chess"]);
+  });
+
+  it("an over-512 KB page marks truncated instead of hiding the source", async () => {
+    const w = full();
+    w.big.add(`/${MAP}/data/pins-`);
+    quiet();
+    await run(w);
+    const t = w.stat("today") as { truncated: string[]; failed: string[] };
+    expect(t.truncated).toContain("countries");
+    expect(t.failed).toEqual([]);
+  });
+});
+
+describe("hourly", () => {
+  const hourly = (w: World) =>
+    w.stat(`hourly-${DAY}`) as {
+      h: number[];
+      lastTotal: number;
+      lastDay: string;
+    };
+
+  it("the first tick is a baseline; later ticks add the change in writes to the current hour", async () => {
+    const w = full();
+    await run(w);
+    // votes 7 + ttt moves 3 + chess moves 2 + pixels 3 + pins 5
+    expect(hourly(w)).toEqual({
+      h: Array(24).fill(0),
+      lastTotal: 20,
+      lastDay: DAY,
+    });
+    w.doc(POLL, `votes-${DAY}`, "v99", {});
+    w.doc(MAP, `pins-${DAY}`, "p99", { c: "ES" });
+    await run(w);
+    expect(hourly(w).h[13]).toBe(2);
+    expect(hourly(w).lastTotal).toBe(22);
+    w.doc(POLL, `votes-${DAY}`, "v100", {});
+    await run(w);
+    expect(hourly(w).h[13]).toBe(3);
+  });
+
+  it("goes to the hour of 'now'", async () => {
+    const w = full();
+    await run(w, env(), { now: Date.UTC(2026, 9, 20, 5, 0, 0) });
+    w.doc(POLL, `votes-${DAY}`, "v99", {});
+    await run(w, env(), { now: Date.UTC(2026, 9, 20, 5, 59, 0) });
+    expect(hourly(w).h[5]).toBe(1);
+  });
+
+  it("clamps a negative delta to 0 and moves the baseline", async () => {
+    const w = full();
+    await run(w);
+    w.set(POLL, `votes-${DAY}`, []); // 7 votes vanish (a reset)
+    await run(w);
+    expect(hourly(w).h.reduce((a, b) => a + b, 0)).toBe(0);
+    expect(hourly(w).lastTotal).toBe(13);
+    w.doc(POLL, `votes-${DAY}`, "v1", {});
+    await run(w);
+    expect(hourly(w).h[13]).toBe(1);
+  });
+
+  it("starts a fresh doc on a new day", async () => {
+    const w = full();
+    await run(w);
+    const next = Date.UTC(2026, 9, 21, 0, 1, 0);
+    w.doc(POLL, "votes-20261021", "v1", {});
+    await run(w, env(), { now: next });
+    const t = w.stat("today") as { day: string; votes: number };
+    expect(t.day).toBe("20261021");
+    expect(t.votes).toBe(1);
+    expect(w.stat("hourly-20261021")).toMatchObject({ lastDay: "20261021" });
+    expect(
+      (w.stat("hourly-20261021") as { h: number[] }).h.reduce(
+        (a, b) => a + b,
+        0,
+      ),
+    ).toBe(0);
+    // yesterday's doc is left alone
+    expect(hourly(w).lastDay).toBe(DAY);
+  });
+
+  it("is not updated when a source failed (no spurious spike on recovery)", async () => {
+    const w = full();
+    await run(w);
+    const before = JSON.stringify(hourly(w));
+    w.fail.add(`/${POLL}/`);
+    quiet();
+    await run(w);
+    expect(JSON.stringify(hourly(w))).toBe(before);
+    w.fail.clear();
+    await run(w);
+    expect(hourly(w).h.reduce((a, b) => a + b, 0)).toBe(0);
+  });
+});
+
+describe("budget, deadline and limits", () => {
+  it("the request budget is 45", () => {
+    expect(MAX_REQUESTS).toBe(45);
+  });
+
+  it("never exceeds the budget, and still writes today (hourly waits for a clean tick)", async () => {
+    const w = full();
+    quiet();
+    await run(w, env(), { budget: 6 });
+    expect(w.calls.length).toBeLessThanOrEqual(6);
+    expect(w.puts().map((c) => c.path.split("/").pop())).toEqual(["today"]);
+    const t = w.stat("today") as { failed: string[] };
+    expect(t.failed.length).toBeGreaterThan(0);
+  });
+
+  it("a normal tick stays far below 45 requests", async () => {
+    const w = full();
+    await run(w);
+    expect(w.calls.length).toBeLessThan(MAX_REQUESTS);
+  });
+
+  it("past the 40 s deadline it skips the rest and still writes", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const w = full();
+    w.hang.add(`/${POLL}/`);
+    quiet();
+    w.install();
+    const done = tick(env(), { now: NOW });
+    await vi.advanceTimersByTimeAsync(40_000);
+    await done;
+    const t = w.stat("today") as { failed: string[]; pixels: number };
+    expect(t.failed).toContain("votes");
+    // later metrics were skipped after the deadline: not fetched
+    expect(w.gets().some((c) => c.path.includes(CANVAS))).toBe(false);
+    expect(t.pixels).toBe(0);
+    expect(w.puts().length).toBeGreaterThanOrEqual(1);
   });
 
   it("puts a 5 s timeout signal on every fetch", async () => {
-    const { calls } = stub(() => page(1));
-    await tick(env());
-    expect(calls.length).toBeGreaterThan(0);
-    for (const c of calls) expect(c.signal).toBeInstanceOf(AbortSignal);
+    const w = full();
+    await run(w);
+    for (const c of w.calls) expect(c.signal).toBeInstanceOf(AbortSignal);
   });
+});
 
-  it("marks a source truncated (not dropped) when a response is over 512 KB", async () => {
-    const { calls } = stub((u) => {
-      if (idOf(u) === A)
-        return new Response("{}", {
-          headers: { "content-length": String(600 * 1024) },
-        });
-      return new Response(
-        JSON.stringify({
-          items: [],
-          nextCursor: null,
-          pad: "x".repeat(600 * 1024),
-        }),
-      );
-    });
-    quiet();
-    await tick(env({ SOURCE_ARTIFACT_IDS: `${A},${B}` }));
-    const body = JSON.parse(puts(calls)[0]?.body as string);
-    expect(Object.keys(body.counts).sort()).toEqual([A, B].sort());
-    expect(body.truncated.sort()).toEqual([A, B].sort());
-  });
-
-  it("does not list a source as truncated when its pages are small", async () => {
-    const { calls } = stub(() => page(2));
-    await tick(env());
-    expect(JSON.parse(puts(calls)[0]?.body as string).truncated).toEqual([]);
-  });
-
-  it("stops at a total budget of 45 requests per tick, writing last", async () => {
-    const ids = Array.from(
-      { length: 10 },
-      (_, i) => `${String.fromCharCode(65 + i)}1b2c3d4E5f6g7h8`,
-    );
-    const { calls } = stub(() => page(200, "next"));
-    quiet();
-    await tick(
-      env({
-        SOURCE_ARTIFACT_IDS: ids.join(","),
-        SOURCE_COLLECTIONS: "c1,c2,c3,c4,c5",
-      }),
-    );
-    expect(calls).toHaveLength(45);
-    expect(calls.at(-1)?.method).toBe("PUT");
-    expect(puts(calls)).toHaveLength(1);
-  });
-
-  it("past the 40 s tick deadline skips the remaining sources and still writes", async () => {
-    vi.useFakeTimers();
-    try {
-      const { calls } = stub((u, c) => {
-        if (idOf(u) !== A) return page(1);
-        return new Promise<Response>((_, reject) =>
-          c.signal?.addEventListener("abort", () =>
-            reject(new Error("aborted")),
-          ),
-        ) as never;
-      });
-      quiet();
-      const done = tick(env());
-      await vi.advanceTimersByTimeAsync(40_000);
-      await done;
-      const gets = calls.filter((c) => c.method === "GET");
-      expect(gets.map((c) => idOf(new URL(c.url)))).toEqual([A]);
-      expect(puts(calls)).toHaveLength(1);
-      expect(JSON.parse(puts(calls)[0]?.body as string).counts).toEqual({});
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
+describe("secrets and handlers", () => {
   it("sends the token as a bearer header and never logs it", async () => {
-    const { calls } = stub((u) => (idOf(u) === A ? undefined : page(1)));
+    const w = full();
+    w.fail.add(`/${POLL}/`);
     const logs = quiet();
-    await tick(env());
+    await run(w);
     for (const l of logs) expect(l).not.toContain(TOKEN);
-    for (const c of calls)
+    for (const c of w.calls)
       expect(c.headers?.authorization).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it("scheduled() runs a tick with the real clock", async () => {
+    const w = full();
+    w.install();
+    await worker.scheduled({} as never, env(), { waitUntil() {} } as never);
+    expect(w.puts().length).toBe(2);
   });
 
   it("has a fetch handler that only serves 404", async () => {
@@ -274,11 +551,21 @@ describe("wrangler.jsonc", () => {
   const cfg = JSON.parse(
     readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8"),
   );
-  it("is private: no workers.dev, no routes, a minutely cron", () => {
+  it("is private, minutely, and has the v2 vars only", () => {
     expect(cfg.name).toBe("open-artifacts-demo-ops");
     expect(cfg.workers_dev).toBe(false);
     expect(cfg.routes).toBeUndefined();
     expect(cfg.triggers.crons).toEqual(["* * * * *"]);
-    expect(Object.keys(cfg.vars)).toContain("SOURCE_COLLECTIONS");
+    expect(Object.keys(cfg.vars).sort()).toEqual(
+      [
+        "CANVAS_ID",
+        "CHESS_ID",
+        "DASHBOARD_ARTIFACT_ID",
+        "DEMO_BASE_URL",
+        "MAP_ID",
+        "POLL_ID",
+        "TICTACTOE_ID",
+      ].sort(),
+    );
   });
 });
