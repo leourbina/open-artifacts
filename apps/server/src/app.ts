@@ -8,6 +8,7 @@ import {
   ROUTE_POLICY,
 } from "./auth/route-policy.js";
 import { readSession, sessionCookieName } from "./auth/session.js";
+import { authProviders } from "./auth/sign-in.js";
 import { ApiError, errorJson, toErrorResponse } from "./http/errors.js";
 import {
   type AppEnv,
@@ -99,6 +100,12 @@ export function createApp(
   // Public, outside SESSION_PATHS: no session read, no D1.
   app.get(SKILL_PATH, serveSkill);
   app.get(UPGRADE_PATH, serveUpgrade);
+  // Public sign-in offering (#359 AuthProviders): config only, before the
+  // /auth/* session middleware, so it never touches D1.
+  app.get(AUTH.providers, (c) => {
+    c.header("cache-control", "no-store");
+    return c.json(authProviders(c.env));
+  });
   // Ordering: GET (and HEAD, which Hono routes to GET handlers) match above
   // first; app.all only catches the remaining methods.
   app.all("/healthz", methodNotAllowed);

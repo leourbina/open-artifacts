@@ -244,12 +244,33 @@ export class OidcStateError extends ApiError {
   }
 }
 
+/**
+ * A refusal after the state cookie checked out: the route knows where the
+ * user was going (`next`) and can send them back to the sign-in page.
+ */
+export class OidcRedeemError extends ApiError {
+  constructor(
+    public next: string,
+    /** The logged failure stage ("tenant", "jwt_verify", …), when known. */
+    public stage: string | null,
+  ) {
+    super("unauthorized", "Login failed");
+  }
+}
+
+/** ApiError("unauthorized") that remembers its (already logged) stage. */
+class OidcFailure extends ApiError {
+  constructor(public stage: string) {
+    super("unauthorized", "Login failed");
+  }
+}
+
 export const fail = (
   stage: string,
   extra?: Record<string, string | undefined>,
 ): never => {
   logOidcFail(stage, extra);
-  throw new ApiError("unauthorized", "Login failed");
+  throw new OidcFailure(stage);
 };
 
 /** The cookie for this attempt (by state), else null. No legacy fallback. */
@@ -344,13 +365,24 @@ export async function handleCallback(
     return failState("state_mismatch");
   // Mix-up: a state minted for one provider is never redeemed by another.
   if ((st.p ?? "access") !== provider.id) return failState("state_mismatch");
-  if (q.has("error")) return fail("idp_error", { error: tag(q.get("error")) });
-  const code = q.get("code");
-  if (!code) return fail("no_code");
-  const id = await provider.redeem(env, {
-    code,
-    verifier: st.verifier,
-    nonce: st.nonce,
-  });
-  return { ...id, next: safeNext(env, st.next) };
+  const next = safeNext(env, st.next);
+  try {
+    if (q.has("error"))
+      return fail("idp_error", { error: tag(q.get("error")) });
+    const code = q.get("code");
+    if (!code) return fail("no_code");
+    const id = await provider.redeem(env, {
+      code,
+      verifier: st.verifier,
+      nonce: st.nonce,
+    });
+    return { ...id, next };
+  } catch (e) {
+    if (e instanceof ApiError)
+      throw new OidcRedeemError(
+        next,
+        e instanceof OidcFailure ? e.stage : null,
+      );
+    throw e;
+  }
 }

@@ -8,6 +8,11 @@ import {
 } from "@oa/shared";
 import type { Context } from "hono";
 import { requireUser } from "../auth/authz.js";
+import {
+  instanceFeatures,
+  instanceSignIn,
+  showsSignInFields,
+} from "../auth/sign-in.js";
 import { emailEnabled } from "../email/send.js";
 import { jsonBody } from "../http/body.js";
 import { appOrigin } from "../http/errors.js";
@@ -25,7 +30,7 @@ async function toMe(
   const kv = await getSettingsKv(c.env);
   const s = toSettings(kv);
   const appUrl = appOrigin(c.env);
-  return {
+  const me: Me = {
     user,
     instance: {
       name: s.name,
@@ -38,6 +43,21 @@ async function toMe(
     },
     ...profile,
   };
+  // Hosted M1 (#359): optional, appended last, only on hosted or
+  // direct-sign-in installs, so Access-only installs keep today's shape.
+  if (!showsSignInFields(c.env)) return me;
+  const cap = c.var.capReason;
+  const exp = c.var.sessionExp;
+  me.instance.hosted = c.env.HOSTED === "1";
+  me.instance.signIn = instanceSignIn(c.env);
+  me.instance.features = instanceFeatures(c.env);
+  me.auth = {
+    method: c.var.authMethod ?? "access",
+    readOnly: cap !== null,
+    cap,
+    expiresAt: exp === null ? null : new Date(exp).toISOString(),
+  };
+  return me;
 }
 
 export function mountMe(app: AppType): void {
