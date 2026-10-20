@@ -8,7 +8,7 @@ out=""; args=("$@"); url="\${args[$#-1]}"
 for ((i=0;i<$#;i++)); do [ "\${args[i]}" = -o ] && out="\${args[i+1]}"; done
 code=200; body='{"success":true,"result":[]}'
 case "$url" in
-  */user/tokens/verify) body='{"result":{"status":"active"}}';;
+  */user/tokens/verify) body='{"result":{"id":"tok123","status":"active"}}';;
   */zones\\?name=*) [ "$NO_ZONE" = 1 ] && body='{"result":[]}' || body='{"result":[{"id":"z1","status":"active"}]}';;
   */access/organizations) code="\${ORG_CODE:-200}"; body='{"result":{"auth_domain":"leourbina.cloudflareaccess.com"}}';;
 esac
@@ -32,6 +32,7 @@ describe("check-prod-token.sh", () => {
     const r = run();
     expect(r.code).toBe(0);
     expect(r.out).toContain("leourbina.cloudflareaccess.com");
+    expect(r.out).toContain("id=tok123");
     expect(r.out + r.err + r.sb.log().join("\n")).not.toContain("s3cret-token");
   });
   it("fails naming Zone: DNS when the zone is missing", () => {

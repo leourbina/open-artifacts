@@ -17,7 +17,12 @@ type Key =
 const usage = (metrics: { key: Key; used: number; limit: number }[]) =>
   server.use(
     http.get(`*${R.usage}`, () =>
-      HttpResponse.json({ available: true, date: "2026-10-18", metrics }),
+      HttpResponse.json({
+        available: true,
+        plan: "free",
+        date: "2026-10-18",
+        metrics,
+      }),
     ),
   );
 const meter = (name: RegExp | string) => screen.findByRole("meter", { name });
@@ -44,6 +49,7 @@ describe("usage", () => {
       http.get(`*${R.usage}`, () =>
         HttpResponse.json({
           available: false,
+          plan: "free",
           date: "2026-10-18",
           metrics: [],
         }),
@@ -262,6 +268,7 @@ describe("usage CPU card", () => {
       http.get(`*${R.usage}`, () =>
         HttpResponse.json({
           available: false,
+          plan: "free",
           date: "2026-10-18",
           metrics: [],
         }),

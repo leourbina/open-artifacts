@@ -3,6 +3,7 @@ import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { type ReactNode, useEffect } from "react";
 import { useMe } from "../auth/useMe";
 import { AppLink } from "../library/AppLink";
+import { MEASURE } from "./ui";
 
 /** Route links styled as shadcn's line tabs: the hairline is an inset
     shadow and the underline sits on it, so the scrolling strip clips
@@ -34,7 +35,7 @@ export function SettingsLayout() {
   if (role === "guest") return <Outlet />; // no chrome; the gate redirects
   return (
     // The 880px measure, centered in the shell gutter.
-    <div className="mx-auto max-w-[880px]">
+    <div className={MEASURE}>
       <h1 className="m-0 text-[length:var(--oa-text-xl)] font-semibold">
         Settings
       </h1>
