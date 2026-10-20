@@ -25,6 +25,7 @@ const usage = (hits: number | null, date = DAY) => {
       served++;
       return HttpResponse.json({
         available: true,
+        plan: "free",
         date,
         metrics: [
           { key: "requests", used: 1200, limit: 100000 },

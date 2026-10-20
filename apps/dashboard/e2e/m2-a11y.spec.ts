@@ -18,6 +18,7 @@ const notConfigured = async (page: Page) =>
           new Response(
             JSON.stringify({
               available: false,
+              plan: "free",
               date: "2026-10-19",
               metrics: [],
             }),
