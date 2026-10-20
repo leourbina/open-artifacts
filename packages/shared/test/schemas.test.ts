@@ -320,6 +320,24 @@ describe("fix round 3", () => {
     expect(m.MeSchema.safeParse(me).success).toBe(false);
     me.instance.defaultVisibility = "team";
     expect(m.MeSchema.safeParse(me).success).toBe(true);
+    // instance.update: optional (older servers), nullable, else the full shape.
+    const inst = me.instance as Record<string, unknown>;
+    inst.update = null;
+    expect(m.MeSchema.safeParse(me).success).toBe(true);
+    inst.update = { latestVersion: "0.4.0" };
+    expect(m.MeSchema.safeParse(me).success).toBe(false);
+    inst.update = {
+      latestVersion: "0.4.0",
+      current: "0.3.0",
+      custom: false,
+      updateAvailable: true,
+      breaking: true,
+      notesUrl: "u",
+      checkedAt: "t",
+    };
+    expect(m.MeSchema.safeParse(me).success).toBe(true);
+    (inst.update as Record<string, unknown>).breaking = null;
+    expect(m.MeSchema.safeParse(me).success).toBe(true);
   });
 });
 

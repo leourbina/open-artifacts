@@ -318,6 +318,26 @@ describe("plan option", () => {
   });
 });
 
+describe("update option", () => {
+  it("defaults to null; createHandlers({ update }) sets it", async () => {
+    fresh();
+    expect((await json(await call("GET", R.me))).instance.update).toBeNull();
+    const update = {
+      latestVersion: "0.4.0",
+      current: "0.3.0",
+      custom: false,
+      updateAvailable: true,
+      breaking: false,
+      notesUrl:
+        "https://github.com/open-artifacts-ai/open-artifacts/releases/tag/v0.4.0",
+      checkedAt: "2026-10-20T00:00:00.000Z",
+    };
+    fresh({ update });
+    const me = MeSchema.parse(await json(await call("GET", R.me)));
+    expect(me.instance.update).toEqual(update);
+  });
+});
+
 describe("fixtures", () => {
   it("parse with their schemas and cover the brief", () => {
     MeSchema.parse(fixtures.me);

@@ -12,7 +12,8 @@ import { emailEnabled } from "../email/send.js";
 import { jsonBody } from "../http/body.js";
 import { appOrigin } from "../http/errors.js";
 import type { AppEnv } from "../http/middleware.js";
-import { getSettings } from "../services/members.js";
+import { getSettingsKv, toSettings } from "../services/members.js";
+import { instanceUpdate, RELEASE_KEY } from "../services/release.js";
 import { getProfile, type Profile, setDisplayName } from "../services/users.js";
 import type { AppType } from "./index.js";
 
@@ -21,7 +22,8 @@ async function toMe(
   user: Member,
   profile: Profile,
 ): Promise<Me> {
-  const s = await getSettings(c.env);
+  const kv = await getSettingsKv(c.env);
+  const s = toSettings(kv);
   const appUrl = appOrigin(c.env);
   return {
     user,
@@ -32,6 +34,7 @@ async function toMe(
       mcpUrl: appUrl + MCP_PATH,
       emailEnabled: emailEnabled(c.env),
       plan: planOf(c.env.PLAN),
+      update: instanceUpdate(user.role, kv.get(RELEASE_KEY)),
     },
     ...profile,
   };

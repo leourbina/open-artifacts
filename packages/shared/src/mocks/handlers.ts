@@ -14,6 +14,7 @@
  *   with allowAnonymousWrites (updatedBy "anon"), as on the server (B13).
  * - quotaExceeded: every /api/v1 route answers 503 quota_exceeded.
  * - emailEnabled: sets Me.instance.emailEnabled (default false, from the fixtures).
+ * - update: sets Me.instance.update (default null, from the fixtures).
  */
 import { delay, type HttpHandler, HttpResponse, http } from "msw";
 import type { z } from "zod";
@@ -37,6 +38,7 @@ import {
   DataQuerySchema,
   DataSetBodySchema,
   type FileEntry,
+  type InstanceUpdate,
   ListQuerySchema,
   type Member,
   MemberInviteSchema,
@@ -61,6 +63,7 @@ export type MockOptions = {
   emailEnabled?: boolean;
   /** Me.instance.plan, and GET /usage `plan` and its limits (default "free"). */
   plan?: Plan;
+  update?: InstanceUpdate | null;
 };
 
 const err = (code: ErrorCode, message: string, details?: unknown) =>
@@ -175,6 +178,7 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
   if (opts.emailEnabled !== undefined)
     me.instance.emailEnabled = opts.emailEnabled;
   me.instance.plan = plan;
+  if (opts.update !== undefined) me.instance.update = opts.update;
   const artifacts: ArtifactSummary[] = f.artifacts;
   const versions = f.versions;
   const files = new Map(Object.entries(f.files));

@@ -181,13 +181,17 @@ const KEY = { name: "name", defaultVisibility: "default_visibility" } as const;
 
 const SETTINGS_ALL = "select key, value from settings";
 
-/** Every publish and /me: one prepared D1 statement. */
-export async function getSettings(env: Env): Promise<Settings> {
+/** Every settings row (one prepared D1 statement); /me also reads the
+ * latest-release row from it, so that costs no extra query. */
+export async function getSettingsKv(env: Env): Promise<Map<string, string>> {
   const { results: rows } = await stmt(env.DB, SETTINGS_ALL).all<{
     key: string;
     value: string;
   }>();
-  const kv = new Map(rows.map((r) => [r.key, r.value]));
+  return new Map(rows.map((r) => [r.key, r.value]));
+}
+
+export function toSettings(kv: Map<string, string>): Settings {
   const name = kv.get(KEY.name);
   const vis = kv.get(KEY.defaultVisibility);
   return {
@@ -197,6 +201,11 @@ export async function getSettings(env: Env): Promise<Settings> {
         ? vis
         : DEFAULT_SETTINGS.defaultVisibility,
   };
+}
+
+/** Every publish and /me: one prepared D1 statement. */
+export async function getSettings(env: Env): Promise<Settings> {
+  return toSettings(await getSettingsKv(env));
 }
 
 export async function patchSettings(
