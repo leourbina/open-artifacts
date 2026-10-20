@@ -22,6 +22,7 @@ import { createBridge } from "./bridge";
 import { Crumbs } from "./Crumbs";
 import { FullScreenEscape } from "./FullScreenEscape";
 import { frameLoad, SANDBOX, safeContentUrl } from "./frame";
+import { createNavigator } from "./navigate";
 import { isPanelTab, type PanelTab, SidePanel } from "./panels/SidePanel";
 import { RenavNotice } from "./RenavNotice";
 import { SlowNotice } from "./SlowNotice";
@@ -33,6 +34,11 @@ import "./viewer.css";
 import { fullPath } from "./paths";
 
 type Bridge = ReturnType<typeof createBridge>;
+
+// One navigator for every viewer, so the rate limit survives the remount a
+// navigation causes. `go` is the mounted viewer's router navigate.
+const artifactNav = { go: (_path: string) => {} };
+const onArtifactNavigate = createNavigator((p) => artifactNav.go(p));
 
 /** No hello this long after the frame loaded: hint that it may be stuck. */
 export const SLOW_MS = 8_000;
@@ -81,6 +87,7 @@ function Viewer({
   const theme = useTheme();
   const [el, setEl] = useState<HTMLIFrameElement | null>(null);
   const navigate = useNavigate();
+  artifactNav.go = (p) => void navigate({ to: p as string });
   const search = useSearch({ strict: false }) as {
     panel?: string;
     tab?: string;
@@ -206,6 +213,7 @@ function Viewer({
       onAccessLost: () =>
         void qc.invalidateQueries({ queryKey: qk.artifact(artifact.id) }),
       onRenavigated,
+      onNavigate: onArtifactNavigate,
     });
     bridge.current = b;
     return () => {

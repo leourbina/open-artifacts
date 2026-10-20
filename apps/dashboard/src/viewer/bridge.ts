@@ -47,6 +47,8 @@ export interface BridgeOptions {
   onAccessLost?: () => void;
   /** The frame navigated somewhere we didn't send it: the bridge is disposed. */
   onRenavigated?: () => void;
+  /** The artifact asked to open `url` (unvalidated: see navigate.ts). */
+  onNavigate?: (url: string) => void;
 }
 
 const BACKOFF_BASE_MS = 1_000;
@@ -403,6 +405,8 @@ export function createBridge(opts: BridgeOptions) {
           capabilities: artifact.capabilities,
           viewer,
           theme: opts.theme,
+          // The runtime turns plain links to this app into navigate requests.
+          appOrigin: location.origin,
         });
         onHello?.();
         break;
@@ -426,6 +430,9 @@ export function createBridge(opts: BridgeOptions) {
         if (blob) onThumb(blob);
         break;
       }
+      case "navigate":
+        opts.onNavigate?.(m.url);
+        break;
       case "resize":
         if (Number.isFinite(m.height) && m.height >= 0 && m.height <= 100_000)
           onResize?.(m.height);

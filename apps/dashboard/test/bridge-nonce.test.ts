@@ -159,3 +159,55 @@ describe("bridge per-load nonce", () => {
     expect(b.requestThumbnail()).toBe(false);
   });
 });
+
+describe("bridge navigate", () => {
+  const NAV = { oa: 1, type: "navigate", url: "https://app.test/a/B" };
+
+  it("welcome carries the app origin", () => {
+    vi.stubGlobal("location", {
+      protocol: "https:",
+      host: "app.test",
+      origin: "https://app.test",
+    });
+    mk();
+    send(HELLO);
+    expect(post.mock.calls[0]?.[0]).toMatchObject({
+      type: "welcome",
+      appOrigin: "https://app.test",
+    });
+  });
+
+  it("forwards navigate only with the current nonce, source and null origin", () => {
+    const onNavigate = vi.fn();
+    mk({ onNavigate });
+    raw(NAV);
+    raw({ ...NAV, nonce: "AAAAAAAAAAAAAAAAAAAAAA" });
+    const ev = new Event("message");
+    Object.assign(ev, {
+      data: stamped(frame, NAV),
+      source: {},
+      origin: "null",
+    });
+    win.dispatchEvent(ev);
+    const ev2 = new Event("message");
+    Object.assign(ev2, {
+      data: stamped(frame, NAV),
+      source: contentWindow,
+      origin: "https://content.test",
+    });
+    win.dispatchEvent(ev2);
+    expect(onNavigate).not.toHaveBeenCalled();
+    send(NAV);
+    expect(onNavigate).toHaveBeenCalledWith("https://app.test/a/B");
+  });
+
+  it("drops navigate after a renavigation disposed the bridge", () => {
+    const onNavigate = vi.fn();
+    mk({ onNavigate });
+    frame.loaded(); // ours
+    const stale = stamped(frame, NAV);
+    frame.loaded(); // not ours
+    raw(stale);
+    expect(onNavigate).not.toHaveBeenCalled();
+  });
+});
