@@ -303,6 +303,21 @@ describe("emailEnabled option", () => {
   });
 });
 
+describe("plan option", () => {
+  it('me and usage default to "free"; createHandlers({ plan: "paid" }) gives Paid', async () => {
+    fresh();
+    const free = UsageSchema.parse(await json(await call("GET", R.usage)));
+    expect(free.plan).toBe("free");
+    expect((await json(await call("GET", R.me))).instance.plan).toBe("free");
+    expect(free.metrics.find((m) => m.key === "requests")?.limit).toBe(100_000);
+    fresh({ plan: "paid" });
+    const paid = UsageSchema.parse(await json(await call("GET", R.usage)));
+    expect(paid.plan).toBe("paid");
+    for (const m of paid.metrics) expect(m.limit).toBe(0);
+    expect((await json(await call("GET", R.me))).instance.plan).toBe("paid");
+  });
+});
+
 describe("fixtures", () => {
   it("parse with their schemas and cover the brief", () => {
     MeSchema.parse(fixtures.me);

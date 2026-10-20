@@ -97,6 +97,7 @@ async function startMocks() {
       http.get("*/api/v1/usage", () =>
         HttpResponse.json({
           available: true,
+          plan: "free",
           date: new Date().toISOString().slice(0, 10),
           metrics: [
             { key: "requests", used: 1200, limit: 100000 },
@@ -127,7 +128,12 @@ async function startMocks() {
   };
   await setupWorker(
     ...extra,
-    ...createHandlers({ quotaExceeded, emailEnabled }),
+    // ?mock=paid: usage reports Workers Paid (no daily caps).
+    ...createHandlers({
+      quotaExceeded,
+      emailEnabled,
+      plan: params.get("mock") === "paid" ? "paid" : "free",
+    }),
   ).start({
     onUnhandledRequest: "bypass",
   });

@@ -23,6 +23,8 @@ import { newId, newPat } from "../ids.js";
 import {
   INLINE_TOO_LARGE_MESSAGE,
   LIMITS,
+  type Plan,
+  usageLimit,
   VERSIONS_PAGE_SIZE,
 } from "../limits.js";
 import { viewerPath } from "../routes.js";
@@ -57,6 +59,8 @@ export type MockOptions = {
   latencyMs?: number;
   quotaExceeded?: boolean;
   emailEnabled?: boolean;
+  /** Me.instance.plan, and GET /usage `plan` and its limits (default "free"). */
+  plan?: Plan;
 };
 
 const err = (code: ErrorCode, message: string, details?: unknown) =>
@@ -165,11 +169,12 @@ type Need = "read" | "write" | "owner";
 const A = "*/api/v1/artifacts/:id";
 
 export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
-  const { latencyMs = 0, quotaExceeded = false } = opts;
+  const { latencyMs = 0, quotaExceeded = false, plan = "free" } = opts;
   const f = structuredClone(fixtures);
   const me = f.me;
   if (opts.emailEnabled !== undefined)
     me.instance.emailEnabled = opts.emailEnabled;
+  me.instance.plan = plan;
   const artifacts: ArtifactSummary[] = f.artifacts;
   const versions = f.versions;
   const files = new Map(Object.entries(f.files));
@@ -705,12 +710,17 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
     http.get("*/api/v1/usage", () =>
       HttpResponse.json({
         available: true,
+        plan,
         date: iso().slice(0, 10),
         metrics: [
-          { key: "requests", used: 1200, limit: 100000 },
-          { key: "d1_reads", used: 3400, limit: 5000000 },
-          { key: "d1_writes", used: 120, limit: 100000 },
-          { key: "do_requests", used: 80, limit: 100000 },
+          { key: "requests", used: 1200, limit: usageLimit(plan, "requests") },
+          { key: "d1_reads", used: 3400, limit: usageLimit(plan, "d1_reads") },
+          { key: "d1_writes", used: 120, limit: usageLimit(plan, "d1_writes") },
+          {
+            key: "do_requests",
+            used: 80,
+            limit: usageLimit(plan, "do_requests"),
+          },
         ],
       }),
     ),

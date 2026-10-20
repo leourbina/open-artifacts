@@ -141,6 +141,14 @@ describe("JSON shapes (byte snapshots)", () => {
     expect(body.replace(VERSION, "<VERSION>")).toMatchSnapshot("healthz");
   });
 
+  it("usage: plan before date (no analytics token in tests)", async () => {
+    const admin = await login(`snap-u-${tag}@x.com`, "admin");
+    const body = await get(R.usage, admin.cookie);
+    expect(body.replace(/\d{4}-\d{2}-\d{2}/, "<DATE>")).toMatchSnapshot(
+      "usage",
+    );
+  });
+
   it("me: cookie and PAT", async () => {
     expect(norm(await get(R.me, a.cookie))).toMatchSnapshot("me a");
     expect(norm(await get(R.me, pat))).toMatchSnapshot("me b pat");

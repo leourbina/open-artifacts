@@ -18,13 +18,18 @@ const TITLE = "Some requests hit Cloudflare's free CPU limit";
 const DAY = "2026-10-19";
 
 let served = 0;
-const usage = (hits: number | null, date = DAY) => {
+const usage = (
+  hits: number | null,
+  date = DAY,
+  plan: "free" | "paid" = "free",
+) => {
   served = 0;
   server.use(
     http.get(`*${R.usage}`, () => {
       served++;
       return HttpResponse.json({
         available: true,
+        plan,
         date,
         metrics: [
           { key: "requests", used: 1200, limit: 100000 },
@@ -91,6 +96,12 @@ describe("CPU banner", () => {
       await noBanner();
       cleanup();
     }
+  });
+
+  it("Workers Paid: no banner however many hits", async () => {
+    usage(9, DAY, "paid");
+    mount("/");
+    await noBanner();
   });
 
   it("ignores yesterday's count", async () => {
