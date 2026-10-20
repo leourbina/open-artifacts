@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.7.0...v0.8.0) (2026-10-20)
+
+
+### Features
+
+* **demo-ops:** live activity feed for the demo dashboard ([#320](https://github.com/open-artifacts-ai/open-artifacts/issues/320)) ([6f419c7](https://github.com/open-artifacts-ai/open-artifacts/commit/6f419c717b7ce1d68d52e9744db42b74e4012005))
+
 ## [0.7.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.6.0...v0.7.0) (2026-10-20)
 
 
