@@ -78,8 +78,9 @@
   gap: 2px;
   margin-bottom: 10px;
 }
+/* Under the label text: the checkbox's 16px plus its 8px gap. */
 .oa-cap small {
-  padding-left: 28px;
+  padding-left: calc(16px + var(--oa-space-2));
 }
 
 /* During a file drag the artifact must not see the drop; the upload overlay takes it. */

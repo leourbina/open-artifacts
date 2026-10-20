@@ -3,10 +3,11 @@
 // here: 8s for errors and toasts with an action, and errors announced
 // assertively (the title is an alert inside Sonner's polite region).
 import { Toaster as Sonner, toast as sonner } from "@oa/ui/shadcn";
+import type { ReactNode } from "react";
 
 export type ToastOptions = {
   title: string;
-  description?: string;
+  description?: ReactNode;
   tone?: "info" | "success" | "danger";
   /** A button in the toast, e.g. Undo. Clicking it also dismisses. */
   action?: { label: string; onClick(): void };
@@ -31,14 +32,6 @@ export function toast({ title, description, tone, action }: ToastOptions) {
 export function Toaster() {
   return (
     <Sonner
-      // Design: 16px in; on phones full width less the gutters, above the
-      // home indicator.
-      offset={16}
-      mobileOffset={{
-        left: 16,
-        right: 16,
-        bottom: "calc(16px + env(safe-area-inset-bottom))",
-      }}
       toastOptions={{
         closeButtonAriaLabel: "Dismiss",
         classNames: {

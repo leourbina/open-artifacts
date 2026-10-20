@@ -173,7 +173,12 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
   const link = location.origin + viewerPath(id);
   const copy = () => {
     const failed = () =>
-      toast({ title: "Couldn't copy", description: link, tone: "danger" });
+      toast({
+        title: "Couldn't copy",
+        // One click selects the whole link, to copy by hand.
+        description: <span className="select-all">{link}</span>,
+        tone: "danger",
+      });
     if (!navigator.clipboard) return failed();
     navigator.clipboard
       .writeText(link)

@@ -91,6 +91,12 @@ test("an error toast is an alert; Dismiss has the 2px focus ring", async ({
   await page.getByRole("button", { name: "Copy link" }).last().click();
   const toast = page.locator("[data-sonner-toast]").first();
   await expect(toast.getByRole("alert")).toHaveText("Couldn't copy");
+  // One click selects the whole link to copy by hand.
+  expect(
+    await toast
+      .locator("[data-description] span")
+      .evaluate((e) => getComputedStyle(e).userSelect),
+  ).toBe("all");
   const dismiss = toast.getByRole("button", { name: "Dismiss" });
   await page.keyboard.press("Shift");
   await dismiss.focus();
@@ -118,4 +124,44 @@ test("the Undo toast offers its action", async ({ page }, info) => {
     body: await page.screenshot(),
     contentType: "image/png",
   });
+});
+
+test("opening Share focuses the active tab, not the panel", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("link", { name: "Landing page" }).first().click();
+  await page.waitForURL(/\/a\//);
+  await page.getByRole("button", { name: "Share", exact: true }).click();
+  const tab = page.getByRole("tab", { name: "Share", selected: true });
+  await expect(tab).toBeFocused();
+});
+
+test("Live data hints line up with their label text", async ({ page }) => {
+  await openShare(page);
+  const x = await page
+    .locator(".oa-cap")
+    .first()
+    .evaluate((cap) => {
+      const label = cap.querySelector("label")?.getBoundingClientRect();
+      const hint = cap.querySelector("small");
+      const r = document.createRange();
+      if (hint) r.selectNodeContents(hint);
+      return { label: label?.left, hint: r.getBoundingClientRect().left };
+    });
+  expect(x.hint).toBe(x.label);
+});
+
+test("dialogs are a surface, not the page gray", async ({ page }) => {
+  await page.goto("/settings/members");
+  await page.getByRole("button", { name: "Add member" }).click();
+  const bg = await page.getByRole("dialog").evaluate((d) => {
+    const probe = document.createElement("div");
+    probe.style.background = "var(--popover)";
+    document.body.append(probe);
+    const want = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return [getComputedStyle(d).backgroundColor, want];
+  });
+  expect(bg[0]).toBe(bg[1]);
 });
