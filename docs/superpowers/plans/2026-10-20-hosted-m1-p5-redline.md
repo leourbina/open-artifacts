@@ -14,8 +14,8 @@
 
 - The anti-goal: data leaking between customers, or one customer signing in to another's artifacts, is a failure even if everything else works.
 - The suite runs only against installs provisioned with test hooks (`stg-a`, `stg-b`); it refuses any target whose `/healthz` doesn't report `testHooks: true`.
-- Test hooks must not exist on any other install. The suite asserts that against prod (`/__test/*` → 404) on every run.
-- Every assertion is about B refusing A's credential: the expected result is a 401, 403 or 404 with no B data in the body, never "anything but 200".
+- Test hooks must not exist on any other install. Because hooks fail closed (a wrong key and "hooks off" both return 404), a 404 proves nothing on its own. The prod check is positive (Task 2): for every row in prod's `installs` table, `/healthz` reports `testHooks: false` **and** the script's secret list and settings (read with a read-only prod token) contain neither `TEST_HOOK_KEY` nor `TEST_HOOKS`. P1's provisioner refuses `testHooks` in the `oa-prod` namespace whatever the CLI flags.
+- Every assertion is about B refusing A's credential: the expected result is a 401, 403 or 404 with no B data in the body, never "anything but 200". Each refusal is meaningful only next to two successes on the same request: B's own credential succeeds at B, and A's credential succeeds at A (`crossCheck`, Task 2). A broken B that refuses everything fails the run.
 - Credentials (PATs, hook keys, session cookies) live in 0600 files or GitHub secrets, never in argv, logs or test names; failure messages print status and a body hash, not the body.
 - Real user exports never enter the repo, CI or a log. The import harness reads them from a local path the user gives.
 - Tests: `env -i PATH="$PATH" HOME="$HOME" pnpm exec vitest run`; never print env.
@@ -23,10 +23,10 @@
 
 ## Review Focus
 
-1. **A check that passes because B is down**: every cross-tenant case first proves the same credential works against A (positive control), and B's `/healthz` is ok in `beforeAll`. Pinned in Task 2's harness.
+1. **A check that passes because B is broken** (B answers 401 to everything, while its static `/healthz` still says ok): every case goes through `crossCheck`, which first proves B's own credential succeeds on the same request. Pinned in Task 2.
 2. **A redirect counted as refusal**: fetches use `redirect: "manual"`; a 3xx to B's sign-in is a refusal only when it carries no session cookie and no B data. Pinned in Task 2.
-3. **Hooks leaking to prod**: the prod probe in Task 2 fails the run when any `/__test/*` route answers non-404.
-4. **A release that skips the suite** (the job skipped, cancelled or not required): `deploy-prod` and `deploy-demo` `needs: redline`, and the redline job has no `if:` that a release can satisfy while skipping it. Pinned in Task 7's workflow invariant test.
+3. **Hooks leaking to prod**: the positive prod check in Task 2 (healthz `testHooks: false` plus no hook secret or var on any prod script) fails the run otherwise.
+4. **A release that skips the suite** (the red-line job failed, skipped or cancelled, or the deploy was dispatched by tag): `deploy-prod` and `deploy-demo` both use `always()`/`!cancelled()`, so `needs:` alone doesn't stop them. Their `if:` must also require `needs.redline.result == 'success'`, and red-line's trigger must match deploy-prod's, dispatch included. Pinned in Task 7.
 5. **An import rerun that duplicates** (new artifacts or new versions on the second run): pinned in Task 8.
 
 ---
@@ -44,7 +44,6 @@
   - `POST /__test/session {email, role: "owner"|"admin"|"member"|"guest"}` → `{ cookie }` (a real `__Host-oa_session` for that user, created if missing).
   - `POST /__test/otp/latest {email}` → `{ code }` (after P2: the last one-time code sent to that address on this install).
   - `POST /__test/oauth-client` → `{ clientId, accessToken }` (a completed MCP OAuth grant for the owner, through the real provider).
-  - Sign-in binding: hooks on also let the install trust the test issuer `https://idp.<staging-domain>` (Task 3) in addition to Google, with the same `hd`/`tid` checks. The real check code path runs; only the issuer list differs.
 - Agreed with Backend on 2026-10-21, with their amendments:
   - Fail closed: hooks are live only when `TEST_HOOKS="1"` **and** `TEST_HOOK_KEY` is at least 32 chars; otherwise `/__test/*` returns 404 and `/healthz` reports `testHooks: false`.
   - The bearer compare is constant-time. A wrong key gets the same 404, never a 401. Hooks exist on the app host only, never the content host.
@@ -62,12 +61,14 @@
 
 **Interfaces:**
 - Produces:
-  - `loadTargets(): { a: Target; b: Target; prod: { url: string } }` from `REDLINE_TARGETS` (JSON) with `Target = { name; app: string; content: string; patFile: string; hookKeyFile: string }`; reads secrets from the files.
+  - `loadTargets(): { a: Target; b: Target; prod: ProdProbe }` from `REDLINE_TARGETS` (JSON) with `Target = { name; installId: string; app: string; content: string; patFile: string; hookKeyFile: string }` and `ProdProbe = { tokenFile: string; accountId: string }` (a read-only token: D1 read on the platform DB, Workers Scripts read); reads secrets from the files.
+  - `crossCheck(req: (cred: Cred, host: Target) => Request, o: { a: Target; b: Target; credA: Cred; credB: Cred; ok?: (r: Response) => boolean }): Promise<void>`: asserts `ok(fetch(req(credB, b)))` and `ok(fetch(req(credA, a)))` (default `ok` is 2xx or 101), then `expectRefused(fetch(req(credA, b)), b)`. Every cross-tenant case in Tasks 4–6 uses it.
+  - `prodClean(p: ProdProbe): Promise<void>`: for every `installs` row in prod, `/healthz.testHooks === false`, `/healthz.installId === row.id`, and the script's secret list and settings contain neither `TEST_HOOK_KEY` nor `TEST_HOOKS`.
   - `hook(t: Target, path: string, body): Promise<unknown>`.
   - `asA/asB` helpers that build `fetch` init with a credential and `redirect: "manual"`.
   - `expectRefused(res: Response, b: Target): Promise<void>`: status in 401, 403, 404, or a 3xx without `set-cookie` whose `location` is B's own sign-in; body (when present) contains none of the marker strings seeded into B (Task 2 seeds a private artifact on each install whose title and content include `REDLINE-<install>-<random>`).
-  - `beforeAll` guard: both targets report `testHooks: true` and `ok: true`; prod's `/__test/session` is 404.
-- [ ] **Step 1: Write the failing tests**: `expectRefused rejects a 200`, `rejects a 302 that sets a cookie`, `rejects a 403 whose body contains B's marker`, `accepts a bare 401`; `loadTargets refuses a target without testHooks`.
+  - `beforeAll` guard: both targets report `testHooks: true`, `ok: true` and their own `installId`; `prodClean` passes.
+- [ ] **Step 1: Write the failing tests**: `expectRefused rejects a 200`, `rejects a 302 that sets a cookie`, `rejects a 403 whose body contains B's marker`, `accepts a bare 401`; `crossCheck fails when B's own credential is refused` (a fake B that 401s everything); `crossCheck fails when A's credential is refused at A`; `prodClean fails on a prod script that lists TEST_HOOK_KEY` and `on healthz testHooks: true`; `loadTargets refuses a target without testHooks`.
 - [ ] **Step 2–4:** Run (FAIL), implement, run (PASS).
 - [ ] **Step 5:** Commit `test(redline): harness and refusal assertions`.
 
@@ -84,7 +85,7 @@ P3 ships `apps/server/test/authz/surfaces.ts` (every HTTP surface as a probe) an
 **Files:**
 - Create: `tests/redline/test/credentials.test.ts`
 
-Each case: positive control on A, then the same credential on B through `expectRefused`.
+Every case goes through `crossCheck` (B's credential succeeds at B, A's at A, then A's is refused at B).
 - [ ] **Step 1: Write the tests**
   - `A's owner PAT at B: /api/v1/me, /api/v1/artifacts, /mcp (tools/list)`.
   - `A's session cookie at B` (cookie value replayed on B's host; also with `Domain` stripped).
@@ -93,6 +94,8 @@ Each case: positive control on A, then the same credential on B through `expectR
   - `A's capture token (X-OA-Capture) at B's content host`.
   - `A's signed upload URL at B`.
   - `B's private artifact id fetched with A's credentials at A` (404: ids don't cross installs).
+  - `A's OAuth refresh token and an unredeemed A authorization code at B's /token` → `invalid_grant`, no token issued.
+  - `A's invite link and share email link opened at B` (signed in to B as a B member) → no membership or share created on B.
 - [ ] **Step 2:** Run against `stg-a`/`stg-b`; expect PASS. Any FAIL is a red-line bug: stop, file it with the Manager as a blocker, don't weaken the test.
 - [ ] **Step 3:** Commit `test(redline): tokens, sessions, OAuth and signed URLs don't cross installs`.
 
@@ -106,10 +109,10 @@ Each case: positive control on A, then the same credential on B through `expectR
   - `WebSocket at B with Origin = A's app or content origin, using B's own valid session` → refused (Origin check).
   - `data API (GET/PUT/PATCH/DELETE data/:col/:doc, POST query, PUT data reset, storage/:key) at B with A's PAT`.
   - `anonymous writes`: a public artifact on B with anonymous writes allowed accepts an anonymous write, and A's PAT sent along doesn't change the actor to A's user (the stored doc has no A identity).
-  - Dispatch edge: `Host: <B app host>` sent to A's IP with SNI A (`curl --resolve`-style via `undici` `connect.servername`): served as B or refused, never A's data with B's host; `X-Forwarded-Host: <B>` on A is ignored; an absolute-form request line naming B sent to A; an unmapped host → generic 404.
+  - Mapping integrity (replaces the Host-to-IP case, which proves nothing behind one anycast edge): A's app and content hosts both resolve in the platform `HOSTS` to A's `installs.id`, and so do B's; each host's `/healthz.installId` equals that id; no host maps to two ids. `X-Forwarded-Host: <B>` on A is ignored; an unmapped host → generic 404; a host that is neither the install's `APP_HOST` nor `CONTENT_HOST` (reached through a test mapping on stg only) → 404 from the server itself.
   - `content host never serves app routes and ignores cookies`: `/api/v1/me` on A's content host with A's session → not 200; a `Cookie` header on content requests doesn't change the response.
-  - `cross-site cookies`: assert the app and content domains are different registrable domains (compare against the Public Suffix List via `tldts`); fail the run otherwise.
-  - Scheduler: `/__oa/nightly` (only if P1 Task 7 took the fallback): a signature made for A's host replayed at B → refused; a 6-minute-old signature → refused.
+  - `cross-site cookies`: the app and content domains are different registrable domains, **and** `a.<app-domain>` and `b.<app-domain>` are different sites. That holds only once the app domain is in the Public Suffix List private section (P1 Task 10 gate; Backend is filing it too). Until the PSL entry is published, this case reports `unproven` and blocks FinQore's go-live only once a second tenant exists.
+  - Scheduler: `/__oa/nightly` (only if P1 Task 7 took the fallback): a signature made for A's host replayed at B → refused; a 6-minute-old signature → refused; the same signature replayed a second time at A → refused (nonce, once per day).
 - [ ] **Step 2:** Run; expect PASS (same stop rule as Task 4).
 - [ ] **Step 3:** Commit `test(redline): live data, sockets and the dispatch edge`.
 
@@ -128,7 +131,8 @@ Installs are configured (by Backend's P2 settings) with `stg-a` and `stg-b` boun
   - Broker: `A's BROKER_KEY redeeming as B`, `B's assertion at A`, `a tampered install id at the broker callback` → refused.
   - One-time codes: `a code issued by A for x@b.redline.test, entered at B` → refused; `a code requested at B for an address not invited to B` → no code sent (hook shows none) and a generic response; `a guest of A who is invited to B gets read-only on B only` (guest can't publish via MCP or data API on B).
 - [ ] **Step 2:** Run; expect PASS (same stop rule).
-- [ ] **Step 3:** Commit `test(redline): sign-in and one-time codes are bound to their install`.
+- [ ] **Step 3:** Mark proof levels. Until the user creates the two real test Workspace tenants, a *validly signed* Google token with the wrong `hd` or `aud` can't be produced live; those cases run only against P2's fake-Google fixture. The suite reports them as `unproven-live`, the Platform status page shows them so, and FinQore's go-live is gated on them turning `proven`.
+- [ ] **Step 4:** Commit `test(redline): sign-in and one-time codes are bound to their install`.
 
 ### Task 7: Release gate
 
@@ -137,10 +141,18 @@ Installs are configured (by Backend's P2 settings) with `stg-a` and `stg-b` boun
 - Create: `.github/workflows/redline-nightly.yml` (main, `0 5 * * *`, plus dispatch; opens or updates a `Red line failing` issue on failure)
 - Modify: the workflow invariant tests (`scripts/ci/*.test.ts`)
 
-Job `redline`: `needs: release-please`; `if: needs.release-please.outputs.release_created == 'true'` (the same condition as `deploy-prod`, so the two can't diverge); concurrency `hosted-staging` (shared with P1's workflow so they never deploy at once); checks out the tag; `oa:hosted publish-release` + `upgrade` for `stg-a` and `stg-b` to the tag; writes PAT and hook-key files from secrets with umask 077; runs `pnpm --filter @oa/redline test`; on failure runs the existing `release-cadence.ts blocker` with the failing case names.
+Job `redline`:
+- `needs: release-please`.
+- `if:` is exactly deploy-prod's trigger, workflow_dispatch included: `always() && github.ref == 'refs/heads/main' && (needs.release-please.outputs.release_created == 'true' || (github.event_name == 'workflow_dispatch' && inputs.tag != ''))`. A dispatched deploy by tag runs the suite too.
+- **Its own install pair `rl-a` and `rl-b`** and its own concurrency group `redline` (`cancel-in-progress: false`). P1's push-to-main smoke keeps `stg-a`/`stg-b` and group `hosted-staging`, so neither workflow can cancel or overwrite the other's deploy mid-run.
+- Checks out the tag, `oa:hosted publish-release` + `upgrade` for `rl-a` and `rl-b` to the tag, writes PAT and hook-key files from secrets with umask 077, runs `pnpm --filter @oa/redline test`, and on failure runs the existing `release-cadence.ts blocker` with the failing case names.
+
+`deploy-prod.if` and `deploy-demo.if` each gain `&& needs.redline.result == 'success'`, and both list `redline` in `needs`. Today both start with `always()`/`!cancelled()`, so `needs:` alone would let them run after a failed, skipped or cancelled red-line.
+
 - [ ] **Step 1: Write the failing invariant tests**
-  - `deploy-prod and deploy-demo need redline`.
-  - `redline's if: equals deploy-prod's if:` (string compare after normalizing whitespace).
+  - `deploy-prod and deploy-demo need redline` **and** `their if: contains needs.redline.result == 'success'`.
+  - `redline's trigger condition equals deploy-prod's minus the redline clause` (parsed and normalized, so the workflow_dispatch tag branch can't be dropped from one of them).
+  - `redline uses concurrency group redline with cancel-in-progress false, and its targets are rl-a/rl-b, never stg-a/stg-b`.
   - `redline has no continue-on-error and no timeout under 20 minutes`.
   - `secrets reach redline only through files written under umask 077`.
 - [ ] **Step 2–4:** Run (FAIL), implement, run (PASS).
@@ -172,4 +184,4 @@ The migration skill itself is Backend's scope C and isn't on main yet. This task
 
 ## Dependencies and order
 
-Tasks 1–5 and 7–8 can start once P1's `stg-a`/`stg-b` exist (P1 Task 9). Task 6 waits on P2; Task 9 on P3 and Backend's migration skill. Until Task 6 lands, the release gate runs Tasks 4–5 only, and the status page says so.
+Tasks 1–5 and 7–8 can start once P1's `stg-a`/`stg-b` and `rl-a`/`rl-b` exist (P1 Task 9). Task 6 waits on P2; Task 9 on P3 and Backend's migration skill. Until Task 6 lands, the release gate runs Tasks 4–5 only, and the status page says so.
