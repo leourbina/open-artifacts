@@ -13,6 +13,7 @@ import {
   type FeatureFlag,
   type Me,
   type SpaceCreateSchema,
+  type SpacePatchSchema,
 } from "@oa/shared";
 import type { z } from "zod";
 
@@ -25,14 +26,18 @@ export {
   type CodeRateLimitedDetails,
   type CodeRequest,
   type CodeRequested,
+  CodeRequestedSchema,
   type CodeVerified,
+  CodeVerifiedSchema,
   type CodeVerifyFailureDetails,
   type DirectoryConnectError,
   DirectoryConnectErrorSchema,
   type DirectoryGroup,
+  DirectoryGroupSchema,
   type DirectoryMode,
   type FeatureFlag,
   type GroupMapping,
+  GroupMappingSchema,
   type GroupRef,
   type HeldSweep,
   type InstanceDirectory,
@@ -41,6 +46,7 @@ export {
   type MySpace,
   normalizeCode,
   type RestrictedGroup,
+  RestrictedGroupSchema,
   type Restriction,
   SIGN_IN_PAGE,
   type SignInError,
@@ -49,19 +55,26 @@ export {
   type Space,
   type SpaceKind,
   type SpaceMember,
+  SpaceMemberSchema,
   type SpaceRef,
   type SpaceRole,
+  SpaceSchema,
   type SpacesQuery,
+  SpacesQuerySchema,
   type SyncStatus,
+  SyncStatusSchema,
   type Tier,
   TRANSFER_PAGE,
   type TransferInput,
   type TransferResult,
+  TransferResultSchema,
   type TransferSummary,
+  TransferSummarySchema,
   type TurnstileRequiredDetails,
 } from "@oa/shared";
 
 export type SpaceCreateInput = z.input<typeof SpaceCreateSchema>;
+export type SpacePatchInput = z.input<typeof SpacePatchSchema>;
 
 /** Every hosted feature flag that is on; none on a self-hosted install. */
 export const features = (me: Me | null | undefined): FeatureFlag[] =>
