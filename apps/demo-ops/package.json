@@ -1,0 +1,20 @@
+{
+  "name": "@oa/demo-ops",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "pnpm --filter @oa/shared build && vitest run",
+    "typecheck": "pnpm --filter @oa/shared build && tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.12"
+  },
+  "dependencies": {
+    "@oa/shared": "workspace:*"
+  }
+}

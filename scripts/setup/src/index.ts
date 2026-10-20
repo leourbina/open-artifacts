@@ -22,6 +22,7 @@ import { secrets } from "./steps/secrets.ts";
 import { healthcheck, selftest } from "./steps/selftest.ts";
 import { withTokenFiles } from "./token-files.ts";
 import { isTokenCommand, tokenCommand } from "./token-page.ts";
+import { parseVarFlags } from "./tunables.ts";
 
 export const STEPS: Step[] = [
   prereqs,
@@ -114,6 +115,7 @@ async function resolve(
       "yes-email-domain": { type: "boolean", default: false },
       "yes-paid": { type: "boolean", default: false },
       plan: { type: "string" },
+      var: { type: "string", multiple: true },
       // Handled before resolve() by tokenCommand (src/token-page.ts).
       "token-links": { type: "boolean", default: false },
       "token-page": { type: "boolean", default: false },
@@ -218,6 +220,7 @@ async function resolve(
     yesEmailDomain: v["yes-email-domain"],
     yesPaid: v["yes-paid"],
     planFlag: v.plan,
+    varFlags: parseVarFlags(v.var),
     planVar: "free",
     yes: v.yes || v.ci,
     upgrade: v.upgrade,
@@ -368,6 +371,14 @@ export const HELP = `Usage: pnpm oa:setup [options]
                 plan on --upgrade keeps the saved value. A deploy never turns a
                 live paid PLAN into free without --plan free. Reported as
                 prereqs data.planVar (data.plan is the detected plan).
+  --var NAME=value  Keep a tunable Worker var across deploys (repeatable; NAME= clears).
+                Names: PUBLIC_HOME (artifact id), EMBED_ORIGINS (https://host[:port],...),
+                ANON_WRITES_PER_MIN (1-600), DATA_DOC_BYTES, DATA_DAILY_WRITES (> 0).
+                Precedence: the flag, then saved state (state.vars), then the live
+                Worker's value, then the template default. So a value set with --var or
+                saved in state wins over a dashboard edit; the dashboard value is kept
+                (noted "kept live") only when setup has none. Invalid saved or live
+                values are ignored with a note. --check/--json report data.vars.
   --token-links [--json]  Print each Cloudflare token setup needs (deploy, access,
                 analytics) with its permissions and a link that pre-fills the
                 dashboard form; account and zone come from --account-id/--app-host
