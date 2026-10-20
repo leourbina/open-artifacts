@@ -210,12 +210,13 @@ code,
   color: var(--oa-text-2);
   font-size: 18px;
 }
-/* The prompt box shares the agent wiring's center line and width below it;
-   the headline and subcopy above stay left-aligned. */
+/* The prompt box shares the agent wiring's center line and width below it,
+   with its label on the box's left edge. The headline and subcopy above stay
+   left-aligned. */
 .cta {
   max-width: 720px;
   margin: 40px auto 0;
-  text-align: center;
+  text-align: left;
 }
 .cta-label {
   color: var(--oa-text-2);
