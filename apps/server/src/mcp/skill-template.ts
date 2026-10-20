@@ -126,7 +126,7 @@ export const clientsSection = (): string => {
       return [
         `### ${a}`,
         oauth && snippetBlock(oauth, "OAuth"),
-        token && snippetBlock(token, "Token"),
+        token ? snippetBlock(token, "Token") : `Token: none; ${a}: use OAuth.`,
         `Reload: ${token?.reload ?? oauth?.reload}`,
       ]
         .filter(Boolean)

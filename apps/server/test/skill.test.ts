@@ -234,7 +234,7 @@ describe("skill.md frontmatter (agentskills.io)", () => {
     const all = agentClients("{{origin}}/mcp", {
       tokenFile: "~/.open-artifacts/{{hostSlug}}-pat-token",
     });
-    expect(all).toHaveLength(10);
+    expect(all).toHaveLength(9);
     const setup = md.split("\n## Client setup\n")[1]?.split("\n## ")[0] ?? "";
     for (const c of all) {
       expect(setup, `${c.variant}:${c.agent}`).toContain(fill(c.code));
@@ -244,6 +244,9 @@ describe("skill.md frontmatter (agentskills.io)", () => {
       if (c.hint) expect(setup).toContain(`Note: ${fill(c.hint)}.`);
     }
     expect(setup).not.toMatch(/oa_pat_/);
+    expect(setup).toContain("Token: none; Cursor: use OAuth.");
+    for (const bad of ["OA_TOKEN", "{env:", "${env:", "bearer_token_env_var"])
+      expect(md).not.toContain(bad);
   });
 
   it("origin: https for a real host even on a dev Worker; http only for local hosts", async () => {

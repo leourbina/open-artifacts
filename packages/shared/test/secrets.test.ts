@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { agentClients, TOKEN_PLACEHOLDER } from "../src/agent-clients.js";
 import {
@@ -47,54 +48,135 @@ describe("secrets", () => {
   });
 });
 
+type Schema = {
+  type?: string;
+  enum?: unknown[];
+  properties?: Record<string, Schema>;
+  required?: string[];
+  additionalProperties?: boolean | Schema;
+  anyOf?: Schema[];
+  $ref?: string;
+  minimum?: number;
+  maximum?: number;
+  exclusiveMinimum?: number;
+};
+
+/** A tiny JSON Schema check: the keywords the vendored fragment uses. */
+function valid(
+  v: unknown,
+  s: Schema,
+  root: Schema & { $defs?: Record<string, Schema> },
+): boolean {
+  if (s.$ref) {
+    const def = root.$defs?.[s.$ref.replace("#/$defs/", "")];
+    return def ? valid(v, def, root) : false;
+  }
+  if (s.anyOf) return s.anyOf.some((a) => valid(v, a, root));
+  if (s.enum && !s.enum.includes(v)) return false;
+  const isObj = typeof v === "object" && v !== null && !Array.isArray(v);
+  if (s.type === "object" && !isObj) return false;
+  if (s.type === "string" && typeof v !== "string") return false;
+  if (s.type === "boolean" && typeof v !== "boolean") return false;
+  if (s.type === "integer" && !Number.isInteger(v)) return false;
+  if (typeof v === "number") {
+    if (s.minimum !== undefined && v < s.minimum) return false;
+    if (s.maximum !== undefined && v > s.maximum) return false;
+    if (s.exclusiveMinimum !== undefined && v <= s.exclusiveMinimum)
+      return false;
+  }
+  if (isObj) {
+    const o = v as Record<string, unknown>;
+    for (const k of s.required ?? []) if (!(k in o)) return false;
+    for (const [k, val] of Object.entries(o)) {
+      const ps = s.properties?.[k];
+      if (ps) {
+        if (!valid(val, ps, root)) return false;
+      } else if (s.additionalProperties === false) return false;
+      else if (
+        typeof s.additionalProperties === "object" &&
+        !valid(val, s.additionalProperties, root)
+      )
+        return false;
+    }
+  }
+  return true;
+}
+
 describe("agentClients", () => {
   const URL_ = "https://oa.example.com/mcp";
   const FILE = "~/.open-artifacts/oa-example-com-pat-token";
+  const AGENTS = ["Claude Code", "Codex CLI", "Cursor", "OpenCode", "Generic"];
 
-  it("5 agents per variant, oauth first, each with verify and reload", () => {
+  it("dashboard form: 5 agents per variant, oauth first, each with verify and reload", () => {
     const all = agentClients(URL_);
-    const agents = [
-      "Claude Code",
-      "Codex CLI",
-      "Cursor",
-      "OpenCode",
-      "Generic",
-    ];
     expect(all.map((s) => `${s.variant}:${s.agent}`)).toEqual([
-      ...agents.map((a) => `oauth:${a}`),
-      ...agents.map((a) => `token:${a}`),
+      ...AGENTS.map((a) => `oauth:${a}`),
+      ...AGENTS.map((a) => `token:${a}`),
     ]);
     for (const s of all) {
       expect(s.verify).toBeTruthy();
       expect(s.reload).toBeTruthy();
     }
+    for (const s of all.filter((s) => s.variant === "token"))
+      expect(s.code).toMatch(/OA_TOKEN|<YOUR_TOKEN>/);
   });
 
-  it("with tokenFile, token variants read the file and never inline a token", () => {
-    const tok = agentClients(URL_, { tokenFile: FILE }).filter(
-      (s) => s.variant === "token",
-    );
-    const by = (a: string) => tok.find((s) => s.agent === a);
-    expect(by("Claude Code")?.code).toContain(
-      "--header 'Authorization: Bearer ${OA_TOKEN}'",
-    );
-    expect(by("Claude Code")?.hint).toContain(
-      `OA_TOKEN="$(cat ${FILE})" claude`,
-    );
-    expect(by("OpenCode")?.code).toContain(`{file:${FILE}}`);
-    expect(by("Codex CLI")?.hint).toContain(`OA_TOKEN="$(cat ${FILE})" codex`);
-    expect(by("Cursor")?.hint).toContain(`$(cat ${FILE})`);
-    expect(by("Generic")?.code).toContain(TOKEN_PLACEHOLDER);
-    for (const s of tok) {
-      expect(s.code).not.toContain("oa_pat_");
-      // Stored configs and add commands never expand the token; only a
-      // launch-command note may.
-      expect(s.code, s.agent).not.toContain("$(cat");
+  it("file form: OAuth for every client first; Cursor has no token variant", () => {
+    const all = agentClients(URL_, { tokenFile: FILE });
+    expect(all.map((s) => `${s.variant}:${s.agent}`)).toEqual([
+      ...AGENTS.map((a) => `oauth:${a}`),
+      ...AGENTS.filter((a) => a !== "Cursor").map((a) => `token:${a}`),
+    ]);
+    for (const s of all) {
+      expect(s.verify).toBeTruthy();
+      expect(s.reload).toBeTruthy();
+      expect(s.verify).not.toMatch(/\$\(cat|echo \$|printenv/);
     }
   });
 
-  it("without tokenFile, token variants read OA_TOKEN (the dashboard's form)", () => {
-    for (const s of agentClients(URL_).filter((s) => s.variant === "token"))
-      expect(s.code).toMatch(/OA_TOKEN|<YOUR_TOKEN>/);
+  it("file form: each token variant reads the file at connect time, no env vars", () => {
+    const tok = agentClients(URL_, { tokenFile: FILE }).filter(
+      (s) => s.variant === "token",
+    );
+    for (const s of tok) {
+      const text = `${s.code}\n${s.hint ?? ""}`;
+      expect(text, s.agent).toContain(FILE);
+      for (const bad of ["{env:", "${env:", "bearer_token_env_var", "OA_TOKEN"])
+        expect(text, `${s.agent}: ${bad}`).not.toContain(bad);
+      expect(s.code).not.toContain("oa_pat_");
+    }
+    const by = (a: string) => tok.find((s) => s.agent === a);
+    expect(by("Claude Code")?.code).toBe(
+      `claude mcp add-json -s user open-artifacts '{"type":"http","url":"${URL_}","headersHelper":"printf '\\''{\\"Authorization\\":\\"Bearer %s\\"}'\\'' \\"$(cat ${FILE})\\""}'`,
+    );
+    expect(by("Codex CLI")?.code).toBe(
+      `[mcp_servers.open-artifacts]\nurl = "${URL_}"\nhttp_headers_helper = "printf '{\\"Authorization\\":\\"Bearer %s\\"}' \\"$(cat ${FILE})\\""`,
+    );
+    expect(by("OpenCode")?.code).toContain(`"Bearer {file:${FILE}}"`);
+    expect(by("Generic")?.code).toContain(TOKEN_PLACEHOLDER);
+  });
+
+  it("file form: both OpenCode variants match OpenCode's McpRemoteConfig schema", () => {
+    const schema = JSON.parse(
+      readFileSync(
+        new URL("./fixtures/opencode-mcp-remote.schema.json", import.meta.url),
+        "utf8",
+      ),
+    );
+    const oc = agentClients(URL_, { tokenFile: FILE }).filter(
+      (s) => s.agent === "OpenCode",
+    );
+    expect(oc).toHaveLength(2);
+    for (const s of oc) {
+      const entry = JSON.parse(s.code).mcp["open-artifacts"];
+      expect(valid(entry, schema, schema), s.variant).toBe(true);
+      expect(entry.enabled).toBeUndefined();
+    }
+    expect(valid({ type: "remote", url: "x", bogus: 1 }, schema, schema)).toBe(
+      false,
+    );
+    expect(
+      valid({ type: "remote", url: "x", oauth: true }, schema, schema),
+    ).toBe(false);
   });
 });
