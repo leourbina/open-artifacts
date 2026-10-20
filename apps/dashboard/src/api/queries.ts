@@ -3,6 +3,7 @@ import {
   ArtifactSummarySchema,
   type ListQueryInput,
   ListQuerySchema,
+  type Me,
   type Member,
   type MemberInvite,
   MemberInviteResultSchema,
@@ -26,6 +27,7 @@ import {
   VersionInfoSchema,
 } from "@oa/shared";
 import {
+  type QueryClient,
   useInfiniteQuery,
   useMutation,
   useQuery,
@@ -49,7 +51,12 @@ import {
   TransferResultSchema,
   TransferSummarySchema,
 } from "./contract";
-import { errorCopy } from "./errorCopy";
+import {
+  DIRECTORY_SETTINGS,
+  type ErrorContext,
+  errorCopy,
+  errorLink,
+} from "./errorCopy";
 
 const failToast = (e: unknown, fallback: string) =>
   toast({
@@ -206,6 +213,38 @@ export const useUsage = (
     ...opts,
   });
 
+/** Where the error shows and who hit it, for `errorCopy` and `errorLink`. */
+const errorContext = (qc: QueryClient): ErrorContext => ({
+  capped: qc.getQueryData<Me>(qk.me)?.auth?.cap != null,
+  onDirectoryPage: location.pathname.startsWith(DIRECTORY_SETTINGS),
+});
+
+/** A failure toast: `title`, Design's copy for `e`, and its link if any. */
+const failureToast = (
+  qc: QueryClient,
+  title: string,
+  e: unknown,
+  fallback = "",
+) => {
+  const ctx = errorContext(qc);
+  const description = errorCopy(e, fallback, ctx);
+  const link = errorLink(e, ctx);
+  toast({
+    title,
+    ...(description ? { description } : {}),
+    tone: "danger",
+    // Hooks sit outside the router, so the link is a page load.
+    ...(link
+      ? {
+          action: {
+            label: link.label,
+            onClick: () => location.assign(link.to),
+          },
+        }
+      : {}),
+  });
+};
+
 /** Run `fn` then invalidate every key `keys()` returns. */
 const useInvalidating = <V, T>(
   fn: (v: V) => Promise<T>,
@@ -218,14 +257,7 @@ const useInvalidating = <V, T>(
     // Here, not at the call site: the row (and its component) may be gone by now.
     ...(failure
       ? {
-          onError: (e: unknown) => {
-            const description = errorCopy(e, "");
-            toast({
-              title: failure,
-              ...(description ? { description } : {}),
-              tone: "danger",
-            });
-          },
+          onError: (e: unknown) => failureToast(qc, failure, e),
         }
       : {}),
     onSuccess: () =>
@@ -555,11 +587,7 @@ export const useMoveArtifact = (id: string) => {
     mutationFn: (spaceId: string) =>
       api.send("POST", R.moveArtifact(id), { spaceId }, ArtifactSummarySchema),
     onError: (e) =>
-      toast({
-        title: "Couldn't move the artifact.",
-        description: errorCopy(e, "Try again."),
-        tone: "danger",
-      }),
+      failureToast(qc, "Couldn't move the artifact.", e, "Try again."),
     onSettled: () =>
       Promise.all(
         [qk.artifact(id), ["artifacts"], ["spaces"], ["search"]].map(

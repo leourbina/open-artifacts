@@ -1,8 +1,8 @@
-// Final copy: Design's options page t6cjQuskQ6zrZaJd ("Copy for the 11 error codes").
+// Final copy: Design, 2026-10-21 (p4-error-copy.md), verbatim.
 import type { ErrorCode } from "@oa/shared";
 import { expect, it } from "vitest";
 import { ApiClientError } from "../src/api/client";
-import { errorCopy } from "../src/api/errorCopy";
+import { errorCopy, errorLink } from "../src/api/errorCopy";
 
 it.each([
   [
@@ -59,4 +59,27 @@ it("a capped caller's space_forbidden says why asking won't help", () => {
     "Your account can only view, so you can't publish.",
   );
   expect(errorCopy(e, "x", { capped: false })).toBe(errorCopy(e, "x"));
+});
+
+it("directory_sync_off links to directory settings off the Directory page", () => {
+  const e = new ApiClientError("directory_sync_off", "server text", 409);
+  expect(errorLink(e)).toEqual({
+    label: "Open directory settings",
+    to: "/settings/directory",
+  });
+  expect(errorLink(e, { onDirectoryPage: false })).toEqual({
+    label: "Open directory settings",
+    to: "/settings/directory",
+  });
+  expect(errorLink(e, { onDirectoryPage: true })).toBeNull();
+  expect(errorCopy(e, "x", { onDirectoryPage: false })).toBe(
+    "Directory sync is off, so this isn't available right now.",
+  );
+});
+
+it("no link for other errors", () => {
+  expect(
+    errorLink(new ApiClientError("space_forbidden", "server text", 403)),
+  ).toBeNull();
+  expect(errorLink(new Error("boom"))).toBeNull();
 });

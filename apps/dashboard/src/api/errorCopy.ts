@@ -1,7 +1,7 @@
 import type { ErrorCode } from "@oa/shared";
 import { ApiClientError } from "./client";
 
-/** The UI's own copy for the hosted error codes (Design's final strings). */
+/** The UI's own copy for the hosted error codes (Design's final strings, 2026-10-21). */
 const COPY: Partial<Record<ErrorCode, string>> = {
   space_forbidden:
     "You can't publish to this space. Ask a space manager to make you an editor.",
@@ -25,17 +25,38 @@ const COPY: Partial<Record<ErrorCode, string>> = {
 /** Asking a space manager can't help a guest or restricted member. */
 const CAPPED_FORBIDDEN = "Your account can only view, so you can't publish.";
 
+export const DIRECTORY_SETTINGS = "/settings/directory";
+
+/** What the UI knows about where and who the error reached. */
+export type ErrorContext = {
+  /** Me.auth.cap is set (a guest or restricted member). */
+  capped?: boolean;
+  /** The error shows on the Directory page itself. */
+  onDirectoryPage?: boolean;
+};
+
 /**
  * What to tell the person about `e`: the mapped copy for a hosted code, else
- * the server's message, else `fallback`. `capped` (Me.auth.cap is set) picks
- * the capped wording of `space_forbidden`.
+ * the server's message, else `fallback`. `capped` picks the capped wording of
+ * `space_forbidden`.
  */
 export const errorCopy = (
   e: unknown,
   fallback: string,
-  ctx?: { capped?: boolean },
+  ctx?: ErrorContext,
 ): string => {
   if (!(e instanceof ApiClientError)) return fallback;
   if (e.code === "space_forbidden" && ctx?.capped) return CAPPED_FORBIDDEN;
   return (e.code !== "cpu_limit" && COPY[e.code]) || e.message || fallback;
 };
+
+/** A link to show with the copy: off the Directory page, `directory_sync_off` points there. */
+export const errorLink = (
+  e: unknown,
+  ctx?: ErrorContext,
+): { label: string; to: string } | null =>
+  e instanceof ApiClientError &&
+  e.code === "directory_sync_off" &&
+  !ctx?.onDirectoryPage
+    ? { label: "Open directory settings", to: DIRECTORY_SETTINGS }
+    : null;

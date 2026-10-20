@@ -69,6 +69,40 @@ it("a mapping 409 toasts the title and the mapped copy", async () => {
   ).toBeVisible();
 });
 
+it("off the Directory page, a sync-off toast links to directory settings", async () => {
+  mountHosted("/", { directory: "frozen" });
+  const { result } = renderHook(() => usePutMapping("SpEngNpQrSt2uVwX"), {
+    wrapper,
+  });
+  await result.current
+    .mutateAsync({ groupId: "gEng01", role: "manager" })
+    .catch(() => {});
+  expect(
+    await screen.findByRole("button", { name: "Open directory settings" }),
+  ).toBeVisible();
+});
+
+it("a capped caller's refused move says their account can only view", async () => {
+  mountHosted("/", true, (m) => ({
+    ...m,
+    auth: {
+      method: "google",
+      readOnly: true,
+      cap: "restricted",
+      expiresAt: null,
+    },
+  }));
+  await waitFor(() => expect(lastClient.getQueryData(["me"])).toBeDefined());
+  const { result } = renderHook(() => useMoveArtifact("De6gHjKmNp7qRsTu"), {
+    wrapper,
+  });
+  await result.current.mutateAsync("SpExcNpQrSt3uVwX").catch(() => {});
+  expect(await screen.findByText("Couldn't move the artifact.")).toBeVisible();
+  expect(
+    screen.getByText("Your account can only view, so you can't publish."),
+  ).toBeVisible();
+});
+
 it("directory group search waits for two characters", async () => {
   mountHosted("/");
   const seen = calls("GET");
