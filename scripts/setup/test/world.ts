@@ -53,6 +53,8 @@ type World = {
   /** Access organization: 403s for the wrangler token, or none at all. */
   org?: "forbidden" | "none" | "404";
   policies?: Obj[];
+  /** GET Access policies/apps answer with this status (checked per request, so it may be set after an install). */
+  accessReadStatus?: number;
   apps?: Obj[];
   /** Worker secret names; undefined means the Worker does not exist yet. */
   secrets?: string[];
@@ -670,6 +672,10 @@ export function world(w: World = {}) {
             : { auth_domain: "team.cloudflareaccess.com" },
         );
       }
+      if (acc && m === "GET" && w.accessReadStatus)
+        return envelope(null, w.accessReadStatus, [
+          { code: 10000, message: "gateway timeout" },
+        ]);
       if (acc && m === "GET")
         return paged(acc[1] === "apps" ? apps : policies, q, w.noResultInfo);
       if (acc) ops.push(`${m} ${acc[1]}${acc[2] ? `/${acc[2]}` : ""}`);

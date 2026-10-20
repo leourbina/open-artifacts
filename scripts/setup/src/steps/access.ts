@@ -127,6 +127,46 @@ async function verifyIssuer(ctx: Ctx, domain: string, clientId: string) {
   );
 }
 
+/** A 5xx or a timeout: the Access API is down, not refusing us. */
+const outage = (e: unknown) => {
+  if (e instanceof NeedInput) return false;
+  const st = status(e);
+  if (st !== undefined) return st >= 500;
+  return /time(d)? ?out|ETIMEDOUT|fetch failed|ECONN/i.test(
+    (e as Error)?.message ?? "",
+  );
+};
+
+/**
+ * Under --upgrade, an Access outage must not block a deploy that never changes
+ * Access: when the app is known (saved state, else the live Worker's
+ * ACCESS_TEAM_DOMAIN and ACCESS_CLIENT_ID vars) and its secret is on the
+ * Worker, note it and carry on from that. Everything else stays an error.
+ */
+async function tolerateOutage(state: State, ctx: Ctx, e: unknown) {
+  if (!ctx.opts.upgrade || !outage(e)) return false;
+  let { teamDomain, accessClientId } = state;
+  if (!(state.accessAppId && teamDomain && accessClientId)) {
+    const vars = await deployedVars(ctx, state.accountId ?? "").catch(
+      () => undefined,
+    );
+    teamDomain = vars?.get("ACCESS_TEAM_DOMAIN") || undefined;
+    accessClientId = vars?.get("ACCESS_CLIENT_ID") || undefined;
+  }
+  if (!teamDomain || !accessClientId) return false;
+  if (
+    !(await listSecrets(ctx).catch(() => new Set<string>())).has(ACCESS_SECRET)
+  )
+    return false;
+  Object.assign(state, { teamDomain, accessClientId });
+  writeConfig(state, ctx);
+  const st = status(e);
+  ctx.notes.push(
+    `Access API unavailable (${st ?? "timeout"}); verified from saved state only (upgrade never changes Access)`,
+  );
+  return true;
+}
+
 /** Thrown when only the organization (team domain) is unreadable. */
 const orgDenied = () =>
   Object.assign(new Error("GET organizations: 403"), {
@@ -389,7 +429,12 @@ export const access: Step = {
       );
       return "done";
     }
-    const l = await lookup(ctx, state.accountId ?? "").catch((e) => {
+    let down = false;
+    const l = await lookup(ctx, state.accountId ?? "").catch(async (e) => {
+      if (await tolerateOutage(state, ctx, e)) {
+        down = true;
+        return undefined;
+      }
       if (status(e) !== 403) throw e;
       ctx.notes.push(
         e.teamDomain
@@ -398,6 +443,7 @@ export const access: Step = {
       );
       return undefined;
     });
+    if (down) return "done";
     if (!l) return "todo";
     const drift = !l.policy || !policyMatches(l.policy);
     const why = !l.domain
@@ -428,7 +474,13 @@ export const access: Step = {
   },
   async apply(state, ctx) {
     // Preflight: nothing is written until every check below has passed.
-    const l = await lookupWithToken(ctx, state.accountId ?? "");
+    let l: Awaited<ReturnType<typeof lookupWithToken>>;
+    try {
+      l = await lookupWithToken(ctx, state.accountId ?? "");
+    } catch (e) {
+      if (await tolerateOutage(state, ctx, e)) return undefined;
+      throw e;
+    }
     if ("status" in l) return l;
     if (!l.domain)
       return AR(
