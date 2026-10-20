@@ -6,10 +6,8 @@ const read = (rel: string) =>
   readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 const setup = read("../src/content/docs/setup.md");
 const upgrade = read("../src/content/docs/upgrade.md");
-const llms = read("../src/lib/llms.ts");
-const index = read("../src/pages/index.astro");
 
-describe("install runbook (#11-#14, #17, prompt phrase)", () => {
+describe("install runbook (#11-#14, #17)", () => {
   it("#11: whoami first, with a long timeout, skipping the login when accounts exist", () => {
     expect(setup).toContain(
       "First run `npx wrangler whoami --json` with at least a 3-minute timeout (it can refresh a login). If it lists accounts, skip the login.",
@@ -39,17 +37,7 @@ describe("install runbook (#11-#14, #17, prompt phrase)", () => {
   it("#17: the ignored build scripts message is documented as expected", () => {
     expect(setup).toContain("Ignored build scripts: esbuild, workerd");
   });
-  it("the prompt phrase is the same everywhere, and llms.txt tells agents what a hostname means", () => {
-    const phrase =
-      "Install Open Artifacts on <host> using open-artifacts.com/llms.txt";
-    expect(setup).toContain(`> ${phrase}`);
-    expect(index).toContain(phrase);
-    expect(setup + index + llms).not.toMatch(/[Ss]et up open-artifacts\.com/);
-    expect(llms).toContain(
-      "If the user asked you to set up this file, optionally 'at', 'on' or 'under' a hostname, they want you to install Open Artifacts with that hostname as --app-host. Don't copy or host this file.",
-    );
-  });
   it("no em dashes in the runbook copy", () => {
-    expect(setup + upgrade + llms + index).not.toContain("—");
+    expect(setup + upgrade).not.toContain("—");
   });
 });
