@@ -14,7 +14,7 @@ async function startMocks() {
   if (import.meta.env.VITE_MOCK !== "1") return;
   const [
     { setupWorker },
-    { createHandlers, fixtures },
+    { createArtifactEvents, createHandlers, fixtures },
     { HttpResponse, http },
   ] = await Promise.all([
     import("msw/browser"),
@@ -169,6 +169,9 @@ async function startMocks() {
       req.headers.set("Authorization", "Bearer mock");
     return realFetch(req);
   };
+  // The R.events socket; e2e drives it through window.__oaEvents.
+  const events = createArtifactEvents();
+  (window as unknown as { __oaEvents: typeof events }).__oaEvents = events;
   await setupWorker(
     ...extra,
     ...createHandlers({
@@ -178,7 +181,9 @@ async function startMocks() {
       update,
       // ?hosted=1 (or tokens, see hostedParam.ts): the hosted M1 mocks.
       hosted: parseHostedParam(params.get("hosted")),
+      events,
     }),
+    ...events.handlers,
   ).start({
     onUnhandledRequest: "bypass",
   });

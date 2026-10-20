@@ -1,4 +1,5 @@
-// M2 review: 4403 on the viewer with the side panel open, and db.resync on reconnect.
+// M2 review: 4403 on the viewer with the side panel open (now the gone
+// state: the copy stays), and db.resync on reconnect.
 import { R } from "@oa/shared";
 import {
   APP,
@@ -33,7 +34,7 @@ const api = (pat: string, method: string, path: string, body?: unknown) =>
     body: body ? JSON.stringify(body) : undefined,
   });
 
-test("a revoked share closes the viewer (panel open) without a reload", async ({
+test("a revoked share keeps the open copy, says so, and stops live data", async ({
   member,
   browser,
 }) => {
@@ -64,10 +65,16 @@ test("a revoked share closes the viewer (panel open) without a reload", async ({
   expect((await api(member.pat, "DELETE", R.share(id, bobEmail))).ok).toBe(
     true,
   );
+  // Design's gone state (live versions): the frame stays, with a banner.
+  await expect(
+    bob.getByText(
+      "You no longer have access. The copy in this tab stays until you leave; live data is off.",
+    ),
+  ).toBeVisible();
+  await expect(bob.locator("iframe.oa-vframe")).toHaveCount(1);
   await expect(
     bob.getByRole("heading", { name: "Page not found" }),
-  ).toBeVisible();
-  await expect(bob.locator("iframe")).toHaveCount(0);
+  ).toHaveCount(0);
   await ctx.close();
 });
 

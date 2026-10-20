@@ -22,7 +22,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Maximize2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { ApiClientError } from "../api/client";
 import {
   qk,
@@ -32,6 +32,7 @@ import {
   useVersions,
 } from "../api/queries";
 import { toast } from "../layout/toast";
+import { VersionsDot } from "./LiveChip";
 import { fullPath } from "./paths";
 import { ICON, LINK_BTN, SM, TXT, VisibilityBadge } from "./ui";
 import { useOfferUndo } from "./useOfferUndo";
@@ -124,6 +125,9 @@ export function TitleBar({
   onShare,
   panelOpen,
   onPanel,
+  live,
+  newer = false,
+  gone = false,
 }: {
   artifact: ArtifactSummary;
   version: number;
@@ -132,6 +136,12 @@ export function TitleBar({
   onShare: () => void;
   panelOpen: boolean;
   onPanel: () => void;
+  /** The live-version chip, right after the version picker. */
+  live?: ReactNode;
+  /** A newer version exists and isn't shown: a dot on Versions (••• on phones). */
+  newer?: boolean;
+  /** Deleted or no access: Full screen, Versions and Share are disabled. */
+  gone?: boolean;
 }) {
   const navigate = useNavigate();
   const qc = useQueryClient();
@@ -233,7 +243,17 @@ export function TitleBar({
               {(versions.data ?? []).map((x) => (
                 <DropdownMenuItem
                   key={x.version}
-                  onSelect={() => go(viewerPath(artifact.id, x.version))}
+                  // Picking Current follows it again (live updates swap in).
+                  onSelect={() =>
+                    go(
+                      viewerPath(
+                        artifact.id,
+                        x.version === artifact.currentVersion
+                          ? undefined
+                          : x.version,
+                      ),
+                    )
+                  }
                 >
                   {`v${x.version}${x.version === artifact.currentVersion ? " (current)" : ""} · ${x.agent?.name ?? who(x.createdBy)}`}
                 </DropdownMenuItem>
@@ -241,32 +261,47 @@ export function TitleBar({
             </DropdownMenuContent>
           </DropdownMenu>
         )}
+        {live}
         {/* On phones it moves into the ••• menu, which only signed-in
             viewers have. */}
-        <ShButton
-          asChild
-          variant="outline"
-          size="xs"
-          className={`${LINK_BTN} ${authed ? "max-[600px]:hidden" : ""}`}
-        >
-          <a href={full} target="_blank" rel="noopener noreferrer">
+        {gone ? (
+          <ShButton
+            variant="outline"
+            size="xs"
+            className={`${SM} ${authed ? "max-[600px]:hidden" : ""}`}
+            disabled
+          >
             {MAXIMIZE}
             Full screen
-          </a>
-        </ShButton>
+          </ShButton>
+        ) : (
+          <ShButton
+            asChild
+            variant="outline"
+            size="xs"
+            className={`${LINK_BTN} ${authed ? "max-[600px]:hidden" : ""}`}
+          >
+            <a href={full} target="_blank" rel="noopener noreferrer">
+              {MAXIMIZE}
+              Full screen
+            </a>
+          </ShButton>
+        )}
         {authed && (
           <ShButton
             variant="outline"
             size="xs"
             className={`${SM} max-[600px]:hidden`}
             aria-expanded={panelOpen}
+            disabled={gone}
             onClick={onPanel}
           >
             Versions
+            {newer && !gone && <VersionsDot />}
           </ShButton>
         )}
         {isOwner && (
-          <ShButton size="xs" className={SM} onClick={onShare}>
+          <ShButton size="xs" className={SM} disabled={gone} onClick={onShare}>
             Share
           </ShButton>
         )}
@@ -283,6 +318,11 @@ export function TitleBar({
                       aria-label="More actions"
                     >
                       •••
+                      {newer && !gone && (
+                        <span className="min-[601px]:hidden">
+                          <VersionsDot />
+                        </span>
+                      )}
                     </ShButton>
                   </DropdownMenuTrigger>
                 </TooltipTrigger>
@@ -291,6 +331,7 @@ export function TitleBar({
               <DropdownMenuContent align="end" className={TXT}>
                 <DropdownMenuItem
                   className="gap-1 min-[601px]:hidden"
+                  disabled={gone}
                   onSelect={openFull}
                 >
                   {MAXIMIZE}
@@ -298,6 +339,7 @@ export function TitleBar({
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   className="min-[601px]:hidden"
+                  disabled={gone}
                   onSelect={onPanel}
                 >
                   Versions

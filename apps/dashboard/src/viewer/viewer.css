@@ -191,3 +191,244 @@
     display: none;
   }
 }
+
+/* Live version updates (Design option B). Title bar chip: 28px, accent soft,
+   6px accent dot, the ink primary button as a 22px pill. */
+.oa-lchip {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 3px 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--oa-accent-soft);
+  color: var(--oa-text);
+  font-family: var(--oa-font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  animation: oa-live-in 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+.oa-lchip-done {
+  padding-left: 10px;
+}
+.oa-lchip-quiet {
+  padding: 0 10px;
+  border: 1px dashed var(--oa-border);
+  background: transparent;
+  color: var(--oa-text-muted);
+  cursor: pointer;
+}
+.oa-ldot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--oa-accent);
+}
+.oa-lchip-sep {
+  flex: none;
+  width: 1px;
+  height: 12px;
+  background: var(--oa-border);
+}
+.oa-lchip .oa-lchip-view {
+  height: 22px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.oa-lchip-undo {
+  height: 22px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--oa-accent-fg);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.oa-lchip-undo:focus-visible,
+.oa-lchip-quiet:focus-visible {
+  outline: 2px solid var(--oa-accent);
+  outline-offset: 2px;
+}
+/* 44px hit areas on phones. */
+.oa-hit {
+  position: relative;
+}
+@media (max-width: 639px) {
+  .oa-hit::before {
+    content: "";
+    position: absolute;
+    inset: -11px -6px;
+  }
+}
+.oa-vdot {
+  display: inline-block;
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin-left: 2px;
+  border-radius: 50%;
+  background: var(--oa-accent);
+}
+@keyframes oa-live-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+@keyframes oa-live-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+/* /full and embeds: the bottom-right bar holds the live pill, then the peek chip. */
+.oa-fsbar {
+  position: fixed;
+  right: max(12px, env(safe-area-inset-right));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.oa-fsbar .oa-fsx {
+  position: relative;
+  right: auto;
+  bottom: auto;
+}
+/* The peek chip's recipe, theme independent. */
+.oa-lpill {
+  position: relative;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  min-width: 32px;
+  max-width: 32px;
+  padding: 0;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 0.26);
+  border-radius: 16px;
+  background: rgb(21 24 28 / 0.84);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 0.22);
+  color: #e9ebee;
+  font-family: var(--oa-font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  text-decoration: none;
+  cursor: pointer;
+  animation: oa-live-in 200ms cubic-bezier(0.2, 0, 0, 1);
+  transition:
+    max-width 200ms cubic-bezier(0.2, 0, 0, 1),
+    padding 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+.oa-lpill::before {
+  content: "";
+  position: absolute;
+  inset: -6px;
+}
+.oa-lpill:hover,
+.oa-lpill:focus,
+.oa-lpill:visited {
+  color: #e9ebee;
+  text-decoration: none;
+}
+.oa-lpill:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 1px;
+  box-shadow: 0 0 0 5px #2350d0;
+}
+.oa-lpill[data-open="true"] {
+  max-width: 320px;
+  padding: 0 12px 0 10px;
+  justify-content: flex-start;
+}
+.oa-lpill .oa-ldot {
+  background: #7f9cff;
+}
+.oa-lpill-icon {
+  display: none;
+}
+.oa-lpill-label {
+  display: none;
+}
+.oa-lpill[data-open="true"] .oa-lpill-label {
+  display: inline;
+}
+/* Collapsed: a 32px circle, refresh icon, 7px dot top right. */
+.oa-lpill[data-open="false"] .oa-lpill-icon {
+  display: inline-flex;
+}
+.oa-lpill[data-open="false"] .oa-ldot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 7px;
+  height: 7px;
+  box-shadow: 0 0 0 2px rgb(21 24 28);
+}
+.oa-lpill-note,
+.oa-lpill-gone {
+  cursor: default;
+}
+a.oa-lpill-gone {
+  cursor: pointer;
+}
+.oa-lpill-gone {
+  background: rgb(21 24 28 / 0.9);
+}
+.oa-lwdot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #e7b44f;
+}
+
+/* View and the safe swap: the new frame loads hidden, then cross-fades in. */
+.oa-vstack {
+  display: grid;
+  height: 100vh;
+}
+.oa-vstack > .oa-vlayer {
+  grid-area: 1 / 1;
+  min-width: 0;
+  min-height: 0;
+}
+.oa-vlayer[data-preload="true"] {
+  visibility: hidden;
+}
+.oa-vlayer[data-arrived="true"] {
+  z-index: 1;
+  animation: oa-live-fade 150ms linear;
+}
+@media (prefers-reduced-motion: reduce) {
+  .oa-lchip,
+  .oa-lpill {
+    animation-name: oa-live-fade;
+    transition: none;
+  }
+  .oa-vlayer[data-arrived="true"] {
+    animation: none;
+  }
+}
+@media print {
+  .oa-fsbar {
+    display: none;
+  }
+}

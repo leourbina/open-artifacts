@@ -1,5 +1,10 @@
 import type { ArtifactSummary, Me } from "@oa/shared";
-import { createHandlers, fixtures } from "@oa/shared/mocks";
+import {
+  type ArtifactEventsMock,
+  createArtifactEvents,
+  createHandlers,
+  fixtures,
+} from "@oa/shared/mocks";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { act, render } from "@testing-library/react";
@@ -18,6 +23,8 @@ export const server = setupServer();
 /** Every /api/v1 request seen since the last test started. */
 export const seen: URL[] = [];
 export const arts = fixtures.artifacts as ArtifactSummary[];
+/** The R.events mock of the current test (fresh each test). */
+export let events: ArtifactEventsMock;
 
 export type Call = { path: string; search: URLSearchParams; body: unknown };
 let recorders: { method?: string; out: Call[] }[] = [];
@@ -85,12 +92,14 @@ export const installHarness = () => {
     recorders = [];
     observers = [];
     lastClient = makeQueryClient();
+    events = createArtifactEvents();
     server.use(
       http.all("*/api/v1/*", ({ request }) => {
         seen.push(new URL(request.url));
         return undefined;
       }),
-      ...createHandlers(),
+      ...createHandlers({ events }),
+      ...events.handlers,
     );
     vi.stubGlobal(
       "IntersectionObserver",
