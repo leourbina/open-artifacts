@@ -961,11 +961,13 @@ describe("demo instance workflows", () => {
     "ops-demo-install.yml": [...CF, "DEMO_OA_ACCESS_TOKEN"],
     "ops-demo-ops-deploy.yml": [...CF, "DEMO_OA_TOKEN"],
     "demo-reset.yml": ["DEMO_OA_TOKEN"],
+    "demo-publish.yml": ["DEMO_OA_TOKEN"],
   };
   const GROUPS: Record<string, string> = {
     "ops-demo-install.yml": "demo-deploy",
     "ops-demo-ops-deploy.yml": "demo-ops-deploy",
     "demo-reset.yml": "demo-reset",
+    "demo-publish.yml": "demo-publish",
   };
   // secrets.X, secrets['X'] and secrets["X"]
   const SECRET_RE =

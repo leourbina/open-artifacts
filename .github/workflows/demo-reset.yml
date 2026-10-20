@@ -28,11 +28,13 @@ jobs:
         run: |
           umask 077
           printf '%s' "$DEMO_OA_TOKEN" > "$RUNNER_TEMP/pat"
+      - name: Build the seed from the per-slug seeds
+        run: node --experimental-strip-types scripts/demo/publish.ts --write-seed "$RUNNER_TEMP/seed.json"
       - name: Reset the demo from the seed
         run: >-
           node --experimental-strip-types scripts/demo/reset.ts
           --base-url https://demo.open-artifacts.com
-          --token-file "$RUNNER_TEMP/pat" ops/demo/seed.json --apply
+          --token-file "$RUNNER_TEMP/pat" "$RUNNER_TEMP/seed.json" --apply
       - name: Check healthz
         run: curl -fsS --retry 5 --retry-delay 5 --retry-all-errors https://demo.open-artifacts.com/healthz
       - name: Remove the PAT file
