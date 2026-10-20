@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.5.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.4.0...v0.5.0) (2026-10-20)
+
+
+### Features
+
+* **dashboard:** Usage on @oa/ui/shadcn (migration area 6) ([#243](https://github.com/open-artifacts-ai/open-artifacts/issues/243)) ([4d81432](https://github.com/open-artifacts-ai/open-artifacts/commit/4d814325db01a115974e40749c2fc302107c1c60))
+* **dashboard:** Usage on Workers Paid ([#279](https://github.com/open-artifacts-ai/open-artifacts/issues/279)) ([#281](https://github.com/open-artifacts-ai/open-artifacts/issues/281)) ([0d53580](https://github.com/open-artifacts-ai/open-artifacts/commit/0d53580d7b9da3328ab8688ac33d13d98143aab8))
+* **landing:** multiplayer artifacts section ([#280](https://github.com/open-artifacts-ai/open-artifacts/issues/280)) ([565587a](https://github.com/open-artifacts-ai/open-artifacts/commit/565587a64a3790ac82f2d12742bc4664f97a7ec5))
+* **setup:** record the previous Worker version and add --rollback ([#266](https://github.com/open-artifacts-ai/open-artifacts/issues/266)) ([a22855b](https://github.com/open-artifacts-ai/open-artifacts/commit/a22855b01ac29b41efd3041aa768fc5acda0caae))
+
+
+### Bug Fixes
+
+* **dashboard:** Share sends one request per action; Modal drops its surface override ([#262](https://github.com/open-artifacts-ai/open-artifacts/issues/262)) ([f066c1d](https://github.com/open-artifacts-ai/open-artifacts/commit/f066c1dc0dafbbd7db9df259132e5cd4f36e4a57))
+* **e2e:** anon write-limit step can't straddle the limiter window ([#285](https://github.com/open-artifacts-ai/open-artifacts/issues/285)) ([2e76ef6](https://github.com/open-artifacts-ai/open-artifacts/commit/2e76ef6fc03ba3a09d30e89ca89a0c6364a5d906))
+* **server:** usage limits follow the plan ([#279](https://github.com/open-artifacts-ai/open-artifacts/issues/279)) ([#284](https://github.com/open-artifacts-ai/open-artifacts/issues/284)) ([fff37be](https://github.com/open-artifacts-ai/open-artifacts/commit/fff37be06a8367d5f4c278b96928ed6db6d00f7f))
+* **setup:** --yes-paid silences free-plan warnings and turns thumbnails on ([#7](https://github.com/open-artifacts-ai/open-artifacts/issues/7), [#20](https://github.com/open-artifacts-ai/open-artifacts/issues/20)) ([#270](https://github.com/open-artifacts-ai/open-artifacts/issues/270)) ([83cee5a](https://github.com/open-artifacts-ai/open-artifacts/commit/83cee5a27c16dbb8d77bf904a483e93cbab09487))
+* **ui:** 16px dialog titles to match the Studio type scale ([#234](https://github.com/open-artifacts-ai/open-artifacts/issues/234)) ([6cdf96d](https://github.com/open-artifacts-ai/open-artifacts/commit/6cdf96d3a48181d2340d61f4e35b04599a7414cd))
+
 ## [0.4.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.3.0...v0.4.0) (2026-10-20)
 
 
