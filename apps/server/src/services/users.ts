@@ -59,6 +59,67 @@ export function toMember(
 
 const defaultName = (email: string) => email.split("@")[0] || email;
 
+/**
+ * The only way the app inserts a user (P2 seam with P3): every path that
+ * creates a person (sign-in, invite, codes, dev and test hooks) goes through
+ * here or through googleLinkStmts below. P3's AFTER INSERT trigger adds the
+ * personal space. Returns the drizzle insert for the caller's conflict rule.
+ */
+export function insertUser(
+  env: Env,
+  u: {
+    email: string;
+    name: string;
+    role: Role;
+    createdAt: number;
+    lastSeenAt?: number;
+  },
+) {
+  return getDb(env)
+    .insert(users)
+    .values({ id: newId(), ...u });
+}
+
+/**
+ * First Google sign-in, race-safe in one batch: create the user (or touch an
+ * active one), link (google, sub) only to an ACTIVE row with that email (never
+ * a removed or suspended one), then read back the row and its Google link.
+ * The caller decides from the read: status not active → removed; another
+ * subject → identity_conflict.
+ */
+export function googleLinkStmts(
+  env: Env,
+  p: {
+    email: string;
+    name: string | null;
+    role: Role;
+    subject: string;
+    tenant: string;
+    now: number;
+  },
+): D1PreparedStatement[] {
+  return [
+    stmt(
+      env.DB,
+      `insert into users (id, email, name, role, created_at, last_seen_at) values (?1, ?2, ?3, ?4, ?5, ?5)
+       on conflict(email) do update set last_seen_at = excluded.last_seen_at where users.status = 'active'`,
+    ).bind(newId(), p.email, p.name ?? defaultName(p.email), p.role, p.now),
+    stmt(
+      env.DB,
+      `insert into identities (provider, subject, tenant, user_id, created_at)
+       select 'google', ?1, ?2, id, ?3 from users where email = ?4 and status = 'active'
+       on conflict do nothing`,
+    ).bind(p.subject, p.tenant, p.now, p.email),
+    stmt(
+      env.DB,
+      `select u.id, u.email, u.name, u.display_name as displayName, u.role, u.last_seen_at as lastSeenAt,
+              u.status, i.subject
+       from users u left join identities i on i.user_id = u.id and i.provider = 'google'
+       where u.email = ?1`,
+    ).bind(p.email),
+  ];
+}
+
 /** Insert, or on email conflict force `role` (if given) and refresh name/last_seen_at. */
 async function upsert(
   env: Env,
@@ -71,16 +132,13 @@ async function upsert(
   const set: Partial<UserRow> = { lastSeenAt: now };
   if (name !== null) set.name = name;
   if (forceRole) set.role = role;
-  const [row] = await getDb(env)
-    .insert(users)
-    .values({
-      id: newId(),
-      email,
-      name: name ?? defaultName(email),
-      role,
-      createdAt: now,
-      lastSeenAt: now,
-    })
+  const [row] = await insertUser(env, {
+    email,
+    name: name ?? defaultName(email),
+    role,
+    createdAt: now,
+    lastSeenAt: now,
+  })
     .onConflictDoUpdate({ target: users.email, set })
     .returning();
   if (!row) throw new Error("user upsert returned no row");
