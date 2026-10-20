@@ -221,7 +221,12 @@ export const prereqs: Step = {
     const confirmed = plan !== "paid" && ctx.opts.planVar === "paid";
     const warns = [...warnings(plan, confirmed), ...extra];
     if (plan === "paid") ctx.notes.unshift("Workers Paid detected");
-    else if (confirmed) ctx.notes.unshift("Workers Paid confirmed (--yes-paid)");
+    else if (confirmed)
+      ctx.notes.unshift(
+        ctx.opts.yesPaid || ctx.opts.planFlag === "paid"
+          ? "Workers Paid confirmed (--yes-paid)"
+          : "Workers Paid (saved plan)",
+      );
     ctx.notes.push(...warns.map((w) => w.message));
     const { missing, zones } = await missingHosts(ctx, id);
     const issues = await tokenIssues(state, ctx, { a: id, zones });

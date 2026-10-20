@@ -100,10 +100,14 @@ describe("--plan and the rendered PLAN var", () => {
     const w = world({ subscriptions: PAID });
     expect(await run([...BASE, "--solo"], w.deps, ROOT)).toBe(0);
     w.setSubscriptions(undefined);
+    w.lines.length = 0;
     expect(
       await run([...BASE, "--solo", "--upgrade", "--browser"], w.deps, ROOT),
     ).toBe(0);
     expect(planOf(w)).toBe("paid");
+    const pre = line(w, "prereqs");
+    expect(pre.message).toContain("Workers Paid (saved plan)");
+    expect(pre.message).not.toContain("--yes-paid");
   });
 });
 
