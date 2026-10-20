@@ -210,9 +210,12 @@ code,
   color: var(--oa-text-2);
   font-size: 18px;
 }
+/* The prompt box shares the agent wiring's center line and width below it;
+   the headline and subcopy above stay left-aligned. */
 .cta {
-  max-width: 760px;
-  margin-top: 40px;
+  max-width: 720px;
+  margin: 40px auto 0;
+  text-align: center;
 }
 .cta-label {
   color: var(--oa-text-2);
@@ -220,6 +223,7 @@ code,
   font-weight: 500;
 }
 .cta-row {
+  text-align: left;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -233,9 +237,9 @@ code,
   flex: 1;
   user-select: all;
   min-width: 0;
-  font-size: clamp(15px, 2.4vw, 24px);
+  font-size: clamp(15px, 1.8vw, 19px);
   font-weight: 500;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 .cta-note {
   min-height: 1.5em;
