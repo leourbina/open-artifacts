@@ -86,12 +86,13 @@ Setup takes each value from its flag first, then from `.openartifacts/state.json
 | `--yes` | Never prompt. Missing values are errors, and the optional `ANALYTICS_TOKEN` is skipped unless it is set in the environment. Optional with `--json`. |
 | `--upgrade` | Upgrade an existing install: only `deploy` and `selftest` do work. See [Upgrade](/docs/upgrade/). |
 | `--new-owner-token` | Mint a new owner token, and revoke the one setup minted before. |
+| `--allow-downgrade` | Deploy a checkout older than the deployed version (from `/healthz`, else saved state). Without it setup stops with `action_required` before the D1 migrations. D1 is not rolled back. `--check` reports `{repoVersion, liveVersion, downgrade}` on the deploy line. |
 | `--check` | Read-only. Runs each step's check without doing the work, and reports it as `done` or `todo`. Without saved state, it rebuilds the state from Cloudflare by `--name` and reports it on a last `state` line. It changes nothing on Cloudflare and writes no files. |
 | `--strict` | Only with `--check`: exit `2` when any step is `todo`, for example to gate CI. |
 | `--json` | Print one JSON object per line instead of text, and never prompt: a missing value is an `action_required` line naming the flag to pass. The optional `ANALYTICS_TOKEN` is skipped unless it is set in the environment. |
 | `--ci` | CI mode: implies `--json`; the owner token is used only for selftest, never printed, and revoked at the end of the run (also on SIGTERM or SIGINT). Requires `--name`; not with `--new-owner-token`. It keeps no `state.json`, so it reuses the welcome artifact by title instead of tracking its id. A SIGKILL or out-of-memory kill can leave a `setup-ci` token live; it is never printed. Find it by the label `setup-ci` in Settings → Tokens. The next `--ci` run revokes it before minting, or run `--ci --revoke-ci-tokens` as an `if: always()` cleanup step. |
 | `--revoke-ci-tokens` | Only with `--ci`: revoke every live `setup-ci` token of the owner and exit. Needs `--name` and the owner email, not the hosts. |
-| `--browser` | Turn on server-side thumbnails (the `BROWSER` binding and `SERVER_THUMBNAILS`) even when setup doesn't read the plan as Workers Paid. Thumbnails need Workers Paid, so setup warns (`browser-free`) on free or unknown. Without either flag, thumbnails are on when the plan reads `paid`, off on `free`, and follow the saved choice when the plan is `unknown`. |
+| `--browser` | Turn on server-side thumbnails (the `BROWSER` binding and `SERVER_THUMBNAILS`) even when setup doesn't read the plan as Workers Paid. Thumbnails need Workers Paid, so setup warns (`browser-free`) on free or unknown, unless Paid is confirmed with `--yes-paid`. Without either flag, thumbnails are on when the plan reads `paid` or you pass `--yes-paid` (add `--no-browser` to keep them off), off on `free`, and follow the saved choice when the plan is `unknown`. |
 | `--no-browser` | Turn server-side thumbnails off. A deploy never removes a live `BROWSER` binding without this flag. `--check` and `--json` report `browser: true` or `false`. |
 | `--solo` | Just you: no invite email, so no `send_email` binding. With `--json`, `--yes` or `--ci`, pass `--solo` or `--team` unless a choice is saved; setup never guesses. Saved in `state.json` as `team: false`. |
 | `--team` | A team: turns on the `email` step, which sets up invite email with Cloudflare Email Sending (Workers Paid only) and renders the `send_email` binding `EMAIL` and the `EMAIL_FROM` var (`noreply@<sending domain>`). Saved in `state.json` as `team`, `email` and `emailDomain`, so `--upgrade` keeps it; `--check` and `--json` report them. Not with `--solo`. |
@@ -133,7 +134,7 @@ Exit codes: `0` when every step is done, `2` when a step needs the user or a mis
 
 ## Plan warnings
 
-The `prereqs` line's `data.warnings` holds one `{ code, plan, message }` per note below, and agents relay each `message` verbatim. With `data.plan` `unknown`, setup sends the first five; with `free`, the same minus `plan-unknown`. `browser-free` appears only with `--browser` on a plan that isn't `paid`.
+The `prereqs` line's `data.warnings` holds one `{ code, plan, message }` per note below, and agents relay each `message` verbatim. With `data.plan` `unknown`, setup sends the first five; with `free`, the same minus `plan-unknown`. `browser-free` appears only with `--browser` on a plan that isn't `paid`. Once Paid is confirmed (`--yes-paid`, `--plan paid`, or a saved plan), none of these warnings are sent, and the `prereqs` message says how it was confirmed.
 
 {PLAN_WARNINGS_TABLE}
 

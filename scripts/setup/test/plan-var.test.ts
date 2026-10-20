@@ -111,6 +111,59 @@ describe("--plan and the rendered PLAN var", () => {
   });
 });
 
+describe("#7: the paid note names its source", () => {
+  it("--plan paid on a detected free plan never mentions --yes-paid", async () => {
+    const w = world({ subscriptions: FREE });
+    expect(await run([...BASE, "--solo", "--plan", "paid"], w.deps, ROOT)).toBe(
+      0,
+    );
+    const pre = line(w, "prereqs");
+    expect(pre.message).toContain("Workers Paid (--plan paid)");
+    expect(pre.message).not.toContain("--yes-paid");
+    expect(pre.data.warnings).toEqual([]);
+  });
+
+  it("a saved plan never mentions --yes-paid and keeps warnings silent", async () => {
+    const w = world({ subscriptions: FREE });
+    expect(await run([...BASE, "--solo", "--yes-paid"], w.deps, ROOT)).toBe(0);
+    w.setSubscriptions(undefined);
+    w.lines.length = 0;
+    expect(await run([...BASE, "--solo", "--upgrade"], w.deps, ROOT)).toBe(0);
+    const pre = line(w, "prereqs");
+    expect(pre.message).toContain("Workers Paid (saved plan)");
+    expect(pre.message).not.toContain("--yes-paid");
+    expect(pre.data.warnings).toEqual([]);
+  });
+
+  it("--yes-paid wins the label when --plan paid is also passed", async () => {
+    const w = world({ subscriptions: FREE });
+    await run(
+      [...BASE, "--solo", "--yes-paid", "--plan", "paid"],
+      w.deps,
+      ROOT,
+    );
+    expect(line(w, "prereqs").message).toContain("--yes-paid");
+  });
+});
+
+describe("#7: --yes-paid with the plan guard", () => {
+  it("renders paid over a live paid PLAN with no guard; an explicit --plan free still wins", async () => {
+    const w = world({ subscriptions: PAID });
+    expect(await run([...BASE, "--solo"], w.deps, ROOT)).toBe(0);
+    w.files.delete(STATE);
+    w.setSubscriptions(undefined);
+    w.lines.length = 0;
+    const up = [...CI, "--upgrade", "--no-browser"];
+    expect(await run([...up, "--yes-paid"], w.deps, ROOT)).toBe(0);
+    expect(planOf(w)).toBe("paid");
+    w.lines.length = 0;
+    expect(
+      await run([...up, "--yes-paid", "--plan", "free"], w.deps, ROOT),
+    ).toBe(0);
+    expect(planOf(w)).toBe("free");
+  });
+});
+
 describe("downgrade guard", () => {
   it("refuses a free render over a live paid PLAN without --plan free", async () => {
     const w = world({ subscriptions: PAID });

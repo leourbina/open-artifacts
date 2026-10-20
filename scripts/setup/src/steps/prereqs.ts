@@ -223,9 +223,11 @@ export const prereqs: Step = {
     if (plan === "paid") ctx.notes.unshift("Workers Paid detected");
     else if (confirmed)
       ctx.notes.unshift(
-        ctx.opts.yesPaid || ctx.opts.planFlag === "paid"
+        ctx.opts.yesPaid
           ? "Workers Paid confirmed (--yes-paid)"
-          : "Workers Paid (saved plan)",
+          : ctx.opts.planFlag === "paid"
+            ? "Workers Paid (--plan paid)"
+            : "Workers Paid (saved plan)",
       );
     ctx.notes.push(...warns.map((w) => w.message));
     const { missing, zones } = await missingHosts(ctx, id);

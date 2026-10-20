@@ -40,6 +40,22 @@ describe("downgrade guard", () => {
     expect(w.ops).toEqual([]);
   });
 
+  it("#7: --yes-paid does not bypass the downgrade guard", async () => {
+    const o: Opts = {};
+    const w = await installed("0.1.0", o);
+    o.healthVersion = "0.2.0";
+    expect(await run([...UP, "--yes-paid"], w.deps, ROOT)).toBe(2);
+    expect(line(w, "prereqs")).toMatchObject({
+      status: "action_required",
+      message: MESSAGE("0.1.0", "0.2.0"),
+    });
+    expect(w.ops).toEqual([]);
+    w.lines.length = 0;
+    expect(
+      await run([...UP, "--yes-paid", "--allow-downgrade"], w.deps, ROOT),
+    ).toBe(0);
+  });
+
   it("--allow-downgrade proceeds with a note", async () => {
     const o: Opts = {};
     const w = await installed("0.1.0", o);
