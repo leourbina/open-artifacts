@@ -30,13 +30,24 @@ let win = new EventTarget();
 const live: { dispose(): void }[] = [];
 const post = vi.fn();
 const contentWindow = { postMessage: post };
-const iframe = { contentWindow } as unknown as HTMLIFrameElement;
+const iframe = Object.assign(new EventTarget(), {
+  contentWindow,
+}) as unknown as HTMLIFrameElement;
+const NONCE = "n".repeat(22);
 let fetchMock: ReturnType<typeof vi.fn>;
 
-const send = (data: unknown, o: { source?: unknown; origin?: string } = {}) => {
+/** Signed with NONCE like the runtime does; `nonce: null` sends it bare. */
+const send = (
+  data: unknown,
+  o: { source?: unknown; origin?: string; nonce?: string | null } = {},
+) => {
   const ev = new Event("message");
+  const nonce = "nonce" in o ? o.nonce : NONCE;
   Object.assign(ev, {
-    data,
+    data:
+      data && typeof data === "object" && nonce !== null
+        ? { ...data, nonce }
+        : data,
     source: "source" in o ? o.source : contentWindow,
     origin: o.origin ?? "null",
   });
@@ -52,6 +63,7 @@ const mk = (art = ART) => {
 };
 const mkRaw = (art: ArtifactSummary) =>
   createBridge({
+    nonce: NONCE,
     iframe,
     artifact: art,
     version: 1,
@@ -113,6 +125,62 @@ describe("bridge message gating", () => {
     send("garbage");
     await flush();
     expect(post).not.toHaveBeenCalled();
+  });
+
+  it("rejects a wrong, missing or non-string nonce, and accepts the right one", async () => {
+    mk();
+    const hello = { oa: 1, type: "hello", protocol: 1, kind: "html" };
+    send(hello, { nonce: "x".repeat(22) });
+    send(hello, { nonce: null });
+    send({ ...hello, nonce: 7 }, { nonce: null });
+    send({ ...hello, nonce: undefined }, { nonce: null });
+    await flush();
+    expect(post).not.toHaveBeenCalled();
+    send(hello);
+    await flush();
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  it("checks the nonce on calls too", async () => {
+    mk();
+    send(
+      {
+        oa: 1,
+        type: "call",
+        id: "x",
+        method: "db.get",
+        params: { collection: "c", id: "d" },
+      },
+      { nonce: "x".repeat(22) },
+    );
+    await flush();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("rejects the right nonce from the wrong source", async () => {
+    mk();
+    send(
+      { oa: 1, type: "hello", protocol: 1, kind: "html" },
+      { source: { postMessage: vi.fn() } },
+    );
+    await flush();
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("disposes on a second load and ignores everything after it", async () => {
+    mk();
+    iframe.dispatchEvent(new Event("load")); // the first load for this src
+    send({ oa: 1, type: "hello", protocol: 1, kind: "html" });
+    await flush();
+    expect(post).toHaveBeenCalledTimes(1);
+    post.mockClear();
+    iframe.dispatchEvent(new Event("load")); // the frame navigated itself
+    send({ oa: 1, type: "hello", protocol: 1, kind: "html" });
+    call("db.get", { collection: "c", id: "d" });
+    await flush();
+    expect(post).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("dispose removes the listener", async () => {
@@ -237,6 +305,7 @@ const webp = (n = 0) =>
 describe("pdf / thumb / resize", () => {
   const opts = (art = ART) => ({
     iframe,
+    nonce: NONCE,
     artifact: art,
     version: 1,
     viewer: null,

@@ -231,7 +231,10 @@ describe("bridge follow-ups", () => {
   });
   const mk = (extra: object = {}) => {
     const b = createBridge({
-      iframe: { contentWindow } as unknown as HTMLIFrameElement,
+      iframe: Object.assign(new EventTarget(), {
+        contentWindow,
+      }) as unknown as HTMLIFrameElement,
+      nonce: "n".repeat(22),
       artifact: art(),
       version: 1,
       viewer: null,
@@ -245,7 +248,14 @@ describe("bridge follow-ups", () => {
   };
   const send = (data: unknown) => {
     const ev = new Event("message");
-    Object.assign(ev, { data, source: contentWindow, origin: "null" });
+    Object.assign(ev, {
+      data:
+        data && typeof data === "object"
+          ? { ...data, nonce: "n".repeat(22) }
+          : data,
+      source: contentWindow,
+      origin: "null",
+    });
     win.dispatchEvent(ev);
   };
   const sub = async () => {

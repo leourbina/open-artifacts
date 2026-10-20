@@ -24,7 +24,7 @@ import { useMe } from "../auth/useMe";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { NotFound } from "../pages/NotFound";
 import { Crumbs } from "./Crumbs";
-import { SANDBOX, safeContentUrl } from "./frame";
+import { newNonce, SANDBOX, safeContentUrl, withNonce } from "./frame";
 import { SM, TXT } from "./ui";
 import { useContentUrl } from "./useContentUrl";
 import "./viewer.css";
@@ -271,6 +271,8 @@ const LABEL: Record<Status, string> = {
 function Preview({ id, v, label }: { id: string; v: number; label: string }) {
   const c = useContentUrl(id, v);
   const url = safeContentUrl(c.url);
+  // Each src gets its own nonce, as in the viewer; the previews run no bridge.
+  const nonce = useMemo(() => (url ? newNonce() : ""), [url]);
   return (
     <figure>
       <figcaption>
@@ -278,7 +280,7 @@ function Preview({ id, v, label }: { id: string; v: number; label: string }) {
       </figcaption>
       {url && (
         <iframe
-          src={url}
+          src={withNonce(url, nonce)}
           title={`Preview of v${v}`}
           sandbox={SANDBOX}
           referrerPolicy="no-referrer"

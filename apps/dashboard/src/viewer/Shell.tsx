@@ -2,7 +2,7 @@ import { type ArtifactSummary, type Me, viewerPath } from "@oa/shared";
 import { Button } from "@oa/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiClientError } from "../api/client";
 import { qk, useArtifact, useVersionInfo } from "../api/queries";
 import { useLoginRedirect } from "../auth/redirect";
@@ -12,7 +12,7 @@ import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { NotFound } from "../pages/NotFound";
 import { createBridge } from "./bridge";
 import { Crumbs } from "./Crumbs";
-import { SANDBOX, safeContentUrl } from "./frame";
+import { newNonce, SANDBOX, safeContentUrl, withNonce } from "./frame";
 import { isPanelTab, type PanelTab, SidePanel } from "./panels/SidePanel";
 import { SlowNotice } from "./SlowNotice";
 import { TitleBar } from "./TitleBar";
@@ -163,10 +163,20 @@ function Viewer({
     );
   };
 
+  // A new nonce for every src the frame is given: the first load, a refreshed
+  // URL before it loads, and each intentional reload (Reload, the slow retry).
+  // A version switch remounts this whole component. A load the frame causes
+  // itself therefore always belongs to a bridge that has already seen its one.
+  const base = frame.src ?? url;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: frame.key remounts the iframe, so it mints too
+  const nonce = useMemo(() => newNonce(), [base, frame.key]);
+  const frameSrc = base ? withNonce(base, nonce) : undefined;
+
   useEffect(() => {
     if (!el) return;
     const b = createBridge({
       iframe: el,
+      nonce,
       ...latest.current,
       version,
       formatOf: () => formatRef.current,
@@ -185,7 +195,7 @@ function Viewer({
       b.dispose();
       bridge.current = null;
     };
-  }, [el, version, qc, artifact.id, onHello]);
+  }, [el, nonce, version, qc, artifact.id, onHello]);
 
   useEffect(() => bridge.current?.setTheme(theme), [theme]);
 
@@ -230,7 +240,7 @@ function Viewer({
               key={frame.key}
               ref={setEl}
               className="oa-vframe"
-              src={frame.src ?? url}
+              src={frameSrc}
               onLoad={onFrameLoad}
               title={artifact.title}
               sandbox={SANDBOX}

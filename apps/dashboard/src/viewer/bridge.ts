@@ -25,6 +25,12 @@ type Theme = "light" | "dark";
 
 export interface BridgeOptions {
   iframe: HTMLIFrameElement;
+  /**
+   * The nonce in the frame's src fragment. A message counts only when it comes
+   * from the frame's window and carries this nonce, so a document the frame
+   * navigated to on its own (it never read ours) is not heard.
+   */
+  nonce: string;
   artifact: ArtifactSummary;
   version: number;
   /** This version's format; the artifact's own is only the current version's. */
@@ -84,6 +90,7 @@ const qs = (p: { cursor?: string; limit?: number }) => {
 export function createBridge(opts: BridgeOptions) {
   const {
     iframe,
+    nonce,
     artifact,
     onPdfText,
     onThumb,
@@ -327,7 +334,11 @@ export function createBridge(opts: BridgeOptions) {
   const handle = (e: MessageEvent) => {
     if (disposed) return;
     if (e.source !== iframe.contentWindow || e.origin !== "null") return;
-    const m = parseArtifactMessage(e.data);
+    // The nonce rides beside the message; the strict schemas never see it.
+    if (!e.data || typeof e.data !== "object") return;
+    const { nonce: got, ...body } = e.data as Record<string, unknown>;
+    if (got !== nonce) return;
+    const m = parseArtifactMessage(body);
     if (!m) return;
     switch (m.type) {
       case "hello":
@@ -368,11 +379,20 @@ export function createBridge(opts: BridgeOptions) {
   };
 
   window.addEventListener("message", onMessage);
+  // One load per src we assigned. A second is the frame navigating itself (a
+  // link, location.href): its document never read our nonce, and whatever it
+  // sends is not ours to answer. Intentional reloads get a new src and bridge.
+  let loads = 0;
+  const onLoad = () => {
+    if (++loads > 1) bridge.dispose();
+  };
+  iframe.addEventListener("load", onLoad);
 
-  return {
+  const bridge = {
     dispose() {
       disposed = true;
       abort.abort();
+      iframe.removeEventListener("load", onLoad);
       window.removeEventListener("message", onMessage);
       for (const s of subs.values()) stop(s);
       subs.clear();
@@ -387,4 +407,5 @@ export function createBridge(opts: BridgeOptions) {
       reply({ oa: 1, type: "theme", theme: t });
     },
   };
+  return bridge;
 }
