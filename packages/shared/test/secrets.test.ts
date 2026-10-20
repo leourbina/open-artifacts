@@ -1,4 +1,7 @@
-import { readFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { agentClients, TOKEN_PLACEHOLDER } from "../src/agent-clients.js";
 import {
@@ -25,7 +28,9 @@ describe("secrets", () => {
     expect(() => secretFile("pat")).toThrow();
   });
 
-  it("secretSnippet is Platform's template (scripts/setup/src/tokens.ts), pinned", () => {
+  // Platform's final template (task D, tokens.ts at e89dc02, confirmed
+  // 2026-10-20); setup imports this function once D lands.
+  it("secretSnippet is Platform's final template, pinned", () => {
     expect(
       secretSnippet(
         "~/.open-artifacts/open-artifacts-staging-cloudflare-token",
@@ -147,13 +152,55 @@ describe("agentClients", () => {
     }
     const by = (a: string) => tok.find((s) => s.agent === a);
     expect(by("Claude Code")?.code).toBe(
-      `claude mcp add-json -s user open-artifacts '{"type":"http","url":"${URL_}","headersHelper":"printf '\\''{\\"Authorization\\":\\"Bearer %s\\"}'\\'' \\"$(cat ${FILE})\\""}'`,
+      `claude mcp add-json -s user open-artifacts '{"type":"http","url":"${URL_}","headersHelper":"T=$(cat ${FILE}) && printf '\\''{\\"Authorization\\":\\"Bearer %s\\"}'\\'' \\"$T\\""}'`,
     );
     expect(by("Codex CLI")?.code).toBe(
-      `[mcp_servers.open-artifacts]\nurl = "${URL_}"\nhttp_headers_helper = "printf '{\\"Authorization\\":\\"Bearer %s\\"}' \\"$(cat ${FILE})\\""`,
+      `[mcp_servers.open-artifacts]\nurl = "${URL_}"\nhttp_headers_helper = "T=$(cat ${FILE}) && printf '{\\"Authorization\\":\\"Bearer %s\\"}' \\"$T\\""`,
     );
     expect(by("OpenCode")?.code).toContain(`"Bearer {file:${FILE}}"`);
-    expect(by("Generic")?.code).toContain(TOKEN_PLACEHOLDER);
+    expect(by("Generic")?.language).toBe("text");
+    expect(by("Generic")?.code).not.toMatch(/<YOUR_TOKEN>|Bearer/);
+  });
+
+  it("file form: the saved helpers print the header, and fail without the file", () => {
+    const home = mkdtempSync(join(tmpdir(), "oa-helper-"));
+    const file = "~/.open-artifacts/x-pat-token";
+    const tok = agentClients(URL_, { tokenFile: file });
+    const claude = tok.find(
+      (s) => s.agent === "Claude Code" && s.variant === "token",
+    );
+    const codex = tok.find(
+      (s) => s.agent === "Codex CLI" && s.variant === "token",
+    );
+    // What Claude Code saves: the add-json argument, as the shell passes it.
+    const saved = execFileSync("bash", [
+      "-c",
+      `claude() { printf '%s' "$6"; }; ${claude?.code}`,
+    ]).toString();
+    const helpers = [
+      (JSON.parse(saved) as { headersHelper: string }).headersHelper,
+      JSON.parse(
+        /http_headers_helper = (".*")$/m.exec(codex?.code ?? "")?.[1] ?? '""',
+      ) as string,
+    ];
+    const run = (h: string) =>
+      spawnSync("bash", ["-c", h], {
+        env: { HOME: home, PATH: process.env.PATH },
+      });
+    for (const h of helpers) {
+      const missing = run(h);
+      expect(missing.status, h).not.toBe(0);
+      expect(missing.stdout.toString()).toBe("");
+    }
+    mkdirSync(join(home, ".open-artifacts"));
+    writeFileSync(join(home, ".open-artifacts", "x-pat-token"), "oa_pat_abc");
+    for (const h of helpers) {
+      const ok = run(h);
+      expect(ok.status).toBe(0);
+      expect(JSON.parse(ok.stdout.toString())).toEqual({
+        Authorization: "Bearer oa_pat_abc",
+      });
+    }
   });
 
   it("file form: both OpenCode variants match OpenCode's McpRemoteConfig schema", () => {

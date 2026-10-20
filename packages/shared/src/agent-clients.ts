@@ -8,7 +8,8 @@ const NAME = "open-artifacts";
 export type Snippet = {
   agent: string;
   variant: "oauth" | "token";
-  language: "bash" | "json" | "toml";
+  /** "text": prose, not a command or config (file form only). */
+  language: "bash" | "json" | "toml" | "text";
   /** Where the config goes, shown above the code. */
   file?: string;
   code: string;
@@ -61,7 +62,8 @@ export function agentClients(
 /** The skill's form: OAuth first; tokens read the file at connect time. */
 function fileClients(url: string, f: string): Snippet[] {
   /** A shell command that prints the auth header JSON from the file. */
-  const helper = `printf '{"Authorization":"Bearer %s"}' "$(cat ${f})"`;
+  // Fails (non-zero, no header) when the file is missing.
+  const helper = `T=$(cat ${f}) && printf '{"Authorization":"Bearer %s"}' "$T"`;
   const oauth: Snippet[] = [
     {
       agent: "Claude Code",
@@ -152,17 +154,8 @@ function fileClients(url: string, f: string): Snippet[] {
     {
       agent: "Generic",
       variant: "token",
-      language: "json",
-      code: json({
-        mcpServers: {
-          [NAME]: {
-            type: "http",
-            url,
-            headers: { Authorization: `Bearer ${TOKEN_PLACEHOLDER}` },
-          },
-        },
-      }),
-      hint: `read the token from ${f} at connect time; never paste it into a config file`,
+      language: "text",
+      code: `Use your client's file- or command-based header option to read the token from ${f} at connect time. If it has none, use OAuth.`,
       verify: GENERIC_VERIFY,
       reload: GENERIC_RELOAD,
     },

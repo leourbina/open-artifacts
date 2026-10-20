@@ -107,9 +107,9 @@ const snippetBlock = (s: Snippet, label: string) =>
   [
     `${label}${s.file ? ` (in \`${s.file}\`)` : ""}:`,
     "",
-    `\`\`\`${s.language === "bash" ? "sh" : s.language}`,
-    s.code,
-    "```",
+    ...(s.language === "text"
+      ? [s.code]
+      : [`\`\`\`${s.language === "bash" ? "sh" : s.language}`, s.code, "```"]),
     "",
     ...(s.hint ? [`Note: ${s.hint}.`, ""] : []),
     `Verify: ${s.verify}`,
