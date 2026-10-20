@@ -24,6 +24,7 @@ type Call = {
   credentials: string;
   auth: string | null;
   embed: string | null;
+  anonId: string | null;
 };
 
 /**
@@ -49,6 +50,7 @@ const instrument = (context: BrowserContext) =>
             credentials: req.credentials,
             auth: req.headers.get("authorization"),
             embed: req.headers.get("x-oa-embed"),
+            anonId: req.headers.get("x-oa-anon-id"),
           });
         const anon = !req.headers.has("authorization");
         if (anon && path.startsWith(`/api/v1/artifacts/${LANDING}`))
@@ -203,8 +205,28 @@ test("(a) an attacker frame with a session cookie and no hint stays anonymous", 
   expect(welcome?.viewer).toBeNull();
   expect(JSON.stringify(await msgs(artifact))).not.toContain(EMAIL);
 
+  // The anonymous-id paths: minting via /anon-id, then a write that carries
+  // the signed token header. Both stay uncredentialed.
+  await artifact.evaluate(() => {
+    const call = (window as unknown as { __call: (...a: unknown[]) => void })
+      .__call;
+    call("id", "viewer.anonId", {});
+  });
+  expect((await reply(artifact, "id")).value).toBe("AnonPoll");
+  await artifact.evaluate(() =>
+    (window as unknown as { __call: (...a: unknown[]) => void }).__call(
+      "w",
+      "db.set",
+      { collection: "votes", id: "x", data: { v: 1 } },
+    ),
+  );
+  expect(await reply(artifact, "w")).toMatchObject({ ok: true });
+  expect(JSON.stringify(await msgs(artifact))).not.toContain("a".repeat(22));
+
   const seen = await calls(app);
   expect(seen.length).toBeGreaterThan(0);
+  expect(seen.some((c) => c.url.endsWith("/anon-id"))).toBe(true);
+  expect(seen.some((c) => c.anonId !== null)).toBe(true);
   for (const c of seen) {
     expect(c, c.url).toMatchObject({
       credentials: "omit",
