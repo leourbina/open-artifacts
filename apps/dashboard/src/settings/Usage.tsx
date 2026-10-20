@@ -1,13 +1,29 @@
 import type { Usage as UsageData } from "@oa/shared";
-import { Badge, Banner, Button } from "@oa/ui";
+import { Banner } from "@oa/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  Skeleton,
+} from "@oa/ui/shadcn";
 import { useUsage } from "../api/queries";
 import { useMe } from "../auth/useMe";
 import { ExtIcon } from "../layout/CpuBanner";
 import { COSTS_DOC } from "../layout/cpu";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
-// Usage is area 6 of the shadcn migration; until then it keeps settings.css.
-import "./settings.css";
-import { toast } from "../layout/toast";
+import {
+  CARD,
+  Code,
+  GAP,
+  INSET,
+  MEASURE,
+  muted,
+  SettingsCard,
+  STACK,
+} from "./ui";
 
 type Tone = "normal" | "warning" | "danger";
 type Metric = UsageData["metrics"][number];
@@ -27,11 +43,66 @@ const LABELS: Record<Metric["key"], { name: string; what: string }> = {
   cpu_p99_ms: { name: "CPU time p99 (ms)", what: "Slowest 1% of requests" },
   kv_writes: { name: "KV writes", what: "Agent sign-ins and token refreshes" },
 };
-const BADGE = {
-  normal: "neutral",
-  warning: "warning",
-  danger: "danger",
-} as const;
+/** The old @oa/ui Badge tones, on shadcn's Badge. */
+const BADGE: Record<Tone, string> = {
+  normal: "bg-[var(--oa-sunken)] text-[var(--oa-text-2)]",
+  warning: "bg-[var(--oa-warning-soft)] text-[var(--oa-warning)]",
+  danger: "bg-[var(--oa-danger-soft)] text-[var(--oa-danger)]",
+};
+const FILL: Record<Tone, string> = {
+  normal: "bg-[var(--oa-text-2)]",
+  warning: "bg-[var(--oa-warning)]",
+  danger: "bg-[var(--oa-danger)]",
+};
+const TEXT: Record<Tone, string> = {
+  normal: "",
+  warning: "text-[var(--oa-warning)]",
+  danger: "text-[var(--oa-danger)]",
+};
+/** Two columns of cards, one at <= 600px. */
+const GRID = "grid grid-cols-2 gap-[var(--oa-space-4)] max-[600px]:grid-cols-1";
+const BIG =
+  "text-[length:var(--oa-text-2xl)] font-semibold leading-[1.2] tracking-[-0.02em] tabular-nums";
+const LINK =
+  "inline-flex items-center gap-[var(--oa-space-1)] whitespace-nowrap rounded-sm font-medium text-foreground underline-offset-2 focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring";
+
+/** A bar of `pct` (clamped) in `tone`; a styled div since <meter> can't be toned. */
+function Track({
+  pct,
+  tone,
+  thin = false,
+  label,
+  max,
+  now,
+  text,
+}: {
+  pct: number;
+  tone: Tone;
+  thin?: boolean;
+  label: string;
+  max: number;
+  now: number;
+  text: string;
+}) {
+  return (
+    // biome-ignore lint/a11y/useSemanticElements: <meter> cannot be styled per tone cross-browser
+    <div
+      role="meter"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={max}
+      aria-valuenow={now}
+      aria-valuetext={text}
+      data-tone={tone}
+      className={`relative overflow-hidden rounded-full bg-[var(--oa-sunken)] shadow-[inset_0_0_0_1px_var(--oa-divider)] ${thin ? "h-1" : "h-2"}`}
+    >
+      <i
+        className={`absolute inset-y-0 left-0 rounded-full ${FILL[tone]}`}
+        style={{ width: `${Math.min(pct, 100)}%` }}
+      />
+    </div>
+  );
+}
 
 /**
  * Raw percent of the limit. Negative use counts as 0; a limit of 0 (or less) with any
@@ -58,25 +129,46 @@ function CpuCard({ metrics }: { metrics: Metric[] }) {
   if (!hitsM && !p99M) return null;
   const idle = metrics.every((m) => !(m.used > 0));
   return (
-    <section className="oa-card oa-cpu" aria-labelledby="oa-cpu-h">
-      <div className="oa-cpu-head">
-        <h2 id="oa-cpu-h">CPU</h2>
-        <span>A per-request limit, not a daily quota</span>
-      </div>
-      <div className="oa-cpu-rows">
-        {hitsM && <HitsRow hits={Math.max(hitsM.used, 0)} />}
-        {p99M && <P99Row metric={p99M} idle={idle} />}
-      </div>
+    <section aria-labelledby="oa-cpu-h" className="min-w-0">
+      <Card className={CARD}>
+        <CardHeader
+          className={`flex min-h-[30px] flex-wrap items-baseline gap-x-[var(--oa-space-2)] ${INSET}`}
+        >
+          <CardTitle>
+            <h2
+              id="oa-cpu-h"
+              className="m-0 text-[length:var(--oa-text-md)] font-semibold"
+            >
+              CPU
+            </h2>
+          </CardTitle>
+          <span className={muted}>A per-request limit, not a daily quota</span>
+        </CardHeader>
+        <CardContent
+          className={`grid grid-cols-2 gap-x-[var(--oa-space-8)] gap-y-[var(--oa-space-4)] max-[600px]:grid-cols-1 ${INSET}`}
+        >
+          {hitsM && <HitsRow hits={Math.max(hitsM.used, 0)} />}
+          {p99M && <P99Row metric={p99M} idle={idle} />}
+        </CardContent>
+      </Card>
     </section>
   );
 }
 
+const ROW = `flex min-w-0 flex-col ${GAP}`;
+const ROW_H =
+  "m-0 text-[length:var(--oa-text-xs)] font-medium text-[var(--oa-text-2)]";
+const SMALL =
+  "text-[length:var(--oa-text-sm)] font-normal tracking-normal text-muted-foreground";
+
 function HitsRow({ hits }: { hits: number }) {
   return (
-    <div className="oa-cpu-row" data-tone={hits >= 3 ? "warning" : "normal"}>
-      <h3>Requests over the CPU limit today</h3>
-      <div className="oa-cpu-big">{fmt(hits)}</div>
-      <p>
+    <div className={ROW} data-tone={hits >= 3 ? "warning" : "normal"}>
+      <h3 className={ROW_H}>Requests over the CPU limit today</h3>
+      <div className={`${BIG} ${hits >= 3 ? TEXT.warning : ""}`}>
+        {fmt(hits)}
+      </div>
+      <p className={muted}>
         {hits > 0
           ? "These requests were stopped with Cloudflare error 1102. Retrying usually works."
           : "No request was stopped for using too much CPU."}
@@ -97,31 +189,28 @@ function P99Row({ metric, idle }: { metric: Metric; idle: boolean }) {
         ? "warning"
         : "normal";
   return (
-    <div className="oa-cpu-row">
-      <h3>Typical busy request (p99)</h3>
+    <div className={ROW}>
+      <h3 className={ROW_H}>Typical busy request (p99)</h3>
       {idle ? (
-        <div className="oa-cpu-big">
-          <small>No requests yet today</small>
+        <div className={BIG}>
+          <small className={SMALL}>No requests yet today</small>
         </div>
       ) : (
         <>
-          <div className="oa-cpu-big">
-            {ms(used)} {limit > 0 && <small>of {ms(limit)}</small>}
+          <div className={BIG}>
+            {ms(used)}{" "}
+            {limit > 0 && <small className={SMALL}>of {ms(limit)}</small>}
           </div>
           {limit > 0 && (
-            // biome-ignore lint/a11y/useSemanticElements: <meter> cannot be styled per tone cross-browser
-            <div
-              className="oa-track oa-thin"
-              role="meter"
-              aria-label="p99 CPU time"
-              aria-valuemin={0}
-              aria-valuemax={limit}
-              aria-valuenow={Math.min(used, limit)}
-              aria-valuetext={`${ms(used)} of ${ms(limit)}`}
-              data-tone={tone}
-            >
-              <i style={{ width: `${Math.min(pct, 100)}%` }} />
-            </div>
+            <Track
+              thin
+              pct={pct}
+              tone={tone}
+              label="p99 CPU time"
+              max={limit}
+              now={Math.min(used, limit)}
+              text={`${ms(used)} of ${ms(limit)}`}
+            />
           )}
         </>
       )}
@@ -135,11 +224,16 @@ function PlanLine() {
   const role = me.status === "authed" ? me.me.user.role : null;
   if (role !== "owner" && role !== "admin") return null;
   return (
-    <p className="oa-plan-line">
+    <p className="m-0 text-[length:var(--oa-text-sm)] text-[var(--oa-text-2)]">
       Workers Free is sized for one person. Workers Paid ($5 a month) is sized
       for a team: it sends invite emails and gives each request up to 30 seconds
       of CPU.{" "}
-      <a href={COSTS_DOC} target="_blank" rel="noopener noreferrer">
+      <a
+        className={LINK}
+        href={COSTS_DOC}
+        target="_blank"
+        rel="noopener noreferrer"
+      >
         Compare plans
         {ExtIcon}
       </a>
@@ -167,85 +261,64 @@ function Meter({ metric }: { metric: Metric }) {
     : state
       ? `${shown} · ${state}`
       : shown;
+  const id = `oa-meter-${metric.key}`;
   return (
-    <section className="oa-card oa-meter" data-tone={tone} aria-label={name}>
-      <div className="oa-meter-head">
-        <h2>{name}</h2>
-        <Badge tone={BADGE[tone]}>{badge}</Badge>
+    <SettingsCard
+      id={id}
+      title={name}
+      action={<Badge className={`rounded-sm ${BADGE[tone]}`}>{badge}</Badge>}
+    >
+      <div className="flex flex-wrap items-baseline gap-[var(--oa-space-2)] tabular-nums">
+        <b className={BIG}>{fmt(used)}</b>
+        <span className="text-muted-foreground">
+          / {fmt(metric.limit)} today
+        </span>
       </div>
-      <div className="oa-meter-value">
-        <b>{fmt(used)}</b>
-        <span>/ {fmt(metric.limit)} today</span>
-      </div>
-      {/* biome-ignore lint/a11y/useSemanticElements: <meter> cannot be styled per tone cross-browser */}
+      <Track
+        pct={pct}
+        tone={tone}
+        label={name}
+        max={Math.max(metric.limit, 0)}
+        now={Math.min(used, Math.max(metric.limit, 0))}
+        text={`${fmt(used)} of ${fmt(metric.limit)}${state ? `, ${state}` : ""}`}
+      />
       <div
-        className="oa-track"
-        role="meter"
-        aria-label={name}
-        aria-valuemin={0}
-        aria-valuemax={Math.max(metric.limit, 0)}
-        aria-valuenow={Math.min(used, Math.max(metric.limit, 0))}
-        aria-valuetext={`${fmt(used)} of ${fmt(metric.limit)}${state ? `, ${state}` : ""}`}
-        data-tone={tone}
+        className={`flex flex-wrap justify-between gap-[var(--oa-space-2)] ${muted}`}
       >
-        <i style={{ width: `${Math.min(pct, 100)}%` }} />
-      </div>
-      <div className="oa-meter-foot">
         <span>{what}</span>
-        <span className="oa-left">{fmt(left)} left</span>
+        <span className={TEXT[tone]}>{fmt(left)} left</span>
       </div>
-    </section>
-  );
-}
-
-const copy = (text: string) => {
-  const failed = () =>
-    toast({
-      title: "Couldn't copy",
-      description: "Copy it by hand.",
-      tone: "danger",
-    });
-  if (!navigator.clipboard) return failed();
-  navigator.clipboard
-    .writeText(text)
-    .then(() => toast({ title: "Copied", tone: "success" }), failed);
-};
-
-function Cmd({ code, label }: { code: string; label: string }) {
-  return (
-    <div className="oa-code oa-code-flush">
-      <pre>
-        <code>{code}</code>
-      </pre>
-      <Button variant="ghost" aria-label={label} onClick={() => copy(code)}>
-        Copy
-      </Button>
-    </div>
+    </SettingsCard>
   );
 }
 
 function Setup() {
+  const p = "m-0";
   return (
-    <section className="oa-card oa-setup" aria-labelledby="oa-setup-h">
-      <h2 id="oa-setup-h">Connect Cloudflare analytics to see usage</h2>
-      <p>
+    <SettingsCard
+      id="oa-setup-h"
+      title="Connect Cloudflare analytics to see usage"
+    >
+      <p className={p}>
         Open Artifacts reads today's numbers from Cloudflare's GraphQL Analytics
         API. It needs a read-only token with the Account Analytics permission,
         stored as the <code>ANALYTICS_TOKEN</code> Worker secret. Everything
         else works without it.
       </p>
-      <p>
+      <p className={p}>
         Run setup and paste the token when prompted (it asks for{" "}
         <code>ANALYTICS_TOKEN</code>):
       </p>
-      <Cmd code="pnpm oa:setup" label="Copy setup command" />
-      <p>Or store it directly:</p>
-      <Cmd
+      <Code code="pnpm oa:setup" label="Copy setup command" />
+      <p className={p}>Or store it directly:</p>
+      <Code
         code="wrangler secret put ANALYTICS_TOKEN"
         label="Copy wrangler command"
       />
-      <p>Then reload this page. The token is never shown in the dashboard.</p>
-    </section>
+      <p className={p}>
+        Then reload this page. The token is never shown in the dashboard.
+      </p>
+    </SettingsCard>
   );
 }
 
@@ -282,11 +355,16 @@ export function Usage() {
   useDocumentTitle("Usage");
   const q = useUsage();
   return (
-    <div className="oa-settings oa-usage">
-      <div className="oa-usage-head">
-        <h1>Usage</h1>
+    // The 880px measure of the other settings pages.
+    <div className={`${MEASURE} ${STACK}`}>
+      <div className="flex items-center gap-[var(--oa-space-3)]">
+        <h1 className="m-0 flex-none text-[length:var(--oa-text-xl)] font-semibold">
+          Usage
+        </h1>
         <Button
           variant="ghost"
+          size="sm"
+          className="ml-auto"
           disabled={q.isFetching}
           onClick={() => void q.refetch()}
         >
@@ -299,7 +377,11 @@ export function Usage() {
           tone="danger"
           title="Couldn't load usage."
           action={
-            <Button variant="secondary" onClick={() => void q.refetch()}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void q.refetch()}
+            >
               Retry
             </Button>
           }
@@ -307,17 +389,22 @@ export function Usage() {
           This doesn't affect your artifacts.
         </Banner>
       ) : !q.data ? (
-        <p aria-busy="true">Loading…</p>
+        <div className={GRID} aria-busy="true">
+          <span className="sr-only">Loading…</span>
+          {[0, 1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-[148px] rounded-xl" />
+          ))}
+        </div>
       ) : !q.data.available ? (
         <Setup />
       ) : (
         <>
           {alerts(q.data.metrics.filter((m) => !CPU_KEYS.has(m.key)))}
-          <p className="oa-seen">
+          <p className={muted}>
             Today, {q.data.date}. Resets at 00:00 UTC. Cloudflare's numbers are
             cached for 5 minutes.
           </p>
-          <div className="oa-meters">
+          <div className={GRID}>
             {q.data.metrics
               .filter((m) => !CPU_KEYS.has(m.key))
               .map((m) => (
