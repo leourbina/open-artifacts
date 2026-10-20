@@ -139,6 +139,8 @@ jobs:
         run: bash scripts/ci/prod-setup.sh cleanup
   # The public demo, in parallel with deploy-prod: off until the repository variable
   # DEMO_ENABLED is 'true' (after ops-demo-install has run). Staging credentials only.
+  # TODO: when ci/release-cadence lands, extend verify-release to check
+  # https://demo.open-artifacts.com/healthz .version when DEMO_ENABLED == 'true'.
   deploy-demo:
     needs: [release-please]
     if: ${{ always() && github.ref == 'refs/heads/main' && vars.DEMO_ENABLED == 'true' && needs.release-please.outputs.release_created == 'true' }}
@@ -177,4 +179,3 @@ jobs:
           pnpm -s oa:setup --ci --revoke-ci-tokens
           --name open-artifacts-demo --app-host demo.open-artifacts.com
           --content-host demo-content.open-artifacts.com --owner-email me@leourbina.com
-

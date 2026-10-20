@@ -1,6 +1,8 @@
 name: Ops - demo first install
 # The public demo (demo.open-artifacts.com) runs on the staging Cloudflare credentials,
 # never a PROD secret. Dispatch only, from main.
+# TODO(#299): the demo should raise RL_ANON and ANON_WRITES_PER_MIN to 120. oa:setup has no
+# flag or var for either on main yet; once #299 lands, set them here (or as a wrangler var).
 on:
   workflow_dispatch:
 permissions:
