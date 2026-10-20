@@ -24,6 +24,7 @@ import { useSignOut } from "../auth/signOut";
 import { useMe } from "../auth/useMe";
 import { SearchBox } from "../library/SearchBox";
 import { EdgePanel } from "../pages/Edge";
+import { MEASURE } from "../settings/ui";
 import { CpuBanner } from "./CpuBanner";
 import { DisplayNamePrompt } from "./DisplayNamePrompt";
 import { QuotaBanner } from "./QuotaBanner";
@@ -149,8 +150,12 @@ function Layout() {
           className="min-w-0 flex-1 outline-none md:min-h-0 md:overflow-auto md:rounded-b-[calc(var(--oa-radius-lg)-1px)] md:[scrollbar-gutter:stable]"
         >
           <QuotaBanner />
-          <CpuBanner role={me?.user.role} />
           <div className="oa-page">
+            {/* In the page's content column: the settings measure there. */}
+            <CpuBanner
+              role={me?.user.role}
+              className={/^\/settings(\/|$)/i.test(path) ? MEASURE : ""}
+            />
             <Outlet />
           </div>
         </main>

@@ -23,6 +23,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
+      - name: version-consistency (package.json, release manifest, CHANGELOG)
+        run: node --experimental-strip-types scripts/ci/version-consistency.ts
       - name: actionlint (runs shellcheck on run blocks)
         env:
           ACTIONLINT_VERSION: 1.7.12
@@ -41,37 +43,128 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      # Fast path for release-please PRs: decided inside each job (a skipped or
+      # missing job would count as passing a required check). The script comes from
+      # the BASE commit, never from the code under test, and any error or any
+      # output other than exactly "release-only" means full CI.
+      - id: ro
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+        run: |
+          rel=false
+          if [ -n "${BASE_SHA:-}" ] && [ -n "${HEAD_SHA:-}" ] \
+            && git show "$BASE_SHA:scripts/ci/release-only.ts" > "$RUNNER_TEMP/release-only.ts" 2> /dev/null \
+            && out=$(node --experimental-strip-types --no-warnings "$RUNNER_TEMP/release-only.ts" "$BASE_SHA" "$HEAD_SHA" 2> /dev/null) \
+            && [ "$out" = "release-only" ]; then
+            rel=true
+          fi
+          echo "release_only=$rel" >> "$GITHUB_OUTPUT"
+      - name: release-only change
+        if: ${{ steps.ro.outputs.release_only == 'true' }}
+        run: |
+          echo "release-only change: skipped (the base commit is on main, which only the merge queue can update)"
+      - uses: pnpm/action-setup@v4
+        if: ${{ steps.ro.outputs.release_only != 'true' }}
+      - uses: actions/setup-node@v4
+        if: ${{ steps.ro.outputs.release_only != 'true' }}
         with:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+        if: ${{ steps.ro.outputs.release_only != 'true' }}
       - run: pnpm typecheck
+        if: ${{ steps.ro.outputs.release_only != 'true' }}
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      # Fast path for release-please PRs: decided inside each job (a skipped or
+      # missing job would count as passing a required check). The script comes from
+      # the BASE commit, never from the code under test, and any error or any
+      # output other than exactly "release-only" means full CI.
+      - id: ro
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+        run: |
+          rel=false
+          if [ -n "${BASE_SHA:-}" ] && [ -n "${HEAD_SHA:-}" ] \
+            && git show "$BASE_SHA:scripts/ci/release-only.ts" > "$RUNNER_TEMP/release-only.ts" 2> /dev/null \
+            && out=$(node --experimental-strip-types --no-warnings "$RUNNER_TEMP/release-only.ts" "$BASE_SHA" "$HEAD_SHA" 2> /dev/null) \
+            && [ "$out" = "release-only" ]; then
+            rel=true
+          fi
+          echo "release_only=$rel" >> "$GITHUB_OUTPUT"
+      - name: release-only change
+        if: ${{ steps.ro.outputs.release_only == 'true' }}
+        run: |
+          echo "release-only change: skipped (the base commit is on main, which only the merge queue can update)"
+      - uses: pnpm/action-setup@v4
+        if: ${{ steps.ro.outputs.release_only != 'true' }}
+      - uses: actions/setup-node@v4
+        if: ${{ steps.ro.outputs.release_only != 'true' }}
         with:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+        if: ${{ steps.ro.outputs.release_only != 'true' }}
       - run: pnpm test
+        if: ${{ steps.ro.outputs.release_only != 'true' }}
       # Wall-clock CPU budgets, serial (not under the parallel suite's load).
       - run: pnpm --filter @oa/server test:cpu
+        if: ${{ steps.ro.outputs.release_only != 'true' }}
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      # Fast path for release-please PRs: decided inside each job (a skipped or
+      # missing job would count as passing a required check). The script comes from
+      # the BASE commit, never from the code under test, and any error or any
+      # output other than exactly "release-only" means full CI.
+      - id: ro
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+        run: |
+          rel=false
+          if [ -n "${BASE_SHA:-}" ] && [ -n "${HEAD_SHA:-}" ] \
+            && git show "$BASE_SHA:scripts/ci/release-only.ts" > "$RUNNER_TEMP/release-only.ts" 2> /dev/null \
+            && out=$(node --experimental-strip-types --no-warnings "$RUNNER_TEMP/release-only.ts" "$BASE_SHA" "$HEAD_SHA" 2> /dev/null) \
+            && [ "$out" = "release-only" ]; then
+            rel=true
+          fi
+          echo "release_only=$rel" >> "$GITHUB_OUTPUT"
+      - name: release-only change
+        if: ${{ steps.ro.outputs.release_only == 'true' }}
+        run: |
+          echo "release-only change: skipped (the base commit is on main, which only the merge queue can update)"
+      - uses: pnpm/action-setup@v4
+        if: ${{ steps.ro.outputs.release_only != 'true' }}
+      - uses: actions/setup-node@v4
+        if: ${{ steps.ro.outputs.release_only != 'true' }}
         with:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+        if: ${{ steps.ro.outputs.release_only != 'true' }}
       - run: pnpm build
+        if: ${{ steps.ro.outputs.release_only != 'true' }}
   # No secrets: the real suite runs a local `wrangler dev` (ENVIRONMENT=dev in a
   # generated temp config), never staging.
   e2e:
@@ -79,32 +172,66 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      # Fast path for release-please PRs: decided inside each job (a skipped or
+      # missing job would count as passing a required check). The script comes from
+      # the BASE commit, never from the code under test, and any error or any
+      # output other than exactly "release-only" means full CI.
+      - id: ro
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+        run: |
+          rel=false
+          if [ -n "${BASE_SHA:-}" ] && [ -n "${HEAD_SHA:-}" ] \
+            && git show "$BASE_SHA:scripts/ci/release-only.ts" > "$RUNNER_TEMP/release-only.ts" 2> /dev/null \
+            && out=$(node --experimental-strip-types --no-warnings "$RUNNER_TEMP/release-only.ts" "$BASE_SHA" "$HEAD_SHA" 2> /dev/null) \
+            && [ "$out" = "release-only" ]; then
+            rel=true
+          fi
+          echo "release_only=$rel" >> "$GITHUB_OUTPUT"
+      - name: release-only change
+        if: ${{ steps.ro.outputs.release_only == 'true' }}
+        run: |
+          echo "release-only change: skipped (the base commit is on main, which only the merge queue can update)"
+      - uses: pnpm/action-setup@v4
+        if: ${{ steps.ro.outputs.release_only != 'true' }}
+      - uses: actions/setup-node@v4
+        if: ${{ steps.ro.outputs.release_only != 'true' }}
         with:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+        if: ${{ steps.ro.outputs.release_only != 'true' }}
       - id: pw
         run: bash scripts/ci/e2e.sh version
+        if: ${{ steps.ro.outputs.release_only != 'true' }}
       - uses: actions/cache@v4
+        if: ${{ steps.ro.outputs.release_only != 'true' }}
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.pw.outputs.playwright }}
       - id: install
         run: bash scripts/ci/e2e.sh install
+        if: ${{ steps.ro.outputs.release_only != 'true' }}
       - run: bash scripts/ci/e2e.sh hosts
+        if: ${{ steps.ro.outputs.release_only != 'true' }}
       - name: Mock suite
+        if: ${{ steps.ro.outputs.release_only != 'true' }}
         run: bash scripts/ci/e2e.sh mock
       # Runs even when the mock suite failed (not when the browsers didn't install).
       - name: Real-server suite (local wrangler dev)
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.ro.outputs.release_only != 'true' && steps.install.outcome == 'success' }}
         run: bash scripts/ci/e2e.sh real
       - name: UI real-browser checks (axe contrast, focus)
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.ro.outputs.release_only != 'true' && steps.install.outcome == 'success' }}
         run: bash scripts/ci/e2e.sh ui
       - name: Landing real-browser checks (no horizontal overflow)
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.ro.outputs.release_only != 'true' && steps.install.outcome == 'success' }}
         run: bash scripts/ci/e2e.sh landing
       - if: failure()
         uses: actions/upload-artifact@v4

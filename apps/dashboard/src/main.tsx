@@ -97,6 +97,7 @@ async function startMocks() {
       http.get("*/api/v1/usage", () =>
         HttpResponse.json({
           available: true,
+          plan: "free",
           date: new Date().toISOString().slice(0, 10),
           metrics: [
             { key: "requests", used: 1200, limit: 100000 },

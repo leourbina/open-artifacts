@@ -51,6 +51,7 @@ const usage = (hits: number) =>
     http.get(`*${R.usage}`, () =>
       HttpResponse.json({
         available: true,
+        plan: "free",
         date: new Date().toISOString().slice(0, 10),
         metrics: [{ key: "cpu_limit_hits", used: hits, limit: 0 }],
       }),

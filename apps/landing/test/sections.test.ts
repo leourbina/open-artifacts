@@ -91,4 +91,44 @@ describe("landing sections", () => {
   it("the hero keeps the library screenshot", () => {
     expect(index).toMatch(/class="frame hero-shot"/);
   });
+
+  it("the multiplayer section is two viewers of one artifact, using the real API", () => {
+    const start = index.indexOf('id="multi-h"');
+    expect(start).toBeGreaterThan(-1);
+    const multi = index.slice(start, index.indexOf("</section>", start));
+    const wins = multi.match(/<figure[^>]*data-who="(Ana|Sam)"/g) ?? [];
+    expect(wins).toHaveLength(2);
+    expect(
+      multi.match(/artifacts\.example\.com\/a\/<b[^>]*>Tq7mW4<\/b>/g),
+    ).toHaveLength(2);
+    expect(multi.match(/type="checkbox"/g)).toHaveLength(10);
+    expect(multi).toMatch(/role="status"[^>]*aria-live="polite"/);
+    expect(multi).toContain("Durable Object");
+    const code = multi.replace(/<[^>]+>/g, "");
+    for (const call of [
+      "openArtifacts.ready",
+      "openArtifacts.viewer.get()",
+      'openArtifacts.db.collection("todos")',
+      "todos.subscribe(({ docs })",
+      "todos.update(id, {",
+    ])
+      expect(code).toContain(call);
+  });
+
+  it("no presence wording: the runtime has no presence API", () => {
+    const text = index.replace(
+      /<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/g,
+      "",
+    );
+    for (const claim of [
+      /people here/i,
+      /\bonline now\b/i,
+      /\bwho(?:'s| is) here\b/i,
+      /\blive users?\b/i,
+      /\bpresence\b/i,
+      /\bis typing\b/i,
+      /\bviewing now\b/i,
+    ])
+      expect(text).not.toMatch(claim);
+  });
 });

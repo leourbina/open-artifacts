@@ -49,7 +49,14 @@ const GaugeIcon = (
  * Today's CPU-limit hits (3 or more), or a 1102 this tab just got. Dismissed for the
  * rest of the UTC day; gone on its own once today's count is back to 0.
  */
-export function CpuBanner({ role }: { role: Me["user"]["role"] | undefined }) {
+export function CpuBanner({
+  role,
+  className = "",
+}: {
+  role: Me["user"]["role"] | undefined;
+  /** The page's content column, so the banner's edges line up with it. */
+  className?: string;
+}) {
   const { admin, hits, recent, today } = useCpuSignals(role);
   const [dismissed, setDismissed] = useState(read);
   const n = hits ?? 0;
@@ -68,7 +75,7 @@ export function CpuBanner({ role }: { role: Me["user"]["role"] | undefined }) {
     setDismissed(day);
   };
   return (
-    <div className="oa-cpu-banner">
+    <div className={`oa-cpu-banner ${className}`}>
       <Banner
         tone="warning"
         title="Some requests hit Cloudflare's free CPU limit"
