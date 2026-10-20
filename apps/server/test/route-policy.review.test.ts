@@ -219,3 +219,33 @@ describe("L5, L6, L7", () => {
     ).toBe("not_found");
   });
 });
+
+describe("L6: content-url mints unsigned only via isPubliclyServable", () => {
+  it("public artifact → unsigned /p/ URL; private shared → signed URL", async () => {
+    const pub = await api(app as never, R.artifacts, viewerCookie, {
+      method: "POST",
+      body: {
+        title: "pub",
+        format: "html",
+        content: "<p>x",
+        visibility: "public",
+      },
+    });
+    const id = ((await pub.json()) as { id: string }).id;
+    const u = (await (
+      await api(app as never, R.contentUrl(id), null)
+    ).json()) as { url: string; expiresAt: string | null };
+    expect(u.url).toContain("/p/");
+    expect(u.expiresAt).toBeNull();
+    const priv = await api(app as never, R.artifacts, viewerCookie, {
+      method: "POST",
+      body: { title: "priv", format: "html", content: "<p>x" },
+    });
+    const pid = ((await priv.json()) as { id: string }).id;
+    const s = (await (
+      await api(app as never, R.contentUrl(pid), viewerCookie)
+    ).json()) as { url: string; expiresAt: string | null };
+    expect(s.url).toContain("/c/");
+    expect(s.expiresAt).not.toBeNull();
+  });
+});

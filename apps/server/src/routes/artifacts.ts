@@ -11,6 +11,7 @@ import {
 } from "@oa/shared";
 import type { Context } from "hono";
 import { authorize, caller, callerOf, requireUser } from "../auth/authz.js";
+import { isPubliclyServable } from "../auth/policy.js";
 import { publicPrefix, signContent } from "../content/signing.js";
 import { readCapped } from "../http/body.js";
 import { ApiError, contentOrigin } from "../http/errors.js";
@@ -184,7 +185,14 @@ export function mountArtifacts(app: AppType): void {
       .first();
     if (!exists) throw notFound();
     const origin = contentOrigin(c.env);
-    if (a.visibility === "public")
+    // Unsigned only when the artifact may be served publicly (the same rule
+    // as the content host's /p/); otherwise a signed, expiring URL.
+    if (
+      isPubliclyServable({
+        visibility: a.visibility,
+        deleted: a.deletedAt != null,
+      })
+    )
       return c.json({
         url: `${origin}${publicPrefix(id, v)}__view`,
         expiresAt: null,
