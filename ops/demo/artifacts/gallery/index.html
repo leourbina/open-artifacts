@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Open Artifacts demo</title>
+<style>
+  /* Studio tokens (packages/ui/src/tokens/tokens.css), inlined: no external fonts. */
+  :root {
+    color-scheme: light;
+    --oa-bg: #eef0f3;
+    --oa-surface: #ffffff;
+    --oa-surface-2: #f6f7f9;
+    --oa-sunken: #eceef1;
+    --oa-divider: #e0e3e8;
+    --oa-border: #bec4cd;
+    --oa-border-strong: #848b95;
+    --oa-text: #15181c;
+    --oa-text-2: #454c56;
+    --oa-text-muted: #5f6670;
+    --oa-accent: #2350d0;
+    --oa-accent-fg: #1d45b8;
+    --oa-accent-soft: #e7edfc;
+    --oa-accent-text: #ffffff;
+    --oa-focus: #2350d0;
+    --oa-danger: #be2f1c;
+    --oa-danger-soft: #fbe7e3;
+    --oa-success: #157a3a;
+    --oa-font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --oa-font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --oa-radius-md: 6px;
+    --oa-radius-lg: 8px;
+    --oa-shadow-2: 0 0 0 1px var(--oa-border-strong), 0 4px 14px rgba(20, 24, 30, 0.06);
+    --oa-duration: 200ms;
+    --oa-ease: cubic-bezier(0.2, 0, 0, 1);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --oa-bg: #131518;
+      --oa-surface: #1c1f23;
+      --oa-surface-2: #212429;
+      --oa-sunken: #181a1e;
+      --oa-divider: #2c3037;
+      --oa-border: #3b414a;
+      --oa-border-strong: #676e78;
+      --oa-text: #e9ebee;
+      --oa-text-2: #b7bdc6;
+      --oa-text-muted: #9097a1;
+      --oa-accent: #7f9cff;
+      --oa-accent-fg: #a3b8ff;
+      --oa-accent-soft: #1f2a4a;
+      --oa-accent-text: #131518;
+      --oa-focus: #7f9cff;
+      --oa-danger: #ff7f6b;
+      --oa-danger-soft: #3a1e1a;
+      --oa-success: #5bc77f;
+      --oa-shadow-2: 0 0 0 1px var(--oa-border-strong), 0 4px 14px rgba(0, 0, 0, 0.4);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --oa-bg: #131518;
+    --oa-surface: #1c1f23;
+    --oa-surface-2: #212429;
+    --oa-sunken: #181a1e;
+    --oa-divider: #2c3037;
+    --oa-border: #3b414a;
+    --oa-border-strong: #676e78;
+    --oa-text: #e9ebee;
+    --oa-text-2: #b7bdc6;
+    --oa-text-muted: #9097a1;
+    --oa-accent: #7f9cff;
+    --oa-accent-fg: #a3b8ff;
+    --oa-accent-soft: #1f2a4a;
+    --oa-accent-text: #131518;
+    --oa-focus: #7f9cff;
+    --oa-danger: #ff7f6b;
+    --oa-danger-soft: #3a1e1a;
+    --oa-success: #5bc77f;
+    --oa-shadow-2: 0 0 0 1px var(--oa-border-strong), 0 4px 14px rgba(0, 0, 0, 0.4);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    min-height: 100vh;
+    background: var(--oa-bg);
+    color: var(--oa-text);
+    font-family: var(--oa-font-sans);
+    font-size: 14px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    padding: 32px 16px 40px;
+  }
+  main { max-width: 1120px; margin: 0 auto; display: flex; flex-direction: column; gap: 28px; }
+
+  header { display: flex; flex-direction: column; gap: 10px; max-width: 720px; }
+  .kicker { margin: 0; font-family: var(--oa-font-mono); font-size: 13px; color: var(--oa-text-muted); }
+  .live { display: inline-block; width: 7px; height: 7px; margin-right: 8px; border-radius: 50%; background: var(--oa-success); vertical-align: 1px; }
+  h1 { margin: 0; font-size: clamp(22px, 3.2vw, 30px); font-weight: 600; letter-spacing: -0.02em; line-height: 1.2; text-wrap: balance; }
+  .sub { margin: 0; color: var(--oa-text-2); font-size: 15px; text-wrap: pretty; }
+  .links { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 4px 0 0; padding: 0; list-style: none; }
+
+  a { color: var(--oa-accent-fg); text-underline-offset: 3px; }
+  a:hover { text-decoration-thickness: 2px; }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--oa-focus); outline-offset: 2px; border-radius: var(--oa-radius-md); }
+
+  .grid {
+    list-style: none; margin: 0; padding: 0;
+    display: grid; gap: 16px;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+  }
+  .card {
+    display: flex; flex-direction: column;
+    background: var(--oa-surface);
+    border: 1px solid var(--oa-border);
+    border-radius: var(--oa-radius-lg);
+    overflow: hidden;
+    transition: box-shadow var(--oa-duration) var(--oa-ease), border-color var(--oa-duration) var(--oa-ease);
+  }
+  .card:hover { border-color: var(--oa-border-strong); box-shadow: var(--oa-shadow-2); }
+  .thumb { display: block; aspect-ratio: 16 / 10; background: var(--oa-bg); border-bottom: 1px solid var(--oa-divider); }
+  .thumb svg { display: block; width: 100%; height: 100%; }
+  .body { display: flex; flex-direction: column; gap: 6px; padding: 14px 16px 16px; flex: 1 1 auto; }
+  h2 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+  .pitch { margin: 0; color: var(--oa-text-2); text-wrap: pretty; flex: 1 1 auto; }
+  .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-height: 36px; padding: 0 14px;
+    border: 1px solid var(--oa-border); border-radius: var(--oa-radius-md);
+    background: var(--oa-surface); color: var(--oa-text);
+    font: inherit; font-weight: 500; text-decoration: none; cursor: pointer;
+    touch-action: manipulation;
+    transition: border-color var(--oa-duration) var(--oa-ease), background var(--oa-duration) var(--oa-ease);
+  }
+  .btn:hover { border-color: var(--oa-border-strong); text-decoration: none; }
+  .btn.primary { background: var(--oa-accent); border-color: var(--oa-accent); color: var(--oa-accent-text); }
+  .btn.primary:hover { background: var(--oa-accent-fg); border-color: var(--oa-accent-fg); }
+  .ext { width: 0.85em; height: 0.85em; margin-left: 5px; vertical-align: -0.05em; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+  .hint { margin: 2px 0 0; font-size: 13px; color: var(--oa-text-muted); }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .empty { margin: 0; color: var(--oa-text-muted); }
+  footer { color: var(--oa-text-muted); font-size: 13px; border-top: 1px solid var(--oa-divider); padding-top: 16px; }
+  footer p { margin: 0; text-wrap: pretty; }
+
+  /* Mini-renders: SVG shapes take token colors, so they follow light and dark. */
+  .t-bg { fill: var(--oa-bg); }
+  .t-surface { fill: var(--oa-surface); stroke: var(--oa-border); }
+  .t-pick { fill: var(--oa-accent-soft); stroke: var(--oa-accent); }
+  .t-soft { fill: var(--oa-accent-soft); }
+  .t-osoft { fill: var(--oa-danger-soft); }
+  .t-x { fill: none; stroke: var(--oa-accent); stroke-linecap: round; }
+  .t-o { fill: none; stroke: var(--oa-danger); }
+  .t-text { fill: var(--oa-text); font-family: var(--oa-font-sans); }
+  .t-muted { fill: var(--oa-text-muted); font-family: var(--oa-font-mono); }
+  .t-accent { fill: var(--oa-accent); font-family: var(--oa-font-sans); }
+  .t-danger { fill: var(--oa-danger); font-family: var(--oa-font-sans); }
+  .t-bar { transform-box: fill-box; transform-origin: left; transition: transform 420ms var(--oa-ease); }
+  .card:hover .t-bar { transform: scaleX(1.06); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .card, .btn, .t-bar { transition: none; }
+    .card:hover .t-bar { transform: none; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="kicker"><span class="live" aria-hidden="true"></span>demo.open-artifacts.com</p>
+    <h1>Live, multiplayer artifacts. Made by AI agents, hosted on Cloudflare.</h1>
+    <p class="sub">Each demo is one HTML page with a shared live database. Open it in two windows and they stay in step. Any AI agent can publish one like it.</p>
+    <ul class="links">
+      <li><a href="https://open-artifacts.com" target="_blank" rel="noopener">open-artifacts.com<svg class="ext" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M5 2H2.5v7.5H10V7M7 1.5h3.5V5M10.5 1.5 5.5 6.5"/></svg><span class="sr"> (opens in new tab)</span></a></li>
+      <li><a href="https://github.com/open-artifacts-ai/open-artifacts" target="_blank" rel="noopener">Source on GitHub<svg class="ext" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M5 2H2.5v7.5H10V7M7 1.5h3.5V5M10.5 1.5 5.5 6.5"/></svg><span class="sr"> (opens in new tab)</span></a></li>
+    </ul>
+  </header>
+
+  <section aria-labelledby="demos-h">
+    <h2 id="demos-h" class="sr">Demos</h2>
+    <ul class="grid" id="grid"></ul>
+    <p class="empty" id="empty" hidden>The demos are being set up. Check back soon.</p>
+  </section>
+
+  <footer>
+    <p>Demos reset every night at 00:00 UTC. Votes and moves are anonymous.</p>
+  </footer>
+</main>
+
+<script>
+(() => {
+  "use strict";
+
+  /* The publish script fills APP_ORIGIN and each id from ops/demo/ids.json.
+     A card whose id is still a placeholder is left out. */
+  const APP_ORIGIN = "{{origin}}";
+
+  const DEMOS = [
+    {
+      slug: "poll",
+      title: "Live poll",
+      pitch: "One question a day. Vote, and every open window's bars move.",
+      id: "{{id:poll}}",
+      thumb: "poll",
+    },
+    {
+      slug: "tictactoe",
+      title: "Tic-tac-toe",
+      pitch: "Two seats, everyone else watches. Moves show up everywhere.",
+      id: "{{id:tictactoe}}",
+      thumb: "tictactoe",
+    },
+    {
+      slug: "chess",
+      title: "Chess",
+      pitch: "Two players, any number of spectators. Every window checks each move against the rules.",
+      id: "{{id:chess}}",
+      thumb: "chess",
+    },
+    {
+      slug: "pixels",
+      title: "Pixel canvas",
+      pitch: "A 32 by 32 canvas everyone paints together, one pixel every 4 seconds. Fresh every day.",
+      id: "{{id:pixels}}",
+      thumb: "pixels",
+    },
+    {
+      slug: "dashboard",
+      title: "Demo activity",
+      pitch: "Votes, games, moves and pixels across the demos today. The numbers update while you watch.",
+      id: "{{id:dashboard}}",
+      thumb: "dashboard",
+    },
+    {
+      slug: "map",
+      title: "Where are you from",
+      pitch: "Pick your country, and a pin lands on the world map in every open window. Fresh every day.",
+      id: "{{id:map}}",
+      thumb: "map",
+    },
+  ];
+
+  const THUMBS = {
+    poll: `
+      <svg viewBox="0 0 320 200" role="img" aria-hidden="true" focusable="false">
+        <rect class="t-bg" width="320" height="200"/>
+        <text class="t-muted" x="40" y="34" font-size="9">Today's question · resets 00:00 UTC</text>
+        <text class="t-text" x="40" y="56" font-size="13" font-weight="600">Meetings on a normal day?</text>
+        <g>
+          <rect class="t-surface" x="40.5" y="68.5" width="240" height="26" rx="5"/>
+          <rect class="t-soft t-bar" x="41" y="69" width="179" height="25" rx="4.5"/>
+          <rect class="t-pick" x="40.5" y="68.5" width="240" height="26" rx="5" fill-opacity="0" stroke-width="1.5"/>
+          <text class="t-accent" x="50" y="85.5" font-size="10" font-weight="600">✓</text>
+          <text class="t-text" x="61" y="85.5" font-size="10">None</text>
+          <text class="t-text" x="244" y="85.5" font-size="10" text-anchor="end">3</text>
+          <text class="t-muted" x="270" y="85.5" font-size="8" text-anchor="end">75%</text>
+        </g>
+        <g>
+          <rect class="t-surface" x="40.5" y="100.5" width="240" height="26" rx="5"/>
+          <text class="t-text" x="50" y="117.5" font-size="10">One</text>
+          <text class="t-text" x="244" y="117.5" font-size="10" text-anchor="end">0</text>
+          <text class="t-muted" x="270" y="117.5" font-size="8" text-anchor="end">0%</text>
+        </g>
+        <g>
+          <rect class="t-surface" x="40.5" y="132.5" width="240" height="26" rx="5"/>
+          <rect class="t-soft t-bar" x="41" y="133" width="60" height="25" rx="4.5"/>
+          <text class="t-text" x="50" y="149.5" font-size="10">Two or three</text>
+          <text class="t-text" x="244" y="149.5" font-size="10" text-anchor="end">1</text>
+          <text class="t-muted" x="270" y="149.5" font-size="8" text-anchor="end">25%</text>
+        </g>
+        <text class="t-muted" x="40" y="180" font-size="8">4 votes, one per browser. Change your vote any time.</text>
+      </svg>`,
+    tictactoe: `
+      <svg viewBox="0 0 320 200" role="img" aria-hidden="true" focusable="false">
+        <rect class="t-bg" width="320" height="200"/>
+        <rect class="t-surface" x="100.5" y="14.5" width="57" height="18" rx="9"/>
+        <text class="t-accent" x="109" y="27" font-size="8.5" font-weight="600">X:</text>
+        <text class="t-text" x="121" y="27" font-size="8.5">you</text>
+        <rect class="t-surface" x="162.5" y="14.5" width="57" height="18" rx="9"/>
+        <text class="t-danger" x="171" y="27" font-size="8.5" font-weight="600">O:</text>
+        <text class="t-text" x="183" y="27" font-size="8.5">guest</text>
+        <g stroke-width="1">
+          <rect class="t-surface" x="100.5" y="40.5" width="37" height="37" rx="4"/>
+          <rect class="t-pick" x="141.5" y="40.5" width="37" height="37" rx="4"/>
+          <rect class="t-surface" x="182.5" y="40.5" width="37" height="37" rx="4"/>
+          <rect class="t-surface" x="100.5" y="81.5" width="37" height="37" rx="4"/>
+          <rect class="t-pick" x="141.5" y="81.5" width="37" height="37" rx="4"/>
+          <rect class="t-surface" x="182.5" y="81.5" width="37" height="37" rx="4"/>
+          <rect class="t-surface" x="100.5" y="122.5" width="37" height="37" rx="4"/>
+          <rect class="t-pick" x="141.5" y="122.5" width="37" height="37" rx="4"/>
+          <rect class="t-surface" x="182.5" y="122.5" width="37" height="37" rx="4"/>
+        </g>
+        <g stroke-width="3">
+          <circle class="t-o" cx="119" cy="59" r="9"/>
+          <circle class="t-o" cx="201" cy="59" r="9"/>
+          <path class="t-x" d="M152 51l16 16M168 51l-16 16M152 92l16 16M168 92l-16 16M152 133l16 16M168 133l-16 16"/>
+        </g>
+        <text class="t-text" x="100" y="180" font-size="9.5">You win.</text>
+        <rect x="160" y="168" width="60" height="18" rx="4" style="fill: var(--oa-accent)"/>
+        <text x="190" y="180" font-size="8.5" font-weight="500" text-anchor="middle" style="fill: var(--oa-accent-text); font-family: var(--oa-font-sans)">Start over</text>
+      </svg>`,
+    chess: `
+      <svg viewBox="0 0 320 200" role="img" aria-hidden="true" focusable="false">
+        <defs>
+          <pattern id="t-chess-sq" width="36" height="36" patternUnits="userSpaceOnUse" x="88" y="28">
+            <rect width="36" height="36" style="fill: #e3e7ed"/>
+            <rect width="18" height="18" x="18" style="fill: #9ba7b8"/>
+            <rect width="18" height="18" y="18" style="fill: #9ba7b8"/>
+          </pattern>
+        </defs>
+        <rect class="t-bg" width="320" height="200"/>
+        <rect x="88" y="28" width="144" height="144" fill="url(#t-chess-sq)" style="stroke: var(--oa-border-strong)"/>
+        <rect class="t-soft" x="160" y="118" width="18" height="18" style="fill: var(--oa-accent); fill-opacity: 0.28"/>
+        <rect class="t-soft" x="160" y="82" width="18" height="18" style="fill: var(--oa-accent); fill-opacity: 0.28"/>
+        <g font-size="16.5" text-anchor="middle" transform="translate(0 1)" style="font-family: 'Apple Symbols', 'Segoe UI Symbol', 'Noto Sans Symbols 2', sans-serif; paint-order: stroke fill; stroke-width: 0.8">
+          <g style="fill: #1b1e22; stroke: #f1f3f6">
+            <text x="97" y="42">&#x265C;&#xFE0E;</text><text x="151" y="42">&#x265B;&#xFE0E;</text><text x="169" y="42">&#x265A;&#xFE0E;</text><text x="223" y="42">&#x265C;&#xFE0E;</text>
+            <text x="97" y="60">&#x265F;&#xFE0E;</text><text x="115" y="60">&#x265F;&#xFE0E;</text><text x="187" y="60">&#x265F;&#xFE0E;</text><text x="205" y="60">&#x265F;&#xFE0E;</text>
+            <text x="133" y="78">&#x265E;&#xFE0E;</text><text x="169" y="96">&#x265F;&#xFE0E;</text>
+          </g>
+          <g style="fill: #fbfcfd; stroke: #1b1e22">
+            <text x="169" y="132">&#x265F;&#xFE0E;</text><text x="187" y="114">&#x265E;&#xFE0E;</text><text x="133" y="114">&#x265D;&#xFE0E;</text>
+            <text x="97" y="150">&#x265F;&#xFE0E;</text><text x="115" y="150">&#x265F;&#xFE0E;</text><text x="205" y="150">&#x265F;&#xFE0E;</text><text x="223" y="150">&#x265F;&#xFE0E;</text>
+            <text x="97" y="168">&#x265C;&#xFE0E;</text><text x="151" y="168">&#x265B;&#xFE0E;</text><text x="205" y="168">&#x265A;&#xFE0E;</text>
+          </g>
+        </g>
+        <text class="t-muted" x="240" y="42" font-size="8">1. e4 e5</text>
+        <text class="t-muted" x="240" y="56" font-size="8">2. Nf3 Nc6</text>
+        <text class="t-muted" x="240" y="70" font-size="8">3. Bc4</text>
+        <text class="t-text" x="88" y="188" font-size="9.5">Your move.</text>
+      </svg>`,
+    pixels: `
+      <svg viewBox="0 0 320 200" role="img" aria-hidden="true" focusable="false">
+        <rect class="t-bg" width="320" height="200"/>
+        <rect x="87.5" y="27.5" width="145" height="145" style="fill: #ffffff; stroke: var(--oa-border-strong)"/>
+        <g shape-rendering="crispEdges"><rect x="218.5" y="32.5" width="4.5" height="4.5" style="fill:#2aa0b5"/><rect x="133" y="41.5" width="4.5" height="4.5" style="fill:#f2c230"/><rect x="133" y="46" width="4.5" height="4.5" style="fill:#f2c230"/><rect x="106" y="50.5" width="4.5" height="4.5" style="fill:#d23f2f"/><rect x="146.5" y="50.5" width="4.5" height="4.5" style="fill:#2350d0"/><rect x="155.5" y="50.5" width="9" height="4.5" style="fill:#f2c230"/><rect x="196" y="50.5" width="4.5" height="4.5" style="fill:#d23f2f"/><rect x="124" y="55" width="4.5" height="4.5" style="fill:#7b45c4"/><rect x="142" y="55" width="36" height="4.5" style="fill:#f2c230"/><rect x="88" y="59.5" width="4.5" height="4.5" style="fill:#7b45c4"/><rect x="137.5" y="59.5" width="45" height="4.5" style="fill:#f2c230"/><rect x="133" y="64" width="22.5" height="4.5" style="fill:#f2c230"/><rect x="155.5" y="64" width="9" height="4.5" style="fill:#d23f2f"/><rect x="164.5" y="64" width="22.5" height="4.5" style="fill:#f2c230"/><rect x="218.5" y="64" width="4.5" height="4.5" style="fill:#2aa0b5"/><rect x="92.5" y="68.5" width="4.5" height="4.5" style="fill:#f2c230"/><rect x="128.5" y="68.5" width="18" height="4.5" style="fill:#f2c230"/><rect x="146.5" y="68.5" width="27" height="4.5" style="fill:#d23f2f"/><rect x="173.5" y="68.5" width="18" height="4.5" style="fill:#f2c230"/><rect x="218.5" y="68.5" width="4.5" height="4.5" style="fill:#2350d0"/><rect x="128.5" y="73" width="13.5" height="4.5" style="fill:#f2c230"/><rect x="142" y="73" width="36" height="4.5" style="fill:#d23f2f"/><rect x="178" y="73" width="13.5" height="4.5" style="fill:#f2c230"/><rect x="128.5" y="77.5" width="13.5" height="4.5" style="fill:#f2c230"/><rect x="142" y="77.5" width="36" height="4.5" style="fill:#d23f2f"/><rect x="178" y="77.5" width="13.5" height="4.5" style="fill:#f2c230"/><rect x="124" y="82" width="13.5" height="4.5" style="fill:#f2c230"/><rect x="137.5" y="82" width="45" height="4.5" style="fill:#d23f2f"/><rect x="182.5" y="82" width="13.5" height="4.5" style="fill:#f2c230"/><rect x="124" y="86.5" width="13.5" height="4.5" style="fill:#f2c230"/><rect x="137.5" y="86.5" width="45" height="4.5" style="fill:#d23f2f"/><rect x="182.5" y="86.5" width="13.5" height="4.5" style="fill:#f2c230"/><rect x="205" y="86.5" width="4.5" height="4.5" style="fill:#f2c230"/><rect x="128.5" y="91" width="13.5" height="4.5" style="fill:#f2c230"/><rect x="142" y="91" width="36" height="4.5" style="fill:#d23f2f"/><rect x="178" y="91" width="9" height="4.5" style="fill:#f2c230"/><rect x="187" y="91" width="4.5" height="4.5" style="fill:#7b45c4"/><rect x="106" y="95.5" width="4.5" height="4.5" style="fill:#15181c"/><rect x="128.5" y="95.5" width="13.5" height="4.5" style="fill:#f2c230"/><rect x="142" y="95.5" width="36" height="4.5" style="fill:#d23f2f"/><rect x="178" y="95.5" width="13.5" height="4.5" style="fill:#f2c230"/><rect x="209.5" y="95.5" width="4.5" height="4.5" style="fill:#d23f2f"/><rect x="88" y="100" width="4.5" height="4.5" style="fill:#d23f2f"/><rect x="128.5" y="100" width="18" height="4.5" style="fill:#f2c230"/><rect x="146.5" y="100" width="27" height="4.5" style="fill:#d23f2f"/><rect x="173.5" y="100" width="18" height="4.5" style="fill:#f2c230"/><rect x="133" y="104.5" width="22.5" height="4.5" style="fill:#f2c230"/><rect x="155.5" y="104.5" width="9" height="4.5" style="fill:#d23f2f"/><rect x="164.5" y="104.5" width="22.5" height="4.5" style="fill:#f2c230"/><rect x="214" y="104.5" width="4.5" height="4.5" style="fill:#1f7a4d"/><rect x="101.5" y="109" width="4.5" height="4.5" style="fill:#15181c"/><rect x="137.5" y="109" width="45" height="4.5" style="fill:#f2c230"/><rect x="142" y="113.5" width="36" height="4.5" style="fill:#f2c230"/><rect x="196" y="113.5" width="4.5" height="4.5" style="fill:#15181c"/><rect x="155.5" y="118" width="9" height="4.5" style="fill:#f2c230"/><rect x="218.5" y="118" width="4.5" height="4.5" style="fill:#2350d0"/><rect x="101.5" y="131.5" width="4.5" height="4.5" style="fill:#2350d0"/><rect x="200.5" y="131.5" width="4.5" height="4.5" style="fill:#2350d0"/><rect x="88" y="136" width="27" height="4.5" style="fill:#1f7a4d"/><rect x="115" y="136" width="4.5" height="4.5" style="fill:#2350d0"/><rect x="119.5" y="136" width="112.5" height="4.5" style="fill:#1f7a4d"/><rect x="88" y="140.5" width="144" height="4.5" style="fill:#1f7a4d"/><rect x="88" y="145" width="135" height="4.5" style="fill:#1f7a4d"/><rect x="223" y="145" width="4.5" height="4.5" style="fill:#15181c"/><rect x="227.5" y="145" width="4.5" height="4.5" style="fill:#1f7a4d"/><rect x="88" y="149.5" width="85.5" height="4.5" style="fill:#1f7a4d"/><rect x="173.5" y="149.5" width="4.5" height="4.5" style="fill:#2350d0"/><rect x="178" y="149.5" width="54" height="4.5" style="fill:#1f7a4d"/><rect x="88" y="154" width="99" height="4.5" style="fill:#1f7a4d"/><rect x="187" y="154" width="4.5" height="4.5" style="fill:#d23f2f"/><rect x="191.5" y="154" width="40.5" height="4.5" style="fill:#1f7a4d"/><rect x="88" y="158.5" width="144" height="4.5" style="fill:#1f7a4d"/><rect x="88" y="163" width="144" height="4.5" style="fill:#1f7a4d"/><rect x="88" y="167.5" width="144" height="4.5" style="fill:#1f7a4d"/></g>
+        <text class="t-muted" x="88" y="188" font-size="9">Next pixel in 3s · 412 of 1,024 painted</text>
+      </svg>`,
+    dashboard: `
+      <svg viewBox="0 0 320 200" role="img" aria-hidden="true" focusable="false">
+        <rect class="t-bg" width="320" height="200"/>
+        <text class="t-muted" x="40" y="26" font-size="8">Updated 12s ago</text>
+        <rect class="t-surface" x="40.5" y="34.5" width="74" height="44" rx="6"/>
+        <text class="t-muted" x="48" y="49" font-size="7.5">Poll votes</text>
+        <text class="t-text" x="48" y="69" font-size="15" font-weight="600">1,284</text>
+        <rect class="t-surface" x="123.5" y="34.5" width="74" height="44" rx="6"/>
+        <text class="t-muted" x="131" y="49" font-size="7.5">Moves played</text>
+        <text class="t-text" x="131" y="69" font-size="15" font-weight="600">3,402</text>
+        <rect class="t-surface" x="206.5" y="34.5" width="74" height="44" rx="6"/>
+        <text class="t-muted" x="214" y="49" font-size="7.5">Pixels painted</text>
+        <text class="t-text" x="214" y="69" font-size="15" font-weight="600">2,917</text>
+        <rect class="t-surface" x="40.5" y="86.5" width="240" height="98" rx="6"/>
+        <text class="t-muted" x="48" y="100" font-size="7.5">Activity by hour today, UTC</text>
+        <line x1="40" x2="280" y1="172.5" y2="172.5" style="stroke: var(--oa-border)"/>
+        <g transform="translate(9 0)" style="fill: var(--oa-accent)"><path d="M40,172V159Q40,157 42,157H49Q51,157 51,159V172Z"/><path d="M53,172V153Q53,151 55,151H62Q64,151 64,153V172Z"/><path d="M66,172V156Q66,154 68,154H75Q77,154 77,156V172Z"/><path d="M79,172V147Q79,145 81,145H88Q90,145 90,147V172Z"/><path d="M92,172V150Q92,148 94,148H101Q103,148 103,150V172Z"/><path d="M105,172V141Q105,139 107,139H114Q116,139 116,141V172Z"/><path d="M118,172V136Q118,134 120,134H127Q129,134 129,136V172Z"/><path d="M131,172V142Q131,140 133,140H140Q142,140 142,142V172Z"/><path d="M144,172V132Q144,130 146,130H153Q155,130 155,132V172Z"/><path d="M157,172V126Q157,124 159,124H166Q168,124 168,126V172Z"/><path d="M170,172V130Q170,128 172,128H179Q181,128 181,130V172Z"/><path d="M183,172V122Q183,120 185,120H192Q194,120 194,122V172Z"/><path d="M196,172V116Q196,114 198,114H205Q207,114 207,116V172Z"/><path d="M209,172V123Q209,121 211,121H218Q220,121 220,123V172Z"/></g>
+      </svg>`,
+    map: `
+      <svg viewBox="0 0 320 200" role="img" aria-hidden="true" focusable="false">
+        <rect class="t-bg" width="320" height="200"/>
+        <g transform="translate(40 14) scale(2)">
+          <path d="M22 0h1M25 0h28M63 0h5M76 0h0M91 0h3M20 1h13M37 1h16M65 1h0M67 1h0M79 1h1M82 1h0M90 1h7M106 1h2M18 2h6M26 2h8M41 2h12M78 2h1M83 2h0M85 2h0M87 2h15M107 2h1M0 3h0M6 3h7M16 3h3M21 3h4M27 3h10M42 3h10M66 3h4M78 3h0M80 3h0M82 3h33M117 3h1M0 4h2M5 4h27M34 4h4M42 4h8M64 4h55M1 5h1M4 5h28M34 5h4M42 5h4M52 5h3M63 5h56M5 6h23M32 6h0M34 6h3M43 6h2M61 6h4M67 6h51M6 7h3M13 7h15M34 7h4M58 7h0M62 7h3M67 7h47M15 8h25M57 8h2M62 8h43M112 8h1M16 9h25M56 9h51M112 9h0M17 10h24M58 10h49M18 11h21M59 11h46M107 11h0M18 12h18M38 12h0M57 12h12M73 12h31M107 12h0M18 13h17M57 13h3M62 13h40M106 13h1M19 14h15M57 14h7M67 14h0M69 14h31M102 14h0M105 14h1M19 15h15M57 15h6M72 15h27M102 15h4M21 16h11M56 16h44M103 16h0M21 17h6M32 17h0M56 17h19M77 17h23M22 18h5M33 18h0M55 18h21M78 18h21M24 19h3M32 19h1M54 19h17M73 19h6M83 19h15M100 19h0M25 20h2M29 20h1M34 20h2M54 20h25M84 20h4M91 20h5M26 21h5M54 21h18M74 21h3M84 21h3M91 21h4M100 21h0M29 22h2M54 22h21M85 22h1M92 22h4M100 22h1M31 23h1M34 23h5M55 23h21M85 23h1M92 23h0M94 23h1M99 23h0M101 23h0M32 24h8M56 24h20M86 24h1M93 24h0M101 24h0M34 25h8M57 25h2M62 25h13M92 25h2M98 25h1M33 26h9M63 26h11M93 26h1M96 26h4M102 26h0M33 27h11M63 27h10M93 27h7M102 27h0M104 27h2M33 28h14M64 28h8M94 28h1M99 28h0M104 28h4M110 28h0M33 29h15M64 29h8M95 29h5M106 29h3M34 30h13M64 30h9M109 30h1M34 31h12M64 31h9M76 31h0M102 31h3M107 31h0M35 32h11M64 32h12M101 32h7M36 33h10M64 33h7M74 33h2M99 33h10M36 34h9M64 34h7M74 34h1M98 34h11M36 35h7M65 35h6M75 35h0M97 35h13M36 36h7M65 36h5M98 36h13M36 37h6M66 37h3M98 37h12M36 38h5M66 38h2M98 38h2M105 38h5M35 39h5M106 39h3M118 39h0M35 40h4M108 40h0M117 40h1M35 41h3M108 41h0M116 41h1M35 42h2M116 42h0M35 43h2M35 44h1M40 44h0M36 45h1" style="fill: none; stroke: var(--oa-border); stroke-width: 0.62; stroke-linecap: round; stroke-dasharray: 0 1"/>
+          <g style="fill: var(--oa-accent); fill-opacity: 0.8; stroke: var(--oa-bg); stroke-width: 0.2"><circle cx="27.2" cy="13.8" r="2.16"/><circle cx="24.2" cy="7.8" r="0.96"/><circle cx="42.5" cy="29.8" r="1.56"/><circle cx="38.2" cy="37.8" r="0.78"/><circle cx="63.0" cy="9.5" r="1.44"/><circle cx="58.8" cy="8.5" r="1.20"/><circle cx="60.2" cy="11.2" r="1.08"/><circle cx="56.8" cy="13.3" r="0.96"/><circle cx="85.2" cy="19.8" r="1.44"/><circle cx="105.5" cy="14.5" r="1.08"/><circle cx="103.8" cy="35.5" r="0.90"/><circle cx="72.2" cy="26.2" r="0.72"/><circle cx="62.2" cy="23.2" r="0.84"/></g>
+        </g>
+        <rect class="t-surface" x="40.5" y="118.5" width="186" height="24" rx="5"/>
+        <text class="t-text" x="50" y="134" font-size="10">Portugal</text>
+        <rect x="232" y="118" width="48" height="25" rx="5" style="fill: var(--oa-accent)"/>
+        <text x="256" y="134" font-size="10" font-weight="600" text-anchor="middle" style="fill: var(--oa-accent-text); font-family: var(--oa-font-sans)">Pin</text>
+        <text class="t-text" x="40" y="164" font-size="9.5">United States</text><text class="t-text" x="280" y="164" font-size="9.5" font-weight="600" text-anchor="end">14</text>
+        <text class="t-text" x="40" y="180" font-size="9.5">Germany</text><text class="t-text" x="280" y="180" font-size="9.5" font-weight="600" text-anchor="end">7</text>
+      </svg>`,
+  };
+
+  const resolved = (v) => typeof v === "string" && !v.startsWith("{" + "{");
+  const VALID_ID = /^[A-Za-z0-9_-]{4,64}$/;
+
+  /* Artifacts run on a separate content host, so a bare "/a/id" would point there.
+     Use the filled origin, else the embedding page's origin when the browser exposes it. */
+  function appOrigin() {
+    if (resolved(APP_ORIGIN) && /^https?:\/\/[^/]+$/.test(APP_ORIGIN)) return APP_ORIGIN;
+    try {
+      const anc = window.location.ancestorOrigins;
+      if (anc && anc.length && anc[anc.length - 1] !== "null") return anc[anc.length - 1];
+    } catch {}
+    return "";
+  }
+
+  /* Opens a window the same size as this one, beside it when there is room.
+     side 1 is right of this window, side -1 is left of it. */
+  function openBeside(url, side) {
+    const sx = window.screenX ?? window.screenLeft ?? 0;
+    const sy = window.screenY ?? window.screenTop ?? 0;
+    const ow = window.outerWidth || 1024;
+    const oh = window.outerHeight || 768;
+    const availW = (screen.availWidth || ow * 2);
+    const availL = screen.availLeft || 0;
+    const w = Math.max(360, Math.min(ow, Math.floor(availW / 2)));
+    const h = Math.max(480, oh);
+    const right = sx + ow, leftOf = sx - w;
+    const fitsRight = right + w <= availL + availW, fitsLeft = leftOf >= availL;
+    let left = side > 0 ? (fitsRight ? right : Math.max(availL, leftOf)) : (fitsLeft ? leftOf : Math.min(right, availL + availW - w));
+    if (side < 0 && !fitsLeft && !fitsRight) left = sx + 40;
+    window.open(url, "_blank", `popup,noopener,width=${w},height=${h},left=${left},top=${sy}`);
+  }
+
+  function card(demo, href) {
+    const li = document.createElement("li");
+    li.className = "card";
+    li.innerHTML = `
+      <div class="thumb">${THUMBS[demo.thumb] || ""}</div>
+      <div class="body">
+        <h2></h2>
+        <p class="pitch"></p>
+        <div class="actions">
+          <a class="btn primary" target="_blank" rel="noopener">Open<svg class="ext" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M5 2H2.5v7.5H10V7M7 1.5h3.5V5M10.5 1.5 5.5 6.5"/></svg></a>
+          <button type="button" class="btn">Open in two windows to see it sync</button>
+        </div>
+        <p class="hint" aria-live="polite">Opens a window beside this one, then a second.</p>
+      </div>`;
+    li.querySelector("h2").textContent = demo.title;
+    li.querySelector(".pitch").textContent = demo.pitch;
+    const a = li.querySelector("a");
+    a.href = href;
+    a.setAttribute("aria-label", `Open ${demo.title} (opens in new tab)`);
+    const btn = li.querySelector("button");
+    btn.setAttribute("aria-label", `Open ${demo.title} in two windows to see it sync`);
+    const hint = li.querySelector(".hint");
+    let opened = 0;
+    btn.addEventListener("click", () => {
+      /* Browsers allow one popup per click, so the two windows take two clicks. */
+      opened += 1;
+      openBeside(href, opened === 1 ? 1 : -1);
+      if (opened === 1) {
+        btn.textContent = "Open the second window";
+        btn.setAttribute("aria-label", `Open a second ${demo.title} window`);
+        hint.textContent = "One window is open. Click again for the second, then use both.";
+      } else {
+        opened = 0;
+        btn.textContent = "Open in two windows to see it sync";
+        btn.setAttribute("aria-label", `Open ${demo.title} in two windows to see it sync`);
+        hint.textContent = "Both windows are open. Change something in one and watch the other.";
+      }
+    });
+    return li;
+  }
+
+  function render() {
+    const base = appOrigin();
+    const grid = document.getElementById("grid");
+    grid.replaceChildren();
+    for (const d of DEMOS) {
+      if (!resolved(d.id) || !VALID_ID.test(d.id)) continue;
+      grid.append(card(d, `${base}/a/${d.id}`));
+    }
+    document.getElementById("empty").hidden = grid.children.length > 0;
+  }
+
+  const OA = window.openArtifacts;
+  const setTheme = (t) => { if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; };
+  if (OA) {
+    setTheme(OA.theme);
+    if (typeof OA.onTheme === "function") OA.onTheme(setTheme);
+    if (OA.ready && typeof OA.ready.then === "function") OA.ready.then(() => setTheme(OA.theme)).catch(() => {});
+  }
+  render();
+})();
+</script>
+</body>
+</html>

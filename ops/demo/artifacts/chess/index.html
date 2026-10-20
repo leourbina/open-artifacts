@@ -1,0 +1,1238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chess</title>
+<style>
+  /* Studio tokens (packages/ui/src/tokens/tokens.css), inlined: no external fonts. */
+  :root {
+    color-scheme: light;
+    --oa-bg: #eef0f3;
+    --oa-surface: #ffffff;
+    --oa-surface-2: #f6f7f9;
+    --oa-divider: #e0e3e8;
+    --oa-border: #bec4cd;
+    --oa-border-strong: #848b95;
+    --oa-text: #15181c;
+    --oa-text-2: #454c56;
+    --oa-text-muted: #5f6670;
+    --oa-accent: #2350d0;
+    --oa-accent-soft: #e7edfc;
+    --oa-accent-text: #ffffff;
+    --oa-focus: #2350d0;
+    --oa-danger: #be2f1c;
+    --oa-font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --oa-font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --oa-radius-md: 6px;
+    --oa-radius-lg: 8px;
+    --oa-duration: 200ms;
+    --oa-ease: cubic-bezier(0.2, 0, 0, 1);
+    /* Board */
+    --sq-light: #e3e7ed;
+    --sq-dark: #9ba7b8;
+    --sq-last: rgba(35, 80, 208, 0.26);
+    --sq-check: rgba(190, 47, 28, 0.55);
+    --sq-dot: rgba(21, 24, 28, 0.32);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --oa-bg: #131518;
+      --oa-surface: #1c1f23;
+      --oa-surface-2: #212429;
+      --oa-divider: #2c3037;
+      --oa-border: #3b414a;
+      --oa-border-strong: #676e78;
+      --oa-text: #e9ebee;
+      --oa-text-2: #b7bdc6;
+      --oa-text-muted: #9097a1;
+      --oa-accent: #7f9cff;
+      --oa-accent-soft: #1f2a4a;
+      --oa-accent-text: #131518;
+      --oa-focus: #7f9cff;
+      --oa-danger: #ff7f6b;
+      --sq-light: #646d7a;
+      --sq-dark: #414852;
+      --sq-last: rgba(127, 156, 255, 0.34);
+      --sq-check: rgba(255, 127, 107, 0.6);
+      --sq-dot: rgba(10, 12, 14, 0.42);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --oa-bg: #131518;
+    --oa-surface: #1c1f23;
+    --oa-surface-2: #212429;
+    --oa-divider: #2c3037;
+    --oa-border: #3b414a;
+    --oa-border-strong: #676e78;
+    --oa-text: #e9ebee;
+    --oa-text-2: #b7bdc6;
+    --oa-text-muted: #9097a1;
+    --oa-accent: #7f9cff;
+    --oa-accent-soft: #1f2a4a;
+    --oa-accent-text: #131518;
+    --oa-focus: #7f9cff;
+    --oa-danger: #ff7f6b;
+    --sq-light: #646d7a;
+    --sq-dark: #414852;
+    --sq-last: rgba(127, 156, 255, 0.34);
+    --sq-check: rgba(255, 127, 107, 0.6);
+    --sq-dot: rgba(10, 12, 14, 0.42);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    min-height: 100vh;
+    background: var(--oa-bg);
+    color: var(--oa-text);
+    font-family: var(--oa-font-sans);
+    font-size: 14px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    padding: 20px 16px;
+  }
+  main {
+    --board: min(100vw - 32px, 480px);
+    max-width: 760px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: var(--board) minmax(0, 1fr);
+    grid-template-areas: "head head" "board side";
+    gap: 12px 24px;
+    align-items: start;
+  }
+  header { grid-area: head; display: flex; flex-direction: column; gap: 8px; }
+  .play { grid-area: board; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  aside { grid-area: side; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  @media (max-width: 719px) {
+    /* biome-ignore lint/correctness/noInvalidGridAreas: one column, one cell per row, which is valid */
+    main { grid-template-columns: minmax(0, 1fr); grid-template-areas: "head" "board" "side"; max-width: 480px; }
+  }
+
+  .kicker { margin: 0; font-family: var(--oa-font-mono); font-size: 13px; color: var(--oa-text-muted); }
+  h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+  h2 { margin: 0; font-size: 13px; font-weight: 600; color: var(--oa-text-2); }
+
+  .seats { list-style: none; margin: 0; padding: 0; display: flex; gap: 8px; max-width: var(--board); }
+  .seat {
+    flex: 1 1 0;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border: 1px solid var(--oa-border);
+    border-radius: 999px;
+    background: var(--oa-surface);
+    color: var(--oa-text-2);
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: border-color var(--oa-duration) var(--oa-ease), background-color var(--oa-duration) var(--oa-ease);
+  }
+  .seat .chip { flex: none; width: 10px; height: 10px; border-radius: 50%; border: 1px solid var(--oa-border-strong); }
+  .seat[data-color="w"] .chip { background: #fbfcfd; }
+  .seat[data-color="b"] .chip { background: #1b1e22; }
+  .seat .m { font-weight: 600; color: var(--oa-text); }
+  .seat[data-you="true"] { color: var(--oa-text); font-weight: 500; }
+  .seat[data-turn="true"] { border-color: var(--oa-accent); background: var(--oa-accent-soft); color: var(--oa-text); }
+
+  .board {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    width: var(--board);
+    aspect-ratio: 1;
+    border: 1px solid var(--oa-border-strong);
+    border-radius: var(--oa-radius-lg);
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .row { display: contents; }
+  .sq {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 100%;
+    aspect-ratio: 1;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: var(--sq-light);
+    color: inherit;
+    font: inherit;
+    cursor: default;
+    touch-action: manipulation;
+  }
+  .sq[data-dark="true"] { background: var(--sq-dark); }
+  .sq[data-act="true"] { cursor: pointer; }
+  .sq::before { content: ""; position: absolute; inset: 0; pointer-events: none; }
+  .sq[data-last="true"]::before { background: var(--sq-last); }
+  .sq[data-check="true"]::before { background: radial-gradient(circle, var(--sq-check) 0 45%, transparent 72%); }
+  .sq[data-sel="true"]::before { background: var(--sq-last); box-shadow: inset 0 0 0 3px var(--oa-accent); }
+  .sq[data-target="true"]::after {
+    content: "";
+    position: absolute;
+    width: 28%;
+    height: 28%;
+    border-radius: 50%;
+    background: var(--sq-dot);
+    pointer-events: none;
+  }
+  .sq[data-target="true"][data-piece]::after { width: 86%; height: 86%; background: none; border: calc(var(--board) / 8 * 0.08) solid var(--sq-dot); }
+  .sq:focus-visible { outline: 3px solid var(--oa-focus); outline-offset: -3px; z-index: 1; }
+  .sq .coord {
+    position: absolute;
+    font: 600 10px/1 var(--oa-font-sans);
+    color: var(--sq-dark);
+    pointer-events: none;
+  }
+  .sq[data-dark="true"] .coord { color: var(--sq-light); }
+  .sq .coord.r { top: 3px; left: 3px; }
+  .sq .coord.f { right: 3px; bottom: 3px; }
+
+  /* Pieces are text glyphs with a contrasting outline so both sides read on either square. */
+  .pc {
+    position: relative;
+    font: calc(var(--board) / 8 * 0.74) / 1 "Apple Symbols", "Segoe UI Symbol", "Noto Sans Symbols 2", "DejaVu Sans", sans-serif;
+    paint-order: stroke fill;
+    -webkit-font-smoothing: auto; /* grayscale smoothing washes out the black glyphs' bodies on macOS */
+    -webkit-text-stroke: calc(var(--board) / 8 * 0.06) #1b1e22;
+    color: #fbfcfd;
+    pointer-events: none;
+  }
+  /* Black glyphs have open detail lines a stroke would fill, so a soft halo outlines them instead. */
+  .pc.b { color: #1b1e22; -webkit-text-stroke: 0; filter: drop-shadow(0 0 0.6px rgba(241, 243, 246, 0.75)); }
+  .pc.new { animation: land 220ms var(--oa-ease); }
+  @keyframes land { from { transform: scale(0.82); opacity: 0.4; } to { transform: scale(1); opacity: 1; } }
+
+  .promo {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--oa-accent);
+    border-radius: var(--oa-radius-lg);
+    background: var(--oa-accent-soft);
+  }
+  .promo[hidden] { display: none; }
+  .promo p { margin: 0 4px 0 0; font-weight: 500; }
+
+  .status { margin: 0; font-size: 15px; min-height: 1.45em; text-wrap: pretty; }
+
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .actions:empty { display: none; }
+  .btn {
+    min-height: 40px;
+    padding: 8px 14px;
+    border: 1px solid var(--oa-border);
+    border-radius: var(--oa-radius-lg);
+    background: var(--oa-surface);
+    color: var(--oa-text);
+    font: inherit;
+    font-weight: 500;
+    cursor: pointer;
+    touch-action: manipulation;
+    transition: border-color var(--oa-duration) var(--oa-ease);
+  }
+  .btn:hover:not(:disabled):not([aria-disabled="true"]) { border-color: var(--oa-border-strong); }
+  .btn:focus-visible { outline: 2px solid var(--oa-focus); outline-offset: 2px; }
+  .btn.primary { background: var(--oa-accent); border-color: var(--oa-accent); color: var(--oa-accent-text); }
+  .btn.primary:hover:not(:disabled):not([aria-disabled="true"]) { filter: brightness(1.08); }
+  .btn:disabled, .btn[aria-disabled="true"] { opacity: 0.55; cursor: default; }
+
+  .moves {
+    margin: 0;
+    padding: 6px 0;
+    list-style: none;
+    max-height: min(var(--board) - 30px, 420px);
+    overflow-y: auto;
+    border: 1px solid var(--oa-border);
+    border-radius: var(--oa-radius-lg);
+    background: var(--oa-surface);
+    font: 13px/1.5 var(--oa-font-mono);
+    counter-reset: none;
+  }
+  @media (max-width: 719px) { .moves { max-height: 180px; } }
+  .moves li { display: grid; grid-template-columns: 3.2em 1fr 1fr; padding: 1px 12px; }
+  .moves li:nth-child(even) { background: var(--oa-surface-2); }
+  .moves .n { color: var(--oa-text-muted); }
+  .moves .cur { color: var(--oa-accent); font-weight: 600; }
+  .moves .none { display: block; color: var(--oa-text-muted); font-family: var(--oa-font-sans); }
+
+  .note { margin: 2px 0 0; color: var(--oa-text-muted); font-size: 13px; text-wrap: pretty; }
+  .error { margin: 0; color: var(--oa-danger); font-size: 13px; }
+  .error:empty { display: none; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .seat, .btn { transition: none; }
+    .pc.new { animation: none; }
+  }
+  .demo-links { margin: 20px auto 0; text-align: center; font-size: 12.5px; }
+  .demo-links a { color: var(--oa-text-muted); text-decoration: none; border-radius: 2px; }
+  .demo-links a:hover { color: var(--oa-text-2); text-decoration: underline; text-underline-offset: 2px; }
+  .demo-links a:focus-visible { outline: 2px solid var(--oa-focus); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="kicker">Two seats · everyone else watches</p>
+    <h1 id="title">Chess</h1>
+    <ul class="seats" id="seats" aria-label="Who's playing"></ul>
+  </header>
+  <div class="play">
+    <!-- biome-ignore lint/a11y/useSemanticElements: an ARIA grid of gridcell buttons with arrow-key focus; no native element does this -->
+    <div class="board" id="board" role="grid" aria-labelledby="title" aria-describedby="status"></div>
+    <!-- biome-ignore lint/a11y/useSemanticElements: a labelled group of buttons, not form fields; a fieldset would bring its own border and min-width -->
+    <div class="promo" id="promo" role="group" aria-label="Promote the pawn to" hidden>
+      <p>Promote to</p>
+      <button type="button" class="btn primary" data-promo="q">Queen</button>
+      <button type="button" class="btn" data-promo="r">Rook</button>
+      <button type="button" class="btn" data-promo="b">Bishop</button>
+      <button type="button" class="btn" data-promo="n">Knight</button>
+      <button type="button" class="btn" data-promo="">Cancel</button>
+    </div>
+    <p class="status" id="status">Connecting…</p>
+    <div class="actions" id="actions"></div>
+    <p class="error" id="error" role="alert"></p>
+  </div>
+  <aside>
+    <h2 id="moves-h">Moves</h2>
+    <ol class="moves" id="moves" aria-labelledby="moves-h"></ol>
+    <p class="note">Every window checks each move against the rules. Seats free up 5 minutes after the last move.</p>
+  </aside>
+  <p class="sr" id="announce" aria-live="polite"></p>
+</main>
+<footer class="demo-links" data-demo-links="gallery" hidden></footer>
+
+<script>
+(() => {
+  "use strict";
+
+  /* ---------- rules: a small chess engine ---------- */
+  /* Squares are 0..63 from a8 to h1. White pieces are upper case, black lower case. */
+
+  const FILES = "abcdefgh";
+  const sqName = (i) => FILES[i & 7] + (8 - (i >> 3));
+  const colorOf = (p) => (p ? (p === p.toUpperCase() ? "w" : "b") : null);
+  const flip = (c) => (c === "w" ? "b" : "w");
+  const at = (r, f) => (r >= 0 && r < 8 && f >= 0 && f < 8 ? r * 8 + f : -1);
+  const KNIGHT = [[-2, -1], [-2, 1], [-1, -2], [-1, 2], [1, -2], [1, 2], [2, -1], [2, 1]];
+  const KING = [[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]];
+  const ROOK = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+  const BISHOP = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
+
+  function startPos() {
+    const b = Array(64).fill("");
+    for (let f = 0; f < 8; f += 1) {
+      b[f] = "rnbqkbnr"[f];
+      b[8 + f] = "p";
+      b[48 + f] = "P";
+      b[56 + f] = "RNBQKBNR"[f];
+    }
+    return { b, turn: "w", castle: "KQkq", ep: -1, half: 0, full: 1 };
+  }
+
+  /** Whether square sq is attacked by side `by`. */
+  function attacked(b, sq, by) {
+    const r = sq >> 3, f = sq & 7;
+    const own = (t) => (by === "w" ? t.toUpperCase() : t);
+    const pr = by === "w" ? r + 1 : r - 1;
+    for (const df of [-1, 1]) if (b[at(pr, f + df)] === own("p")) return true;
+    for (const [dr, df] of KNIGHT) if (b[at(r + dr, f + df)] === own("n")) return true;
+    for (const [dr, df] of KING) if (b[at(r + dr, f + df)] === own("k")) return true;
+    for (const [dirs, kind] of [[ROOK, "r"], [BISHOP, "b"]]) {
+      for (const [dr, df] of dirs) {
+        for (let k = 1; ; k += 1) {
+          const t = at(r + dr * k, f + df * k);
+          if (t < 0) break;
+          if (b[t]) {
+            if (b[t] === own(kind) || b[t] === own("q")) return true;
+            break;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  function pseudoMoves(s) {
+    const { b, turn } = s;
+    const out = [];
+    const add = (from, to) => {
+      if (b[from].toLowerCase() === "p" && (to >> 3 === 0 || to >> 3 === 7)) {
+        for (const promo of "qrbn") out.push({ from, to, promo });
+      } else out.push({ from, to, promo: "" });
+    };
+    const enemy = (t) => b[t] && colorOf(b[t]) !== turn;
+    for (let i = 0; i < 64; i += 1) {
+      const p = b[i];
+      if (colorOf(p) !== turn) continue;
+      const t = p.toLowerCase(), r = i >> 3, f = i & 7;
+      if (t === "p") {
+        const dir = turn === "w" ? -1 : 1;
+        const one = at(r + dir, f);
+        if (one >= 0 && !b[one]) {
+          add(i, one);
+          const two = at(r + 2 * dir, f);
+          if (r === (turn === "w" ? 6 : 1) && !b[two]) add(i, two);
+        }
+        for (const df of [-1, 1]) {
+          const c = at(r + dir, f + df);
+          if (c >= 0 && (enemy(c) || c === s.ep)) add(i, c);
+        }
+      } else if (t === "n" || t === "k") {
+        for (const [dr, df] of t === "n" ? KNIGHT : KING) {
+          const d = at(r + dr, f + df);
+          if (d >= 0 && (!b[d] || enemy(d))) add(i, d);
+        }
+      } else {
+        const dirs = t === "r" ? ROOK : t === "b" ? BISHOP : ROOK.concat(BISHOP);
+        for (const [dr, df] of dirs) {
+          for (let k = 1; ; k += 1) {
+            const d = at(r + dr * k, f + df * k);
+            if (d < 0) break;
+            if (!b[d]) { add(i, d); continue; }
+            if (enemy(d)) add(i, d);
+            break;
+          }
+        }
+      }
+    }
+    // Castling: the king and the squares it crosses may not be attacked.
+    const them = flip(turn);
+    const home = turn === "w" ? 60 : 4;
+    const K = turn === "w" ? "K" : "k", R = turn === "w" ? "R" : "r";
+    if (b[home] === K && !attacked(b, home, them)) {
+      if (s.castle.includes(turn === "w" ? "K" : "k") && b[home + 3] === R && !b[home + 1] && !b[home + 2] &&
+          !attacked(b, home + 1, them) && !attacked(b, home + 2, them)) out.push({ from: home, to: home + 2, promo: "" });
+      if (s.castle.includes(turn === "w" ? "Q" : "q") && b[home - 4] === R && !b[home - 1] && !b[home - 2] && !b[home - 3] &&
+          !attacked(b, home - 1, them) && !attacked(b, home - 2, them)) out.push({ from: home, to: home - 2, promo: "" });
+    }
+    return out;
+  }
+
+  function makeMove(s, m) {
+    const b = s.b.slice();
+    const p = b[m.from], t = p.toLowerCase();
+    let capture = Boolean(b[m.to]);
+    if (t === "p" && m.to === s.ep && !b[m.to]) {
+      b[m.to + (s.turn === "w" ? 8 : -8)] = "";
+      capture = true;
+    }
+    b[m.to] = m.promo ? (s.turn === "w" ? m.promo.toUpperCase() : m.promo) : p;
+    b[m.from] = "";
+    if (t === "k" && Math.abs(m.to - m.from) === 2) {
+      const [rf, rt] = m.to > m.from ? [m.from + 3, m.from + 1] : [m.from - 4, m.from - 1];
+      b[rt] = b[rf];
+      b[rf] = "";
+    }
+    let castle = s.castle;
+    const drop = (chars) => { for (const c of chars) castle = castle.replace(c, ""); };
+    if (p === "K") drop("KQ");
+    if (p === "k") drop("kq");
+    for (const sq of [m.from, m.to]) {
+      if (sq === 63) drop("K");
+      if (sq === 56) drop("Q");
+      if (sq === 7) drop("k");
+      if (sq === 0) drop("q");
+    }
+    return {
+      b,
+      turn: flip(s.turn),
+      castle,
+      ep: t === "p" && Math.abs(m.to - m.from) === 16 ? (m.from + m.to) / 2 : -1,
+      half: t === "p" || capture ? 0 : s.half + 1,
+      full: s.full + (s.turn === "b" ? 1 : 0),
+    };
+  }
+
+  const kingOf = (s, c) => s.b.indexOf(c === "w" ? "K" : "k");
+  const inCheck = (s) => attacked(s.b, kingOf(s, s.turn), flip(s.turn));
+  function legalMoves(s) {
+    return pseudoMoves(s).filter((m) => {
+      const n = makeMove(s, m);
+      return !attacked(n.b, kingOf(n, s.turn), n.turn);
+    });
+  }
+  const posKey = (s) => s.b.join("") + s.turn + s.castle + s.ep;
+
+  function san(s, m, legal) {
+    const p = s.b[m.from], t = p.toLowerCase();
+    let out;
+    if (t === "k" && Math.abs(m.to - m.from) === 2) out = m.to > m.from ? "O-O" : "O-O-O";
+    else {
+      const capture = Boolean(s.b[m.to]) || (t === "p" && m.to === s.ep);
+      if (t === "p") {
+        out = (capture ? FILES[m.from & 7] + "x" : "") + sqName(m.to) + (m.promo ? "=" + m.promo.toUpperCase() : "");
+      } else {
+        const rivals = legal.filter((o) => o.to === m.to && o.from !== m.from && s.b[o.from] === p);
+        let dis = "";
+        if (rivals.length) {
+          if (!rivals.some((o) => (o.from & 7) === (m.from & 7))) dis = FILES[m.from & 7];
+          else if (!rivals.some((o) => o.from >> 3 === m.from >> 3)) dis = String(8 - (m.from >> 3));
+          else dis = sqName(m.from);
+        }
+        out = t.toUpperCase() + dis + (capture ? "x" : "") + sqName(m.to);
+      }
+    }
+    const n = makeMove(s, m);
+    if (inCheck(n)) out += legalMoves(n).length ? "+" : "#";
+    return out;
+  }
+
+  /** How the position ends, or null while play goes on. */
+  function result(s, legal, seen) {
+    if (!legal.length) return inCheck(s) ? { mate: true, winner: flip(s.turn) } : { draw: "stalemate" };
+    if (s.half >= 100) return { draw: "the 50-move rule" };
+    if ((seen.get(posKey(s)) || 0) >= 3) return { draw: "threefold repetition" };
+    const rest = s.b.filter((p) => p && p.toLowerCase() !== "k");
+    if (rest.every((p) => "nbNB".includes(p)) && rest.length <= 1) return { draw: "insufficient material" };
+    return null;
+  }
+
+  /** A game replayed from its moves: every window builds the same one. */
+  function newGame(g) {
+    const s = startPos();
+    const legal = legalMoves(s);
+    return { g, moves: [], sans: [], states: [s], legal, seen: new Map([[posKey(s), 1]]), end: null, lastAt: 0, last: null };
+  }
+  const pos = (game) => game.states[game.states.length - 1];
+  const UCI = /^([a-h][1-8])([a-h][1-8])([qrbn]?)$/;
+  const sqIndex = (n) => FILES.indexOf(n[0]) + (8 - Number(n[1])) * 8;
+
+  /** The legal move a UCI string names in the current position, or null. */
+  function findMove(game, uci) {
+    const hit = typeof uci === "string" && UCI.exec(uci);
+    if (!hit || game.end) return null;
+    const from = sqIndex(hit[1]), to = sqIndex(hit[2]);
+    return game.legal.find((m) => m.from === from && m.to === to && m.promo === hit[3]) || null;
+  }
+  /** Plays one legal move onto the game, in place. */
+  function apply(game, m, when) {
+    const s = pos(game);
+    game.sans.push(san(s, m, game.legal));
+    game.moves.push(sqName(m.from) + sqName(m.to) + m.promo);
+    const n = makeMove(s, m);
+    game.states.push(n);
+    game.legal = legalMoves(n);
+    const k = posKey(n);
+    game.seen.set(k, (game.seen.get(k) || 0) + 1);
+    game.end = result(n, game.legal, game.seen);
+    game.lastAt = Math.max(game.lastAt, Math.min(Number(when) || 0, Date.now()));
+    game.last = m;
+  }
+  const cloneGame = (g) => ({ ...g, moves: g.moves.slice(), sans: g.sans.slice(), states: g.states.slice(), seen: new Map(g.seen) });
+
+  /* ---------- app ---------- */
+
+  const TABLE = "table";
+  const TABLE_ID = "table";
+  const MOVES = "moves";
+  /* A seat frees 5 minutes after the last move (or its claim). No heartbeat: the demo has 10k writes a day. */
+  const SEAT_TTL_MS = 5 * 60 * 1000;
+  const SKEW_MS = 30 * 1000; // grace for other browsers' clocks when checking a write
+  const COLORS = ["w", "b"];
+  const NAME = { w: "White", b: "Black" };
+  const SEAT = { w: "white", b: "black" };
+  const PIECE = { k: "king", q: "queen", r: "rook", b: "bishop", n: "knight", p: "pawn" };
+  const GLYPH = { k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
+  const moveId = (g, n) => `${g}-${String(n).padStart(3, "0")}`;
+
+  const OA = window.openArtifacts;
+  const $ = (id) => document.getElementById(id);
+  const el = { seats: $("seats"), board: $("board"), promo: $("promo"), status: $("status"), actions: $("actions"), moves: $("moves"), error: $("error"), announce: $("announce") };
+
+  let me = null;       // { id, signedIn }
+  let tableCol = null, movesCol = null;
+  let table = null;    // { g, white, black }: the last seats this window accepted
+  let game = null;     // the game replayed from accepted moves
+  const pending = new Map(); // move docs that arrived ahead of their turn, by doc id
+  let busy = false;
+  let ready = false;   // identity resolved, subscribed and the first load done
+  let failText = "";   // why the board could not start, shown instead of "Connecting…"
+  let readOnly = false;
+  let closed = false;
+  let selected = -1;
+  let promoFor = null; // { from, to } while the promotion picker is open
+  let focusAt = 52;    // display index of the focused square
+  let fresh = -1;      // square to animate
+
+  /* ---------- identity (as in tic-tac-toe); used only for seat labels ---------- */
+
+  const safeId = (s) => String(s).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 100);
+  function randomId(bytes = 12) {
+    const b = new Uint8Array(bytes);
+    crypto.getRandomValues(b);
+    return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  }
+  /** A per-browser id when storage works, else per tab. Used when viewer.anonId() has no id. */
+  function localId() {
+    for (const store of ["localStorage", "sessionStorage"]) {
+      try {
+        const s = window[store];
+        let id = s.getItem("oa-demo-id");
+        if (!id) { id = randomId(); s.setItem("oa-demo-id", id); }
+        return id;
+      } catch { /* sandboxed: try the next */ }
+    }
+    return randomId();
+  }
+  async function hash(s) {
+    try {
+      const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+      return Array.from(new Uint8Array(d).slice(0, 12), (x) => x.toString(16).padStart(2, "0")).join("");
+    } catch {
+      let h = 2166136261;
+      for (const c of s) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
+      return (h >>> 0).toString(16);
+    }
+  }
+  async function identify() {
+    let viewer = null;
+    try { viewer = await OA.viewer.get(); } catch { viewer = null; }
+    if (viewer && viewer.email) return { id: `u-${await hash(viewer.email)}`, signedIn: true };
+    // viewer.anonId(), else the { anonId } that viewer.get() returns on servers before it.
+    let anon = null;
+    try {
+      if (OA.viewer && typeof OA.viewer.anonId === "function") anon = await OA.viewer.anonId();
+    } catch { anon = null; }
+    if (!anon && viewer && typeof viewer.anonId === "string") anon = viewer.anonId;
+    if (anon && safeId(anon)) return { id: safeId(anon), signedIn: false };
+    return { id: localId(), signedIn: false };
+  }
+
+  /* ---------- seats ---------- */
+
+  const emptyTable = () => ({ g: "g0", white: null, black: null });
+  function cleanSeat(s) {
+    if (!s || typeof s !== "object") return null;
+    const id = safeId(s.id || "");
+    const at = Number(s.at);
+    return id && Number.isFinite(at) ? { id, at } : null;
+  }
+  /** The stored doc as a table, or null when it isn't one. */
+  function normalizeTable(data) {
+    if (!data || typeof data.g !== "string" || !/^[A-Za-z0-9_-]{1,32}$/.test(data.g)) return null;
+    return { g: data.g, white: cleanSeat(data.white), black: cleanSeat(data.black) };
+  }
+  const lastAt = () => (game && table && game.g === table.g ? game.lastAt : 0);
+  const live = (seat, grace = 0) => Boolean(seat) && Date.now() - Math.max(seat.at, lastAt()) < SEAT_TTL_MS + grace;
+  const sameSeat = (a, b) => (a ? a.id + ":" + a.at : "") === (b ? b.id + ":" + b.at : "");
+  const seatOf = (c, t = table) => t && t[SEAT[c]];
+
+  /** The color this window plays, or null when watching. */
+  function myColor() {
+    if (!table || !me) return null;
+    for (const c of COLORS) if (live(seatOf(c)) && seatOf(c).id === me.id) return c;
+    return null;
+  }
+
+  /**
+   * Accepts new seats only if they follow from the previous ones by a single
+   * claim, leave or start over. Seats are first come, first served.
+   */
+  function legalTable(prev, next) {
+    if (next.white && next.black && next.white.id === next.black.id) return false;
+    if (next.g !== prev.g) {
+      // Start over: seats stay with their holders (the nightly reset opens both).
+      if (!next.white && !next.black) return true;
+      return COLORS.every((c) => {
+        const a = seatOf(c, prev), b = seatOf(c, next);
+        return sameSeat(a, b) || Boolean(a && b && a.id === b.id);
+      });
+    }
+    // Claim or leave: a seat is let go, or taken when it is free.
+    for (const c of COLORS) {
+      const a = seatOf(c, prev), b = seatOf(c, next);
+      if (sameSeat(a, b) || b === null) continue;
+      if (live(a, SKEW_MS) && a.id !== b.id) return false;
+    }
+    return true;
+  }
+
+  /* ---------- data ---------- */
+
+  /** Takes the server's seats as they are, then replays the game's moves, stopping at the first that breaks the rules. */
+  async function load() {
+    const doc = await tableCol.get(TABLE_ID).catch((e) => { if (e && e.code === "not_found") return null; throw e; });
+    const t = (doc && normalizeTable(doc.data)) || emptyTable();
+    const docs = [];
+    let cursor;
+    do {
+      const page = await movesCol.query({ where: { g: t.g }, orderBy: "n", limit: 500, cursor });
+      docs.push(...page.items);
+      cursor = page.nextCursor;
+    } while (cursor && docs.length < 2000);
+    const g = newGame(t.g);
+    for (const d of docs) {
+      const data = d.data || {};
+      if (data.n !== g.moves.length) break;
+      const m = findMove(g, data.m);
+      if (!m) break;
+      apply(g, m, data.at);
+    }
+    pending.clear();
+    table = t;
+    game = g;
+    selected = -1;
+    closePromo();
+    render();
+  }
+
+  function onTable(e) {
+    if (!table) return; // load() has not finished; it reads the latest anyway
+    if (e.resync) { load().catch(() => {}); return; }
+    if (e.deleted.includes(TABLE_ID)) { load().catch(() => {}); return; }
+    for (const d of e.docs) {
+      if (d.id !== TABLE_ID) continue;
+      if (!d.data) { load().catch(() => {}); continue; }
+      const next = normalizeTable(d.data);
+      if (!next || !legalTable(table, next)) continue; // skip writes that break the rules
+      setTable(next, true);
+    }
+  }
+
+  function onMoves(e) {
+    if (!game) return;
+    if (e.resync) { load().catch(() => {}); return; }
+    for (const d of e.docs) {
+      if (!d.data) { load().catch(() => {}); return; }
+      const data = d.data;
+      if (typeof data.g !== "string" || !Number.isInteger(data.n) || d.id !== moveId(data.g, data.n)) continue;
+      if (data.g === game.g && data.n < game.moves.length) continue; // already played (or a late rival)
+      pending.set(d.id, data);
+      if (pending.size > 64) pending.delete(pending.keys().next().value);
+    }
+    drain(true);
+  }
+
+  /** Plays queued moves that come next in this game, in order. Illegal ones are dropped. */
+  function drain(announceIt) {
+    let played = false;
+    for (;;) {
+      const id = moveId(game.g, game.moves.length);
+      const data = pending.get(id);
+      if (!data) break;
+      pending.delete(id);
+      const m = findMove(game, data.m);
+      if (!m) continue; // breaks the rules: skip it
+      apply(game, m, data.at);
+      fresh = m.to;
+      played = true;
+      if (announceIt) announceMove();
+    }
+    if (played) {
+      if (selected >= 0 && !targetsOf(selected).length) selected = -1;
+      if (promoFor && !game.legal.some((m) => m.from === promoFor.from && m.to === promoFor.to)) closePromo();
+      render();
+    }
+  }
+
+  function setTable(next, announceIt) {
+    const prev = table;
+    table = next;
+    if (!game || game.g !== next.g) {
+      game = newGame(next.g);
+      selected = -1;
+      fresh = -1;
+      closePromo();
+      if (announceIt && prev) say("New game. " + statusText());
+      for (const id of pending.keys()) if (!id.startsWith(next.g + "-")) pending.delete(id);
+      drain(announceIt);
+    } else if (announceIt && prev) {
+      let msg = "";
+      for (const c of COLORS) {
+        const a = seatOf(c, prev), b = seatOf(c, next);
+        if ((a && a.id) !== (b && b.id)) msg += `${NAME[c]}: ${b ? (me && b.id === me.id ? "you" : "another browser") : "open"}. `;
+      }
+      if (msg) say(msg);
+    }
+    render();
+  }
+
+  /* ---------- actions ---------- */
+
+  /** Every write carries me.id: never write without one. */
+  const hasId = () => Boolean(me) && typeof me.id === "string" && me.id.length > 0;
+  const seatFor = () => ({ id: me.id, at: Date.now() });
+  const blocked = () => busy || readOnly || closed;
+
+  /** Optimistic write: show it now, and go back to the server's state if it is rejected. */
+  async function write(show, save) {
+    if (busy) { hint(SAVING); return; }
+    if (readOnly || closed) { hint(el.error.textContent || "This board can't save moves."); return; }
+    if (!hasId()) { hint(NO_ID); return; }
+    busy = true;
+    showError("");
+    show();
+    render();
+    try {
+      await save();
+    } catch (err) {
+      handleWriteError(err);
+      await load().catch(() => render());
+    } finally {
+      busy = false;
+      render();
+    }
+  }
+  function writeTable(next) {
+    write(() => setTable(next, true), () => tableCol.set(TABLE_ID, next));
+  }
+
+  /* Seats are checked against the clock at click time, not the last render. */
+  function claim(c) {
+    if (notReady()) return;
+    const mine = myColor();
+    if (mine) { hint(`You already play ${NAME[mine]}.`); return; }
+    if (live(seatOf(c))) { hint(`${NAME[c]} was just taken by another browser.`); return; }
+    writeTable({ ...table, [SEAT[c]]: seatFor() });
+  }
+  function leave() {
+    if (notReady()) return;
+    const c = myColor();
+    if (c) writeTable({ ...table, [SEAT[c]]: null });
+    else hint("Your seat already timed out.");
+  }
+  function startOver() {
+    if (notReady()) return;
+    if (!canStartOver()) { hint("Only a player can start over while the seats are taken."); return; }
+    const c = myColor();
+    writeTable({ ...table, g: "g" + randomId(6), ...(c ? { [SEAT[c]]: seatFor() } : {}) });
+  }
+  function play(m) {
+    if (!hasId()) { hint(NO_ID); return; }
+    const c = myColor();
+    if (!c || !canMove(c) || !findMove(game, sqName(m.from) + sqName(m.to) + m.promo)) return;
+    const n = game.moves.length;
+    const doc = { g: game.g, n, m: sqName(m.from) + sqName(m.to) + m.promo, by: me.id, at: Date.now() };
+    selected = -1;
+    closePromo();
+    write(() => {
+      game = cloneGame(game);
+      apply(game, m, doc.at);
+      fresh = m.to;
+      announceMove();
+    }, () => movesCol.set(moveId(doc.g, n), doc));
+  }
+
+  /** Why a click on the board did nothing for a window without a seat. */
+  function whyWatching() {
+    if (COLORS.some((c) => seatOf(c) && seatOf(c).id === me.id)) return "Your seat timed out after 5 minutes without a move. Take a seat to play again.";
+    return COLORS.some((c) => !live(seatOf(c))) ? "Take a seat to play." : "You are watching. Both seats are taken.";
+  }
+  function whyWaiting(c) {
+    if (game.end) return "This game is over. Start over to play again.";
+    if (!bothSeated()) return `Waiting for someone to take ${NAME[flip(c)]}.`;
+    return `It's ${NAME[pos(game).turn]}'s turn.`;
+  }
+
+  const bothSeated = () => COLORS.every((c) => live(seatOf(c)));
+  const canMove = (c) => Boolean(game) && bothSeated() && !game.end && pos(game).turn === c;
+  const canStartOver = () => Boolean(game) && game.moves.length > 0 && (Boolean(myColor()) || !COLORS.some((c) => live(seatOf(c))));
+  const targetsOf = (sq) => (game ? game.legal.filter((m) => m.from === sq) : []);
+
+  function handleWriteError(err) {
+    const code = err && err.code;
+    const msg = String((err && err.message) || "");
+    if ((code === "rate_limited" || code === "quota_exceeded") && /daily|day/i.test(msg)) {
+      closed = true;
+      showError("The board is done for today. It resets at 00:00 UTC.");
+    } else if (code === "rate_limited") showError("Too many moves from your network. Try again in a minute.");
+    else if (code === "unauthorized") { readOnly = true; showError("Sign in to play on this board."); }
+    else if (code === "capability_denied") { readOnly = true; showError("This board can't save moves."); }
+    else showError("That move didn't save. Try again.");
+  }
+
+  /* ---------- board input ---------- */
+
+  const flipped = () => myColor() === "b";
+  const sqAt = (d) => (flipped() ? 63 - d : d);
+  const squares = () => el.board.querySelectorAll(".sq");
+
+  function onSquare(d) {
+    focusAt = d;
+    if (notReady()) return;
+    if (busy) { hint(SAVING); return; }
+    if (readOnly || closed) { hint(el.error.textContent || "This board can't save moves."); return; }
+    const c = myColor();
+    if (!c) { hint(whyWatching()); return; }
+    if (!canMove(c)) { hint(whyWaiting(c)); return; }
+    const sq = sqAt(d);
+    if (selected >= 0) {
+      const hits = targetsOf(selected).filter((m) => m.to === sq);
+      if (hits.length > 1) { openPromo(selected, sq); return; }
+      if (hits.length === 1) { play(hits[0]); return; }
+    }
+    if (sq === selected) selected = -1;
+    else if (colorOf(pos(game).b[sq]) === c && targetsOf(sq).length) {
+      selected = sq;
+      const n = targetsOf(sq).length;
+      say(`${PIECE[pos(game).b[sq].toLowerCase()]} on ${sqName(sq)} selected. ${n} legal ${n === 1 ? "move" : "moves"}.`);
+    } else selected = -1;
+    render();
+  }
+
+  function openPromo(from, to) {
+    promoFor = { from, to };
+    el.promo.hidden = false;
+    el.promo.querySelector("[data-promo=q]").focus();
+  }
+  function closePromo() {
+    const had = promoFor;
+    promoFor = null;
+    el.promo.hidden = true;
+    if (had && el.promo.contains(document.activeElement)) setFocus(focusAt, true);
+  }
+  el.promo.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-promo]");
+    if (!b || !promoFor) return;
+    const { from, to } = promoFor;
+    const kind = b.dataset.promo;
+    if (!kind) { closePromo(); selected = -1; render(); setFocus(focusAt, true); return; }
+    const m = game.legal.find((x) => x.from === from && x.to === to && x.promo === kind);
+    if (m) play(m);
+    setFocus(focusAt, true);
+  });
+  el.promo.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.preventDefault(); closePromo(); selected = -1; render(); setFocus(focusAt, true); }
+  });
+
+  function buildBoard() {
+    for (let r = 0; r < 8; r += 1) {
+      const row = document.createElement("div");
+      row.className = "row";
+      row.setAttribute("role", "row");
+      for (let c = 0; c < 8; c += 1) {
+        const d = r * 8 + c;
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "sq";
+        b.setAttribute("role", "gridcell");
+        b.tabIndex = d === focusAt ? 0 : -1;
+        b.setAttribute("aria-disabled", "true");
+        b.addEventListener("click", () => onSquare(d));
+        b.addEventListener("focus", () => setFocus(d, false));
+        row.append(b);
+      }
+      el.board.append(row);
+    }
+    el.board.addEventListener("keydown", onKey);
+  }
+  function setFocus(d, move) {
+    focusAt = d;
+    squares().forEach((b, j) => { b.tabIndex = j === d ? 0 : -1; });
+    if (move) squares()[d].focus();
+  }
+  function onKey(e) {
+    if (e.key === "Escape" && selected >= 0) { e.preventDefault(); selected = -1; render(); return; }
+    const r = focusAt >> 3, c = focusAt & 7;
+    const to = {
+      ArrowUp: [Math.max(0, r - 1), c], ArrowDown: [Math.min(7, r + 1), c],
+      ArrowLeft: [r, Math.max(0, c - 1)], ArrowRight: [r, Math.min(7, c + 1)],
+      Home: [r, 0], End: [r, 7],
+    }[e.key];
+    if (!to) return;
+    e.preventDefault();
+    setFocus(e.ctrlKey && (e.key === "Home" || e.key === "End") ? (e.key === "Home" ? 0 : 63) : to[0] * 8 + to[1], true);
+  }
+
+  /* ---------- render ---------- */
+
+  const nameOf = (c) => {
+    const seat = seatOf(c);
+    if (!live(seat)) return "open";
+    return me && seat.id === me.id ? "you" : "another browser";
+  };
+
+  function statusText() {
+    if (!game || !table || !ready) return failText || "Connecting…";
+    const mine = myColor();
+    const end = game.end;
+    if (end && end.mate) return end.winner === mine ? "Checkmate. You win." : `Checkmate. ${NAME[end.winner]} wins.`;
+    if (end) return `Draw by ${end.draw}.`;
+    const open = COLORS.filter((c) => !live(seatOf(c)));
+    if (open.length) {
+      if (mine) return `Waiting for someone to take ${NAME[flip(mine)]}. Open this page in another browser to play both sides.`;
+      return open.length === 2 ? "Both seats are open. Take one to play." : `${NAME[open[0]]} is open. Take it to play.`;
+    }
+    const turn = pos(game).turn;
+    const check = inCheck(pos(game)) ? "Check. " : "";
+    if (!mine) return `${check}${NAME[turn]} to move. You are watching.`;
+    return check + (turn === mine ? "Your move." : `${NAME[turn]} to move.`);
+  }
+
+  function say(msg) { el.announce.textContent = msg.trim(); }
+  function announceMove() {
+    const n = game.sans.length - 1;
+    const who = NAME[n % 2 ? "b" : "w"];
+    say(`${who}: ${game.sans[n]}. ${game.end || inCheck(pos(game)) ? statusText() : ""}`);
+  }
+
+  let expiry = null;
+  function render() {
+    if (!game || !table) { el.status.textContent = statusText(); return; }
+    const mine = myColor();
+    const s = pos(game);
+    const turn = game.end ? null : s.turn;
+    const ready = bothSeated();
+
+    el.seats.replaceChildren(...COLORS.map((c) => {
+      const li = document.createElement("li");
+      li.className = "seat";
+      li.dataset.color = c;
+      li.dataset.you = String(mine === c);
+      li.dataset.turn = String(turn === c && ready);
+      const chip = document.createElement("span");
+      chip.className = "chip";
+      chip.setAttribute("aria-hidden", "true");
+      const mk = document.createElement("span");
+      mk.className = "m";
+      mk.textContent = `${NAME[c]}:`;
+      li.append(chip, mk, ` ${nameOf(c)}`);
+      if (turn === c && ready) li.setAttribute("aria-current", "true");
+      return li;
+    }));
+
+    const canPlay = ready && Boolean(mine) && canMove(mine) && !blocked();
+    const targets = new Set(selected >= 0 ? targetsOf(selected).map((m) => m.to) : []);
+    const movable = new Set(canPlay ? game.legal.map((m) => m.from) : []);
+    const check = inCheck(s) ? kingOf(s, s.turn) : -1;
+    const last = game.last;
+    const isFlipped = flipped();
+    squares().forEach((b, d) => {
+      const sq = isFlipped ? 63 - d : d;
+      const p = s.b[sq];
+      const dark = ((sq >> 3) + (sq & 7)) % 2 === 1;
+      const isLast = Boolean(last) && (sq === last.from || sq === last.to);
+      b.dataset.sq = sqName(sq);
+      b.dataset.dark = String(dark);
+      b.dataset.last = String(isLast);
+      b.dataset.check = String(sq === check);
+      b.dataset.sel = String(sq === selected);
+      b.dataset.target = String(canPlay && targets.has(sq));
+      b.dataset.act = String(canPlay && (movable.has(sq) || targets.has(sq)));
+      if (p) b.dataset.piece = p; else delete b.dataset.piece;
+      const parts = [sqName(sq), p ? `${colorOf(p) === "w" ? "white" : "black"} ${PIECE[p.toLowerCase()]}` : "empty"];
+      if (sq === selected) parts.push("selected");
+      if (canPlay && targets.has(sq)) parts.push(p ? "capture" : "legal move");
+      if (sq === check) parts.push("in check");
+      if (isLast) parts.push("last move");
+      b.setAttribute("aria-label", parts.join(", "));
+      b.setAttribute("aria-disabled", String(!canPlay));
+      if (sq === selected) b.setAttribute("aria-selected", "true"); else b.removeAttribute("aria-selected");
+
+      const key = `${p}|${d >> 3 === 7 ? "f" : ""}${(d & 7) === 0 ? "r" : ""}|${isFlipped}`;
+      if (b.dataset.shown !== key) {
+        b.dataset.shown = key;
+        b.replaceChildren();
+        if ((d & 7) === 0) b.append(coord("r", String(8 - (sq >> 3))));
+        if (d >> 3 === 7) b.append(coord("f", FILES[sq & 7]));
+        if (p) {
+          const g = document.createElement("span");
+          g.className = `pc ${colorOf(p)}${sq === fresh ? " new" : ""}`;
+          g.setAttribute("aria-hidden", "true");
+          g.textContent = GLYPH[p.toLowerCase()] + "︎";
+          b.append(g);
+        }
+      }
+    });
+    fresh = -1;
+
+    renderMoves();
+    el.status.textContent = statusText();
+    renderActions(mine);
+
+    // Re-render the moment a seat expires, so a stale label never offers the wrong button.
+    clearTimeout(expiry);
+    const left = Math.min(...COLORS.map((c) => (live(seatOf(c)) ? Math.max(seatOf(c).at, lastAt()) + SEAT_TTL_MS - Date.now() : Infinity)));
+    if (left < Infinity) expiry = setTimeout(render, left + 50);
+  }
+  function coord(kind, text) {
+    const c = document.createElement("span");
+    c.className = `coord ${kind}`;
+    c.setAttribute("aria-hidden", "true");
+    c.textContent = text;
+    return c;
+  }
+
+  function renderMoves() {
+    const key = game.g + ":" + game.sans.length;
+    if (el.moves.dataset.key === key) return;
+    el.moves.dataset.key = key;
+    if (!game.sans.length) {
+      const li = document.createElement("li");
+      li.className = "none";
+      li.textContent = "No moves yet.";
+      el.moves.replaceChildren(li);
+      return;
+    }
+    const rows = [];
+    for (let i = 0; i < game.sans.length; i += 2) {
+      const li = document.createElement("li");
+      const n = document.createElement("span");
+      n.className = "n";
+      n.textContent = `${i / 2 + 1}.`;
+      li.append(n);
+      for (const j of [i, i + 1]) {
+        const m = document.createElement("span");
+        m.textContent = game.sans[j] || "";
+        if (j === game.sans.length - 1) { m.className = "cur"; m.setAttribute("aria-current", "true"); }
+        li.append(m);
+      }
+      rows.push(li);
+    }
+    el.moves.replaceChildren(...rows);
+    el.moves.scrollTop = el.moves.scrollHeight;
+  }
+
+  function renderActions(mine) {
+    const want = [];
+    if (!mine) for (const c of COLORS) if (!live(seatOf(c))) want.push(["claim-" + c, `Play as ${NAME[c]}`, true]);
+    if (canStartOver()) want.push(["reset", "Start over", Boolean(game.end)]);
+    if (mine) want.push(["leave", "Leave seat", false]);
+    const key = want.map((w) => w.join("|")).join(",");
+    if (el.actions.dataset.key !== key) {
+      const hadFocus = el.actions.contains(document.activeElement) ? document.activeElement.dataset.act : null;
+      el.actions.dataset.key = key;
+      el.actions.replaceChildren(...want.map(([act, label, primary]) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = primary ? "btn primary" : "btn";
+        b.dataset.act = act;
+        b.textContent = label;
+        return b;
+      }));
+      if (hadFocus) {
+        const again = el.actions.querySelector(`[data-act="${hadFocus}"]`);
+        (again || el.board.querySelector('.sq[tabindex="0"]')).focus();
+      }
+    }
+    el.actions.querySelectorAll("button").forEach((b) => { b.disabled = !ready || readOnly || closed; b.setAttribute("aria-disabled", String(busy)); });
+  }
+
+  el.actions.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-act]");
+    if (!b) return;
+    const act = b.dataset.act;
+    if (busy) { hint(SAVING); return; }
+    if (act.startsWith("claim-")) claim(act.slice(6));
+    else if (act === "reset") startOver();
+    else if (act === "leave") leave();
+  });
+
+  function showError(m) { el.error.textContent = m; }
+  function fail(msg = "Could not reach the board. Reload to try again.") {
+    failText = msg;
+    el.status.textContent = msg;
+  }
+
+  /* ---------- feedback ---------- */
+
+  const SAVING = "Saving your last move…";
+  const NO_ID = "Can't tell who you are, so nothing was saved. Reload to try again.";
+  let hintTimer = null;
+  /** Says why a click did nothing, on the status line and to screen readers, then goes back to the usual status. */
+  function hint(msg) {
+    render(); // refresh first: what the click saw may be stale
+    el.status.textContent = msg;
+    say(msg);
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(render, 4000);
+  }
+  /** Before the first load: says so instead of dropping the click. */
+  function notReady() {
+    if (ready) return false;
+    hint(failText || "Still connecting, try again in a moment.");
+    return true;
+  }
+
+  /* ---------- boot ---------- */
+
+  async function boot() {
+    buildBoard();
+    if (!OA || !OA.db) {
+      game = newGame("g0");
+      table = emptyTable();
+      fail("Open this board from its view link to play.");
+      render();
+      return;
+    }
+    await OA.ready;
+    const setTheme = (t) => { document.documentElement.dataset.theme = t; };
+    setTheme(OA.theme);
+    OA.onTheme(setTheme);
+    me = await identify();
+    tableCol = OA.db.collection(TABLE);
+    movesCol = OA.db.collection(MOVES);
+    tableCol.subscribe(onTable);
+    movesCol.subscribe(onMoves);
+    await load();
+    ready = true;
+    failText = "";
+    render();
+    // Seats expire on the clock, not on a write: re-render so labels stay honest.
+    setInterval(render, 10000);
+  }
+  setTimeout(() => { if (!ready && !failText) fail("Could not connect. Reload to try again."); }, 10000);
+  boot().catch(() => fail());
+})();
+</script>
+<script>
+/* Links to the other demos. The publish script fills APP_ORIGIN and each id from
+   ops/demo/ids.json; a link whose id is still a placeholder is never made. */
+(() => {
+  "use strict";
+  const APP_ORIGIN = "{{origin}}";
+  const IDS = { gallery: "{{id:gallery}}" };
+  const resolved = (v) => typeof v === "string" && !v.startsWith("{" + "{");
+  const VALID_ID = /^[A-Za-z0-9_-]{4,64}$/;
+  function appOrigin() {
+    if (resolved(APP_ORIGIN) && /^https?:\/\/[^/]+$/.test(APP_ORIGIN)) return APP_ORIGIN;
+    try {
+      const anc = window.location.ancestorOrigins;
+      if (anc && anc.length && anc[anc.length - 1] !== "null") return anc[anc.length - 1];
+    } catch {}
+    return "";
+  }
+  const base = appOrigin();
+  const LABELS = { gallery: "All demos", tictactoe: "Tic-tac-toe", chess: "Chess" };
+  /* Links are built here, never in the markup, so an unfilled id leaves no link behind. */
+  function link(slug, text) {
+    const id = IDS[slug];
+    if (!resolved(id) || !VALID_ID.test(id)) return null;
+    const a = document.createElement("a");
+    a.href = `${base}/a/${id}`;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.dataset.demo = slug;
+    a.textContent = text;
+    if (slug === "gallery") a.insertAdjacentHTML("beforeend", '<span aria-hidden="true"> ↗</span>');
+    a.insertAdjacentHTML("beforeend", '<span class="sr"> (opens in new tab)</span>');
+    return a;
+  }
+  /* data-demo-link: the element's own text becomes the link. */
+  for (const el of document.querySelectorAll("[data-demo-link]")) {
+    const a = link(el.dataset.demoLink, el.textContent);
+    if (a) el.replaceChildren(a);
+  }
+  /* data-demo-links: a hidden list of links, shown once at least one resolves. */
+  for (const el of document.querySelectorAll("[data-demo-links]")) {
+    for (const slug of el.dataset.demoLinks.split(" ")) {
+      const a = link(slug, LABELS[slug]);
+      if (a) el.append(a);
+    }
+    el.hidden = !el.children.length;
+  }
+})();
+</script>
+</body>
+</html>

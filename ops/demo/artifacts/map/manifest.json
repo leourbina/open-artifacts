@@ -1,0 +1,10 @@
+{
+  "title": "Where are you from",
+  "visibility": "public",
+  "allowAnonymousWrites": true,
+  "capabilities": {
+    "db": true,
+    "viewer": true
+  },
+  "description": "Pick your country, and a pin lands on the world map in every open window. A fresh map every day."
+}

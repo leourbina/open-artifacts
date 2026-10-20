@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pixel canvas</title>
+<style>
+  /* Studio tokens (packages/ui/src/tokens/tokens.css), inlined: no external fonts. */
+  :root {
+    color-scheme: light;
+    --oa-bg: #eef0f3;
+    --oa-surface: #ffffff;
+    --oa-divider: #e0e3e8;
+    --oa-border: #bec4cd;
+    --oa-border-strong: #848b95;
+    --oa-text: #15181c;
+    --oa-text-2: #454c56;
+    --oa-text-muted: #5f6670;
+    --oa-accent: #2350d0;
+    --oa-focus: #2350d0;
+    --oa-danger: #be2f1c;
+    --oa-font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --oa-font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --oa-radius: 6px;
+    --oa-duration: 200ms;
+    --oa-ease: cubic-bezier(0.2, 0, 0, 1);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --oa-bg: #131518;
+      --oa-surface: #1c1f23;
+      --oa-divider: #2c3037;
+      --oa-border: #3b414a;
+      --oa-border-strong: #676e78;
+      --oa-text: #e9ebee;
+      --oa-text-2: #b7bdc6;
+      --oa-text-muted: #9097a1;
+      --oa-accent: #7f9cff;
+      --oa-focus: #7f9cff;
+      --oa-danger: #ff7f6b;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --oa-bg: #131518;
+    --oa-surface: #1c1f23;
+    --oa-divider: #2c3037;
+    --oa-border: #3b414a;
+    --oa-border-strong: #676e78;
+    --oa-text: #e9ebee;
+    --oa-text-2: #b7bdc6;
+    --oa-text-muted: #9097a1;
+    --oa-accent: #7f9cff;
+    --oa-focus: #7f9cff;
+    --oa-danger: #ff7f6b;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    min-height: 100vh;
+    background: var(--oa-bg);
+    color: var(--oa-text);
+    font-family: var(--oa-font-sans);
+    font-size: 14px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    padding: 20px 16px;
+  }
+  main { max-width: 512px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px; }
+
+  .kicker { margin: 0; font-family: var(--oa-font-mono); font-size: 13px; color: var(--oa-text-muted); }
+  h1 { margin: 4px 0 2px; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+
+  /* The paper is white in both themes: colors are shared, so they must look the same to everyone. */
+  .frame { overflow: auto; border: 1px solid var(--oa-border-strong); border-radius: 2px; background: #ffffff; }
+  .board {
+    --pick: #2350d0;
+    display: grid;
+    grid-template-columns: repeat(32, minmax(10px, 1fr));
+    min-width: 320px;
+    aspect-ratio: 1;
+    background: #ffffff;
+    touch-action: manipulation;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .row { display: contents; }
+  .cell { position: relative; background: #ffffff; cursor: crosshair; outline: none; }
+  .cell:hover { box-shadow: inset 0 0 0 2px var(--pick), inset 0 0 0 3px #ffffff; }
+  .board[data-wait="true"] .cell, .board[data-off="true"] .cell { cursor: not-allowed; }
+  .board[data-off="true"] .cell:hover { box-shadow: none; }
+  .cell:focus-visible { z-index: 1; box-shadow: 0 0 0 2px var(--oa-focus), 0 0 0 4px var(--oa-surface); }
+
+  .palette {
+    display: grid;
+    grid-template-columns: repeat(16, 1fr);
+    gap: 4px;
+  }
+  .swatch {
+    position: relative;
+    display: block;
+    width: 100%;
+    aspect-ratio: 1;
+    min-width: 0;
+    padding: 0;
+    border: 1px solid rgba(0, 0, 0, 0.18);
+    border-radius: var(--oa-radius);
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+  :root[data-theme="dark"] .swatch { border-color: rgba(255, 255, 255, 0.22); }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .swatch { border-color: rgba(255, 255, 255, 0.22); } }
+  .swatch[aria-checked="true"] { box-shadow: 0 0 0 2px var(--oa-bg), 0 0 0 4px var(--oa-accent); }
+  .swatch:focus-visible { outline: 2px solid var(--oa-focus); outline-offset: 5px; }
+  .ring { position: absolute; inset: -5px; width: calc(100% + 10px); height: calc(100% + 10px); pointer-events: none; overflow: visible; }
+  .ring rect { fill: none; stroke: var(--oa-text); stroke-width: 3; stroke-dasharray: 100; stroke-dashoffset: 100; }
+  .ring[data-run="true"] rect { transition: stroke-dashoffset 4s linear; }
+
+  .status { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0; color: var(--oa-text-muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .status .ready { color: var(--oa-text); }
+  .note { margin: 0; color: var(--oa-text-muted); font-size: 13px; text-wrap: pretty; }
+  .error { margin: 0; color: var(--oa-danger); font-size: 13px; }
+  .error:empty { display: none; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+  @media (max-width: 480px) {
+    .palette { grid-template-columns: repeat(8, 1fr); gap: 6px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ring[data-run="true"] rect { transition: none; }
+  }
+  .demo-links { margin: 20px auto 0; text-align: center; font-size: 12.5px; }
+  .demo-links a { color: var(--oa-text-muted); text-decoration: none; border-radius: 2px; }
+  .demo-links a:hover { color: var(--oa-text-2); text-decoration: underline; text-underline-offset: 2px; }
+  .demo-links a:focus-visible { outline: 2px solid var(--oa-focus); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<main>
+  <p class="kicker">Today's canvas · resets 00:00 UTC</p>
+  <h1 id="title">Pixel canvas</h1>
+  <div class="frame" id="frame">
+    <!-- biome-ignore lint/a11y/useSemanticElements: an ARIA grid of gridcell buttons with arrow-key focus; no native element does this -->
+    <div class="board" id="board" role="grid" aria-labelledby="title" aria-describedby="help"></div>
+  </div>
+  <div class="palette" id="palette" role="radiogroup" aria-label="Color"></div>
+  <p class="status" id="status"><span id="cool">Connecting…</span><span id="count"></span></p>
+  <p class="note" id="help">Pick a color, then click a pixel. One pixel every 4 seconds. Keyboard: arrow keys move, Enter or Space paints.</p>
+  <p class="error" id="error" role="alert"></p>
+  <p class="sr" id="announce" aria-live="polite"></p>
+</main>
+<footer class="demo-links" data-demo-links="gallery" hidden></footer>
+
+<script>
+(() => {
+  "use strict";
+
+  const SIZE = 32;
+  const COOLDOWN_MS = 4000; // 15 pixels a minute per browser, under the 30 a minute per IP
+  /* Index 0 is blank: painting it is the only way to clear a pixel. */
+  const PALETTE = [
+    ["blank", "#ffffff"], ["light gray", "#c4c9d1"], ["gray", "#6b727c"], ["black", "#15181c"],
+    ["brown", "#8a5a33"], ["red", "#d23f2f"], ["orange", "#ec7a2c"], ["yellow", "#f2c230"],
+    ["lime", "#8cc63f"], ["green", "#1f7a4d"], ["teal", "#2aa0b5"], ["sky", "#7cc4f2"],
+    ["blue", "#2350d0"], ["navy", "#1d2f6f"], ["purple", "#7b45c4"], ["pink", "#e46aa8"],
+  ];
+
+  const OA = window.openArtifacts;
+  const $ = (id) => document.getElementById(id);
+  const el = { board: $("board"), palette: $("palette"), cool: $("cool"), count: $("count"), error: $("error"), announce: $("announce") };
+  const nf = new Intl.NumberFormat("en-US");
+
+  /* ---------- day key ---------- */
+
+  /** The collection for the UTC day containing t: canvas-YYYYMMDD. */
+  function dayKey(t) {
+    return "canvas-" + new Date(t).toISOString().slice(0, 10).replace(/-/g, "");
+  }
+  /** Milliseconds from t to the next 00:00 UTC. */
+  function msToNextDay(t) {
+    return (Math.floor(t / 86400000) + 1) * 86400000 - t;
+  }
+  const rowId = (r) => "r" + String(r).padStart(2, "0");
+
+  /* ---------- state ---------- */
+
+  const server = new Uint8Array(SIZE * SIZE); // what the server has
+  const pending = new Map();                  // cell index -> { color, seq } not yet confirmed
+  let seq = 0;
+  let col = null;
+  let key = "";
+  let unsub = null;
+  let dayTimer = null;
+  let pick = 12;            // blue
+  let cursor = 0;           // roving focus cell
+  let lastPaint = 0;
+  let closed = false;       // daily cap reached
+  let readOnly = false;
+  let ready = false;        // subscribed and the first load done
+  let failText = "";        // why the canvas could not start, shown instead of "Connecting…"
+  let tick = null;
+
+  const viewColor = (i) => (pending.has(i) ? pending.get(i).color : server[i]);
+
+  function readLast() {
+    try { return Number(localStorage.getItem("oa-pixels-last")) || 0; } catch { return 0; }
+  }
+  function writeLast(t) {
+    try { localStorage.setItem("oa-pixels-last", String(t)); } catch { /* sandboxed: per tab */ }
+  }
+
+  /* ---------- board ---------- */
+
+  const cells = [];
+  function label(i) {
+    const r = Math.floor(i / SIZE), c = i % SIZE;
+    return `Row ${r + 1}, column ${c + 1}, ${PALETTE[viewColor(i)][0]}`;
+  }
+  function paintCell(i) {
+    const node = cells[i];
+    const color = PALETTE[viewColor(i)][1];
+    if (node.dataset.color !== color) {
+      node.dataset.color = color;
+      node.style.background = color;
+      node.setAttribute("aria-label", label(i));
+    }
+  }
+  function buildBoard() {
+    const frag = document.createDocumentFragment();
+    for (let r = 0; r < SIZE; r += 1) {
+      const row = document.createElement("div");
+      row.className = "row";
+      row.setAttribute("role", "row");
+      for (let c = 0; c < SIZE; c += 1) {
+        const i = r * SIZE + c;
+        const cell = document.createElement("div");
+        cell.className = "cell";
+        cell.setAttribute("role", "gridcell");
+        cell.tabIndex = i === cursor ? 0 : -1;
+        cell.dataset.i = String(i);
+        cells.push(cell);
+        row.append(cell);
+        paintCell(i);
+      }
+      frag.append(row);
+    }
+    el.board.append(frag);
+    el.board.addEventListener("click", (e) => {
+      const cell = e.target.closest(".cell");
+      if (!cell) return;
+      moveTo(Number(cell.dataset.i), false);
+      paint(Number(cell.dataset.i));
+    });
+    el.board.addEventListener("keydown", onBoardKey);
+  }
+  function moveTo(i, focus = true) {
+    cells[cursor].tabIndex = -1;
+    cursor = i;
+    cells[i].tabIndex = 0;
+    if (focus) cells[i].focus();
+  }
+  function onBoardKey(e) {
+    const r = Math.floor(cursor / SIZE), c = cursor % SIZE;
+    let next = null;
+    switch (e.key) {
+      case "ArrowUp": next = r > 0 ? cursor - SIZE : null; break;
+      case "ArrowDown": next = r < SIZE - 1 ? cursor + SIZE : null; break;
+      case "ArrowLeft": next = c > 0 ? cursor - 1 : null; break;
+      case "ArrowRight": next = c < SIZE - 1 ? cursor + 1 : null; break;
+      case "Home": next = e.ctrlKey ? 0 : r * SIZE; break;
+      case "End": next = e.ctrlKey ? SIZE * SIZE - 1 : r * SIZE + SIZE - 1; break;
+      case "Enter": case " ": e.preventDefault(); paint(cursor); return;
+      default: return;
+    }
+    e.preventDefault();
+    if (next !== null) moveTo(next);
+  }
+
+  /* ---------- palette ---------- */
+
+  const swatches = [];
+  const ring = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  ring.setAttribute("class", "ring");
+  ring.setAttribute("aria-hidden", "true");
+  ring.innerHTML = '<rect x="1.5" y="1.5" rx="8" pathLength="100" style="width: calc(100% - 3px); height: calc(100% - 3px)"/>';
+  function buildPalette() {
+    PALETTE.forEach(([name, hex], i) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "swatch";
+      b.setAttribute("role", "radio");
+      b.setAttribute("aria-label", name);
+      b.style.background = hex;
+      b.addEventListener("click", () => choose(i));
+      b.addEventListener("keydown", (e) => {
+        const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+        if (e.key === "Home" || e.key === "End" || step) {
+          e.preventDefault();
+          const n = e.key === "Home" ? 0 : e.key === "End" ? PALETTE.length - 1 : (pick + step + PALETTE.length) % PALETTE.length;
+          choose(n);
+          swatches[n].focus();
+        }
+      });
+      swatches.push(b);
+      el.palette.append(b);
+    });
+    choose(pick);
+  }
+  function choose(i) {
+    pick = i;
+    swatches.forEach((b, j) => {
+      b.setAttribute("aria-checked", String(j === i));
+      b.tabIndex = j === i ? 0 : -1;
+    });
+    swatches[i].append(ring);
+    el.board.style.setProperty("--pick", PALETTE[i][0] === "blank" ? "#848b95" : PALETTE[i][1]);
+  }
+
+  /* ---------- cooldown ---------- */
+
+  function coolLeft() { return Math.max(0, lastPaint + COOLDOWN_MS - Date.now()); }
+  function startRing() {
+    const rect = ring.firstChild;
+    ring.dataset.run = "false";
+    rect.style.strokeDashoffset = "0";
+    void ring.getBoundingClientRect();
+    ring.dataset.run = "true";
+    rect.style.strokeDashoffset = "100";
+  }
+  function renderCool() {
+    const left = coolLeft();
+    const rect = ring.firstChild;
+    el.board.dataset.wait = String(left > 0);
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      rect.style.strokeDashoffset = String(100 - Math.round((left / COOLDOWN_MS) * 100));
+    }
+    if (!ready) el.cool.textContent = failText || "Connecting…";
+    else if (closed) el.cool.textContent = "Canvas is full for today";
+    else if (readOnly) el.cool.textContent = "View only";
+    else if (left > 0) el.cool.textContent = `Next pixel in ${Math.ceil(left / 1000)}s`;
+    else el.cool.textContent = "Ready to paint";
+    el.cool.className = left > 0 || closed || readOnly || !ready ? "" : "ready";
+    if (left > 0 && !tick) {
+      tick = setInterval(() => {
+        renderCool();
+        if (coolLeft() === 0) { clearInterval(tick); tick = null; renderCool(); }
+      }, 250);
+    }
+  }
+  function renderCount() {
+    let n = 0;
+    for (let i = 0; i < server.length; i += 1) if (viewColor(i) !== 0) n += 1;
+    el.count.textContent = `${nf.format(n)} of 1,024 pixels painted today`;
+  }
+
+  /* ---------- data ---------- */
+
+  /** Copies a row doc into the server grid. Only c0..c31 with a palette index count. */
+  function applyRow(doc) {
+    const m = /^r(\d{2})$/.exec(doc && doc.id);
+    if (!m) return;
+    const r = Number(m[1]);
+    if (r >= SIZE) return;
+    const data = (doc.data && typeof doc.data === "object") ? doc.data : {};
+    for (let c = 0; c < SIZE; c += 1) {
+      const v = data["c" + c];
+      const i = r * SIZE + c;
+      server[i] = Number.isInteger(v) && v >= 0 && v < PALETTE.length ? v : 0;
+      paintCell(i);
+    }
+  }
+  function clearRow(id) {
+    const m = /^r(\d{2})$/.exec(id);
+    if (!m || Number(m[1]) >= SIZE) return;
+    for (let c = 0; c < SIZE; c += 1) { const i = Number(m[1]) * SIZE + c; server[i] = 0; paintCell(i); }
+  }
+
+  async function loadAll() {
+    const seen = new Set();
+    let cursorTok;
+    for (let p = 0; p < 4; p += 1) {
+      const page = await col.list(cursorTok ? { cursor: cursorTok, limit: 100 } : { limit: 100 });
+      for (const d of page.items) { applyRow(d); seen.add(d.id); }
+      if (!page.nextCursor || page.items.length === 0) break;
+      cursorTok = page.nextCursor;
+    }
+    for (let r = 0; r < SIZE; r += 1) if (!seen.has(rowId(r))) clearRow(rowId(r));
+    renderCount();
+  }
+
+  function onChange(e) {
+    if (e.resync) { loadAll().catch(() => {}); return; }
+    for (const d of e.docs) applyRow(d);
+    for (const id of e.deleted) clearRow(id);
+    renderCount();
+  }
+
+  async function openDay() {
+    clearTimeout(dayTimer);
+    key = dayKey(Date.now());
+    if (unsub) unsub();
+    server.fill(0);
+    pending.clear();
+    closed = false;
+    for (let i = 0; i < cells.length; i += 1) paintCell(i);
+    col = OA.db.collection(key);
+    unsub = col.subscribe(onChange);
+    await loadAll();
+    el.board.dataset.off = String(readOnly);
+    renderCool();
+    // A new collection at 00:00 UTC; nothing gets wiped.
+    dayTimer = setTimeout(() => openDay().catch(() => fail()), msToNextDay(Date.now()) + 1000);
+  }
+
+  /* ---------- painting ---------- */
+
+  function paint(i) {
+    if (!ready) { hint(failText || "Still connecting, try again in a moment."); return; }
+    if (readOnly) { hint(el.error.textContent || "This canvas can't save pixels."); return; }
+    if (closed) { say("Canvas is full for today. A fresh one opens at 00:00 UTC."); return; }
+    const left = coolLeft();
+    if (left > 0) { say(`Next pixel in ${Math.ceil(left / 1000)} seconds.`); return; }
+    if (dayKey(Date.now()) !== key) { openDay().catch(() => fail()); return; }
+    const color = pick;
+    const r = Math.floor(i / SIZE), c = i % SIZE;
+    if (viewColor(i) === color) { say(`Row ${r + 1}, column ${c + 1} is already ${PALETTE[color][0]}.`); return; }
+
+    seq += 1;
+    const mine = { color, seq };
+    pending.set(i, mine);
+    paintCell(i);
+    renderCount();
+    lastPaint = Date.now();
+    writeLast(lastPaint);
+    startRing();
+    renderCool();
+    showError("");
+    say(`Painted row ${r + 1}, column ${c + 1} ${PALETTE[color][0]}.`);
+
+    const target = col;
+    target.update(rowId(r), { ["c" + c]: color })
+      .then((doc) => { if (target === col && doc) applyRow(doc); })
+      .catch(async (err) => {
+        if (target !== col) return;
+        handleWriteError(err, r, c);
+        // Roll back to what the server has for that row.
+        try { const doc = await target.get(rowId(r)); if (target === col) { if (doc) applyRow(doc); else clearRow(rowId(r)); } } catch { /* keep the last known value */ }
+      })
+      .finally(() => {
+        if (pending.get(i) === mine) pending.delete(i);
+        if (target === col) { paintCell(i); renderCount(); }
+      });
+  }
+
+  function handleWriteError(err, r, c) {
+    const code = err && err.code;
+    const msg = String((err && err.message) || "");
+    const where = `Your pixel at row ${r + 1}, column ${c + 1} didn't save.`;
+    if ((code === "rate_limited" || code === "quota_exceeded") && /daily|day/i.test(msg)) {
+      closed = true;
+      el.board.dataset.off = "true";
+      showError("Canvas is full for today. A fresh one opens at 00:00 UTC.");
+    } else if (code === "rate_limited") showError(`${where} Too many pixels from your network. Try again in a minute.`);
+    else if (code === "unauthorized") { readOnly = true; showError("Sign in to paint on this canvas."); }
+    else if (code === "capability_denied") { readOnly = true; showError("This canvas can't save pixels."); }
+    else showError(`${where} Try again.`);
+    if (readOnly) el.board.dataset.off = "true";
+    renderCool();
+  }
+
+  /* ---------- boot ---------- */
+
+  function say(m) { el.announce.textContent = ""; requestAnimationFrame(() => { el.announce.textContent = m; }); }
+  function showError(m) { el.error.textContent = m; }
+  function fail(msg = "Could not reach the canvas. Reload to try again.") {
+    failText = msg;
+    el.cool.textContent = msg;
+  }
+  let hintTimer = null;
+  /** Says why a click did not paint, on the status line and to screen readers, then goes back to the usual status. */
+  function hint(msg) {
+    el.cool.textContent = msg;
+    el.cool.className = "";
+    say(msg);
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(renderCool, 4000);
+  }
+
+  async function boot() {
+    buildBoard();
+    buildPalette();
+    el.board.dataset.off = "true";
+    el.board.setAttribute("aria-disabled", "true");
+    if (!OA || !OA.db) {
+      fail("Open this canvas from its view link to paint.");
+      return;
+    }
+    await OA.ready;
+    const setTheme = (t) => { document.documentElement.dataset.theme = t; };
+    setTheme(OA.theme);
+    OA.onTheme(setTheme);
+    lastPaint = Math.min(readLast(), Date.now());
+    await openDay();
+    ready = true;
+    failText = "";
+    el.board.dataset.off = String(readOnly || closed);
+    el.board.setAttribute("aria-disabled", String(readOnly || closed));
+    renderCool();
+    // Timers sleep in background tabs: check the day again when the page comes back.
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && col && dayKey(Date.now()) !== key) openDay().catch(() => fail());
+    });
+  }
+  setTimeout(() => { if (!ready && !failText) fail("Could not connect. Reload to try again."); }, 10000);
+  boot().catch(() => fail());
+})();
+</script>
+<script>
+/* Links to the other demos. The publish script fills APP_ORIGIN and each id from
+   ops/demo/ids.json; a link whose id is still a placeholder is never made. */
+(() => {
+  "use strict";
+  const APP_ORIGIN = "{{origin}}";
+  const IDS = { gallery: "{{id:gallery}}" };
+  const resolved = (v) => typeof v === "string" && !v.startsWith("{" + "{");
+  const VALID_ID = /^[A-Za-z0-9_-]{4,64}$/;
+  function appOrigin() {
+    if (resolved(APP_ORIGIN) && /^https?:\/\/[^/]+$/.test(APP_ORIGIN)) return APP_ORIGIN;
+    try {
+      const anc = window.location.ancestorOrigins;
+      if (anc && anc.length && anc[anc.length - 1] !== "null") return anc[anc.length - 1];
+    } catch {}
+    return "";
+  }
+  const base = appOrigin();
+  const LABELS = { gallery: "All demos", tictactoe: "Tic-tac-toe", chess: "Chess" };
+  /* Links are built here, never in the markup, so an unfilled id leaves no link behind. */
+  function link(slug, text) {
+    const id = IDS[slug];
+    if (!resolved(id) || !VALID_ID.test(id)) return null;
+    const a = document.createElement("a");
+    a.href = `${base}/a/${id}`;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.dataset.demo = slug;
+    a.textContent = text;
+    if (slug === "gallery") a.insertAdjacentHTML("beforeend", '<span aria-hidden="true"> ↗</span>');
+    a.insertAdjacentHTML("beforeend", '<span class="sr"> (opens in new tab)</span>');
+    return a;
+  }
+  /* data-demo-link: the element's own text becomes the link. */
+  for (const el of document.querySelectorAll("[data-demo-link]")) {
+    const a = link(el.dataset.demoLink, el.textContent);
+    if (a) el.replaceChildren(a);
+  }
+  /* data-demo-links: a hidden list of links, shown once at least one resolves. */
+  for (const el of document.querySelectorAll("[data-demo-links]")) {
+    for (const slug of el.dataset.demoLinks.split(" ")) {
+      const a = link(slug, LABELS[slug]);
+      if (a) el.append(a);
+    }
+    el.hidden = !el.children.length;
+  }
+})();
+</script>
+</body>
+</html>

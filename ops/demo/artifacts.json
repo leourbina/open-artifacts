@@ -1,0 +1,40 @@
+{
+  "staging": {},
+  "review": {
+    "poll": {
+      "instance": "artifacts.leourbina.com",
+      "id": "DKfXiKC1qb7Knqrr",
+      "visibility": "public"
+    },
+    "tictactoe": {
+      "instance": "artifacts.leourbina.com",
+      "id": "CkyAe3uSYRnYthKz",
+      "visibility": "public"
+    },
+    "gallery": {
+      "instance": "artifacts.leourbina.com",
+      "id": "VP4aqRwupYFrv8xx",
+      "visibility": "private"
+    },
+    "chess": {
+      "instance": "artifacts.leourbina.com",
+      "id": "gUhMi1YnZE2ydXLs",
+      "visibility": "public"
+    },
+    "pixels": {
+      "instance": "artifacts.leourbina.com",
+      "id": "yZ7DrazjUcMg4JoX",
+      "visibility": "public"
+    },
+    "dashboard": {
+      "instance": "artifacts.leourbina.com",
+      "id": "FevbVG2F9B3WApVu",
+      "visibility": "private"
+    },
+    "map": {
+      "instance": "artifacts.leourbina.com",
+      "id": "getukdJePW3bsGdS",
+      "visibility": "public"
+    }
+  }
+}

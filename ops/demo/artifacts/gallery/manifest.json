@@ -1,0 +1,7 @@
+{
+  "title": "Open Artifacts demo",
+  "visibility": "public",
+  "allowAnonymousWrites": false,
+  "capabilities": {},
+  "description": "The live demos in one place. Open any of them in two windows and watch them sync."
+}

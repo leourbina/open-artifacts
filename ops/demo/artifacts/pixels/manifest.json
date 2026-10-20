@@ -1,0 +1,10 @@
+{
+  "title": "Pixel canvas",
+  "visibility": "public",
+  "allowAnonymousWrites": true,
+  "capabilities": {
+    "db": true,
+    "viewer": true
+  },
+  "description": "A 32 by 32 canvas everyone paints together, one pixel every 4 seconds. A fresh canvas every day."
+}

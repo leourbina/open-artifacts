@@ -1,0 +1,10 @@
+{
+  "title": "Tic-tac-toe",
+  "visibility": "public",
+  "allowAnonymousWrites": true,
+  "capabilities": {
+    "db": true,
+    "viewer": true
+  },
+  "description": "Two seats, everyone else watches. Moves show up in every open window."
+}

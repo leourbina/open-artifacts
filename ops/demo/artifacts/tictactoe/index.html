@@ -1,0 +1,755 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tic-tac-toe</title>
+<style>
+  /* Studio tokens (packages/ui/src/tokens/tokens.css), inlined: no external fonts. */
+  :root {
+    color-scheme: light;
+    --oa-bg: #eef0f3;
+    --oa-surface: #ffffff;
+    --oa-surface-2: #f6f7f9;
+    --oa-divider: #e0e3e8;
+    --oa-border: #bec4cd;
+    --oa-border-strong: #848b95;
+    --oa-text: #15181c;
+    --oa-text-2: #454c56;
+    --oa-text-muted: #5f6670;
+    --oa-accent: #2350d0;
+    --oa-accent-soft: #e7edfc;
+    --oa-focus: #2350d0;
+    --oa-danger: #be2f1c;
+    --oa-x: #2350d0;
+    --oa-o: #be2f1c;
+    --oa-x-soft: #e7edfc;
+    --oa-o-soft: #fbe6e2;
+    --oa-font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --oa-font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --oa-radius-lg: 8px;
+    --oa-duration: 200ms;
+    --oa-ease: cubic-bezier(0.2, 0, 0, 1);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --oa-bg: #131518;
+      --oa-surface: #1c1f23;
+      --oa-surface-2: #212429;
+      --oa-divider: #2c3037;
+      --oa-border: #3b414a;
+      --oa-border-strong: #676e78;
+      --oa-text: #e9ebee;
+      --oa-text-2: #b7bdc6;
+      --oa-text-muted: #9097a1;
+      --oa-accent: #7f9cff;
+      --oa-accent-soft: #1f2a4a;
+      --oa-focus: #7f9cff;
+      --oa-danger: #ff7f6b;
+      --oa-x: #7f9cff;
+      --oa-o: #ff7f6b;
+      --oa-x-soft: #1f2a4a;
+      --oa-o-soft: #3a1f1a;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --oa-bg: #131518;
+    --oa-surface: #1c1f23;
+    --oa-surface-2: #212429;
+    --oa-divider: #2c3037;
+    --oa-border: #3b414a;
+    --oa-border-strong: #676e78;
+    --oa-text: #e9ebee;
+    --oa-text-2: #b7bdc6;
+    --oa-text-muted: #9097a1;
+    --oa-accent: #7f9cff;
+    --oa-accent-soft: #1f2a4a;
+    --oa-focus: #7f9cff;
+    --oa-danger: #ff7f6b;
+    --oa-x: #7f9cff;
+    --oa-o: #ff7f6b;
+    --oa-x-soft: #1f2a4a;
+    --oa-o-soft: #3a1f1a;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    min-height: 100vh;
+    background: var(--oa-bg);
+    color: var(--oa-text);
+    font-family: var(--oa-font-sans);
+    font-size: 14px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    padding: 20px 16px;
+  }
+  main { max-width: 360px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px; }
+
+  .kicker {
+    margin: 0;
+    font-family: var(--oa-font-mono);
+    font-size: 13px;
+    color: var(--oa-text-muted);
+  }
+  h1 { margin: 4px 0 2px; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+
+  .seats { list-style: none; margin: 0; padding: 0; display: flex; gap: 8px; }
+  .seat {
+    flex: 1 1 0;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border: 1px solid var(--oa-border);
+    border-radius: 999px;
+    background: var(--oa-surface);
+    color: var(--oa-text-2);
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: border-color var(--oa-duration) var(--oa-ease), background-color var(--oa-duration) var(--oa-ease);
+  }
+  .seat .m { font-weight: 600; }
+  .seat[data-mark="X"] .m { color: var(--oa-x); }
+  .seat[data-mark="O"] .m { color: var(--oa-o); }
+  .seat[data-you="true"] { color: var(--oa-text); font-weight: 500; }
+  .seat[data-turn="true"] { border-color: var(--oa-accent); background: var(--oa-accent-soft); color: var(--oa-text); }
+
+  .board {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    width: 100%;
+    aspect-ratio: 1;
+  }
+  .row { display: contents; }
+  .cell {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: 1px solid var(--oa-border);
+    border-radius: var(--oa-radius-lg);
+    background: var(--oa-surface);
+    color: var(--oa-text);
+    font: 600 clamp(32px, 11vw, 44px) / 1 var(--oa-font-sans);
+    cursor: pointer;
+    touch-action: manipulation;
+    transition: border-color var(--oa-duration) var(--oa-ease), background-color var(--oa-duration) var(--oa-ease);
+  }
+  .cell:focus-visible { outline: 2px solid var(--oa-focus); outline-offset: 2px; }
+  .cell[aria-disabled="true"] { cursor: default; }
+  .cell[data-playable="true"]:hover { border-color: var(--oa-border-strong); background: var(--oa-surface-2); }
+  .cell[data-mark="X"] { color: var(--oa-x); }
+  .cell[data-mark="O"] { color: var(--oa-o); }
+  .cell[data-win="true"][data-mark="X"] { background: var(--oa-x-soft); border-color: var(--oa-x); }
+  .cell[data-win="true"][data-mark="O"] { background: var(--oa-o-soft); border-color: var(--oa-o); }
+  .cell .g { display: block; }
+  .cell .g.new { animation: pop 220ms var(--oa-ease); }
+  @keyframes pop { from { transform: scale(0.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+  .status { margin: 0; font-size: 15px; min-height: 1.45em; text-wrap: pretty; }
+
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .btn {
+    min-height: 40px;
+    padding: 8px 14px;
+    border: 1px solid var(--oa-border);
+    border-radius: var(--oa-radius-lg);
+    background: var(--oa-surface);
+    color: var(--oa-text);
+    font: inherit;
+    font-weight: 500;
+    cursor: pointer;
+    touch-action: manipulation;
+    transition: border-color var(--oa-duration) var(--oa-ease);
+  }
+  .btn:hover:not(:disabled):not([aria-disabled="true"]) { border-color: var(--oa-border-strong); }
+  .btn:focus-visible { outline: 2px solid var(--oa-focus); outline-offset: 2px; }
+  .btn.primary { background: var(--oa-accent); border-color: var(--oa-accent); color: var(--oa-surface); }
+  .btn.primary:hover:not(:disabled):not([aria-disabled="true"]) { border-color: var(--oa-accent); filter: brightness(1.08); }
+  .btn:disabled, .btn[aria-disabled="true"] { opacity: 0.55; cursor: default; }
+
+  .note { margin: 2px 0 0; color: var(--oa-text-muted); font-size: 13px; text-wrap: pretty; }
+  .error { margin: 0; color: var(--oa-danger); font-size: 13px; }
+  .error:empty { display: none; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .seat, .cell, .btn { transition: none; }
+    .cell .g.new { animation: none; }
+  }
+  .demo-links { margin: 20px auto 0; text-align: center; font-size: 12.5px; }
+  .demo-links a { color: var(--oa-text-muted); text-decoration: none; border-radius: 2px; }
+  .demo-links a:hover { color: var(--oa-text-2); text-decoration: underline; text-underline-offset: 2px; }
+  .demo-links a:focus-visible { outline: 2px solid var(--oa-focus); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<main>
+  <p class="kicker">Two seats · everyone else watches</p>
+  <h1 id="title">Tic-tac-toe</h1>
+  <ul class="seats" id="seats" aria-label="Who's playing"></ul>
+  <!-- biome-ignore lint/a11y/useSemanticElements: an ARIA grid of gridcell buttons with arrow-key focus; no native element does this -->
+  <div class="board" id="board" role="grid" aria-labelledby="title" aria-describedby="status"></div>
+  <p class="status" id="status">Connecting…</p>
+  <div class="actions" id="actions"></div>
+  <p class="note" id="note">Seats free up 5 minutes after a player's last move.</p>
+  <p class="error" id="error" role="alert"></p>
+  <p class="sr" id="announce" aria-live="polite"></p>
+</main>
+<footer class="demo-links" data-demo-links="gallery" hidden></footer>
+
+<script>
+(() => {
+  "use strict";
+
+  const COLLECTION = "game";
+  const DOC_ID = "game";
+  /* A seat frees 5 minutes after its holder's last move. No heartbeat: the demo has 10k writes a day. */
+  const SEAT_TTL_MS = 5 * 60 * 1000;
+  const SKEW_MS = 30 * 1000; // grace for other browsers' clocks when checking a write
+  const LINES = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]];
+  const MARKS = ["X", "O"];
+  const slot = (m) => (m === "X" ? "x" : "o");
+  const other = (m) => (m === "X" ? "O" : "X");
+
+  const OA = window.openArtifacts;
+  const $ = (id) => document.getElementById(id);
+  const el = { seats: $("seats"), board: $("board"), status: $("status"), actions: $("actions"), error: $("error"), announce: $("announce") };
+
+  let me = null;       // { id, signedIn }
+  let col = null;
+  let game = null;     // { board, x, o }: the last state this window accepted
+  let busy = false;
+  let ready = false;   // identity resolved, subscribed and the first load done
+  let failText = "";   // why the board could not start, shown instead of "Connecting…"
+  let readOnly = false;
+  let closed = false;
+  let focusIndex = 4;
+  let freshCell = -1;  // the cell to animate
+
+  /* ---------- identity (as in the poll); used only for seat labels ---------- */
+
+  const safeId = (s) => String(s).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 100);
+  function randomId() {
+    const b = new Uint8Array(12);
+    crypto.getRandomValues(b);
+    return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  }
+  /** A per-browser id when storage works, else per tab. Used when viewer.anonId() has no id. */
+  function localId() {
+    for (const store of ["localStorage", "sessionStorage"]) {
+      try {
+        const s = window[store];
+        let id = s.getItem("oa-demo-id");
+        if (!id) { id = randomId(); s.setItem("oa-demo-id", id); }
+        return id;
+      } catch { /* sandboxed: try the next */ }
+    }
+    return randomId();
+  }
+  async function hash(s) {
+    try {
+      const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+      return Array.from(new Uint8Array(d).slice(0, 12), (x) => x.toString(16).padStart(2, "0")).join("");
+    } catch {
+      let h = 2166136261;
+      for (const c of s) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
+      return (h >>> 0).toString(16);
+    }
+  }
+  async function identify() {
+    let viewer = null;
+    try { viewer = await OA.viewer.get(); } catch { viewer = null; }
+    if (viewer && viewer.email) return { id: `u-${await hash(viewer.email)}`, signedIn: true };
+    // viewer.anonId(), else the { anonId } that viewer.get() returns on servers before it.
+    let anon = null;
+    try {
+      if (OA.viewer && typeof OA.viewer.anonId === "function") anon = await OA.viewer.anonId();
+    } catch { anon = null; }
+    if (!anon && viewer && typeof viewer.anonId === "string") anon = viewer.anonId;
+    if (anon && safeId(anon)) return { id: safeId(anon), signedIn: false };
+    return { id: localId(), signedIn: false };
+  }
+
+  /* ---------- rules ---------- */
+
+  const emptyGame = () => ({ board: Array(9).fill(""), x: null, o: null });
+
+  function cleanSeat(s) {
+    if (!s || typeof s !== "object") return null;
+    const id = safeId(s.id || "");
+    const at = Number(s.at);
+    return id && Number.isFinite(at) ? { id, at } : null;
+  }
+  /** The stored doc as a game, or null when it isn't one. */
+  function normalize(data) {
+    if (!data || !Array.isArray(data.board) || data.board.length !== 9) return null;
+    const board = data.board.map((c) => (c === "X" || c === "O" ? c : ""));
+    const xs = board.filter((c) => c === "X").length;
+    const os = board.filter((c) => c === "O").length;
+    if (xs - os !== 0 && xs - os !== 1) return null;
+    return { board, x: cleanSeat(data.x), o: cleanSeat(data.o) };
+  }
+
+  const turnOf = (board) => (board.filter((c) => c === "X").length > board.filter((c) => c === "O").length ? "O" : "X");
+  function outcome(board) {
+    for (const line of LINES) {
+      const [a, b, c] = line;
+      if (board[a] && board[a] === board[b] && board[a] === board[c]) return { winner: board[a], line };
+    }
+    return board.every(Boolean) ? { draw: true } : null;
+  }
+  const live = (seat, grace = 0) => Boolean(seat) && Date.now() - seat.at < SEAT_TTL_MS + grace;
+  const sameSeat = (a, b) => (a ? a.id + ":" + a.at : "") === (b ? b.id + ":" + b.at : "");
+  const isEmpty = (board) => board.every((c) => !c);
+
+  /** The mark this window holds, or null when watching. */
+  function myMark(g = game) {
+    if (!g || !me) return null;
+    for (const m of MARKS) if (live(g[slot(m)]) && g[slot(m)].id === me.id) return m;
+    return null;
+  }
+
+  /**
+   * Accepts a new state only if it follows from the previous one by a single
+   * claim, leave, move or start over. Seats are first come, first served.
+   */
+  function legal(prev, next) {
+    const seatLive = (seat) => live(seat, SKEW_MS);
+    if (next.x && next.o && next.x.id === next.o.id) return false;
+
+    const changed = [];
+    for (let i = 0; i < 9; i += 1) if (prev.board[i] !== next.board[i]) changed.push(i);
+
+    if (changed.length === 0) {
+      // Claim or leave: a seat is let go, or taken when it is free.
+      for (const m of MARKS) {
+        const a = prev[slot(m)], b = next[slot(m)];
+        if (sameSeat(a, b) || b === null) continue;
+        if (seatLive(a) && a.id !== b.id) return false;
+      }
+      return true;
+    }
+
+    if (isEmpty(next.board)) {
+      // Start over: seats stay with their holders.
+      for (const m of MARKS) {
+        const a = prev[slot(m)], b = next[slot(m)];
+        if (!sameSeat(a, b) && !(a && b && a.id === b.id)) return false;
+      }
+      return true;
+    }
+
+    // A move: one empty cell, the right mark, by a seat that is still held.
+    if (changed.length !== 1 || outcome(prev.board)) return false;
+    const i = changed[0];
+    const m = turnOf(prev.board);
+    if (prev.board[i] !== "" || next.board[i] !== m) return false;
+    const seat = prev[slot(m)], after = next[slot(m)];
+    if (!seatLive(seat) || !after || after.id !== seat.id) return false;
+    return sameSeat(prev[slot(other(m))], next[slot(other(m))]);
+  }
+
+  /* ---------- data ---------- */
+
+  /** Takes the server's doc as is: on first load and after a resync, there is no history to check. */
+  async function load() {
+    const doc = await col.get(DOC_ID);
+    const g = doc && normalize(doc.data);
+    setGame(g || emptyGame(), false);
+  }
+
+  function onChange(e) {
+    if (!game) return; // load() has not finished; it reads the latest anyway
+    if (e.resync) { load().catch(() => {}); return; }
+    for (const id of e.deleted) if (id === DOC_ID) setGame(emptyGame(), true);
+    for (const d of e.docs) {
+      if (d.id !== DOC_ID) continue;
+      if (!d.data) { load().catch(() => {}); continue; } // too large to broadcast inline
+      const next = normalize(d.data);
+      if (!next || !legal(game, next)) continue; // skip writes that break the rules
+      setGame(next, true);
+    }
+  }
+
+  function setGame(next, announceIt) {
+    const prev = game;
+    game = next;
+    if (announceIt && prev) announce(prev, next);
+    render();
+  }
+
+  /* ---------- actions ---------- */
+
+  /** Every write carries me.id: never write without one. */
+  const hasId = () => Boolean(me) && typeof me.id === "string" && me.id.length > 0;
+  const seatFor = () => ({ id: me.id, at: Date.now() });
+
+  async function write(next) {
+    if (busy) { hint(SAVING); return; }
+    if (readOnly || closed) { hint(el.error.textContent || "This board can't save moves."); return; }
+    if (!hasId()) { hint(NO_ID); return; }
+    busy = true;
+    showError("");
+    const prev = game;
+    setGame(next, true);
+    try {
+      await col.set(DOC_ID, next);
+    } catch (err) {
+      handleWriteError(err);
+      game = prev;
+      await load().catch(() => render());
+    } finally {
+      busy = false;
+      render();
+    }
+  }
+
+  /* Seats are checked against the clock at click time, not the last render. */
+  function claim(m) {
+    if (notReady()) return;
+    const mine = myMark();
+    if (mine) { hint(`You already play ${mine}.`); return; }
+    if (live(game[slot(m)])) { hint(`Seat ${m} was just taken by another browser.`); return; }
+    write({ ...game, [slot(m)]: seatFor() });
+  }
+  function leave() {
+    if (notReady()) return;
+    const m = myMark();
+    if (m) write({ ...game, [slot(m)]: null });
+    else hint("Your seat already timed out.");
+  }
+  function play(i) {
+    if (notReady()) return;
+    if (busy) { hint(SAVING); return; }
+    const m = myMark();
+    if (!m) { hint(whyWatching()); return; }
+    if (!canMove(m)) { hint(whyWaiting(m)); return; }
+    if (game.board[i]) { hint("That square is taken."); return; }
+    const board = game.board.slice();
+    board[i] = m;
+    freshCell = i;
+    write({ ...game, board, [slot(m)]: seatFor() });
+  }
+  function startOver() {
+    if (notReady()) return;
+    if (!canStartOver()) { hint("Only a player can start over while the seats are taken."); return; }
+    const m = myMark();
+    freshCell = -1;
+    write({ ...game, board: Array(9).fill(""), ...(m ? { [slot(m)]: seatFor() } : {}) });
+  }
+
+  /** Why a click on the board did nothing for a window without a seat. */
+  function whyWatching() {
+    if (MARKS.some((m) => game[slot(m)] && game[slot(m)].id === me.id)) return "Your seat timed out after 5 minutes without a move. Take a seat to play again.";
+    return MARKS.some((m) => !live(game[slot(m)])) ? "Take a seat to play." : "You are watching. Both seats are taken.";
+  }
+  function whyWaiting(m) {
+    if (outcome(game.board)) return "This game is over. Start over to play again.";
+    if (!bothSeated()) return `Waiting for someone to take ${other(m)}.`;
+    return `It's ${turnOf(game.board)}'s turn.`;
+  }
+
+  const bothSeated = () => MARKS.every((m) => live(game[slot(m)]));
+  const canMove = (m) => Boolean(game) && bothSeated() && !outcome(game.board) && turnOf(game.board) === m;
+  const canStartOver = () => Boolean(game) && !isEmpty(game.board) && (Boolean(myMark()) || !MARKS.some((m) => live(game[slot(m)])));
+
+  function handleWriteError(err) {
+    const code = err && err.code;
+    const msg = String((err && err.message) || "");
+    if ((code === "rate_limited" || code === "quota_exceeded") && /daily|day/i.test(msg)) {
+      closed = true;
+      showError("The board is done for today. It resets at 00:00 UTC.");
+    } else if (code === "rate_limited") showError("Too many moves from your network. Try again in a minute.");
+    else if (code === "unauthorized") { readOnly = true; showError("Sign in to play on this board."); }
+    else if (code === "capability_denied") { readOnly = true; showError("This board can't save moves."); }
+    else showError("That move didn't save. Try again.");
+  }
+
+  /* ---------- render ---------- */
+
+  const nameOf = (m) => {
+    const seat = game && game[slot(m)];
+    if (!live(seat)) return "open";
+    return me && seat.id === me.id ? "you" : "another browser";
+  };
+  const cellName = (i) => `row ${Math.floor(i / 3) + 1}, column ${(i % 3) + 1}`;
+
+  function statusText() {
+    if (!game || !ready) return failText || "Connecting…";
+    const mine = myMark();
+    const end = outcome(game.board);
+    if (end && end.winner) return end.winner === mine ? "You win." : `${end.winner} wins.`;
+    if (end) return "Draw.";
+    const open = MARKS.filter((m) => !live(game[slot(m)]));
+    if (open.length) {
+      if (mine) return `Waiting for someone to take ${other(mine)}. Open this page in another browser to play both sides.`;
+      return open.length === 2 ? "Both seats are open. Take one to play." : `Seat ${open[0]} is open. Take it to play.`;
+    }
+    const turn = turnOf(game.board);
+    if (!mine) return `${turn} to move. You are watching.`;
+    return turn === mine ? "Your move." : `${turn} to move.`;
+  }
+
+  function announce(prev, next) {
+    let msg = "";
+    const changed = [];
+    for (let i = 0; i < 9; i += 1) if (prev.board[i] !== next.board[i]) changed.push(i);
+    if (changed.length === 1 && next.board[changed[0]]) {
+      const i = changed[0];
+      msg = `${next.board[i]} played ${cellName(i)}.`;
+      if (freshCell !== i) freshCell = i;
+    } else if (changed.length && isEmpty(next.board)) {
+      msg = "New game.";
+      freshCell = -1;
+    }
+    if (msg) {
+      const g = game; game = next;
+      msg += ` ${statusText()}`;
+      game = g;
+    } else {
+      for (const m of MARKS) {
+        const a = prev[slot(m)], b = next[slot(m)];
+        if ((a && a.id) !== (b && b.id)) msg += `${m}: ${b ? (me && b.id === me.id ? "you" : "another browser") : "open"}. `;
+      }
+    }
+    if (msg) el.announce.textContent = msg.trim();
+  }
+
+  function buildBoard() {
+    for (let r = 0; r < 3; r += 1) {
+      const row = document.createElement("div");
+      row.className = "row";
+      row.setAttribute("role", "row");
+      for (let c = 0; c < 3; c += 1) {
+        const i = r * 3 + c;
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "cell";
+        b.setAttribute("role", "gridcell");
+        b.tabIndex = i === focusIndex ? 0 : -1;
+        b.setAttribute("aria-disabled", "true");
+        b.addEventListener("click", () => { focusIndex = i; play(i); });
+        b.addEventListener("focus", () => setFocus(i, false));
+        row.append(b);
+      }
+      el.board.append(row);
+    }
+    el.board.addEventListener("keydown", onKey);
+  }
+  const cells = () => el.board.querySelectorAll(".cell");
+  function setFocus(i, move) {
+    focusIndex = i;
+    cells().forEach((b, j) => { b.tabIndex = j === i ? 0 : -1; });
+    if (move) cells()[i].focus();
+  }
+  function onKey(e) {
+    const r = Math.floor(focusIndex / 3), c = focusIndex % 3;
+    const to = {
+      ArrowUp: [Math.max(0, r - 1), c], ArrowDown: [Math.min(2, r + 1), c],
+      ArrowLeft: [r, Math.max(0, c - 1)], ArrowRight: [r, Math.min(2, c + 1)],
+      Home: [r, 0], End: [r, 2],
+    }[e.key];
+    if (!to) return;
+    e.preventDefault();
+    setFocus(e.ctrlKey && (e.key === "Home" || e.key === "End") ? (e.key === "Home" ? 0 : 8) : to[0] * 3 + to[1], true);
+  }
+
+  let expiry = null;
+  function render() {
+    if (!game) { el.status.textContent = statusText(); return; }
+    const mine = myMark();
+    const end = outcome(game.board);
+    const win = new Set(end && end.line ? end.line : []);
+    const turn = end ? null : turnOf(game.board);
+
+    el.seats.replaceChildren(...MARKS.map((m) => {
+      const li = document.createElement("li");
+      li.className = "seat";
+      li.dataset.mark = m;
+      li.dataset.you = String(mine === m);
+      li.dataset.turn = String(turn === m && bothSeated());
+      const mk = document.createElement("span");
+      mk.className = "m";
+      mk.textContent = `${m}:`;
+      li.append(mk, ` ${nameOf(m)}`);
+      if (turn === m && bothSeated()) li.setAttribute("aria-current", "true");
+      return li;
+    }));
+
+    cells().forEach((b, i) => {
+      const mark = game.board[i];
+      const playable = ready && Boolean(mine) && !busy && !readOnly && !closed && canMove(mine) && !mark;
+      b.dataset.mark = mark;
+      b.dataset.win = String(win.has(i));
+      b.dataset.playable = String(playable);
+      b.setAttribute("aria-disabled", String(!playable));
+      b.setAttribute("aria-label", `${cellName(i)}: ${mark || "empty"}${win.has(i) ? ", winning line" : ""}`);
+      if (b.dataset.shown !== mark) {
+        b.dataset.shown = mark;
+        b.replaceChildren();
+        if (mark) {
+          const g = document.createElement("span");
+          g.className = i === freshCell ? "g new" : "g";
+          g.setAttribute("aria-hidden", "true");
+          g.textContent = mark;
+          b.append(g);
+        }
+      }
+    });
+
+    el.status.textContent = statusText();
+    renderActions(mine);
+
+    // Re-render the moment a seat expires, so a stale label never offers the wrong button.
+    clearTimeout(expiry);
+    const left = Math.min(...MARKS.map((m) => (live(game[slot(m)]) ? game[slot(m)].at + SEAT_TTL_MS - Date.now() : Infinity)));
+    if (left < Infinity) expiry = setTimeout(render, left + 50);
+  }
+
+  function renderActions(mine) {
+    const want = [];
+    if (!mine) for (const m of MARKS) if (!live(game[slot(m)])) want.push(["claim-" + m, `Play as ${m}`, true]);
+    if (canStartOver()) want.push(["reset", "Start over", Boolean(outcome(game.board))]);
+    if (mine) want.push(["leave", "Leave seat", false]);
+    const key = want.map((w) => w.join("|")).join(",");
+    const off = !ready || readOnly || closed;
+    if (el.actions.dataset.key !== key) {
+      const hadFocus = el.actions.contains(document.activeElement) ? document.activeElement.dataset.act : null;
+      el.actions.dataset.key = key;
+      el.actions.replaceChildren(...want.map(([act, label, primary]) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = primary ? "btn primary" : "btn";
+        b.dataset.act = act;
+        b.textContent = label;
+        return b;
+      }));
+      if (hadFocus) {
+        const again = el.actions.querySelector(`[data-act="${hadFocus}"]`);
+        (again || el.board.querySelector('.cell[tabindex="0"]')).focus();
+      }
+    }
+    el.actions.querySelectorAll("button").forEach((b) => { b.disabled = off; b.setAttribute("aria-disabled", String(busy)); });
+  }
+
+  el.actions.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-act]");
+    if (!b) return;
+    const act = b.dataset.act;
+    if (busy) { hint(SAVING); return; }
+    if (act.startsWith("claim-")) claim(act.slice(6));
+    else if (act === "reset") startOver();
+    else if (act === "leave") leave();
+  });
+
+  function showError(m) { el.error.textContent = m; }
+  function fail(msg = "Could not reach the board. Reload to try again.") {
+    failText = msg;
+    el.status.textContent = msg;
+  }
+
+  /* ---------- feedback ---------- */
+
+  const SAVING = "Saving your last move…";
+  const NO_ID = "Can't tell who you are, so nothing was saved. Reload to try again.";
+  let hintTimer = null;
+  /** Says why a click did nothing, on the status line and to screen readers, then goes back to the usual status. */
+  function hint(msg) {
+    render(); // refresh first: what the click saw may be stale
+    el.status.textContent = msg;
+    el.announce.textContent = msg;
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(render, 4000);
+  }
+  /** Before the first load: says so instead of dropping the click. */
+  function notReady() {
+    if (ready) return false;
+    hint(failText || "Still connecting, try again in a moment.");
+    return true;
+  }
+
+  /* ---------- boot ---------- */
+
+  async function boot() {
+    buildBoard();
+    if (!OA || !OA.db) {
+      fail("Open this board from its view link to play.");
+      return;
+    }
+    await OA.ready;
+    const setTheme = (t) => { document.documentElement.dataset.theme = t; };
+    setTheme(OA.theme);
+    OA.onTheme(setTheme);
+    me = await identify();
+    col = OA.db.collection(COLLECTION);
+    col.subscribe(onChange);
+    await load();
+    ready = true;
+    failText = "";
+    render();
+    // Seats expire on the clock, not on a write: re-render so labels stay honest.
+    setInterval(render, 10000);
+  }
+  setTimeout(() => { if (!ready && !failText) fail("Could not connect. Reload to try again."); }, 10000);
+  boot().catch(() => fail());
+})();
+</script>
+<script>
+/* Links to the other demos. The publish script fills APP_ORIGIN and each id from
+   ops/demo/ids.json; a link whose id is still a placeholder is never made. */
+(() => {
+  "use strict";
+  const APP_ORIGIN = "{{origin}}";
+  const IDS = { gallery: "{{id:gallery}}" };
+  const resolved = (v) => typeof v === "string" && !v.startsWith("{" + "{");
+  const VALID_ID = /^[A-Za-z0-9_-]{4,64}$/;
+  function appOrigin() {
+    if (resolved(APP_ORIGIN) && /^https?:\/\/[^/]+$/.test(APP_ORIGIN)) return APP_ORIGIN;
+    try {
+      const anc = window.location.ancestorOrigins;
+      if (anc && anc.length && anc[anc.length - 1] !== "null") return anc[anc.length - 1];
+    } catch {}
+    return "";
+  }
+  const base = appOrigin();
+  const LABELS = { gallery: "All demos", tictactoe: "Tic-tac-toe", chess: "Chess" };
+  /* Links are built here, never in the markup, so an unfilled id leaves no link behind. */
+  function link(slug, text) {
+    const id = IDS[slug];
+    if (!resolved(id) || !VALID_ID.test(id)) return null;
+    const a = document.createElement("a");
+    a.href = `${base}/a/${id}`;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.dataset.demo = slug;
+    a.textContent = text;
+    if (slug === "gallery") a.insertAdjacentHTML("beforeend", '<span aria-hidden="true"> ↗</span>');
+    a.insertAdjacentHTML("beforeend", '<span class="sr"> (opens in new tab)</span>');
+    return a;
+  }
+  /* data-demo-link: the element's own text becomes the link. */
+  for (const el of document.querySelectorAll("[data-demo-link]")) {
+    const a = link(el.dataset.demoLink, el.textContent);
+    if (a) el.replaceChildren(a);
+  }
+  /* data-demo-links: a hidden list of links, shown once at least one resolves. */
+  for (const el of document.querySelectorAll("[data-demo-links]")) {
+    for (const slug of el.dataset.demoLinks.split(" ")) {
+      const a = link(slug, LABELS[slug]);
+      if (a) el.append(a);
+    }
+    el.hidden = !el.children.length;
+  }
+})();
+</script>
+</body>
+</html>

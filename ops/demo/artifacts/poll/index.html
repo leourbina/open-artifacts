@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live poll</title>
+<style>
+  /* Studio tokens (packages/ui/src/tokens/tokens.css), inlined: no external fonts. */
+  :root {
+    color-scheme: light;
+    --oa-bg: #eef0f3;
+    --oa-surface: #ffffff;
+    --oa-surface-2: #f6f7f9;
+    --oa-divider: #e0e3e8;
+    --oa-border: #bec4cd;
+    --oa-border-strong: #848b95;
+    --oa-text: #15181c;
+    --oa-text-2: #454c56;
+    --oa-text-muted: #5f6670;
+    --oa-accent: #2350d0;
+    --oa-accent-soft: #e7edfc;
+    --oa-focus: #2350d0;
+    --oa-danger: #be2f1c;
+    --oa-font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --oa-font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --oa-radius-lg: 8px;
+    --oa-duration: 200ms;
+    --oa-ease: cubic-bezier(0.2, 0, 0, 1);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --oa-bg: #131518;
+      --oa-surface: #1c1f23;
+      --oa-surface-2: #212429;
+      --oa-divider: #2c3037;
+      --oa-border: #3b414a;
+      --oa-border-strong: #676e78;
+      --oa-text: #e9ebee;
+      --oa-text-2: #b7bdc6;
+      --oa-text-muted: #9097a1;
+      --oa-accent: #7f9cff;
+      --oa-accent-soft: #1f2a4a;
+      --oa-focus: #7f9cff;
+      --oa-danger: #ff7f6b;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --oa-bg: #131518;
+    --oa-surface: #1c1f23;
+    --oa-surface-2: #212429;
+    --oa-divider: #2c3037;
+    --oa-border: #3b414a;
+    --oa-border-strong: #676e78;
+    --oa-text: #e9ebee;
+    --oa-text-2: #b7bdc6;
+    --oa-text-muted: #9097a1;
+    --oa-accent: #7f9cff;
+    --oa-accent-soft: #1f2a4a;
+    --oa-focus: #7f9cff;
+    --oa-danger: #ff7f6b;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    min-height: 100vh;
+    background: var(--oa-bg);
+    color: var(--oa-text);
+    font-family: var(--oa-font-sans);
+    font-size: 14px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    padding: 20px 16px;
+  }
+  main { max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px; }
+
+  .kicker {
+    margin: 0;
+    font-family: var(--oa-font-mono);
+    font-size: 13px;
+    color: var(--oa-text-muted);
+  }
+  h1 { margin: 4px 0 2px; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; text-wrap: balance; }
+
+  .options { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  .opt {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 48px;
+    padding: 10px 14px;
+    border: 1px solid var(--oa-border);
+    border-radius: var(--oa-radius-lg);
+    background: var(--oa-surface);
+    color: var(--oa-text);
+    font: inherit;
+    font-size: 15px;
+    text-align: left;
+    cursor: pointer;
+    overflow: hidden;
+    isolation: isolate;
+    touch-action: manipulation;
+    transition: border-color var(--oa-duration) var(--oa-ease);
+  }
+  .opt:hover { border-color: var(--oa-border-strong); }
+  .opt:focus-visible { outline: 2px solid var(--oa-focus); outline-offset: 2px; }
+  .opt[aria-pressed="true"] { border-color: var(--oa-accent); box-shadow: inset 0 0 0 1px var(--oa-accent); }
+  .opt:disabled { cursor: default; }
+  .opt:disabled:hover { border-color: var(--oa-border); }
+  .opt[aria-pressed="true"]:disabled:hover { border-color: var(--oa-accent); }
+  .bar {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 0;
+    background: var(--oa-accent-soft);
+    z-index: -1;
+    transition: width 420ms var(--oa-ease);
+  }
+  .label { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  .check { display: inline-block; width: 1.1em; color: var(--oa-accent); font-weight: 600; }
+  .opt:not([aria-pressed="true"]) .check { display: none; }
+  .count {
+    flex: none;
+    font-variant-numeric: tabular-nums;
+    color: var(--oa-text);
+  }
+  .pct { color: var(--oa-text-muted); margin-left: 8px; font-size: 13px; }
+
+  .note { margin: 2px 0 0; color: var(--oa-text-muted); font-size: 13px; text-wrap: pretty; }
+  .error { margin: 0; color: var(--oa-danger); font-size: 13px; }
+  .error:empty { display: none; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .bar, .opt { transition: none; }
+  }
+  .demo-links { margin: 20px auto 0; text-align: center; font-size: 12.5px; }
+  .demo-links a { color: var(--oa-text-muted); text-decoration: none; border-radius: 2px; }
+  .demo-links a:hover { color: var(--oa-text-2); text-decoration: underline; text-underline-offset: 2px; }
+  .demo-links a:focus-visible { outline: 2px solid var(--oa-focus); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<main>
+  <p class="kicker" id="kicker">Today's question · resets 00:00 UTC</p>
+  <h1 id="question">Loading today's question</h1>
+  <ul class="options" id="options" aria-labelledby="question"></ul>
+  <p class="note" id="note">Connecting…</p>
+  <p class="error" id="error" role="alert"></p>
+  <p class="sr" id="announce" aria-live="polite"></p>
+</main>
+<footer class="demo-links" data-demo-links="gallery" hidden></footer>
+
+<script>
+(() => {
+  "use strict";
+
+  /* One preset question a day, picked by UTC day. No free text anywhere. */
+  const QUESTIONS = [
+    { q: "Tabs or spaces?", o: ["Spaces", "Tabs", "Whatever the formatter says"] },
+    { q: "Light or dark mode?", o: ["Light", "Dark", "Follow the system"] },
+    { q: "Best time to deploy?", o: ["Monday morning", "Friday afternoon", "Whenever CI is green"] },
+    { q: "Where do your notes live?", o: ["Plain text files", "A notes app", "Paper", "In my head"] },
+    { q: "Coffee or tea?", o: ["Coffee", "Tea", "Both", "Neither"] },
+    { q: "How do you read docs?", o: ["Top to bottom", "Jump to the example", "Ask an AI agent", "Read the source"] },
+    { q: "Your editor font size?", o: ["12 or smaller", "13 to 14", "15 to 16", "17 or larger"] },
+    { q: "Monorepo or many repos?", o: ["Monorepo", "Many repos", "Depends on the team"] },
+    { q: "How many browser tabs are open right now?", o: ["Under 10", "10 to 30", "31 to 100", "Too many to count"] },
+    { q: "Your commit messages are mostly…", o: ["Conventional commits", "Short and casual", "Long and detailed", "\"fix\""] },
+    { q: "Keyboard or mouse?", o: ["Keyboard", "Mouse or trackpad", "Both equally"] },
+    { q: "Best desk companion?", o: ["Cat", "Dog", "Rubber duck", "Houseplant"] },
+    { q: "Meetings on a normal day?", o: ["None", "One", "Two or three", "Four or more"] },
+    { q: "First thing you check in the morning?", o: ["Email", "Chat", "CI", "The weather"] },
+  ];
+  const COOLDOWN_MS = 2000; // keeps one visitor well under the per-IP write limit
+  const PAGE = 500;
+
+  const OA = window.openArtifacts;
+  const $ = (id) => document.getElementById(id);
+  const el = { kicker: $("kicker"), question: $("question"), options: $("options"), note: $("note"), error: $("error"), announce: $("announce") };
+
+  let me = null;             // { id, signedIn }
+  let day = "";              // YYYYMMDD (UTC)
+  let poll = null;           // today's { q, o }
+  let col = null;            // votes-YYYYMMDD
+  let unsub = null;
+  const votes = new Map();   // docId -> option index
+  let mine = null;           // my option index (optimistic)
+  let pending = null;        // option waiting for the cooldown
+  let lastWrite = 0;
+  let timer = null;
+  let readOnly = false;
+  let ready = false;         // identity resolved, subscribed and the first load done
+  let failText = "";         // why the poll could not start, shown instead of "Connecting…"
+  let closed = false;
+
+  const utcDay = (t = Date.now()) => new Date(t).toISOString().slice(0, 10).replace(/-/g, "");
+  const dayIndex = (t = Date.now()) => Math.floor(t / 86400000);
+  const nf = new Intl.NumberFormat("en-US");
+
+  /* ---------- identity ---------- */
+
+  const safeId = (s) => String(s).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 100);
+  function randomId() {
+    const b = new Uint8Array(12);
+    crypto.getRandomValues(b);
+    return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  }
+  /** A per-browser id when storage works, else per tab. Used when viewer.anonId() has no id. */
+  function localId() {
+    for (const store of ["localStorage", "sessionStorage"]) {
+      try {
+        const s = window[store];
+        let id = s.getItem("oa-demo-id");
+        if (!id) { id = randomId(); s.setItem("oa-demo-id", id); }
+        return id;
+      } catch { /* sandboxed: try the next */ }
+    }
+    return randomId();
+  }
+  async function hash(s) {
+    try {
+      const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+      return Array.from(new Uint8Array(d).slice(0, 12), (x) => x.toString(16).padStart(2, "0")).join("");
+    } catch {
+      let h = 2166136261;
+      for (const c of s) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
+      return (h >>> 0).toString(16);
+    }
+  }
+  async function identify() {
+    let viewer = null;
+    try { viewer = await OA.viewer.get(); } catch { viewer = null; }
+    if (viewer && viewer.email) return { id: `u-${await hash(viewer.email)}`, signedIn: true };
+    // viewer.anonId(), else the { anonId } that viewer.get() returns on servers before it.
+    let anon = null;
+    try {
+      if (OA.viewer && typeof OA.viewer.anonId === "function") anon = await OA.viewer.anonId();
+    } catch { anon = null; }
+    if (!anon && viewer && typeof viewer.anonId === "string") anon = viewer.anonId;
+    if (anon && safeId(anon)) return { id: safeId(anon), signedIn: false };
+    return { id: localId(), signedIn: false };
+  }
+
+  /**
+   * Counts a vote only when it is well formed: a known option index.
+   */
+  function validVote(doc) {
+    const o = doc && doc.data && doc.data.o;
+    if (!Number.isInteger(o) || o < 0 || o >= poll.o.length) return null;
+    return o;
+  }
+
+  /* ---------- data ---------- */
+
+  async function loadAll() {
+    const next = new Map();
+    let cursor;
+    for (let i = 0; i < 100; i += 1) {
+      const page = await col.list(cursor ? { cursor, limit: PAGE } : { limit: PAGE });
+      for (const d of page.items) {
+        const o = validVote(d);
+        if (o !== null) next.set(d.id, o);
+      }
+      if (!page.nextCursor || page.items.length === 0) break;
+      cursor = page.nextCursor;
+    }
+    votes.clear();
+    for (const [k, v] of next) votes.set(k, v);
+    if (pending === null && !inFlight) mine = votes.has(me.id) ? votes.get(me.id) : null;
+  }
+
+  function applyChange(e) {
+    if (e.resync) { loadAll().then(render, () => {}); return; }
+    for (const d of e.docs) {
+      const o = validVote(d);
+      if (o === null) votes.delete(d.id); else votes.set(d.id, o);
+    }
+    for (const id of e.deleted) votes.delete(id);
+    // Your own vote from another window updates the pressed state here too.
+    if (pending === null && !inFlight) mine = votes.has(me.id) ? votes.get(me.id) : null;
+    render();
+  }
+
+  async function openDay() {
+    day = utcDay();
+    poll = QUESTIONS[dayIndex() % QUESTIONS.length];
+    if (unsub) unsub();
+    votes.clear();
+    mine = null;
+    closed = false;
+    col = OA.db.collection(`votes-${day}`);
+    unsub = col.subscribe(applyChange);
+    await loadAll();
+    render();
+    // Roll over at the next UTC midnight; nothing needs wiping.
+    const ms = (dayIndex() + 1) * 86400000 - Date.now() + 1000;
+    setTimeout(() => openDay().catch(() => fail()), ms);
+  }
+
+  /* ---------- voting ---------- */
+
+  let inFlight = false;
+  /** Every write carries me.id: never write without one. */
+  const hasId = () => Boolean(me) && typeof me.id === "string" && me.id.length > 0;
+  function vote(o) {
+    if (!ready) { hint(failText || "Still connecting, try again in a moment."); return; }
+    if (readOnly || closed) { hint(el.error.textContent || "This poll can't save votes."); return; }
+    if (!hasId()) { hint("Can't tell who you are, so nothing was saved. Reload to try again."); return; }
+    if (o === mine && pending === null) { hint(`Your vote is already ${poll.o[o]}.`); return; }
+    mine = o;
+    pending = o;
+    votes.set(me.id, o);
+    showError("");
+    render();
+    const wait = lastWrite + COOLDOWN_MS - Date.now();
+    el.announce.textContent = wait > 0 || inFlight ? `Voted ${poll.o[o]}. Saving in a moment.` : `Voted ${poll.o[o]}.`;
+    flush();
+  }
+  function flush() {
+    if (inFlight || pending === null || timer || !hasId()) return;
+    const wait = lastWrite + COOLDOWN_MS - Date.now();
+    if (wait > 0) { timer = setTimeout(() => { timer = null; flush(); }, wait); return; }
+    const o = pending;
+    pending = null;
+    inFlight = true;
+    lastWrite = Date.now();
+    const target = col;
+    target.set(me.id, { o })
+      .catch((err) => {
+        if (target !== col) return;
+        handleWriteError(err);
+        // Fall back to what the server has, including your own vote.
+        return loadAll().then(() => { mine = votes.has(me.id) ? votes.get(me.id) : null; render(); });
+      })
+      .finally(() => { inFlight = false; flush(); });
+  }
+
+  function handleWriteError(err) {
+    const code = err && err.code;
+    const msg = String((err && err.message) || "");
+    if (code === "rate_limited" && /daily/i.test(msg)) {
+      closed = true;
+      showError("Voting is done for today. A new question opens at 00:00 UTC.");
+    } else if (code === "rate_limited") showError("Too many votes from your network. Try again in a minute.");
+    else if (code === "unauthorized") { readOnly = true; showError("Sign in to vote on this poll."); }
+    else if (code === "capability_denied") { readOnly = true; showError("This poll can't save votes."); }
+    else showError("Your vote didn't save. Try again.");
+  }
+
+  /* ---------- render ---------- */
+
+  function showError(m) { el.error.textContent = m; }
+  function fail(msg = "Could not reach the poll. Reload to try again.") {
+    failText = msg;
+    el.note.textContent = msg;
+  }
+  let hintTimer = null;
+  /** Says why a click did nothing, on the note line and to screen readers, then goes back to the usual note. */
+  function hint(msg) {
+    render();
+    el.note.textContent = msg;
+    el.announce.textContent = msg;
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(render, 4000);
+  }
+
+  function render() {
+    if (!poll) { el.note.textContent = failText || "Connecting…"; return; }
+    el.question.textContent = poll.q;
+    const counts = poll.o.map(() => 0);
+    for (const o of votes.values()) counts[o] += 1;
+    const total = votes.size;
+    const max = Math.max(1, ...counts);
+
+    if (el.options.children.length !== poll.o.length) {
+      el.options.replaceChildren(...poll.o.map((label, i) => {
+        const li = document.createElement("li");
+        li.innerHTML = `<button type="button" class="opt" aria-pressed="false"><span class="bar" aria-hidden="true"></span><span class="label"><span class="check" aria-hidden="true">✓</span><span class="txt"></span></span><span class="count" aria-hidden="true"><span class="n"></span><span class="pct"></span></span></button>`;
+        li.querySelector(".txt").textContent = label;
+        li.firstChild.addEventListener("click", () => vote(i));
+        return li;
+      }));
+    }
+    poll.o.forEach((label, i) => {
+      const b = el.options.children[i].firstChild;
+      const pct = total ? Math.round((counts[i] / total) * 100) : 0;
+      b.querySelector(".txt").textContent = label;
+      b.querySelector(".bar").style.width = `${total ? (counts[i] / max) * 100 : 0}%`;
+      b.querySelector(".n").textContent = nf.format(counts[i]);
+      b.querySelector(".pct").textContent = `${pct}%`;
+      b.setAttribute("aria-pressed", String(mine === i));
+      b.disabled = readOnly || closed || !ready;
+      b.setAttribute("aria-label", `${label}: ${nf.format(counts[i])} ${counts[i] === 1 ? "vote" : "votes"}, ${pct} percent${mine === i ? ", your vote" : ""}`);
+    });
+    if (!ready) { el.note.textContent = failText || "Connecting…"; return; }
+    const votesWord = total === 1 ? "vote" : "votes";
+    el.note.textContent = readOnly
+      ? `${nf.format(total)} ${votesWord}, one per browser.`
+      : `${nf.format(total)} ${votesWord}, one per browser. Change your vote any time.`;
+  }
+
+  /* ---------- boot ---------- */
+
+  async function boot() {
+    if (!OA || !OA.db) {
+      fail("Open this poll from its view link to vote.");
+      return;
+    }
+    await OA.ready;
+    const setTheme = (t) => { document.documentElement.dataset.theme = t; };
+    setTheme(OA.theme);
+    OA.onTheme(setTheme);
+    me = await identify();
+    await openDay();
+    ready = true;
+    failText = "";
+    render();
+  }
+  setTimeout(() => { if (!ready && !failText) fail("Could not connect. Reload to try again."); }, 10000);
+  boot().catch(() => fail());
+})();
+</script>
+<script>
+/* Links to the other demos. The publish script fills APP_ORIGIN and each id from
+   ops/demo/ids.json; a link whose id is still a placeholder is never made. */
+(() => {
+  "use strict";
+  const APP_ORIGIN = "{{origin}}";
+  const IDS = { gallery: "{{id:gallery}}" };
+  const resolved = (v) => typeof v === "string" && !v.startsWith("{" + "{");
+  const VALID_ID = /^[A-Za-z0-9_-]{4,64}$/;
+  function appOrigin() {
+    if (resolved(APP_ORIGIN) && /^https?:\/\/[^/]+$/.test(APP_ORIGIN)) return APP_ORIGIN;
+    try {
+      const anc = window.location.ancestorOrigins;
+      if (anc && anc.length && anc[anc.length - 1] !== "null") return anc[anc.length - 1];
+    } catch {}
+    return "";
+  }
+  const base = appOrigin();
+  const LABELS = { gallery: "All demos", tictactoe: "Tic-tac-toe", chess: "Chess" };
+  /* Links are built here, never in the markup, so an unfilled id leaves no link behind. */
+  function link(slug, text) {
+    const id = IDS[slug];
+    if (!resolved(id) || !VALID_ID.test(id)) return null;
+    const a = document.createElement("a");
+    a.href = `${base}/a/${id}`;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.dataset.demo = slug;
+    a.textContent = text;
+    if (slug === "gallery") a.insertAdjacentHTML("beforeend", '<span aria-hidden="true"> ↗</span>');
+    a.insertAdjacentHTML("beforeend", '<span class="sr"> (opens in new tab)</span>');
+    return a;
+  }
+  /* data-demo-link: the element's own text becomes the link. */
+  for (const el of document.querySelectorAll("[data-demo-link]")) {
+    const a = link(el.dataset.demoLink, el.textContent);
+    if (a) el.replaceChildren(a);
+  }
+  /* data-demo-links: a hidden list of links, shown once at least one resolves. */
+  for (const el of document.querySelectorAll("[data-demo-links]")) {
+    for (const slug of el.dataset.demoLinks.split(" ")) {
+      const a = link(slug, LABELS[slug]);
+      if (a) el.append(a);
+    }
+    el.hidden = !el.children.length;
+  }
+})();
+</script>
+</body>
+</html>

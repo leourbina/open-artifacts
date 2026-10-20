@@ -1,0 +1,7 @@
+{
+  "artifact": "dashboard",
+  "collections": {
+    "stats": {}
+  },
+  "notes": "Empty: the nightly reset clears stats, and the demo-ops Worker writes stats/today and stats/hourly-YYYYMMDD once a minute with its token. The page only reads."
+}

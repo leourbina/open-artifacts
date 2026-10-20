@@ -1,0 +1,5 @@
+{
+  "artifact": "poll",
+  "collections": {},
+  "notes": "No seed. Votes live in votes-YYYYMMDD (UTC), so each day starts empty on its own. The nightly job only prunes collections older than yesterday."
+}
