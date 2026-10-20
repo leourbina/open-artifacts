@@ -1035,6 +1035,31 @@ describe("anonymous reads of non-public artifacts (as on the server)", () => {
     ).toBe(200);
   });
 
+  it("anonymous data/storage writes to a non-public artifact -> 404; query on public is a read", async () => {
+    fresh();
+    for (const headers of [anon, { ...embed }])
+      for (const a of [priv, team]) {
+        for (const [m, path, body] of [
+          ["PUT", R.dataDoc(a.id, "c", "d"), { v: 1 }],
+          ["PATCH", R.dataDoc(a.id, "c", "d"), { v: 1 }],
+          ["DELETE", R.dataDoc(a.id, "c", "d"), undefined],
+          ["POST", R.dataQuery(a.id, "c"), {}],
+          ["PUT", R.storageKey(a.id, "k"), { value: 1 }],
+          ["DELETE", R.storageKey(a.id, "k"), undefined],
+        ] as const) {
+          const r = await call(m, path, body, headers);
+          expect(r.status, `${m} ${path}`).toBe(404);
+          expect((await json(r)).error.code).toBe("not_found");
+        }
+      }
+    expect(
+      (await call("PUT", R.dataDoc(bad, "c", "d"), { v: 1 }, anon)).status,
+    ).toBe(404);
+    expect(
+      (await call("POST", R.dataQuery(poll.id, "votes"), {}, anon)).status,
+    ).toBe(200);
+  });
+
   it("X-OA-Embed: 1 and ?embed=1 make authed routes 401 even with a cookie", async () => {
     fresh();
     expect((await call("GET", R.me, undefined, embed)).status).toBe(401);
