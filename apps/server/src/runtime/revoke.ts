@@ -1,4 +1,5 @@
 import type { Env } from "../env.js";
+import { logError } from "../log.js";
 import { type GoneReason, runtimeStub } from "./do.js";
 
 type Ctx = Pick<ExecutionContext, "waitUntil">;
@@ -26,7 +27,7 @@ export async function closeRuntimeSockets(
       .map((id) => runtimeStub(env, id).closeSockets(reason, gone)),
   ).then((rs) => {
     for (const r of rs)
-      if (r.status === "rejected") console.error("closeSockets", r.reason);
+      if (r.status === "rejected") logError("close_sockets_failed", r.reason);
   });
   if (ctx) ctx.waitUntil(all);
   else await all;

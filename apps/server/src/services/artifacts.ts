@@ -32,6 +32,7 @@ import { normEmail } from "../db/email.js";
 import { artifacts, shares, users } from "../db/schema.js";
 import type { Env } from "../env.js";
 import { ApiError, appOrigin } from "../http/errors.js";
+import { logError, logWarn } from "../log.js";
 import { runtimeStub, type VersionEvent } from "../runtime/do.js";
 import { closeRuntimeSockets } from "../runtime/revoke.js";
 import { type ManifestEntry, materialize, planFiles } from "./manifest.js";
@@ -44,7 +45,7 @@ type Ctx = Pick<ExecutionContext, "waitUntil">;
 const CAPS = { db: false, viewer: false, storage: false };
 
 const later = async (ctx: Ctx | undefined, p: Promise<unknown>) => {
-  const safe = p.catch((e) => console.error(e));
+  const safe = p.catch((e) => logError("background_task_failed", e));
   if (ctx) ctx.waitUntil(safe);
   else await safe;
 };
@@ -67,14 +68,7 @@ export async function enqueueIndex(
   try {
     await runtimeStub(env, id).scheduleIndex(id, version, thumb, event);
   } catch (e) {
-    console.error(
-      JSON.stringify({
-        evt: "index_enqueue_failed",
-        artifactId: id,
-        version,
-        error: String((e as Error)?.message ?? e).slice(0, 300),
-      }),
-    );
+    logError("index_enqueue_failed", e, { artifactId: id, version });
   }
 }
 
@@ -1030,10 +1024,10 @@ export async function purgeDeleted(env: Env, now: number): Promise<number> {
       if (await purgeOne(env, id, rid, cutoff, budget)) purged++;
     } catch (e) {
       // One bad artifact must not block the rest; it is retried after a backoff.
-      console.error("purge failed", id, e);
+      logError("purge_failed", e, { artifactId: id });
       // Structured, for Workers Logs alerting: this one keeps failing.
       if (attempts + 1 >= 3)
-        console.warn({ evt: "purge_failing", id, attempts: attempts + 1 });
+        logWarn("purge_failing", undefined, { id, attempts: attempts + 1 });
       await env.DB.prepare(
         "update artifacts set purge_attempts = purge_attempts + 1, purge_after = ? where id = ?",
       )

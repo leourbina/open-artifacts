@@ -17,6 +17,7 @@ import {
   errorJson,
   isD1QuotaError,
 } from "../http/errors.js";
+import { logError } from "../log.js";
 import { toRuntimeApiError } from "../runtime/do.js";
 import { cpuNudge } from "../services/usage.js";
 import { VERSION } from "../version.gen.js";
@@ -66,7 +67,7 @@ export function errorResult(e: unknown): CallToolResult {
     return text(api.code, api.message);
   }
   if (isD1QuotaError(e)) return text("quota_exceeded", QUOTA_MESSAGE);
-  console.error(e);
+  logError("mcp_tool_error", e);
   return text("internal", "Internal error");
 }
 

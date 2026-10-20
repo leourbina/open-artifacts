@@ -1,6 +1,7 @@
 import { type ErrorCode, QUOTA_MESSAGE, STATUS_FOR } from "@oa/shared";
 import { HTTPException } from "hono/http-exception";
 import type { Env } from "../env.js";
+import { logError } from "../log.js";
 
 export class ApiError extends Error {
   constructor(
@@ -68,7 +69,7 @@ export function toErrorResponse(e: unknown): Response {
       e.message,
     );
   }
-  console.error(e);
+  logError("unhandled_error", e);
   return errorJson(STATUS_FOR.internal, "internal", "Internal error");
 }
 

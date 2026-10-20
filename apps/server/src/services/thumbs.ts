@@ -6,6 +6,7 @@ import {
 } from "../content/signing.js";
 import type { Env } from "../env.js";
 import { contentOrigin } from "../http/errors.js";
+import { logError } from "../log.js";
 import { decodeBase64 } from "../util/base64.js";
 import { type Cdp, connectCdp, LaunchError } from "./cdp.js";
 
@@ -197,14 +198,7 @@ export async function captureThumbnail(
       : e instanceof LaunchError
         ? "launch_failed"
         : "failed";
-    console.error(
-      JSON.stringify({
-        evt: `thumbnail_${result}`,
-        artifactId: id,
-        version,
-        error: String((e as Error)?.message ?? e).slice(0, 300),
-      }),
-    );
+    logError(`thumbnail_${result}`, e, { artifactId: id, version });
     return result;
   }
   if (!bytes) return "failed";

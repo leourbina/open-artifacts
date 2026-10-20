@@ -96,10 +96,10 @@ describe("purge backoff", () => {
         await purgeDeleted(e, t);
         t += purgeBackoff(i) + 60_000;
       }
-      const calls = warn.mock.calls.filter(
-        (c) => (c[0] as { evt?: string })?.evt === "purge_failing",
-      );
-      expect(calls).toEqual([[{ evt: "purge_failing", id, attempts: 3 }]]);
+      const calls = warn.mock.calls
+        .map((c) => JSON.parse(String(c[0])))
+        .filter((o) => o.evt === "purge_failing");
+      expect(calls).toEqual([{ evt: "purge_failing", id, attempts: 3 }]);
     } finally {
       warn.mockRestore();
     }

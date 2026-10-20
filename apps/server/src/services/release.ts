@@ -11,6 +11,7 @@
 import type { InstanceUpdate, Role } from "@oa/shared";
 import { stmt } from "../db/stmt.js";
 import type { Env } from "../env.js";
+import { logError, logWarn } from "../log.js";
 import { VERSION } from "../version.gen.js";
 
 export const RELEASE_REPO = "open-artifacts-ai/open-artifacts";
@@ -250,12 +251,12 @@ export async function checkLatestRelease(
         checkError: out.error,
         errorAt: now,
       };
-      console.warn("release check", out.error);
+      logWarn("release_check_failed", undefined, { reason: out.error });
     }
     await stmt(env.DB, SET).bind(RELEASE_KEY, JSON.stringify(next)).run();
     return next;
   } catch (e) {
-    console.error("release check", e);
+    logError("release_check_error", e);
     return null;
   }
 }
