@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.7.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.6.0...v0.7.0) (2026-10-20)
+
+
+### Features
+
+* **dashboard:** chromeless full-screen view at /a/&lt;id&gt;/full; remove Open raw ([#290](https://github.com/open-artifacts-ai/open-artifacts/issues/290)) ([#296](https://github.com/open-artifacts-ai/open-artifacts/issues/296)) ([b3d4bf3](https://github.com/open-artifacts-ai/open-artifacts/commit/b3d4bf3a60d75bf14882a5490bc1c904759f35b9))
+* **dashboard:** Update available, sidebar chip and Version card (admins) ([#255](https://github.com/open-artifacts-ai/open-artifacts/issues/255)) ([8bca53b](https://github.com/open-artifacts-ai/open-artifacts/commit/8bca53bf6e1b749beee6a7fcc8d735226a8f7728))
+* **demo-ops:** per-minute activity aggregator for the demo dashboard ([#310](https://github.com/open-artifacts-ai/open-artifacts/issues/310)) ([4be84ed](https://github.com/open-artifacts-ai/open-artifacts/commit/4be84ed203035d48ac1f2642cf50246f21baa054))
+* **setup:** --var NAME=value keeps tunable Worker vars across deploys ([#315](https://github.com/open-artifacts-ai/open-artifacts/issues/315)) ([e657cd8](https://github.com/open-artifacts-ai/open-artifacts/commit/e657cd8b3811f86676243552708be0d0ea6f7137))
+
+
+### Bug Fixes
+
+* **setup:** --upgrade tolerates an Access API outage ([#317](https://github.com/open-artifacts-ai/open-artifacts/issues/317)) ([#318](https://github.com/open-artifacts-ai/open-artifacts/issues/318)) ([329fa7d](https://github.com/open-artifacts-ai/open-artifacts/commit/329fa7d701c9686bc42bdc62587c240e2a3de7ea))
+
 ## [0.6.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.5.0...v0.6.0) (2026-10-20)
 
 
