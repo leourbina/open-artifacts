@@ -10,6 +10,7 @@
   "vars": {
     "DEMO_BASE_URL": "https://demo.open-artifacts.com",
     "DASHBOARD_ARTIFACT_ID": "",
-    "SOURCE_ARTIFACT_IDS": ""
+    "SOURCE_ARTIFACT_IDS": "",
+    "SOURCE_COLLECTIONS": ""
   }
 }

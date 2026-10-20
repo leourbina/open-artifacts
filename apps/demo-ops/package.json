@@ -7,11 +7,14 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "vitest run",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "test": "pnpm --filter @oa/shared build && vitest run",
+    "typecheck": "pnpm --filter @oa/shared build && tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
     "typescript": "^5.9.3",
     "vitest": "^4.1.12"
+  },
+  "dependencies": {
+    "@oa/shared": "workspace:*"
   }
 }

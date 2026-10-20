@@ -18,7 +18,8 @@ describe("ops-demo-ops-deploy.yml", () => {
   it("is dispatch only, from main, on the demo group", () => {
     expect(Object.keys(w.on)).toEqual(["workflow_dispatch"]);
     expect(job.if).toContain("github.ref == 'refs/heads/main'");
-    expect(w.concurrency.group).toBe("demo");
+    expect(w.concurrency.group).toBe("demo-ops-deploy");
+    expect(w.concurrency["cancel-in-progress"]).toBe(false);
   });
   it("uses only the staging-scoped token, account id and the demo PAT", () => {
     const names = new Set(
@@ -29,6 +30,15 @@ describe("ops-demo-ops-deploy.yml", () => {
       "CLOUDFLARE_API_TOKEN",
       "DEMO_OA_TOKEN",
     ]);
+  });
+  it("scopes the Cloudflare token to the deploy steps only", () => {
+    expect(w.env).toBeUndefined();
+    expect(job.env).toBeUndefined();
+    for (const s of steps) {
+      const has = JSON.stringify(s.env ?? {}).includes("CLOUDFLARE_API_TOKEN");
+      const wrangler = String(s.run ?? "").includes("wrangler");
+      expect(has, s.name ?? s.run).toBe(wrangler);
+    }
   });
   it("deploys the demo-ops config", () => {
     expect(text).toContain("../demo-ops/wrangler.jsonc");

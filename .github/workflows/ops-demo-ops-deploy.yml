@@ -6,15 +6,12 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: demo
+  group: demo-ops-deploy
   cancel-in-progress: false
 jobs:
   deploy:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -25,8 +22,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @oa/demo-ops test
       - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: pnpm --filter @oa/server exec wrangler deploy -c ../demo-ops/wrangler.jsonc
       - name: Set DEMO_OA_TOKEN
         env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           DEMO_OA_TOKEN: ${{ secrets.DEMO_OA_TOKEN }}
         run: printf '%s' "$DEMO_OA_TOKEN" | pnpm --filter @oa/server exec wrangler secret put DEMO_OA_TOKEN -c ../demo-ops/wrangler.jsonc
