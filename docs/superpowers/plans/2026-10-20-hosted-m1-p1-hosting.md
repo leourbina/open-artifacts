@@ -59,7 +59,15 @@ All installs share one Cloudflare account, so some state is shared even though n
 - **Control-plane token:** the CLI's Cloudflare token can read every customer's D1 and R2. It lives in the macOS keychain (`security find-generic-password -s oa-hosted-<env>`), never in a file, and is created with an expiry of 7 days or less. CI holds only the staging token; for prod it holds just the inventory key and a Workers Scripts Read token (Task 7b).
 - **Custom hostnames:** M4 in the roadmap, not M1. Rule for later: a `HOSTS` key is written only after the Cloudflare for SaaS hostname is active and its ownership verified, and is unique across installs.
 - **P2's `HOSTED=1`** is set on every hosted install (Task 3).
-- **Backups:** export is `NotInM1`, so FinQore has no R2 or Durable Object backup in M1. The Manager is taking this to the user. D1 Time Travel (30 days) covers the database only.
+- **Backups:** export is `NotInM1`, so FinQore has no R2 or Durable Object backup in M1. **User-accepted on 2026-10-21** (via the Manager): FinQore runs without backup or export until M2. D1 Time Travel (30 days) covers the database only.
+
+## Hosted domains (user, 2026-10-21; content domain pending)
+
+- App suffix: **`app.open-artifacts.com`**; tenants at `<slug>.app.open-artifacts.com`. `app.open-artifacts.com` goes in the Public Suffix List private section, so each tenant is its own site.
+- Content suffix: proposed **`content.open-artifacts.com`** (tenants at `<slug>.content.open-artifacts.com`), also in the PSL private section, so tenants' untrusted content is neither same-site with each other nor with `open-artifacts.com`, `demo.` or `staging.`. Pending the user's confirmation; a separate registrable domain also works.
+- Staging namespace: `app-stg.open-artifacts.com` and `content-stg.open-artifacts.com`, also PSL-listed, so P5's same-site check can prove it on `rl-a`/`rl-b`.
+- TLS: these hostnames are two levels below the zone apex, which Universal SSL doesn't cover. Options: one Advanced Certificate Manager certificate for `*.app`, `*.content`, `*.app-stg` and `*.content-stg` (**$10/month**, a user gate), or a Workers Custom Domain per tenant hostname (a free certificate each, but the provisioner then needs zone write on `open-artifacts.com`). Recommended: ACM.
+- No DNS, route or certificate change until the Manager confirms the content domain and the user approves the cost.
 
 ## Global Constraints
 
