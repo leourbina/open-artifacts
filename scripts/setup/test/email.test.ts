@@ -214,6 +214,19 @@ describe("team/solo and the email step", () => {
       expect(h).toContain(f);
   });
 
+  it("team notes that every Access sign-in uses a Zero Trust seat; solo does not", async () => {
+    const t = world();
+    expect(await run([...TEAM, "--no-email"], t.deps, ROOT)).toBe(0);
+    expect(line(t.lines, "prereqs").data.notes.join("; ")).toContain(
+      "uses a Zero Trust seat",
+    );
+    const s = world();
+    expect(await run(HOSTS, s.deps, ROOT)).toBe(0);
+    expect(line(s.lines, "prereqs").data.notes.join("; ")).not.toContain(
+      "Zero Trust seat",
+    );
+  });
+
   it("--solo and --team conflict", async () => {
     const w = world();
     expect(await run([...BASE, "--solo", "--team"], w.deps, ROOT)).toBe(1);
