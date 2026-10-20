@@ -30,8 +30,8 @@ for (const plan of ["free", "paid"] as const)
           await expect(main).toContainText("of 10 ms");
           await expect(main).toContainText(PLAN_LINE);
         } else {
-          await expect(requests).toContainText("182,400");
-          await expect(requests).not.toContainText("today");
+          await expect(requests).toContainText("182,400today");
+          await expect(requests).not.toContainText("/");
           await expect(
             page.getByRole("meter", { name: "Worker requests" }),
           ).toHaveCount(0);
@@ -39,6 +39,15 @@ for (const plan of ["free", "paid"] as const)
           await expect(main).toContainText("of 30 s");
           await expect(main).not.toContainText("of 10 ms");
           await expect(main).not.toContainText(PLAN_LINE);
+          await expect(main).toContainText(
+            "This instance is on Workers Paid. There are no daily limits",
+          );
+          await expect(
+            page.getByRole("link", { name: /See pricing/ }),
+          ).toHaveAttribute(
+            "href",
+            "https://developers.cloudflare.com/workers/platform/pricing/",
+          );
         }
         expect(
           await page.evaluate(
@@ -52,3 +61,28 @@ for (const plan of ["free", "paid"] as const)
           contentType: "image/png",
         });
       });
+
+// An uncapped card keeps a capped card's height (Design, #279).
+for (const width of [1280, 390])
+  test(`uncapped and capped meter cards are equally tall at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    const heights = async (mock: string) => {
+      await page.goto(`/settings/usage?mock=${mock}`);
+      await expect(page.getByRole("region", { name: "CPU" })).toBeVisible();
+      return page.evaluate(() =>
+        [
+          ...document.querySelectorAll<HTMLElement>(
+            "#oa-main section[aria-labelledby^=oa-meter-] [data-slot=card]",
+          ),
+        ].map((c) => c.getBoundingClientRect().height),
+      );
+    };
+    const capped = await heights("cpu");
+    const uncapped = await heights("paid");
+    expect(capped.length).toBe(4);
+    expect(uncapped.length).toBe(5);
+    for (const h of [...capped, ...uncapped])
+      expect(Math.abs(h - (capped[0] ?? 0))).toBeLessThanOrEqual(0.5);
+  });

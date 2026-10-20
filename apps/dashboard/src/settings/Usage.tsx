@@ -12,7 +12,7 @@ import {
 import { useUsage } from "../api/queries";
 import { useMe } from "../auth/useMe";
 import { ExtIcon } from "../layout/CpuBanner";
-import { COSTS_DOC } from "../layout/cpu";
+import { COSTS_DOC, PRICING_URL } from "../layout/cpu";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 import {
   CARD,
@@ -226,8 +226,24 @@ function P99Row({ metric, idle }: { metric: Metric; idle: boolean }) {
 function PlanLine({ plan }: { plan: "free" | "paid" | undefined }) {
   const me = useMe();
   const role = me.status === "authed" ? me.me.user.role : null;
-  // On Paid there is nothing to upgrade to. TODO(#279): Design's Paid copy.
-  if ((role !== "owner" && role !== "admin") || plan === "paid") return null;
+  if (role !== "owner" && role !== "admin") return null;
+  if (plan === "paid")
+    return (
+      <p className="m-0 text-[length:var(--oa-text-sm)] text-[var(--oa-text-2)]">
+        This instance is on Workers Paid. There are no daily limits, and each
+        request gets up to 30 seconds of CPU. Usage beyond what the plan
+        includes is billed by Cloudflare.{" "}
+        <a
+          className={LINK}
+          href={PRICING_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          See pricing
+          {ExtIcon}
+        </a>
+      </p>
+    );
   return (
     <p className="m-0 text-[length:var(--oa-text-sm)] text-[var(--oa-text-2)]">
       Workers Free is sized for one person. Workers Paid ($5 a month) is sized
@@ -249,14 +265,23 @@ function PlanLine({ plan }: { plan: "free" | "paid" | undefined }) {
 function Meter({ metric }: { metric: Metric }) {
   const { name, what } = LABELS[metric.key];
   const used = Math.max(metric.used, 0);
-  // A limit of 0 is no daily cap (Workers Paid): the count alone, no bar.
+  // A limit of 0 is no daily cap (Workers Paid): the count, no bar or cap.
+  // The description sits where the bar was, in a slot as tall as the bar and
+  // the foot, so the card is as tall as a capped one.
   if (!(metric.limit > 0))
     return (
       <SettingsCard id={`oa-meter-${metric.key}`} title={name}>
-        <div className="tabular-nums">
+        <div className="flex flex-wrap items-baseline gap-[var(--oa-space-2)] tabular-nums">
           <b className={BIG}>{fmt(used)}</b>
+          <span className="text-muted-foreground">today</span>
         </div>
-        <p className={muted}>{what}</p>
+        <div className="relative">
+          <div aria-hidden="true" className={`invisible grid ${GAP}`}>
+            <div className="h-2" />
+            <p className={muted}>&nbsp;</p>
+          </div>
+          <p className={`absolute inset-x-0 top-0 ${muted}`}>{what}</p>
+        </div>
       </SettingsCard>
     );
   const pct = percent(used, metric.limit);

@@ -121,8 +121,8 @@ describe("usage", () => {
     const card = (await screen.findByRole("region", {
       name: "Worker requests",
     })) as HTMLElement;
-    expect(card.textContent).toContain("182,400");
-    expect(card.textContent).not.toMatch(/today|left|%/);
+    expect(card.textContent).toContain("182,400today");
+    expect(card.textContent).not.toMatch(/\/|left|%/);
     expect(screen.queryByRole("meter", { name: "Worker requests" })).toBeNull();
     expect(screen.queryByRole("meter", { name: "D1 rows read" })).toBeNull();
     // Capped metrics keep their bar.
@@ -337,7 +337,7 @@ describe("usage per plan (#279)", () => {
     expect(screen.getByText(PLAN_LINE)).toBeTruthy();
   });
 
-  it("Paid: no daily caps, 'of 30 s' on the CPU card, no Free plan line", async () => {
+  it("Paid: no daily caps, 'of 30 s' on the CPU card, the Paid plan line", async () => {
     respond({
       plan: "paid",
       metrics: [
@@ -357,6 +357,17 @@ describe("usage per plan (#279)", () => {
     );
     expect(screen.queryByText("of 10 ms")).toBeNull();
     expect(screen.queryByText(PLAN_LINE)).toBeNull();
+    const line = screen.getByText(/This instance is on Workers Paid\./);
+    expect(line.textContent).toBe(
+      "This instance is on Workers Paid. There are no daily limits, and each request gets up to 30 seconds of CPU. Usage beyond what the plan includes is billed by Cloudflare. See pricing",
+    );
+    expect(
+      screen.getByRole("link", { name: /See pricing/ }).getAttribute("href"),
+    ).toBe("https://developers.cloudflare.com/workers/platform/pricing/");
+    expect(
+      (await screen.findByRole("region", { name: "Worker requests" }))
+        .textContent,
+    ).toContain("182,400today");
   });
 
   it("no plan (older server): treated as Free", async () => {

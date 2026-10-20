@@ -6,6 +6,8 @@ import { useUsage } from "../api/queries";
 export const CPU_DOC =
   "https://open-artifacts.com/docs/self-hosting-costs/#hitting-the-cpu-limit";
 export const COSTS_DOC = "https://open-artifacts.com/docs/self-hosting-costs/";
+export const PRICING_URL =
+  "https://developers.cloudflare.com/workers/platform/pricing/";
 export const PLANS_URL =
   "https://dash.cloudflare.com/?to=/:account/workers/plans";
 
