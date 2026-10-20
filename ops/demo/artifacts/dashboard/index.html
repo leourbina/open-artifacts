@@ -102,6 +102,9 @@
     white-space: nowrap; overflow-wrap: normal;
   }
   .tile .detail span { white-space: nowrap; }
+  .tile .delayed { display: inline-flex; align-items: center; gap: 3px; color: var(--oa-warning); }
+  .tile .delayed svg { width: 11px; height: 11px; flex: none; }
+  .tile[data-state="missing"] .value { color: var(--oa-text-muted); font-weight: 400; }
   .tile .detail { margin: 0; color: var(--oa-text-muted); font-size: 12.5px; font-variant-numeric: tabular-nums; min-height: 1.45em; }
 
   .chart { padding: 12px 14px 10px; }
@@ -246,56 +249,91 @@
   const shown = {};      // tile key -> number on screen
   const prev = {};       // tile key -> value before the last update
   const spoken = {};     // tile key -> value last announced
+  const held = {};       // metric -> last value from a source that was not failing
   let announceTimer = null;
   let lastAnnounce = 0;
 
-  /** Normalizes the doc to plain numbers, and which tiles are lower bounds. */
+  /* Each metric and the source (demo) that feeds it. `missing` and `failed` name sources;
+     `truncated` names metrics. */
+  const METRICS = {
+    votes: ["poll", (d) => d.votes],
+    pixels: ["canvas", (d) => d.pixels],
+    countries: ["map", (d) => d.countries],
+    pins: ["map", (d) => d.pins],
+    "gamesInProgress.chess": ["chess", (d) => d.gamesInProgress && d.gamesInProgress.chess],
+    "gamesInProgress.tictactoe": ["tictactoe", (d) => d.gamesInProgress && d.gamesInProgress.tictactoe],
+    "moves.chess": ["chess", (d) => d.moves && d.moves.chess],
+    "moves.tictactoe": ["tictactoe", (d) => d.moves && d.moves.tictactoe],
+  };
+  const names = (v) => new Set(Array.isArray(v) ? v.map(String) : []);
+
+  /** Normalizes the doc: per metric its value, whether it is a lower bound, missing or delayed. */
   function normalize(d) {
-    const g = (d.gamesInProgress && typeof d.gamesInProgress === "object") ? d.gamesInProgress : {};
-    const m = (d.moves && typeof d.moves === "object") ? d.moves : {};
-    const trunc = new Set(Array.isArray(d.truncated) ? d.truncated.map(String) : []);
-    const cut = (name) => [...trunc].some((t) => t === name || t.startsWith(name + "."));
+    const missing = names(d.missing), failed = names(d.failed), trunc = names(d.truncated);
+    const m = {};
+    for (const [name, [src, get]] of Object.entries(METRICS)) {
+      const cut = [...trunc].some((t) => t === name || name.startsWith(t + "."));
+      if (missing.has(src)) { m[name] = { v: 0, cut: false, missing: true, failed: false }; delete held[name]; continue; }
+      const isFailed = failed.has(src);
+      // A failed source keeps the last value this page saw from it.
+      const v = isFailed && held[name] !== undefined ? held[name].v : int(get(d));
+      const c = isFailed && held[name] !== undefined ? held[name].cut : cut;
+      if (!isFailed) held[name] = { v, cut };
+      m[name] = { v, cut: c, missing: false, failed: isFailed };
+    }
     return {
       day: typeof d.day === "string" && /^\d{8}$/.test(d.day) ? d.day : utcDay(Date.now()),
       updatedAt: Number.isFinite(d.updatedAt) ? d.updatedAt : 0,
-      votes: int(d.votes),
-      ttt: int(g.tictactoe), chess: int(g.chess),
-      mttt: int(m.tictactoe), mchess: int(m.chess),
-      pixels: int(d.pixels), countries: int(d.countries), pins: int(d.pins),
-      cut: {
-        votes: cut("votes"), games: cut("gamesInProgress"), moves: cut("moves"),
-        pixels: cut("pixels"), countries: cut("countries"), pins: cut("pins"),
-      },
+      m,
     };
   }
 
   /* ---------- tiles ---------- */
 
   const NAMES = { votes: "Poll votes", games: "Games in progress", moves: "Moves played", pixels: "Pixels painted", countries: "Countries" };
+  const PARTS = {
+    votes: ["votes"], games: ["gamesInProgress.chess", "gamesInProgress.tictactoe"],
+    moves: ["moves.chess", "moves.tictactoe"], pixels: ["pixels"], countries: ["countries"],
+  };
   const tile = (k) => el.tiles.querySelector(`[data-key="${k}"]`);
-  const valueOf = (t, k) => ({
-    votes: t.votes, games: t.ttt + t.chess, moves: t.mttt + t.mchess, pixels: t.pixels, countries: t.countries,
-  })[k];
+  /** A tile's number: the sum of its live parts, or null when every part is missing. */
+  function tileOf(t, k) {
+    const parts = PARTS[k].map((p) => t.m[p]).filter((x) => !x.missing);
+    if (!parts.length) return { n: null, cut: false, failed: false };
+    return { n: parts.reduce((a, x) => a + x.v, 0), cut: parts.some((x) => x.cut), failed: parts.some((x) => x.failed) };
+  }
+  const valueOf = (t, k) => tileOf(t, k).n;
+  const DASH = "–";
   const plus = (n, cut) => big(n) + (cut ? "+" : "");
-  const spokenNum = (n, cut) => (cut ? "at least " : "") + nf.format(n);
+  const part = (x) => (x.missing ? DASH : plus(x.v, x.cut));
+  const spokenNum = (n, cut) => (n === null ? "not available" : (cut ? "at least " : "") + nf.format(n));
 
   /** Detail parts; each part stays on one line, wrapping only between parts. */
   function detailOf(k, t) {
-    const delta = valueOf(t, k) - (prev[k] ?? valueOf(t, k));
+    const { n, failed } = tileOf(t, k);
+    if (n === null) return ["Not live yet"];
+    const delta = n - (prev[k] ?? n);
     const since = delta > 0 ? `+${nf.format(delta)} since the last update` : "";
+    const m = t.m;
+    let out;
     switch (k) {
-      case "votes": return [since || "on today's question"];
-      case "pixels": return [since || "on today's canvas"];
-      case "games": return [`${nf.format(t.chess)} chess ·`, `${nf.format(t.ttt)} tic\u2011tac\u2011toe`];
-      case "moves": return [`${plus(t.mchess, t.cut.moves)} chess ·`, `${plus(t.mttt, t.cut.moves)} tic\u2011tac\u2011toe`];
-      default: return [`${plus(t.pins, t.cut.pins)} ${t.pins === 1 && !t.cut.pins ? "pin" : "pins"} on the map`];
+      case "votes": out = [since || "on today's question"]; break;
+      case "pixels": out = [since || "on today's canvas"]; break;
+      case "games": out = [`${part(m["gamesInProgress.chess"])} chess ·`, `${part(m["gamesInProgress.tictactoe"])} tic‑tac‑toe`]; break;
+      case "moves": out = [`${part(m["moves.chess"])} chess ·`, `${part(m["moves.tictactoe"])} tic‑tac‑toe`]; break;
+      default: out = [`${part(m.pins)} ${m.pins.v === 1 && !m.pins.cut ? "pin" : "pins"} on the map`];
     }
+    if (failed) out[out.length - 1] += " ·", out.push({ delayed: true });
+    return out;
   }
 
   function renderDetail(p, parts) {
     p.replaceChildren(...parts.flatMap((s, i) => {
       const span = document.createElement("span");
-      span.textContent = s;
+      if (s && s.delayed) {
+        span.className = "delayed";
+        span.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 4.5V8l2.5 1.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>delayed';
+      } else span.textContent = s;
       return i ? [" ", span] : [span];
     }));
   }
@@ -305,9 +343,11 @@
   }
 
   function countTo(k, node, to, cut) {
+    if (node._raf) cancelAnimationFrame(node._raf);
+    node._raf = 0;
+    if (to === null) { delete shown[k]; node.textContent = DASH; return; }
     const from = shown[k] ?? to;
     shown[k] = to;
-    if (node._raf) cancelAnimationFrame(node._raf);
     if (from === to || reduced.matches || document.hidden) { setNumber(node, to, cut); return; }
     const start = performance.now();
     const step = (now) => {
@@ -329,13 +369,14 @@
   function renderTiles(next, old) {
     for (const k of Object.keys(NAMES)) {
       const li = tile(k);
-      const n = valueOf(next, k);
-      const cut = next.cut[k];
-      if (old) prev[k] = valueOf(old, k);
-      const changed = old && (valueOf(old, k) !== n || old.cut[k] !== cut);
+      const { n, cut } = tileOf(next, k);
+      const was = old ? tileOf(old, k) : null;
+      if (old) prev[k] = was.n ?? undefined;
+      const changed = was && n !== null && (was.n !== n || was.cut !== cut);
       const v = li.querySelector(".value");
       countTo(k, v, n, cut);
       v.setAttribute("aria-label", spokenNum(n, cut));
+      li.dataset.state = n === null ? "missing" : "live";
       renderDetail(li.querySelector(".detail"), detailOf(k, next));
       if (changed) flash(li);
     }
@@ -353,8 +394,8 @@
       if (!today) return;
       const parts = [];
       for (const k of Object.keys(NAMES)) {
-        const n = valueOf(today, k);
-        if (spoken[k] !== undefined && spoken[k] !== n) parts.push(`${NAMES[k]} ${spokenNum(n, today.cut[k])}`);
+        const { n, cut } = tileOf(today, k);
+        if (n !== null && spoken[k] !== undefined && spoken[k] !== n) parts.push(`${NAMES[k]} ${spokenNum(n, cut)}`);
         spoken[k] = n;
       }
       if (parts.length) { lastAnnounce = Date.now(); say(parts.join(". ") + "."); }

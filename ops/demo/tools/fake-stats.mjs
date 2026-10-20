@@ -4,8 +4,11 @@
 //
 //   node ops/demo/tools/fake-stats.mjs --origin http://localhost:8787 --artifact <id> --token <PAT>
 //
-// Options: --every <seconds> (default 3), --truncate <metric,...> (marks metrics as lower
-// bounds), --age <seconds> (backdates updatedAt, to see the stale state), --once.
+// Options: --every <seconds> (default 3), --truncate <metric,...> (lower bounds: votes, pixels,
+// pins, countries, moves.chess, ...), --missing <source,...> (not deployed: poll, canvas, map,
+// tictactoe, chess), --failed <source,...> (this tick failed for that source; its metrics are
+// written as 0 so the page has to keep its last value), --chaos (random truncated, missing and
+// failed each tick), --age <seconds> (backdates updatedAt, to see the stale state), --once.
 // The token is any PAT that can write the artifact (its owner's). OA_TOKEN works too.
 import { parseArgs } from "node:util";
 
@@ -16,6 +19,9 @@ const { values: o } = parseArgs({
     token: { type: "string", default: process.env.OA_TOKEN },
     every: { type: "string", default: "3" },
     truncate: { type: "string", default: "" },
+    missing: { type: "string", default: "" },
+    failed: { type: "string", default: "" },
+    chaos: { type: "boolean", default: false },
     age: { type: "string", default: "0" },
     once: { type: "boolean", default: false },
   },
@@ -37,6 +43,13 @@ const s = {
   mttt: 300 + rnd(100), mchess: 150 + rnd(80),
   pixels: 600 + rnd(300), countries: 12 + rnd(10), pins: 40 + rnd(20),
 };
+
+const SOURCES = ["poll", "canvas", "map", "tictactoe", "chess"];
+const BY_SOURCE = {
+  poll: ["votes"], canvas: ["pixels"], map: ["countries", "pins"],
+  tictactoe: ["gamesInProgress.tictactoe", "moves.tictactoe"], chess: ["gamesInProgress.chess", "moves.chess"],
+};
+const zero = (doc, path) => { const [a, b] = path.split("."); if (b) doc[a][b] = 0; else doc[a] = 0; };
 
 async function put(id, data) {
   const r = await fetch(`${base}/${id}`, {
@@ -60,8 +73,16 @@ async function tick() {
     moves: { tictactoe: s.mttt, chess: s.mchess }, pixels: s.pixels,
     countries: s.countries, pins: s.pins,
   };
-  if (o.truncate) today.truncated = o.truncate.split(",").filter(Boolean);
-  await put(`hourly-${day()}`, { h });
+  const list = (v) => v.split(",").filter(Boolean);
+  const pick = (xs, p) => xs.filter(() => Math.random() < p);
+  const truncated = o.chaos ? pick(["votes", "pixels", "pins", "countries", "moves.chess"], 0.2) : list(o.truncate);
+  const missing = o.chaos ? pick(SOURCES, 0.15) : list(o.missing);
+  const failed = o.chaos ? pick(SOURCES.filter((x) => !missing.includes(x)), 0.2) : list(o.failed);
+  for (const src of [...missing, ...failed]) for (const k of BY_SOURCE[src] || []) zero(today, k);
+  if (truncated.length) today.truncated = truncated;
+  if (missing.length) today.missing = missing;
+  if (failed.length) today.failed = failed;
+  await put(`hourly-${day()}`, { h, lastTotal: h.reduce((a, b) => a + b, 0), lastDay: day() });
   await put("today", today);
   console.log(new Date().toISOString(), JSON.stringify(today));
 }

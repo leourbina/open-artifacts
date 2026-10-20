@@ -28,7 +28,8 @@ not belong to the doc's owner (the poll). Tic-tac-toe uses the id only for its s
 | tictactoe | `game/game` back to an empty board with both seats open. Clients apply a write only if it is one claim, leave, move or start over from the last state they accepted; seats are first come, first served, and the id is only used for the seat labels. |
 | chess | `table/table` back to game `g0` with both seats open, and every doc in `moves` deleted. Moves are append-only docs (`moves/<g>-<nnn>`, UCI); every window replays them with the inline rules engine and drops any move that is not legal from the last accepted position, in sequence. Seats are first come, first served and free 5 minutes after the last move. |
 | pixels | None: pixels live in `canvas-YYYYMMDD` (UTC), one doc per row (`r00`..`r31`), one key per pixel (`c0`..`c31`, a palette index). A pixel is `update(row, { cN })`, a shallow merge, so painters in the same row never clobber each other. Any visitor can paint any pixel; the 4 second cooldown is per browser. |
-| dashboard | `stats` emptied. Only Platform's demo-ops Worker writes, once a minute, with its token (`allowAnonymousWrites: false`): `stats/today` = `{ day, updatedAt, votes, gamesInProgress: { tictactoe, chess }, moves: { tictactoe, chess }, pixels, countries, pins, truncated? }` and `stats/hourly-YYYYMMDD` = `{ h: [24 writes per UTC hour] }`. A metric named in `truncated` is a lower bound and shows as "400+". The page only reads; it shows a stale badge when `updatedAt` is over 3 minutes old. |
+| dashboard | `stats` emptied. Only Platform's demo-ops Worker writes, once a minute, with its token (`allowAnonymousWrites: false`): `stats/today` = `{ day, updatedAt, votes, gamesInProgress: { tictactoe, chess }, moves: { tictactoe, chess }, pixels, countries, pins, truncated? }` and `stats/hourly-YYYYMMDD` = `{ h: [24 writes per UTC hour] }`. `truncated` names metrics (`votes`, `pixels`, `pins`, `countries`, `moves.chess`, ...) that are lower bounds, shown as "400+". `missing` and `failed` name sources (`poll` feeds votes, `canvas` pixels, `map` countries and pins, `tictactoe` and `chess` their games and moves): a missing source shows "–" ("not available"), a failed one keeps the last value the page saw with a "delayed" hint. Hourly ignores `lastTotal` and `lastDay` and reads only `h`. The page only reads; it shows a stale badge when `updatedAt` is over 3 minutes old. |
+| map | None: pins live in `pins-YYYYMMDD` (UTC), one doc per browser (keyed like the poll) holding `{ c }`, an ISO 3166-1 alpha-2 code. Windows count a pin only when `c` is in the page's built-in country list; changing your pick overwrites your doc. |
 
 ## Fake stats feed
 
@@ -40,8 +41,10 @@ every few seconds, with counts that grow like a busy demo:
 node ops/demo/tools/fake-stats.mjs --origin http://localhost:8787 --artifact <id> --token <PAT>
 ```
 
-`--every <s>` sets the interval (default 3), `--truncate pixels,moves` marks metrics as lower
-bounds, `--age 240` backdates `updatedAt` to show the stale state, and `--once` writes one tick
+`--every <s>` sets the interval (default 3), `--truncate pixels,moves.chess` marks metrics as lower
+bounds, `--missing chess,map` and `--failed poll` mark sources as not deployed or failing (a failed
+source's metrics are written as 0, so the page must keep its last value), `--chaos` picks random
+truncated, missing and failed each tick, `--age 240` backdates `updatedAt` to show the stale state, and `--once` writes one tick
 and exits. The token is a PAT of the artifact's owner (or set `OA_TOKEN`).
 
 ## Gallery placeholders

@@ -1,0 +1,638 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Where are you from</title>
+<style>
+  /* Studio tokens (packages/ui/src/tokens/tokens.css), inlined: no external fonts. */
+  :root {
+    color-scheme: light;
+    --oa-bg: #eef0f3;
+    --oa-surface: #ffffff;
+    --oa-surface-2: #f6f7f9;
+    --oa-divider: #e0e3e8;
+    --oa-border: #bec4cd;
+    --oa-border-strong: #848b95;
+    --oa-text: #15181c;
+    --oa-text-2: #454c56;
+    --oa-text-muted: #5f6670;
+    --oa-accent: #2350d0;
+    --oa-accent-soft: #e7edfc;
+    --oa-accent-text: #ffffff;
+    --oa-focus: #2350d0;
+    --oa-danger: #be2f1c;
+    --oa-font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --oa-font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --oa-radius: 6px;
+    --oa-radius-lg: 8px;
+    --oa-duration: 200ms;
+    --oa-ease: cubic-bezier(0.2, 0, 0, 1);
+    --map-land: #c9ced6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --oa-bg: #131518;
+      --oa-surface: #1c1f23;
+      --oa-surface-2: #212429;
+      --oa-divider: #2c3037;
+      --oa-border: #3b414a;
+      --oa-border-strong: #676e78;
+      --oa-text: #e9ebee;
+      --oa-text-2: #b7bdc6;
+      --oa-text-muted: #9097a1;
+      --oa-accent: #7f9cff;
+      --oa-accent-soft: #1f2a4a;
+      --oa-accent-text: #131518;
+      --oa-focus: #7f9cff;
+      --oa-danger: #ff7f6b;
+      --map-land: #474e58;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --oa-bg: #131518;
+    --oa-surface: #1c1f23;
+    --oa-surface-2: #212429;
+    --oa-divider: #2c3037;
+    --oa-border: #3b414a;
+    --oa-border-strong: #676e78;
+    --oa-text: #e9ebee;
+    --oa-text-2: #b7bdc6;
+    --oa-text-muted: #9097a1;
+    --oa-accent: #7f9cff;
+    --oa-accent-soft: #1f2a4a;
+    --oa-accent-text: #131518;
+    --oa-focus: #7f9cff;
+    --oa-danger: #ff7f6b;
+    --map-land: #474e58;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    min-height: 100vh;
+    background: var(--oa-bg);
+    color: var(--oa-text);
+    font-family: var(--oa-font-sans);
+    font-size: 14px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    padding: 20px 16px;
+  }
+  main { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px; }
+
+  .kicker { margin: 0; font-family: var(--oa-font-mono); font-size: 13px; color: var(--oa-text-muted); }
+  h1 { margin: 4px 0 2px; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+  h2 { margin: 8px 0 0; font-size: 14px; font-weight: 600; }
+
+  /* The map: land is one dashed path (a round dot per grid cell), pins sit on top. */
+  .map { margin: 0; padding: 12px; background: var(--oa-surface); border: 1px solid var(--oa-divider); border-radius: var(--oa-radius-lg); }
+  .map svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .land { fill: none; stroke: var(--map-land); stroke-width: 0.62; stroke-linecap: round; stroke-dasharray: 0 1; }
+  .pin { fill: var(--oa-accent); fill-opacity: 0.78; stroke: var(--oa-surface); stroke-width: 0.18; transform-box: fill-box; transform-origin: center; }
+  .pin.me { fill-opacity: 1; stroke: var(--oa-text); stroke-width: 0.32; }
+  .pin.pop { animation: pop 700ms var(--oa-ease); }
+  @keyframes pop { 0% { transform: scale(0.2); } 55% { transform: scale(1.35); } 100% { transform: scale(1); } }
+
+  /* Picker: an ARIA combobox over the built-in country list. */
+  .picker { display: flex; gap: 8px; align-items: stretch; }
+  .combo { position: relative; flex: 1 1 auto; min-width: 0; }
+  .combo input {
+    width: 100%;
+    min-height: 44px;
+    padding: 10px 36px 10px 12px;
+    border: 1px solid var(--oa-border);
+    border-radius: var(--oa-radius-lg);
+    background: var(--oa-surface);
+    color: var(--oa-text);
+    font: inherit;
+    font-size: 15px;
+  }
+  .combo input::placeholder { color: var(--oa-text-muted); }
+  .combo input:hover { border-color: var(--oa-border-strong); }
+  .combo input:focus-visible { outline: 2px solid var(--oa-focus); outline-offset: 1px; }
+  .combo input:disabled { opacity: 0.6; }
+  .caret { position: absolute; right: 12px; top: 50%; width: 10px; height: 10px; margin-top: -5px; pointer-events: none; fill: none; stroke: var(--oa-text-muted); stroke-width: 1.6; }
+  .list {
+    position: absolute;
+    z-index: 5;
+    left: 0; right: 0; top: calc(100% + 4px);
+    max-height: 260px;
+    overflow-y: auto;
+    margin: 0; padding: 4px;
+    list-style: none;
+    background: var(--oa-surface);
+    border: 1px solid var(--oa-border);
+    border-radius: var(--oa-radius-lg);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+  }
+  .list[hidden] { display: none; }
+  .list li { display: flex; gap: 8px; align-items: center; padding: 7px 8px; border-radius: var(--oa-radius); cursor: pointer; }
+  .list li[aria-selected="true"] { background: var(--oa-accent-soft); }
+  .list li.none { color: var(--oa-text-muted); cursor: default; }
+  .flag { flex: none; width: 1.4em; text-align: center; }
+  .btn {
+    flex: none;
+    min-height: 44px;
+    padding: 0 20px;
+    border: 1px solid var(--oa-accent);
+    border-radius: var(--oa-radius-lg);
+    background: var(--oa-accent);
+    color: var(--oa-accent-text);
+    font: inherit;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+  .btn:focus-visible { outline: 2px solid var(--oa-focus); outline-offset: 2px; }
+  .btn:disabled { opacity: 0.5; cursor: default; }
+
+  .note { margin: 0; color: var(--oa-text-muted); font-size: 13px; text-wrap: pretty; font-variant-numeric: tabular-nums; }
+  .note b { color: var(--oa-text); font-weight: 600; }
+  .error { margin: 0; color: var(--oa-danger); font-size: 13px; }
+  .error:empty { display: none; }
+
+  .top { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+  .top li { position: relative; display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--oa-divider); font-size: 15px; }
+  .top li:last-child { border-bottom: 0; }
+  .top .name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  .top .you { color: var(--oa-text-muted); font-size: 13px; margin-left: 6px; }
+  .top .meter { flex: 0 1 140px; height: 6px; border-radius: 3px; background: var(--oa-surface-2); overflow: hidden; }
+  .top .meter span { display: block; height: 100%; background: var(--oa-accent); border-radius: 3px; transition: width 420ms var(--oa-ease); }
+  .top .n { flex: none; min-width: 3ch; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .top .empty { color: var(--oa-text-muted); font-size: 14px; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+  @media (max-width: 480px) {
+    .map { padding: 8px; }
+    .top .meter { flex-basis: 72px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pin.pop { animation: none; }
+    .top .meter span { transition: none; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <p class="kicker">Today's map · resets 00:00 UTC</p>
+  <h1 id="title">Where are you from?</h1>
+  <figure class="map">
+    <svg id="map" viewBox="-1 -1 121 47" role="img" aria-labelledby="mapLabel" focusable="false">
+      <title id="mapLabel">World map of today's pins</title>
+      <path class="land" d="M22 0h1M25 0h28M63 0h5M76 0h0M91 0h3M20 1h13M37 1h16M65 1h0M67 1h0M79 1h1M82 1h0M90 1h7M106 1h2M18 2h6M26 2h8M41 2h12M78 2h1M83 2h0M85 2h0M87 2h15M107 2h1M0 3h0M6 3h7M16 3h3M21 3h4M27 3h10M42 3h10M66 3h4M78 3h0M80 3h0M82 3h33M117 3h1M0 4h2M5 4h27M34 4h4M42 4h8M64 4h55M1 5h1M4 5h28M34 5h4M42 5h4M52 5h3M63 5h56M5 6h23M32 6h0M34 6h3M43 6h2M61 6h4M67 6h51M6 7h3M13 7h15M34 7h4M58 7h0M62 7h3M67 7h47M15 8h25M57 8h2M62 8h43M112 8h1M16 9h25M56 9h51M112 9h0M17 10h24M58 10h49M18 11h21M59 11h46M107 11h0M18 12h18M38 12h0M57 12h12M73 12h31M107 12h0M18 13h17M57 13h3M62 13h40M106 13h1M19 14h15M57 14h7M67 14h0M69 14h31M102 14h0M105 14h1M19 15h15M57 15h6M72 15h27M102 15h4M21 16h11M56 16h44M103 16h0M21 17h6M32 17h0M56 17h19M77 17h23M22 18h5M33 18h0M55 18h21M78 18h21M24 19h3M32 19h1M54 19h17M73 19h6M83 19h15M100 19h0M25 20h2M29 20h1M34 20h2M54 20h25M84 20h4M91 20h5M26 21h5M54 21h18M74 21h3M84 21h3M91 21h4M100 21h0M29 22h2M54 22h21M85 22h1M92 22h4M100 22h1M31 23h1M34 23h5M55 23h21M85 23h1M92 23h0M94 23h1M99 23h0M101 23h0M32 24h8M56 24h20M86 24h1M93 24h0M101 24h0M34 25h8M57 25h2M62 25h13M92 25h2M98 25h1M33 26h9M63 26h11M93 26h1M96 26h4M102 26h0M33 27h11M63 27h10M93 27h7M102 27h0M104 27h2M33 28h14M64 28h8M94 28h1M99 28h0M104 28h4M110 28h0M33 29h15M64 29h8M95 29h5M106 29h3M34 30h13M64 30h9M109 30h1M34 31h12M64 31h9M76 31h0M102 31h3M107 31h0M35 32h11M64 32h12M101 32h7M36 33h10M64 33h7M74 33h2M99 33h10M36 34h9M64 34h7M74 34h1M98 34h11M36 35h7M65 35h6M75 35h0M97 35h13M36 36h7M65 36h5M98 36h13M36 37h6M66 37h3M98 37h12M36 38h5M66 38h2M98 38h2M105 38h5M35 39h5M106 39h3M118 39h0M35 40h4M108 40h0M117 40h1M35 41h3M108 41h0M116 41h1M35 42h2M116 42h0M35 43h2M35 44h1M40 44h0M36 45h1"/>
+      <g id="pins"></g>
+    </svg>
+  </figure>
+  <form class="picker" id="form" novalidate>
+    <div class="combo">
+      <label class="sr" for="country">Your country</label>
+      <input id="country" type="text" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="list" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Pick your country" disabled>
+      <svg class="caret" viewBox="0 0 10 10" aria-hidden="true" focusable="false"><path d="M1.5 3.5 5 7l3.5-3.5"/></svg>
+      <ul class="list" id="list" role="listbox" aria-label="Countries" hidden></ul>
+    </div>
+    <button class="btn" id="pin" type="submit" disabled>Pin</button>
+  </form>
+  <p class="note" id="note">Connecting…</p>
+  <p class="error" id="error" role="alert"></p>
+  <h2 id="topTitle">Top countries today</h2>
+  <ol class="top" id="top" aria-labelledby="topTitle"></ol>
+  <p class="sr" id="announce" aria-live="polite"></p>
+</main>
+
+<script>
+(() => {
+  "use strict";
+
+  /* ISO 3166-1 alpha-2 code, name, latitude, longitude. Pins outside this list are ignored. */
+  const DATA = "AF:Afghanistan:33:65|AX:Åland Islands:60.1:19.9|AL:Albania:41:20|DZ:Algeria:28:3|AS:American Samoa:-14.3:-170|AD:Andorra:42.5:1.5|AO:Angola:-12.5:18.5|AI:Anguilla:18.3:-63.2|AG:Antigua and Barbuda:17.1:-61.8|AR:Argentina:-34:-64|AM:Armenia:40:45|AW:Aruba:12.5:-70|AU:Australia:-27:133|AT:Austria:47.3:13.3|AZ:Azerbaijan:40.5:47.5|BS:Bahamas:24.3:-76|BH:Bahrain:26:50.6|BD:Bangladesh:24:90|BB:Barbados:13.2:-59.5|BY:Belarus:53:28|BE:Belgium:50.8:4|BZ:Belize:17.3:-88.7|BJ:Benin:9.5:2.3|BM:Bermuda:32.3:-64.7|BT:Bhutan:27.5:90.5|BO:Bolivia:-17:-65|BA:Bosnia and Herzegovina:44:18|BW:Botswana:-22:24|BR:Brazil:-10:-55|IO:British Indian Ocean Territory:-6:71.5|VG:British Virgin Islands:18.4:-64.6|BN:Brunei:4.5:114.7|BG:Bulgaria:43:25|BF:Burkina Faso:13:-2|BI:Burundi:-3.5:30|KH:Cambodia:13:105|CM:Cameroon:6:12|CA:Canada:60:-95|CV:Cape Verde:16:-24|BQ:Caribbean Netherlands:12.2:-68.2|KY:Cayman Islands:19.5:-80.5|CF:Central African Republic:7:21|TD:Chad:15:19|CL:Chile:-30:-71|CN:China:35:105|CX:Christmas Island:-10.5:105.7|CC:Cocos (Keeling) Islands:-12.5:96.8|CO:Colombia:4:-72|KM:Comoros:-12.2:44.3|CK:Cook Islands:-21.2:-159.8|CR:Costa Rica:10:-84|HR:Croatia:45.2:15.5|CU:Cuba:21.5:-80|CW:Curaçao:12.1:-68.9|CY:Cyprus:35:33|CZ:Czechia:49.8:15.5|DK:Denmark:56:10|DJ:Djibouti:11.5:43|DM:Dominica:15.4:-61.3|DO:Dominican Republic:19:-70.7|CD:DR Congo:0:25|EC:Ecuador:-2:-77.5|EG:Egypt:27:30|SV:El Salvador:13.8:-88.9|GQ:Equatorial Guinea:2:10|ER:Eritrea:15:39|EE:Estonia:59:26|SZ:Eswatini:-26.5:31.5|ET:Ethiopia:8:38|FK:Falkland Islands:-51.7:-59|FO:Faroe Islands:62:-7|FJ:Fiji:-18:175|FI:Finland:64:26|FR:France:46:2|GF:French Guiana:4:-53|PF:French Polynesia:-15:-140|GA:Gabon:-1:11.8|GM:Gambia:13.5:-16.6|GE:Georgia:42:43.5|DE:Germany:51:9|GH:Ghana:8:-2|GI:Gibraltar:36.1:-5.3|GR:Greece:39:22|GL:Greenland:72:-40|GD:Grenada:12.1:-61.7|GP:Guadeloupe:16.3:-61.6|GU:Guam:13.5:144.8|GT:Guatemala:15.5:-90.2|GG:Guernsey:49.5:-2.6|GN:Guinea:11:-10|GW:Guinea-Bissau:12:-15|GY:Guyana:5:-59|HT:Haiti:19:-72.4|HN:Honduras:15:-86.5|HK:Hong Kong:22.3:114.2|HU:Hungary:47:20|IS:Iceland:65:-18|IN:India:20:77|ID:Indonesia:-5:120|IR:Iran:32:53|IQ:Iraq:33:44|IE:Ireland:53:-8|IM:Isle of Man:54.3:-4.5|IL:Israel:31.5:35.1|IT:Italy:42.8:12.8|CI:Ivory Coast:8:-5|JM:Jamaica:18.3:-77.5|JP:Japan:36:138|JE:Jersey:49.3:-2.2|JO:Jordan:31:36|KZ:Kazakhstan:48:68|KE:Kenya:1:38|KI:Kiribati:1.4:173|XK:Kosovo:42.7:21.2|KW:Kuwait:29.5:45.8|KG:Kyrgyzstan:41:75|LA:Laos:18:105|LV:Latvia:57:25|LB:Lebanon:33.8:35.8|LS:Lesotho:-29.5:28.5|LR:Liberia:6.5:-9.5|LY:Libya:25:17|LI:Liechtenstein:47.3:9.5|LT:Lithuania:56:24|LU:Luxembourg:49.8:6.2|MO:Macau:22.2:113.6|MG:Madagascar:-20:47|MW:Malawi:-13.5:34|MY:Malaysia:2.5:112.5|MV:Maldives:3.3:73|ML:Mali:17:-4|MT:Malta:35.8:14.6|MH:Marshall Islands:9:168|MQ:Martinique:14.7:-61|MR:Mauritania:20:-12|MU:Mauritius:-20.3:57.6|YT:Mayotte:-12.8:45.2|MX:Mexico:23:-102|FM:Micronesia:6.9:158.3|MD:Moldova:47:29|MC:Monaco:43.7:7.4|MN:Mongolia:46:105|ME:Montenegro:42.5:19.3|MS:Montserrat:16.8:-62.2|MA:Morocco:32:-5|MZ:Mozambique:-18.2:35|MM:Myanmar:22:98|NA:Namibia:-22:17|NR:Nauru:-0.5:166.9|NP:Nepal:28:84|NL:Netherlands:52.5:5.8|NC:New Caledonia:-21.5:165.5|NZ:New Zealand:-41:174|NI:Nicaragua:13:-85|NE:Niger:16:8|NG:Nigeria:10:8|NU:Niue:-19:-169.9|NF:Norfolk Island:-29:168|KP:North Korea:40:127|MK:North Macedonia:41.8:22|MP:Northern Mariana Islands:15.2:145.8|NO:Norway:62:10|OM:Oman:21:57|PK:Pakistan:30:70|PW:Palau:7.5:134.5|PS:Palestine:31.9:35.2|PA:Panama:9:-80|PG:Papua New Guinea:-6:147|PY:Paraguay:-23:-58|PE:Peru:-10:-76|PH:Philippines:13:122|PN:Pitcairn Islands:-25.1:-130.1|PL:Poland:52:20|PT:Portugal:39.5:-8|PR:Puerto Rico:18.3:-66.5|QA:Qatar:25.5:51.3|CG:Republic of the Congo:-1:15|RE:Réunion:-21.1:55.5|RO:Romania:46:25|RU:Russia:60:100|RW:Rwanda:-2:30|BL:Saint Barthélemy:18.5:-63.4|SH:Saint Helena, Ascension and Tristan da Cunha:-15.9:-5.7|KN:Saint Kitts and Nevis:17.3:-62.7|LC:Saint Lucia:13.9:-61|MF:Saint Martin:18.1:-63.9|PM:Saint Pierre and Miquelon:46.8:-56.3|VC:Saint Vincent and the Grenadines:13.3:-61.2|WS:Samoa:-13.6:-172.3|SM:San Marino:43.8:12.4|ST:São Tomé and Príncipe:1:7|SA:Saudi Arabia:25:45|SN:Senegal:14:-14|RS:Serbia:44:21|SC:Seychelles:-4.6:55.7|SL:Sierra Leone:8.5:-11.5|SG:Singapore:1.4:103.8|SX:Sint Maarten:18:-63|SK:Slovakia:48.7:19.5|SI:Slovenia:46.1:14.8|SB:Solomon Islands:-8:159|SO:Somalia:10:49|ZA:South Africa:-29:24|GS:South Georgia:-54.5:-37|KR:South Korea:37:127.5|SS:South Sudan:7:30|ES:Spain:40:-4|LK:Sri Lanka:7:81|SD:Sudan:15:30|SR:Suriname:4:-56|SJ:Svalbard and Jan Mayen:78:20|SE:Sweden:62:15|CH:Switzerland:47:8|SY:Syria:35:38|TW:Taiwan:23.5:121|TJ:Tajikistan:39:71|TZ:Tanzania:-6:35|TH:Thailand:15:100|TL:Timor-Leste:-8.8:125.9|TG:Togo:8:1.2|TK:Tokelau:-9:-172|TO:Tonga:-20:-175|TT:Trinidad and Tobago:11:-61|TN:Tunisia:34:9|TR:Türkiye:39:35|TM:Turkmenistan:40:60|TC:Turks and Caicos Islands:21.8:-71.6|TV:Tuvalu:-8:178|UG:Uganda:1:32|UA:Ukraine:49:32|AE:United Arab Emirates:24:54|GB:United Kingdom:54:-2|US:United States:38:-97|VI:United States Virgin Islands:18.4:-64.9|UY:Uruguay:-33:-56|UZ:Uzbekistan:41:64|VU:Vanuatu:-16:167|VA:Vatican City:41.9:12.5|VE:Venezuela:8:-66|VN:Vietnam:16.2:107.8|WF:Wallis and Futuna:-13.3:-176.2|EH:Western Sahara:24.5:-13|YE:Yemen:15:48|ZM:Zambia:-15:30|ZW:Zimbabwe:-20:30";
+  /* Other names people type. Search only; never stored. */
+  const ALIASES = {
+    US: "usa america united states of america", GB: "uk britain great britain england scotland wales northern ireland",
+    AE: "uae emirates", TR: "turkey", CZ: "czech republic", CI: "cote d'ivoire", MM: "burma", NL: "holland",
+    KR: "korea", CV: "cape verde", SZ: "swaziland", MK: "macedonia", VA: "holy see", CD: "drc congo", CG: "congo",
+  };
+  const GRID = { step: 3, top: 81, rows: 46 };
+  const COOLDOWN_MS = 2000; // keeps one visitor well under the per-IP write limit
+  const PAGE = 500;
+  const TOP_N = 10;
+
+  const COUNTRIES = DATA.split("|").map((s) => {
+    const [code, name, lat, lon] = s.split(":");
+    return { code, name, lat: Number(lat), lon: Number(lon), key: fold(`${name} ${code} ${ALIASES[code] || ""}`) };
+  });
+  const BY_CODE = new Map(COUNTRIES.map((c) => [c.code, c]));
+
+  const OA = window.openArtifacts;
+  const $ = (id) => document.getElementById(id);
+  const el = { pins: $("pins"), mapLabel: $("mapLabel"), form: $("form"), input: $("country"), list: $("list"), pin: $("pin"), note: $("note"), error: $("error"), top: $("top"), announce: $("announce") };
+  const nf = new Intl.NumberFormat("en-US");
+
+  function fold(s) { return s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase(); }
+  function flag(code) { return String.fromCodePoint(...[...code].map((ch) => 0x1f1e6 + ch.charCodeAt(0) - 65)); }
+
+  let me = null;             // { id, signedIn }
+  let col = null;            // pins-YYYYMMDD
+  let key = "";
+  let unsub = null;
+  let dayTimer = null;
+  const pins = new Map();    // docId -> country code
+  let mine = null;           // my code (optimistic)
+  let pending = null;        // code waiting for the cooldown
+  let inFlight = false;
+  let lastWrite = 0;
+  let timer = null;
+  let readOnly = false;
+  let closed = false;
+  const popped = new Set();  // codes to animate on the next render
+
+  const utcDay = (t = Date.now()) => new Date(t).toISOString().slice(0, 10).replace(/-/g, "");
+  const dayIndex = (t = Date.now()) => Math.floor(t / 86400000);
+
+  /* ---------- identity (as in the poll) ---------- */
+
+  const safeId = (s) => String(s).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 100);
+  function randomId() {
+    const b = new Uint8Array(12);
+    crypto.getRandomValues(b);
+    return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  }
+  /** A per-browser id when storage works, else per tab. Used only until anonId lands. */
+  function localId() {
+    for (const store of ["localStorage", "sessionStorage"]) {
+      try {
+        const s = window[store];
+        let id = s.getItem("oa-demo-id");
+        if (!id) { id = randomId(); s.setItem("oa-demo-id", id); }
+        return id;
+      } catch { /* sandboxed: try the next */ }
+    }
+    return randomId();
+  }
+  async function hash(s) {
+    try {
+      const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+      return Array.from(new Uint8Array(d).slice(0, 12), (x) => x.toString(16).padStart(2, "0")).join("");
+    } catch {
+      let h = 2166136261;
+      for (const c of s) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
+      return (h >>> 0).toString(16);
+    }
+  }
+  async function identify() {
+    let viewer = null;
+    try { viewer = await OA.viewer.get(); } catch { viewer = null; }
+    const anon = (viewer && viewer.anonId) || (typeof OA.anonId === "string" ? OA.anonId : null);
+    if (viewer && viewer.email) return { id: `u-${await hash(viewer.email)}`, signedIn: true };
+    if (anon) return { id: safeId(anon), signedIn: false };
+    return { id: localId(), signedIn: false };
+  }
+
+  /** A pin counts only when c is a code from the built-in list. */
+  function validPin(doc) {
+    const c = doc && doc.data && doc.data.c;
+    return typeof c === "string" && BY_CODE.has(c) ? c : null;
+  }
+
+  /* ---------- data ---------- */
+
+  async function loadAll() {
+    const next = new Map();
+    let cursor;
+    for (let i = 0; i < 100; i += 1) {
+      const page = await col.list(cursor ? { cursor, limit: PAGE } : { limit: PAGE });
+      for (const d of page.items) {
+        const c = validPin(d);
+        if (c !== null) next.set(d.id, c);
+      }
+      if (!page.nextCursor || page.items.length === 0) break;
+      cursor = page.nextCursor;
+    }
+    pins.clear();
+    for (const [k, v] of next) pins.set(k, v);
+    syncMine();
+  }
+  function syncMine() {
+    if (pending === null && !inFlight) mine = pins.has(me.id) ? pins.get(me.id) : null;
+  }
+
+  function applyChange(e) {
+    if (e.resync) { loadAll().then(render, () => {}); return; }
+    let latest = null;
+    for (const d of e.docs) {
+      const c = validPin(d);
+      const was = pins.get(d.id);
+      if (c === null) pins.delete(d.id); else pins.set(d.id, c);
+      if (c !== null && c !== was) {
+        popped.add(c);
+        if (d.id !== me.id) latest = c;
+      }
+    }
+    for (const id of e.deleted) pins.delete(id);
+    syncMine();
+    render();
+    if (latest) say(`Someone picked ${BY_CODE.get(latest).name}.`);
+  }
+
+  async function openDay() {
+    clearTimeout(dayTimer);
+    if (unsub) unsub();
+    pins.clear();
+    mine = null;
+    closed = false;
+    key = `pins-${utcDay()}`;
+    col = OA.db.collection(key);
+    unsub = col.subscribe(applyChange);
+    await loadAll();
+    render();
+    // A new collection at 00:00 UTC; nothing gets wiped.
+    dayTimer = setTimeout(() => openDay().catch(fail), (dayIndex() + 1) * 86400000 - Date.now() + 1000);
+  }
+
+  /* ---------- pinning ---------- */
+
+  function pinCountry(code) {
+    if (readOnly || closed || !col || !BY_CODE.has(code)) return;
+    if (code === mine && pending === null) { say(`Your pin is already ${BY_CODE.get(code).name}.`); return; }
+    mine = code;
+    pending = code;
+    pins.set(me.id, code);
+    popped.add(code);
+    showError("");
+    render();
+    say(`You picked ${BY_CODE.get(code).name}.`);
+    flush();
+  }
+  function flush() {
+    if (inFlight || pending === null || timer) return;
+    const wait = lastWrite + COOLDOWN_MS - Date.now();
+    if (wait > 0) { timer = setTimeout(() => { timer = null; flush(); }, wait); return; }
+    const c = pending;
+    pending = null;
+    inFlight = true;
+    lastWrite = Date.now();
+    const target = col;
+    target.set(me.id, { c })
+      .catch((err) => {
+        if (target !== col) return;
+        handleWriteError(err);
+        // Roll back to what the server has, including your own pin.
+        pins.delete(me.id);
+        return loadAll().catch(() => {});
+      })
+      .finally(() => {
+        inFlight = false;
+        if (target === col) { syncMine(); render(); }
+        flush();
+      });
+  }
+
+  function handleWriteError(err) {
+    const code = err && err.code;
+    const msg = String((err && err.message) || "");
+    pending = null;
+    if ((code === "rate_limited" || code === "quota_exceeded") && /daily|day/i.test(msg)) {
+      closed = true;
+      showError("Pins are done for today. A fresh map opens at 00:00 UTC.");
+    } else if (code === "rate_limited") showError("Your pin didn't save. Too many pins from your network. Try again in a minute.");
+    else if (code === "unauthorized") { readOnly = true; showError("Sign in to pin your country."); }
+    else if (code === "capability_denied") { readOnly = true; showError("This map can't save pins."); }
+    else showError("Your pin didn't save. Try again.");
+  }
+
+  /* ---------- combobox ---------- */
+
+  let matches = [];
+  let active = -1;
+  let chosen = null;         // code picked in the combobox, not yet pinned
+
+  function openList(q) {
+    const f = fold(q.trim());
+    matches = f ? COUNTRIES.filter((c) => c.key.includes(f)).sort((a, b) => rank(a, f) - rank(b, f)) : COUNTRIES.slice();
+    active = matches.length && f ? 0 : -1;
+    const frag = document.createDocumentFragment();
+    matches.forEach((c, i) => {
+      const li = document.createElement("li");
+      li.id = `opt-${c.code}`;
+      li.setAttribute("role", "option");
+      li.setAttribute("aria-selected", String(i === active));
+      li.innerHTML = '<span class="flag" aria-hidden="true"></span><span></span>';
+      li.firstChild.textContent = flag(c.code);
+      li.lastChild.textContent = c.name;
+      li.addEventListener("mousedown", (e) => e.preventDefault());
+      li.addEventListener("click", () => select(i));
+      frag.append(li);
+    });
+    if (!matches.length) {
+      const li = document.createElement("li");
+      li.className = "none";
+      li.textContent = "No country matches";
+      frag.append(li);
+    }
+    el.list.replaceChildren(frag);
+    el.list.hidden = false;
+    el.input.setAttribute("aria-expanded", "true");
+    setActive(active);
+  }
+  /** Names that start with the query first, then words that do, then the rest. */
+  function rank(c, f) {
+    const n = fold(c.name);
+    return n.startsWith(f) ? 0 : (` ${c.key}`).includes(` ${f}`) ? 1 : 2;
+  }
+  function closeList() {
+    el.list.hidden = true;
+    el.input.setAttribute("aria-expanded", "false");
+    el.input.removeAttribute("aria-activedescendant");
+    active = -1;
+  }
+  function setActive(i) {
+    const prev = el.list.querySelector('[aria-selected="true"]');
+    if (prev) prev.setAttribute("aria-selected", "false");
+    active = i;
+    if (i < 0) { el.input.removeAttribute("aria-activedescendant"); return; }
+    const li = el.list.children[i];
+    li.setAttribute("aria-selected", "true");
+    el.input.setAttribute("aria-activedescendant", li.id);
+    li.scrollIntoView({ block: "nearest" });
+  }
+  function select(i) {
+    const c = matches[i];
+    if (!c) return;
+    chosen = c.code;
+    el.input.value = c.name;
+    closeList();
+    el.input.focus();
+    renderControls();
+  }
+  /** What the Pin button would pin: the chosen option, or typed text that names exactly one country. */
+  function resolveInput() {
+    const f = fold(el.input.value.trim());
+    if (!f) return null;
+    if (chosen && fold(BY_CODE.get(chosen).name) === f) return chosen;
+    const exact = COUNTRIES.find((c) => fold(c.name) === f || c.code.toLowerCase() === f);
+    if (exact) return exact.code;
+    const hits = COUNTRIES.filter((c) => c.key.includes(f));
+    return hits.length === 1 ? hits[0].code : null;
+  }
+
+  function wireCombo() {
+    el.input.addEventListener("input", () => { chosen = null; openList(el.input.value); renderControls(); });
+    el.input.addEventListener("click", () => { if (el.list.hidden) openList(chosen ? "" : el.input.value); });
+    el.input.addEventListener("blur", () => closeList());
+    el.input.addEventListener("keydown", (e) => {
+      const open = !el.list.hidden;
+      switch (e.key) {
+        case "ArrowDown":
+          e.preventDefault();
+          if (!open) { openList(chosen ? "" : el.input.value); if (!matches.length) return; setActive(chosen ? Math.max(0, matches.findIndex((c) => c.code === chosen)) : 0); return; }
+          if (matches.length) setActive(Math.min(matches.length - 1, active + 1));
+          return;
+        case "ArrowUp":
+          e.preventDefault();
+          if (!open) { openList(chosen ? "" : el.input.value); if (matches.length) setActive(matches.length - 1); return; }
+          if (matches.length) setActive(Math.max(0, active - 1));
+          return;
+        case "Enter":
+          if (open && active >= 0) { e.preventDefault(); select(active); }
+          return; // otherwise the form submits and pins
+        case "Escape":
+          if (open) { e.preventDefault(); closeList(); }
+          else if (el.input.value) { e.preventDefault(); el.input.value = ""; chosen = null; renderControls(); }
+          return;
+        default:
+      }
+    });
+    el.form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      closeList();
+      const code = resolveInput();
+      if (!code) { showError("Pick a country from the list."); return; }
+      chosen = code;
+      el.input.value = BY_CODE.get(code).name;
+      pinCountry(code);
+    });
+  }
+
+  /* ---------- render ---------- */
+
+  const SVGNS = "http://www.w3.org/2000/svg";
+  function place(c) {
+    const x = (c.lon + 180) / GRID.step - 0.5;
+    const y = Math.min(GRID.rows - 0.5, Math.max(-0.5, (GRID.top - c.lat) / GRID.step - 0.5));
+    return [x, y];
+  }
+  function tally() {
+    const counts = new Map();
+    for (const c of pins.values()) counts.set(c, (counts.get(c) || 0) + 1);
+    return [...counts].sort((a, b) => b[1] - a[1] || BY_CODE.get(a[0]).name.localeCompare(BY_CODE.get(b[0]).name));
+  }
+
+  function renderMap(ranked) {
+    const max = ranked.length ? ranked[0][1] : 1;
+    const frag = document.createDocumentFragment();
+    // Big circles first so small ones stay on top and visible.
+    for (const [code, n] of ranked) {
+      const c = BY_CODE.get(code);
+      const [x, y] = place(c);
+      const dot = document.createElementNS(SVGNS, "circle");
+      dot.setAttribute("cx", x.toFixed(2));
+      dot.setAttribute("cy", y.toFixed(2));
+      dot.setAttribute("r", (0.62 + 1.7 * Math.sqrt(n / max)).toFixed(2));
+      dot.setAttribute("class", `pin${code === mine ? " me" : ""}${popped.has(code) ? " pop" : ""}`);
+      dot.dataset.code = code;
+      const t = document.createElementNS(SVGNS, "title");
+      t.textContent = `${c.name}: ${nf.format(n)}`;
+      dot.append(t);
+      frag.append(dot);
+    }
+    popped.clear();
+    el.pins.replaceChildren(frag);
+    const total = pins.size;
+    el.mapLabel.textContent = total
+      ? `World map of today's pins: ${nf.format(total)} ${total === 1 ? "pin" : "pins"} in ${nf.format(ranked.length)} ${ranked.length === 1 ? "country" : "countries"}. The list below has the counts.`
+      : "World map of today's pins. No pins yet.";
+  }
+
+  function renderTop(ranked) {
+    const max = ranked.length ? ranked[0][1] : 1;
+    if (!ranked.length) {
+      const li = document.createElement("li");
+      li.className = "empty";
+      li.textContent = "No pins yet today. Be the first.";
+      el.top.replaceChildren(li);
+      return;
+    }
+    el.top.replaceChildren(...ranked.slice(0, TOP_N).map(([code, n]) => {
+      const c = BY_CODE.get(code);
+      const li = document.createElement("li");
+      li.innerHTML = '<span class="flag" aria-hidden="true"></span><span class="name"></span><span class="meter" aria-hidden="true"><span></span></span><span class="n"></span>';
+      li.querySelector(".flag").textContent = flag(code);
+      li.querySelector(".name").textContent = c.name;
+      if (code === mine) {
+        const you = document.createElement("span");
+        you.className = "you";
+        you.textContent = "(you)";
+        li.querySelector(".name").append(you);
+      }
+      li.querySelector(".meter span").style.width = `${(n / max) * 100}%`;
+      li.querySelector(".n").textContent = nf.format(n);
+      li.querySelector(".n").setAttribute("aria-label", `${nf.format(n)} ${n === 1 ? "pin" : "pins"}`);
+      return li;
+    }));
+  }
+
+  function renderControls() {
+    const off = readOnly || closed || !col;
+    el.input.disabled = off;
+    el.pin.disabled = off;
+    el.pin.textContent = mine && chosen === mine ? "Pinned" : mine ? "Move pin" : "Pin";
+  }
+
+  function render() {
+    const ranked = tally();
+    renderMap(ranked);
+    renderTop(ranked);
+    renderControls();
+    const total = pins.size;
+    const head = `${nf.format(total)} ${total === 1 ? "pin" : "pins"} from ${nf.format(ranked.length)} ${ranked.length === 1 ? "country" : "countries"} today, one per browser.`;
+    el.note.replaceChildren();
+    if (mine) {
+      const b = document.createElement("b");
+      b.textContent = `${flag(mine)} ${BY_CODE.get(mine).name}`;
+      el.note.append("Your pin: ", b, `. ${head}`);
+    } else el.note.append(head);
+    if (closed) el.note.append(" Done for today.");
+    else if (!readOnly) el.note.append(mine ? " Change it any time." : "");
+  }
+
+  /* ---------- boot ---------- */
+
+  function say(m) { el.announce.textContent = ""; requestAnimationFrame(() => { el.announce.textContent = m; }); }
+  function showError(m) { el.error.textContent = m; }
+  function fail() { el.note.textContent = "Could not reach the map. Reload to try again."; }
+
+  async function boot() {
+    wireCombo();
+    if (!OA || !OA.db) {
+      el.note.textContent = "Open this map from its view link to pin your country.";
+      return;
+    }
+    await OA.ready;
+    const setTheme = (t) => { document.documentElement.dataset.theme = t; };
+    setTheme(OA.theme);
+    OA.onTheme(setTheme);
+    me = await identify();
+    await openDay();
+    // Timers sleep in background tabs: check the day again when the page comes back.
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && col && `pins-${utcDay()}` !== key) openDay().catch(fail);
+    });
+  }
+  boot().catch(fail);
+})();
+</script>
+</body>
+</html>
