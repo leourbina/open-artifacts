@@ -99,7 +99,7 @@ export function createBridge(opts: BridgeOptions) {
   // The anonId header rides only on anonymous calls to artifacts that allow
   // anonymous writes; never signed in, never into the frame.
   const anon = opts.viewer === null && artifact.allowAnonymousWrites === true;
-  /** The first token-less anonymous call; others wait so one id is minted. */
+  /** The first token-less call that mints (writes, anon-id); others wait so one id is minted. */
   let minting: Promise<void> | null = null;
   const subs = new Map<string, Sub>();
   let disposed = false;
@@ -212,10 +212,11 @@ export function createBridge(opts: BridgeOptions) {
   };
 
   const anonCall = async <T>(
+    mints: boolean,
     go: (extra?: RequestExtra) => Promise<T>,
   ): Promise<T> => {
     if (!anon) return go();
-    if (!loadAnonToken() && minting) await minting;
+    if (mints && !loadAnonToken() && minting) await minting;
     const token = loadAnonToken();
     const p = go({
       ...(token ? { headers: { [ANON_ID_HEADER]: token } } : {}),
@@ -224,7 +225,7 @@ export function createBridge(opts: BridgeOptions) {
         if (isAnonToken(t)) saveAnonToken(t);
       },
     });
-    if (!token && !minting) {
+    if (mints && !token && !minting) {
       const done: Promise<void> = p.then(
         () => {},
         () => {},
@@ -239,13 +240,19 @@ export function createBridge(opts: BridgeOptions) {
   // Aborted on dispose so in-flight calls stop and never reply.
   const http = {
     get: <T>(path: string, schema: z.ZodType<T>) =>
-      anonCall((x) => api.get(path, schema, abort.signal, x)),
+      anonCall(path === R.anonId(id), (x) =>
+        api.get(path, schema, abort.signal, x),
+      ),
     send: <T = void>(
       method: "POST" | "PUT" | "PATCH" | "DELETE",
       path: string,
       body: unknown,
       schema?: z.ZodType<T>,
-    ) => anonCall((x) => api.send(method, path, body, schema, abort.signal, x)),
+    ) =>
+      // POST is db.query, a read: only writes mint.
+      anonCall(method !== "POST", (x) =>
+        api.send(method, path, body, schema, abort.signal, x),
+      ),
   };
 
   async function run(

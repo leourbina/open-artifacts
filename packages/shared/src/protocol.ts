@@ -46,11 +46,11 @@ const Theme = ThemeSchema;
  * Anonymous id (artifacts with allowAnonymousWrites): the shell sends its
  * signed token "<id>.<sig>" in this request header on anonymous runtime calls,
  * and the server returns a new one in the same response header whenever it
- * mints one (missing, malformed or forged token). The token never enters the
- * artifact frame.
+ * mints one (anonymous writes and R.anonId only; missing, malformed or forged
+ * token). The token never enters the artifact frame.
  */
 export const ANON_ID_HEADER = "X-OA-Anon-Id";
-/** Public part of an anonId: its first 8 chars (updatedBy "anon:<short>"). */
+/** Length of the per-artifact public anonId (updatedBy "anon:<short>"). */
 export const ANON_ID_SHORT_LEN = 8;
 /** viewer.get() for an anonymous viewer of an artifact with allowAnonymousWrites. */
 export const AnonViewerSchema = z.strictObject({

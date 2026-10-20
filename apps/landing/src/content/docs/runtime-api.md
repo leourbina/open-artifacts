@@ -68,9 +68,12 @@ await votes.set(crypto.randomUUID(), { option: "Lisbon" });
 On an artifact that allows anonymous writes, each anonymous browser gets an `anonId`, so a game or poll can tell two anonymous players apart. Their documents carry `updatedBy: "anon:<anonId>"`. Only documents written before anonymous ids existed still say `"anon"`.
 
 - It belongs to one browser on one device. Another browser or device gets a different id, and clearing site data resets it.
+- Each artifact sees a different id for the same browser, so ids can't be matched across artifacts.
 - It is not a person or an account, so don't treat it as proof of who someone is.
 - It is signed by the server: no one can forge someone else's id, but anyone can reset their own.
 - It is only issued on artifacts that allow anonymous writes. Signed-in viewers never get one.
+
+An `anonId` is a label, not a permission. Any anonymous viewer can still overwrite or delete any document, so use it to show who did what (for example, a seat claimed by `anonId`) and expect conflicts.
 
 ## Per-viewer data: `storage`
 

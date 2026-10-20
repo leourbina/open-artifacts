@@ -76,42 +76,71 @@ const write = (id: string, doc: string, token: string | null, ip?: string) =>
 const byOf = async (r: Response) =>
   DataDocSchema.parse(await r.json()).updatedBy;
 
+/** A token minted for one browser (the artifact only picks the short id). */
+const mintToken = async (artifactId: string) =>
+  (await resolveAnonId(env, artifactId, undefined, true))?.issued ?? "";
+/** This browser's public id on `artifactId`, via GET anon-id. */
+const shortOn = async (artifactId: string, token: string | null) => {
+  const r = await anon(R.anonId(artifactId), token);
+  expect(r.status).toBe(200);
+  return {
+    short: AnonViewerSchema.parse(await r.json()).anonId,
+    issued: r.headers.get(ANON_ID_HEADER),
+  };
+};
+
 describe("anonId issuance", () => {
   it("is never issued on an artifact without allowAnonymousWrites", async () => {
     const id = await pub({ visibility: "public" });
     const r = await anon(R.dataCollection(id, "c"), null);
     expect(r.status).toBe(200);
     expect(r.headers.get(ANON_ID_HEADER)).toBeNull();
-    expect((await anon(R.anonId(id), null)).status).toBe(401);
-    // A valid token from elsewhere is ignored, not echoed.
-    const { issued } = await resolveAnonId(env, undefined);
-    const r2 = await anon(R.dataCollection(id, "c"), issued);
-    expect(r2.headers.get(ANON_ID_HEADER)).toBeNull();
+    const g = await anon(R.anonId(id), null);
+    expect(g.status).toBe(401);
+    expect(g.headers.get(ANON_ID_HEADER)).toBeNull();
   });
 
-  it("is minted on the first anonymous read, then stable across calls", async () => {
+  it("reads never mint or echo a token", async () => {
     const id = await optIn();
-    const first = await anon(R.dataCollection(id, "c"), null);
-    expect(first.status).toBe(200);
-    const token = first.headers.get(ANON_ID_HEADER) ?? "";
-    expect(token).toMatch(TOKEN_RE);
-    expect(first.headers.get("cache-control")).toBe("no-store");
-    const short = token.slice(0, 8);
+    for (const t of [null, await mintToken(id), "garbage"]) {
+      const r = await anon(R.dataCollection(id, "c"), t);
+      expect(r.status).toBe(200);
+      expect(r.headers.get(ANON_ID_HEADER)).toBeNull();
+    }
+  });
 
+  it("GET anon-id mints once, then the short id is stable on that artifact", async () => {
+    const id = await optIn();
+    const first = await shortOn(id, null);
+    const token = first.issued ?? "";
+    expect(token).toMatch(TOKEN_RE);
+    expect(first.short).toMatch(/^[A-Za-z0-9_-]{8}$/);
+    // Not derived in the open from the token.
+    expect(token.startsWith(first.short)).toBe(false);
+
+    const again = await shortOn(id, token);
+    expect(again).toEqual({ short: first.short, issued: null });
     const w1 = await write(id, "a", token);
     expect(w1.headers.get(ANON_ID_HEADER)).toBeNull();
-    expect(await byOf(w1)).toBe(`anon:${short}`);
+    expect(await byOf(w1)).toBe(`anon:${first.short}`);
     // Another IP, same browser: same id.
     const w2 = await anon(R.dataDoc(id, "c", "b"), token, {
       method: "PATCH",
       body: { x: 1 },
     });
-    expect(await byOf(w2)).toBe(`anon:${short}`);
-    const g = await anon(R.dataDoc(id, "c", "a"), token);
-    expect(await byOf(g)).toBe(`anon:${short}`);
-    const me = await anon(R.anonId(id), token);
-    expect(AnonViewerSchema.parse(await me.json())).toEqual({ anonId: short });
-    expect(me.headers.get(ANON_ID_HEADER)).toBeNull();
+    expect(await byOf(w2)).toBe(`anon:${first.short}`);
+  });
+
+  it("the same browser has a different short id on each artifact", async () => {
+    const [a, b] = [await optIn(), await optIn()];
+    const { issued } = await shortOn(a, null);
+    const token = issued ?? "";
+    const sa = (await shortOn(a, token)).short;
+    const sb = await shortOn(b, token);
+    expect(sb.issued).toBeNull();
+    expect(sb.short).not.toBe(sa);
+    expect(await byOf(await write(a, "x", token))).toBe(`anon:${sa}`);
+    expect(await byOf(await write(b, "x", token))).toBe(`anon:${sb.short}`);
   });
 
   it("a token-less write mints one and uses it", async () => {
@@ -120,12 +149,14 @@ describe("anonId issuance", () => {
     expect(w.status).toBe(200);
     const token = w.headers.get(ANON_ID_HEADER) ?? "";
     expect(token).toMatch(TOKEN_RE);
-    expect(await byOf(w)).toBe(`anon:${token.slice(0, 8)}`);
+    const { short } = await shortOn(id, token);
+    expect(await byOf(w)).toBe(`anon:${short}`);
   });
 
   it("a forged or tampered token is never accepted: a new one is minted", async () => {
     const id = await optIn();
-    const good = (await resolveAnonId(env, undefined)).issued ?? "";
+    const good = await mintToken(id);
+    const goodShort = (await shortOn(id, good)).short;
     const [gid = "", gsig = ""] = good.split(".");
     const flip = (s: string, i: number) =>
       s.slice(0, i) + (s[i] === "A" ? "B" : "A") + s.slice(i + 1);
@@ -145,45 +176,50 @@ describe("anonId issuance", () => {
       const fresh = w.headers.get(ANON_ID_HEADER) ?? "";
       expect(fresh).toMatch(TOKEN_RE);
       expect(fresh).not.toBe(f);
-      expect(fresh.slice(0, 8)).not.toBe(gid.slice(0, 8));
-      expect(await byOf(w)).toBe(`anon:${fresh.slice(0, 8)}`);
+      const by = await byOf(w);
+      expect(by).not.toBe(`anon:${goodShort}`);
+      expect(by).toBe(`anon:${(await shortOn(id, fresh)).short}`);
     }
     // A token signed with another key is refused too.
-    const other = await resolveAnonId(
-      { SESSION_SECRET: "x".repeat(40) },
-      undefined,
-    );
-    const w = await write(id, "g", other.issued);
-    expect(w.headers.get(ANON_ID_HEADER)).not.toBe(other.issued);
-    expect(await byOf(w)).not.toBe(`anon:${other.short}`);
+    const other =
+      (
+        await resolveAnonId(
+          { SESSION_SECRET: "x".repeat(40) },
+          id,
+          undefined,
+          true,
+        )
+      )?.issued ?? "";
+    const w = await write(id, "g", other);
+    const fresh = w.headers.get(ANON_ID_HEADER);
+    expect(fresh).toMatch(TOKEN_RE);
+    expect(fresh).not.toBe(other);
   });
 
   it("two browsers get distinct ids", async () => {
     const id = await optIn();
-    const a = (await anon(R.dataCollection(id, "c"), null)).headers.get(
-      ANON_ID_HEADER,
-    );
-    const b = (await anon(R.dataCollection(id, "c"), null)).headers.get(
-      ANON_ID_HEADER,
-    );
-    expect(a).toMatch(TOKEN_RE);
-    expect(b).toMatch(TOKEN_RE);
-    expect(a?.slice(0, 22)).not.toBe(b?.slice(0, 22));
-    const wa = await write(id, "a", a);
-    const wb = await write(id, "b", b);
-    const [ba, bb] = [await byOf(wa), await byOf(wb)];
-    expect(ba).not.toBe(bb);
+    const a = await shortOn(id, null);
+    const b = await shortOn(id, null);
+    expect(a.issued).toMatch(TOKEN_RE);
+    expect(b.issued).toMatch(TOKEN_RE);
+    expect(a.issued?.slice(0, 22)).not.toBe(b.issued?.slice(0, 22));
+    expect(a.short).not.toBe(b.short);
+    const [ba, bb] = [
+      await byOf(await write(id, "a", a.issued)),
+      await byOf(await write(id, "b", b.issued)),
+    ];
+    expect(ba).toBe(`anon:${a.short}`);
+    expect(bb).toBe(`anon:${b.short}`);
     expect(ba).toMatch(BY_RE);
-    expect(bb).toMatch(BY_RE);
   });
 
   it("signed-in callers are unchanged: no token, updatedBy u:{id}", async () => {
     const id = await optIn();
-    const { issued } = await resolveAnonId(env, undefined);
+    const token = await mintToken(id);
     const r = await api(app, R.dataDoc(id, "c", "s"), owner.cookie, {
       method: "PUT",
       body: 1,
-      headers: { [ANON_ID_HEADER]: issued ?? "" },
+      headers: { [ANON_ID_HEADER]: token },
     });
     expect(r.status).toBe(200);
     expect(r.headers.get(ANON_ID_HEADER)).toBeNull();
@@ -191,7 +227,34 @@ describe("anonId issuance", () => {
     expect((await api(app, R.anonId(id), owner.cookie)).status).toBe(401);
   });
 
-  it("anonymous subscribe and storage never mint", async () => {
+  it("GET anon-id needs the viewer capability and is rate limited per IP", async () => {
+    const noViewer = await pub({
+      visibility: "public",
+      allowAnonymousWrites: true,
+      capabilities: { db: true, viewer: false, storage: false },
+    });
+    expect((await anon(R.anonId(noViewer), null)).status).toBe(403);
+    const id = await optIn();
+    const keys: string[] = [];
+    const deny = {
+      async limit({ key }: { key: string }) {
+        keys.push(key);
+        return { success: false };
+      },
+    };
+    const r = await app.fetch(
+      new Request(`http://app.localhost${R.anonId(id)}`, {
+        headers: { "cf-connecting-ip": "192.0.2.9" },
+      }),
+      { ...env, RL_ANON: deny },
+      { waitUntil() {}, passThroughOnException() {} } as never,
+    );
+    expect(r.status).toBe(429);
+    expect(r.headers.get(ANON_ID_HEADER)).toBeNull();
+    expect(keys).toEqual(["anonid:ip:192.0.2.9"]);
+  });
+
+  it("anonymous storage never mints", async () => {
     const id = await optIn();
     const s = await anon(R.storageKey(id, "k"), null);
     expect(s.status).toBe(401);

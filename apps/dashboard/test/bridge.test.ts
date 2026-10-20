@@ -632,17 +632,21 @@ describe("anonymous id", () => {
     expect(store.get(ANON_ID_KEY)).toBe("bad token");
   });
 
-  it("concurrent first calls wait for one minted token", async () => {
+  it("concurrent first writes wait for one minted token; reads don't", async () => {
     vi.stubGlobal("localStorage", okStorage);
     let release!: (r: Response) => void;
     fetchMock.mockImplementationOnce(
       () => new Promise<Response>((r) => (release = r)),
     );
     mkAnon(OPT_IN);
-    call("db.get", { collection: "c", id: "d1" }, "a");
-    call("db.get", { collection: "c", id: "d2" }, "b");
+    call("db.set", { collection: "c", id: "d1", data: 1 }, "a");
+    call("db.set", { collection: "c", id: "d2", data: 2 }, "b");
     await flush();
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    call("db.get", { collection: "c", id: "d1" }, "r");
+    await flush();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    fetchMock.mock.calls.pop();
     release(withToken(TOKEN));
     await flush();
     await flush();
