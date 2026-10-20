@@ -37,8 +37,6 @@ export const filler = (n: number) =>
   Array.from({ length: n }, (_, i) => ({ id: `f${i}`, title: `other-${i}` }));
 
 type World = {
-  /** Process env handed to the setup run. */
-  env?: Record<string, string>;
   /** Extra files (token files) and their modes. */
   files?: Record<string, string>;
   fileModes?: Record<string, number>;
