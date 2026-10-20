@@ -54,7 +54,10 @@ test("no CPU banner without CPU trouble", async ({ page }) => {
 test("viewer: a silent frame gets the CPU notice above it, upsell after 2 reloads", async ({
   page,
 }) => {
-  test.setTimeout(60_000);
+  // The notice fires SLOW_MS after the frame loads. A fake clock replaces the
+  // wait: fast-forward until the timer, armed by that load, has fired. Nothing
+  // here depends on how long the machine takes.
+  await page.clock.install();
   // A frame that loads but never says hello.
   await page.route("https://content.example.com/**", (r) =>
     r.fulfill({ contentType: "text/html", body: "<p>No runtime here</p>" }),
@@ -62,18 +65,25 @@ test("viewer: a silent frame gets the CPU notice above it, upsell after 2 reload
   await page.goto("/a/Ef7hJkLmNp8qRsTv?mock=cpu");
   const notice = page.locator(".oa-vnotice");
   const frame = page.locator("iframe.oa-vframe");
-  await expect(frame).toBeVisible();
+  await expect(frame).toBeVisible({ timeout: 30_000 });
   await expect(notice).toHaveCount(0);
+  const slow = () =>
+    expect(async () => {
+      await page.clock.fastForward(8_000);
+      await expect(notice).toBeVisible({ timeout: 1_000 });
+    }).toPass({ timeout: 30_000 });
+  await slow();
+  // Usage (the CPU signal) can land after the notice; wait on it, not on time.
   await expect(notice).toContainText(
     "This artifact may have hit your instance's CPU limit. Reloading usually works.",
-    { timeout: 12_000 },
+    { timeout: 30_000 },
   );
   await expect(frame).toBeVisible();
   await expect(notice).not.toContainText("Workers Paid");
   for (let i = 0; i < 2; i++) {
     await notice.getByRole("button", { name: "Reload" }).click();
     await expect(notice).toHaveCount(0);
-    await expect(notice).toBeVisible({ timeout: 12_000 });
+    await slow();
   }
   await expect(notice).toContainText("Workers Paid raises the limit.");
   await expect(notice.getByRole("link", { name: /See plans/ })).toBeVisible();
