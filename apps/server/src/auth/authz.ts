@@ -1,9 +1,10 @@
-import type {
-  AccessLevel,
-  CapReason,
-  ListQuery,
-  Member,
-  Visibility,
+import {
+  type AccessLevel,
+  type CapReason,
+  type ListQuery,
+  type Member,
+  type Visibility,
+  VisibilitySchema,
 } from "@oa/shared";
 import {
   and,
@@ -101,11 +102,11 @@ export async function accessLevel(
   const a = row.a;
   const level = decide({
     caller: user ? { id: user.id, orgRole: user.role } : null,
-    cap: c.kind === "user" ? (c.cap ?? null) : null,
+    cap: capOfCaller(c),
     artifact: {
       spaceId: a.ownerId,
       spaceKind: "personal",
-      visibility: a.visibility as Visibility,
+      visibility: visibilityOf(a.visibility),
       deleted: a.deletedAt != null,
     },
     space: { publicLinks: true, allMembersRole: null },
@@ -119,10 +120,19 @@ export async function accessLevel(
   return level ? { level, artifact: a } : null;
 }
 
+/** The caller's cap: the one source both decide() and can() read. */
+export const capOfCaller = (c: Caller): CapReason | null =>
+  c.kind === "user" ? (c.cap ?? null) : null;
+
+const VISIBILITIES: ReadonlySet<string> = new Set(VisibilitySchema.options);
+/** A stored visibility, or "private" when the row holds anything else (fail closed). */
+const visibilityOf = (v: string): Visibility =>
+  VISIBILITIES.has(v) ? (v as Visibility) : "private";
+
 /** The context `can` needs for one caller and artifact. */
 export function canCtx(c: Caller, a: ArtifactRow): CanCtx {
   return {
-    cap: c.kind === "user" ? (c.cap ?? null) : null,
+    cap: capOfCaller(c),
     personal: true,
     anonymous: c.kind !== "user",
     allowAnonymousWrites: a.allowAnonymousWrites === 1,

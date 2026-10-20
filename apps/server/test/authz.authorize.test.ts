@@ -162,3 +162,31 @@ describe("MCP data store: can(level, data.*) and the db capability", () => {
     );
   });
 });
+
+describe("gatherer fails closed and caps", () => {
+  it("a capped caller never gets trash, even with allowDeleted", async () => {
+    const ownerId = (owner.caller as { user: Member }).user.id;
+    const gone = newId();
+    const now = Date.now();
+    await getDb(env).insert(artifacts).values({
+      id: gone,
+      ownerId,
+      title: "gone",
+      format: "html",
+      visibility: "private",
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: now,
+    });
+    const capped = {
+      ...(owner.caller as Caller & { kind: "user" }),
+      cap: "restricted" as const,
+    };
+    await notFound(
+      authorize(env, capped, gone, "view", { allowDeleted: true }),
+    );
+    await expect(
+      authorize(env, owner.caller, gone, "undelete", { allowDeleted: true }),
+    ).resolves.toMatchObject({ level: "owner" });
+  });
+});
