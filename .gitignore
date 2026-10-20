@@ -7,6 +7,9 @@ dist-assets/
 logs/
 apps/server/wrangler.jsonc
 apps/server/src/version.gen.ts
+apps/server/src/mcp/skill.generated.ts
+apps/server/src/mcp/upgrade.generated.ts
+apps/server/src/mcp/tool-manifest.json
 *.log
 .DS_Store
 .env*

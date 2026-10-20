@@ -2,13 +2,14 @@ import { env } from "cloudflare:workers";
 import {
   agentClients,
   dataDocLimit,
+  dataLimits,
   LIMITS,
   newId,
   type Plan,
 } from "@oa/shared";
 import { describe, expect, it, vi } from "vitest";
 import { createPat } from "../src/auth/pat.js";
-import { INSTRUCTIONS, sizeText } from "../src/mcp/instructions.js";
+import { INSTRUCTIONS, planText, sizeText } from "../src/mcp/instructions.js";
 import { SKILL_HASH, SKILL_TEMPLATE } from "../src/mcp/skill.generated.js";
 import { renderSkill, SKILL_DOC_URI } from "../src/mcp/skill.js";
 import {
@@ -71,8 +72,32 @@ function toolSections(md: string): Map<string, string> {
 }
 
 describe("skill.md drift", () => {
-  it("src/mcp/skill.generated.ts is up to date (run the build)", () => {
+  // skill.generated.ts is gitignored and written by `pnpm gen` before every
+  // test run, so these check the emitter, not a committed copy.
+  it("the template renders deterministically", () => {
+    expect(renderSkillTemplate()).toBe(renderSkillTemplate());
+  });
+
+  it("the generated template is a fresh render", () => {
     expect(SKILL_TEMPLATE).toBe(renderSkillTemplate());
+  });
+
+  it("the served /skill.md is a fresh render with its tokens filled", async () => {
+    const e = E() as Parameters<typeof dataLimits>[0] & { APP_HOST: string };
+    const { plan, docBytes } = dataLimits(e);
+    const v: Record<string, string> = {
+      ...planText(plan, docBytes),
+      origin: skillOrigin(e.APP_HOST),
+      host: e.APP_HOST,
+      name: await skillName(e.APP_HOST),
+      hostSlug: hostSlug(e.APP_HOST),
+      version: VERSION,
+    };
+    const fresh = renderSkillTemplate().replace(
+      /\{\{(\w+)\}\}/g,
+      (m, k: string) => v[k] ?? m,
+    );
+    expect(await skill()).toBe(fresh);
   });
 
   it("SKILL_HASH is the template's sha256 prefix", async () => {
