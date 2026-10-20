@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** The dashboard shows spaces (library, publish, move), gives admins a page to map Google groups (or, on Team, people) to spaces with viewer, editor and manager roles, lets admins transfer a departed person's personal artifacts, and offers a hosted sign-in page (Google plus emailed codes), while a self-hosted install looks and behaves exactly as today.
+**Goal:** The dashboard shows spaces (library, publish, move), gives admins a page to map Google groups (or, on Team, people) to spaces with viewer, editor and manager roles, lets admins transfer a departed person's personal artifacts, and fits the dashboard around Backend's server-rendered hosted sign-in (Google plus emailed codes), while a self-hosted install looks and behaves exactly as today.
 
-**Architecture:** Every hosted feature is gated on new optional `Me` fields (`me.spaces`, `me.hosted`, `me.authProvider`) or, signed out, on `/auth/providers`, so an older or self-hosted server renders today's UI unchanged. Permissions come from a new server-computed `artifact.can` block (fallback: today's `access`), read through one helper so no component decides edit rights itself. This track edits only `apps/dashboard`: Backend P2/P3 own every `@oa/shared` change (schemas, routes, error codes, MSW fixtures and handlers). Task 1 consumes their contract PR; every later UI task is test-first against their mocks; the real suite follows once P2/P3 ship.
+**Architecture:** Every hosted feature is gated on new optional `Me` fields (`me.spaces`, `me.hosted`, `me.authProvider`) or, signed out, on `/auth/providers`, so an older or self-hosted server renders today's UI unchanged. Permissions come from a new server-computed `artifact.can` block (fallback: today's `access`), read through one helper so no component decides edit rights itself. Sign-in itself is Backend's: P2 renders the chooser and code pages on the server (`/auth/login`, `/auth/code`), so the dashboard only hands off to them and explains refusals. This track edits only `apps/dashboard`: Backend P2/P3 own every `@oa/shared` change (schemas, routes, error codes, MSW fixtures and handlers). Task 1 consumes their contract PR; every later UI task is test-first against their mocks; the real suite follows once P2/P3 ship.
 
 **Tech Stack:** React 19, TanStack Router and Query, `@oa/ui` and `@oa/ui/shadcn`, zod, MSW (`@oa/shared/mocks`), vitest plus Testing Library, Playwright (mock config and `playwright.real.config.ts`).
 
@@ -13,13 +13,13 @@
 ## Global Constraints
 
 - Copy: no em dashes in any user-facing string; say "any AI agent".
-- Self-hosted is unchanged: with `me.spaces` and `me.hosted` absent or null and `/auth/providers` absent or `mode: "access"`, no new control renders and `/sign-in` is today's Access page (existing `e2e/signin-split.spec.ts` stays green unedited).
+- Self-hosted is unchanged: with `me.spaces` and `me.hosted` absent or null and `/auth/providers` absent or `providers: ["access"]`, no new control renders and `/sign-in` is today's Access page (existing `e2e/signin-split.spec.ts` stays green unedited).
 - Personal artifacts belong to the person: admins can't browse or read them. The UI never lists, links or requests another user's personal space or its artifacts; a transfer shows a count only.
 - Read-only is enforced on the server; the UI must not offer edit, rename, restore, publish-to, move, share or delete to a role that lacks it (read from `artifactCan`, Task 3).
 - A tier change never widens access: in frozen or manual mode the UI offers no control that adds a group, and copy never implies sync will resume on its own.
 - Public no-sign-in links can be turned off per space; when off, the UI never offers "public".
 - Roles per space are exactly `viewer`, `editor`, `manager`; "All members" is a built-in group (id `all_members`) that can't be deleted, only given a role or none.
-- Emailed codes: guests are read-only; the sign-in page never reveals whether an address is invited (same response for every address).
+- Guests (people outside the company, signed in by emailed code) are read-only; the UI never offers them more, and never reveals whether an address is invited.
 - New `Me`/`ArtifactSummary` fields are `.optional()` so older servers still parse (pattern: `MeSchema.instance.update`).
 - Visual choices are Design's: tasks marked **Blocked on D#** start only after the user picks that option. Logic, data and tests in those tasks may be written first against a neutral placeholder layout that uses existing `@oa/ui` primitives.
 - Boundary: this track never edits `packages/shared` or `apps/server`. A missing or wrong shared shape is a message to Backend, not a local patch.
@@ -30,7 +30,7 @@
 1. **A self-hosted instance after upgrade** (spaces off, Access sign-in): a person expects nothing new to appear and no request to `/api/v1/spaces` or `/auth/providers` to fire. Pinned in Task 1 (`me without hosted fields parses through the adapter`) and Task 4 (`spaces off: no spaces request, no switcher`).
 2. **A viewer of a space opening an artifact**: expects no rename, restore, publish, move, share or delete affordance anywhere (viewer, panels, library card menu, upload drop), and a stale tab that tries anyway gets a toast, not a crash. Pinned in Task 3 (`viewer sees no edit affordance`, `403 forbidden on rename toasts`).
 3. **An admin handling a departed person**: expects to see how many personal artifacts await transfer, never their titles, and can't pick the departed person as the successor. Pinned in Task 12 (`transfer never requests the person's artifacts`, `successor list excludes the departed`).
-4. **Emailed code typos and abuse**: a code pasted with spaces or a dash, a wrong or expired code, or a burst of resends (429) should each give a clear, non-enumerating message and keep the email filled in. Pinned in Task 13 (`code normalizes spaces and dashes`, `invalid_code`, `rate_limited`, `same screen for unknown address`).
+4. **Wrong Google account**: someone signs in with a personal Gmail or another company's Workspace; P2 refuses the tenant and lands them on `/no-access` with no session. They expect to be told to use their company Google account and offered a way to try again, not "You're signed in". Pinned in Task 13 (`tenant refusal is not described as signed in`). (Code typos, resends and enumeration now live in P2's server pages and P2's tests.)
 5. **Space settings edge cases**: deleting a non-empty space (409), demoting the last manager, or turning public links off while artifacts are public should show the server's message and leave the UI consistent with the server after refetch. Pinned in Task 9 (`delete non-empty space shows 409 message`) and Task 8 (`public off: existing public artifact shows the space note`).
 
 ---
@@ -53,7 +53,7 @@ hosted: z.object({
     error: z.string().nullable(),
   }).nullable(),
 }).nullable().optional(),                                     // absent or null: not a hosted install
-authProvider: z.enum(["access", "google", "email_code", "dev"]).optional(), // how this session signed in
+authProvider: z.enum(["access", "google", "code"]).optional(),  // how this session signed in; P2 Session.m values
 ```
 Spaces gate on `me.spaces`, not `me.hosted`: the spec puts RBAC in the open-source product behind config, so a self-hoster may turn it on.
 
@@ -94,19 +94,27 @@ DirectoryGroupSchema = z.object({ id: z.string(), name: z.string(), email: z.str
 - `POST /api/v1/members/:id/transfer` `{ to: { kind: "user", userId } | { kind: "space", spaceId } }` (owner/admin) -> `{ moved: number }`. 400 when `userId` is the departed person or a guest; 409 when the person is still `active`. This is the departed bulk transfer.
 - Single transfer: `POST /api/v1/artifacts/:id/transfer` with the same `to` -> `ArtifactSummary`, for the owner of a personal artifact handing it on. P4 uses only the bulk form; the single form is listed so the shapes line up, with no P4 UI (add a task if the user wants it).
 
-**Sign-in** (pending P2):
-- `GET /auth/providers` (public, no session) -> `AuthProvidersSchema = z.object({ mode: z.enum(["access", "direct"]), google: z.boolean(), emailCode: z.boolean() })`.
-- `AUTH.google = "/auth/google"`: GET, redirects to Google; returns to `/sign-in?error=domain` when `hd` doesn't match, `?error=1` otherwise.
-- `POST /auth/email-code` `{ email }` -> 204 for every well-formed address (no enumeration); 429 `rate_limited` with `Retry-After`.
-- `POST /auth/email-code/verify` `{ email, code }` (code: 6 digits) -> 204 plus session cookie; 400 `invalid_code` (wrong or expired, one message); 429 `rate_limited`.
-- New error codes in `errors.ts`: `forbidden` (403, a role too low for a write; today's owner-only routes keep answering 404) and `invalid_code` (400). `conflict` and `rate_limited` already exist.
+**Sign-in** (reconciled to the Backend P2 plan (`docs/superpowers/plans/2026-10-21-hosted-m1-p2-signin.md`, artifact `gGj5GnfYaSKE933f`, draft of 2026-10-21); P2 has no "API contract for P4" section yet, so these are read from its Routes, Admission and Task sections):
+- Adopted as is (server-owned; the dashboard only links to them): `GET /auth/login` (Access-only installs: 302 to Access as today; direct installs: a server-rendered chooser page, strict CSP, no script, keeps `next`); `GET /auth/login/google` -> Google directly or via the broker; `GET /auth/callback/google`; `POST /auth/code/request` (form, always 303 to `/auth/code`); `GET /auth/code`; `POST /auth/code/verify` (form). Routes `AUTH.loginGoogle`, `AUTH.callbackGoogle`, `AUTH.code`, `AUTH.codeRequest`, `AUTH.codeVerify`.
+- Adopted: codes are 8 digits (shown `1234 5678`, input accepts spaces and dashes), 10 minute TTL, generic failures, 429 "Too many attempts, try again in a minute". No dashboard code handles them.
+- Adopted: a refused tenant (no `hd`, or `hd` not in `AUTH_DOMAINS`), `identity_conflict` and an uninvited person all land on `/no-access` with **no session**.
+- Adopted: guests in `GUEST_ACCESS=read` are capped at viewer (artifact-scoped writes 404, create 403 `forbidden`); a share to an outside address with role `editor` is stored as `viewer` and `ShareResult` gains `downgraded: true`. `forbidden` is P2's (Task 9).
+- Adopted: `DELETE /api/v1/members/:id/identities/:provider` (admin only) resets a member's Google link.
+- **Still needed from P2** (see "Mismatches with P2" below): `GET /auth/providers` -> `AuthProvidersSchema = z.object({ providers: z.array(z.enum(["access", "google", "email"])) })` (P2's `AUTH_PROVIDERS` names; public, no session); `me.authProvider` from `Session.m`; a reason on `/no-access?reason=tenant|identity_conflict|invite`; `Member.identities?: Array<"google">`.
+
+**Mismatches with P2 that P4 can't simply adopt** (raised with Backend; P4 tasks assume the requested shape and fall back as noted):
+1. **No provider discovery.** Signed out, the SPA can't tell an Access install from a direct one, so `/sign-in` can't drop "Continue with Cloudflare Access". Ask: `GET /auth/providers` as above. Fallback: today's page.
+2. **No Me field for the sign-in method.** P2 keeps it only in the session cookie (`m`). Ask: `me.authProvider` (`access | google | code`). Fallback: absent.
+3. **Who owns the hosted sign-in look.** P2's chooser and code pages are server-rendered in `apps/server/src/auth/pages.ts`, outside this track. Design's D8 pick has to be built by Backend there (matching the dashboard's split brand panel), or P2 must expose JSON endpoints so the SPA renders them. P4 assumes the former and drops its own code form.
+4. **`/no-access` can't tell why.** Tenant refusal, identity conflict and "not invited" all redirect there, and today's page says "You're signed in", which is false for a refusal. Ask: `?reason=`. Fallback: neutral copy that covers all three.
+5. **Identity reset has no read side.** Admins can reset a Google link, but `Member` doesn't say which members have one. Ask: `Member.identities`. Fallback: offer reset on every non-guest member and treat a 404 as "nothing to reset".
 
 **Shared package deliverables** (Backend P3, with P2 for the sign-in parts), in one contract PR that P4 Task 1 is blocked on:
-- `packages/shared/src/schemas.ts`: every schema above, `.optional()` where marked, with exported types `Space`, `SpaceRef`, `MySpace` (element of `me.spaces`), `SpaceRole`, `SpaceAccess`, `GroupGrant`, `MemberGrant`, `DirectoryGroup`, `ArtifactCan`, `AuthProviders`, `TransferInput`, `TransferResult`.
-- `packages/shared/src/routes.ts`: `R.spaces`, `R.space(id)`, `R.spaceAccess(id)`, `R.spaceGroup(id, groupId)`, `R.spaceMember(id, userId)`, `R.directoryGroups`, `R.move(id)`, `R.memberTransfer(id)`, `R.artifactTransfer(id)`; `AUTH.providers`, `AUTH.google`, `AUTH.emailCode`, `AUTH.emailCodeVerify`. Ids percent-encoded via `seg`.
-- `packages/shared/src/errors.ts`: `forbidden` and `invalid_code`.
+- `packages/shared/src/schemas.ts`: every schema above, `.optional()` where marked, with exported types `Space`, `SpaceRef`, `MySpace` (element of `me.spaces`), `SpaceRole`, `SpaceAccess`, `GroupGrant`, `MemberGrant`, `DirectoryGroup`, `ArtifactCan`, `AuthProviders`, `TransferInput`, `TransferResult`; `ShareResult.downgraded` (P2).
+- `packages/shared/src/routes.ts`: `R.spaces`, `R.space(id)`, `R.spaceAccess(id)`, `R.spaceGroup(id, groupId)`, `R.spaceMember(id, userId)`, `R.directoryGroups`, `R.move(id)`, `R.memberTransfer(id)`, `R.artifactTransfer(id)`; `AUTH.providers` (requested from P2), and P2's `AUTH.loginGoogle`, `AUTH.callbackGoogle`, `AUTH.code`, `AUTH.codeRequest`, `AUTH.codeVerify`; `R.memberIdentity(id, provider)` (P2). Ids percent-encoded via `seg`.
+- `packages/shared/src/errors.ts`: `forbidden` (P2 Task 9).
 - `packages/shared/src/mocks/fixtures.ts`: `fixtures.spaces` with my personal space (`sp_personal_ada`), `sp_eng` (editor), `sp_exec` (viewer), `sp_clients` (manager, `publicLinks: false`); a departed member (`status: "removed"`, `pendingTransfer: 12`); artifacts carrying `space` and `can` in hosted mode.
-- `packages/shared/src/mocks/handlers.ts`: handlers for every route above, stateful per `createHandlers` call, enforcing the 409s, the 403s and the public-off downgrade on move; `/auth/email-code` answers 204 for any address. **A mock switch**: `createHandlers({ hosted?: { authMode: "access" | "direct"; tier: "trial" | "team" | "business"; directoryMode: "sync" | "manual" | "frozen" | null; spaces: boolean } })`. Without `hosted`, `/me` has none of the new fields and `/auth/providers` answers `{ mode: "access", google: false, emailCode: false }` (today's behaviour).
+- `packages/shared/src/mocks/handlers.ts`: handlers for every route above, stateful per `createHandlers` call, enforcing the 409s, the 403s and the public-off downgrade on move; `/no-access` reasons are reachable by test URL only. **A mock switch**: `createHandlers({ hosted?: { authMode: "access" | "direct"; tier: "trial" | "team" | "business"; directoryMode: "sync" | "manual" | "frozen" | null; spaces: boolean } })`. Without `hosted`, `/me` has none of the new fields and `/auth/providers` answers `{ providers: ["access"] }` (today's behaviour); `authMode: "direct"` answers `{ providers: ["google", "email"] }` and sets `me.authProvider: "google"`.
 - Shared tests (Backend's): schema parsing of old and new `Me`/`ArtifactSummary`, `SpaceRoleSchema.options` is exactly `["viewer", "editor", "manager"]`, route encoding, and the mock-switch behaviour above.
 
 ## Task order and parallelism
@@ -125,10 +133,11 @@ DirectoryGroupSchema = z.object({ id: z.string(), name: z.string(), email: z.str
 | 10 Group mapping | 9 | D5 | 11 no (same file), 12, 13 |
 | 11 Manual members | 10 | D6 | 12, 13 |
 | 12 Transfer | 2 | D7 | everything from 4 on |
-| 13 Hosted sign-in | 2 | D8 | everything from 4 on |
-| 14 Real e2e | 3 to 13, Backend P2 and P3 merged | none | none |
+| 13 Sign-in handoff, no-access | 2 | D8 | everything from 4 on |
+| 15 Reset Google link | 2 | D11 | everything from 4 on except 12 (same file) |
+| 14 Real e2e | 3 to 13 and 15, Backend P2 and P3 merged | none | none |
 
-Every task from 2 on uses Backend's mocks, so all of them depend on Task 1. File overlaps to sequence within a wave: `router.tsx` (4, 9, 13: separate routes), `Library.tsx` (4 then 5), `Details.tsx` (3 then 7), `Share.tsx` (3 then 8), `SpaceAccess.tsx` (10 then 11).
+Every task from 2 on uses Backend's mocks, so all of them depend on Task 1. File overlaps to sequence within a wave: `router.tsx` (4, 9, 13: separate routes), `Library.tsx` (4 then 5), `Details.tsx` (3 then 7), `Share.tsx` (3 then 8), `SpaceAccess.tsx` (10 then 11), `Members.tsx` (12 and 15).
 
 ## Design options needed
 
@@ -141,7 +150,8 @@ Each is a question for Design, who produce options; the user picks. Tasks marked
 - **D5 Spaces admin page**: layout of `/settings/spaces` (list plus detail, or one card per space), the group-to-role row, the role picker, adding a group (search field), and how "All members" reads.
 - **D6 Manual and frozen modes**: how Team tier's hand-managed members and a frozen sync list are presented (banner wording and placement, the member row, the "frozen at last sync" marker).
 - **D7 Transfer**: where departed people show (badge on Members rows vs a separate "Departed" card), and the transfer dialog (successor person vs a space, confirmation copy).
-- **D8 Hosted sign-in**: Google button, the emailed-code two-step (email then code), code entry (one field vs six boxes), error and resend states, and the brand panel footer for hosted ("Self-hosted on Cloudflare" must not show).
+- **D8 Hosted sign-in**: the dashboard's `/sign-in` in direct mode (one hand-off button vs going straight to the chooser; hosted footer, "Self-hosted on Cloudflare" must not show) and the look of P2's server-rendered chooser and code pages (Google button, email field, 8-digit code entry, error and resend states). **Backend builds the server pages from the pick**; the no-access page variants (wrong Google account, conflict, not invited).
+- **D11 Reset Google link**: where the admin's "Reset Google sign-in" action sits on a Members row, and its confirmation copy.
 - **D9 Public links off**: how the Share panel shows "public" when the space disallows it (hidden, or disabled with a note), and the space-level toggle on the admin page.
 - **D10 Read-only signal**: whether viewers get an explicit "View only" marker in the viewer, or simply no edit controls.
 
@@ -154,15 +164,16 @@ Only `apps/dashboard` changes. `packages/shared` arrives from Backend (see "Shar
 `apps/dashboard/src`
 - `api/contract.ts` (create): the one place the dashboard imports hosted shapes from `@oa/shared`, plus the lenient readers for older servers.
 - `api/queries.ts` (modify): space, access, directory, move, transfer hooks and `qk` keys.
-- `api/auth.ts` (create): sign-in calls (`useAuthProviders`, `startEmailCode`, `verifyEmailCode`); separate because they run signed out.
+- `api/auth.ts` (create): `useAuthProviders()`; separate because it runs signed out.
 - `auth/permissions.ts` (create): `artifactCan`, `canPublishTo`, `useHosted`.
 - `spaces/` (create): `SpacePicker.tsx`, `SpaceSwitcher.tsx`, `SpaceMarker.tsx`, `MoveDialog.tsx`, `useCurrentSpace.ts`.
 - `settings/spaces/` (create): `Spaces.tsx` (page), `SpaceAccess.tsx` (groups and members editor), `GroupSearch.tsx`.
 - `settings/Transfer.tsx` (create): transfer dialog; `settings/Members.tsx` (modify): departed status.
-- `pages/SignIn.tsx` (modify): branch on providers; `pages/EmailCode.tsx` (create): the two-step code form.
+- `pages/SignIn.tsx` (modify): branch on providers; `pages/NoAccess.tsx` (modify): reason-aware copy.
+- `settings/Members.tsx` (modify, Task 15): reset a member's Google link.
 - `library/Library.tsx`, `library/useLibraryQuery.ts`, `router.tsx`, `upload/UploadDialog.tsx`, `upload/uploadPipeline.ts`, `viewer/TitleBar.tsx`, `viewer/panels/{Details,Versions,Share}.tsx`, `settings/SettingsLayout.tsx` (modify).
 
-Tests: `apps/dashboard/test/{contract,hosted-queries,permissions,spaces-library,spaces-publish,spaces-move,share-public-off,spaces-admin,space-access,transfer,signin-hosted}.test.tsx`; `apps/dashboard/e2e/{spaces,signin-hosted}.spec.ts`; `apps/dashboard/e2e/real/spaces.spec.ts`; `apps/dashboard/test/harness.tsx` (modify: `mountHosted`).
+Tests: `apps/dashboard/test/{contract,hosted-queries,permissions,spaces-library,spaces-publish,spaces-move,share-public-off,spaces-admin,space-access,transfer,signin-hosted,reset-identity}.test.tsx`; `apps/dashboard/e2e/{spaces,signin-hosted}.spec.ts`; `apps/dashboard/e2e/real/spaces.spec.ts`; `apps/dashboard/test/harness.tsx` (modify: `mountHosted`).
 
 ---
 
@@ -179,7 +190,7 @@ Tests: `apps/dashboard/test/{contract,hosted-queries,permissions,spaces-library,
 - Consumes: Backend's shared exports (see "Shared package deliverables") and `createHandlers({ hosted })`.
 - Produces:
   - `contract.ts` re-exports the hosted types the dashboard uses (`Space`, `SpaceRef`, `MySpace`, `SpaceRole`, `SpaceAccess`, `GroupGrant`, `MemberGrant`, `DirectoryGroup`, `ArtifactCan`, `AuthProviders`, `TransferInput`, `TransferResult`) and `SPACE_ROLES: readonly SpaceRole[]`; no dashboard file imports these from `@oa/shared` directly.
-  - `readAuthProviders(raw: unknown): AuthProviders`: parses, and maps a 404 or a parse failure to `{ mode: "access", google: false, emailCode: false }`.
+  - `readAuthProviders(raw: unknown): AuthProviders`: parses, and maps a 404 or a parse failure to `{ providers: ["access"] }`.
   - `harness.tsx`: `mountHosted(path: string, hosted: HostedMock)` where `HostedMock` is the `hosted` option of Backend's `createHandlers`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -199,7 +210,7 @@ test("dashboard types line up with the shared schemas", () => {
   expect(SPACE_ROLES).toEqual(["viewer", "editor", "manager"]);
 });
 test("readAuthProviders falls back to access mode", () => {
-  expect(readAuthProviders(undefined)).toEqual({ mode: "access", google: false, emailCode: false });
+  expect(readAuthProviders(undefined)).toEqual({ providers: ["access"] });
 });
 ```
 
@@ -217,7 +228,7 @@ Expected: PASS, no type errors.
 
 - [ ] **Step 5: Commit** `feat(dashboard): consume Backend's hosted contract`
 
-### Task 2: Query hooks and sign-in calls
+### Task 2: Query hooks
 
 **Depends on:** Task 1; uses Backend's mocks.
 
@@ -231,7 +242,8 @@ Expected: PASS, no type errors.
 - Produces:
   - `qk.spaces = ["spaces"]`, `qk.spaceAccess(id) = ["spaces", id, "access"]`, `qk.directoryGroups(q) = ["directory", "groups", q]`.
   - `useSpaces(opts?: { enabled?: boolean })`, `useCreateSpace()`, `usePatchSpace(id)`, `useDeleteSpace()`, `useSpaceAccess(id)`, `usePutGroupGrant(spaceId)` (`{ groupId, role }`), `useDeleteGroupGrant(spaceId)`, `usePutMemberGrant(spaceId)` (`{ userId, role }`), `useDeleteMemberGrant(spaceId)`, `useDirectoryGroups(q: string)` (enabled when `q.trim().length >= 2`), `useMoveArtifact(id)` (`spaceId: string`), `useTransfer(memberId)` (`TransferInput`).
-  - `api/auth.ts`: `useAuthProviders()`, `startEmailCode(email: string): Promise<void>`, `verifyEmailCode(email: string, code: string): Promise<void>`.
+  - `api/auth.ts`: `useAuthProviders(): UseQueryResult<AuthProviders>` (through `readAuthProviders`; never retries a 404).
+  - `useResetIdentity()` (`{ memberId, provider: "google" }`, invalidates `qk.members`, failure "Couldn't reset the sign-in.").
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -241,8 +253,7 @@ it("move invalidates the artifact, the library and spaces", async () => {
 });
 it("group grant failure toasts the server message", ...);  // "Couldn't change access." + description
 it("directory search waits for two characters", ...);        // no request for "e", one for "en"
-it("verifyEmailCode sends X-OA-Request and JSON body", ...);
-it("useAuthProviders treats a 404 as access mode", ...);    // older server: { mode: "access", google: false, emailCode: false }
+it("useAuthProviders treats a 404 as access mode", ...);    // older server: { providers: ["access"] }
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -257,7 +268,7 @@ Expected: FAIL, hooks not exported.
 Run: `pnpm --filter @oa/dashboard test -- hosted-queries qk`
 Expected: PASS.
 
-- [ ] **Step 5: Commit** `feat(dashboard): space, access, move, transfer and sign-in hooks`
+- [ ] **Step 5: Commit** `feat(dashboard): space, access, move, transfer and identity hooks`
 
 ### Task 3: One permission helper; viewers never see edit
 
@@ -289,6 +300,7 @@ it("viewer sees no edit affordance", async () => {
 });
 it("space manager who is not owner can change visibility", ...); // can.share true, access "editor"
 it("403 forbidden on rename toasts and keeps the old title", ...);
+it("outside editor share saved as viewer says so", ...);       // ShareResult.downgraded → note "People outside the company can only view." (copy per D10)
 it("canPublishTo excludes viewer and roleless spaces", ...);
 ```
 
@@ -654,36 +666,29 @@ Expected: PASS, `members.test.tsx` unchanged.
 
 - [ ] **Step 5: Commit** `feat(settings): transfer a departed person's artifacts`
 
-### Task 13: Hosted sign-in page (Google and emailed codes)
+### Task 13: Sign-in handoff and no-access reasons
 
-**Depends on:** Task 2; uses Backend's mocks.
+**Depends on:** Task 2; uses Backend's mocks. Real behaviour needs P2's `/auth/providers` (mismatch 1); until then the fallback keeps today's page.
 
 **Blocked on D8.**
 
 **Files:**
-- Modify: `apps/dashboard/src/pages/SignIn.tsx`, `apps/dashboard/src/router.tsx:153-155` (pass `error` value, not just presence)
-- Create: `apps/dashboard/src/pages/EmailCode.tsx`
+- Modify: `apps/dashboard/src/pages/SignIn.tsx`, `apps/dashboard/src/pages/NoAccess.tsx`, `apps/dashboard/src/router.tsx` (`/no-access` passes `reason`)
 - Test: `apps/dashboard/test/signin-hosted.test.tsx`, `apps/dashboard/e2e/signin-hosted.spec.ts`
 
 **Interfaces:**
-- Consumes: `useAuthProviders`, `startEmailCode`, `verifyEmailCode`, `AUTH.google`.
-- Produces: `SignIn({ error?: string })` (`"1"` today's failure, `"domain"` wrong Google domain); `normalizeCode(raw: string): string | null` in `EmailCode.tsx` (strips spaces and dashes; six digits or null).
+- Consumes: `useAuthProviders`, `AUTH.login`.
+- Produces: `NoAccess({ reason?: "tenant" | "identity_conflict" | "invite" })`. The SPA never builds Google or code URLs itself; it links to `AUTH.login?next=<path>` and P2's chooser does the rest.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-it("access mode renders today's page unchanged", ...);          // "Continue with Cloudflare Access", no Google button
-it("direct mode renders Continue with Google linking AUTH.google", ...);
+it("access mode renders today's page unchanged", ...);          // "Continue with Cloudflare Access"
+it("direct mode never mentions Cloudflare Access", ...);        // providers ["google","email"]
+it("direct mode hands off to AUTH.login with next", ...);       // per D8: button href or immediate redirect
 it("brand footer does not say Self-hosted on Cloudflare in direct mode", ...);
-it("error=domain explains to use the company Google account", ...);
-it("same screen for unknown address", ...);                     // 204 for any email → code step, identical copy
-it("code normalizes spaces and dashes", () => {
-  expect(normalizeCode(" 123-456 ")).toBe("123456");
-  expect(normalizeCode("12345")).toBeNull();
-});
-it("invalid_code keeps the email and clears the code", ...);
-it("rate_limited shows the wait from Retry-After and disables Resend", ...);
-it("verify success redirects to the return path", ...);         // via auth/redirect.tsx
+it("tenant refusal is not described as signed in", ...);        // /no-access?reason=tenant: no "You're signed in", has "company Google account", has a sign-in link
+it("unknown or missing reason keeps neutral copy", ...);        // fallback for mismatch 4
 it("no copy contains an em dash", ...);                         // scan rendered text for "\u2014"
 // e2e/signin-hosted.spec.ts (mock, hosted): layout at 375 and 1280, light and dark; existing signin-split.spec.ts untouched
 ```
@@ -693,18 +698,18 @@ it("no copy contains an em dash", ...);                         // scan rendered
 Run: `pnpm --filter @oa/dashboard test -- signin-hosted`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement per D8.** Code input uses `inputMode="numeric"` and `autoComplete="one-time-code"`.
+- [ ] **Step 3: Implement per D8.** No inline script is added to sign-in pages (P2's CSP covers its own pages; the SPA page is unchanged in that respect).
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `pnpm --filter @oa/dashboard test -- signin-hosted && pnpm --filter @oa/dashboard test:e2e -- signin`
 Expected: PASS, both `signin-split` and `signin-hosted`.
 
-- [ ] **Step 5: Commit** `feat(sign-in): hosted Google and emailed-code sign-in`
+- [ ] **Step 5: Commit** `feat(sign-in): hand off to direct sign-in; explain refusals`
 
 ### Task 14: Real end-to-end suite against a hosted-mode server
 
-**Depends on:** Tasks 3 to 13; Backend P2 and P3 merged.
+**Depends on:** Tasks 3 to 13 and 15; Backend P2 and P3 merged.
 
 **Files:**
 - Create: `apps/dashboard/e2e/real/spaces.spec.ts`
@@ -722,7 +727,7 @@ test("an admin's space list and library never show another person's personal art
 test("an editor publishes into a space and moves it to another", ...);
 test("public links off: Share can't make it public and /a/<id>/full embeds show NotPublic", ...);
 test("transfer moves a removed person's artifacts to a successor", ...);
-test("emailed code signs an invited guest in as read-only", ...);  // code read from the dev mailbox hook
+test("an invited guest signed in by code sees no edit controls", ...); // P2 code flow, code read from the test inbox
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -739,14 +744,52 @@ Expected: PASS.
 
 - [ ] **Step 5: Commit** `test(e2e): hosted spaces journey on a real server`
 
+### Task 15: Reset a member's Google link
+
+**Depends on:** Task 2; uses Backend's mocks (P2's `DELETE /api/v1/members/:id/identities/:provider`).
+
+**Blocked on D11.**
+
+**Files:**
+- Modify: `apps/dashboard/src/settings/Members.tsx`
+- Test: `apps/dashboard/test/reset-identity.test.tsx`
+
+**Interfaces:**
+- Consumes: `useResetIdentity`, `Member.identities` (requested; mismatch 5).
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+it("admins see Reset Google sign-in on members with a Google link", ...);
+it("without Member.identities, offered on every non-guest member", ...); // fallback
+it("never offered on guests or to non-admins", ...);
+it("confirm, DELETE, then refetch members", ...);
+it("404 says there was nothing to reset", ...);
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `pnpm --filter @oa/dashboard test -- reset-identity`
+Expected: FAIL.
+
+- [ ] **Step 3: Implement per D11.**
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `pnpm --filter @oa/dashboard test -- reset-identity members`
+Expected: PASS.
+
+- [ ] **Step 5: Commit** `feat(settings): reset a member's Google sign-in`
+
 ---
 
 ## Self-review
 
-- **Spec coverage:** 4.1 sign-in → Task 13 (Google domain lock is server-side; UI shows `error=domain`); emailed codes for guests and trial → 13, 14. 4.2 spaces and personal space → 4, 5; roles → 1 (adapter), 10, 11; "All members" → 10; Google-style ownership: space artifacts movable by managers → 3 (`can`), 7; personal not browsable by admins → Backend mocks (consumed in 1), 5, 9, 12, 14; transfer → 12; per-artifact visibility kept → 8; public links off per space → 8, 9; contractors read-only → 3, 11 (guests viewer only), 14. 4.3 step 3 (connect IdP, map groups) → 10 (connect itself is control plane, M2). 4.5 Team manual members, frozen sync, never widens access → 11. Outside sharing and audit log are M4, out of P4.
+- **Spec coverage:** 4.1 sign-in → P2 (server pages, domain lock, codes); P4 Task 13 (handoff, refusal copy), 15 (identity reset), 14 (real run); guests read-only → 3 (downgrade note), 14. 4.2 spaces and personal space → 4, 5; roles → 1 (adapter), 10, 11; "All members" → 10; Google-style ownership: space artifacts movable by managers → 3 (`can`), 7; personal not browsable by admins → Backend mocks (consumed in 1), 5, 9, 12, 14; transfer → 12; per-artifact visibility kept → 8; public links off per space → 8, 9; contractors read-only → 3, 11 (guests viewer only), 14. 4.3 step 3 (connect IdP, map groups) → 10 (connect itself is control plane, M2). 4.5 Team manual members, frozen sync, never widens access → 11. Outside sharing and audit log are M4, out of P4.
 - **Step scan:** every blocked task names its D-item; logic tests are fixed regardless of the pick.
+- **P2 reconciliation:** sign-in routes, code rules, refusal landing, guest cap, share downgrade and identity reset match P2's draft; the five mismatches are listed with fallbacks.
 - **Boundary:** no task lists a file under `packages/shared` or `apps/server`; all shared changes are in "Shared package deliverables" as Backend's.
 - **Parallelism:** the table under "Task order and parallelism" matches each task's Depends on line.
-- **Type consistency:** `artifactCan`, `canPublishTo`, `readAuthProviders`, `mountHosted`, `useHosted`, `useCurrentSpace`, `SpacePicker`, `useMoveArtifact`, `useTransfer`, `normalizeCode` used with the same signatures across tasks.
+- **Type consistency:** `artifactCan`, `canPublishTo`, `readAuthProviders`, `mountHosted`, `useHosted`, `useCurrentSpace`, `SpacePicker`, `useMoveArtifact`, `useTransfer`, `useResetIdentity`, `useAuthProviders` used with the same signatures across tasks.
 - **Review Focus:** five lines, each pinned to a named test in its owning task.
 - **Proportion:** signatures, test names and assertions only; no component bodies.
