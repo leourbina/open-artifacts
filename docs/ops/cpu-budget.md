@@ -107,10 +107,14 @@ to R2 and never parses the file.
 ## Gates and the report
 
 `pnpm test:cpu` gates CI only on checks that hold on any runner: cost
-relative to a tiny request or a baseline (with at least 5 ms of slack, since
-Workers timers tick in whole ms), size and ratio checks, deterministic
-counts (bytes read, binding calls) and the calibrated code-CPU bar in
-`test/code-cpu` (Node thread CPU). Absolute wall-clock bounds go through
+relative to a tiny request or a baseline, size and ratio checks,
+deterministic counts (bytes read, binding calls) and the calibrated code-CPU
+bar in `test/code-cpu` (Node thread CPU). Relative gates measure the
+baseline and the request interleaved (`pairedMs`, median of 7 pairs) and
+scale their bound to the runner with `scaledBound`: X × clamp(tiny / ref,
+1, 4), where tiny is the test's own baseline on this runner and ref the same
+baseline on a dev laptop (recorded next to each `*_REF_MS` constant). A
+runner 3× slower than a laptop gets a 3× wider bound. Absolute wall-clock bounds go through
 `budget()` in `test/cpu-time.ts`: every run annotates
 `<label>: <ms> ms (budget <max>)`, and only `pnpm test:cpu:strict`
 (`CPU_STRICT=1`) asserts them, so a slow or noisy runner shows up in the

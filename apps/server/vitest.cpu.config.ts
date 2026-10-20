@@ -29,5 +29,8 @@ export default defineConfig({
     setupFiles: ["./test/setup.ts"],
     fileParallelism: false,
     maxWorkers: 1,
+    // A real regression fails every attempt; a one-off runner stall (the
+    // tiny baseline jumping past the 4x calibration clamp) does not repeat.
+    retry: 2,
   },
 });

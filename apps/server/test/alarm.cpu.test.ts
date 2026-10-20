@@ -1,21 +1,21 @@
 // Index-alarm wall-clock budget in local workerd (docs/ops/cpu-budget.md):
-// one alarm indexes one version (D1 read, ≤ 64 KB R2 range read,
-// extractText, one D1 batch). Median of 5 per entry kind. Local D1/R2 I/O
-// is included and CI runners are noisy, so the absolute time is a report
-// (budget(): asserted only under test:cpu:strict). The gate is the
-// size-dependent part (64 KB minus a tiny entry), which measured 6 ms on a CI
-// runner (~3x slower than a laptop), bounded at 10 ms: it still catches a
-// parser blow-up, and code CPU is pinned tightly by test/code-cpu (Node,
-// thread CPU). Runs serially via vitest.cpu.config.ts.
+// one alarm indexes one version (D1 read, <= 64 KB R2 range read,
+// extractText, one D1 batch). Local D1/R2 I/O is included and CI runners are
+// noisy, so the absolute time is a report (budget(): asserted only under
+// test:cpu:strict). The gate is the size-dependent part (64 KB minus a tiny
+// entry, measured interleaved, median of 7 pairs), bounded at 10 ms scaled to
+// the runner by the tiny alarm's own time (scaledBound). It still catches a
+// parser blow-up; code CPU is pinned tightly by test/code-cpu (Node, thread
+// CPU). Runs serially via vitest.cpu.config.ts.
 import { runDurableObjectAlarm } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import type { Member } from "@oa/shared";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, it } from "vitest";
 import type { Env } from "../src/env.js";
 import { type ArtifactRuntime, runtimeStub } from "../src/runtime/do.js";
 import { publish } from "../src/services/artifacts.js";
 import { getUser } from "../src/services/users.js";
-import { budget, medianMs } from "./cpu-time.js";
+import { budget, calibrated, pairedMs } from "./cpu-time.js";
 import { login } from "./helpers.js";
 
 let owner: Member;
@@ -39,8 +39,8 @@ const md = (bytes: number) => {
   return s.slice(0, bytes);
 };
 
-/** Median wall ms of the index alarm for one artifact's current version. */
-async function alarmMs(format: string, content: string) {
+/** One run of the index alarm for a new artifact's current version. */
+async function alarm(format: string, content: string) {
   const { id, version } = await publish(
     env as Env,
     owner,
@@ -48,27 +48,34 @@ async function alarmMs(format: string, content: string) {
     null,
   );
   const stub = runtimeStub(env as Env, id);
-  return medianMs(async () => {
+  return async () => {
     await stub.scheduleIndex(id, version);
     await runDurableObjectAlarm(
       stub as unknown as DurableObjectStub<ArtifactRuntime>,
     );
-  });
+  };
 }
 
+/** Local median of the tiny-entry alarm (dev laptop, 2026-10-20). */
+const TINY_REF_MS = 6;
+
 describe("index alarm CPU", () => {
-  it("indexing a 64 KB html or markdown entry stays near the 10 ms budget", async ({
+  it("indexing a 64 KB html or markdown entry costs < 10 ms over a tiny one", async ({
     annotate,
   }) => {
-    const tiny = await alarmMs("html", "<p>x</p>");
-    await annotate(`${tiny} ms  tiny html entry`);
+    const tiny = await alarm("html", "<p>x</p>");
     for (const [format, content] of [
       ["html", html(64 * 1024)],
       ["markdown", md(64 * 1024)],
     ] as const) {
-      const ms = await alarmMs(format, content);
-      await budget(annotate, `64 KB ${format} alarm`, ms, 15);
-      expect(ms - tiny, `${format} alarm over a tiny entry`).toBeLessThan(10);
+      const t = await pairedMs(tiny, await alarm(format, content));
+      await budget(annotate, `64 KB ${format} alarm`, t.ms, 15);
+      await calibrated(annotate, `${format} alarm over a tiny entry`, {
+        ms: t.delta,
+        baseMs: t.base,
+        refMs: TINY_REF_MS,
+        maxMs: 10,
+      });
     }
   });
 });

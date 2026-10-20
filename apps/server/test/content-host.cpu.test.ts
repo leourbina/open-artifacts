@@ -1,12 +1,14 @@
 // Ported from the B10 adversarial review: injection must not walk every node.
-// Wall-clock budgets: runs serially via vitest.cpu.config.ts (median of 5).
+// Wall-clock budgets: runs serially via vitest.cpu.config.ts (median of 7).
 // Absolute times are reports (budget(): asserted only under test:cpu:strict);
 // the gate is injection against a one-handler HTMLRewriter baseline.
 import { describe, expect, it } from "vitest";
 import { injectRuntime } from "../src/content/inject.js";
-import { budget, medianMs as time } from "./cpu-time.js";
+import { budget, calibrated, pairedMs, medianMs as time } from "./cpu-time.js";
 
 const TAG = '<script src="/_oa/rt.js"></script>';
+/** Local median of the one-handler rewrite of ~80 KB (dev laptop, 2026-10-20). */
+const REWRITE_REF_MS = 1;
 const html = (n: number) =>
   `<!doctype html><html><head><title>t</title></head><body>${"<i>a</i>".repeat(n)}</body></html>`;
 const res = (b: BodyInit) =>
@@ -31,21 +33,27 @@ describe("injectRuntime CPU (global 10 ms budget)", () => {
     annotate,
   }) => {
     const body = html(10_000); // ~80 KB, an ordinary page
-    const baseline = await time(() =>
-      new HTMLRewriter()
-        .on("head", {
-          element: (e) => {
-            e.prepend("<script></script>", { html: true });
-          },
-        })
-        .transform(res(body))
-        .text(),
+    const t = await pairedMs(
+      () =>
+        new HTMLRewriter()
+          .on("head", {
+            element: (e) => {
+              e.prepend("<script></script>", { html: true });
+            },
+          })
+          .transform(res(body))
+          .text(),
+      () => inj(body),
     );
-    const injected = await time(() => inj(body));
-    await budget(annotate, "inject ~80 KB page", injected, 10);
+    await budget(annotate, "inject ~80 KB page", t.ms, 10);
     // Relative gate: a walk of every node would be many times the one-handler
-    // baseline. The +5 ms keeps whole-ms timer ticks from failing it.
-    expect(injected).toBeLessThan(baseline * 3 + 5);
+    // baseline. The 5 ms slack over 3x it is scaled to the runner.
+    await calibrated(annotate, "inject over 3x a one-handler rewrite", {
+      ms: t.ms - 3 * t.base,
+      baseMs: t.base,
+      refMs: REWRITE_REF_MS,
+      maxMs: 5,
+    });
   });
 
   it("5 MB of HTML is injected in < 10 ms (report)", async ({ annotate }) => {
