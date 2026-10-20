@@ -81,3 +81,43 @@ test("viewer: a silent frame gets the CPU notice above it, upsell after 2 reload
   await expect(notice).toHaveCount(0);
   await expect(frame).toBeVisible();
 });
+
+test("Paid: the banner reports the 30-second limit with no upgrade pitch (#279)", async ({
+  page,
+}) => {
+  await page.goto("/?mock=paid-cpu");
+  const paid = page
+    .getByRole("status")
+    .filter({ hasText: "Some requests hit Cloudflare's CPU limit" });
+  await expect(paid).toBeVisible();
+  await expect(paid).toContainText(
+    "Your instance hit the 30-second per-request limit 4 times today.",
+  );
+  await expect(paid.getByRole("link", { name: "View usage" })).toBeVisible();
+  await expect(
+    paid.getByRole("link", { name: /Report an issue/ }),
+  ).toHaveAttribute(
+    "href",
+    "https://github.com/open-artifacts-ai/open-artifacts/issues/new",
+  );
+  await expect(paid).not.toContainText("Workers Paid");
+  await paid.getByRole("link", { name: "View usage" }).click();
+  await expect(page).toHaveURL(/\/settings\/usage/);
+});
+
+test("Paid: a silent frame gets the 30-second notice (#279)", async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  await page.route("https://content.example.com/**", (r) =>
+    r.fulfill({ contentType: "text/html", body: "<p>No runtime here</p>" }),
+  );
+  await page.goto("/a/Ef7hJkLmNp8qRsTv?mock=paid-cpu");
+  const notice = page.locator(".oa-vnotice");
+  await expect(notice).toContainText(
+    "This request hit Cloudflare's 30-second CPU limit. Try again.",
+    { timeout: 12_000 },
+  );
+  await expect(notice.getByRole("link")).toHaveCount(0);
+  await expect(page.locator("iframe.oa-vframe")).toBeVisible();
+});

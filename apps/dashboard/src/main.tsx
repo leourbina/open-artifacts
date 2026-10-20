@@ -118,6 +118,28 @@ async function startMocks() {
       }),
     );
   }
+  // ?mock=paid: a Workers Paid instance (#279): no daily caps, 30 s of CPU.
+  // ?mock=paid-cpu adds 4 CPU-limit hits today.
+  const paidCpu = params.get("mock") === "paid-cpu";
+  if (params.get("mock") === "paid" || paidCpu)
+    extra.push(
+      http.get("*/api/v1/usage", () =>
+        HttpResponse.json({
+          available: true,
+          plan: "paid",
+          date: new Date().toISOString().slice(0, 10),
+          metrics: [
+            { key: "requests", used: 182400, limit: 0 },
+            { key: "d1_reads", used: 3400, limit: 0 },
+            { key: "d1_writes", used: 120, limit: 0 },
+            { key: "do_requests", used: 80, limit: 0 },
+            { key: "kv_writes", used: 2300, limit: 0 },
+            { key: "cpu_limit_hits", used: paidCpu ? 4 : 0, limit: 0 },
+            { key: "cpu_p99_ms", used: 18.2, limit: 30000 },
+          ],
+        }),
+      ),
+    );
   // Mock-only: the mocks treat unauthenticated requests as anonymous, and a service worker
   // can't see the cookie header, so authenticate with a bearer token instead.
   const realFetch = window.fetch.bind(window);
@@ -128,7 +150,11 @@ async function startMocks() {
   };
   await setupWorker(
     ...extra,
-    ...createHandlers({ quotaExceeded, emailEnabled }),
+    ...createHandlers({
+      quotaExceeded,
+      emailEnabled,
+      plan: params.get("mock")?.startsWith("paid") ? "paid" : "free",
+    }),
   ).start({
     onUnhandledRequest: "bypass",
   });

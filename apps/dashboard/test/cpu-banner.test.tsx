@@ -1,4 +1,4 @@
-import { R } from "@oa/shared";
+import { R, REPO_URL } from "@oa/shared";
 import { fixtures } from "@oa/shared/mocks";
 import {
   act,
@@ -18,14 +18,14 @@ const TITLE = "Some requests hit Cloudflare's free CPU limit";
 const DAY = "2026-10-19";
 
 let served = 0;
-const usage = (hits: number | null, date = DAY) => {
+const usage = (hits: number | null, date = DAY, plan?: "free" | "paid") => {
   served = 0;
   server.use(
     http.get(`*${R.usage}`, () => {
       served++;
       return HttpResponse.json({
         available: true,
-        plan: "free",
+        plan: plan ?? "free",
         date,
         metrics: [
           { key: "requests", used: 1200, limit: 100000 },
@@ -182,5 +182,83 @@ describe("CPU banner", () => {
     usage(0);
     mount("/");
     await noBanner();
+  });
+
+  describe("on Workers Paid (#279)", () => {
+    const PAID_TITLE = "Some requests hit Cloudflare's CPU limit";
+    /** The plan comes from Me, for every role. */
+    const paidMe = (role: "owner" | "admin" | "member" = "owner") =>
+      server.use(
+        http.get(`*${R.me}`, () =>
+          HttpResponse.json({
+            ...fixtures.me,
+            user: { ...fixtures.me.user, role },
+            instance: { ...fixtures.me.instance, plan: "paid" },
+          }),
+        ),
+      );
+
+    it("reports the 30-second limit and never pitches an upgrade", async () => {
+      paidMe();
+      usage(4, DAY, "paid");
+      mount("/");
+      await screen.findByText(PAID_TITLE, {}, SLOW);
+      expect(screen.queryByText(TITLE)).toBeNull();
+      expect(
+        screen.getByText(
+          "Your instance hit the 30-second per-request limit 4 times today. Retrying usually works. If it keeps happening, please report it so we can fix it.",
+        ),
+      ).toBeTruthy();
+      expect(
+        screen.getByRole("link", { name: "View usage" }).getAttribute("href"),
+      ).toBe("/settings/usage");
+      const report = screen.getByRole("link", { name: /Report an issue/ });
+      expect(report.getAttribute("href")).toBe(`${REPO_URL}/issues/new`);
+      expect(report.getAttribute("target")).toBe("_blank");
+      expect(document.body.textContent).not.toMatch(/Workers Paid|See plans/);
+    });
+
+    it("a 1102 before any count has no number", async () => {
+      paidMe();
+      usage(0, DAY, "paid");
+      recordCpuLimit();
+      mount("/");
+      expect(
+        await screen.findByText(
+          "Your instance hit the 30-second per-request limit today. Retrying usually works. If it keeps happening, please report it so we can fix it.",
+          {},
+          SLOW,
+        ),
+      ).toBeTruthy();
+    });
+
+    it("members get the Paid copy too, without View usage", async () => {
+      paidMe("member");
+      recordCpuLimit();
+      mount("/");
+      await screen.findByText(PAID_TITLE, {}, SLOW);
+      expect(screen.queryByRole("link", { name: "View usage" })).toBeNull();
+      expect(
+        screen.getByRole("link", { name: /Report an issue/ }),
+      ).toBeTruthy();
+      expect(document.body.textContent).not.toMatch(
+        /Workers Paid|See plans|instance owner/,
+      );
+    });
+
+    it("stays hidden under 3 hits and dismisses like the Free banner", async () => {
+      paidMe();
+      usage(2, DAY, "paid");
+      mount("/");
+      await noBanner();
+      expect(screen.queryByText(PAID_TITLE)).toBeNull();
+      cleanup();
+      usage(3, DAY, "paid");
+      mount("/");
+      await screen.findByText(PAID_TITLE, {}, SLOW);
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+      await waitFor(() => expect(screen.queryByText(PAID_TITLE)).toBeNull());
+      expect(localStorage.getItem("oa.cpuBanner.dismissed")).toBe(DAY);
+    });
   });
 });

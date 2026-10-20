@@ -6,6 +6,8 @@ import { useUsage } from "../api/queries";
 export const CPU_DOC =
   "https://open-artifacts.com/docs/self-hosting-costs/#hitting-the-cpu-limit";
 export const COSTS_DOC = "https://open-artifacts.com/docs/self-hosting-costs/";
+export const PRICING_URL =
+  "https://developers.cloudflare.com/workers/platform/pricing/";
 export const PLANS_URL =
   "https://dash.cloudflare.com/?to=/:account/workers/plans";
 
@@ -22,9 +24,13 @@ export const utcDay = (t = Date.now()) =>
 
 /**
  * What the shell knows about CPU-limit trouble today: `hits` from usage (owners and
- * admins only, null when unknown) and whether this tab just got a 1102.
+ * admins only, null when unknown), whether this tab just got a 1102, and
+ * whether the instance is on Workers Paid.
  */
-export function useCpuSignals(role: Role | null | undefined) {
+export function useCpuSignals(
+  role: Role | null | undefined,
+  plan: Me["instance"]["plan"] | undefined,
+) {
   // `role` comes from the caller: a fresh useMe observer here would refetch an
   // errored /me on mount and flip the caller back to loading.
   const admin = role === "owner" || role === "admin";
@@ -42,5 +48,7 @@ export function useCpuSignals(role: Role | null | undefined) {
       ? (data.metrics.find((m) => m.key === "cpu_limit_hits")?.used ?? null)
       : null;
   const recent = at !== null && now - at < RECENT_MS && utcDay(at) === today;
-  return { admin, hits, recent, today };
+  // From Me, so members know it too.
+  const paid = plan === "paid";
+  return { admin, hits, recent, today, paid };
 }

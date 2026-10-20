@@ -46,8 +46,10 @@ function Viewer({
   authed,
   viewer,
   role,
+  plan,
 }: {
   role: Me["user"]["role"] | undefined;
+  plan: Me["instance"]["plan"] | undefined;
   artifact: ArtifactSummary;
   version: number;
   explicitVersion: boolean;
@@ -119,7 +121,7 @@ function Viewer({
   // The slow notice: armed on each frame load, cleared by hello, gone for this view
   // once dismissed. Reloading remounts the frame (and so the bridge) with a fresh
   // URL; one reload per frame load, so a double click counts once.
-  const cpu = useCpuSignals(role);
+  const cpu = useCpuSignals(role, plan);
   const helloSeen = useRef(false);
   const slowTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const dismissed = useRef(false);
@@ -215,6 +217,7 @@ function Viewer({
                 cpu={(cpu.hits ?? 0) > 0 || cpu.recent}
                 reloads={reloads}
                 admin={cpu.admin}
+                paid={cpu.paid}
                 onReload={reload}
                 onDismiss={() => {
                   dismissed.current = true;
@@ -292,6 +295,7 @@ export function Shell({ id, v }: { id: string; v?: number }) {
       explicitVersion={v !== undefined}
       authed={authed}
       role={authed ? me.me.user.role : undefined}
+      plan={authed ? me.me.instance.plan : undefined}
       viewer={
         authed ? { email: me.me.user.email, name: me.me.user.name } : null
       }

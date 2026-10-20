@@ -46,12 +46,12 @@ const advance = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
 const hello = () => act(() => createBridge.mock.calls.at(-1)?.[0].onHello?.());
 const text = () =>
   document.querySelector(".oa-vnotice-text")?.textContent ?? null;
-const usage = (hits: number) =>
+const usage = (hits: number, plan?: "free" | "paid") =>
   server.use(
     http.get(`*${R.usage}`, () =>
       HttpResponse.json({
         available: true,
-        plan: "free",
+        plan: plan ?? "free",
         date: new Date().toISOString().slice(0, 10),
         metrics: [{ key: "cpu_limit_hits", used: hits, limit: 0 }],
       }),
@@ -226,5 +226,43 @@ describe("viewer slow notice", () => {
     await reloadAndWait();
     await reloadAndWait();
     expect(text()).toBe(GENERIC);
+  });
+
+  it("Workers Paid: the 30-second line, no Learn more, no upsell after reloads (#279)", async () => {
+    // The plan comes from Me.
+    server.use(
+      http.get(`*${R.me}`, () =>
+        HttpResponse.json({
+          ...fixtures.me,
+          instance: { ...fixtures.me.instance, plan: "paid" },
+        }),
+      ),
+    );
+    usage(1, "paid");
+    mount(viewerPath(ID));
+    const f = await frame();
+    await act(() => new Promise((r) => setTimeout(r, 50)));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    fireEvent.load(f);
+    await advance(8_000);
+    expect(text()).toBe(
+      "This request hit Cloudflare's 30-second CPU limit. Try again.",
+    );
+    expect(screen.queryByRole("link", { name: /Learn more/ })).toBeNull();
+    await reloadAndWait();
+    await reloadAndWait();
+    expect(text()).not.toMatch(UPSELL);
+    expect(screen.queryByRole("link", { name: /See plans/ })).toBeNull();
+  });
+
+  it("explicit Free keeps the Free CPU copy", async () => {
+    usage(1, "free");
+    mount(viewerPath(ID));
+    const f = await frame();
+    await act(() => new Promise((r) => setTimeout(r, 50)));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    fireEvent.load(f);
+    await advance(8_000);
+    expect(text()).toMatch(CPU);
   });
 });

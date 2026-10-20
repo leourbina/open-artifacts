@@ -111,17 +111,23 @@ describe("usage", () => {
     );
   });
 
-  it("limit 0 does not crash; with usage it is over the limit, without it is normal", async () => {
+  it("limit 0 is no daily cap: the count alone, no bar, no cap, no alert (#279)", async () => {
     usage([
-      { key: "requests", used: 5, limit: 0 },
+      { key: "requests", used: 182400, limit: 0 },
       { key: "d1_reads", used: 0, limit: 0 },
+      { key: "d1_writes", used: 5, limit: 100 },
     ]);
     mount("/settings/usage");
-    const m = await meter("Worker requests");
-    expect(m.getAttribute("data-tone")).toBe("danger");
-    expect((await meter("D1 rows read")).getAttribute("data-tone")).toBe(
-      "normal",
-    );
+    const card = (await screen.findByRole("region", {
+      name: "Worker requests",
+    })) as HTMLElement;
+    expect(card.textContent).toContain("182,400today");
+    expect(card.textContent).not.toMatch(/\/|left|%/);
+    expect(screen.queryByRole("meter", { name: "Worker requests" })).toBeNull();
+    expect(screen.queryByRole("meter", { name: "D1 rows read" })).toBeNull();
+    // Capped metrics keep their bar.
+    expect(await meter("D1 rows written")).toBeTruthy();
+    expect(screen.queryByText(/have reached today's limit/)).toBeNull();
     expect(document.body.textContent).not.toMatch(/NaN|Infinity/);
   });
 
@@ -296,5 +302,71 @@ describe("usage CPU card", () => {
       ).toBe("https://open-artifacts.com/docs/self-hosting-costs/");
       cleanup();
     }
+  });
+});
+
+describe("usage per plan (#279)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-18T12:00:00Z"));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  const respond = (body: object) =>
+    server.use(
+      http.get(`*${R.usage}`, () =>
+        HttpResponse.json({ available: true, date: "2026-10-18", ...body }),
+      ),
+    );
+  const PLAN_LINE = /Workers Free is sized for one person\./;
+
+  it("Free: daily caps, the 10 ms CPU line and the plan line", async () => {
+    respond({
+      plan: "free",
+      metrics: [
+        { key: "requests", used: 1200, limit: 100000 },
+        { key: "kv_writes", used: 300, limit: 1000 },
+        { key: "cpu_p99_ms", used: 9.6, limit: 10 },
+      ],
+    });
+    mount("/settings/usage");
+    expect(await meter("Worker requests")).toBeTruthy();
+    expect(screen.getByText("/ 100,000 today")).toBeTruthy();
+    expect(screen.getByText("/ 1,000 today")).toBeTruthy();
+    expect(screen.getByText("of 10 ms")).toBeTruthy();
+    expect(screen.getByText(PLAN_LINE)).toBeTruthy();
+  });
+
+  it("Paid: no daily caps, 'of 30 s' on the CPU card, the Paid plan line", async () => {
+    respond({
+      plan: "paid",
+      metrics: [
+        { key: "requests", used: 182400, limit: 0 },
+        { key: "kv_writes", used: 2300, limit: 0 },
+        { key: "cpu_limit_hits", used: 0, limit: 0 },
+        { key: "cpu_p99_ms", used: 18.2, limit: 30000 },
+      ],
+    });
+    mount("/settings/usage");
+    await screen.findByRole("region", { name: "CPU" });
+    expect(screen.queryByText(/\/ [\d,]+ today/)).toBeNull();
+    expect(screen.getByText("18.2 ms")).toBeTruthy();
+    expect(screen.getByText("of 30 s")).toBeTruthy();
+    expect((await meter("p99 CPU time")).getAttribute("aria-valuetext")).toBe(
+      "18.2 ms of 30 s",
+    );
+    expect(screen.queryByText("of 10 ms")).toBeNull();
+    expect(screen.queryByText(PLAN_LINE)).toBeNull();
+    const line = screen.getByText(/This instance is on Workers Paid\./);
+    expect(line.textContent).toBe(
+      "This instance is on Workers Paid. There are no daily limits, and each request gets up to 30 seconds of CPU. Usage beyond what the plan includes is billed by Cloudflare. See pricing",
+    );
+    expect(
+      screen.getByRole("link", { name: /See pricing/ }).getAttribute("href"),
+    ).toBe("https://developers.cloudflare.com/workers/platform/pricing/");
+    expect(
+      (await screen.findByRole("region", { name: "Worker requests" }))
+        .textContent,
+    ).toContain("182,400today");
   });
 });
