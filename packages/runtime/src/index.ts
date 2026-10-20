@@ -140,6 +140,40 @@ const ignore = (e: unknown) => {
     console.error("openArtifacts:", e);
 };
 
+/** Cumulative scroll (px) that counts as an interaction. */
+export const SCROLL_INTERACT_PX = 24;
+const INTERACT_EVENTS = ["pointerdown", "keydown", "input", "change"];
+
+/**
+ * Calls `fire` once, on the first pointerdown, keydown, input or change, or
+ * once scrolling (the window or any element) adds up to over
+ * SCROLL_INTERACT_PX; then removes every listener. Returns the remover.
+ */
+function onFirstInteraction(fire: () => void): () => void {
+  const opts = { capture: true, passive: true };
+  const last = new WeakMap<object, number[]>();
+  let moved = 0;
+  const done = () => {
+    for (const t of INTERACT_EVENTS) removeEventListener(t, hit, opts);
+    removeEventListener("scroll", scroll, opts);
+  };
+  function hit() {
+    done();
+    fire();
+  }
+  function scroll(e: Event) {
+    const el = e.target instanceof Element ? e.target : null;
+    const pos = el ? [el.scrollLeft, el.scrollTop] : [scrollX, scrollY];
+    const [x = 0, y = 0] = last.get(el ?? window) ?? [];
+    last.set(el ?? window, pos);
+    moved += Math.abs((pos[0] ?? 0) - x) + Math.abs((pos[1] ?? 0) - y);
+    if (moved > SCROLL_INTERACT_PX) hit();
+  }
+  for (const t of INTERACT_EVENTS) addEventListener(t, hit, opts);
+  addEventListener("scroll", scroll, opts);
+  return done;
+}
+
 /** Builds the SDK over a fresh bridge and announces it with `hello` (html pages). */
 export function createRuntime(opts: RuntimeOptions = {}): OpenArtifacts {
   const bridge: Bridge = createBridge(
@@ -330,7 +364,16 @@ export function createRuntime(opts: RuntimeOptions = {}): OpenArtifacts {
     },
   };
 
-  opts.signal?.addEventListener("abort", () => bridge.dispose());
+  // Every format loads the runtime, so this covers renderer pages too.
+  // Artifact content can forge or suppress oa:interacted: it is only a hint for
+  // whether the viewer auto-swaps versions; nothing security-relevant may depend on it.
+  const stopInteract = bridge.raw
+    ? () => {}
+    : onFirstInteraction(() => bridge.send({ oa: 1, type: "interacted" }));
+  opts.signal?.addEventListener("abort", () => {
+    stopInteract();
+    bridge.dispose();
+  });
   if (bridge.raw) welcomed();
   // Renderer pages (markdown/code/pdf) send their own hello.
   else if (kind === "html") bridge.hello(kind);
