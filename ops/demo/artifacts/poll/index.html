@@ -189,6 +189,8 @@
   let lastWrite = 0;
   let timer = null;
   let readOnly = false;
+  let ready = false;         // identity resolved, subscribed and the first load done
+  let failText = "";         // why the poll could not start, shown instead of "Connecting…"
   let closed = false;
 
   const utcDay = (t = Date.now()) => new Date(t).toISOString().slice(0, 10).replace(/-/g, "");
@@ -292,21 +294,23 @@
     render();
     // Roll over at the next UTC midnight; nothing needs wiping.
     const ms = (dayIndex() + 1) * 86400000 - Date.now() + 1000;
-    setTimeout(() => openDay().catch(fail), ms);
+    setTimeout(() => openDay().catch(() => fail()), ms);
   }
 
   /* ---------- voting ---------- */
 
   let inFlight = false;
   function vote(o) {
-    if (readOnly || closed || !col) return;
-    if (o === mine && pending === null) return;
+    if (!ready) { hint(failText || "Still connecting, try again in a moment."); return; }
+    if (readOnly || closed) { hint(el.error.textContent || "This poll can't save votes."); return; }
+    if (o === mine && pending === null) { hint(`Your vote is already ${poll.o[o]}.`); return; }
     mine = o;
     pending = o;
     votes.set(me.id, o);
     showError("");
     render();
-    el.announce.textContent = `Voted ${poll.o[o]}.`;
+    const wait = lastWrite + COOLDOWN_MS - Date.now();
+    el.announce.textContent = wait > 0 || inFlight ? `Voted ${poll.o[o]}. Saving in a moment.` : `Voted ${poll.o[o]}.`;
     flush();
   }
   function flush() {
@@ -343,12 +347,22 @@
   /* ---------- render ---------- */
 
   function showError(m) { el.error.textContent = m; }
-  function fail() {
-    el.note.textContent = "Could not reach the poll. Reload to try again.";
+  function fail(msg = "Could not reach the poll. Reload to try again.") {
+    failText = msg;
+    el.note.textContent = msg;
+  }
+  let hintTimer = null;
+  /** Says why a click did nothing, on the note line and to screen readers, then goes back to the usual note. */
+  function hint(msg) {
+    render();
+    el.note.textContent = msg;
+    el.announce.textContent = msg;
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(render, 4000);
   }
 
   function render() {
-    if (!poll) return;
+    if (!poll) { el.note.textContent = failText || "Connecting…"; return; }
     el.question.textContent = poll.q;
     const counts = poll.o.map(() => 0);
     for (const o of votes.values()) counts[o] += 1;
@@ -372,9 +386,10 @@
       b.querySelector(".n").textContent = nf.format(counts[i]);
       b.querySelector(".pct").textContent = `${pct}%`;
       b.setAttribute("aria-pressed", String(mine === i));
-      b.disabled = readOnly || closed;
+      b.disabled = readOnly || closed || !ready;
       b.setAttribute("aria-label", `${label}: ${nf.format(counts[i])} ${counts[i] === 1 ? "vote" : "votes"}, ${pct} percent${mine === i ? ", your vote" : ""}`);
     });
+    if (!ready) { el.note.textContent = failText || "Connecting…"; return; }
     const votesWord = total === 1 ? "vote" : "votes";
     el.note.textContent = readOnly
       ? `${nf.format(total)} ${votesWord}, one per browser.`
@@ -385,7 +400,7 @@
 
   async function boot() {
     if (!OA || !OA.db) {
-      el.note.textContent = "Open this poll from its view link to vote.";
+      fail("Open this poll from its view link to vote.");
       return;
     }
     await OA.ready;
@@ -394,8 +409,12 @@
     OA.onTheme(setTheme);
     me = await identify();
     await openDay();
+    ready = true;
+    failText = "";
+    render();
   }
-  boot().catch(fail);
+  setTimeout(() => { if (!ready && !failText) fail("Could not connect. Reload to try again."); }, 10000);
+  boot().catch(() => fail());
 })();
 </script>
 </body>

@@ -192,6 +192,8 @@
   let lastPaint = 0;
   let closed = false;       // daily cap reached
   let readOnly = false;
+  let ready = false;        // subscribed and the first load done
+  let failText = "";        // why the canvas could not start, shown instead of "Connecting…"
   let tick = null;
 
   const viewColor = (i) => (pending.has(i) ? pending.get(i).color : server[i]);
@@ -328,11 +330,12 @@
     if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
       rect.style.strokeDashoffset = String(100 - Math.round((left / COOLDOWN_MS) * 100));
     }
-    if (closed) el.cool.textContent = "Canvas is full for today";
+    if (!ready) el.cool.textContent = failText || "Connecting…";
+    else if (closed) el.cool.textContent = "Canvas is full for today";
     else if (readOnly) el.cool.textContent = "View only";
     else if (left > 0) el.cool.textContent = `Next pixel in ${Math.ceil(left / 1000)}s`;
     else el.cool.textContent = "Ready to paint";
-    el.cool.className = left > 0 || closed || readOnly ? "" : "ready";
+    el.cool.className = left > 0 || closed || readOnly || !ready ? "" : "ready";
     if (left > 0 && !tick) {
       tick = setInterval(() => {
         renderCool();
@@ -402,17 +405,18 @@
     el.board.dataset.off = String(readOnly);
     renderCool();
     // A new collection at 00:00 UTC; nothing gets wiped.
-    dayTimer = setTimeout(() => openDay().catch(fail), msToNextDay(Date.now()) + 1000);
+    dayTimer = setTimeout(() => openDay().catch(() => fail()), msToNextDay(Date.now()) + 1000);
   }
 
   /* ---------- painting ---------- */
 
   function paint(i) {
-    if (!col || readOnly) return;
+    if (!ready) { hint(failText || "Still connecting, try again in a moment."); return; }
+    if (readOnly) { hint(el.error.textContent || "This canvas can't save pixels."); return; }
     if (closed) { say("Canvas is full for today. A fresh one opens at 00:00 UTC."); return; }
     const left = coolLeft();
     if (left > 0) { say(`Next pixel in ${Math.ceil(left / 1000)} seconds.`); return; }
-    if (dayKey(Date.now()) !== key) { openDay().catch(fail); return; }
+    if (dayKey(Date.now()) !== key) { openDay().catch(() => fail()); return; }
     const color = pick;
     const r = Math.floor(i / SIZE), c = i % SIZE;
     if (viewColor(i) === color) { say(`Row ${r + 1}, column ${c + 1} is already ${PALETTE[color][0]}.`); return; }
@@ -463,14 +467,27 @@
 
   function say(m) { el.announce.textContent = ""; requestAnimationFrame(() => { el.announce.textContent = m; }); }
   function showError(m) { el.error.textContent = m; }
-  function fail() { el.cool.textContent = "Could not reach the canvas. Reload to try again."; }
+  function fail(msg = "Could not reach the canvas. Reload to try again.") {
+    failText = msg;
+    el.cool.textContent = msg;
+  }
+  let hintTimer = null;
+  /** Says why a click did not paint, on the status line and to screen readers, then goes back to the usual status. */
+  function hint(msg) {
+    el.cool.textContent = msg;
+    el.cool.className = "";
+    say(msg);
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(renderCool, 4000);
+  }
 
   async function boot() {
     buildBoard();
     buildPalette();
+    el.board.dataset.off = "true";
+    el.board.setAttribute("aria-disabled", "true");
     if (!OA || !OA.db) {
-      el.cool.textContent = "Open this canvas from its view link to paint.";
-      el.board.dataset.off = "true";
+      fail("Open this canvas from its view link to paint.");
       return;
     }
     await OA.ready;
@@ -479,12 +496,18 @@
     OA.onTheme(setTheme);
     lastPaint = Math.min(readLast(), Date.now());
     await openDay();
+    ready = true;
+    failText = "";
+    el.board.dataset.off = String(readOnly || closed);
+    el.board.setAttribute("aria-disabled", String(readOnly || closed));
+    renderCool();
     // Timers sleep in background tabs: check the day again when the page comes back.
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden && col && dayKey(Date.now()) !== key) openDay().catch(fail);
+      if (!document.hidden && col && dayKey(Date.now()) !== key) openDay().catch(() => fail());
     });
   }
-  boot().catch(fail);
+  setTimeout(() => { if (!ready && !failText) fail("Could not connect. Reload to try again."); }, 10000);
+  boot().catch(() => fail());
 })();
 </script>
 </body>

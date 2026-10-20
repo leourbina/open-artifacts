@@ -170,11 +170,11 @@
     touch-action: manipulation;
     transition: border-color var(--oa-duration) var(--oa-ease);
   }
-  .btn:hover:not(:disabled) { border-color: var(--oa-border-strong); }
+  .btn:hover:not(:disabled):not([aria-disabled="true"]) { border-color: var(--oa-border-strong); }
   .btn:focus-visible { outline: 2px solid var(--oa-focus); outline-offset: 2px; }
   .btn.primary { background: var(--oa-accent); border-color: var(--oa-accent); color: var(--oa-surface); }
-  .btn.primary:hover:not(:disabled) { border-color: var(--oa-accent); filter: brightness(1.08); }
-  .btn:disabled { opacity: 0.55; cursor: default; }
+  .btn.primary:hover:not(:disabled):not([aria-disabled="true"]) { border-color: var(--oa-accent); filter: brightness(1.08); }
+  .btn:disabled, .btn[aria-disabled="true"] { opacity: 0.55; cursor: default; }
 
   .note { margin: 2px 0 0; color: var(--oa-text-muted); font-size: 13px; text-wrap: pretty; }
   .error { margin: 0; color: var(--oa-danger); font-size: 13px; }
@@ -222,6 +222,8 @@
   let col = null;
   let game = null;     // { board, x, o }: the last state this window accepted
   let busy = false;
+  let ready = false;   // identity resolved, subscribed and the first load done
+  let failText = "";   // why the board could not start, shown instead of "Connecting…"
   let readOnly = false;
   let closed = false;
   let focusIndex = 4;
@@ -360,6 +362,7 @@
   }
 
   function onChange(e) {
+    if (!game) return; // load() has not finished; it reads the latest anyway
     if (e.resync) { load().catch(() => {}); return; }
     for (const id of e.deleted) if (id === DOC_ID) setGame(emptyGame(), true);
     for (const d of e.docs) {
@@ -383,7 +386,8 @@
   const seatFor = () => ({ id: me.id, at: Date.now() });
 
   async function write(next) {
-    if (busy || readOnly || closed) return;
+    if (busy) { hint(SAVING); return; }
+    if (readOnly || closed) { hint(el.error.textContent || "This board can't save moves."); return; }
     busy = true;
     showError("");
     const prev = game;
@@ -400,27 +404,49 @@
     }
   }
 
+  /* Seats are checked against the clock at click time, not the last render. */
   function claim(m) {
-    if (!game || myMark() || live(game[slot(m)])) return;
+    if (notReady()) return;
+    const mine = myMark();
+    if (mine) { hint(`You already play ${mine}.`); return; }
+    if (live(game[slot(m)])) { hint(`Seat ${m} was just taken by another browser.`); return; }
     write({ ...game, [slot(m)]: seatFor() });
   }
   function leave() {
+    if (notReady()) return;
     const m = myMark();
     if (m) write({ ...game, [slot(m)]: null });
+    else hint("Your seat already timed out.");
   }
   function play(i) {
+    if (notReady()) return;
+    if (busy) { hint(SAVING); return; }
     const m = myMark();
-    if (!m || !canMove(m) || game.board[i]) return;
+    if (!m) { hint(whyWatching()); return; }
+    if (!canMove(m)) { hint(whyWaiting(m)); return; }
+    if (game.board[i]) { hint("That square is taken."); return; }
     const board = game.board.slice();
     board[i] = m;
     freshCell = i;
     write({ ...game, board, [slot(m)]: seatFor() });
   }
   function startOver() {
-    if (!canStartOver()) return;
+    if (notReady()) return;
+    if (!canStartOver()) { hint("Only a player can start over while the seats are taken."); return; }
     const m = myMark();
     freshCell = -1;
     write({ ...game, board: Array(9).fill(""), ...(m ? { [slot(m)]: seatFor() } : {}) });
+  }
+
+  /** Why a click on the board did nothing for a window without a seat. */
+  function whyWatching() {
+    if (MARKS.some((m) => game[slot(m)] && game[slot(m)].id === me.id)) return "Your seat timed out after 5 minutes without a move. Take a seat to play again.";
+    return MARKS.some((m) => !live(game[slot(m)])) ? "Take a seat to play." : "You are watching. Both seats are taken.";
+  }
+  function whyWaiting(m) {
+    if (outcome(game.board)) return "This game is over. Start over to play again.";
+    if (!bothSeated()) return `Waiting for someone to take ${other(m)}.`;
+    return `It's ${turnOf(game.board)}'s turn.`;
   }
 
   const bothSeated = () => MARKS.every((m) => live(game[slot(m)]));
@@ -449,7 +475,7 @@
   const cellName = (i) => `row ${Math.floor(i / 3) + 1}, column ${(i % 3) + 1}`;
 
   function statusText() {
-    if (!game) return "Connecting…";
+    if (!game || !ready) return failText || "Connecting…";
     const mine = myMark();
     const end = outcome(game.board);
     if (end && end.winner) return end.winner === mine ? "You win." : `${end.winner} wins.`;
@@ -501,6 +527,7 @@
         b.className = "cell";
         b.setAttribute("role", "gridcell");
         b.tabIndex = i === focusIndex ? 0 : -1;
+        b.setAttribute("aria-disabled", "true");
         b.addEventListener("click", () => { focusIndex = i; play(i); });
         b.addEventListener("focus", () => setFocus(i, false));
         row.append(b);
@@ -527,8 +554,9 @@
     setFocus(e.ctrlKey && (e.key === "Home" || e.key === "End") ? (e.key === "Home" ? 0 : 8) : to[0] * 3 + to[1], true);
   }
 
+  let expiry = null;
   function render() {
-    if (!game) return;
+    if (!game) { el.status.textContent = statusText(); return; }
     const mine = myMark();
     const end = outcome(game.board);
     const win = new Set(end && end.line ? end.line : []);
@@ -550,7 +578,7 @@
 
     cells().forEach((b, i) => {
       const mark = game.board[i];
-      const playable = Boolean(mine) && !busy && !readOnly && !closed && canMove(mine) && !mark;
+      const playable = ready && Boolean(mine) && !busy && !readOnly && !closed && canMove(mine) && !mark;
       b.dataset.mark = mark;
       b.dataset.win = String(win.has(i));
       b.dataset.playable = String(playable);
@@ -571,6 +599,11 @@
 
     el.status.textContent = statusText();
     renderActions(mine);
+
+    // Re-render the moment a seat expires, so a stale label never offers the wrong button.
+    clearTimeout(expiry);
+    const left = Math.min(...MARKS.map((m) => (live(game[slot(m)]) ? game[slot(m)].at + SEAT_TTL_MS - Date.now() : Infinity)));
+    if (left < Infinity) expiry = setTimeout(render, left + 50);
   }
 
   function renderActions(mine) {
@@ -579,7 +612,7 @@
     if (canStartOver()) want.push(["reset", "Start over", Boolean(outcome(game.board))]);
     if (mine) want.push(["leave", "Leave seat", false]);
     const key = want.map((w) => w.join("|")).join(",");
-    const off = busy || readOnly || closed;
+    const off = !ready || readOnly || closed;
     if (el.actions.dataset.key !== key) {
       const hadFocus = el.actions.contains(document.activeElement) ? document.activeElement.dataset.act : null;
       el.actions.dataset.key = key;
@@ -596,27 +629,50 @@
         (again || el.board.querySelector('.cell[tabindex="0"]')).focus();
       }
     }
-    el.actions.querySelectorAll("button").forEach((b) => { b.disabled = off; });
+    el.actions.querySelectorAll("button").forEach((b) => { b.disabled = off; b.setAttribute("aria-disabled", String(busy)); });
   }
 
   el.actions.addEventListener("click", (e) => {
     const b = e.target.closest("button[data-act]");
     if (!b) return;
     const act = b.dataset.act;
+    if (busy) { hint(SAVING); return; }
     if (act.startsWith("claim-")) claim(act.slice(6));
     else if (act === "reset") startOver();
     else if (act === "leave") leave();
   });
 
   function showError(m) { el.error.textContent = m; }
-  function fail() { el.status.textContent = "Could not reach the board. Reload to try again."; }
+  function fail(msg = "Could not reach the board. Reload to try again.") {
+    failText = msg;
+    el.status.textContent = msg;
+  }
+
+  /* ---------- feedback ---------- */
+
+  const SAVING = "Saving your last move…";
+  let hintTimer = null;
+  /** Says why a click did nothing, on the status line and to screen readers, then goes back to the usual status. */
+  function hint(msg) {
+    render(); // refresh first: what the click saw may be stale
+    el.status.textContent = msg;
+    el.announce.textContent = msg;
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(render, 4000);
+  }
+  /** Before the first load: says so instead of dropping the click. */
+  function notReady() {
+    if (ready) return false;
+    hint(failText || "Still connecting, try again in a moment.");
+    return true;
+  }
 
   /* ---------- boot ---------- */
 
   async function boot() {
     buildBoard();
     if (!OA || !OA.db) {
-      el.status.textContent = "Open this board from its view link to play.";
+      fail("Open this board from its view link to play.");
       return;
     }
     await OA.ready;
@@ -627,10 +683,14 @@
     col = OA.db.collection(COLLECTION);
     col.subscribe(onChange);
     await load();
+    ready = true;
+    failText = "";
+    render();
     // Seats expire on the clock, not on a write: re-render so labels stay honest.
     setInterval(render, 10000);
   }
-  boot().catch(fail);
+  setTimeout(() => { if (!ready && !failText) fail("Could not connect. Reload to try again."); }, 10000);
+  boot().catch(() => fail());
 })();
 </script>
 </body>

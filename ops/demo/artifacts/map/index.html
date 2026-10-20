@@ -246,6 +246,8 @@
   let lastWrite = 0;
   let timer = null;
   let readOnly = false;
+  let ready = false;         // identity resolved, subscribed and the first load done
+  let failText = "";         // why the map could not start, shown instead of "Connecting…"
   let closed = false;
   const popped = new Set();  // codes to animate on the next render
 
@@ -354,13 +356,15 @@
     await loadAll();
     render();
     // A new collection at 00:00 UTC; nothing gets wiped.
-    dayTimer = setTimeout(() => openDay().catch(fail), (dayIndex() + 1) * 86400000 - Date.now() + 1000);
+    dayTimer = setTimeout(() => openDay().catch(() => fail()), (dayIndex() + 1) * 86400000 - Date.now() + 1000);
   }
 
   /* ---------- pinning ---------- */
 
   function pinCountry(code) {
-    if (readOnly || closed || !col || !BY_CODE.has(code)) return;
+    if (!ready) { hint(failText || "Still connecting, try again in a moment."); return; }
+    if (readOnly || closed) { hint(el.error.textContent || "This map can't save pins."); return; }
+    if (!BY_CODE.has(code)) return;
     if (code === mine && pending === null) { say(`Your pin is already ${BY_CODE.get(code).name}.`); return; }
     mine = code;
     pending = code;
@@ -368,7 +372,8 @@
     popped.add(code);
     showError("");
     render();
-    say(`You picked ${BY_CODE.get(code).name}.`);
+    const wait = lastWrite + COOLDOWN_MS - Date.now();
+    say(wait > 0 || inFlight ? `You picked ${BY_CODE.get(code).name}. Saving in a moment.` : `You picked ${BY_CODE.get(code).name}.`);
     flush();
   }
   function flush() {
@@ -590,13 +595,14 @@
   }
 
   function renderControls() {
-    const off = readOnly || closed || !col;
+    const off = readOnly || closed || !ready;
     el.input.disabled = off;
     el.pin.disabled = off;
     el.pin.textContent = mine && chosen === mine ? "Pinned" : mine ? "Move pin" : "Pin";
   }
 
   function render() {
+    if (!ready) { renderControls(); el.note.textContent = failText || "Connecting…"; return; }
     const ranked = tally();
     renderMap(ranked);
     renderTop(ranked);
@@ -617,12 +623,24 @@
 
   function say(m) { el.announce.textContent = ""; requestAnimationFrame(() => { el.announce.textContent = m; }); }
   function showError(m) { el.error.textContent = m; }
-  function fail() { el.note.textContent = "Could not reach the map. Reload to try again."; }
+  function fail(msg = "Could not reach the map. Reload to try again.") {
+    failText = msg;
+    el.note.textContent = msg;
+  }
+  let hintTimer = null;
+  /** Says why a pin did nothing, on the note line and to screen readers, then goes back to the usual note. */
+  function hint(msg) {
+    render();
+    el.note.textContent = msg;
+    say(msg);
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(render, 4000);
+  }
 
   async function boot() {
     wireCombo();
     if (!OA || !OA.db) {
-      el.note.textContent = "Open this map from its view link to pin your country.";
+      fail("Open this map from its view link to pin your country.");
       return;
     }
     await OA.ready;
@@ -631,12 +649,16 @@
     OA.onTheme(setTheme);
     me = await identify();
     await openDay();
+    ready = true;
+    failText = "";
+    render();
     // Timers sleep in background tabs: check the day again when the page comes back.
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden && col && `pins-${utcDay()}` !== key) openDay().catch(fail);
+      if (!document.hidden && col && `pins-${utcDay()}` !== key) openDay().catch(() => fail());
     });
   }
-  boot().catch(fail);
+  setTimeout(() => { if (!ready && !failText) fail("Could not connect. Reload to try again."); }, 10000);
+  boot().catch(() => fail());
 })();
 </script>
 </body>

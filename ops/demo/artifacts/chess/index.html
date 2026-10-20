@@ -239,11 +239,11 @@
     touch-action: manipulation;
     transition: border-color var(--oa-duration) var(--oa-ease);
   }
-  .btn:hover:not(:disabled) { border-color: var(--oa-border-strong); }
+  .btn:hover:not(:disabled):not([aria-disabled="true"]) { border-color: var(--oa-border-strong); }
   .btn:focus-visible { outline: 2px solid var(--oa-focus); outline-offset: 2px; }
   .btn.primary { background: var(--oa-accent); border-color: var(--oa-accent); color: var(--oa-accent-text); }
-  .btn.primary:hover:not(:disabled) { filter: brightness(1.08); }
-  .btn:disabled { opacity: 0.55; cursor: default; }
+  .btn.primary:hover:not(:disabled):not([aria-disabled="true"]) { filter: brightness(1.08); }
+  .btn:disabled, .btn[aria-disabled="true"] { opacity: 0.55; cursor: default; }
 
   .moves {
     margin: 0;
@@ -548,6 +548,8 @@
   let game = null;     // the game replayed from accepted moves
   const pending = new Map(); // move docs that arrived ahead of their turn, by doc id
   let busy = false;
+  let ready = false;   // identity resolved, subscribed and the first load done
+  let failText = "";   // why the board could not start, shown instead of "Connecting…"
   let readOnly = false;
   let closed = false;
   let selected = -1;
@@ -755,7 +757,8 @@
 
   /** Optimistic write: show it now, and go back to the server's state if it is rejected. */
   async function write(show, save) {
-    if (blocked()) return;
+    if (busy) { hint(SAVING); return; }
+    if (readOnly || closed) { hint(el.error.textContent || "This board can't save moves."); return; }
     busy = true;
     showError("");
     show();
@@ -774,16 +777,23 @@
     write(() => setTable(next, true), () => tableCol.set(TABLE_ID, next));
   }
 
+  /* Seats are checked against the clock at click time, not the last render. */
   function claim(c) {
-    if (!table || myColor() || live(seatOf(c))) return;
+    if (notReady()) return;
+    const mine = myColor();
+    if (mine) { hint(`You already play ${NAME[mine]}.`); return; }
+    if (live(seatOf(c))) { hint(`${NAME[c]} was just taken by another browser.`); return; }
     writeTable({ ...table, [SEAT[c]]: seatFor() });
   }
   function leave() {
+    if (notReady()) return;
     const c = myColor();
     if (c) writeTable({ ...table, [SEAT[c]]: null });
+    else hint("Your seat already timed out.");
   }
   function startOver() {
-    if (!canStartOver()) return;
+    if (notReady()) return;
+    if (!canStartOver()) { hint("Only a player can start over while the seats are taken."); return; }
     const c = myColor();
     writeTable({ ...table, g: "g" + randomId(6), ...(c ? { [SEAT[c]]: seatFor() } : {}) });
   }
@@ -800,6 +810,17 @@
       fresh = m.to;
       announceMove();
     }, () => movesCol.set(moveId(doc.g, n), doc));
+  }
+
+  /** Why a click on the board did nothing for a window without a seat. */
+  function whyWatching() {
+    if (COLORS.some((c) => seatOf(c) && seatOf(c).id === me.id)) return "Your seat timed out after 5 minutes without a move. Take a seat to play again.";
+    return COLORS.some((c) => !live(seatOf(c))) ? "Take a seat to play." : "You are watching. Both seats are taken.";
+  }
+  function whyWaiting(c) {
+    if (game.end) return "This game is over. Start over to play again.";
+    if (!bothSeated()) return `Waiting for someone to take ${NAME[flip(c)]}.`;
+    return `It's ${NAME[pos(game).turn]}'s turn.`;
   }
 
   const bothSeated = () => COLORS.every((c) => live(seatOf(c)));
@@ -827,8 +848,12 @@
 
   function onSquare(d) {
     focusAt = d;
+    if (notReady()) return;
+    if (busy) { hint(SAVING); return; }
+    if (readOnly || closed) { hint(el.error.textContent || "This board can't save moves."); return; }
     const c = myColor();
-    if (!c || !canMove(c) || blocked()) return;
+    if (!c) { hint(whyWatching()); return; }
+    if (!canMove(c)) { hint(whyWaiting(c)); return; }
     const sq = sqAt(d);
     if (selected >= 0) {
       const hits = targetsOf(selected).filter((m) => m.to === sq);
@@ -881,6 +906,7 @@
         b.className = "sq";
         b.setAttribute("role", "gridcell");
         b.tabIndex = d === focusAt ? 0 : -1;
+        b.setAttribute("aria-disabled", "true");
         b.addEventListener("click", () => onSquare(d));
         b.addEventListener("focus", () => setFocus(d, false));
         row.append(b);
@@ -916,7 +942,7 @@
   };
 
   function statusText() {
-    if (!game || !table) return "Connecting…";
+    if (!game || !table || !ready) return failText || "Connecting…";
     const mine = myColor();
     const end = game.end;
     if (end && end.mate) return end.winner === mine ? "Checkmate. You win." : `Checkmate. ${NAME[end.winner]} wins.`;
@@ -939,8 +965,9 @@
     say(`${who}: ${game.sans[n]}. ${game.end || inCheck(pos(game)) ? statusText() : ""}`);
   }
 
+  let expiry = null;
   function render() {
-    if (!game || !table) return;
+    if (!game || !table) { el.status.textContent = statusText(); return; }
     const mine = myColor();
     const s = pos(game);
     const turn = game.end ? null : s.turn;
@@ -963,7 +990,7 @@
       return li;
     }));
 
-    const canPlay = Boolean(mine) && canMove(mine) && !blocked();
+    const canPlay = ready && Boolean(mine) && canMove(mine) && !blocked();
     const targets = new Set(selected >= 0 ? targetsOf(selected).map((m) => m.to) : []);
     const movable = new Set(canPlay ? game.legal.map((m) => m.from) : []);
     const check = inCheck(s) ? kingOf(s, s.turn) : -1;
@@ -1011,6 +1038,11 @@
     renderMoves();
     el.status.textContent = statusText();
     renderActions(mine);
+
+    // Re-render the moment a seat expires, so a stale label never offers the wrong button.
+    clearTimeout(expiry);
+    const left = Math.min(...COLORS.map((c) => (live(seatOf(c)) ? Math.max(seatOf(c).at, lastAt()) + SEAT_TTL_MS - Date.now() : Infinity)));
+    if (left < Infinity) expiry = setTimeout(render, left + 50);
   }
   function coord(kind, text) {
     const c = document.createElement("span");
@@ -1072,20 +1104,43 @@
         (again || el.board.querySelector('.sq[tabindex="0"]')).focus();
       }
     }
-    el.actions.querySelectorAll("button").forEach((b) => { b.disabled = blocked(); });
+    el.actions.querySelectorAll("button").forEach((b) => { b.disabled = !ready || readOnly || closed; b.setAttribute("aria-disabled", String(busy)); });
   }
 
   el.actions.addEventListener("click", (e) => {
     const b = e.target.closest("button[data-act]");
     if (!b) return;
     const act = b.dataset.act;
+    if (busy) { hint(SAVING); return; }
     if (act.startsWith("claim-")) claim(act.slice(6));
     else if (act === "reset") startOver();
     else if (act === "leave") leave();
   });
 
   function showError(m) { el.error.textContent = m; }
-  function fail() { el.status.textContent = "Could not reach the board. Reload to try again."; }
+  function fail(msg = "Could not reach the board. Reload to try again.") {
+    failText = msg;
+    el.status.textContent = msg;
+  }
+
+  /* ---------- feedback ---------- */
+
+  const SAVING = "Saving your last move…";
+  let hintTimer = null;
+  /** Says why a click did nothing, on the status line and to screen readers, then goes back to the usual status. */
+  function hint(msg) {
+    render(); // refresh first: what the click saw may be stale
+    el.status.textContent = msg;
+    say(msg);
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(render, 4000);
+  }
+  /** Before the first load: says so instead of dropping the click. */
+  function notReady() {
+    if (ready) return false;
+    hint(failText || "Still connecting, try again in a moment.");
+    return true;
+  }
 
   /* ---------- boot ---------- */
 
@@ -1094,8 +1149,8 @@
     if (!OA || !OA.db) {
       game = newGame("g0");
       table = emptyTable();
+      fail("Open this board from its view link to play.");
       render();
-      el.status.textContent = "Open this board from its view link to play.";
       return;
     }
     await OA.ready;
@@ -1108,10 +1163,14 @@
     tableCol.subscribe(onTable);
     movesCol.subscribe(onMoves);
     await load();
+    ready = true;
+    failText = "";
+    render();
     // Seats expire on the clock, not on a write: re-render so labels stay honest.
     setInterval(render, 10000);
   }
-  boot().catch(fail);
+  setTimeout(() => { if (!ready && !failText) fail("Could not connect. Reload to try again."); }, 10000);
+  boot().catch(() => fail());
 })();
 </script>
 </body>
