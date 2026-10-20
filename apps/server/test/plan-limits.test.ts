@@ -17,6 +17,7 @@ import type { Env } from "../src/env.js";
 import { type ArtifactRuntime, runtimeStub } from "../src/runtime/do.js";
 import { publish } from "../src/services/artifacts.js";
 import { getUser } from "../src/services/users.js";
+import { VERSION } from "../src/version.gen.js";
 import { errOf, fetchAndWait, login } from "./helpers.js";
 import { callWorker, E, MCP_URL } from "./mcp-helpers.js";
 
@@ -418,7 +419,7 @@ describe("/healthz", () => {
         e,
       );
       expect(r.status).toBe(200);
-      expect(await r.json()).toEqual({ ok: true, plan });
+      expect(await r.json()).toEqual({ ok: true, plan, version: VERSION });
     }
   });
 });

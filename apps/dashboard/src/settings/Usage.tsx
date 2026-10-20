@@ -1,5 +1,5 @@
 import type { Usage as UsageData } from "@oa/shared";
-import { Badge, Banner, Button, toast } from "@oa/ui";
+import { Badge, Banner, Button } from "@oa/ui";
 import { useUsage } from "../api/queries";
 import { useMe } from "../auth/useMe";
 import { ExtIcon } from "../layout/CpuBanner";
@@ -7,6 +7,7 @@ import { COSTS_DOC } from "../layout/cpu";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 // Usage is area 6 of the shadcn migration; until then it keeps settings.css.
 import "./settings.css";
+import { toast } from "../layout/toast";
 
 type Tone = "normal" | "warning" | "danger";
 type Metric = UsageData["metrics"][number];

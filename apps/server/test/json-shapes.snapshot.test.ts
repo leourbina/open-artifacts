@@ -17,6 +17,7 @@ import { createPat } from "../src/auth/pat.js";
 import { publish, softDelete } from "../src/services/artifacts.js";
 import { putShare } from "../src/services/shares.js";
 import { getUser } from "../src/services/users.js";
+import { VERSION } from "../src/version.gen.js";
 import { api, login, runIndex } from "./helpers.js";
 
 const app = createApp();
@@ -130,6 +131,14 @@ describe("JSON shapes (byte snapshots)", () => {
     expect(norm(p1)).toMatchSnapshot("page 1");
     expect(norm(p2)).toMatchSnapshot("page 2");
     expect(norm(all)).toMatchSnapshot("with deleted");
+  });
+
+  it("healthz: public, version last", async () => {
+    const r = await app.request("http://app.localhost/healthz", {}, env);
+    expect(r.status).toBe(200);
+    const body = await r.text();
+    expect(body).toBe(`{"ok":true,"plan":"free","version":"${VERSION}"}`);
+    expect(body.replace(VERSION, "<VERSION>")).toMatchSnapshot("healthz");
   });
 
   it("me: cookie and PAT", async () => {

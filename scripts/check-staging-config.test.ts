@@ -109,6 +109,17 @@ describe("wrangler.staging.jsonc env.staging", () => {
     );
     expect(tpl.vars.SERVER_THUMBNAILS).toBe("on");
   });
+  it("logs every staging request to Workers Logs; the template logs too", () => {
+    expect(env.observability).toEqual({
+      enabled: true,
+      head_sampling_rate: 1,
+    });
+    const tpl = JSON.parse(
+      readFileSync(join(root, "apps/server/wrangler.template.jsonc"), "utf8"),
+    );
+    expect(tpl.observability.enabled).toBe(true);
+    expect(tpl.observability.head_sampling_rate ?? 1).toBe(1);
+  });
   it("runs staging with PLAN=paid (the account is on Workers Paid)", () => {
     expect(env.vars.PLAN).toBe("paid");
   });

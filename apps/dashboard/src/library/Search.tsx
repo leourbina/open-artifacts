@@ -1,9 +1,9 @@
-import { EmptyState, Skeleton } from "@oa/ui";
+import { Skeleton } from "@oa/ui/shadcn";
 import { useSearch as useRouteSearch } from "@tanstack/react-router";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { ArtifactRow } from "./ArtifactRow";
 import { SearchIcon } from "./icons";
-import "./library.css";
+import { ALERT, Empty, H1, LIST, PAGE } from "./ui";
 import { uniqueItems, useSentinel } from "./useInfinite";
 import { useSearchQuery } from "./useSearchQuery";
 
@@ -15,39 +15,49 @@ export function SearchPage() {
   const sentinel = useSentinel(r);
   const items = uniqueItems(r.data?.pages);
   return (
-    <section className="lib">
-      <h1>Search</h1>
+    <section className={PAGE}>
+      <h1 className={H1}>Search</h1>
       {!q && (
-        <EmptyState
+        <Empty
           icon={<SearchIcon />}
           title="Search your artifacts"
           description="Type in the search box to find titles, content, and agents."
         />
       )}
       {r.isError && (
-        <div className="lib-error" role="alert">
+        <div className={ALERT} role="alert">
           Search failed. Try again.
         </div>
       )}
       {q && r.isPending && !r.isError && (
-        <div className="lib-list" role="status" aria-label="Searching">
-          <Skeleton height={40} />
-          <Skeleton height={40} />
+        <div className={LIST} role="status" aria-label="Searching">
+          <Skeleton className="h-10" />
+          <Skeleton className="h-10" />
         </div>
       )}
       {r.isSuccess && items.length === 0 && (
-        <EmptyState
+        <Empty
           icon={<SearchIcon />}
           title={`No results for “${q}”`}
           description="Try different words, or check the spelling."
         />
       )}
-      <div className="lib-list">
+      {r.isSuccess && items.length > 0 && (
+        <p
+          className="m-0 text-[length:var(--oa-text-sm)] text-muted-foreground"
+          aria-live="polite"
+        >
+          {items.length}
+          {r.hasNextPage ? "+" : ""} {items.length === 1 ? "result" : "results"}{" "}
+          for “{q}”
+        </p>
+      )}
+      <div className={LIST}>
         {items.map((a) => (
           <ArtifactRow key={a.id} artifact={a} snippet={a.snippet} />
         ))}
       </div>
-      <div ref={sentinel} className="lib-sentinel" />
+      <div ref={sentinel} className="h-px" />
     </section>
   );
 }
