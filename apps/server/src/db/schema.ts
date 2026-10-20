@@ -75,8 +75,12 @@ export const artifacts = sqliteTable(
     purgeAfter: integer("purge_after"),
   },
   (t) => [
-    index("artifacts_owner_updated_idx").on(t.ownerId, t.updatedAt),
-    index("artifacts_visibility_updated_idx").on(t.visibility, t.updatedAt),
+    // Partial indexes only (#248): every index entry is a billed D1 row write,
+    // and each publish bumps updated_at. Live rows: the *_live pair. Deleted
+    // rows: the owner's trash listing and the purge cron.
+    index("artifacts_owner_deleted_idx")
+      .on(t.ownerId, t.deletedAt)
+      .where(sql`${t.deletedAt} is not null`),
     index("artifacts_deleted_idx")
       .on(t.deletedAt)
       .where(sql`${t.deletedAt} is not null`),

@@ -127,6 +127,74 @@ async function verifyIssuer(ctx: Ctx, domain: string, clientId: string) {
   );
 }
 
+/** A 5xx or a timeout: the Access API is down, not refusing us. */
+const outage = (e: unknown) => {
+  if (e instanceof NeedInput) return false;
+  const st = status(e);
+  if (st !== undefined) return st >= 500;
+  return /time(d)? ?out|ETIMEDOUT|fetch failed|ECONN/i.test(
+    (e as Error)?.message ?? "",
+  );
+};
+
+/**
+ * Under --upgrade, an Access outage must not block a deploy that never changes
+ * Access. The app counts as known from saved state (same host and account), or
+ * from the live Worker's ACCESS_TEAM_DOMAIN and ACCESS_CLIENT_ID vars when there
+ * is no state; either way the live Worker's hosts, owner and account must match
+ * this run and its client secret must be there. Anything else stays an error.
+ */
+async function tolerateOutage(state: State, ctx: Ctx, e: unknown) {
+  if (!ctx.opts.upgrade || !outage(e)) return false;
+  const hadState = ctx.prev?.appHost !== undefined;
+  if (
+    hadState &&
+    !(
+      ctx.prev?.appHost === ctx.opts.appHost &&
+      ctx.prev?.accountId === state.accountId
+    )
+  )
+    throw new Error(
+      "Access API unavailable; can't verify the new host's callback; retry later",
+    );
+  const accountId = state.accountId ?? "";
+  const vars = await deployedVars(ctx, accountId).catch(() => undefined);
+  if (!vars) return false;
+  const fromState = Boolean(
+    hadState && state.accessAppId && state.teamDomain && state.accessClientId,
+  );
+  const teamDomain = (
+    fromState ? state.teamDomain : vars.get("ACCESS_TEAM_DOMAIN")
+  )?.toLowerCase();
+  const clientId = fromState
+    ? state.accessClientId
+    : vars.get("ACCESS_CLIENT_ID");
+  if (!teamDomain || !TEAM_HOST.test(teamDomain) || !clientId) return false;
+  if (
+    !(await listSecrets(ctx).catch(() => new Set<string>())).has(ACCESS_SECRET)
+  )
+    return false;
+  // A Workers API read, not Access: the live Worker must be this install.
+  await verifyWorker(ctx, accountId, {
+    APP_HOST: ctx.opts.appHost,
+    CONTENT_HOST: ctx.opts.contentHost,
+    OWNER_EMAIL: ctx.opts.ownerEmail,
+    ACCESS_TEAM_DOMAIN: teamDomain,
+    ACCESS_CLIENT_ID: clientId,
+  });
+  const liveAccount = vars.get("CF_ACCOUNT_ID");
+  if (liveAccount && accountId && liveAccount !== accountId)
+    throw new NeedInput(
+      `the deployed Worker ${ctx.opts.name} differs in CF_ACCOUNT_ID; pass the flags it was deployed with, or rerun a full setup (without --upgrade) to change them`,
+    );
+  Object.assign(state, { teamDomain, accessClientId: clientId });
+  writeConfig(state, ctx);
+  ctx.notes.push(
+    `Access API unavailable (${status(e) ?? "timeout"}); verified from ${fromState ? "saved state" : "the live Worker"} only (upgrade never changes Access)`,
+  );
+  return true;
+}
+
 /** Thrown when only the organization (team domain) is unreadable. */
 const orgDenied = () =>
   Object.assign(new Error("GET organizations: 403"), {
@@ -389,7 +457,12 @@ export const access: Step = {
       );
       return "done";
     }
-    const l = await lookup(ctx, state.accountId ?? "").catch((e) => {
+    let down = false;
+    const l = await lookup(ctx, state.accountId ?? "").catch(async (e) => {
+      if (await tolerateOutage(state, ctx, e)) {
+        down = true;
+        return undefined;
+      }
       if (status(e) !== 403) throw e;
       ctx.notes.push(
         e.teamDomain
@@ -398,6 +471,7 @@ export const access: Step = {
       );
       return undefined;
     });
+    if (down) return "done";
     if (!l) return "todo";
     const drift = !l.policy || !policyMatches(l.policy);
     const why = !l.domain
@@ -428,7 +502,13 @@ export const access: Step = {
   },
   async apply(state, ctx) {
     // Preflight: nothing is written until every check below has passed.
-    const l = await lookupWithToken(ctx, state.accountId ?? "");
+    let l: Awaited<ReturnType<typeof lookupWithToken>>;
+    try {
+      l = await lookupWithToken(ctx, state.accountId ?? "");
+    } catch (e) {
+      if (await tolerateOutage(state, ctx, e)) return undefined;
+      throw e;
+    }
     if ("status" in l) return l;
     if (!l.domain)
       return AR(

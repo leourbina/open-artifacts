@@ -1,11 +1,17 @@
-import { type Format, isId, normalizePath } from "@oa/shared";
+import { type Format, isId, normalizePath, viewerPath } from "@oa/shared";
 import { type Context, Hono } from "hono";
 import { methodNotAllowed, ROBOTS } from "../app.js";
 import type { Env } from "../env.js";
+import { contentFrameAncestors } from "../http/embed.js";
 import { ApiError, appOrigin, toErrorResponse } from "../http/errors.js";
 import { CONTENT_CSP } from "../http/middleware.js";
 import { injectRuntime } from "./inject.js";
-import { verifyContentPrefix } from "./signing.js";
+import {
+  CAPTURE_HEADER,
+  type SignMode,
+  verifyCapture,
+  verifyContentToken,
+} from "./signing.js";
 
 type ManifestEntry = {
   path: string;
@@ -151,6 +157,7 @@ function lruSet(k: string, v: VersionData): void {
 
 type Row = {
   format: Format;
+  current_version: number;
   visibility: string;
   deleted_at: number | null;
   entry?: string;
@@ -172,14 +179,14 @@ async function load(
   const cached = lruGet(key);
   if (cached) {
     const row = await env.DB.prepare(
-      "select format, visibility, deleted_at from artifacts where id = ?",
+      "select format, current_version, visibility, deleted_at from artifacts where id = ?",
     )
       .bind(id)
       .first<Row>();
     return row ? { row, data: cached } : null;
   }
   const row = await env.DB.prepare(
-    `select a.format, a.visibility, a.deleted_at, v.entry, v.manifest, v.language,
+    `select a.format, a.current_version, a.visibility, a.deleted_at, v.entry, v.manifest, v.language,
        v.format as vformat
      from artifacts a join versions v on v.artifact_id = a.id
      where a.id = ? and v.version = ?`,
@@ -284,21 +291,35 @@ function parseRange(
 
 const isHtml = (ct: string) => /^text\/html\s*(;|$)/i.test(ct);
 
+/** `attachment` with the file's basename, RFC 6266/5987 encoded. */
+function attachment(path: string): string {
+  const name = path.split("/").pop() || "download";
+  const ascii = name.replace(/[^\x20-\x7e]|["\\%;]/g, "_");
+  const star = encodeURIComponent(name).replace(
+    /['()*]/g,
+    (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${star}`;
+}
+
 /**
  * Streams one manifest file. text/html always gets the runtime injected
  * (whole body; Range is ignored for HTML); others honor a single byte range.
+ * A download is the stored bytes as an attachment: no injection, ranges kept.
  */
 async function serveFile(
   c: Context<CEnv>,
   e: ManifestEntry,
   cache: string,
   contentType = e.contentType,
+  download = false,
 ): Promise<Response> {
-  const html = isHtml(contentType);
+  const html = !download && isHtml(contentType);
   const headers = new Headers({
     "Content-Type": withCharset(contentType),
     "Cache-Control": cache,
   });
+  if (download) headers.set("Content-Disposition", attachment(e.path));
   if (html) {
     const obj = await c.env.FILES.get(e.key);
     if (!obj) throw notFound();
@@ -335,21 +356,42 @@ async function serve(
 ): Promise<Response> {
   if (!isId(id) || !VERSION_NUM.test(vRaw)) throw notFound();
   const v = Number(vRaw);
-  if (signed !== null && !(await verifyContentPrefix(c.env, signed, id, v)))
-    throw notFound();
+  // `dl` must be exactly one `dl=1`; anything else under that name is tampering.
+  const dls = new URL(c.req.url).searchParams.getAll("dl");
+  if (dls.length > 1 || (dls.length === 1 && dls[0] !== "1")) throw notFound();
+  const dl = dls.length === 1;
+  // Downloads are signed only: an unsigned /p/ URL can't ask for one.
+  let mode: SignMode | null = "frame";
+  if (signed !== null)
+    mode = await verifyContentToken(c.env, signed, id, v, dl);
+  else if (dl) mode = null;
+  if (mode === null) throw notFound();
   const path = rest === "__view" ? "__view" : filePath(rest);
-  if (path === null) throw notFound();
+  if (path === null || (mode === "dl" && path === "__view")) throw notFound();
   const got = await load(c.env, id, v);
   if (!got) throw notFound();
   const { row, data } = got;
   if (row.deleted_at != null) throw notFound();
   if (signed === null && row.visibility !== "public") throw notFound();
-  const cache = signed === null ? CACHE_PUBLIC : CACHE_SIGNED;
+  // The content host never renders top level: a browser's top-level visit
+  // goes to the viewer on the app host (fixed origin, validated id and v).
+  // The one exception is server-side thumbnail capture, proven by a MAC'd
+  // request header that never appears in a URL; that response is not cached.
+  let capture = false;
+  if (mode === "frame" && c.req.header("sec-fetch-dest") === "document") {
+    capture = await verifyCapture(c.env, c.req.header(CAPTURE_HEADER), id, v);
+    if (!capture) return toViewer(c.env, id, v, row.current_version);
+  }
+  const cache = capture
+    ? "no-store"
+    : signed === null
+      ? CACHE_PUBLIC
+      : CACHE_SIGNED;
 
   if (path !== "__view") {
     const e = data.files.get(path);
     if (!e) throw notFound();
-    return serveFile(c, e, cache);
+    return serveFile(c, e, cache, e.contentType, mode === "dl");
   }
   const format = data.format ?? row.format;
   if (format !== "html") {
@@ -374,6 +416,21 @@ async function serve(
   return serveFile(c, e, cache, "text/html");
 }
 
+/**
+ * 303 to the viewer, nothing else: the current version opens full-screen
+ * (`/a/{id}/full`), an older one at `/a/{id}/v/{v}`. Never cached.
+ */
+function toViewer(env: Env, id: string, v: number, current: number) {
+  const path = v === current ? `${viewerPath(id)}/full` : viewerPath(id, v);
+  return new Response(null, {
+    status: 303,
+    headers: {
+      Location: `${appOrigin(env)}${path}`,
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
 /** Relative, per-segment-encoded; ':' encoded so it can't read as a scheme. */
 const entryLocation = (entry: string) =>
   entry
@@ -391,17 +448,24 @@ contentApp.use(async (c, next) => {
   await next();
   c.res = new Response(c.res.body, c.res);
   const h = c.res.headers;
+  // Embed origins may frame only served public content, never signed/private.
+  const publicOk =
+    (c.req.method === "GET" || c.req.method === "HEAD") &&
+    c.res.ok &&
+    PUBLIC.test(new URL(c.req.url).pathname);
   h.delete("Set-Cookie");
   h.set(
     "Content-Security-Policy",
-    `${CONTENT_CSP}; frame-ancestors ${appOrigin(c.env)}`,
+    `${CONTENT_CSP}; frame-ancestors ${contentFrameAncestors(c.env, appOrigin(c.env), publicOk)}`,
   );
   h.set("Cross-Origin-Resource-Policy", "cross-origin");
   // Sandboxed (opaque-origin) frames send `Origin: null`: allow any origin,
-  // never with credentials, and never vary on Origin.
+  // never with credentials, and never vary on Origin. A top-level visit gets
+  // a redirect instead of the content (unless it's a capture): caches must
+  // key on both.
   h.set("Access-Control-Allow-Origin", "*");
   h.delete("Access-Control-Allow-Credentials");
-  h.delete("Vary");
+  h.set("Vary", `Sec-Fetch-Dest, ${CAPTURE_HEADER}`);
   h.set("X-Robots-Tag", "noindex, nofollow");
   h.set("X-Content-Type-Options", "nosniff");
   h.set("Referrer-Policy", "no-referrer");

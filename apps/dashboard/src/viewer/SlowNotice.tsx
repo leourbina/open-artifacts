@@ -3,7 +3,7 @@ import { ExtIcon } from "../layout/CpuBanner";
 import { CPU_DOC, PLANS_URL } from "../layout/cpu";
 import { ICON, LINK_BTN, SM } from "./ui";
 
-const svg = (d: string) => (
+export const svg = (d: string) => (
   <svg
     viewBox="0 0 16 16"
     width="14"
@@ -19,8 +19,8 @@ const svg = (d: string) => (
   </svg>
 );
 const AlertIcon = svg("M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2zM8 4.8v3.7M8 11v.2");
-const RetryIcon = svg("M13 3.5v3h-3M13 6.5A5 5 0 1 0 13.4 10");
-const DismissIcon = svg("M4 4l8 8M12 4l-8 8");
+export const RetryIcon = svg("M13 3.5v3h-3M13 6.5A5 5 0 1 0 13.4 10");
+export const DismissIcon = svg("M4 4l8 8M12 4l-8 8");
 
 /** After this many reloads the CPU variant mentions Workers Paid. */
 export const UPSELL_AFTER = 2;

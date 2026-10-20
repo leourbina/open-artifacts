@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ERROR_CODES } from "./errors.js";
 import { FORMATS } from "./formats.js";
 import { LIMITS } from "./limits.js";
+import { shellNonce } from "./nonce.js";
 import {
   type Capabilities,
   CapabilitiesSchema,
@@ -28,6 +29,7 @@ export const RUNTIME_METHODS = [
   "db.subscribe",
   "db.unsubscribe",
   "viewer.get",
+  "viewer.anonId",
   "storage.get",
   "storage.set",
   "storage.delete",
@@ -42,15 +44,41 @@ const THUMB_RE = /^data:image\/webp;base64,[A-Za-z0-9+/]*={0,2}$/;
 
 const Theme = ThemeSchema;
 
+/**
+ * Anonymous id (artifacts with allowAnonymousWrites): the shell sends its
+ * signed token "<id>.<iat>.<sig>" (legacy v1: "<id>.<sig>") in this request
+ * header on anonymous runtime calls, and the server returns a new one in the
+ * same response header whenever it mints one (anonymous writes and R.anonId
+ * only; missing, malformed or forged token: new id; v1 or older than 30 days:
+ * same id). The token never enters the artifact frame.
+ */
+export const ANON_ID_HEADER = "X-OA-Anon-Id";
+/** Length of the per-artifact public anonId (updatedBy "anon:<short>"). */
+export const ANON_ID_SHORT_LEN = 8;
+/** A per-artifact public anonId (viewer.anonId(), updatedBy "anon:<anonId>"). */
+export const AnonIdSchema = z.string().regex(/^[A-Za-z0-9_-]{8}$/);
+/** Body of GET R.anonId, which serves viewer.anonId() for anonymous viewers. */
+export const AnonViewerSchema = z.strictObject({ anonId: AnonIdSchema });
+export type AnonViewer = z.infer<typeof AnonViewerSchema>;
+
+/**
+ * Every artifact to shell message may carry `nonce`: the per-load value the shell
+ * put in the frame URL (see nonce.ts). The shell drops messages without its
+ * current nonce.
+ */
+const nonce = z.string().max(64).optional();
+
 export const ArtifactToShellSchema = z.union([
   z.strictObject({
     oa: z.literal(1),
+    nonce,
     type: z.literal("hello"),
     protocol: z.number().int().min(1).max(1000),
     kind: z.enum(FORMATS),
   }),
   z.strictObject({
     oa: z.literal(1),
+    nonce,
     type: z.literal("call"),
     id: z.string().max(200),
     method: z.enum(RUNTIME_METHODS),
@@ -58,6 +86,7 @@ export const ArtifactToShellSchema = z.union([
   }),
   z.strictObject({
     oa: z.literal(1),
+    nonce,
     type: z.literal("pdf.text"),
     version: z.number().int(),
     text: z
@@ -70,6 +99,7 @@ export const ArtifactToShellSchema = z.union([
   }),
   z.strictObject({
     oa: z.literal(1),
+    nonce,
     type: z.literal("thumb.ready"),
     dataUrl: z
       .string()
@@ -78,6 +108,7 @@ export const ArtifactToShellSchema = z.union([
   }),
   z.strictObject({
     oa: z.literal(1),
+    nonce,
     type: z.literal("resize"),
     height: z.number().finite().min(0).max(100_000),
   }),
@@ -142,15 +173,18 @@ export const METHOD_CAPABILITY: Record<RuntimeMethod, keyof Capabilities> = {
   "db.subscribe": "db",
   "db.unsubscribe": "db",
   "viewer.get": "viewer",
+  "viewer.anonId": "viewer",
   "storage.get": "storage",
   "storage.set": "storage",
   "storage.delete": "storage",
   "storage.list": "storage",
 };
 
+/** Posts to the parent shell, adding this load's nonce when there is one. */
 export function sendToShell(msg: ArtifactToShell): void {
   if (typeof window === "undefined" || window.parent === window) return;
-  window.parent.postMessage(msg, "*");
+  const n = shellNonce();
+  window.parent.postMessage(n ? { ...msg, nonce: n } : msg, "*");
 }
 
 export function parseArtifactMessage(data: unknown): ArtifactToShell | null {
@@ -186,6 +220,7 @@ export const RUNTIME_PARAMS = {
   "db.subscribe": z.strictObject(col),
   "db.unsubscribe": z.strictObject(col),
   "viewer.get": z.strictObject({}),
+  "viewer.anonId": z.strictObject({}),
   "storage.get": z.strictObject({ key: StorageKeyNameSchema }),
   "storage.set": z.strictObject({
     key: StorageKeyNameSchema,
@@ -215,6 +250,7 @@ export const RUNTIME_RESULTS = {
   "viewer.get": z
     .object({ email: z.string(), name: z.string().nullable() })
     .nullable(),
+  "viewer.anonId": AnonIdSchema.nullable(),
   "storage.get": z.unknown(),
   "storage.set": z.null(),
   "storage.delete": z.null(),

@@ -19,12 +19,16 @@ import { publish } from "../src/services/artifacts.js";
 import { getUser } from "../src/services/users.js";
 import { VERSION } from "../src/version.gen.js";
 import { errOf, fetchAndWait, login } from "./helpers.js";
-import { callWorker, E, MCP_URL } from "./mcp-helpers.js";
+import { callWorker, connect, E, MCP_URL } from "./mcp-helpers.js";
 
 const app = createApp();
 const tag = newId().slice(0, 6).toLowerCase();
 const FREE = { ...(env as Env), PLAN: undefined } as Env;
 const PAID = { ...(env as Env), PLAN: "paid" } as Env;
+/** Paid with DATA_DOC_BYTES = 1536 KB: the /mcp cap becomes 1600 KB. */
+const PAID_BIG = { ...PAID, DATA_DOC_BYTES: String(1536 * 1024) } as Env;
+/** Free with DATA_DOC_BYTES = 64 KB. */
+const FREE_SMALL = { ...FREE, DATA_DOC_BYTES: String(64 * 1024) } as Env;
 let owner: { cookie: string; member: Member };
 let pat: string;
 
@@ -402,6 +406,61 @@ describe("/mcp body cap (before any parse)", () => {
     ).res;
     expect(r.status).toBe(413);
     expect((await rpcOf(r)).error?.message).toBe(mcpTooLargeMessage("paid"));
+  });
+});
+
+describe("DATA_DOC_BYTES override", () => {
+  it("REST: the body cap and 413 message follow the effective limit", async () => {
+    const id = await art(FREE_SMALL);
+    const r = await rest(
+      "PUT",
+      R.dataDoc(id, "c", "a"),
+      doc(100 * 1024),
+      FREE_SMALL,
+    ).res;
+    expect(r.status).toBe(413);
+    expect((await errOf(r)).message).toBe(
+      dataDocTooLargeMessage("free", 64 * 1024),
+    );
+    const ok = await rest(
+      "PUT",
+      R.dataDoc(id, "c", "a"),
+      doc(60 * 1024),
+      FREE_SMALL,
+    ).res;
+    expect(ok.status).toBe(200);
+  });
+
+  it("/mcp on Paid: a 1.2 MB doc fits a 1536 KB limit; over 1600 KB → 413 with the effective numbers", async () => {
+    const id = await art(PAID_BIG);
+    const r = await mcp(
+      { id, collection: "c", docId: "a", data: { t: "x".repeat(1200 * 1024) } },
+      "artifact_data_set",
+      PAID_BIG,
+    ).res;
+    expect(r.status).toBe(200);
+    expect((await rpcOf(r)).result?.isError).toBeUndefined();
+    const big = await mcp(
+      { title: "t", format: "html", content: "x".repeat(1700 * 1024) },
+      "publish_artifact",
+      PAID_BIG,
+    ).res;
+    expect(big.status).toBe(413);
+    const m = (await rpcOf(big)).error?.message;
+    expect(m).toBe(mcpTooLargeMessage("paid", 1536 * 1024));
+    expect(m).toContain("Request body exceeds 1600 KB on this instance.");
+    expect(m).toContain("limited to 1536 KB");
+  });
+
+  it("the MCP instructions state the effective per-doc limit", async () => {
+    const c = await connect(pat, { env: PAID_BIG });
+    expect(c.getInstructions()).toContain(
+      "- Limits: 1536 KB per document on this instance (paid plan), 50 MB per artifact",
+    );
+    const d = await connect(pat, { env: PAID });
+    expect(d.getInstructions()).toContain(
+      "- Limits: 1 MB per document on this instance (paid plan), 50 MB per artifact",
+    );
   });
 });
 

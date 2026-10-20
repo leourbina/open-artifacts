@@ -111,7 +111,7 @@ const snippetBlock = (s: Snippet, label: string) =>
       ? [s.code]
       : [`\`\`\`${s.language === "bash" ? "sh" : s.language}`, s.code, "```"]),
     "",
-    ...(s.hint ? [`Note: ${s.hint}.`, ""] : []),
+    ...(s.hint ? [`Note: ${s.hint}`, ""] : []),
     `Verify: ${s.verify}`,
   ].join("\n");
 
@@ -126,7 +126,9 @@ export const clientsSection = (): string => {
       return [
         `### ${a}`,
         oauth && snippetBlock(oauth, "OAuth"),
-        token ? snippetBlock(token, "Token") : `Token: none; ${a}: use OAuth.`,
+        token
+          ? snippetBlock(token, "Token")
+          : `Token: none. ${a} can't read a token file, so sign in with OAuth.`,
         `Reload: ${token?.reload ?? oauth?.reload}`,
       ]
         .filter(Boolean)
@@ -193,6 +195,18 @@ ${clientsSection()}
 ${tools()}
 
 ${renderSections(plan, (t) => `## ${t}\n`)}
+
+## Public interactive artifacts
+
+Use this when anyone with the link should be able to vote, play or add to a page without signing in.
+
+- Publish with \`visibility: "public"\`, \`allowAnonymousWrites: true\`, and the capabilities the page uses (\`db\`, usually \`viewer\`). Without allowAnonymousWrites, anonymous viewers can read but every write fails with \`unauthorized\`. Make an artifact public only when the user asks, and tell them that anyone with the link can change its data.
+- Treat all data as shared and editable by anyone. Any visitor can write any document, so don't build anything that depends on keeping someone out.
+- \`viewer.anonId()\` returns a per-artifact id for an anonymous visitor (null when signed in). Use it to label things ("your vote", "X: you") and to key one document per browser, not to grant or deny anything.
+- Design for griefing: first-come seats or slots, a visible reset that anyone can use, and state that is easy to rebuild. Prefer choices, emoji and presets over free text. If you need text, cap its length and expire it.
+- Budget writes. Each artifact has a daily write limit and anonymous writes are rate-limited per network, so never write on a timer (no heartbeats). Write only on a user action, and use a day-keyed collection (e.g. \`votes-20261020\`) instead of deleting old data. When \`rate_limited\` mentions the daily limit, show "done for today".
+- Handle rejected writes: roll back anything you showed optimistically, then reload from the server. Codes: \`unauthorized\`, \`rate_limited\`, \`capability_denied\`, and \`no_shell\` when the page is opened outside the viewer.
+- Don't claim presence ("3 people here", "watching now"); there is no presence API.
 
 ## What to tell the user
 

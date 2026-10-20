@@ -125,6 +125,9 @@ describe("routes and misc", () => {
     expect(S.R.dataSubscribe("id", "a b")).toBe(
       "/api/v1/artifacts/id/data-subscribe?collection=a%20b",
     );
+    expect(S.R.dataCount("id", "a b")).toBe(
+      "/api/v1/artifacts/id/data-count/a%20b",
+    );
     expect(S.diffPath("id", 1, 2)).toBe("/a/id/diff/1/2");
     expect(S.PAGES).toEqual({ noAccess: "/no-access", search: "/search" });
   });

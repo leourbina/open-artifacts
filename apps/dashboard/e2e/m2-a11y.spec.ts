@@ -196,10 +196,11 @@ test("token secrecy: gone from DOM, storage, history and console after Done", as
   const made = page.getByRole("dialog", { name: "Token created" });
   const token = (await made.locator("code.oa-token").textContent()) ?? "";
   expect(token).toMatch(/^oa_pat_/);
-  // No snippet carries it.
+  // Neither the save command nor any snippet carries it.
   for (const tab of await made.getByRole("tab").all()) {
     await tab.click();
-    await expect(made.locator("pre")).not.toContainText(token);
+    for (const pre of await made.locator("pre").all())
+      await expect(pre).not.toContainText(token);
   }
   await made.getByRole("button", { name: "Done" }).click();
   await expect(made).toBeHidden();

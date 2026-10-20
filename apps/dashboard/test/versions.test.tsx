@@ -138,7 +138,7 @@ describe("diff", () => {
     );
     for (const f of document.querySelectorAll("iframe"))
       expect(f.getAttribute("sandbox")).toBe(
-        "allow-scripts allow-forms allow-popups allow-modals allow-downloads",
+        "allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads",
       );
   });
 });

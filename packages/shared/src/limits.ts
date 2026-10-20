@@ -76,7 +76,7 @@ export type Plan = "free" | "paid";
 export const planOf = (v: unknown): Plan =>
   typeof v === "string" && v.trim().toLowerCase() === "paid" ? "paid" : "free";
 
-/** Max bytes of one data doc (or storage value) on `plan`. */
+/** The default max bytes of one data doc (or storage value) on `plan`; an instance's is dataLimits(env).docBytes. */
 export const dataDocLimit = (plan: Plan): number =>
   plan === "paid" ? LIMITS.dataDocBytesPaid : LIMITS.dataDocBytesFree;
 
@@ -92,21 +92,137 @@ export const dataResetDocLimit = (plan: Plan): number =>
 export const dataResetTooLargeMessage = (plan: Plan): string =>
   `A data reset snapshot is limited to ${dataResetLimit(plan) / 1024 / 1024} MB on this instance; Workers Paid allows ${LIMITS.dataResetBytesPaid / 1024 / 1024} MB.`;
 
-/** Max /mcp request body bytes on `plan`, checked before any parse. */
-export const mcpBodyLimit = (plan: Plan): number =>
-  plan === "paid" ? LIMITS.mcpBodyBytesPaid : LIMITS.mcpBodyBytesFree;
+/**
+ * Max /mcp request body bytes on `plan`, checked before any parse. On Paid it
+ * follows the instance's data-doc limit (doc + 64 KB), never below Free's cap.
+ */
+export const mcpBodyLimit = (
+  plan: Plan,
+  docBytes: number = dataDocLimit(plan),
+): number =>
+  plan === "paid"
+    ? Math.max(LIMITS.mcpBodyBytesFree, docBytes + 64 * KB)
+    : LIMITS.mcpBodyBytesFree;
 
-/** The 413 too_large message for a data doc (or storage value) over dataDocLimit(plan). */
-export const dataDocTooLargeMessage = (plan: Plan): string =>
-  `Data docs are limited to ${dataDocLimit(plan) / 1024} KB on this instance; Workers Paid allows ${LIMITS.dataDocBytesPaid / 1024 / 1024} MB.`;
+/** "256 KB", or exact bytes when not a whole KB. */
+export const formatKb = (b: number): string =>
+  Number.isInteger(b / KB) ? `${b / KB} KB` : `${b} bytes`;
+
+/** The "Workers Paid allows 1 MB" hint, except on a Paid instance with an overridden limit. */
+const paidHint = (plan: Plan, docBytes: number): string | null =>
+  plan === "free" || docBytes === LIMITS.dataDocBytesPaid
+    ? `Workers Paid allows ${LIMITS.dataDocBytesPaid / 1024 / 1024} MB.`
+    : null;
+
+/** The 413 too_large message for a data doc (or storage value) over the instance's limit. */
+export const dataDocTooLargeMessage = (
+  plan: Plan,
+  docBytes: number = dataDocLimit(plan),
+): string => {
+  const hint = paidHint(plan, docBytes);
+  return `Data docs are limited to ${formatKb(docBytes)} on this instance${hint ? `; ${hint}` : "."}`;
+};
 
 /**
  * The /mcp 413 message, for both ways to get there: a large file (use the
  * upload path) and a large data doc (the plan's limit; JSON-RPC escaping
  * inflates non-ASCII sent as \u, so UTF-8 or the REST data API fits more).
  */
-export const mcpTooLargeMessage = (plan: Plan): string =>
-  `Request body exceeds ${mcpBodyLimit(plan) / 1024} KB on this instance. Large files: create_upload({ path, size, contentType }), PUT the bytes to the returned url, then publish_artifact({ id: artifactId, title, files: { "<path>": { uploadId } } }). Data docs on this instance are limited to ${dataDocLimit(plan) / 1024} KB; clients that escape non-ASCII as \\u inflate the request, so send UTF-8 or use the REST data API. Workers Paid allows ${LIMITS.dataDocBytesPaid / 1024 / 1024} MB.`;
+export const mcpTooLargeMessage = (
+  plan: Plan,
+  docBytes: number = dataDocLimit(plan),
+): string => {
+  const hint = paidHint(plan, docBytes);
+  return `Request body exceeds ${formatKb(mcpBodyLimit(plan, docBytes))} on this instance. Large files: create_upload({ path, size, contentType }), PUT the bytes to the returned url, then publish_artifact({ id: artifactId, title, files: { "<path>": { uploadId } } }). Data docs on this instance are limited to ${formatKb(docBytes)}; clients that escape non-ASCII as \\u inflate the request, so send UTF-8 or use the REST data API.${hint ? ` ${hint}` : ""}`;
+};
+
+/**
+ * Live-data limits an instance may override with wrangler vars (empty or
+ * unset: the default), clamped to each plan's ceiling by dataLimits(env).
+ *
+ * - DATA_DOC_BYTES: one data doc / storage value. Free 256 KB (a write's JSON
+ *   work must fit the 10 ms CPU budget), so Free may only go down. Paid up to
+ *   1920 KB: a DO SQLite string, BLOB or row is at most 2 MB and the row also
+ *   holds collection, id and actor (< 1 KB). Memory stays bounded by the 50 MB
+ *   artifact total (a list loads at most that), within the 128 MB isolate.
+ *   https://developers.cloudflare.com/durable-objects/platform/limits/
+ *   https://developers.cloudflare.com/workers/platform/limits/#memory
+ * - DATA_DAILY_WRITES: data/storage writes per artifact per UTC day (≤3 DO
+ *   rows each). Free 10,000: DO Free allows 100,000 rows written per day for
+ *   the whole account, so Free may only go down. Paid up to 1,000,000 (≤3M
+ *   rows, about $3/day per artifact at $1/M rows past the included 50M/month).
+ *   https://developers.cloudflare.com/durable-objects/platform/pricing/
+ */
+export const DATA_LIMIT_DEFAULTS = {
+  free: { docBytes: DATA_DOC_FREE, dailyWrites: 10_000 },
+  paid: { docBytes: DATA_DOC_PAID, dailyWrites: 10_000 },
+} as const satisfies Record<Plan, Record<string, number>>;
+export const DATA_LIMIT_CEILINGS = {
+  free: { docBytes: DATA_DOC_FREE, dailyWrites: 10_000 },
+  paid: { docBytes: 1920 * KB, dailyWrites: 1_000_000 },
+} as const satisfies Record<Plan, Record<string, number>>;
+
+/** The wrangler var behind each overridable live-data limit. */
+export const DATA_LIMIT_VARS = {
+  docBytes: "DATA_DOC_BYTES",
+  dailyWrites: "DATA_DAILY_WRITES",
+} as const;
+
+export type DataLimitEnv = {
+  PLAN?: string;
+  DATA_DOC_BYTES?: string;
+  DATA_DAILY_WRITES?: string;
+};
+export type DataLimits = { plan: Plan; docBytes: number; dailyWrites: number };
+
+/** Problems already logged, so each distinct one logs once per isolate. */
+const warned = new Set<string>();
+
+/**
+ * The instance's effective live-data limits. Each var is a whole number
+ * clamped to [1, the plan's ceiling] (logged); empty or unset is the default;
+ * anything else falls back to the default (logged).
+ */
+export function dataLimits(
+  env: DataLimitEnv,
+  log: (msg: string) => void = console.warn,
+): DataLimits {
+  const plan = planOf(env.PLAN);
+  const pick = (key: keyof typeof DATA_LIMIT_VARS): number => {
+    const name = DATA_LIMIT_VARS[key];
+    const def = DATA_LIMIT_DEFAULTS[plan][key];
+    const max = DATA_LIMIT_CEILINGS[plan][key];
+    const raw = String(env[name] ?? "").trim();
+    if (raw === "") return def;
+    const warn = (msg: string) => {
+      const k = `${plan}|${name}|${raw}`;
+      if (warned.has(k)) return;
+      warned.add(k);
+      log(msg);
+    };
+    if (!/^\d+$/.test(raw)) {
+      warn(
+        `${name}=${JSON.stringify(raw)} is not a whole number; using ${def}`,
+      );
+      return def;
+    }
+    const n = Number(raw);
+    if (n < 1) {
+      warn(`${name}=${raw} is below 1; using 1`);
+      return 1;
+    }
+    if (n > max) {
+      warn(`${name}=${raw} exceeds the ${plan}-plan ceiling; using ${max}`);
+      return max;
+    }
+    return n;
+  };
+  return { plan, docBytes: pick("docBytes"), dailyWrites: pick("dailyWrites") };
+}
+
+/** The 429 rate_limited message once an artifact passes its daily data-write limit. */
+export const dailyWritesMessage = (dailyWrites: number): string =>
+  `daily write limit reached (${dailyWrites} writes per artifact per UTC day on this instance)`;
 
 /**
  * Daily caps the usage page measures against, per plan (GET /usage `limit`).

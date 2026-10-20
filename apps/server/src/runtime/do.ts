@@ -1,15 +1,18 @@
 import { DurableObject } from "cloudflare:workers";
 import {
+  DATA_LIMIT_DEFAULTS,
   type DataChange,
   DataChangeSchema,
+  type DataCount,
   type DataDoc,
   DataNameSchema,
   DataPatchBodySchema,
   type DataQueryInput,
   DataQuerySchema,
   type DataResetResult,
-  dataDocLimit,
+  dailyWritesMessage,
   dataDocTooLargeMessage,
+  dataLimits,
   dataResetBodySchema,
   dataResetDocLimit,
   ERROR_CODES,
@@ -58,14 +61,36 @@ export async function runtimeCall<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 const enc = new TextEncoder();
-/** "u:{userId}" | "ip:{ip}" | "agent:{userId}", printable ASCII only (no NUL/surrogate collisions). */
-const ACTOR_RE = /^(u|ip|agent):[\x21-\x7e]{1,250}$/;
 /**
- * The updatedBy stored and returned for a write: anonymous writers are "anon"
- * (their "ip:" actor is only the internal rate-limit key, never shown to viewers).
+ * "u:{userId}" | "ip:{ip}" | "ip:{ip}|{anonShort}" | "agent:{userId}", printable
+ * ASCII only (no NUL/surrogate collisions).
  */
-export const publicActor = (actor: string): string =>
-  actor.startsWith("ip:") ? "anon" : actor;
+const ACTOR_RE = /^(u|ip|agent):[\x21-\x7e]{1,250}$/;
+/** The "|{anonShort}" suffix of an anonymous writer with a verified anonId. */
+const ANON_SUFFIX_RE = /\|([A-Za-z0-9_-]{8})$/;
+/**
+ * The updatedBy stored and returned for a write: anonymous writers are
+ * "anon:{anonShort}" with a verified anonId, else "anon" (the "ip:" part is
+ * only the internal rate-limit key, never shown to viewers).
+ */
+export const publicActor = (actor: string): string => {
+  if (!actor.startsWith("ip:")) return actor;
+  const m = ANON_SUFFIX_RE.exec(actor);
+  return m ? `anon:${m[1]}` : "anon";
+};
+/** The per-minute rate key: an anonymous writer's IP, whatever its anonId. */
+const rateKey = (actor: string): string =>
+  actor.startsWith("ip:") ? actor.replace(ANON_SUFFIX_RE, "") : actor;
+/**
+ * Anonymous writes per IP per artifact per minute: env ANON_WRITES_PER_MIN,
+ * an integer clamped to 1..600; unset or not a number -> LIMITS.anonWritesPerMinPerIp.
+ */
+export function anonWritesPerMin(v: string | undefined): number {
+  const t = v?.trim() ?? "";
+  if (!/^\d{1,9}$/.test(t)) return LIMITS.anonWritesPerMinPerIp;
+  const n = Number(t);
+  return Math.min(600, Math.max(1, n));
+}
 /** Fixed per-row overhead counted toward LIMITS.artifactDataBytes. */
 const ROW_OVERHEAD = 64;
 /** Broadcasts inline the doc only up to this many bytes; larger docs go out as data:null. */
@@ -112,10 +137,11 @@ const MAX_LIMIT = 500;
 const MINUTE_MS = 60_000;
 const DAY_MS = 86_400_000;
 /**
- * Data/storage writes per artifact per UTC day (DO Free: 100k rows written/day,
- * ≤3 rows per write), tracked in the single totals row.
+ * The default data/storage writes per artifact per UTC day (DO Free: 100k rows
+ * written/day, ≤3 rows per write), tracked in the single totals row. An
+ * instance's is dataLimits(env).dailyWrites (DATA_DAILY_WRITES).
  */
-export const DAILY_WRITES = 10_000;
+export const DAILY_WRITES = DATA_LIMIT_DEFAULTS.free.dailyWrites;
 const MAX_CURSOR = 4096;
 
 function dataName(v: unknown, what: string): string {
@@ -278,15 +304,15 @@ type SocketMeta = { t: number };
 /**
  * Per-artifact live-page data (spec §6.7): shared docs, per-viewer storage, and a
  * hibernating WebSocket feed per collection. No auth here: callers (B13) authorize
- * and pass the actor ("u:{id}" | "ip:{ip}" | "agent:{id}").
+ * and pass the actor ("u:{id}" | "ip:{ip}" | "ip:{ip}|{anonShort}" | "agent:{id}").
  */
 export class ArtifactRuntime extends DurableObject<Env> {
   private ready = false;
 
-  /** The data-doc limit of this instance's plan (env PLAN). */
+  /** The instance's data-doc limit (env PLAN, DATA_DOC_BYTES). */
   private get docLimit(): DocLimit {
-    const plan = planOf(this.env.PLAN);
-    return { bytes: dataDocLimit(plan), message: dataDocTooLargeMessage(plan) };
+    const { plan, docBytes } = dataLimits(this.env);
+    return { bytes: docBytes, message: dataDocTooLargeMessage(plan, docBytes) };
   }
 
   /** Clock; overridable in tests. */
@@ -357,10 +383,11 @@ export class ArtifactRuntime extends DurableObject<Env> {
       this.rate.clear();
       this.rateMinute = minute;
     }
-    const n = (this.rate.get(actor) ?? 0) + 1;
-    this.rate.set(actor, n);
-    const cap = actor.startsWith("ip:")
-      ? LIMITS.anonWritesPerMinPerIp
+    const key = rateKey(actor);
+    const n = (this.rate.get(key) ?? 0) + 1;
+    this.rate.set(key, n);
+    const cap = key.startsWith("ip:")
+      ? anonWritesPerMin(this.env.ANON_WRITES_PER_MIN)
       : LIMITS.viewerWritesPerMin;
     if (n > cap) fail("rate_limited", "too many writes; try again in a minute");
   }
@@ -368,7 +395,7 @@ export class ArtifactRuntime extends DurableObject<Env> {
   /**
    * One write's bookkeeping, inside the write's transaction, as ONE row: the
    * totals row holds the artifact's bytes, today's write count (429 past
-   * DAILY_WRITES) and per-collection bytes (`cols`, JSON). With the doc row and
+   * dataLimits(env).dailyWrites) and per-collection bytes (`cols`, JSON). With the doc row and
    * its index entry that is ≤3 rows written per data write.
    */
   private bump(delta: number, collection?: string): void {
@@ -387,8 +414,9 @@ export class ArtifactRuntime extends DurableObject<Env> {
         ...(col ? [colPath(collection), colPath(collection), delta] : []),
       )
       .one();
-    if (writes > DAILY_WRITES)
-      fail("rate_limited", "daily write limit reached");
+    const { dailyWrites } = dataLimits(this.env);
+    if (writes > dailyWrites)
+      fail("rate_limited", dailyWritesMessage(dailyWrites));
     if (delta > 0 && bytes > LIMITS.artifactDataBytes)
       fail("too_large", "artifact data exceeds 50 MB");
   }
@@ -525,6 +553,23 @@ export class ArtifactRuntime extends DurableObject<Env> {
       dataName(id, "id"),
     );
     return row ? toDoc(row) : null;
+  }
+
+  /**
+   * Docs in the collection. A covering scan of the primary key range
+   * (collection, id) (EXPLAIN QUERY PLAN: "SEARCH docs USING ... INDEX ...
+   * (collection=?)"); no doc bodies are read.
+   */
+  count(collection: string): DataCount {
+    const c = dataName(collection, "collection");
+    return {
+      count: this.sql
+        .exec<{ n: number }>(
+          "select count(*) as n from docs where collection = ?",
+          c,
+        )
+        .one().n,
+    };
   }
 
   /** Docs in (updated_at, id) order, keyset-paginated. */
@@ -788,10 +833,12 @@ export class ArtifactRuntime extends DurableObject<Env> {
     const updatedAt = this.iso();
     const rows: [string, string, string, number][] = [];
     const cols = new Map<string, number>();
+    // Each doc has the instance's effective per-doc limit (DATA_DOC_BYTES).
+    const docLimit = this.docLimit;
     for (const [col, docs] of Object.entries(p.data.collections)) {
       let total = 0;
       for (const [id, data] of Object.entries(docs)) {
-        const { json, bytes } = serialize(data, this.docLimit);
+        const { json, bytes } = serialize(data, docLimit);
         const size = bytes + col.length + id.length + by.length + ROW_OVERHEAD;
         rows.push([col, id, json, size]);
         total += size;
@@ -1320,6 +1367,7 @@ export class ArtifactRuntime extends DurableObject<Env> {
 type RpcMethods =
   | "get"
   | "list"
+  | "count"
   | "query"
   | "set"
   | "update"

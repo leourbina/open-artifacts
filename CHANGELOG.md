@@ -1,5 +1,83 @@
 # Changelog
 
+## [0.14.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.13.0...v0.14.0) (2026-10-20)
+
+
+### Features
+
+* **content:** new-tab links escape the sandbox; no top navigation ([#313](https://github.com/open-artifacts-ai/open-artifacts/issues/313)) ([872674c](https://github.com/open-artifacts-ai/open-artifacts/commit/872674c0235ede6b46be1b83f45f55334ba25252))
+* **dashboard:** artifact popups escape the sandbox (fixes blank /a/&lt;id&gt; P0; needs user yes) ([#311](https://github.com/open-artifacts-ai/open-artifacts/issues/311)) ([cc2297d](https://github.com/open-artifacts-ai/open-artifacts/commit/cc2297d6d55c001758778edda5d1aa050174634d))
+
+## [0.13.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.12.0...v0.13.0) (2026-10-20)
+
+
+### Features
+
+* **server:** anonymous id tokens carry issued-at and renew after 30 days ([#334](https://github.com/open-artifacts-ai/open-artifacts/issues/334)) ([df8d6c3](https://github.com/open-artifacts-ai/open-artifacts/commit/df8d6c350b301a612c7326a36f317b6af60e318a))
+* **setup:** EMBED_ALLOW_SAME_SITE tunable ([#333](https://github.com/open-artifacts-ai/open-artifacts/issues/333)) ([e03b94a](https://github.com/open-artifacts-ai/open-artifacts/commit/e03b94a9e1cbc336fd89b55465844b2f30abba6b))
+
+
+### Performance Improvements
+
+* **server:** fewer D1 rows per publish ([#248](https://github.com/open-artifacts-ai/open-artifacts/issues/248)) ([#335](https://github.com/open-artifacts-ai/open-artifacts/issues/335)) ([24b477a](https://github.com/open-artifacts-ai/open-artifacts/commit/24b477a453c0f7b74168d5ccd4009a2287bf77fe))
+
+## [0.12.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.11.0...v0.12.0) (2026-10-20)
+
+
+### Features
+
+* **server:** EMBED_ORIGINS lets /a/:id/full be framed by listed origins ([#295](https://github.com/open-artifacts-ai/open-artifacts/issues/295)) ([f3e472d](https://github.com/open-artifacts-ai/open-artifacts/commit/f3e472d5710f9d093ccdd323797070476cdaf70c))
+
+## [0.11.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.10.0...v0.11.0) (2026-10-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* **server:** get_artifact's downloadUrl is now a signed attachment URL that expires after 10 minutes (public artifacts used to get a non-expiring /p/ URL). Don't store it; call get_artifact again to get a fresh one.
+
+### Features
+
+* **server:** the content host never renders top-level; raw view removed ([#292](https://github.com/open-artifacts-ai/open-artifacts/issues/292)) ([#294](https://github.com/open-artifacts-ai/open-artifacts/issues/294)) ([771e16c](https://github.com/open-artifacts-ai/open-artifacts/commit/771e16cdc5a6dcae851f4132b9d4a92215faf90e))
+
+## [0.10.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.9.0...v0.10.0) (2026-10-20)
+
+
+### Features
+
+* **dashboard:** framed /full runs anonymously (embed mode, gates [#295](https://github.com/open-artifacts-ai/open-artifacts/issues/295)) ([#321](https://github.com/open-artifacts-ai/open-artifacts/issues/321)) ([8c13e7d](https://github.com/open-artifacts-ai/open-artifacts/commit/8c13e7da8ed59218ef71739bf4334b7372e4791c))
+* **viewer:** renavigation notice for live-data artifacts ([#326](https://github.com/open-artifacts-ai/open-artifacts/issues/326)) ([e4dfac3](https://github.com/open-artifacts-ai/open-artifacts/commit/e4dfac3821ef7db7cd9f2ba924c4a1bad2134999))
+
+## [0.9.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.8.0...v0.9.0) (2026-10-20)
+
+
+### Features
+
+* **dashboard:** file-based token snippets in Settings → Agents ([#322](https://github.com/open-artifacts-ai/open-artifacts/issues/322)) ([d3ea8e6](https://github.com/open-artifacts-ai/open-artifacts/commit/d3ea8e6cfecf2b21ec3c26ad8587baaf05ba8864))
+* **runtime:** per-load nonce on every bridge message ([#306](https://github.com/open-artifacts-ai/open-artifacts/issues/306)) ([944e934](https://github.com/open-artifacts-ai/open-artifacts/commit/944e934d0bac65482dff84dcfc80c7d4970fe7b7))
+* **server:** per-instance overrides for live-data limits ([#303](https://github.com/open-artifacts-ai/open-artifacts/issues/303)) ([e48e179](https://github.com/open-artifacts-ai/open-artifacts/commit/e48e1796bfc05db270bd28df775ea21898ad4731))
+
+## [0.8.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.7.0...v0.8.0) (2026-10-20)
+
+
+### Features
+
+* **demo-ops:** live activity feed for the demo dashboard ([#320](https://github.com/open-artifacts-ai/open-artifacts/issues/320)) ([6f419c7](https://github.com/open-artifacts-ai/open-artifacts/commit/6f419c717b7ce1d68d52e9744db42b74e4012005))
+
+## [0.7.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.6.0...v0.7.0) (2026-10-20)
+
+
+### Features
+
+* **dashboard:** chromeless full-screen view at /a/&lt;id&gt;/full; remove Open raw ([#290](https://github.com/open-artifacts-ai/open-artifacts/issues/290)) ([#296](https://github.com/open-artifacts-ai/open-artifacts/issues/296)) ([b3d4bf3](https://github.com/open-artifacts-ai/open-artifacts/commit/b3d4bf3a60d75bf14882a5490bc1c904759f35b9))
+* **dashboard:** Update available, sidebar chip and Version card (admins) ([#255](https://github.com/open-artifacts-ai/open-artifacts/issues/255)) ([8bca53b](https://github.com/open-artifacts-ai/open-artifacts/commit/8bca53bf6e1b749beee6a7fcc8d735226a8f7728))
+* **demo-ops:** per-minute activity aggregator for the demo dashboard ([#310](https://github.com/open-artifacts-ai/open-artifacts/issues/310)) ([4be84ed](https://github.com/open-artifacts-ai/open-artifacts/commit/4be84ed203035d48ac1f2642cf50246f21baa054))
+* **setup:** --var NAME=value keeps tunable Worker vars across deploys ([#315](https://github.com/open-artifacts-ai/open-artifacts/issues/315)) ([e657cd8](https://github.com/open-artifacts-ai/open-artifacts/commit/e657cd8b3811f86676243552708be0d0ea6f7137))
+
+
+### Bug Fixes
+
+* **setup:** --upgrade tolerates an Access API outage ([#317](https://github.com/open-artifacts-ai/open-artifacts/issues/317)) ([#318](https://github.com/open-artifacts-ai/open-artifacts/issues/318)) ([329fa7d](https://github.com/open-artifacts-ai/open-artifacts/commit/329fa7d701c9686bc42bdc62587c240e2a3de7ea))
+
 ## [0.6.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.5.0...v0.6.0) (2026-10-20)
 
 

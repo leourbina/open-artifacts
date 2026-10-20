@@ -13,6 +13,8 @@
 //   unknown or unapproved slugs are left untouched. The substituted text is part of
 //   the content hash, stored in the version message as `src:<sha256>`: an unchanged
 //   hash is skipped.
+// - `{{origin}}` (exact spelling) becomes `new URL(--base-url).origin` (no trailing slash,
+//   no path) in the same files; never in manifest.json or seeds. Part of the hash.
 // - A slug with an id publishes a new version. A slug without one fails fast, before any
 //   request, unless --create is given: then it is created, printed as `NEW <slug> <id>`
 //   and the run fails (commit ids.json). A missing publish.json approves nothing.
@@ -102,15 +104,24 @@ export function validateManifest(m: unknown): string[] {
   return errs;
 }
 
-/** `{{id:<slug>}}` → that slug's id, for approved slugs that have one. */
+/**
+ * `{{id:<slug>}}` → that slug's id, for approved slugs that have one; `{{origin}}` →
+ * `origin` (the app origin, no trailing slash) when given.
+ */
 export function substitute(
   text: string,
   ids: Record<string, string>,
   approved: string[],
+  origin?: string,
 ): string {
-  return text.replace(/\{\{id:([a-z0-9-]+)\}\}/g, (whole, slug: string) =>
-    approved.includes(slug) && ids[slug] ? (ids[slug] as string) : whole,
+  const withIds = text.replace(
+    /\{\{id:([a-z0-9-]+)\}\}/g,
+    (whole, slug: string) =>
+      approved.includes(slug) && ids[slug] ? (ids[slug] as string) : whole,
   );
+  return origin === undefined
+    ? withIds
+    : withIds.split("{{origin}}").join(origin);
 }
 
 const readJson = (p: string): unknown => JSON.parse(readFileSync(p, "utf8"));
@@ -263,6 +274,7 @@ function plan(
   slug: string,
   ids: Record<string, string>,
   approved: string[],
+  origin?: string,
 ): Plan {
   const root = join(dir, "artifacts", slug);
   const m = readManifest(dir, slug);
@@ -276,7 +288,7 @@ function plan(
       path,
       text,
       bytes: text
-        ? Buffer.from(substitute(raw.toString("utf8"), ids, approved))
+        ? Buffer.from(substitute(raw.toString("utf8"), ids, approved, origin))
         : raw,
     });
   }
@@ -356,6 +368,7 @@ export async function run(
   }
   const approved = readApproved(o.demoDir);
   const ids = readIds(o.demoDir);
+  const origin = new URL(o.baseUrl).origin;
   const token = o.apply ? readToken(o, env) : "";
   const scrub = (s: string) => (token ? s.split(token).join("<token>") : s);
   let failed = 0;
@@ -368,7 +381,7 @@ export async function run(
   const plans: Plan[] = [];
   for (const slug of order(approved)) {
     try {
-      plans.push(plan(o.demoDir, slug, ids, approved));
+      plans.push(plan(o.demoDir, slug, ids, approved, origin));
       readSeed(o.demoDir, slug); // validate (and refuse symlinks) before any request
     } catch (e) {
       fail((e as Error).message);
@@ -409,7 +422,7 @@ export async function run(
     if (!r.ok) throw new Error(`HTTP ${r.status} ${text.slice(0, 300)}`);
     return text ? (JSON.parse(text) as unknown) : null;
   };
-  const api = (p: string) => `${o.baseUrl}${p}`;
+  const api = (p: string) => `${origin}${p}`;
   const needNew: string[] = [];
 
   for (const p of plans) {

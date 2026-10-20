@@ -38,12 +38,16 @@ const sh = (s: string) =>
 const toml = (s: string) => JSON.stringify(s).replaceAll("\x7f", "\\u007F");
 const json = (v: unknown) => JSON.stringify(v, null, 2);
 
-const CURSOR_VERIFY_OAUTH = `Find ${NAME} under Customize (sidebar); when Cursor asks you to sign in, finish it in the browser, and it then lists its tools.`;
+const CURSOR_VERIFY_OAUTH = `Find ${NAME} under Customize in the sidebar. When Cursor asks you to sign in, finish in your browser. Cursor then lists its tools.`;
 const CURSOR_RELOAD =
-  "Toggle the server off and on in Customize, or restart Cursor.";
-const GENERIC_VERIFY =
-  "Ask the client to list the server's tools (tools/list); publish_artifact is among them.";
-const GENERIC_RELOAD = "Restart the client or reload its MCP servers.";
+  "Turn the server off and on again in Customize, or restart Cursor.";
+const GENERIC_VERIFY = `Ask your AI agent to list the ${NAME} tools. You should see publish_artifact.`;
+const GENERIC_RELOAD = "Restart your AI agent, or reload its MCP servers.";
+const CLAUDE_RELOAD =
+  "Start a new Claude Code session, or reconnect from `/mcp`.";
+const CODEX_RELOAD =
+  "Restart Codex (the CLI, IDE extension or app). It reads its config when it starts.";
+const OPENCODE_RELOAD = "Restart OpenCode. It reads its config when it starts.";
 
 /**
  * MCP client snippets per agent and auth variant: every oauth variant first,
@@ -70,17 +74,16 @@ function fileClients(url: string, f: string): Snippet[] {
       variant: "oauth",
       language: "bash",
       code: `claude mcp add --transport http -s user ${NAME} ${sh(url)}`,
-      verify: `In a session, run \`/mcp\` (or \`claude mcp login ${NAME}\`) and sign in through the browser; \`claude mcp list\` then shows ${NAME} as connected.`,
-      reload: "Start a new Claude Code session, or reconnect from `/mcp`.",
+      verify: `In a Claude Code session, run \`/mcp\` (or \`claude mcp login ${NAME}\`) and sign in with your browser. Then \`claude mcp list\` shows ${NAME} as connected.`,
+      reload: CLAUDE_RELOAD,
     },
     {
       agent: "Codex CLI",
       variant: "oauth",
       language: "bash",
       code: `codex mcp add ${NAME} --url ${sh(url)}`,
-      verify: `\`codex mcp login ${NAME}\` signs in through the browser; \`codex mcp list\` then shows it.`,
-      reload:
-        "Restart codex (CLI, IDE extension or app); it reads its config at start.",
+      verify: `Run \`codex mcp login ${NAME}\` to sign in with your browser. Then \`codex mcp list\` shows ${NAME}.`,
+      reload: CODEX_RELOAD,
     },
     {
       agent: "Cursor",
@@ -97,8 +100,8 @@ function fileClients(url: string, f: string): Snippet[] {
       language: "json",
       file: "opencode.json",
       code: json({ mcp: { [NAME]: { type: "remote", url } } }),
-      verify: `\`opencode mcp auth ${NAME}\` signs in through the browser; \`opencode mcp list\` then shows it.`,
-      reload: "Restart opencode; it reads its config at start.",
+      verify: `Run \`opencode mcp auth ${NAME}\` to sign in with your browser. Then \`opencode mcp list\` shows ${NAME}.`,
+      reload: OPENCODE_RELOAD,
     },
     {
       agent: "Generic",
@@ -117,9 +120,9 @@ function fileClients(url: string, f: string): Snippet[] {
       code: `claude mcp add-json -s user ${NAME} ${sh(
         JSON.stringify({ type: "http", url, headersHelper: helper }),
       )}`,
-      hint: `the header helper reads ${f} each time Claude Code connects; user scope, so no workspace trust is needed`,
-      verify: `\`claude mcp list\` shows ${NAME} as connected.`,
-      reload: "Start a new Claude Code session, or reconnect from `/mcp`.",
+      hint: `Claude Code reads the token from ${f} each time it connects. It's added for your user, so it works in every project.`,
+      verify: `Run \`claude mcp list\`. It shows ${NAME} as connected.`,
+      reload: CLAUDE_RELOAD,
     },
     {
       agent: "Codex CLI",
@@ -127,10 +130,9 @@ function fileClients(url: string, f: string): Snippet[] {
       language: "toml",
       file: "~/.codex/config.toml",
       code: `[mcp_servers.${NAME}]\nurl = ${toml(url)}\nhttp_headers_helper = ${toml(helper)}`,
-      hint: "needs Codex 0.163 or later; older versions: use OAuth",
-      verify: `\`codex mcp list\` shows ${NAME}.`,
-      reload:
-        "Restart codex (CLI, IDE extension or app); it reads its config at start.",
+      hint: "This needs Codex 0.163 or later. On older versions, use OAuth.",
+      verify: `Run \`codex mcp list\`. It shows ${NAME}.`,
+      reload: CODEX_RELOAD,
     },
     {
       agent: "OpenCode",
@@ -147,15 +149,15 @@ function fileClients(url: string, f: string): Snippet[] {
           },
         },
       }),
-      hint: "OpenCode can run as a background service that doesn't read your shell profile; the file reference works either way. Don't run `opencode service …` from inside an OpenCode session: it restarts the server you're running in",
-      verify: `\`opencode mcp list\` shows ${NAME} as connected.`,
-      reload: "Restart opencode; it reads its config at start.",
+      hint: "OpenCode reads the token file even when it runs in the background. Don't run `opencode service` from inside an OpenCode session, because it restarts the server.",
+      verify: `Run \`opencode mcp list\`. It shows ${NAME} as connected.`,
+      reload: OPENCODE_RELOAD,
     },
     {
       agent: "Generic",
       variant: "token",
       language: "text",
-      code: `Use your client's file- or command-based header option to read the token from ${f} at connect time. If it has none, use OAuth.`,
+      code: `Use your client's option to read the token from ${f} when it connects. If it has none, use OAuth. Never paste the token into a config file.`,
       verify: GENERIC_VERIFY,
       reload: GENERIC_RELOAD,
     },
@@ -190,22 +192,22 @@ function envClients(mcpUrl: string): Snippet[] {
 claude mcp add --transport http ${NAME} ${sh(mcpUrl)} --header "Authorization: Bearer $OA_TOKEN"
 unset OA_TOKEN`
         : `claude mcp add --transport http ${NAME} ${sh(mcpUrl)}`,
-      hint: "paste the token at the hidden prompt; Claude Code stores the expanded header in its own config",
+      hint: "Paste your token when prompted. It stays hidden as you type, and Claude Code saves it in its own config.",
       verify: t
-        ? `\`claude mcp list\` shows ${NAME} as connected.`
-        : `In a session, run \`/mcp\`, pick ${NAME} and sign in through the browser; it then lists its tools.`,
-      reload: "Start a new Claude Code session, or reconnect from `/mcp`.",
+        ? `Run \`claude mcp list\`. It shows ${NAME} as connected.`
+        : `In a Claude Code session, run \`/mcp\`, pick ${NAME} and sign in with your browser. Claude Code then lists its tools.`,
+      reload: CLAUDE_RELOAD,
     });
     add({
       agent: "Codex CLI",
       language: "toml",
       code: `[mcp_servers.${NAME}]\nurl = ${toml(mcpUrl)}${t ? `\nbearer_token_env_var = "OA_TOKEN"` : ""}`,
       file: "~/.codex/config.toml",
-      hint: "export OA_TOKEN in the shell that starts codex",
+      hint: "Export OA_TOKEN in the shell that starts Codex.",
       verify: t
-        ? `\`codex mcp list\` shows ${NAME}.`
-        : `\`codex mcp login ${NAME}\` signs in through the browser; \`codex mcp list\` then shows it.`,
-      reload: "Restart codex; it reads config.toml at start.",
+        ? `Run \`codex mcp list\`. It shows ${NAME}.`
+        : `Run \`codex mcp login ${NAME}\` to sign in with your browser. Then \`codex mcp list\` shows ${NAME}.`,
+      reload: "Restart Codex. It reads config.toml when it starts.",
     });
     add({
       agent: "Cursor",
@@ -221,9 +223,9 @@ unset OA_TOKEN`
         },
       }),
       file: "~/.cursor/mcp.json",
-      hint: "export OA_TOKEN before launching Cursor",
+      hint: "Export OA_TOKEN before you open Cursor.",
       verify: t
-        ? `Customize (sidebar) shows ${NAME} enabled with its tools.`
+        ? `Customize in the sidebar shows ${NAME} turned on, with its tools.`
         : CURSOR_VERIFY_OAUTH,
       reload: CURSOR_RELOAD,
     });
@@ -247,11 +249,11 @@ unset OA_TOKEN`
         },
       }),
       file: "opencode.json",
-      hint: "export OA_TOKEN before launching OpenCode; an unset OA_TOKEN becomes an empty string",
+      hint: "Export OA_TOKEN before you start OpenCode. If it isn't set, OpenCode sends an empty token.",
       verify: t
-        ? `\`opencode mcp list\` shows ${NAME} as connected.`
-        : `\`opencode mcp auth ${NAME}\` signs in through the browser; \`opencode mcp list\` then shows it.`,
-      reload: "Restart opencode; it reads its config at start.",
+        ? `Run \`opencode mcp list\`. It shows ${NAME} as connected.`
+        : `Run \`opencode mcp auth ${NAME}\` to sign in with your browser. Then \`opencode mcp list\` shows ${NAME}.`,
+      reload: OPENCODE_RELOAD,
     });
     add({
       agent: "Generic",
@@ -267,7 +269,7 @@ unset OA_TOKEN`
           },
         },
       }),
-      hint: `replace ${TOKEN_PLACEHOLDER} with your token; keep this file out of git`,
+      hint: `If your client can read the token from a file or an environment variable, use that. If it can't, replace ${TOKEN_PLACEHOLDER} with your token and keep this file out of git.`,
       verify: GENERIC_VERIFY,
       reload: GENERIC_RELOAD,
     });

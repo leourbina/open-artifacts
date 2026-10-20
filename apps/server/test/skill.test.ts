@@ -2,13 +2,14 @@ import { env } from "cloudflare:workers";
 import {
   agentClients,
   dataDocLimit,
+  dataLimits,
   LIMITS,
   newId,
   type Plan,
 } from "@oa/shared";
 import { describe, expect, it, vi } from "vitest";
 import { createPat } from "../src/auth/pat.js";
-import { INSTRUCTIONS, sizeText } from "../src/mcp/instructions.js";
+import { INSTRUCTIONS, planText, sizeText } from "../src/mcp/instructions.js";
 import { SKILL_HASH, SKILL_TEMPLATE } from "../src/mcp/skill.generated.js";
 import { renderSkill, SKILL_DOC_URI } from "../src/mcp/skill.js";
 import {
@@ -71,8 +72,32 @@ function toolSections(md: string): Map<string, string> {
 }
 
 describe("skill.md drift", () => {
-  it("src/mcp/skill.generated.ts is up to date (run the build)", () => {
+  // skill.generated.ts is gitignored and written by `pnpm gen` before every
+  // test run, so these check the emitter, not a committed copy.
+  it("the template renders deterministically", () => {
+    expect(renderSkillTemplate()).toBe(renderSkillTemplate());
+  });
+
+  it("the generated template is a fresh render", () => {
     expect(SKILL_TEMPLATE).toBe(renderSkillTemplate());
+  });
+
+  it("the served /skill.md is a fresh render with its tokens filled", async () => {
+    const e = E() as Parameters<typeof dataLimits>[0] & { APP_HOST: string };
+    const { plan, docBytes } = dataLimits(e);
+    const v: Record<string, string> = {
+      ...planText(plan, docBytes),
+      origin: skillOrigin(e.APP_HOST),
+      host: e.APP_HOST,
+      name: await skillName(e.APP_HOST),
+      hostSlug: hostSlug(e.APP_HOST),
+      version: VERSION,
+    };
+    const fresh = renderSkillTemplate().replace(
+      /\{\{(\w+)\}\}/g,
+      (m, k: string) => v[k] ?? m,
+    );
+    expect(await skill()).toBe(fresh);
   });
 
   it("SKILL_HASH is the template's sha256 prefix", async () => {
@@ -124,6 +149,21 @@ describe("skill.md drift", () => {
     expect(md.match(/\b17\b/g) ?? []).toHaveLength(1);
   });
 
+  it("has the public interactive artifacts section, after the sharing and live-data sections", async () => {
+    const md = await skill();
+    const at = md.indexOf("\n## Public interactive artifacts\n");
+    expect(at).toBeGreaterThan(md.indexOf("\n## Sharing and visibility\n"));
+    expect(at).toBeGreaterThan(md.indexOf("\n## Live data (html artifacts)\n"));
+    const section = md.slice(at).split("\n## ")[1] ?? "";
+    for (const phrase of [
+      "`allowAnonymousWrites: true`",
+      "`viewer.anonId()`",
+      "`no_shell`",
+      "no presence API",
+    ])
+      expect(section).toContain(phrase);
+  });
+
   it("every tool example passes its input schema", () => {
     for (const t of TOOL_DEFS) {
       const r = t.inputSchema.safeParse(t.example);
@@ -154,6 +194,14 @@ describe("skill.md drift", () => {
       if (plan === "free") expect(ins).not.toContain("1 MB per document");
     });
   }
+
+  it("states the effective data-doc limit when DATA_DOC_BYTES overrides it", async () => {
+    const md = await skill(
+      E({ PLAN: "paid", DATA_DOC_BYTES: String(1536 * 1024) }),
+    );
+    expect(md).toContain("1536 KB per document on this instance (paid plan)");
+    expect(md).toContain("a request body over 1600 KB");
+  });
 
   it("metadata.version is VERSION, as /healthz reports", async () => {
     const fm = frontmatter(await skill());
@@ -241,10 +289,12 @@ describe("skill.md frontmatter (agentskills.io)", () => {
       expect(setup).toContain(`### ${c.agent}\n`);
       expect(setup).toContain(`Verify: ${fill(c.verify ?? "?")}`);
       expect(setup).toContain(`Reload: ${c.reload}`);
-      if (c.hint) expect(setup).toContain(`Note: ${fill(c.hint)}.`);
+      if (c.hint) expect(setup).toContain(`Note: ${fill(c.hint)}`);
     }
     expect(setup).not.toMatch(/oa_pat_/);
-    expect(setup).toContain("Token: none; Cursor: use OAuth.");
+    expect(setup).toContain(
+      "Token: none. Cursor can't read a token file, so sign in with OAuth.",
+    );
     for (const bad of ["OA_TOKEN", "{env:", "${env:", "bearer_token_env_var"])
       expect(md).not.toContain(bad);
   });

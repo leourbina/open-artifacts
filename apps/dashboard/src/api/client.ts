@@ -1,5 +1,6 @@
 import { ApiErrorSchema, type ErrorCode } from "@oa/shared";
 import type { z } from "zod";
+import { EMBED_HEADER, isEmbed } from "../embed";
 
 /** `cpu_limit` is client-only: Cloudflare's error 1102 page, never sent by the API. */
 export type ClientErrorCode = ErrorCode | "cpu_limit";
@@ -94,15 +95,49 @@ function toError(
   return new ApiClientError(code, message, status, details);
 }
 
-async function request(path: string, init: RequestInit): Promise<Response> {
+/** Per-call extras: more request headers, and a look at a successful response. */
+export type RequestExtra = {
+  headers?: Record<string, string>;
+  onResponse?: (res: Response) => void;
+};
+
+/**
+ * The fetch options for a request. Framed (embed mode), it is anonymous no
+ * matter what the caller asked for: no credentials, plus the embed hint.
+ */
+export function requestInit(init: RequestInit): RequestInit {
+  if (!isEmbed()) return { credentials: "same-origin", ...init };
+  const headers = {
+    ...Object.fromEntries(new Headers(init.headers)),
+    [EMBED_HEADER]: "1",
+  };
+  return { ...init, headers, credentials: "omit" };
+}
+
+async function request(
+  path: string,
+  init: RequestInit,
+  extra?: RequestExtra,
+): Promise<Response> {
   let res: Response;
   try {
-    res = await fetch(path, { credentials: "same-origin", ...init });
+    res = await fetch(
+      path,
+      requestInit({
+        ...init,
+        ...(extra?.headers
+          ? { headers: { ...(init.headers as object), ...extra.headers } }
+          : {}),
+      }),
+    );
   } catch (e) {
     if (e instanceof Error && e.name === "AbortError") throw e;
     throw internal(e instanceof Error ? e.message : "Network error", 0);
   }
-  if (res.ok) return res;
+  if (res.ok) {
+    extra?.onResponse?.(res);
+    return res;
+  }
   const err = toError(
     await res.text().catch(() => ""),
     res.status,
@@ -132,8 +167,9 @@ export const api = {
     path: string,
     schema: z.ZodType<T>,
     signal?: AbortSignal,
+    extra?: RequestExtra,
   ): Promise<T> {
-    return parse(await request(path, { method: "GET", signal }), schema);
+    return parse(await request(path, { method: "GET", signal }, extra), schema);
   },
   /** Raw body as text (for file contents), with its content type. */
   async getText(
@@ -152,15 +188,20 @@ export const api = {
     body: unknown,
     schema?: z.ZodType<T>,
     signal?: AbortSignal,
+    extra?: RequestExtra,
   ): Promise<T> {
     const headers: Record<string, string> = { "X-OA-Request": "1" };
     if (body !== undefined) headers["Content-Type"] = "application/json";
-    const res = await request(path, {
-      method,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal,
-    });
+    const res = await request(
+      path,
+      {
+        method,
+        headers,
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal,
+      },
+      extra,
+    );
     return parse(res, schema);
   },
   /** Same-origin PUT of a raw body (cookie-authed, so it carries the CSRF header). */
@@ -188,6 +229,8 @@ export const api = {
     return new Promise((resolve, reject) => {
       const abort = () => new DOMException("Aborted", "AbortError");
       if (signal?.aborted) return reject(abort());
+      // A same-origin XHR always carries cookies; a framed shell never uploads.
+      if (isEmbed()) return reject(internal("Not available embedded", 0));
       const xhr = new XMLHttpRequest();
       const onAbort = () => {
         xhr.abort();

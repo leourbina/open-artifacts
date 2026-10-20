@@ -23,8 +23,10 @@ import { qk } from "../api/queries";
 import { useRedirect } from "../auth/redirect";
 import { useSignOut } from "../auth/signOut";
 import { useMe } from "../auth/useMe";
+import { isEmbed, isFullPath } from "../embed";
 import { SearchBox } from "../library/SearchBox";
 import { EdgePanel } from "../pages/Edge";
+import { NotPublic } from "../pages/NotPublic";
 import { MEASURE } from "../settings/ui";
 import { CpuBanner } from "./CpuBanner";
 import { DisplayNamePrompt } from "./DisplayNamePrompt";
@@ -87,7 +89,9 @@ function Layout() {
   const path =
     useRouterState({ select: (s) => s.matches.at(-1)?.pathname }) ??
     loc.pathname;
-  const anonymous = state.status === "anonymous" && !publicRoute(path);
+  const embed = isEmbed();
+  const anonymous =
+    !embed && state.status === "anonymous" && !publicRoute(path);
 
   useEffect(() => {
     if (anonymous)
@@ -106,6 +110,11 @@ function Layout() {
   }, [guestHome, navigate]);
 
   if (anonymous || guestHome) return null;
+  // Framed: /a/<id>/full alone, with no app chrome or banners.
+  if (embed)
+    return (
+      <main id="oa-main">{isFullPath(path) ? <Outlet /> : <NotPublic />}</main>
+    );
   if (bareRoute(path))
     return (
       <main id="oa-main">

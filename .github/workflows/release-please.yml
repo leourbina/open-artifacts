@@ -14,6 +14,10 @@ permissions:
 jobs:
   release-please:
     if: ${{ github.event_name == 'push' }}
+    # Back-to-back pushes queue instead of racing on the release PR ("Error updating ref").
+    concurrency:
+      group: release-please
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     outputs:
       release_created: ${{ steps.rp.outputs.release_created }}
@@ -139,9 +143,6 @@ jobs:
         run: bash scripts/ci/prod-setup.sh cleanup
   # The public demo, in parallel with deploy-prod: off until the repository variable
   # DEMO_ENABLED is 'true' (after ops-demo-install has run). Staging credentials only.
-  # TODO: when ci/release-cadence lands, extend verify-release to check
-  # https://demo.open-artifacts.com/healthz .version when DEMO_ENABLED == 'true', and add
-  # deploy-demo to its `needs`.
   deploy-demo:
     needs: [release-please]
     if: ${{ !cancelled() && github.ref == 'refs/heads/main' && vars.DEMO_ENABLED == 'true' && needs.release-please.outputs.release_created == 'true' }}
@@ -199,3 +200,29 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           OA_ACCESS_TOKEN: ${{ secrets.DEMO_OA_ACCESS_TOKEN }}
         run: bash scripts/ci/prod-setup.sh demo-cleanup
+  # Runs once a release was created, after every deploy (whatever their result; deploy-demo is skipped while DEMO_ENABLED is off): the
+  # live prod healthz and the landing meta must show the released version, else a
+  # `blocker` issue is opened and this job fails. Skipped for pre-release tags.
+  verify-release:
+    needs: [release-please, deploy-prod, deploy-landing, deploy-demo]
+    if: ${{ always() && needs.release-please.outputs.release_created == 'true' && !contains(needs.release-please.outputs.tag_name, '-') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    env:
+      TAG: ${{ needs.release-please.outputs.tag_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Verify the release is live
+        if: ${{ vars.DEMO_ENABLED != 'true' }}
+        run: node --experimental-strip-types scripts/ci/verify-release.ts --tag "$TAG" --repo "$GITHUB_REPOSITORY"
+      - name: Verify the release is live (with the demo)
+        if: ${{ vars.DEMO_ENABLED == 'true' }}
+        run: node --experimental-strip-types scripts/ci/verify-release.ts --tag "$TAG" --repo "$GITHUB_REPOSITORY" --demo-url https://demo.open-artifacts.com

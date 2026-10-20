@@ -56,7 +56,13 @@ const setupLines = (md: string) =>
   md.split("\n").filter((l) => l.includes("pnpm -s oa:setup "));
 
 describe("upgrade.md drift", () => {
-  it("src/mcp/upgrade.generated.ts is up to date (run the build)", () => {
+  // upgrade.generated.ts is gitignored and written by `pnpm gen` before every
+  // test run, so these check the emitter, not a committed copy.
+  it("the template renders deterministically", () => {
+    expect(renderUpgradeTemplate()).toBe(renderUpgradeTemplate());
+  });
+
+  it("the generated template is a fresh render", () => {
     expect(UPGRADE_TEMPLATE).toBe(renderUpgradeTemplate());
   });
 

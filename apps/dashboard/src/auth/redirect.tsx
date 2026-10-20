@@ -1,9 +1,12 @@
 import { AUTH } from "@oa/shared";
 import { createContext, useContext, useEffect } from "react";
+import { isEmbed, openInNewTab } from "../embed";
 
 export type Redirect = (url: string) => void;
 
-const hardRedirect: Redirect = (url) => window.location.assign(url);
+/** Framed, the frame never leaves its page: the target opens in a new tab. */
+const hardRedirect: Redirect = (url) =>
+  isEmbed() ? openInNewTab(url) : window.location.assign(url);
 
 const RedirectContext = createContext<Redirect>(hardRedirect);
 
@@ -11,10 +14,12 @@ const RedirectContext = createContext<Redirect>(hardRedirect);
 export const RedirectProvider = RedirectContext.Provider;
 export const useRedirect = () => useContext(RedirectContext);
 
-/** Sends the visitor to sign in (returning to `next`) once `when` holds. */
+/** Sends the visitor to sign in (returning to `next`) once `when` holds.
+    Never framed: the caller shows the not-public panel instead. */
 export function useLoginRedirect(when: boolean, next: string) {
   const redirect = useRedirect();
   useEffect(() => {
-    if (when) redirect(`${AUTH.login}?next=${encodeURIComponent(next)}`);
+    if (when && !isEmbed())
+      redirect(`${AUTH.login}?next=${encodeURIComponent(next)}`);
   }, [when, redirect, next]);
 }

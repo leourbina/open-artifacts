@@ -4,12 +4,15 @@ import type { Context } from "hono";
 import { getDb } from "../db/client.js";
 import { artifacts } from "../db/schema.js";
 import type { Env } from "../env.js";
+import { isFramedFetch } from "../http/embed.js";
 import { appOrigin } from "../http/errors.js";
 import type { AppEnv } from "../http/middleware.js";
 import { getSettings } from "../services/members.js";
 import type { AppType } from "./index.js";
 
 const SITE = "Open Artifacts";
+/** Embed-mode marker for the dashboard (see http/embed.ts). */
+export const EMBED_META = `<meta name="oa-embed" content="1">`;
 const VERSION_NUM = /^[1-9]\d{0,8}$/;
 
 // Bidi controls, zero-width characters, word joiner/invisibles and BOM.
@@ -177,7 +180,12 @@ export async function publicHome(
 }
 
 export function mountShell(app: AppType): void {
-  const shell = async (c: Context<AppEnv>, id: string, v?: number) => {
+  const shell = async (
+    c: Context<AppEnv>,
+    id: string,
+    v?: number,
+    embed = false,
+  ) => {
     const [og, meta, index] = await Promise.all([
       publicOg(c.env, id, v),
       instanceMeta(c.env),
@@ -192,7 +200,10 @@ export function mountShell(app: AppType): void {
       })
       .on("head", {
         element(e) {
-          e.append(meta + (og ? metaTags(og) : ""), { html: true });
+          e.append(
+            (embed ? EMBED_META : "") + meta + (og ? metaTags(og) : ""),
+            { html: true },
+          );
         },
       })
       .transform(index);
@@ -201,12 +212,18 @@ export function mountShell(app: AppType): void {
       headers: {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "no-store",
+        Vary: "Sec-Fetch-Dest",
       },
     });
   };
   app.get("/a/:id", (c) => shell(c, c.req.param("id")));
   // Chromeless viewer (#290): same shell, checks and OG; og:url stays canonical.
-  app.get("/a/:id/full", (c) => shell(c, c.req.param("id")));
+  // Framed (any non-document Sec-Fetch-Dest): add the oa-embed meta, a hint
+  // for the dashboard's embed mode. The shell never reads the session, so this
+  // render is not where anonymity is enforced (that is client-side).
+  app.get("/a/:id/full", (c) =>
+    shell(c, c.req.param("id"), undefined, isFramedFetch(c.req.raw)),
+  );
   app.get("/a/:id/v/:v", async (c, next) => {
     const v = c.req.param("v");
     if (!VERSION_NUM.test(v)) return next();

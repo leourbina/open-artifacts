@@ -1,10 +1,11 @@
 import {
+  ANON_ID_HEADER,
   type Capabilities,
   CapabilitiesSchema,
   DataNameSchema,
   DataQuerySchema,
-  dataDocLimit,
   dataDocTooLargeMessage,
+  dataLimits,
   dataResetLimit,
   dataResetTooLargeMessage,
   isId,
@@ -16,11 +17,12 @@ import {
 } from "@oa/shared";
 import type { Context } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { caller, requireAccess } from "../auth/authz.js";
+import { type Caller, caller, requireAccess } from "../auth/authz.js";
 import { cappedJson, readCapped } from "../http/body.js";
 import { ApiError, appOrigin } from "../http/errors.js";
 import type { AppEnv } from "../http/middleware.js";
 import type { AppType } from "../routes/index.js";
+import { type AnonId, resolveAnonId } from "./anon-id.js";
 import { ACTOR_HEADER, publicActor, runtimeCall, runtimeStub } from "./do.js";
 
 // Literals so Hono infers params; must equal R.data* / R.storage* in @oa/shared.
@@ -30,19 +32,21 @@ const COL = `${ART}/data/:col`;
 const QUERY = `${COL}/query`;
 const DOC = `${COL}/:doc`;
 const SUBSCRIBE = `${ART}/data-subscribe`;
+const COUNT = `${ART}/data-count/:col`;
+const ANON_ID = `${ART}/anon-id`;
 const STORAGE = `${ART}/storage`;
 const KEY = `${STORAGE}/:key`;
 
 /**
  * Raw write bodies (doc, patch, {value}) are measured as sent, whitespace
- * included: the DO checks the raw bytes against the plan's data-doc limit
+ * included: the DO checks the raw bytes against the instance's data-doc limit
  * without re-serializing (which would cost CPU). So the cap here is the limit
  * itself: over it, 413 with the plan message from Content-Length, before the
  * body is read.
  */
 const readDocBody = (c: C): Promise<Uint8Array> => {
-  const plan = planOf(c.env.PLAN);
-  return readCapped(c, dataDocLimit(plan), dataDocTooLargeMessage(plan));
+  const { plan, docBytes } = dataLimits(c.env);
+  return readCapped(c, docBytes, dataDocTooLargeMessage(plan, docBytes));
 };
 const MAX_QUERY_BODY = 64 * 1024;
 /** CF-Connecting-IP: IPv4 or IPv6 text form. */
@@ -50,7 +54,7 @@ const IP_RE = /^[0-9A-Fa-f:.]{2,45}$/;
 const IPV4_RE = /^\d{1,3}(?:\.\d{1,3}){3}$/;
 
 type C = Context<AppEnv>;
-type Gate = { artifactId: string; actor: string };
+type Gate = { artifactId: string; actor: string; anon: AnonId | null };
 
 const NO_CAPS: Capabilities = { db: false, viewer: false, storage: false };
 function capsOf(json: string): Capabilities {
@@ -123,18 +127,27 @@ async function anonLimit(c: C, key: string, what: string): Promise<void> {
  * - storage: signed-in only (401), actor "u:{id}" (the storage owner).
  * - data writes: signed-in "u:{id}"; anonymous only with allowAnonymousWrites
  *   (else 401), after RL_ANON "ip:{key}" (429; 503 if unbound outside dev),
- *   as "ip:{key}" (ipKey: IPv4, or the IPv6 /64); stored/returned updatedBy is "anon".
+ *   as "ip:{key}|{short}" (ipKey: IPv4, or the IPv6 /64).
  * - subscribe: signed-in "u:{id}"; anonymous "ip:{key}" after RL_ANON "sub:ip:{key}".
  * - data reads: anyone with view access (actor unused).
+ * - anonId: anonymous writes, and "anonId" (GET anon-id, after RL_ANON
+ *   "anonid:ip:{key}"), on an artifact with allowAnonymousWrites only: the
+ *   ANON_ID_HEADER token is verified, or a new one minted (returned by
+ *   `withAnon`). `short` is per artifact; a write stores updatedBy
+ *   "anon:{short}", and the DO still rate limits by "ip:{key}". Reads never
+ *   touch it; signed-in callers and other artifacts never get one.
  */
 async function gate(
   c: C,
   method: RuntimeMethod,
-  kind: "read" | "write" | "storage" | "subscribe",
+  kind: "read" | "write" | "storage" | "subscribe" | "anonId",
 ): Promise<Gate> {
   const artifactId = c.req.param("id") ?? "";
   if (!isId(artifactId)) throw new ApiError("not_found", "Not found");
-  const who = caller(c);
+  // Embed mode (X-OA-Embed: 1) is downgrade-only: the call runs anonymously
+  // whatever cookie or token came with it (#295 does this app-wide).
+  const who: Caller =
+    c.req.header("x-oa-embed") === "1" ? { kind: "anonymous" } : caller(c);
   const a = await requireAccess(c.env, who, artifactId, "viewer");
   const cap = METHOD_CAPABILITY[method];
   if (!capsOf(a.capabilities)[cap])
@@ -142,17 +155,47 @@ async function gate(
       "capability_denied",
       `This artifact did not declare the "${cap}" capability`,
     );
-  if (who.kind === "user") return { artifactId, actor: `u:${who.user.id}` };
-  if (kind === "read") return { artifactId, actor: "" };
-  if (kind === "storage" || (kind === "write" && a.allowAnonymousWrites !== 1))
+  if (who.kind === "user")
+    return { artifactId, actor: `u:${who.user.id}`, anon: null };
+  if (kind === "read") return { artifactId, actor: "", anon: null };
+  const optIn = a.allowAnonymousWrites === 1;
+  if (kind === "storage" || (kind === "write" && !optIn))
     throw new ApiError("unauthorized", "Sign in to save changes");
+  if (kind === "anonId" && !optIn)
+    throw new ApiError("unauthorized", "No anonymous id here");
+  const anonId = async (): Promise<AnonId> => {
+    const r = await resolveAnonId(
+      c.env,
+      artifactId,
+      c.req.header(ANON_ID_HEADER),
+      true,
+    );
+    if (!r) throw new Error("anonId not minted");
+    return r;
+  };
   const key = ipKey(c.req.header("cf-connecting-ip") ?? "");
   if (!key)
     throw new ApiError("rate_limited", "Anonymous access is unavailable");
-  if (kind === "subscribe")
+  if (kind === "subscribe") {
     await anonLimit(c, `sub:ip:${key}`, "subscriptions");
-  else await anonLimit(c, `ip:${key}`, "writes");
-  return { artifactId, actor: `ip:${key}` };
+    return { artifactId, actor: `ip:${key}`, anon: null };
+  }
+  if (kind === "anonId") {
+    await anonLimit(c, `anonid:ip:${key}`, "requests");
+    return { artifactId, actor: "", anon: await anonId() };
+  }
+  await anonLimit(c, `ip:${key}`, "writes");
+  const anon = await anonId();
+  return { artifactId, actor: `ip:${key}|${anon.short}`, anon };
+}
+
+/** `res` carrying a newly minted anonId token, if the gate minted one. */
+function withAnon(g: Gate, res: Response): Response {
+  if (!g.anon?.issued) return res;
+  const out = new Response(res.body, res);
+  out.headers.set(ANON_ID_HEADER, g.anon.issued);
+  out.headers.set("cache-control", "no-store");
+  return out;
 }
 
 const enc = new TextEncoder();
@@ -180,6 +223,13 @@ const jsonText = (text: string) =>
 const stub = (c: C, g: Gate) => runtimeStub(c.env, g.artifactId);
 
 export function mountRuntime(app: AppType): void {
+  // viewer.anonId() for an anonymous viewer: their per-artifact public id.
+  app.get(ANON_ID, async (c) => {
+    const g = await gate(c, "viewer.anonId", "anonId");
+    if (!g.anon) throw new ApiError("unauthorized", "No anonymous id here");
+    return withAnon(g, c.json({ anonId: g.anon.short }));
+  });
+
   app.get(COL, async (c) => {
     const g = await gate(c, "db.list", "read");
     const p = RUNTIME_PARAMS["db.list"].safeParse({
@@ -192,6 +242,14 @@ export function mountRuntime(app: AppType): void {
     return c.json(
       await runtimeCall(() => stub(c, g).list(collection, cursor, n)),
     );
+  });
+
+  // Same gate as the list route (db.list: access, "db" capability, anonymous
+  // reads on public artifacts); one indexed COUNT(*) in the DO.
+  app.get(COUNT, async (c) => {
+    const g = await gate(c, "db.list", "read");
+    const col = name(c.req.param("col"), "collection");
+    return c.json(await runtimeCall(() => stub(c, g).count(col)));
   });
 
   // A read, but POST: the query is a JSON body.
@@ -226,9 +284,12 @@ export function mountRuntime(app: AppType): void {
       updatedAt,
       updatedBy: publicActor(g.actor),
     }).split('"data":null');
-    return new Response(
-      concat(enc.encode(`${head}"data":`), body, enc.encode(tail ?? "")),
-      { headers: { "content-type": "application/json; charset=UTF-8" } },
+    return withAnon(
+      g,
+      new Response(
+        concat(enc.encode(`${head}"data":`), body, enc.encode(tail ?? "")),
+        { headers: { "content-type": "application/json; charset=UTF-8" } },
+      ),
     );
   });
 
@@ -237,8 +298,11 @@ export function mountRuntime(app: AppType): void {
     const col = name(c.req.param("col"), "collection");
     const id = name(c.req.param("doc"), "document id");
     const body = await rawBody(c);
-    return jsonText(
-      await runtimeCall(() => stub(c, g).updateRaw(col, id, body, g.actor)),
+    return withAnon(
+      g,
+      jsonText(
+        await runtimeCall(() => stub(c, g).updateRaw(col, id, body, g.actor)),
+      ),
     );
   });
 
@@ -247,7 +311,7 @@ export function mountRuntime(app: AppType): void {
     const col = name(c.req.param("col"), "collection");
     const id = name(c.req.param("doc"), "document id");
     await runtimeCall(() => stub(c, g).delete(col, id, g.actor));
-    return c.body(null, 204);
+    return withAnon(g, c.body(null, 204));
   });
 
   // Owner-only atomic replace of all data docs (R.dataReset). The body is capped
@@ -270,7 +334,7 @@ export function mountRuntime(app: AppType): void {
       dataResetLimit(plan),
       dataResetTooLargeMessage(plan),
     );
-    const g = { artifactId, actor: `u:${who.user.id}` };
+    const g: Gate = { artifactId, actor: `u:${who.user.id}`, anon: null };
     return c.json(
       await runtimeCall(() => stub(c, g).replaceRaw(toBuffer(body), g.actor)),
     );

@@ -56,6 +56,22 @@ describe("ops-demo-ops-deploy.yml", () => {
     expect(co.length).toBeGreaterThan(0);
     for (const s of co) expect(s.with?.["persist-credentials"]).toBe(false);
   });
+  it("maps ops/demo/ids.json to the id vars and passes them as --var to the deploy", () => {
+    const run = (s: { run?: string }) => String(s.run ?? "");
+    const iMap = steps.findIndex((s) =>
+      run(s).includes("apps/demo-ops/scripts/vars.ts ops/demo/ids.json"),
+    );
+    const iDeploy = steps.findIndex((s) => run(s).includes("wrangler deploy"));
+    expect(iMap).toBeGreaterThanOrEqual(0);
+    expect(iMap).toBeLessThan(iDeploy);
+    // the mapping step holds no secrets and does not touch wrangler
+    expect(JSON.stringify(steps[iMap])).not.toContain("secrets.");
+    expect(run(steps[iMap])).not.toContain("wrangler");
+    const deploy = run(steps[iDeploy]);
+    expect(deploy).toContain('args+=(--var "$kv")');
+    expect(deploy).toContain('"${args[@]}"');
+    expect(deploy).toContain("wrangler deploy -c ../demo-ops/wrangler.jsonc");
+  });
   it("deploys the demo-ops config", () => {
     expect(text).toContain("../demo-ops/wrangler.jsonc");
     expect(text).toMatch(/wrangler deploy/);

@@ -1,6 +1,7 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
+  DataCountSchema,
   DataDocSchema,
   LIMITS,
   type Member,
@@ -225,7 +226,7 @@ describe("anonymous access", () => {
     expect((await put(id, null, "a", 1)).status).toBe(404);
   });
 
-  it('allowAnonymousWrites: updatedBy "anon" (ip:{ip} rate key); the 31st write per minute → 429', async () => {
+  it('allowAnonymousWrites: updatedBy "anon:{short}" (ip:{ip} rate key); the 31st write per minute → 429', async () => {
     const id = await pub({ visibility: "public", allowAnonymousWrites: true });
     // Deterministic: the DO's minute window is pinned (no rollover mid-test),
     // and the RL_ANON stub counts per key for this test only (no wall clock).
@@ -247,8 +248,8 @@ describe("anonymous access", () => {
       const r = await write(`d${i}`, ip, rl);
       expect(r.status).toBe(200);
       if (i === 0)
-        expect(((await r.json()) as { updatedBy: string }).updatedBy).toBe(
-          "anon",
+        expect(((await r.json()) as { updatedBy: string }).updatedBy).toMatch(
+          /^anon:[A-Za-z0-9_-]{8}$/,
         );
     }
     const r = await write("x", ip, rl);
@@ -296,6 +297,76 @@ describe("anonymous access", () => {
       null,
     );
     expect(noIp.status).toBe(429);
+  });
+});
+
+describe("data count", () => {
+  const count = async (id: string, u: U | null, col = "c") => {
+    const r = u
+      ? await api(app, R.dataCount(id, col), u.cookie)
+      : await anon(R.dataCount(id, col));
+    return r.status === 200
+      ? DataCountSchema.parse(await r.json()).count
+      : r.status;
+  };
+
+  it("tracks inserts and deletes; empty collection → 0", async () => {
+    const id = await pub({ visibility: "team" });
+    expect(await count(id, viewer)).toBe(0);
+    for (const d of ["a", "b", "c"]) await put(id, owner, d, { d });
+    await put(id, owner, "a", { d: "again" }); // overwrite, not a new doc
+    expect(await count(id, viewer)).toBe(3);
+    // A doc whose id is "count" stays a doc, and other collections don't count.
+    await put(id, owner, "count", 1);
+    await api(app, R.dataDoc(id, "other", "x"), owner.cookie, {
+      method: "PUT",
+      body: 1,
+    });
+    expect(await count(id, owner)).toBe(4);
+    expect(
+      (await api(app, R.dataDoc(id, "c", "count"), owner.cookie)).status,
+    ).toBe(200);
+    await api(app, R.dataDoc(id, "c", "b"), owner.cookie, {
+      method: "DELETE",
+    });
+    expect(await count(id, owner)).toBe(3);
+    expect(await count(id, owner, "nope")).toBe(0);
+    const r = await api(app, R.dataCount(id, "bad name"), owner.cookie);
+    expect(r.status).toBe(400);
+  });
+
+  it("gated like list: 404 non-viewer, 403 no db, anonymous only on public", async () => {
+    const priv = await pub();
+    expect(await count(priv, guest)).toBe(404);
+    expect(await count(priv, null)).toBe(404);
+    const noDb = await pub({ capabilities: { db: false, storage: true } });
+    const d = await api(app, R.dataCount(noDb, "c"), owner.cookie);
+    expect(d.status).toBe(403);
+    expect((await errOf(d)).code).toBe("capability_denied");
+    const team = await pub({ visibility: "team" });
+    expect(await count(team, null)).toBe(
+      (await anon(R.dataCollection(team, "c"))).status,
+    );
+    const pubId = await pub({ visibility: "public" });
+    await put(pubId, owner, "a", 1);
+    expect((await anon(R.dataCollection(pubId, "c"))).status).toBe(200);
+    expect(await count(pubId, null)).toBe(1);
+  });
+
+  it("uses an index, never the doc bodies", async () => {
+    const id = await pub();
+    await inDo(id, (i) => {
+      const sql = (i as unknown as { ctx: DurableObjectState }).ctx.storage.sql;
+      const plan = sql
+        .exec<{ detail: string }>(
+          "explain query plan select count(*) as n from docs where collection = ?",
+          "c",
+        )
+        .toArray()
+        .map((r) => r.detail)
+        .join("; ");
+      expect(plan).toMatch(/^SEARCH docs USING .*INDEX .*\(collection=\?\)/);
+    });
   });
 });
 

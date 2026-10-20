@@ -2,19 +2,28 @@ import { type ArtifactSummary, type Me, viewerPath } from "@oa/shared";
 import { Button } from "@oa/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  type SyntheticEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { ApiClientError } from "../api/client";
 import { qk, useArtifact, useVersionInfo } from "../api/queries";
 import { useLoginRedirect } from "../auth/redirect";
 import { useMe } from "../auth/useMe";
+import { isEmbed } from "../embed";
 import { useCpuSignals } from "../layout/cpu";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { NotFound } from "../pages/NotFound";
+import { NotPublic } from "../pages/NotPublic";
 import { createBridge } from "./bridge";
 import { Crumbs } from "./Crumbs";
 import { FullScreenEscape } from "./FullScreenEscape";
-import { SANDBOX, safeContentUrl } from "./frame";
+import { frameLoad, SANDBOX, safeContentUrl } from "./frame";
 import { isPanelTab, type PanelTab, SidePanel } from "./panels/SidePanel";
+import { RenavNotice } from "./RenavNotice";
 import { SlowNotice } from "./SlowNotice";
 import { TitleBar } from "./TitleBar";
 import { useArtifactSideEffects } from "./useArtifactSideEffects";
@@ -118,21 +127,46 @@ function Viewer({
     key: 0,
     src: null,
   });
+  // The renavigation notice: the frame left the page we loaded, so its bridge
+  // is gone. Only artifacts with live data lose anything. Each later load in
+  // that frame is another navigation and brings a dismissed notice back.
+  const caps = artifact.capabilities;
+  const live = caps.db || caps.viewer || caps.storage;
+  const renavigated = useRef(false);
+  const [renav, setRenav] = useState(false);
+  const onRenavigated = useCallback(() => {
+    renavigated.current = true;
+    // No bridge, so no hello: the slow notice would be wrong.
+    clearTimeout(slowTimer.current);
+    setSlow(false);
+    setRenav(live);
+  }, [live]);
   const onHello = useCallback(() => {
     helloSeen.current = true;
     clearTimeout(slowTimer.current);
     setSlow(false);
   }, []);
   const contentLoaded = content.onLoad;
-  const onFrameLoad = useCallback(() => {
-    contentLoaded();
-    reloading.current = false;
-    clearTimeout(slowTimer.current);
-    if (helloSeen.current || dismissed.current) return;
-    slowTimer.current = setTimeout(() => {
-      if (!helloSeen.current) setSlow(true);
-    }, SLOW_MS);
-  }, [contentLoaded]);
+  const onFrameLoad = useCallback(
+    (e: SyntheticEvent<HTMLIFrameElement>) => {
+      // No src prop, so a new frame first loads about:blank, before the bridge
+      // calls loadArtifactFrame. That load isn't the artifact: it must neither
+      // freeze the content URL nor arm the slow timer.
+      if (!frameLoad(e.currentTarget)) return;
+      if (renavigated.current) {
+        setRenav(live);
+        return;
+      }
+      contentLoaded();
+      reloading.current = false;
+      clearTimeout(slowTimer.current);
+      if (helloSeen.current || dismissed.current) return;
+      slowTimer.current = setTimeout(() => {
+        if (!helloSeen.current) setSlow(true);
+      }, SLOW_MS);
+    },
+    [contentLoaded, live],
+  );
   useEffect(() => () => clearTimeout(slowTimer.current), []);
   const reload = () => {
     if (reloading.current) return;
@@ -140,6 +174,8 @@ function Viewer({
     helloSeen.current = false;
     clearTimeout(slowTimer.current);
     setSlow(false);
+    renavigated.current = false;
+    setRenav(false);
     setReloads((r) => r + 1);
     const ready = content.fresh()
       ? Promise.resolve(content.current)
@@ -149,10 +185,14 @@ function Viewer({
     );
   };
 
+  // Every intentional load (first load, a refreshed URL before the first load,
+  // Reload) gets a fresh bridge, which loads the frame with a fresh nonce.
+  const src = frame.src ?? url;
   useEffect(() => {
-    if (!el) return;
+    if (!el || !src) return;
     const b = createBridge({
       iframe: el,
+      url: src,
       ...latest.current,
       version,
       formatOf: () => formatRef.current,
@@ -165,16 +205,19 @@ function Viewer({
       // The refetch 404s if access is gone, which the shell then handles.
       onAccessLost: () =>
         void qc.invalidateQueries({ queryKey: qk.artifact(artifact.id) }),
+      onRenavigated,
     });
     bridge.current = b;
     return () => {
       b.dispose();
       bridge.current = null;
     };
-  }, [el, version, qc, artifact.id, onHello]);
+  }, [el, src, version, qc, artifact.id, onHello, onRenavigated]);
 
   useEffect(() => bridge.current?.setTheme(theme), [theme]);
 
+  if ((content.notFound || signedOut) && isEmbed())
+    return <NotPublic id={artifact.id} />;
   if (content.notFound) return <NotFound />;
   if (signedOut) return null;
   return (
@@ -199,6 +242,12 @@ function Viewer({
         ) : null}
         {url && (
           <div className="oa-vmain">
+            {renav && (
+              <RenavNotice
+                onReload={reload}
+                onDismiss={() => setRenav(false)}
+              />
+            )}
             {slow && (
               <SlowNotice
                 cpu={(cpu.hits ?? 0) > 0 || cpu.recent}
@@ -213,11 +262,11 @@ function Viewer({
                 }}
               />
             )}
+            {/* No src prop: the bridge sets it (loadArtifactFrame). */}
             <iframe
               key={frame.key}
               ref={setEl}
               className="oa-vframe"
-              src={frame.src ?? url}
               onLoad={onFrameLoad}
               title={artifact.title}
               sandbox={SANDBOX}
@@ -278,6 +327,9 @@ export function Shell({
     q.data && (authed || q.data.visibility !== "private") ? q.data.title : null,
   );
 
+  // Framed, never a sign-in redirect (useLoginRedirect is inert there).
+  if (isEmbed() && (toLogin || status === 404 || status === 403))
+    return <NotPublic id={id} />;
   if (toLogin) return null;
   if (status === 404 && authed) return <NotFound />;
   if (q.error && !q.data)

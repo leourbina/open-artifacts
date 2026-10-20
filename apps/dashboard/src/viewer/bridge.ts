@@ -1,4 +1,6 @@
 import {
+  ANON_ID_HEADER,
+  AnonViewerSchema,
   type ArtifactSummary,
   type ArtifactToShell,
   DataChangeSchema,
@@ -18,13 +20,18 @@ import {
   type StorageSetBody,
 } from "@oa/shared";
 import type { z } from "zod";
-import { ApiClientError, api } from "../api/client";
+import { ApiClientError, api, type RequestExtra } from "../api/client";
+import { isEmbed } from "../embed";
+import { isAnonToken, loadAnonToken, saveAnonToken } from "./anonId";
+import { frameLoad, loadArtifactFrame } from "./frame";
 
 type Viewer = { email: string; name: string | null };
 type Theme = "light" | "dark";
 
 export interface BridgeOptions {
   iframe: HTMLIFrameElement;
+  /** The content URL: the bridge loads it into `iframe` with a fresh nonce. */
+  url: string;
   artifact: ArtifactSummary;
   version: number;
   /** This version's format; the artifact's own is only the current version's. */
@@ -38,6 +45,8 @@ export interface BridgeOptions {
   onHello?: () => void;
   /** A data subscription was closed with 4403: access was revoked. */
   onAccessLost?: () => void;
+  /** The frame navigated somewhere we didn't send it: the bridge is disposed. */
+  onRenavigated?: () => void;
 }
 
 const BACKOFF_BASE_MS = 1_000;
@@ -81,6 +90,13 @@ const qs = (p: { cursor?: string; limit?: number }) => {
   return s ? `?${s}` : "";
 };
 
+/**
+ * One bridge per intentional frame load. It loads `opts.url` itself (through
+ * loadArtifactFrame, so with a fresh nonce) and accepts a message only if its
+ * source is the frame's window and it carries that nonce. A `load` that isn't
+ * the one it started is a renavigation (by the artifact or anything that can
+ * navigate the frame): the bridge disposes itself and answers nothing more.
+ */
 export function createBridge(opts: BridgeOptions) {
   const {
     iframe,
@@ -92,7 +108,16 @@ export function createBridge(opts: BridgeOptions) {
     onAccessLost,
   } = opts;
   const id = artifact.id; // the only artifact id any route is ever built from
-  const viewer = artifact.capabilities.viewer ? opts.viewer : null;
+  // Framed, the artifact never learns who is viewing, whatever the caller passed.
+  const embed = isEmbed();
+  const viewer = artifact.capabilities.viewer && !embed ? opts.viewer : null;
+  // The anonId header rides only on anonymous calls (viewer null for any
+  // reason: signed out, or embed mode) to artifacts that allow anonymous
+  // writes; never signed in, never into the frame.
+  const anon =
+    (opts.viewer === null || embed) && artifact.allowAnonymousWrites === true;
+  /** The first token-less call that mints (writes, anon-id); others wait so one id is minted. */
+  let minting: Promise<void> | null = null;
   const subs = new Map<string, Sub>();
   let disposed = false;
   let thumbPending = false;
@@ -120,9 +145,10 @@ export function createBridge(opts: BridgeOptions) {
 
   const connect = (col: string, s: Sub) => {
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(
-      `${proto}//${location.host}${R.dataSubscribe(id, col)}`,
-    );
+    // Framed: the server treats the socket as anonymous (its cookie still rides along).
+    const path = R.dataSubscribe(id, col);
+    const hint = isEmbed() ? `${path.includes("?") ? "&" : "?"}embed=1` : "";
+    const ws = new WebSocket(`${proto}//${location.host}${path}${hint}`);
     s.ws = ws;
     ws.onopen = () => {
       s.attempt = 0;
@@ -203,16 +229,51 @@ export function createBridge(opts: BridgeOptions) {
     }
   };
 
+  const anonCall = async <T>(
+    mints: boolean,
+    go: (extra?: RequestExtra) => Promise<T>,
+  ): Promise<T> => {
+    if (!anon) return go();
+    // Re-check after each wait: a failed mint leaves no token, and only one
+    // waiter may become the next minter.
+    if (mints) while (!loadAnonToken() && minting) await minting;
+    const token = loadAnonToken();
+    const p = go({
+      ...(token ? { headers: { [ANON_ID_HEADER]: token } } : {}),
+      onResponse: (res) => {
+        const t = res.headers.get(ANON_ID_HEADER);
+        if (isAnonToken(t)) saveAnonToken(t);
+      },
+    });
+    if (mints && !token && !minting) {
+      const done: Promise<void> = p.then(
+        () => {},
+        () => {},
+      );
+      minting = done.then(() => {
+        minting = null;
+      });
+    }
+    return p;
+  };
+
   // Aborted on dispose so in-flight calls stop and never reply.
   const http = {
     get: <T>(path: string, schema: z.ZodType<T>) =>
-      api.get(path, schema, abort.signal),
+      anonCall(path === R.anonId(id), (x) =>
+        api.get(path, schema, abort.signal, x),
+      ),
     send: <T = void>(
       method: "POST" | "PUT" | "PATCH" | "DELETE",
       path: string,
       body: unknown,
       schema?: z.ZodType<T>,
-    ) => api.send(method, path, body, schema, abort.signal),
+    ) =>
+      // POST is only db.query, a read: writes are PUT/PATCH/DELETE and mint
+      // (bridge.test.ts "write methods" pins this).
+      anonCall(method !== "POST", (x) =>
+        api.send(method, path, body, schema, abort.signal, x),
+      ),
   };
 
   async function run(
@@ -263,6 +324,11 @@ export function createBridge(opts: BridgeOptions) {
         return null;
       case "viewer.get":
         return viewer;
+      case "viewer.anonId":
+        // Only the per-artifact short id; the signed token stays here.
+        return anon
+          ? (await http.get(R.anonId(id), AnonViewerSchema)).anonId
+          : null;
       case "storage.get": {
         const e = await nullIfNotFound(
           http.get(R.storageKey(id, p.key), StorageEntrySchema),
@@ -328,7 +394,7 @@ export function createBridge(opts: BridgeOptions) {
     if (disposed) return;
     if (e.source !== iframe.contentWindow || e.origin !== "null") return;
     const m = parseArtifactMessage(e.data);
-    if (!m) return;
+    if (!m || m.nonce !== current.nonce) return;
     switch (m.type) {
       case "hello":
         reply({
@@ -367,16 +433,31 @@ export function createBridge(opts: BridgeOptions) {
     }
   };
 
+  const dispose = () => {
+    disposed = true;
+    abort.abort();
+    window.removeEventListener("message", onMessage);
+    iframe.removeEventListener("load", onLoad);
+    for (const s of subs.values()) stop(s);
+    subs.clear();
+  };
+  const onLoad = () => {
+    if (disposed) return;
+    if (frameLoad(iframe) === current && current.expected) {
+      current.expected = false;
+      return;
+    }
+    // Not our src assignment: whatever is in the frame now never had the nonce.
+    dispose();
+    opts.onRenavigated?.();
+  };
+
   window.addEventListener("message", onMessage);
+  iframe.addEventListener("load", onLoad);
+  const current = loadArtifactFrame(iframe, opts.url);
 
   return {
-    dispose() {
-      disposed = true;
-      abort.abort();
-      window.removeEventListener("message", onMessage);
-      for (const s of subs.values()) stop(s);
-      subs.clear();
-    },
+    dispose,
     requestThumbnail(): boolean {
       if (disposed) return false;
       thumbPending = true;

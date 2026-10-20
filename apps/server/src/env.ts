@@ -32,6 +32,22 @@ export interface Env {
    * missing or deleted leaves "/" unchanged.
    */
   PUBLIC_HOME?: string;
+  /**
+   * Anonymous writes per IP per artifact per minute, enforced in the DO
+   * (anonWritesPerMin: 1..600, default LIMITS.anonWritesPerMinPerIp). The
+   * RL_ANON binding's own per-IP limit (wrangler `ratelimits`) applies first.
+   */
+  ANON_WRITES_PER_MIN?: string;
+  /**
+   * Per-doc data limit in bytes (dataLimits; empty or unset: the plan's
+   * default). Clamped to 256 KB on Free, 1920 KB on Paid.
+   */
+  DATA_DOC_BYTES?: string;
+  /**
+   * Data/storage writes per artifact per UTC day (dataLimits; empty or unset:
+   * 10,000). Clamped to 10,000 on Free, 1,000,000 on Paid.
+   */
+  DATA_DAILY_WRITES?: string;
   // vars
   APP_HOST: string;
   CONTENT_HOST: string;
@@ -39,6 +55,17 @@ export interface Env {
   ENVIRONMENT: "dev" | "production";
   ACCESS_TEAM_DOMAIN: string;
   ACCESS_CLIENT_ID: string;
+  /**
+   * Space-separated https origins allowed to frame /a/:id/full (and the
+   * content host beneath it); unset/empty = none. Validated in http/embed.ts.
+   */
+  EMBED_ORIGINS?: string;
+  /**
+   * "1" keeps EMBED_ORIGINS entries that are same-site with APP_HOST (they
+   * get Lax cookies in the frame); anything else drops them. Set it only once
+   * the client embed mode is deployed.
+   */
+  EMBED_ALLOW_SAME_SITE?: string;
   /** Sender for invite/share emails (an onboarded Email Service domain). */
   EMAIL_FROM?: string;
   // secrets

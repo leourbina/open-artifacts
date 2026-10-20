@@ -3,10 +3,14 @@ import { ContentUrlSchema, type Member, newId, R } from "@oa/shared";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import {
+  CAPTURE_HEADER,
   publicPrefix,
+  signCapture,
   signContentPrefix,
+  signDownload,
   verifyContentPrefix,
 } from "../src/content/signing.js";
+import { appOrigin } from "../src/http/errors.js";
 import { patch, publish, softDelete } from "../src/services/artifacts.js";
 import { getUser } from "../src/services/users.js";
 import {
@@ -382,6 +386,190 @@ describe("content host serving", () => {
     ]) {
       const r = await call(p, { headers: { cookie: owner.cookie } });
       expect(r.headers.get("set-cookie"), p).toBeNull();
+    }
+  });
+});
+
+describe("no top-level rendering (#292)", () => {
+  const dest = (d: string) => ({
+    headers: { "sec-fetch-dest": d, "sec-fetch-mode": "navigate" },
+  });
+  const APP_URL = appOrigin(env);
+  const twoVersions = async () => {
+    const id = await pubSite();
+    await publish(
+      env,
+      owner.member,
+      { id, format: "html", content: "<p>v2</p>" } as never,
+      null,
+      undefined,
+      "version",
+    );
+    return id;
+  };
+
+  it("a framed load (and in-frame navigation) is served", async () => {
+    const id = await pubSite();
+    const prefix = await signContentPrefix(env, id, 1);
+    for (const p of ["__view", "index.html", "sub/a%20b.txt"]) {
+      const r = await call(`${prefix}${p}`, dest("iframe"));
+      expect(r.status, p).toBe(200);
+      expect(r.headers.get("vary")).toBe(`Sec-Fetch-Dest, ${CAPTURE_HEADER}`);
+      expect(r.headers.get("content-security-policy")).toContain(
+        `frame-ancestors ${APP_URL}`,
+      );
+    }
+  });
+
+  it("a top-level visit redirects: current → /full, an older version → /v/<n>", async () => {
+    const id = await twoVersions();
+    for (const p of ["__view", "index.html", "style.css", "nope.txt"]) {
+      const latest = await call(
+        `${await signContentPrefix(env, id, 2)}${p}`,
+        dest("document"),
+      );
+      expect(latest.status, p).toBe(303);
+      expect(latest.headers.get("location")).toBe(`${APP_URL}/a/${id}/full`);
+      expect(latest.headers.get("cache-control")).toBe("no-store");
+      expect(latest.headers.get("content-disposition")).toBeNull();
+      expect(await latest.text()).toBe("");
+      const old = await call(
+        `${await signContentPrefix(env, id, 1)}${p}`,
+        dest("document"),
+      );
+      expect(old.status, p).toBe(303);
+      expect(old.headers.get("location")).toBe(`${APP_URL}/a/${id}/v/1`);
+      expect(await old.text()).toBe("");
+    }
+    // Public /p/ too; a private artifact still 404s (no existence leak).
+    expect(
+      (await call(`${publicPrefix(id, 2)}__view`, dest("document"))).status,
+    ).toBe(404);
+    await patch(env, owner.member, id, { visibility: "public" });
+    const pub = await call(`${publicPrefix(id, 2)}__view`, dest("document"));
+    expect(pub.status).toBe(303);
+    expect(pub.headers.get("location")).toBe(`${APP_URL}/a/${id}/full`);
+  });
+
+  it("no redirect before the token and the artifact check out", async () => {
+    const id = await pubSite();
+    const prefix = await signContentPrefix(env, id, 1);
+    const tampered = prefix.replace(/\/c\/(\d+)\./, (_, e) => `/c/${+e + 1}.`);
+    for (const p of [
+      `${tampered}__view`,
+      `${prefix.replace(id, "A".repeat(16))}__view`,
+      `/c/x/${id}/v1/__view`,
+      "/c/1.x/..%2F..%2Fevil.com/v1/__view",
+      "/p/%2F%2Fevil.com/v1/__view",
+    ]) {
+      const r = await call(p, dest("document"));
+      expect(r.status, p).toBe(404);
+      expect(r.headers.get("location"), p).toBeNull();
+    }
+  });
+
+  it("sub-resources and fetches load", async () => {
+    const id = await pubSite();
+    const prefix = await signContentPrefix(env, id, 1);
+    for (const d of ["script", "style", "image", "font", "empty", "worker"]) {
+      const r = await call(`${prefix}style.css`, {
+        headers: { "sec-fetch-dest": d, "sec-fetch-mode": "no-cors" },
+      });
+      expect(r.status, d).toBe(200);
+      expect(await r.text()).toBe("body{color:red}");
+    }
+  });
+
+  it("no Sec-Fetch headers (agents, curl) → 200", async () => {
+    const id = await pubSite();
+    const prefix = await signContentPrefix(env, id, 1);
+    const r = await call(`${prefix}index.html`);
+    expect(r.status).toBe(200);
+    expect(await r.text()).toContain("hi");
+  });
+
+  it("a signed download (dl=1) is served top level as an attachment", async () => {
+    const id = await pubSite();
+    const { path } = await signDownload(env, id, 1, "index.html");
+    expect(path).toMatch(/\?dl=1$/);
+    const r = await call(path, dest("document"));
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-disposition")).toBe(
+      `attachment; filename="index.html"; filename*=UTF-8''index.html`,
+    );
+    const body = await r.text();
+    // The stored bytes: no runtime injected.
+    expect(body).not.toContain(RUNTIME_TAG);
+    expect(body).toContain('href="style.css"');
+    const sp = await signDownload(env, id, 1, "sub/a b.txt");
+    const s = await call(sp.path, dest("document"));
+    expect(s.status).toBe(200);
+    expect(s.headers.get("content-disposition")).toContain(
+      "filename*=UTF-8''a%20b.txt",
+    );
+    expect(await s.text()).toBe("spaced");
+  });
+
+  it("a tampered dl param is rejected", async () => {
+    const id = await pubSite({ visibility: "public" });
+    const frame = await signContentPrefix(env, id, 1);
+    const { path: dl } = await signDownload(env, id, 1, "index.html");
+    const tampered = [
+      `${frame}index.html?dl=1`, // dl added to a frame token
+      dl.replace("?dl=1", "?dl=0"),
+      dl.replace("?dl=1", "?dl=true"),
+      `${dl}&dl=1`,
+      dl.replace("/v1/", "/v2/"),
+      `${dl.replace("index.html?dl=1", "__view")}?dl=1`,
+      `${publicPrefix(id, 1)}index.html?dl=1`, // unsigned
+    ];
+    for (const p of tampered) {
+      for (const init of [dest("document"), undefined]) {
+        const r = await call(p, init);
+        expect(r.status, p).toBe(404);
+        expect(r.headers.get("content-disposition"), p).toBeNull();
+      }
+    }
+    // dl dropped from a dl token: the signature no longer matches either way.
+    const dropped = dl.replace("?dl=1", "");
+    expect((await call(dropped)).status).toBe(404);
+    expect((await call(dropped, dest("document"))).status).toBe(404);
+  });
+
+  it("only a valid capture header renders top level (thumbnails)", async () => {
+    const id = await twoVersions();
+    const prefix = await signContentPrefix(env, id, 1);
+    const top = (h?: string) =>
+      call(`${prefix}__view`, {
+        headers: {
+          "sec-fetch-dest": "document",
+          ...(h === undefined ? {} : { [CAPTURE_HEADER]: h }),
+        },
+      });
+    // The URL alone redirects.
+    expect((await top()).status).toBe(303);
+    const good = await signCapture(env, id, 1);
+    const r = await top(good);
+    expect(r.status).toBe(200);
+    expect(r.headers.get("cache-control")).toBe("no-store");
+    expect(r.headers.get("vary")).toContain(CAPTURE_HEADER);
+    expect(await r.text()).toContain(RUNTIME_TAG);
+    const [exp, sig] = good.split(".") as [string, string];
+    const flip = (s: string) => (s[0] === "A" ? "B" : "A") + s.slice(1);
+    for (const bad of [
+      `${exp}.${flip(sig)}`, // wrong MAC
+      `${+exp + 1}.${sig}`, // exp altered
+      await signCapture(env, id, 2), // wrong v
+      await signCapture(env, "A".repeat(16), 1), // wrong id
+      await signCapture(env, id, 1, Date.now() - 120_000), // expired
+      await signCapture(env, id, 1, Date.now() + 600_000), // far future
+      // A URL token isn't a capture header.
+      (prefix.split("/")[2] ?? "") as string,
+      "",
+    ]) {
+      const b = await top(bad);
+      expect(b.status, bad).toBe(303);
+      expect(await b.text()).toBe("");
     }
   });
 });

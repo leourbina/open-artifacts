@@ -34,7 +34,10 @@ const silentFrame = async (page: Page) => {
     document.addEventListener(
       "load",
       (e) => {
-        if ((e.target as Element).tagName === "IFRAME") w.__frameLoads++;
+        // Only content loads: a new frame first loads about:blank (no src
+        // yet), which the viewer ignores and which arms no timer.
+        const t = e.target as Element;
+        if (t.tagName === "IFRAME" && t.getAttribute("src")) w.__frameLoads++;
       },
       true,
     );

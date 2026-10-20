@@ -4,7 +4,7 @@ import {
   TokenCreatedSchema,
   TokenCreateInputSchema,
 } from "@oa/shared";
-import { Button, Dialog, Input } from "@oa/ui";
+import { Button, Dialog, Input, Kbd } from "@oa/ui";
 import {
   Button as ShButton,
   Input as ShInput,
@@ -28,7 +28,7 @@ import {
 import { useMe } from "../auth/useMe";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { relativeTime } from "../library/time";
-import { snippets } from "./snippets";
+import { saveTokenCommand, snippets, tokenFile } from "./snippets";
 import {
   Code,
   CodeBlock,
@@ -42,8 +42,9 @@ import {
 
 const when = (iso: string) => relativeTime(iso) || "Unknown";
 
-/** Agent picker over one variant's snippets. The pick survives a variant
-    switch when that agent has a snippet there too. */
+/** Agent picker over one variant's snippets. Both variants show the same
+    agents, so the pick survives a variant switch; an agent without a token
+    form (Cursor) gets a note instead. */
 function SnippetTabs({
   mcpUrl,
   variant,
@@ -51,7 +52,13 @@ function SnippetTabs({
   mcpUrl: string;
   variant: "oauth" | "token";
 }) {
-  const list = snippets(mcpUrl).filter((s) => s.variant === variant);
+  const all = snippets(mcpUrl, { tokenFile: tokenFile() });
+  const list = all
+    .filter((s) => s.variant === "oauth")
+    .map(({ agent }) => ({
+      agent,
+      s: all.find((s) => s.variant === variant && s.agent === agent),
+    }));
   const [picked, setPicked] = useState(list[0]?.agent);
   // Values are indexes: Radix builds element ids from them, and agent names
   // have spaces.
@@ -82,28 +89,41 @@ function SnippetTabs({
         variant="line"
         className="h-[34px] w-full justify-start gap-[var(--oa-space-4)] overflow-x-auto rounded-none p-0 shadow-[inset_0_-1px_0_var(--color-border)] [scrollbar-width:none]"
       >
-        {list.map((s, i) => (
+        {list.map(({ agent }, i) => (
           <TabsTrigger
-            key={s.agent}
+            key={agent}
             value={String(i)}
             className="h-full flex-none px-0 text-[length:var(--oa-text-sm)] group-data-[orientation=horizontal]/tabs:after:bottom-0 group-data-[orientation=horizontal]/tabs:after:h-[2px] focus-visible:outline-offset-[-2px]"
           >
-            {s.agent}
+            {agent}
           </TabsTrigger>
         ))}
       </TabsList>
-      {list.map((s, i) => (
+      {list.map(({ agent, s }, i) => (
         <TabsContent
-          key={s.agent}
+          key={agent}
           value={String(i)}
           className="grid min-w-0 gap-[var(--oa-space-2)] data-[state=inactive]:hidden"
         >
-          {s.hint && <p className={muted}>{s.hint}</p>}
-          {s.file && <p className={muted}>{s.file}</p>}
-          <Code
-            code={s.code}
-            label={s.language === "bash" ? "Copy command" : "Copy config"}
-          />
+          {!s ? (
+            <p className={muted}>
+              {agent} signs in with OAuth, so it doesn't need a token.
+            </p>
+          ) : (
+            <>
+              {s.hint && <p className={muted}>{s.hint}</p>}
+              {s.file && <p className={muted}>{s.file}</p>}
+              {s.language === "text" ? (
+                <p className="text-[length:var(--oa-text-sm)]">{s.code}</p>
+              ) : (
+                <Code
+                  code={s.code}
+                  label={s.language === "bash" ? "Copy command" : "Copy config"}
+                  wrap={variant === "token"}
+                />
+              )}
+            </>
+          )}
         </TabsContent>
       ))}
     </Tabs>
@@ -309,8 +329,16 @@ function CreateDialog({ onClose }: { onClose: () => void }) {
           {mcpUrl && (
             <>
               <p className={muted}>
-                Snippets read the token from OA_TOKEN. In your shell, run{" "}
-                <code>read -rs OA_TOKEN; export OA_TOKEN</code> and paste it.
+                Save this token to a file so your agent can use it without it
+                ever appearing in chat. Copy the token above, run this line in a
+                terminal, and paste the token when asked. The input stays
+                hidden. In Claude Code, type <Kbd>!</Kbd> and a space, then
+                paste the line.
+              </p>
+              <Code code={saveTokenCommand()} label="Copy save command" wrap />
+              <p className={muted}>
+                Then set up your client below. Never paste the token into chat
+                or into a config file.
               </p>
               <SnippetTabs mcpUrl={mcpUrl} variant="token" />
             </>

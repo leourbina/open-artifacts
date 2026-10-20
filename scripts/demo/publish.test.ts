@@ -515,6 +515,91 @@ describe("run: publishing", () => {
     expect(JSON.parse(g2?.body as string).message).not.toBe(g.message);
   });
 
+  describe("{{origin}}", () => {
+    const pub = async (
+      files: Record<string, string>,
+      baseUrl: string,
+      seed?: unknown,
+    ) => {
+      const fx = fixture({
+        ids: { poll: POLL },
+        slugs: {
+          poll: {
+            files,
+            seed,
+            manifest: manifest({ description: "see {{origin}}" }),
+          },
+        },
+      });
+      const s = server();
+      await exec(fx, s, { baseUrl });
+      return JSON.parse(publishes(s.reqs)[0]?.body as string);
+    };
+    it("is replaced in index.html and other text files", async () => {
+      const b = await pub(
+        {
+          "index.html": "<a href='{{origin}}/x'>{{origin}}</a>",
+          "app.js": "const o='{{origin}}';",
+        },
+        "https://demo.example.test",
+      );
+      expect(b.files["index.html"]).toBe(
+        "<a href='https://demo.example.test/x'>https://demo.example.test</a>",
+      );
+      expect(b.files["app.js"]).toBe("const o='https://demo.example.test';");
+    });
+    it("is not replaced in manifest.json (settings) or seeds", async () => {
+      const b = await pub(
+        { "index.html": "<p>{{origin}}</p>" },
+        "https://demo.example.test",
+        { collections: { c: { d: { u: "{{origin}}" } } } },
+      );
+      expect(b.description).toBe("see {{origin}}");
+      expect(b.files["manifest.json"]).toBeUndefined();
+      const seeds = buildSeed(
+        fixture({
+          ids: { poll: POLL },
+          slugs: {
+            poll: { seed: { collections: { c: { d: { u: "{{origin}}" } } } } },
+          },
+        }).dir,
+      );
+      expect(JSON.stringify(seeds)).toContain("{{origin}}");
+    });
+    it("normalizes a base url with a path or trailing slash", async () => {
+      for (const base of [
+        "https://demo.example.test/",
+        "https://demo.example.test/a/b?x=1",
+      ]) {
+        const b = await pub({ "index.html": "{{origin}}|" }, base);
+        expect(b.files["index.html"]).toBe("https://demo.example.test|");
+      }
+    });
+    it("only matches the exact spelling", async () => {
+      const b = await pub(
+        { "index.html": "{{ origin }} {{Origin}} {{origin }}" },
+        "https://demo.example.test",
+      );
+      expect(b.files["index.html"]).toBe("{{ origin }} {{Origin}} {{origin }}");
+    });
+    it("changes the content hash when the origin changes", async () => {
+      const a = await pub(
+        { "index.html": "{{origin}}" },
+        "https://a.example.test",
+      );
+      const c = await pub(
+        { "index.html": "{{origin}}" },
+        "https://b.example.test",
+      );
+      expect(a.message).not.toBe(c.message);
+      const a2 = await pub(
+        { "index.html": "{{origin}}" },
+        "https://a.example.test/",
+      );
+      expect(a2.message).toBe(a.message);
+    });
+  });
+
   it("uploads large files and references them by uploadId", async () => {
     const big = Buffer.alloc(200 * 1024, 97);
     const fx = fixture({

@@ -14,7 +14,7 @@ import worker from "../src/index.js";
 import { mountRoutes } from "../src/routes/index.js";
 
 const CSP =
-  "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; frame-ancestors http://app.localhost";
+  "sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads; frame-ancestors http://app.localhost";
 let assetCalls: string[] = [];
 const ASSETS = {
   fetch(req: Request) {
@@ -184,7 +184,7 @@ describe("toErrorResponse mapping", () => {
 describe("securityHeaders immutability", () => {
   it("handles immutable headers (redirect)", async () => {
     const app = new Hono();
-    app.use(securityHeaders({ frameDeny: true }));
+    app.use(securityHeaders());
     app.get("/r", () => Response.redirect("http://x.test/", 302));
     const res = await app.request("/r");
     expect(res.status).toBe(302);

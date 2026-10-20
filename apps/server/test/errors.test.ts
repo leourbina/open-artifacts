@@ -80,7 +80,7 @@ describe("errors", () => {
 describe("headers on thrown errors", () => {
   it("securityHeaders survive onError", async () => {
     const app = new Hono();
-    app.use(securityHeaders({ frameDeny: true }));
+    app.use(securityHeaders());
     app.onError((err) => toErrorResponse(err));
     app.get("/x", () => {
       throw new Error("boom");

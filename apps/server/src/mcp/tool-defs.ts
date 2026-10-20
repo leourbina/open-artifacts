@@ -49,7 +49,7 @@ export const TOOL_DEFS = [
     inputSchema: GetArtifactInputSchema,
     example: { id: ID, path: "index.html" },
     description:
-      "Read an artifact's metadata and one version (latest by default). Returns a file's text inline when it is text and at most 1 MB; otherwise a short-lived downloadUrl.",
+      "Read an artifact's metadata and one version (latest by default). Returns a file's text inline when it is text and at most 1 MB; otherwise a short-lived downloadUrl. Download URLs expire after 10 minutes; call get_artifact again for a fresh one.",
   },
   {
     name: "list_artifacts",

@@ -515,6 +515,22 @@ describe("release-please", () => {
     const gate = wf("release-please.yml").jobs["deploy-landing"].steps;
     expect(JSON.stringify(gate)).toContain("steps.gate.outputs.present");
   });
+  it("release-please job queues back-to-back pushes; no other job is serialized behind it", () => {
+    const w = wf("release-please.yml");
+    expect(w.jobs["release-please"].concurrency).toEqual({
+      group: "release-please",
+      "cancel-in-progress": false,
+    });
+    expect(w.concurrency).toBeUndefined();
+    for (const [name, job] of Object.entries(w.jobs))
+      if (name !== "release-please")
+        expect(
+          // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
+          JSON.stringify((job as any).concurrency ?? {}),
+          name,
+        ).not.toContain('"release-please"');
+  });
+
   it("release-please opens its PR with the release App token, so CI runs on it", () => {
     // PRs and pushes made with GITHUB_TOKEN trigger no workflows; an App token's do.
     const steps = wf("release-please.yml").jobs["release-please"].steps;
@@ -953,6 +969,128 @@ describe("workflow jobs that use repo files have a checkout", () => {
   }
 });
 
+describe("release cadence", () => {
+  const w = wf("release-cadence.yml");
+  // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
+  type Step = any;
+  const job = w.jobs.cadence;
+  const steps: Step[] = job.steps;
+
+  it("runs every 15 minutes, on dispatch, and after release-please and CI (no check_suite)", () => {
+    expect(w.on.schedule).toEqual([{ cron: "*/15 * * * *" }]);
+    expect(triggers(w).sort()).toEqual(
+      ["schedule", "workflow_dispatch", "workflow_run"].sort(),
+    );
+    expect(w.on.workflow_run.workflows).toEqual(["release-please", "CI"]);
+    expect(w.on.workflow_run.types).toEqual(["completed"]);
+    expect(w.concurrency.group).toBe("release-cadence");
+  });
+
+  it("checks out the default branch only, without persisting credentials", () => {
+    const co = steps.filter((s) =>
+      String(s.uses).startsWith("actions/checkout@"),
+    );
+    expect(co).toHaveLength(1);
+    expect(co[0].with["persist-credentials"]).toBe(false);
+    expect(co[0].with?.ref).toBeUndefined();
+  });
+
+  it("mints a narrowly scoped App token only in a conditional step before arming", () => {
+    const app = steps.find((s) => s.id === "app");
+    expect(String(app.if)).toContain("steps.plan.outputs.write == 'true'");
+    expect(
+      Object.fromEntries(
+        Object.entries(app.with).filter(([k]) => k.startsWith("permission-")),
+      ),
+    ).toEqual({
+      "permission-pull-requests": "write",
+      "permission-contents": "write",
+    });
+    const i = steps.indexOf(app);
+    expect(steps[i + 1].name).toBe("arm");
+    expect(String(steps[i + 1].if)).toContain(
+      "steps.plan.outputs.write == 'true'",
+    );
+    const plan = steps.find((s) => s.id === "plan");
+    expect(steps.indexOf(plan)).toBeLessThan(i);
+    expect(plan.run).toContain("release-cadence.ts plan");
+    expect(plan.run).toContain("$GITHUB_OUTPUT");
+    expect(JSON.stringify(plan)).not.toContain("steps.app");
+  });
+
+  it("uses the App token only in the arm step", () => {
+    const withSecrets = steps.filter((s) =>
+      /secrets\.RELEASE_APP/.test(JSON.stringify(s)),
+    );
+    expect(withSecrets).toHaveLength(1);
+    expect(String(withSecrets[0].uses)).toMatch(
+      /^actions\/create-github-app-token@/,
+    );
+    expect(withSecrets[0].id).toBe("app");
+    const usesToken = steps.filter((s) =>
+      JSON.stringify(s).includes("steps.app.outputs.token"),
+    );
+    expect(usesToken.map((s) => s.name)).toEqual(["arm"]);
+    expect(usesToken[0].run).toContain("release-cadence.ts arm");
+    // the blocker step runs with GITHUB_TOKEN, and no other secret is read
+    const blocker = steps.find((s) => s.name === "blocker");
+    expect(blocker.env.GH_TOKEN).toMatch(/^\$\{\{ github\.token \}\}$/);
+    expect(JSON.stringify(w)).not.toMatch(
+      /secrets\.(?!RELEASE_APP_ID|RELEASE_APP_PRIVATE_KEY)/,
+    );
+  });
+
+  it("has minimal permissions: none by default, and only issues are writable", () => {
+    expect(w.permissions).toEqual({});
+    const p = job.permissions as Record<string, string>;
+    expect(Object.entries(p).filter(([, v]) => v === "write")).toEqual([
+      ["issues", "write"],
+    ]);
+    expect(Object.keys(p).sort()).toEqual([
+      "checks",
+      "contents",
+      "issues",
+      "pull-requests",
+      "statuses",
+    ]);
+    expect(p.contents).toBe("read");
+    expect(p["pull-requests"]).toBe("read");
+  });
+
+  it("takes no input from the event into its commands", () => {
+    for (const s of steps) expect(String(s.run ?? "")).not.toMatch(/\$\{\{/);
+  });
+
+  describe("verify-release in release-please.yml", () => {
+    const rp = wf("release-please.yml");
+    const v = rp.jobs["verify-release"];
+    it("runs after both deploys, only when a release was created", () => {
+      expect([v.needs].flat()).toEqual(
+        expect.arrayContaining(["deploy-prod", "deploy-landing"]),
+      );
+      expect(String(v.if)).toContain(
+        "needs.release-please.outputs.release_created == 'true'",
+      );
+      expect(String(v.if)).toContain("always()");
+    });
+    it("can only write issues, and runs the tested script on the new tag", () => {
+      expect(v.permissions).toEqual({ contents: "read", issues: "write" });
+      // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
+      const run = v.steps.find((s: any) =>
+        String(s.run ?? "").includes("verify-release.ts"),
+      );
+      expect(run.run).toContain("--tag");
+      expect(JSON.stringify(v)).not.toMatch(/secrets\./);
+      expect(v.steps[0].with.ref).toContain("tag_name");
+    });
+    it("is skipped for pre-release tags", () => {
+      expect(String(v.if)).toMatch(
+        /!contains\(needs\.release-please\.outputs\.tag_name, '-'\)/,
+      );
+    });
+  });
+});
+
 describe("demo instance workflows", () => {
   const dir = join(root, ".github/workflows");
   const CF = ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"];
@@ -1123,7 +1261,29 @@ describe("demo instance workflows", () => {
         "deploy-demo",
       );
     });
-    // TODO: once ci/release-cadence merges, assert verify-release `needs` deploy-demo.
+    it("verify-release waits for it, tolerates it being skipped, and checks the demo only when enabled", () => {
+      const v = rp.jobs["verify-release"];
+      expect([v.needs].flat()).toEqual(
+        expect.arrayContaining([
+          "deploy-prod",
+          "deploy-landing",
+          "deploy-demo",
+        ]),
+      );
+      expect(String(v.if)).toContain("always()");
+      // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
+      const runs = v.steps.filter((s: any) =>
+        String(s.run ?? "").includes("verify-release.ts"),
+      );
+      // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
+      const withDemo = runs.filter((s: any) => s.run.includes("--demo-url"));
+      expect(withDemo).toHaveLength(1);
+      expect(withDemo[0].run).toContain("https://demo.open-artifacts.com");
+      expect(String(withDemo[0].if)).toContain("vars.DEMO_ENABLED == 'true'");
+      // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
+      const without = runs.find((s: any) => !s.run.includes("--demo-url"));
+      expect(String(without.if)).toContain("vars.DEMO_ENABLED != 'true'");
+    });
   });
 
   describe("checkouts in demo workflows", () => {
