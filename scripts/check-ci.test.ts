@@ -641,6 +641,28 @@ describe("ops-staging-access.yml", () => {
   });
 });
 
+describe("ops-staging-token-id.yml", () => {
+  const w = wf("ops-staging-token-id.yml");
+  const raw = read(".github/workflows/ops-staging-token-id.yml");
+  it("is workflow_dispatch only and runs on main", () => {
+    expect(triggers(w)).toEqual(["workflow_dispatch"]);
+    expect(w.jobs.id.if).toBe("github.ref == 'refs/heads/main'");
+  });
+  it("serializes with other staging ops and times out", () => {
+    expect(w.concurrency).toEqual({
+      group: "staging",
+      "cancel-in-progress": false,
+    });
+    expect(w.jobs.id["timeout-minutes"]).toBeLessThanOrEqual(5);
+  });
+  it("passes the staging token only to the tested script step", () => {
+    expect(raw).toContain("scripts/ops/staging-token-id.sh");
+    expect(w.jobs.id.env).toBeUndefined();
+    expect(raw.match(/secrets\./g)).toHaveLength(1);
+    expect(raw).toContain("secrets.CLOUDFLARE_API_TOKEN");
+  });
+});
+
 describe("ops-staging-access.yml hardening", () => {
   const w = wf("ops-staging-access.yml");
   it("keeps the Cloudflare token out of job-level env", () => {
@@ -709,6 +731,7 @@ describe("prod and staging tokens never cross", () => {
     for (const f of [
       "deploy-staging.yml",
       "ops-staging-access.yml",
+      "ops-staging-token-id.yml",
       "landing-preview.yml",
     ])
       expect(refs(f), f).not.toContain("PROD_CLOUDFLARE_API_TOKEN");

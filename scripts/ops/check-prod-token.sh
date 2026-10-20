@@ -34,9 +34,9 @@ record() { # name ok detail missing-permission
 }
 
 get /user/tokens/verify
-st=$(jq_ '.result.status')
+st=$(jq_ '.result.status'); tid=$(jq_ '.result.id')
 [ "$code" = 200 ] && [ "$st" = active ] && ok=1 || ok=0
-record "Token: active" "$ok" "status=${st:-?} http=$code" "valid active token"
+record "Token: active" "$ok" "status=${st:-?} id=${tid:-?} http=$code" "valid active token"
 
 get "/zones?name=$ZONE_NAME&account.id=$ID"
 n=$(jq_ '.result | length'); zst=$(jq_ '.result[0].status'); zid=$(jq_ '.result[0].id')
