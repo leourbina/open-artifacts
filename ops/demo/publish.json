@@ -1,3 +1,11 @@
 {
-  "approved": ["poll", "tictactoe", "chess", "pixels", "map", "dashboard", "gallery"]
+  "approved": [
+    "poll",
+    "tictactoe",
+    "chess",
+    "pixels",
+    "map",
+    "dashboard",
+    "gallery"
+  ]
 }
