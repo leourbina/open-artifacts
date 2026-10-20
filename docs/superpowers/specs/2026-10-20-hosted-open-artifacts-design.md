@@ -64,7 +64,7 @@ Six months after launch: **10 paying companies, each actively using it every wee
 ### 4.1 Architecture
 
 - **A control plane** **(my call)** is a separate Worker app, owned by us, on our main domain. It handles signup, billing, provisioning, upgrades, maintenance windows and the customer admin console. It drives the existing `oa:setup` logic (resources, secrets, deploy, healthcheck, selftest), or a library extracted from it, through the Cloudflare API. It does not shell out to a laptop.
-- **Each customer install** is a normal Open Artifacts deploy, at `<company>.<our hosted domain>` by default. A custom domain (`artifacts.company.com`) is a Business-tier feature. **(my call)**
+- **Each customer install** is the normal Open Artifacts Worker deployed as a **user Worker in a Workers for Platforms dispatch namespace** (section 4.8), at `<company>.<our hosted domain>` by default. A custom domain (`artifacts.company.com`) is a Business-tier feature. **(my call)**
 - **Sign-in: direct, no Access** **(user)**. The server is already a generic OIDC client (PKCE), so it signs in straight against:
   - **Google Workspace and Microsoft Entra** through our own multi-tenant "Sign in with Google/Microsoft" apps. Each install accepts only its customer's verified domain (Google `hd`) or tenant id (Entra `tid`), checked on the server against the ID token, never the email alone. No per-customer connection or cost. **(my call)**
   - **Okta and generic SAML through WorkOS, in the Enterprise tier only** **(user: Enterprise, higher prices; my call: WorkOS, from the Clerk vs WorkOS evaluation)**. Directory Sync is always included, not optional. One central auth-broker Worker on the control plane holds the WorkOS API key; installs never do, because that key can read every customer's directory. The broker names the customer's organization on every sign-in. The callback requires an exact match on `organization_id`, `connection_id` and the verified email domain, then hands the install a short-lived signed assertion for that install only. IdP-initiated SAML is turned into a fresh SP-initiated flow. Group sync uses WorkOS Directory Sync's ordered Events API. Suspensions arrive as `state: inactive`, and a deleted directory sends one `dsync.deleted` with no per-user removals; both must revoke access. Buy WorkOS's custom auth domain early so a later exit doesn't force every customer to reconfigure.
@@ -98,7 +98,7 @@ Six months after launch: **10 paying companies, each actively using it every wee
 
 ### 4.4 Upgrades (user: automatic, in a customer-set window)
 
-**(my call)** Releases roll out in waves: our own install, then a canary group, then everyone, each inside its own maintenance window. A failed healthcheck or selftest stops the rollout and rolls back that install, reusing `--rollback`. Urgent security fixes may skip the window, with notice. The control plane shows each install's version and upgrade history. Upgrades never pass `--allow-downgrade`.
+**(my call)** Releases roll out in waves: our own install, then a canary group, then everyone, each inside its own maintenance window. A failed healthcheck or selftest stops the rollout and rolls back that install, reusing the provisioning interface's rollback. Urgent security fixes may skip the window, with notice. The control plane shows each install's version and upgrade history. Upgrades never pass `--allow-downgrade`.
 
 ### 4.5 Pricing (user: tiers, creators pay, viewers free, generous allowance, trial)
 
@@ -136,36 +136,34 @@ Each employee runs the existing migration tool (skill) in their own agent. The a
 - The control plane holds no customer artifact data. Its credentials are scoped to the minimum, and its actions are audited.
 - An independent security review, including the direct sign-in, the WorkOS broker and the one-time-code path, takes place before the first paying customer.
 
-### 4.8 Keep a later move to Workers for Platforms cheap (user: yes)
+### 4.8 Workers for Platforms from day one (user)
 
-Start with the setup code reused as a library: one normal Worker per install, with a ceiling of about 490 customers on the 500-Worker account limit. Plan to move to Workers for Platforms before about 300 customers. These are requirements from the start:
+Every hosted install is a **user Worker in one Workers for Platforms dispatch namespace**, not a normal Worker. **(user)**
 
-1. **Export and import of a whole install**, including Durable Object data (live data and runtime docs). Durable Object storage belongs to the Worker that defines it, so the move to a dispatch namespace is an export and import. Cancellation and backups need this anyway.
-2. **Provisioning behind one interface** (create, upgrade, roll back, delete, export, import an install), with today's per-Worker implementation first and room for a Workers for Platforms one.
-3. **Every resource named by install ID** (Worker, D1, R2, KV, hostnames), never by hand, so routing can be generated.
-4. ~~Verify Durable Objects support in Workers for Platforms.~~ **Checked against the Cloudflare docs on 2026-10-20:**
-   - User Workers in a dispatch namespace support Durable Object bindings, alongside D1, R2 and KV, each attached per Worker for isolation.
-   - **Durable Object transfers across the dispatch-namespace boundary are not supported**: the source and target must both be inside, or both outside, a dispatch namespace. So requirement 1 (export and import) is the only migration path, and it is mandatory.
+**Why** (verified against the Cloudflare docs on 2026-10-20):
+- **Durable Object data can't be transferred** across the dispatch-namespace boundary. Starting with normal Workers would force a per-customer export, import and cutover later; starting here means it never happens.
+- **Normal Workers cap out early.** An account allows 500 Workers and only **250 Cron Triggers**. Each install has a nightly cron (`17 3 * * *`), so the real ceiling would be about 250 customers.
+- **No caps here.** Workers for Platforms has no limit on scripts or Durable Object namespaces. User Workers support Durable Object, D1, R2 and KV bindings, attached per Worker for isolation.
+- **It's cheap:** $25 per month, with 20 million requests and 60 million CPU ms included, and 1,000 user Workers included, then $0.02 each per month. That's about $25 per month at 1,000 customers and about $105 at 5,000.
+- **It fits the code:** the server uses neither of the two features user Workers disable, the Cache API (`caches.default`) and the `cf` object.
 
-5. **No Worker-name assumptions in the app** **(my call)**: the app never relies on its own Worker name, routes, or account-level settings a dispatch namespace lacks. CI runs the e2e suite once inside a dispatch namespace to prove it.
-6. **Rehearse the move** **(my call)**: before about 100 customers, move our own staging install through export, import and cutover, and time it.
+**What gets built** **(my call)**:
+1. **A dispatch Worker** on the hosted domain routes each hostname to that customer's user Worker by install ID. It holds no customer data and does nothing else.
+2. **Custom domains** go through Cloudflare for SaaS custom hostnames on the dispatch Worker's zone: 100 free, then $0.10 each per month.
+3. **A central scheduler** in the control plane runs every install's nightly job (purge and similar) through the dispatch namespace, in place of per-Worker Cron Triggers. The builder confirms whether user Workers can have their own Cron Triggers; the central scheduler is the plan either way.
+4. **Provisioning sits behind one interface** (create, upgrade, roll back, delete, export, import) with two implementations: hosted (Workers for Platforms) and self-hosted (normal Worker, today's `oa:setup`). The app code is identical in both. CI runs the e2e suite in both modes.
+5. **Every resource is named by install ID** (user Worker, D1, R2, KV, hostnames).
+6. **Export and import of a whole install**, including Durable Object data. It's still needed for backups, cancellation, and moving a customer between accounts.
 
-**Workers for Platforms pricing (Cloudflare docs, Oct 2026):**
-
-| Item | Price |
-|---|---|
-| Base | $25 per month |
-| Requests | 20 million included, then $0.30 per million |
-| CPU | 60 million ms included, then $0.02 per million ms |
-| User Workers | 1,000 included, then $0.02 per Worker per month |
-
-That is about $25 per month at 1,000 customers and about $105 at 5,000, on top of the Durable Object, D1, R2 and KV usage we already pay. Cost is not a reason to delay the move; the reason is migration effort. Custom domains on the dispatch Worker use Cloudflare for SaaS custom hostnames: 100 free, then $0.10 each per month.
+**Known limits** **(user Workers)**:
+- Gradual deployments aren't supported, so each customer's upgrade goes to 100% of their traffic at once. That fits the per-customer waves in 4.4.
+- The builder confirms per-customer logs and live tailing (Tail Workers on the dispatch Worker or on each user Worker).
 
 ## 5. Left to the builder
 
 - How the control plane drives provisioning: the Cloudflare API directly, a library extracted from `oa:setup`, Workers for Platforms, or a mix. It must respect the per-customer isolation above.
 - **Group sync uses both (user):** claims at sign-in for day one, plus push or polling sync so that removals and suspensions take effect right away. **Identity providers in order (user): Google Workspace first (FinQore uses it), then Microsoft Entra and Okta as a fast follow.** (my call) Google Workspace has no general-purpose SCIM push to custom apps, so for Google the "sync" half is likely an Admin SDK Directory API poll using a customer-granted read-only scope, with group membership read at sign-in. The builder confirms the exact mechanism. Entra and Okta support SCIM. How the RBAC schema is stored is left to the builder.
-- Verify the Cloudflare limits that cap the customer count. Without Access, the binding limit is **500 Workers per account** (about 490 customers, see 4.8). KV allows 1,000 namespaces. Still to check: D1 databases and R2 buckets per account, and custom hostnames. D1's 10 GB per-database limit caps one install at roughly 100k+ artifacts.
+- Verify the Cloudflare limits that cap the customer count. With Workers for Platforms (4.8) there is no Worker or Cron Trigger cap. KV allows 1,000 namespaces. Still to check: D1 databases and R2 buckets per account, and custom hostnames. D1's 10 GB per-database limit caps one install at roughly 100k+ artifacts.
 - Real prices. A first cost model (`2026-10-20-hosted-research/hosted-cost-model.md`) puts Cloudflare usage at about $0.24, $1.27 and $14.89 per month for small (20 people), medium (100) and large (500) installs. That's an 86 to 96% gross margin at the draft prices once Access seats are gone. Stripe fees and fixed overhead dominate, then Durable Object rows written for heavy live data. Proposed meter: live-data writes, with Team at 250k plus 50k per creator per month and Business at double; overage at $10 per million writes and $0.10 per GB-month.
 - Metering: how storage and live-data operations are counted per install and reported to billing.
 - The admin console's UI (Design gives options and the user picks).
