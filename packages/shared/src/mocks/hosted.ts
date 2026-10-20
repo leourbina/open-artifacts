@@ -88,6 +88,12 @@ export type HostedMockOptions = {
   tier?: Tier | null;
   /** Directory binding mode (default "google"). */
   directory?: DirectoryMode;
+  /** The failing state when unhealthy (default "backoff"). */
+  unhealthyState?:
+    | "backoff"
+    | "auth_failed"
+    | "customer_mismatch"
+    | "scope_missing";
   /** Sync unhealthy for 2 h: banner and tokensUnverified (default false). */
   unhealthy?: boolean;
   /** Extra FEATURES flags beyond the defaults (spaces, content_revocation, usage_off, plus the sync flag). guests_read_only is ignored: it is reported from the sign-in config (on when google or email is enabled). */
@@ -328,7 +334,12 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
             connectedAt: T0,
           },
     healthy: directoryMode === "off" ? null : !o.unhealthy,
-    state: directoryMode === "off" ? "never" : o.unhealthy ? "backoff" : "ok",
+    state:
+      directoryMode === "off"
+        ? "never"
+        : o.unhealthy
+          ? (o.unhealthyState ?? "backoff")
+          : "ok",
     unhealthySince,
     lastSuccessAt: directoryMode === "off" ? null : (unhealthySince ?? iso()),
     lastError: o.unhealthy
@@ -350,6 +361,11 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
           ]
         : [],
   };
+
+  if (sync.lastSuccessAt)
+    sync.staleAt = new Date(
+      Date.parse(sync.lastSuccessAt) + 7 * 24 * 3600_000,
+    ).toISOString();
 
   // ---- derived views --------------------------------------------------------
   const isAdmin = () => me.user.role === "owner" || me.user.role === "admin";
@@ -489,6 +505,9 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
       unhealthySince: sync.unhealthySince,
       banner: unhealthy && isAdmin(),
       tokensUnverified: unhealthy && isAdmin(),
+      state: isAdmin() ? sync.state : null,
+      staleAt: isAdmin() ? sync.staleAt : null,
+      heldSweeps: isAdmin() ? sync.held.length : 0,
     };
     for (const m of members) m.restriction = restrictionOf(m.id);
     const myCap = cap();

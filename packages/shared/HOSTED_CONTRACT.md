@@ -67,7 +67,8 @@ every flag that is on.
 | `RestrictionSchema` | `{ manual, groups: GroupRef[] }` (Member.restriction): restricted if either applies; frozen group restrictions stay in force |
 | `TierSchema` | `trial \| team \| business` (null = self-hosted) |
 | `DirectoryModeSchema` | `off \| google \| frozen` |
-| `InstanceDirectorySchema` | `{ mode, healthy, unhealthySince, banner, tokensUnverified }`. `banner`: unhealthy ≥ 1 h (owner/admin only). `tokensUnverified`: true while unhealthy, since PATs and MCP grants aren't capped at 24 h |
+| `InstanceDirectorySchema` | `{ mode, healthy, unhealthySince, banner, tokensUnverified, state, staleAt, heldSweeps }`. `banner`: unhealthy ≥ 1 h (owner/admin only). `tokensUnverified`: true while unhealthy, since PATs and MCP grants aren't capped at 24 h. `state` (`SyncState`) and `staleAt` (lastSuccessAt + 7 d): owner/admin only, null for others; `heldSweeps`: held sweeps waiting, 0 for non-admins |
+| `SyncStateSchema` | `ok \| backoff \| auth_failed \| customer_mismatch \| scope_missing \| never`. `scope_missing`: a granted scope was revoked (Admin SDK 403 insufficientPermissions); fix copy "reconnect and grant all scopes" |
 | `InstanceSignInSchema` | `{ mode: access \| direct, providers: (access \| google \| email)[] }` |
 | `AuthMethodSchema` | `access \| google \| code \| pat \| oauth \| dev \| test` |
 | `MeAuthSchema` | `{ method, readOnly, cap, expiresAt }` |
@@ -218,7 +219,7 @@ These are the names P2 and P3 use; the contract wins. There is no
 
 `createHandlers({ hosted: true | HostedMockOptions })`, off by default (existing
 FE tests unchanged). Options: `mode`, `providers`, `turnstile`, `tier`,
-`directory`, `unhealthy`, `features` (`guests_read_only` ignored). Store:
+`directory`, `unhealthy`, `unhealthyState`, `features` (`guests_read_only` ignored). Store:
 personal space per member, Engineering (caller manager, allMembersRole viewer,
 "Meeting notes" lives there), Exec (caller viewer, publicLinks off), Clients
 (admin view); groups `gEng01`, `gExec02`, `gSales03`, `gCon04` (restricted

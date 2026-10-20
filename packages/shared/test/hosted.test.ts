@@ -725,3 +725,38 @@ describe("hosted mocks: owners and admins can't be restricted", () => {
     expect(ms.find((m) => m.id === bob)?.restriction).toBeNull();
   });
 });
+
+describe("hosted mocks: sync banner fields", () => {
+  it("admins see state, staleAt and held sweeps", async () => {
+    fresh({ hosted: { unhealthy: true, unhealthyState: "scope_missing" } });
+    const me = Strict.Me.parse(await json(await call("GET", R.me)));
+    const d = me.instance.directory;
+    expect(d).toMatchObject({
+      state: "scope_missing",
+      heldSweeps: 1,
+      banner: true,
+    });
+    const st = Strict.SyncStatus.parse(
+      await json(await call("GET", R.directory)),
+    );
+    expect(st.state).toBe("scope_missing");
+    expect(d?.staleAt).toBe(st.staleAt);
+    expect(
+      Date.parse(d?.staleAt as string) - Date.parse(st.lastSuccessAt as string),
+    ).toBe(7 * 24 * 3600_000);
+  });
+
+  it("members can't read health", async () => {
+    fresh({ hosted: { unhealthy: true } });
+    await call("POST", AUTH.codeRequest, { email: "bob@example.com" });
+    await call("POST", AUTH.codeVerify, { code: HOSTED_MOCK_CODE });
+    const me = Strict.Me.parse(await json(await call("GET", R.me)));
+    expect(me.instance.directory).toMatchObject({
+      state: null,
+      staleAt: null,
+      heldSweeps: 0,
+      banner: false,
+      tokensUnverified: false,
+    });
+  });
+});

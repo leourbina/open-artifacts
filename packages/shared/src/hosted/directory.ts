@@ -2,7 +2,11 @@
 // identities(provider = "google", subject = DirUser.id): no shape carries a
 // users.directory_id. Health comes from the directory binding plus those links.
 import { z } from "zod";
-import { DirectoryModeSchema, GroupRefSchema } from "./core.js";
+import {
+  DirectoryModeSchema,
+  GroupRefSchema,
+  SyncStateSchema,
+} from "./core.js";
 
 /** A Google Directory user as sync reads it. `id` equals the Google sign-in `sub`. */
 export const DirUserSchema = z.object({
@@ -46,8 +50,8 @@ export const SyncStatusSchema = z.object({
   binding: DirectoryBindingSchema.nullable(),
   /** Null when mode is off. */
   healthy: z.boolean().nullable(),
-  /** ok | backoff (429/5xx) | auth_failed (401/invalid_grant) | customer_mismatch | never (no success yet). */
-  state: z.enum(["ok", "backoff", "auth_failed", "customer_mismatch", "never"]),
+  /** SyncStateSchema: ok | backoff | auth_failed | customer_mismatch | scope_missing | never. */
+  state: SyncStateSchema,
   /** First failure of the current outage, else null. */
   unhealthySince: z.string().nullable(),
   lastSuccessAt: z.string().nullable(),
