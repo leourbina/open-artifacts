@@ -37,6 +37,7 @@ export function core(o: Core = {}) {
   const prompts: string[] = [];
   const answers = [...(o.answers ?? [])];
   const sleeps: number[] = [];
+  let clock = 0;
   /** Paths written through writeSecret (0600 files). */
   const secretWrites: string[] = [];
   const deps: Deps = {
@@ -66,7 +67,12 @@ export function core(o: Core = {}) {
     exec:
       o.exec ?? (async () => ({ code: 0, stdout: o.stdout ?? "", stderr: "" })),
     fetch: o.fetch ?? (async () => envelope(null, 500)),
-    sleep: async (ms) => void sleeps.push(ms),
+    // The fake clock advances only by sleeping, so waits are deterministic.
+    now: () => clock,
+    sleep: async (ms) => {
+      sleeps.push(ms);
+      clock += ms;
+    },
   };
   const state = () => JSON.parse(files.get(STATE) ?? "{}");
   return { deps, files, lines, prompts, state, sleeps, secretWrites };

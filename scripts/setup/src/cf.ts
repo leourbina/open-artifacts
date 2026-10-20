@@ -56,6 +56,10 @@ export type Deps = {
   sleep?: (ms: number) => Promise<void>;
   /** Test seam: how long the health checks keep retrying a host that doesn't resolve (default 5 minutes). */
   dnsWaitMs?: number;
+  /** Test seam: Date.now (the DNS wait is wall-clock time). */
+  now?: () => number;
+  /** Test seam: process.platform (picks the DNS cache flush hint). */
+  platform?: string;
   /** Test seam: process.exit. */
   exit?: (code: number) => void;
   /** Env for wrangler children beyond the process env: a deploy token read from a file. */

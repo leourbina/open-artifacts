@@ -10,6 +10,9 @@ const WELCOME = "scripts/setup/welcome.md";
 const DELAYS = [1, 2, 4, 8, 15, 15, 15];
 /** A host that doesn't resolve is retried this long (a fresh record can take minutes). */
 const DNS_WAIT_MS = 5 * 60_000;
+/** After this long without resolving, ask public DNS whether the record is live. */
+const DNS_PROBE_MS = 60_000;
+const DOH_TIMEOUT_MS = 5000;
 const DNS_CODES = new Set(["ENOTFOUND", "EAI_AGAIN"]);
 
 /** undici hides the reason (ENOTFOUND, ECONNREFUSED, ...) in `cause.code`. */
@@ -24,43 +27,80 @@ const ownHost = (ctx: Ctx, host: string) =>
     (h) => host === h || host.endsWith(`.${h}`),
   );
 
-/** Does public DNS (over DoH, through the injected fetch) have an A record for `host`? */
-async function publicHasRecord(
+type Public = "live" | "missing" | "unknown";
+const DOH_LIVE = new Set([1, 28, 5]); // A, AAAA, CNAME
+
+/** One DoH question: live (an A, AAAA or CNAME answer), missing (NODATA or NXDOMAIN) or unknown (SERVFAIL, bad body, timeout). */
+async function ask(
   ctx: Ctx,
   host: string,
-): Promise<boolean | undefined> {
+  type: "A" | "AAAA",
+): Promise<Public> {
   try {
     const res = await ctx.deps.fetch(
-      `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(host)}&type=A`,
-      { headers: { accept: "application/dns-json" } },
+      `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(host)}&type=${type}`,
+      {
+        headers: { accept: "application/dns-json" },
+        signal: AbortSignal.timeout(DOH_TIMEOUT_MS),
+      },
     );
-    if (!res.ok) return undefined;
-    const body = (await res.json()) as { Answer?: unknown[] };
-    return Array.isArray(body.Answer) && body.Answer.length > 0;
+    if (!res.ok) return "unknown";
+    const body = (await res.json()) as {
+      Status?: unknown;
+      Answer?: { type?: unknown }[];
+    };
+    if (body.Status !== 0 && body.Status !== 3) return "unknown";
+    const live =
+      Array.isArray(body.Answer) &&
+      body.Answer.some((a) => DOH_LIVE.has(a?.type as number));
+    return live ? "live" : "missing";
   } catch {
-    return undefined;
+    return "unknown";
   }
 }
 
-/** The host would not resolve for the whole wait: say whose fault it is. */
+/** Does public DNS have a record for `host`? Either family counts. */
+async function publicState(ctx: Ctx, host: string): Promise<Public> {
+  const r = [await ask(ctx, host, "A"), await ask(ctx, host, "AAAA")];
+  if (r.includes("live")) return "live";
+  return r.includes("unknown") ? "unknown" : "missing";
+}
+
+function flushHint(ctx: Ctx): string {
+  const p = ctx.deps.platform ?? process.platform;
+  if (p === "darwin")
+    return "Wait a few minutes or run `sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder` (macOS)";
+  if (p === "linux")
+    return "Wait a few minutes or run `resolvectl flush-caches` (systemd-resolved)";
+  return "Flush your OS DNS cache or wait a few minutes";
+}
+
+const stale = (ctx: Ctx, host: string) =>
+  new NeedInput(
+    `Your machine's DNS cache has a stale miss for ${host}; the record is live. ${flushHint(ctx)}, then rerun.`,
+  );
+
+/** The wait is over: say whose fault it is. */
 async function dnsFailure(
   ctx: Ctx,
   host: string,
   code: string,
 ): Promise<never> {
-  const live = await publicHasRecord(ctx, host);
-  if (live)
-    throw new NeedInput(
-      `Your machine's DNS cache has a stale miss for ${host}; the record is live. Wait a few minutes or run \`sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder\` (macOS), then rerun.`,
-    );
+  const state = await publicState(ctx, host);
+  if (state === "live") throw stale(ctx, host);
   throw new Error(
-    live === false
-      ? `DNS: ${host} has no public A record (${code}); add the missing record, then rerun`
+    state === "missing"
+      ? `DNS: ${host} has no public A, AAAA or CNAME record (${code}); add the missing record, then rerun`
       : `DNS: ${host} does not resolve (${code}) and public DNS could not be checked; wait 2 minutes and rerun`,
   );
 }
 
-/** Fetches until 200, retrying failures with bounded backoff (a host that doesn't resolve gets minutes, then a DNS diagnosis). */
+/**
+ * Fetches until 200, retrying failures with bounded backoff. A host of this
+ * install that doesn't resolve gets up to 5 minutes (wall clock) unless --ci
+ * (no stale local cache there): after 1 minute public DNS is asked, and a live
+ * record stops the wait at once.
+ */
 async function until200(
   ctx: Ctx,
   label: string,
@@ -71,9 +111,11 @@ async function until200(
 ) {
   const sleep =
     ctx.deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const now = ctx.deps.now ?? Date.now;
   const host = new URL(url).hostname;
   const dnsWait = ctx.deps.dnsWaitMs ?? DNS_WAIT_MS;
-  let waited = 0;
+  let dnsSince: number | undefined;
+  let probed = false;
   for (let i = 0; ; i++) {
     let last: string;
     let wrong = false;
@@ -88,15 +130,26 @@ async function until200(
       } else last = `HTTP ${res.status}`;
     } catch (e) {
       const code = causeCode(e);
-      last = code ? `${(e as Error).message} (${code})` : (e as Error).message;
-      if (code && DNS_CODES.has(code) && ownHost(ctx, host)) dns = code;
+      const isDns = code !== undefined && DNS_CODES.has(code);
+      last = !code
+        ? (e as Error).message
+        : isDns
+          ? `${(e as Error).message} (${code} ${(e as { cause?: { hostname?: string } }).cause?.hostname ?? host})`
+          : `${(e as Error).message} (${code})`;
+      if (isDns && !ctx.opts.ci && ownHost(ctx, host)) dns = code;
     }
     let delay = DELAYS[i];
     if (dns) {
-      // Keep going past the normal ~60s: a new record or a stale cache needs minutes.
+      dnsSince ??= now();
+      const elapsed = now() - dnsSince;
+      if (elapsed >= DNS_PROBE_MS && !probed) {
+        probed = true;
+        if ((await publicState(ctx, host)) === "live") throw stale(ctx, host);
+      }
       delay ??= 15;
-      if (waited + delay * 1000 > dnsWait) return dnsFailure(ctx, host, dns);
+      if (elapsed + delay * 1000 > dnsWait) return dnsFailure(ctx, host, dns);
     } else {
+      dnsSince = undefined;
       if (delay === undefined && wrong)
         throw new Error(`${label}: ${shown} answered 200 but ${last}`);
       if (delay === undefined)
@@ -104,7 +157,6 @@ async function until200(
           `${label}: ${shown} not 200 after ~60s (last: ${last})`,
         );
     }
-    waited += delay * 1000;
     await sleep(delay * 1000);
   }
 }
