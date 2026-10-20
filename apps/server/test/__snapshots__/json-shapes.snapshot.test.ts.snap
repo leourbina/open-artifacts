@@ -1,5 +1,7 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`JSON shapes (byte snapshots) > data count: equal to its schema's parse > data count 1`] = `"{"count":2}"`;
+
 exports[`JSON shapes (byte snapshots) > data reset: result, equal to its schema's parse > data reset 1`] = `"{"collections":2,"docs":2,"updatedAt":"<TS>"}"`;
 
 exports[`JSON shapes (byte snapshots) > healthz: public, version last > healthz 1`] = `"{"ok":true,"plan":"free","version":"<VERSION>"}"`;

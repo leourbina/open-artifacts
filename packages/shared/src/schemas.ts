@@ -439,6 +439,10 @@ export const DataDocSchema = z.object({
 });
 export type DataDoc = z.infer<typeof DataDocSchema>;
 
+/** GET R.dataCount response. */
+export const DataCountSchema = z.object({ count: z.number().int() });
+export type DataCount = z.infer<typeof DataCountSchema>;
+
 const DATA_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 const isDataKey = (k: string) => DATA_KEY_RE.test(k) && !FORBIDDEN_KEYS.has(k);
