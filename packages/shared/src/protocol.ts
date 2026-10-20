@@ -112,6 +112,8 @@ export const ArtifactToShellSchema = z.union([
     type: z.literal("resize"),
     height: z.number().finite().min(0).max(100_000),
   }),
+  /** Sent once, on the viewer's first interaction with the artifact. */
+  z.strictObject({ oa: z.literal(1), nonce, type: z.literal("interacted") }),
 ]);
 export type ArtifactToShell = z.infer<typeof ArtifactToShellSchema>;
 
