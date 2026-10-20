@@ -45,6 +45,7 @@ matching row.
 | upload PUT | 8 / 5 | 0.36 |
 | publish `{ uploadId }` | 17 / 5 | 0.52 |
 | data doc write 256 KB (Worker / DO) | - | 0.88 / 0.51 |
+| data reset 500 docs / 1 MB (Worker / DO; DO bar 8 ms) | - | 0.69 / 3.5 |
 | index alarm (DO) | 12 / 12 | 0.53 (64 KB html) |
 
 The 1 KB publish control is the worst staging row while doing almost no
@@ -119,6 +120,15 @@ runner 3× slower than a laptop gets a 3× wider bound. Absolute wall-clock boun
 `<label>: <ms> ms (budget <max>)`, and only `pnpm test:cpu:strict`
 (`CPU_STRICT=1`) asserts them, so a slow or noisy runner shows up in the
 report instead of failing a merge.
+
+## `GET /skill.md`
+
+The skill is pre-rendered at build time (`scripts/emit-skill.ts`, Zod to JSON
+Schema included) into `src/mcp/skill.generated.ts`. A request does one regex
+fill of its `{{tokens}}`, memoized per isolate (host, plan and version are
+fixed per deploy), with no session, D1 or Markdown work.
+`test/skill.cpu.test.ts` asserts a first fill < 1 ms and the memoized route
+< 2 ms end to end. On staging, measure it like `GET /healthz`.
 
 ## How we measure
 

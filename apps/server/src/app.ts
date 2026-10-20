@@ -8,6 +8,7 @@ import {
   securityHeaders,
   session,
 } from "./http/middleware.js";
+import { SKILL_PATH, serveSkill } from "./mcp/skill.js";
 import { type AppType, mountRoutes } from "./routes/index.js";
 import { withInstanceMeta } from "./routes/shell.js";
 import { VERSION } from "./version.gen.js";
@@ -68,10 +69,13 @@ export function createApp(mount: (app: AppType) => void = mountRoutes) {
     c.json({ ok: true, plan: planOf(c.env.PLAN), version: VERSION }),
   );
   app.get("/robots.txt", (c) => c.text(ROBOTS));
+  // Public, outside SESSION_PATHS: no session read, no D1.
+  app.get(SKILL_PATH, serveSkill);
   // Ordering: GET (and HEAD, which Hono routes to GET handlers) match above
   // first; app.all only catches the remaining methods.
   app.all("/healthz", methodNotAllowed);
   app.all("/robots.txt", methodNotAllowed);
+  app.all(SKILL_PATH, methodNotAllowed);
 
   // c.var.user (Bearer PAT wins over the cookie) for Worker routes only, so
   // SPA/asset requests never touch D1 (beyond the shell's instance-name read). Elsewhere caller() sees anonymous.

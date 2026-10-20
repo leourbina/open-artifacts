@@ -61,7 +61,7 @@ export function SlowNotice({
           {AlertIcon}
         </span>
         <div className="min-w-0 flex-1 max-[560px]:basis-[calc(100%-60px)]">
-          <span className="oa-vnotice-text [&_a]:font-medium [&_a]:whitespace-nowrap [&_a]:text-foreground [&_a]:underline-offset-2">
+          <span className="oa-vnotice-text [&_a]:font-medium [&_a]:whitespace-nowrap [&_a]:text-foreground [&_a]:underline [&_a]:underline-offset-2">
             {cpu && paid ? (
               "This request hit Cloudflare's 30-second CPU limit. Try again."
             ) : cpu ? (

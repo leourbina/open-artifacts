@@ -1,3 +1,4 @@
+export * from "./agent-clients.js";
 export * from "./errors.js";
 export * from "./formats.js";
 export * from "./ids.js";
@@ -7,3 +8,4 @@ export * from "./paths.js";
 export * from "./protocol.js";
 export * from "./routes.js";
 export * from "./schemas.js";
+export * from "./secrets.js";

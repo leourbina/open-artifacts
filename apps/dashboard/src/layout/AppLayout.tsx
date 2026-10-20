@@ -138,8 +138,8 @@ function Layout() {
           8px in from the chrome (0 on the sidebar side unless collapsed),
           viewport-tall, and its content (not the panel) scrolls under the
           header. Below 768px it is full-bleed and the page scrolls. */}
-      <div className="relative flex w-full min-w-0 flex-1 flex-col bg-[var(--oa-bg)] md:m-[var(--oa-space-2)] md:ml-0 md:h-[calc(100svh-2*var(--oa-space-2))] md:rounded-[var(--oa-radius-lg)] md:border md:border-solid md:border-[var(--oa-border)] md:peer-data-[state=collapsed]:ml-[var(--oa-space-2)]">
-        <header className="sticky top-0 z-[5] box-border flex h-12 flex-none items-center gap-[10px] border-0 border-b border-solid border-[var(--oa-divider)] bg-[var(--oa-bg)] px-[var(--oa-space-5)] max-md:px-[var(--oa-space-3)] md:static md:rounded-t-[calc(var(--oa-radius-lg)-1px)]">
+      <div className="relative flex w-full min-w-0 flex-1 flex-col bg-[var(--oa-bg)] md:m-[var(--oa-space-2)] md:ml-0 md:h-[calc(100svh-2*var(--oa-space-2))] md:rounded-[var(--oa-radius-lg)] md:border md:border-[var(--oa-border)] md:peer-data-[state=collapsed]:ml-[var(--oa-space-2)]">
+        <header className="sticky top-0 z-[5] flex h-12 flex-none items-center gap-[10px] border-0 border-b border-[var(--oa-divider)] bg-[var(--oa-bg)] px-[var(--oa-space-5)] max-md:px-[var(--oa-space-3)] md:static md:rounded-t-[calc(var(--oa-radius-lg)-1px)]">
           <SidebarTrigger aria-label="Toggle navigation" />
           <TopBar me={me} />
         </header>
