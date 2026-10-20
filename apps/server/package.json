@@ -9,6 +9,7 @@
     "dev": "echo \"@oa/server dev: placeholder\"",
     "test": "pnpm run version:emit && vitest run --exclude \"test/smoke/**\" --passWithNoTests",
     "test:cpu": "pnpm run version:emit && vitest run -c vitest.cpu.config.ts",
+    "test:cpu:strict": "CPU_STRICT=1 pnpm run test:cpu",
     "bench": "pnpm run version:emit && vitest run -c vitest.bench.config.ts",
     "smoke": "pnpm --filter @oa/shared build && vitest run -c vitest.smoke.config.ts --passWithNoTests",
     "typecheck": "pnpm run version:emit && tsc --noEmit -p tsconfig.json"
