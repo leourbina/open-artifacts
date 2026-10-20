@@ -55,6 +55,21 @@ it("viewer sees no edit affordance but keeps data writes", async () => {
   ).toBeNull();
 });
 
+it("self-hosted viewer share (no can, no space): no notice, no access label", async () => {
+  serve({
+    access: "viewer",
+    can: undefined,
+    space: undefined,
+    capabilities: { db: true, viewer: false, storage: true },
+  });
+  mount(`/a/${arts[0].id}`);
+  await screen.findByRole("heading", { name: arts[0].title });
+  expect(
+    screen.queryByText("You can view this, but not change it."),
+  ).toBeNull();
+  expect(screen.queryByText("Viewer")).toBeNull();
+});
+
 it("guest sees the read-only notice when can.dataWrite is false", async () => {
   serve({
     access: "viewer",
