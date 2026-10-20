@@ -654,6 +654,56 @@ describe("anonymous id", () => {
     expect(headerOf(1)).toBe(TOKEN);
   });
 
+  it("after a failed first mint, a burst of writes mints exactly once more", async () => {
+    vi.stubGlobal("localStorage", okStorage);
+    let fail!: (r: Response) => void;
+    fetchMock.mockImplementationOnce(
+      () => new Promise<Response>((r) => (fail = r)),
+    );
+    fetchMock.mockImplementationOnce(async () => withToken(TOKEN));
+    mkAnon(OPT_IN);
+    call("db.set", { collection: "c", id: "d0", data: 0 }, "a");
+    await flush();
+    for (const n of [1, 2, 3])
+      call("db.set", { collection: "c", id: `d${n}`, data: n }, `w${n}`);
+    await flush();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    fail(json({ error: { code: "internal", message: "boom" } }, 500));
+    for (let i = 0; i < 6; i++) await flush();
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    // Only one of the three went token-less (the one mint); the rest carry it.
+    expect([1, 2, 3].map(headerOf).filter((h) => h === null)).toHaveLength(1);
+    expect([1, 2, 3].map(headerOf).filter((h) => h === TOKEN)).toHaveLength(2);
+    expect(resultOf("a")).toMatchObject({ ok: false });
+  });
+
+  it("write methods: db writes are never POST (POST is only db.query)", async () => {
+    vi.stubGlobal("localStorage", okStorage);
+    fetchMock.mockImplementation(async (url: string) =>
+      url.endsWith("/query")
+        ? json({ items: [], nextCursor: null })
+        : json(DOC),
+    );
+    mkAnon(OPT_IN);
+    call("db.set", { collection: "c", id: "d1", data: 1 }, "s");
+    call("db.update", { collection: "c", id: "d1", patch: { x: 1 } }, "u");
+    call("db.delete", { collection: "c", id: "d1" }, "d");
+    call("db.query", { collection: "c", query: {} }, "q");
+    for (let i = 0; i < 4; i++) await flush();
+    const sent = fetchMock.mock.calls
+      .map((c) => `${(c[1] as RequestInit).method} ${c[0]}`)
+      .sort();
+    const doc = R.dataDoc("art1", "c", "d1");
+    expect(sent).toEqual(
+      [
+        `DELETE ${doc}`,
+        `PATCH ${doc}`,
+        `POST ${R.dataQuery("art1", "c")}`,
+        `PUT ${doc}`,
+      ].sort(),
+    );
+  });
+
   it("no header when signed in, even with a stored token", async () => {
     vi.stubGlobal("localStorage", okStorage);
     store.set(ANON_ID_KEY, TOKEN);

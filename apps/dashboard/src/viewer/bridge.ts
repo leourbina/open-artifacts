@@ -216,7 +216,9 @@ export function createBridge(opts: BridgeOptions) {
     go: (extra?: RequestExtra) => Promise<T>,
   ): Promise<T> => {
     if (!anon) return go();
-    if (mints && !loadAnonToken() && minting) await minting;
+    // Re-check after each wait: a failed mint leaves no token, and only one
+    // waiter may become the next minter.
+    if (mints) while (!loadAnonToken() && minting) await minting;
     const token = loadAnonToken();
     const p = go({
       ...(token ? { headers: { [ANON_ID_HEADER]: token } } : {}),
@@ -249,7 +251,8 @@ export function createBridge(opts: BridgeOptions) {
       body: unknown,
       schema?: z.ZodType<T>,
     ) =>
-      // POST is db.query, a read: only writes mint.
+      // POST is only db.query, a read: writes are PUT/PATCH/DELETE and mint
+      // (bridge.test.ts "write methods" pins this).
       anonCall(method !== "POST", (x) =>
         api.send(method, path, body, schema, abort.signal, x),
       ),
