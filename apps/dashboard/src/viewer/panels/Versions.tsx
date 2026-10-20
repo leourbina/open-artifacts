@@ -1,11 +1,12 @@
 import { type ArtifactSummary, diffPath, viewerPath } from "@oa/shared";
-import { Avatar, Button, Dialog, displayName, toast } from "@oa/ui";
+import { Avatar, Button, Dialog, displayName } from "@oa/ui";
 import { Separator, Button as ShButton, Skeleton } from "@oa/ui/shadcn";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useState } from "react";
 import { ApiClientError } from "../../api/client";
 import { useRestoreVersion, useVersionPages } from "../../api/queries";
 import { useSingleFlight } from "../../api/useSingleFlight";
+import { toast } from "../../layout/toast";
 import { AppLink } from "../../library/AppLink";
 import { relativeTime } from "../../library/time";
 import { LINK_BTN, SM } from "../ui";

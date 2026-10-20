@@ -35,43 +35,11 @@
   border: 1px solid var(--oa-divider);
   background: #fff;
 }
-.oa-share,
 .oa-details {
   display: flex;
   flex-direction: column;
   gap: 16px;
   margin-top: 12px;
-}
-.oa-share h3 {
-  margin: 0 0 6px;
-  font-size: var(--oa-text-sm);
-}
-.oa-invite {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.oa-invite input {
-  flex: 1 0 100%;
-}
-.oa-people {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.oa-people li {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.oa-people li > span:nth-child(2) {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .oa-details form > div {
   display: flex;
@@ -98,28 +66,11 @@
   padding: 0;
   list-style: none;
 }
-.oa-share input,
-.oa-share textarea,
 .oa-details input,
 .oa-details textarea {
   box-sizing: border-box;
   width: 100%;
   max-width: 100%;
-}
-.oa-invite {
-  align-items: center;
-}
-.oa-invite input {
-  flex: 1 0 100%;
-}
-.oa-people li > span:nth-child(2) {
-  flex: 1 1 0;
-  min-width: 0;
-  white-space: nowrap;
-}
-.oa-people li > button[role="combobox"] {
-  flex: none;
-  width: 96px;
 }
 .oa-cap {
   display: flex;
@@ -127,33 +78,14 @@
   gap: 2px;
   margin-bottom: 10px;
 }
+/* Under the label text: the checkbox's 16px plus its 8px gap. */
 .oa-cap small {
-  padding-left: 28px;
+  padding-left: calc(16px + var(--oa-space-2));
 }
 
 /* During a file drag the artifact must not see the drop; the upload overlay takes it. */
 .oa-file-drag .oa-vframe {
   pointer-events: none;
-}
-/* #189: toggle, helper text, then an aligned action row. */
-.oa-share .oa-vis-note {
-  margin: 8px 0 0;
-}
-.oa-vis-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 16px;
-}
-/* Keep the segment focus ring inside the toggle's border. */
-.oa-share [role="radiogroup"] [role="radio"]:focus-visible {
-  outline-offset: -2px;
-}
-.oa-share .oa-shared {
-  margin-bottom: 16px;
-}
-.oa-share .oa-shared p {
-  margin: 0 0 8px;
 }
 /* Slow-frame notice: above the frame, never in place of it. */
 .oa-vmain {

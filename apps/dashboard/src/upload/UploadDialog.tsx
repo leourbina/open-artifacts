@@ -1,11 +1,12 @@
 import { normalizePath, viewerPath } from "@oa/shared";
-import { Button, Dialog, Input, Select, Textarea, toast } from "@oa/ui";
+import { Button, Dialog, Input, Select, Textarea } from "@oa/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { ApiClientError } from "../api/client";
 import { qk } from "../api/queries";
 import "./upload.css";
+import { toast } from "../layout/toast";
 import {
   commonFolder,
   defaultEntry,

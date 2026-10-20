@@ -1,5 +1,4 @@
 import type { Me } from "@oa/shared";
-import { toast } from "@oa/ui";
 import {
   Button,
   Card,
@@ -19,6 +18,7 @@ import {
   TOO_LONG,
 } from "../auth/displayName";
 import { useMe } from "../auth/useMe";
+import { toast } from "../layout/toast";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { CARD, INSET } from "./ui";
 
