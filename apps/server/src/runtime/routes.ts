@@ -4,8 +4,8 @@ import {
   CapabilitiesSchema,
   DataNameSchema,
   DataQuerySchema,
-  dataDocLimit,
   dataDocTooLargeMessage,
+  dataLimits,
   dataResetLimit,
   dataResetTooLargeMessage,
   isId,
@@ -39,14 +39,14 @@ const KEY = `${STORAGE}/:key`;
 
 /**
  * Raw write bodies (doc, patch, {value}) are measured as sent, whitespace
- * included: the DO checks the raw bytes against the plan's data-doc limit
+ * included: the DO checks the raw bytes against the instance's data-doc limit
  * without re-serializing (which would cost CPU). So the cap here is the limit
  * itself: over it, 413 with the plan message from Content-Length, before the
  * body is read.
  */
 const readDocBody = (c: C): Promise<Uint8Array> => {
-  const plan = planOf(c.env.PLAN);
-  return readCapped(c, dataDocLimit(plan), dataDocTooLargeMessage(plan));
+  const { plan, docBytes } = dataLimits(c.env);
+  return readCapped(c, docBytes, dataDocTooLargeMessage(plan, docBytes));
 };
 const MAX_QUERY_BODY = 64 * 1024;
 /** CF-Connecting-IP: IPv4 or IPv6 text form. */

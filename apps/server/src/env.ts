@@ -38,6 +38,16 @@ export interface Env {
    * RL_ANON binding's own per-IP limit (wrangler `ratelimits`) applies first.
    */
   ANON_WRITES_PER_MIN?: string;
+  /**
+   * Per-doc data limit in bytes (dataLimits; empty or unset: the plan's
+   * default). Clamped to 256 KB on Free, 1920 KB on Paid.
+   */
+  DATA_DOC_BYTES?: string;
+  /**
+   * Data/storage writes per artifact per UTC day (dataLimits; empty or unset:
+   * 10,000). Clamped to 10,000 on Free, 1,000,000 on Paid.
+   */
+  DATA_DAILY_WRITES?: string;
   // vars
   APP_HOST: string;
   CONTENT_HOST: string;

@@ -3,7 +3,9 @@ import { env } from "cloudflare:workers";
 import {
   DataChangeSchema,
   type DataDoc,
+  dailyWritesMessage,
   dataDocLimit,
+  dataDocTooLargeMessage,
   LIMITS,
 } from "@oa/shared";
 import { describe, expect, it } from "vitest";
@@ -16,7 +18,7 @@ import {
   runtimeStub,
   toRuntimeApiError,
 } from "../src/runtime/do.js";
-import { doAsPaid } from "./helpers.js";
+import { doAsPaid, PAID_ENV } from "./helpers.js";
 
 let seq = 0;
 const stubFor = (name = `rt-${++seq}-${Math.random()}`) =>
@@ -239,13 +241,79 @@ describe("ArtifactRuntime limits", () => {
     });
     const e = await s.set("v", "b", 1, "u:2").catch((x: Error) => x);
     expect(String((e as Error).message)).toBe(
-      "oa:rate_limited:daily write limit reached",
+      `oa:rate_limited:${dailyWritesMessage(DAILY_WRITES)}`,
     );
     expect(await s.get("v", "b")).toBeNull();
     await inDo(s, (i) => {
       i.now = () => t + 86_400_000;
     });
     await s.set("v", "b", 1, "u:2");
+  });
+
+  it("Paid overrides: DATA_DOC_BYTES and DATA_DAILY_WRITES are enforced", async () => {
+    const s = stubFor();
+    const docBytes = 1536 * 1024;
+    await inDo(s, (i) => {
+      (i as unknown as { env: object }).env = {
+        ...PAID_ENV,
+        DATA_DOC_BYTES: String(docBytes),
+        DATA_DAILY_WRITES: "20000",
+      };
+    });
+    const ok = "x".repeat(docBytes - 2);
+    await s.set("v", "ok", ok, "u:1");
+    const e = await s.set("v", "big", `${ok}x`, "u:1").catch((x: Error) => x);
+    expect(String((e as Error).message)).toBe(
+      `oa:too_large:${dataDocTooLargeMessage("paid", docBytes)}`,
+    );
+    expect(String((e as Error).message)).toContain("1536 KB");
+    // 15,000 writes is past the default but under the override.
+    await inDo(s, (_i, state) => {
+      state.storage.sql.exec(
+        "update totals set writes = ? where id = 1",
+        15_000,
+      );
+    });
+    await s.set("v", "a", 1, "u:2");
+    await inDo(s, (_i, state) => {
+      state.storage.sql.exec(
+        "update totals set writes = ? where id = 1",
+        20_000,
+      );
+    });
+    const w = await s.set("v", "b", 1, "u:2").catch((x: Error) => x);
+    expect(String((w as Error).message)).toBe(
+      "oa:rate_limited:daily write limit reached (20000 writes per artifact per UTC day on this instance)",
+    );
+  });
+
+  it("Free override: a lower DATA_DOC_BYTES applies; a higher one clamps to 256 KB", async () => {
+    const s = stubFor();
+    await inDo(s, (i) => {
+      (i as unknown as { env: object }).env = {
+        ...env,
+        PLAN: "free",
+        DATA_DOC_BYTES: "1024",
+        DATA_DAILY_WRITES: "",
+      };
+    });
+    await s.set("v", "ok", "x".repeat(1022), "u:1");
+    expect(await codeOf(s.set("v", "big", "x".repeat(1023), "u:1"))).toBe(
+      "too_large",
+    );
+    const t = stubFor();
+    await inDo(t, (i) => {
+      (i as unknown as { env: object }).env = {
+        ...env,
+        PLAN: "free",
+        DATA_DOC_BYTES: String(1024 * 1024),
+      };
+    });
+    const limit = 256 * 1024;
+    await t.set("v", "ok", "x".repeat(limit - 2), "u:1");
+    expect(await codeOf(t.set("v", "big", "x".repeat(limit - 1), "u:1"))).toBe(
+      "too_large",
+    );
   });
 
   it("a rolled-back first-ever write leaves the schema in place (next write succeeds)", async () => {

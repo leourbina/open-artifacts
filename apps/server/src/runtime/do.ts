@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import {
+  DATA_LIMIT_DEFAULTS,
   type DataChange,
   DataChangeSchema,
   type DataCount,
@@ -9,8 +10,9 @@ import {
   type DataQueryInput,
   DataQuerySchema,
   type DataResetResult,
-  dataDocLimit,
+  dailyWritesMessage,
   dataDocTooLargeMessage,
+  dataLimits,
   dataResetBodySchema,
   dataResetDocLimit,
   ERROR_CODES,
@@ -135,10 +137,11 @@ const MAX_LIMIT = 500;
 const MINUTE_MS = 60_000;
 const DAY_MS = 86_400_000;
 /**
- * Data/storage writes per artifact per UTC day (DO Free: 100k rows written/day,
- * ≤3 rows per write), tracked in the single totals row.
+ * The default data/storage writes per artifact per UTC day (DO Free: 100k rows
+ * written/day, ≤3 rows per write), tracked in the single totals row. An
+ * instance's is dataLimits(env).dailyWrites (DATA_DAILY_WRITES).
  */
-export const DAILY_WRITES = 10_000;
+export const DAILY_WRITES = DATA_LIMIT_DEFAULTS.free.dailyWrites;
 const MAX_CURSOR = 4096;
 
 function dataName(v: unknown, what: string): string {
@@ -306,10 +309,10 @@ type SocketMeta = { t: number };
 export class ArtifactRuntime extends DurableObject<Env> {
   private ready = false;
 
-  /** The data-doc limit of this instance's plan (env PLAN). */
+  /** The instance's data-doc limit (env PLAN, DATA_DOC_BYTES). */
   private get docLimit(): DocLimit {
-    const plan = planOf(this.env.PLAN);
-    return { bytes: dataDocLimit(plan), message: dataDocTooLargeMessage(plan) };
+    const { plan, docBytes } = dataLimits(this.env);
+    return { bytes: docBytes, message: dataDocTooLargeMessage(plan, docBytes) };
   }
 
   /** Clock; overridable in tests. */
@@ -392,7 +395,7 @@ export class ArtifactRuntime extends DurableObject<Env> {
   /**
    * One write's bookkeeping, inside the write's transaction, as ONE row: the
    * totals row holds the artifact's bytes, today's write count (429 past
-   * DAILY_WRITES) and per-collection bytes (`cols`, JSON). With the doc row and
+   * dataLimits(env).dailyWrites) and per-collection bytes (`cols`, JSON). With the doc row and
    * its index entry that is ≤3 rows written per data write.
    */
   private bump(delta: number, collection?: string): void {
@@ -411,8 +414,9 @@ export class ArtifactRuntime extends DurableObject<Env> {
         ...(col ? [colPath(collection), colPath(collection), delta] : []),
       )
       .one();
-    if (writes > DAILY_WRITES)
-      fail("rate_limited", "daily write limit reached");
+    const { dailyWrites } = dataLimits(this.env);
+    if (writes > dailyWrites)
+      fail("rate_limited", dailyWritesMessage(dailyWrites));
     if (delta > 0 && bytes > LIMITS.artifactDataBytes)
       fail("too_large", "artifact data exceeds 50 MB");
   }
@@ -829,10 +833,12 @@ export class ArtifactRuntime extends DurableObject<Env> {
     const updatedAt = this.iso();
     const rows: [string, string, string, number][] = [];
     const cols = new Map<string, number>();
+    // Each doc has the instance's effective per-doc limit (DATA_DOC_BYTES).
+    const docLimit = this.docLimit;
     for (const [col, docs] of Object.entries(p.data.collections)) {
       let total = 0;
       for (const [id, data] of Object.entries(docs)) {
-        const { json, bytes } = serialize(data, this.docLimit);
+        const { json, bytes } = serialize(data, docLimit);
         const size = bytes + col.length + id.length + by.length + ROW_OVERHEAD;
         rows.push([col, id, json, size]);
         total += size;
