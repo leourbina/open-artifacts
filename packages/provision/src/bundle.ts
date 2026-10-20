@@ -8,7 +8,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, extname, join, relative } from "node:path";
+import { basename, dirname, extname, join, relative } from "node:path";
 import { promisify } from "node:util";
 import { parseTemplate } from "./metadata.js";
 
@@ -30,6 +30,7 @@ export interface Bundle {
   version: string;
 }
 
+const ZERO_UUID = "00000000-0000-0000-0000-000000000000";
 const ZERO_ID = "00000000000000000000000000000000";
 
 async function walk(dir: string): Promise<string[]> {
@@ -58,7 +59,9 @@ export async function buildBundle(
       JSON.stringify(tpl)
         .replace(/\{\{WORKER_NAME\}\}/g, "oa-bundle")
         .replace(/\{\{(\w*HOST)\}\}/g, "x.invalid")
-        .replace(/\{\{(D1_ID|KV_ID)\}\}/g, ZERO_ID)
+        .replace(/\{\{(D1_NAME|R2_BUCKET)\}\}/g, "oa-bundle")
+        .replace(/\{\{D1_ID\}\}/g, ZERO_UUID)
+        .replace(/\{\{KV_ID\}\}/g, ZERO_ID)
         .replace(/\{\{(\w+)\}\}/g, "x"),
     );
     dummy.routes = undefined;
@@ -98,7 +101,14 @@ export async function buildBundle(
           : ext === ".js" || ext === ".mjs"
             ? "esm"
             : null;
-      if (!type) continue;
+      if (!type) {
+        const base = basename(f);
+        if (ext === ".map" || (base === "README.md" && dirname(f) === outdir))
+          continue;
+        throw new Error(
+          `unexpected wrangler output ${relative(outdir, f)}: only .js, .mjs and .wasm modules are supported`,
+        );
+      }
       modules.push({
         name: relative(outdir, f).split("\\").join("/"),
         type,

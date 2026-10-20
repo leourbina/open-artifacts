@@ -5,10 +5,13 @@ import { describe, expect, it } from "vitest";
 import {
   type Binding,
   buildBundle,
+  HOSTED_ADDED,
   type InstallMetaInput,
+  KNOWN_SECRETS,
   names,
   parseTemplate,
   type ResourceMetaInput,
+  scriptSubdomainSettings,
   TEMPLATE_BINDINGS_EXCLUDED,
   userWorkerMetadata,
 } from "../src/index.js";
@@ -24,17 +27,20 @@ const inst = (o: Partial<InstallMetaInput> = {}): InstallMetaInput => ({
   appHost: "a.app.test",
   contentHost: "a.content.test",
   ownerEmail: "o@x.test",
-  vars: { EMAIL_FROM: "noreply@a.mail.app.test" },
+  vars: {},
   testHooks: false,
   ...o,
 });
 const res = (o: Partial<ResourceMetaInput> = {}): ResourceMetaInput => ({
-  d1Id: "d1-id",
-  kvId: "kv-id",
+  d1Id: "11111111-2222-4333-8444-555555555555",
+  kvId: "0123456789abcdef0123456789abcdef",
   version: "1.2.3",
   rlNs: 2_000_000,
   doMigrationTag: null,
-  namespace: "oa-staging",
+  env: "staging",
+  target: "account",
+  mode: "create",
+  assetsJwt: "jwt",
   mainModule: "index.js",
   secrets: { SESSION_SECRET: "s", CONTENT_SIGNING_KEY: "c" },
   ...o,
@@ -61,7 +67,7 @@ describe("userWorkerMetadata", () => {
       expect(have.has(n) || n in TEMPLATE_BINDINGS_EXCLUDED, n).toBe(true);
     for (const n of Object.keys(TEMPLATE_BINDINGS_EXCLUDED)) {
       expect(have.has(n), `${n} must not be uploaded`).toBe(false);
-      if (n !== "ANALYTICS_TOKEN")
+      if (!["ANALYTICS_TOKEN", "ACCESS_CLIENT_SECRET"].includes(n))
         expect(Object.keys(tpl).includes(n) || n in tpl.vars, n).toBe(true);
     }
     // top-level template keys are all known
@@ -70,8 +76,6 @@ describe("userWorkerMetadata", () => {
       "main",
       "compatibility_date",
       "compatibility_flags",
-      "workers_dev",
-      "preview_urls",
       "browser",
       "send_email",
       "assets",
@@ -86,7 +90,25 @@ describe("userWorkerMetadata", () => {
       "vars",
       "observability",
     ]);
-    for (const k of Object.keys(tpl)) expect(known.has(k), k).toBe(true);
+    for (const k of Object.keys(tpl))
+      expect(known.has(k) || k in TEMPLATE_BINDINGS_EXCLUDED, k).toBe(true);
+    // every uploaded name is a template binding/var or a hosted addition
+    const allowed = new Set<string>([...want, ...HOSTED_ADDED]);
+    const full = userWorkerMetadata(
+      inst({ testHooks: true }),
+      res({
+        template: tpl,
+        secrets: {
+          SESSION_SECRET: "s",
+          CONTENT_SIGNING_KEY: "c",
+          TEST_HOOK_KEY: "k".repeat(32),
+        },
+      }),
+    );
+    for (const b of full.bindings)
+      expect(allowed.has(b.name), b.name).toBe(true);
+    expect(HOSTED_ADDED).toContain("TEST_HOOKS");
+    expect(HOSTED_ADDED).toContain("TEST_HOOK_KEY");
     for (const [, why] of Object.entries(TEMPLATE_BINDINGS_EXCLUDED))
       expect(why.length).toBeGreaterThan(5);
   });
@@ -94,14 +116,17 @@ describe("userWorkerMetadata", () => {
   it("maps binding types exactly", () => {
     const m = userWorkerMetadata(inst(), res());
     const by = (n: string) => m.bindings.find((b) => b.name === n);
-    expect(by("DB")).toMatchObject({ type: "d1", id: "d1-id" });
+    expect(by("DB")).toMatchObject({
+      type: "d1",
+      id: "11111111-2222-4333-8444-555555555555",
+    });
     expect(by("FILES")).toMatchObject({
       type: "r2_bucket",
       bucket_name: names("iabcdefghjk2").r2,
     });
     expect(by("OAUTH_KV")).toMatchObject({
       type: "kv_namespace",
-      namespace_id: "kv-id",
+      namespace_id: "0123456789abcdef0123456789abcdef",
     });
     expect(by("ARTIFACT_RUNTIME")).toMatchObject({
       type: "durable_object_namespace",
@@ -116,6 +141,7 @@ describe("userWorkerMetadata", () => {
     expect(by("BROWSER")?.type).toBe("browser");
     expect(by("ASSETS")?.type).toBe("assets");
     expect(m.assets).toEqual({
+      jwt: "jwt",
       config: {
         not_found_handling: "single-page-application",
         run_worker_first: true,
@@ -132,7 +158,7 @@ describe("userWorkerMetadata", () => {
     const m = userWorkerMetadata(
       inst({
         vars: {
-          EMAIL_FROM: "n@a.test",
+          EMAIL_FROM: "noreply@a.mail.app.test",
           FEATURES: "spaces,directory_sync",
           EMAIL_DAILY_CAP: "50",
           CODE_EMAILS_PER_DAY: "200",
@@ -160,7 +186,12 @@ describe("userWorkerMetadata", () => {
       "usage_off",
     );
     const m = userWorkerMetadata(
-      inst({ vars: { EMAIL_FROM: "n@a.test", FEATURES: "usage_off,x" } }),
+      inst({
+        vars: {
+          EMAIL_FROM: "noreply@a.mail.app.test",
+          FEATURES: "usage_off,x",
+        },
+      }),
       res(),
     );
     expect(text(m.bindings, "FEATURES")).toBe("usage_off,x");
@@ -169,34 +200,38 @@ describe("userWorkerMetadata", () => {
   it("unknown or invalid var throws", () => {
     expect(() =>
       userWorkerMetadata(
-        inst({ vars: { EMAIL_FROM: "n@a.test", NOPE: "1" } }),
+        inst({ vars: { EMAIL_FROM: "noreply@a.mail.app.test", NOPE: "1" } }),
         res(),
       ),
     ).toThrow(/unknown var/);
     expect(() =>
       userWorkerMetadata(
-        inst({ vars: { EMAIL_FROM: "n@a.test", HOSTED: "0" } }),
+        inst({ vars: { EMAIL_FROM: "noreply@a.mail.app.test", HOSTED: "0" } }),
         res(),
       ),
     ).toThrow(/unknown var/);
     expect(() =>
       userWorkerMetadata(
-        inst({ vars: { EMAIL_FROM: "n@a.test", EMAIL_DAILY_CAP: "x" } }),
+        inst({
+          vars: { EMAIL_FROM: "noreply@a.mail.app.test", EMAIL_DAILY_CAP: "x" },
+        }),
         res(),
       ),
     ).toThrow(/invalid var/);
     expect(() =>
       userWorkerMetadata(
-        inst({ vars: { EMAIL_FROM: "n@a.test", INSTALL_ID: "iaaaaaaaaaaa" } }),
+        inst({
+          vars: {
+            EMAIL_FROM: "noreply@a.mail.app.test",
+            INSTALL_ID: "iaaaaaaaaaaa",
+          },
+        }),
         res(),
       ),
     ).toThrow(/INSTALL_ID/);
   });
 
   it("unfilled placeholder throws", () => {
-    expect(() => userWorkerMetadata(inst({ vars: {} }), res())).toThrow(
-      /unfilled/,
-    );
     const bad = { ...tpl, vars: { ...tpl.vars, EXTRA: "{{NOPE}}" } };
     expect(() => userWorkerMetadata(inst(), res({ template: bad }))).toThrow(
       /unfilled/,
@@ -302,24 +337,48 @@ describe("userWorkerMetadata", () => {
         secrets: {
           SESSION_SECRET: "s",
           CONTENT_SIGNING_KEY: "c",
-          TEST_HOOK_KEY: "k",
+          TEST_HOOK_KEY: "k".repeat(32),
         },
       }),
     );
     expect(text(m.bindings, "TEST_HOOKS")).toBe("1");
     expect(m.bindings.find((b) => b.name === "TEST_HOOK_KEY")).toMatchObject({
       type: "secret_text",
-      text: "k",
+      text: "k".repeat(32),
     });
     expect(m.keep_bindings).toBeUndefined();
     expect(() =>
       userWorkerMetadata(
         inst({ testHooks: true }),
-        res({ namespace: "oa-prod" }),
+        res({ env: "prod", target: "account" }),
       ),
-    ).toThrow(/oa-prod/);
+    ).toThrow(/prod/);
     expect(() =>
-      userWorkerMetadata(inst(), res({ secrets: { TEST_HOOK_KEY: "k" } })),
+      userWorkerMetadata(
+        inst({ testHooks: true }),
+        res({ env: "prod", target: "namespace" }),
+      ),
+    ).toThrow(/prod/);
+    expect(() =>
+      userWorkerMetadata(
+        inst({ testHooks: true }),
+        res({
+          secrets: {
+            SESSION_SECRET: "s",
+            CONTENT_SIGNING_KEY: "c",
+            TEST_HOOK_KEY: "short",
+          },
+        }),
+      ),
+    ).toThrow(/32/);
+    expect(() => userWorkerMetadata(inst({ testHooks: true }), res())).toThrow(
+      /create needs every secret/,
+    );
+    expect(() =>
+      userWorkerMetadata(
+        inst(),
+        res({ secrets: { TEST_HOOK_KEY: "k".repeat(32) } }),
+      ),
     ).toThrow(/unknown secret/);
   });
 
@@ -334,14 +393,15 @@ describe("userWorkerMetadata", () => {
     ).toEqual(["CONTENT_SIGNING_KEY", "SESSION_SECRET"]);
     const part = userWorkerMetadata(
       inst(),
-      res({ secrets: { CONTENT_SIGNING_KEY: "c" } }),
+      res({ mode: "update", secrets: { CONTENT_SIGNING_KEY: "c" } }),
     );
     expect(
       part.bindings.filter((b) => b.type === "secret_text").map((b) => b.name),
     ).toEqual(["CONTENT_SIGNING_KEY"]);
     expect(part.keep_bindings).toEqual(["secret_text", "secret_key"]);
     expect(
-      userWorkerMetadata(inst(), res({ secrets: {} })).keep_bindings,
+      userWorkerMetadata(inst(), res({ mode: "update", secrets: {} }))
+        .keep_bindings,
     ).toEqual(["secret_text", "secret_key"]);
   });
 
@@ -370,6 +430,195 @@ describe("userWorkerMetadata", () => {
           b.name === "ACCESS_CLIENT_SECRET" || b.name === "ANALYTICS_TOKEN",
       ),
     ).toBe(false);
+  });
+});
+
+describe("round 1", () => {
+  it("create requires every secret", () => {
+    expect(() =>
+      userWorkerMetadata(inst(), res({ secrets: { SESSION_SECRET: "s" } })),
+    ).toThrow(/create needs every secret/);
+  });
+
+  it("rlNs is validated", () => {
+    for (const rlNs of [0, 1001, -8, 1_000_001, 1_000_000.5, 3_000_000])
+      expect(
+        () => userWorkerMetadata(inst(), res({ rlNs })),
+        String(rlNs),
+      ).toThrow(/rlNs/);
+  });
+
+  it("a second D1, R2 or KV entry throws", () => {
+    for (const k of ["d1_databases", "r2_buckets", "kv_namespaces"]) {
+      const t = { ...tpl, [k]: [...tpl[k], ...tpl[k]] };
+      expect(() => userWorkerMetadata(inst(), res({ template: t }))).toThrow(
+        /more than one/,
+      );
+    }
+  });
+
+  it("setup tunables and NIGHTLY_PUBKEY are allowed and validated", () => {
+    const key = Buffer.alloc(32, 7).toString("base64url");
+    const m = userWorkerMetadata(
+      inst({
+        vars: {
+          EMBED_ORIGINS: "https://Foo.test:443",
+          DATA_DOC_BYTES: "1000",
+          NIGHTLY_PUBKEY: key,
+        },
+      }),
+      res(),
+    );
+    expect(text(m.bindings, "EMBED_ORIGINS")).toBe("https://foo.test");
+    expect(text(m.bindings, "DATA_DOC_BYTES")).toBe("1000");
+    expect(text(m.bindings, "NIGHTLY_PUBKEY")).toBe(key);
+    const badVars: Record<string, string>[] = [
+      { DATA_DOC_BYTES: "abc" },
+      { EMBED_ORIGINS: "http://x.test" },
+      { NIGHTLY_PUBKEY: "short" },
+      { NIGHTLY_PUBKEY: Buffer.alloc(31).toString("base64url") },
+    ];
+    for (const vars of badVars)
+      expect(() => userWorkerMetadata(inst({ vars }), res())).toThrow(
+        /invalid var/,
+      );
+  });
+
+  it("assets: exactly one of jwt and keepAssets; config from the template", () => {
+    expect(() =>
+      userWorkerMetadata(inst(), res({ assetsJwt: undefined })),
+    ).toThrow(/exactly one/);
+    expect(() => userWorkerMetadata(inst(), res({ keepAssets: true }))).toThrow(
+      /exactly one/,
+    );
+    const k = userWorkerMetadata(
+      inst(),
+      res({ assetsJwt: undefined, keepAssets: true }),
+    );
+    expect(k.keep_assets).toBe(true);
+    expect(k.assets.jwt).toBeUndefined();
+    expect(userWorkerMetadata(inst(), res()).assets.jwt).toBe("jwt");
+    const t = { ...tpl, assets: { ...tpl.assets, html_handling: "none" } };
+    expect(
+      userWorkerMetadata(inst(), res({ template: t })).assets.config,
+    ).toMatchObject({ html_handling: "none" });
+    const bad = { ...tpl, assets: { ...tpl.assets, surprise: 1 } };
+    expect(() => userWorkerMetadata(inst(), res({ template: bad }))).toThrow(
+      /unknown assets config key/,
+    );
+  });
+
+  it("validates inputs", () => {
+    const bad: Partial<InstallMetaInput>[] = [
+      { id: "nope" },
+      { appHost: "A.app.test" },
+      { contentHost: "x" },
+      { ownerEmail: "nope" },
+    ];
+    for (const b of bad)
+      expect(() => userWorkerMetadata(inst(b), res())).toThrow();
+    expect(() => userWorkerMetadata(inst(), res({ d1Id: "x" }))).toThrow(
+      /UUID/,
+    );
+    expect(() => userWorkerMetadata(inst(), res({ kvId: "x" }))).toThrow(
+      /32 hex/,
+    );
+  });
+
+  it("EMAIL_FROM is tied to the install", () => {
+    const m = userWorkerMetadata(inst(), res());
+    expect(text(m.bindings, "EMAIL_FROM")).toBe("noreply@a.mail.app.test");
+    expect(() =>
+      userWorkerMetadata(
+        inst({ vars: { EMAIL_FROM: "noreply@b.mail.app.test" } }),
+        res(),
+      ),
+    ).toThrow(/EMAIL_FROM/);
+  });
+
+  it("asserts values for AUTH_* and CODE_EMAILS_PER_DAY", () => {
+    const m = userWorkerMetadata(
+      inst({
+        vars: {
+          CODE_EMAILS_PER_DAY: "250",
+          AUTH_PROVIDERS: "google,email",
+          AUTH_DOMAINS: "finqore.com",
+        },
+      }),
+      res(),
+    );
+    expect(text(m.bindings, "CODE_EMAILS_PER_DAY")).toBe("250");
+    expect(text(m.bindings, "AUTH_PROVIDERS")).toBe("google,email");
+    expect(text(m.bindings, "AUTH_DOMAINS")).toBe("finqore.com");
+  });
+
+  it("two installs share no resource, host or ratelimit id", () => {
+    const a = userWorkerMetadata(inst(), res({ rlNs: 2_000_000 }));
+    const b = userWorkerMetadata(
+      inst({
+        id: "ibcdefghjk2a",
+        appHost: "b.app.test",
+        contentHost: "b.content.test",
+      }),
+      res({
+        rlNs: 2_000_008,
+        d1Id: "aaaaaaaa-2222-4333-8444-555555555555",
+        kvId: "fedcba9876543210fedcba9876543210",
+      }),
+    );
+    const pick = (m: typeof a, type: string, key: string) =>
+      m.bindings.filter((x) => x.type === type).map((x) => x[key]);
+    expect(pick(a, "d1", "id")).not.toEqual(pick(b, "d1", "id"));
+    expect(pick(a, "kv_namespace", "namespace_id")).not.toEqual(
+      pick(b, "kv_namespace", "namespace_id"),
+    );
+    expect(pick(a, "r2_bucket", "bucket_name")).not.toEqual(
+      pick(b, "r2_bucket", "bucket_name"),
+    );
+    for (const k of ["APP_HOST", "CONTENT_HOST", "WORKER_NAME"])
+      expect(text(a.bindings, k)).not.toBe(text(b.bindings, k));
+    const ra = pick(a, "ratelimit", "namespace_id");
+    const rb = pick(b, "ratelimit", "namespace_id");
+    expect(ra.some((x) => rb.includes(x))).toBe(false);
+  });
+
+  it("no plain_text value equals a secret value", () => {
+    const secrets = {
+      SESSION_SECRET: "sess-secret-value-1234567890abcdef",
+      CONTENT_SIGNING_KEY: "sign-secret-value-1234567890abcdef",
+    };
+    const m = userWorkerMetadata(inst(), res({ secrets }));
+    for (const b of m.bindings.filter((x) => x.type === "plain_text"))
+      expect(Object.values(secrets)).not.toContain(b.text);
+    expect(
+      JSON.stringify(m.bindings.filter((x) => x.type !== "secret_text")),
+    ).not.toContain("secret-value");
+  });
+
+  it("scriptSubdomainSettings disables workers.dev and previews", () => {
+    expect(scriptSubdomainSettings()).toEqual({
+      enabled: false,
+      previews_enabled: false,
+    });
+  });
+
+  it("every server secret in env.ts is known or excluded", async () => {
+    const { requiredSecrets } = await import(
+      "../../../scripts/ops/check-staging-secrets.ts"
+    );
+    const root = new URL("../../../", import.meta.url);
+    const needed: string[] = requiredSecrets(
+      await readFile(new URL("apps/server/src/env.ts", root), "utf8"),
+      await readFile(
+        new URL("apps/server/wrangler.staging.jsonc", root),
+        "utf8",
+      ),
+    );
+    const ok = new Set<string>([
+      ...KNOWN_SECRETS,
+      ...Object.keys(TEMPLATE_BINDINGS_EXCLUDED),
+    ]);
+    for (const n of needed) expect(ok.has(n), `server secret ${n}`).toBe(true);
   });
 });
 
@@ -421,6 +670,15 @@ describe("buildBundle", () => {
     ]);
     expect(JSON.stringify(calls[0]?.config)).not.toContain("{{");
     expect(calls[0]?.config.routes).toBeUndefined();
+    // dummy values must pass wrangler's validation (found by a real dry run)
+    const cfg = calls[0]?.config as {
+      r2_buckets: { bucket_name: string }[];
+      d1_databases: { database_id: string }[];
+    };
+    expect(cfg.r2_buckets[0]?.bucket_name).toMatch(
+      /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/,
+    );
+    expect(cfg.d1_databases[0]?.database_id).toMatch(/^[0-9a-f-]{36}$/);
     expect(b.mainModule).toBe("index.js");
     expect(b.version).toBe("9.8.7");
     expect(b.assetsDir).toBe("apps/server/dist-assets");
@@ -432,6 +690,29 @@ describe("buildBundle", () => {
     expect(b.modules.find((m) => m.name === "x.wasm")?.bytes).toEqual(
       new Uint8Array([0, 97, 115, 109]),
     );
+  });
+
+  it("skips .map and README.md, throws on other unexpected modules", async () => {
+    const root = await mkdtemp(join(tmpdir(), "oa-root-"));
+    await mkdir(join(root, "apps/server"), { recursive: true });
+    await writeFile(
+      join(root, "package.json"),
+      JSON.stringify({ version: "1.0.0" }),
+    );
+    await writeFile(
+      join(root, "apps/server/wrangler.template.jsonc"),
+      await readFile(TEMPLATE_PATH),
+    );
+    const run = (extra: string) =>
+      buildBundle(root, async (_c, args) => {
+        const outdir = args[args.indexOf("--outdir") + 1] as string;
+        await writeFile(join(outdir, "index.js"), "export default {}");
+        await writeFile(join(outdir, "index.js.map"), "{}");
+        await writeFile(join(outdir, "README.md"), "x");
+        await writeFile(join(outdir, extra), "x");
+      });
+    await expect(run("data.bin")).rejects.toThrow(/unexpected wrangler output/);
+    await expect(run("a.txt")).rejects.toThrow(/unexpected/);
   });
 
   it("throws when wrangler produced no main module", async () => {

@@ -19,11 +19,14 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -b",
-    "test": "vitest run",
-    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json"
+    "build": "pnpm --filter @oa/shared build && tsc -b",
+    "test": "pnpm --filter @oa/shared build && vitest run",
+    "typecheck": "pnpm --filter @oa/shared build && tsc --noEmit -p tsconfig.typecheck.json"
   },
   "devDependencies": {
     "@types/node": "^22.20.5"
+  },
+  "dependencies": {
+    "@oa/shared": "workspace:*"
   }
 }
