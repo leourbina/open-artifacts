@@ -634,10 +634,10 @@ describe("fix round 1", () => {
     return r.webSocket ?? r.status;
   };
 
-  it("20 anonymous sockets per IPv6 /56; another /64 in it is refused", async () => {
+  it("8 anonymous sockets per IPv6 /56; a 9th from another /64 in it is refused", async () => {
     const id = await pub({ visibility: "public" });
     const socks: WebSocket[] = [];
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 8; i++) {
       const w = await anon(
         id,
         `2001:db8:7:1${i.toString(16).padStart(2, "0")}::1`,
@@ -648,16 +648,20 @@ describe("fix round 1", () => {
     expect(await anon(id, "2001:db8:7:1ff::9")).toBe(429);
     const other = await anon(id, "2001:db8:7:200::1");
     expect(typeof other).not.toBe("number");
+    // Members aren't limited by the anonymous caps.
+    const member: WebSocket[] = [];
+    for (let i = 0; i < 9; i++) member.push(await open(id, viewer));
+    for (const w of member) w.close();
     for (const w of [...socks, other as WebSocket]) w.close();
   });
 
   it("a full anonymous pool (100) still lets members connect", async () => {
     const id = await pub({ visibility: "public" });
     const socks: WebSocket[] = [];
-    // 6 IPv4 actors × 20 = 120 attempts over the 100-socket anonymous pool.
+    // 13 IPv4 actors × 8 = 104 attempts over the 100-socket anonymous pool.
     let refused = 0;
-    for (let a = 0; a < 6; a++)
-      for (let k = 0; k < 20; k++) {
+    for (let a = 0; a < 13; a++)
+      for (let k = 0; k < 8; k++) {
         const w = await anon(id, `192.0.2.${a + 1}`);
         if (typeof w === "number") {
           expect(w).toBe(429);
@@ -665,7 +669,7 @@ describe("fix round 1", () => {
         } else socks.push(w);
       }
     expect(socks).toHaveLength(100);
-    expect(refused).toBe(20);
+    expect(refused).toBe(4);
     expect(await anon(id, "192.0.2.99")).toBe(429);
     for (const u of [viewer, owner])
       expect((await open(id, u)).readyState).toBe(1);

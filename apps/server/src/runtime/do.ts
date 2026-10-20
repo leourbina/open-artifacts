@@ -100,12 +100,12 @@ const MAX_SOCKETS = 200;
 /** Data-subscribe sockets per DO from anonymous (ip:) viewers (their own pool). */
 const MAX_ANON_SOCKETS = 100;
 /**
- * Data-subscribe sockets per anonymous actor (an IPv4 address or IPv6 /56):
- * as for members. A tab holds one socket per subscribed collection, and one
- * IPv4 (NAT, CGNAT, an office) or /56 (a household) is often many viewers;
- * a flood now only crowds the anonymous pool, never members.
+ * Data-subscribe sockets per anonymous actor (an IPv4 address or IPv6 /56).
+ * A tab holds one socket per subscribed collection: 8 covers a couple of
+ * tabs with a few collections each, and it takes 13 networks (not 5) to
+ * fill the anonymous pool. Floods never crowd members' pool.
  */
-const MAX_ANON_SOCKETS_PER_ACTOR = 20;
+const MAX_ANON_SOCKETS_PER_ACTOR = 8;
 /** R.events sockets per DO from signed-in viewers (their own pool). */
 const MAX_EVENTS_SOCKETS = 200;
 /** R.events sockets per DO from anonymous (ip:) viewers (their own pool). */
