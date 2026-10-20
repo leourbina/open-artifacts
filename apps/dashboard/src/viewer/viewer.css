@@ -100,3 +100,94 @@
     height: 60vh;
   }
 }
+
+/* Full-screen escape (#290, option A): the peek chip. It floats on the
+   artifact, so its colors ignore the app theme. */
+.oa-fsx {
+  position: fixed;
+  right: max(12px, env(safe-area-inset-right));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  z-index: 10;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  max-width: 32px;
+  padding: 0 6px;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 0.26);
+  border-radius: 16px;
+  background: rgb(21 24 28 / 0.84);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 0.22);
+  color: #e9ebee;
+  font-family: var(--oa-font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  text-decoration: none;
+  opacity: 0.72;
+  transition:
+    max-width 200ms cubic-bezier(0.2, 0, 0, 1),
+    padding 200ms cubic-bezier(0.2, 0, 0, 1),
+    opacity 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+/* The hit area reaches 6px past every edge: 44px tall on touch. */
+.oa-fsx::before {
+  content: "";
+  position: absolute;
+  inset: -6px;
+}
+.oa-fsx[data-open="true"] {
+  max-width: 260px;
+  padding: 0 12px 0 8px;
+  opacity: 1;
+}
+.oa-fsx:hover,
+.oa-fsx:focus,
+.oa-fsx:visited {
+  color: #e9ebee;
+  text-decoration: none;
+}
+.oa-fsx:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 1px;
+  box-shadow: 0 0 0 5px #2350d0;
+}
+.oa-fsx img {
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+/* The label stays in the DOM when collapsed, so the name never changes. */
+.oa-fsx-label,
+.oa-fsx-arrow {
+  opacity: 0;
+  transition: opacity 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+.oa-fsx-arrow {
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
+.oa-fsx[data-open="true"] .oa-fsx-label {
+  opacity: 1;
+}
+.oa-fsx[data-open="true"] .oa-fsx-arrow {
+  opacity: 0.8;
+}
+@media (prefers-reduced-motion: reduce) {
+  .oa-fsx,
+  .oa-fsx-label,
+  .oa-fsx-arrow {
+    transition: none;
+  }
+}
+@media print {
+  .oa-fsx {
+    display: none;
+  }
+}

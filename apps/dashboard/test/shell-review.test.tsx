@@ -123,7 +123,6 @@ describe("viewer shell review", () => {
     await screen.findByRole("button", { name: /More actions/ });
     await wait(50);
     expect(document.querySelector("iframe")).toBeNull();
-    expect(screen.queryByRole("link", { name: "Open raw" })).toBeNull();
   });
 
   it("a background refetch that bumps currentVersion does not reload the doc", async () => {
@@ -156,30 +155,6 @@ describe("viewer shell review", () => {
     fireEvent.click(btn);
     await wait(50);
     expect(deletes).toBe(1);
-  });
-
-  it("Open raw is not an expired signed URL after the TTL", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    let n = 0;
-    server.use(
-      http.get("*/api/v1/artifacts/:id/content-url", () =>
-        HttpResponse.json({
-          url: `https://content.example.com/c/x/index.html?sig=${++n}`,
-          expiresAt: new Date(Date.now() + 600_000).toISOString(),
-        }),
-      ),
-    );
-    mount(viewerPath(OWNED));
-    fireEvent.load(await frame());
-    await act(async () => {
-      vi.advanceTimersByTime(541_000);
-    });
-    await waitFor(() => expect(n).toBe(2));
-    const w = { opener: {}, location: { href: "" }, close: vi.fn() };
-    const open = vi.spyOn(window, "open").mockReturnValue(w as never);
-    fireEvent.click(screen.getByRole("button", { name: "Open raw" }));
-    await waitFor(() => expect(w.location.href).toContain("sig=2"));
-    open.mockRestore();
   });
 
   it("Download entry exists for a version beyond the first versions page", async () => {
@@ -294,5 +269,35 @@ describe("viewer shell review", () => {
     });
     await wait(50);
     expect(deletes).toBe(0);
+  });
+});
+
+describe("full screen (#290)", () => {
+  const full = (aid: string) => `${viewerPath(aid)}/full`;
+
+  it("renders the frame alone: no crumbs, title bar or panel", async () => {
+    mount(`${full(OWNED)}?panel=open&tab=share`);
+    await frame();
+    expect(screen.queryByRole("navigation", { name: "Breadcrumb" })).toBeNull();
+    expect(screen.queryByRole("heading", { level: 1 })).toBeNull();
+    expect(screen.queryByRole("button", { name: "More actions" })).toBeNull();
+    expect(screen.queryByRole("tablist")).toBeNull();
+  });
+
+  it("anonymous + 404 redirects to sign-in, back to the full-screen view", async () => {
+    anonymous();
+    artifactIs(404, "not_found");
+    const { redirect } = mount(full(OWNED));
+    await waitFor(() =>
+      expect(redirect).toHaveBeenCalledWith(login(full(OWNED))),
+    );
+  });
+
+  it("signed in + 404 shows not found", async () => {
+    artifactIs(404, "not_found");
+    mount(full(OWNED));
+    expect(
+      await screen.findByRole("heading", { name: "Page not found" }),
+    ).toBeInTheDocument();
   });
 });
