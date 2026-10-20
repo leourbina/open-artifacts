@@ -47,8 +47,9 @@ export function core(o: Core = {}) {
     fs: {
       read: (p) => files.get(p) ?? null,
       write: (p, d) => void files.set(p, d),
-      hashTree: (base, rels) => {
+      hashTree: (base, rels, include) => {
         const hit = [...files.keys()]
+          .filter((k) => include?.(k.slice(base.length + 1)) ?? true)
           .filter((k) =>
             rels.some((r) => {
               const p = r === "." ? base : `${base}/${r}`;

@@ -126,6 +126,8 @@ type World = {
   deployFails?: string;
   /** A stable `wrangler deploy --dry-run` build with this content (a different value is a different bundle). Unset: every build differs, so the deploy is never skipped. */
   stableBundle?: string;
+  /** Each dry run also writes a varying source map and README (like real wrangler); they must not matter. */
+  noisyDryRun?: boolean;
   /** `wrangler deploy --dry-run` fails. */
   dryRunFails?: boolean;
   /** `wrangler rollback` fails with this stderr. */
@@ -466,6 +468,10 @@ export function world(w: World = {}) {
         const out = a.slice("deploy --dry-run --outdir ".length);
         const body = w.stableBundle ?? `unstable#${++dryRuns}`;
         c.files.set(`${out}/index.js`, body);
+        if (w.noisyDryRun) {
+          c.files.set(`${out}/index.js.map`, `{"sourceRoot":"${out}"}`);
+          c.files.set(`${out}/README.md`, `built ${++dryRuns}`);
+        }
         stdout = `--dry-run: exiting now.\n`;
       } else if (a === "deploy") {
         if (w.deployFails)

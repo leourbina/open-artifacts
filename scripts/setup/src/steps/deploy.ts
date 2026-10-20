@@ -144,7 +144,8 @@ async function deployHash(ctx: Ctx): Promise<string | undefined> {
     const dir = fs.tempDir?.() as string;
     try {
       await ctx.wrangler(["deploy", "--dry-run", "--outdir", dir]);
-      return fs.hashTree?.(dir, ["."]);
+      // Only the code: source maps embed the outdir and README.md a timestamp.
+      return fs.hashTree?.(dir, ["."], (rel) => /\.(m?js|wasm)$/.test(rel));
     } finally {
       fs.removeTree?.(dir);
     }

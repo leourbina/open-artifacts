@@ -42,7 +42,11 @@ export type Fs = {
    */
   writeSecret?: (path: string, data: string) => void;
   /** A hash of every file under `base`/`rels` (names relative to `base`, and contents); undefined when none exists. */
-  hashTree?: (base: string, rels: string[]) => string | undefined;
+  hashTree?: (
+    base: string,
+    rels: string[],
+    include?: (rel: string) => boolean,
+  ) => string | undefined;
   /** A new empty temp directory. */
   tempDir?: () => string;
   /** Removes a file or directory tree (best effort). */
@@ -91,7 +95,7 @@ export const realFs: Fs = {
     mkdirSync(dirname(p), { recursive: true });
     writeFileSync(p, d);
   },
-  hashTree: (base, rels) => {
+  hashTree: (base, rels, include) => {
     const h = createHash("sha256");
     let any = false;
     const walk = (rel: string) => {
@@ -105,7 +109,7 @@ export const realFs: Fs = {
       if (st.isDirectory()) {
         for (const n of readdirSync(p).sort())
           if (n !== "node_modules") walk(join(rel, n));
-      } else if (st.isFile()) {
+      } else if (st.isFile() && (include?.(rel) ?? true)) {
         any = true;
         h.update(`${rel}\0`).update(readFileSync(p)).update("\0");
       }

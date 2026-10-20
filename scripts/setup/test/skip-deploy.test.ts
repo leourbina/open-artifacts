@@ -80,6 +80,21 @@ describe("#25: an identical deploy is skipped", () => {
     expect(deploys(w)).toBe(1);
   });
 
+  it("#25: a varying source map and README beside a stable index.js do not stop the skip; a code change still does", async () => {
+    const { w, opts } = await installed({ noisyDryRun: true });
+    expect(w.state().deployHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    expect(deploys(w)).toBe(0);
+    expect(line(w, "deploy").status).toBe("skipped");
+    const w2 = world({
+      ...opts,
+      stableBundle: "bundle-v2",
+      files: Object.fromEntries(w.files),
+    });
+    expect(await run(HOSTS, w2.deps, ROOT)).toBe(0);
+    expect(deploys(w2)).toBe(1);
+  });
+
   it("never skips when the dry run fails", async () => {
     const { w } = await installed({ dryRunFails: true });
     expect(w.state().deployHash).toBeUndefined();
