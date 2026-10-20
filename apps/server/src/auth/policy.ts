@@ -39,7 +39,9 @@ export type PolicyAction =
   | "data.reset"
   | "move"
   | "transfer"
-  | "anonId";
+  | "anonId"
+  /** MCP data tools on an artifact without the db capability (B14, narrowed). */
+  | "data.seed";
 
 export type OrgAction =
   | "space.create"
@@ -237,6 +239,10 @@ export function can(
       return level === "viewer" ? ctx.firstThumbnail === true : true;
     case "transfer":
       return full && level === "owner" && ctx.personal;
+    case "data.seed":
+      // Agents may seed data before declaring db: the uncapped personal
+      // owner only; managers, editors and capped callers need the capability.
+      return !capped && !ctx.anonymous && level === "owner";
   }
   if (EDIT.has(action)) return !capped && level !== "viewer";
   if (FULL.has(action)) return full;
@@ -263,7 +269,7 @@ export function orgCan(
     case "space.publish":
       return (
         !capped &&
-        m.role !== "guest" &&
+        TEAM_ROLES.includes(m.role) &&
         (opts.spaceRole === "editor" || opts.spaceRole === "manager")
       );
     case "artifact.create":
@@ -272,7 +278,7 @@ export function orgCan(
       return m.role === "owner" && !capped;
     case "tokens.create":
     case "mcp.connect":
-      return m.role !== "guest" && !capped;
+      return TEAM_ROLES.includes(m.role) && !capped;
     default:
       return admin;
   }

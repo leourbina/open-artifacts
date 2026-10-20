@@ -353,25 +353,7 @@ describe("MCP artifact data tools", () => {
     id = (await publishMd(client, "# data")).id;
   });
 
-  it("owner of an artifact without db → capability_denied (no owner bypass)", async () => {
-    const get = { id, collection: "votes", docId: "a" };
-    expect(
-      textOf(await tool(client, "artifact_data_set", { ...get, data: {} })),
-    ).toMatch(/^capability_denied/);
-    expect(textOf(await tool(client, "artifact_data_get", get))).toMatch(
-      /^capability_denied/,
-    );
-    sc(
-      await tool(client, "publish_artifact", {
-        id,
-        content: "# data",
-        format: "markdown",
-        capabilities: { db: true },
-      }),
-    );
-  });
-
-  it("artifact_data_set → artifact_data_get round trip", async () => {
+  it("artifact_data_set → artifact_data_get round trip (the owner may seed before db)", async () => {
     const set = sc<{ id: string; data: unknown; updatedBy: string }>(
       await tool(client, "artifact_data_set", {
         id,

@@ -153,13 +153,23 @@ describe("MCP data store: can(level, data.*) and the db capability", () => {
       store({ env, caller: owner.caller }, dbId, "data.write"),
     ).resolves.toBeDefined();
   });
-  it("the owner of a non-db artifact gets capability_denied", async () => {
+  it("B14 narrowed: only the uncapped owner may seed a non-db artifact", async () => {
     const { store } = await import("../src/mcp/tools/data.js");
+    const nodb = ids.nodb as string;
+    const denied = (p: Promise<unknown>) =>
+      expect(p).rejects.toSatisfy(
+        (e) => e instanceof ApiError && e.code === "capability_denied",
+      );
     await expect(
-      store({ env, caller: owner.caller }, ids.nodb as string, "data.write"),
-    ).rejects.toSatisfy(
-      (e) => e instanceof ApiError && e.code === "capability_denied",
-    );
+      store({ env, caller: owner.caller }, nodb, "data.write"),
+    ).resolves.toBeDefined();
+    await denied(store({ env, caller: editor.caller }, nodb, "data.write"));
+    await denied(store({ env, caller: editor.caller }, nodb, "data.read"));
+    const cappedOwner = {
+      ...(owner.caller as Caller & { kind: "user" }),
+      cap: "restricted" as const,
+    };
+    await denied(store({ env, caller: cappedOwner }, nodb, "data.read"));
   });
 });
 
@@ -188,5 +198,28 @@ describe("gatherer fails closed and caps", () => {
     await expect(
       authorize(env, owner.caller, gone, "undelete", { allowDeleted: true }),
     ).resolves.toMatchObject({ level: "owner" });
+  });
+});
+
+describe("the cap travels with the member (M1)", () => {
+  it("callerOf reads withCap; copies keep it; JSON never shows it", async () => {
+    const { callerOf, withCap } = await import("../src/auth/authz.js");
+    const m = withCap(
+      { ...(owner.caller as { user: Member }).user },
+      "restricted",
+    );
+    expect(callerOf(m)).toMatchObject({ kind: "user", cap: "restricted" });
+    expect(callerOf({ ...m })).toMatchObject({ cap: "restricted" });
+    expect(JSON.stringify(m)).not.toContain("restricted");
+    expect(callerOf(null)).toEqual({ kind: "anonymous" });
+  });
+  it("services that take a Member honour its cap (no rebuilt uncapped Caller)", async () => {
+    const { withCap } = await import("../src/auth/authz.js");
+    const { patch } = await import("../src/services/artifacts.js");
+    const capped = withCap(
+      { ...(owner.caller as { user: Member }).user },
+      "restricted",
+    );
+    await notFound(patch(env, capped, ids.art as string, { title: "nope" }));
   });
 });

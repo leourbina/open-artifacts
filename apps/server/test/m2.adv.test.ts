@@ -572,7 +572,7 @@ describe("M2 whole-track adversarial", () => {
       docId: "a",
       data: { a: 2 },
     });
-    // owner, no db capability: REST 403 and MCP capability_denied (no owner bypass, P3 review 5)
+    // owner, no db capability: REST 403; MCP lets the uncapped owner seed (B14, narrowed)
     const id2 = await create(owner.cookie, {});
     const rest2 = await w(
       req(R.dataDoc(id2, "c", "a"), {
@@ -597,7 +597,7 @@ describe("M2 whole-track adversarial", () => {
       rest: 200,
       mcpErr: false,
       rest2: 403,
-      mcp2Err: true,
+      mcp2Err: false,
     });
     // MCP writes as the user (shares the REST rate bucket), not as "agent:".
     expect(String(mcp.structuredContent?.updatedBy)).toBe(`u:${sv.userId}`);

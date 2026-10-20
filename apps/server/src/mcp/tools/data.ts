@@ -1,29 +1,34 @@
 import type { McpServer } from "@modelcontextprotocol/server";
-import { authorize } from "../../auth/authz.js";
+import { authorize, canCtx } from "../../auth/authz.js";
+import { can } from "../../auth/policy.js";
 import { ApiError } from "../../http/errors.js";
 import {
   type RuntimeStub,
   runtimeCall,
   runtimeStub,
 } from "../../runtime/do.js";
+import { capsOf } from "../../runtime/routes.js";
 import { guard, ok, type ToolEnv } from "../server.js";
 import { toolConfig } from "../tool-defs.js";
 
 /**
  * The artifact's runtime DO after the access check, as on the REST runtime
  * routes (spec §6.7): `can(level, "data.read" | "data.write")` (else 404),
- * then the `db` capability for every caller, the owner included (403
- * capability_denied, since access is already proven). Capped callers can't
- * write.
+ * then the `db` capability (403 capability_denied, since access is already
+ * proven), except for the uncapped personal owner, so an agent can seed data
+ * before declaring db (B14, narrowed: `can(level, "data.seed")`). Capped
+ * callers can't write.
  */
 export async function store(
   t: Pick<ToolEnv, "env" | "caller">,
   id: string,
   action: "data.read" | "data.write",
 ): Promise<RuntimeStub> {
-  const { artifact: a } = await authorize(t.env, t.caller, id, action);
-  const caps = JSON.parse(a.capabilities) as { db?: boolean };
-  if (caps.db !== true)
+  const { level, artifact: a } = await authorize(t.env, t.caller, id, action);
+  if (
+    !capsOf(a.capabilities).db &&
+    !can(level, "data.seed", canCtx(t.caller, a))
+  )
     throw new ApiError(
       "capability_denied",
       "This artifact does not declare the db capability",

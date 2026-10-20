@@ -24,6 +24,7 @@ import {
   accessLevel,
   authorize,
   type Caller,
+  callerOf,
   canCtx,
   listFilterSql,
   requireAccess,
@@ -138,7 +139,7 @@ export async function publish(
             .bind(id)
             .first();
     if (exists) {
-      const who: Caller = { kind: "user", user };
+      const who = callerOf(user);
       const { level, artifact: a } = await authorize(env, who, id, "publish");
       create = false;
       const sharing =
@@ -334,7 +335,7 @@ const bad = (message: string, path?: string) =>
   );
 const DAY = 86400_000;
 const iso = (ms: number) => new Date(ms).toISOString();
-const asUser = (user: Member): Caller => ({ kind: "user", user });
+const asUser = (user: Member): Caller => callerOf(user);
 
 type Alloc = {
   id: string;
@@ -765,9 +766,11 @@ export async function putThumbnail(
   bytes: Uint8Array,
   version?: number,
 ): Promise<void> {
-  const r = await accessLevel(env, asUser(user), id);
+  const who = asUser(user);
+  const r = await accessLevel(env, who, id);
   if (!r) throw notFound();
-  const editor = r.level !== "viewer";
+  const editor = can(r.level, "publish", canCtx(who, r.artifact));
+  let firstThumbnail = editor;
   if (!editor) {
     const email = normEmail(user.email);
     const shared = email
@@ -779,8 +782,15 @@ export async function putThumbnail(
       : null;
     const team =
       r.artifact.visibility === "team" && TEAM_ROLES.includes(user.role);
-    if (!shared && !team) throw notFound();
+    firstThumbnail = !!shared || team;
   }
+  if (
+    !can(r.level, "thumbnail.write", {
+      ...canCtx(who, r.artifact),
+      firstThumbnail,
+    })
+  )
+    throw notFound();
   const v = version ?? r.artifact.currentVersion;
   if (v > r.artifact.currentVersion)
     throw new ApiError("bad_request", "No such version");

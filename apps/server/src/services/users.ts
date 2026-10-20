@@ -1,5 +1,6 @@
 import { type Member, newId, type Role, type UserRef } from "@oa/shared";
 import { eq } from "drizzle-orm";
+import { withCap } from "../auth/authz.js";
 import { getDb } from "../db/client.js";
 import { normEmail } from "../db/email.js";
 import { shares, users } from "../db/schema.js";
@@ -147,7 +148,10 @@ export async function getUser(env: Env, id: string): Promise<Member | null> {
         "id" | "email" | "name" | "displayName" | "role" | "lastSeenAt"
       >
     >();
-  return row ? toMember(row) : null;
+  // Every request's user comes through here (session, PAT, OAuth), so the cap
+  // is set once. Sources: P2's authConfig.guestsReadOnly and P3's restriction
+  // (users.restricted_*, 0009); until those land nobody is capped.
+  return row ? withCap(toMember(row), null) : null;
 }
 
 export type Profile = {

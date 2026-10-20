@@ -105,7 +105,7 @@ export const SECTIONS = {
   - storage: private per-viewer key/value storage.
 - Undeclared calls fail with capability_denied. allowAnonymousWrites: true lets anonymous viewers of public artifacts write (rate-limited).
 - Limits: ${p.dataDoc} per document on this instance (${p.plan} plan${p.dataDocNote}), ${LIMITS.artifactDataBytes / 1024 / 1024} MB per artifact, ${LIMITS.viewerWritesPerMin} writes per minute per viewer.
-- The artifact_data_* tools read and write the same db collections, and need the db capability too (owners included); documents are JSON objects.`,
+- The artifact_data_* tools read and write the same db collections; documents are JSON objects. They need the db capability, except for the artifact's owner, who may seed data before declaring it (viewers' pages still need db).`,
   },
   runtimeApi: {
     title: "window.openArtifacts (available inside published html)",

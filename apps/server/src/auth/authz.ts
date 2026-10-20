@@ -53,9 +53,29 @@ const RANK: Record<AccessLevel, number> = {
   owner: 3,
 };
 
+/**
+ * The caller's cap travels on the Member object itself, under a symbol key:
+ * copies (`{ ...user }`) keep it, JSON and zod output never show it. Whoever
+ * loads a user for a request (session, PAT, OAuth, MCP) sets it with
+ * `withCap`; every Caller is built by `callerOf`, never a literal.
+ */
+export const CAP: unique symbol = Symbol("oa.cap");
+export type CappedMember = Member & { [CAP]?: CapReason | null };
+
+/** Marks `m` with its cap (null = uncapped) and returns it. */
+export function withCap<M extends Member>(m: M, cap: CapReason | null): M {
+  (m as CappedMember)[CAP] = cap;
+  return m;
+}
+
+/** The one way to build a Caller: carries the member's cap. */
+export function callerOf(m: Member | null | undefined): Caller {
+  if (!m) return { kind: "anonymous" };
+  return { kind: "user", user: m, cap: (m as CappedMember)[CAP] ?? null };
+}
+
 export function caller(c: Context<AppEnv>): Caller {
-  const user = c.var.user;
-  return user ? { kind: "user", user } : { kind: "anonymous" };
+  return callerOf(c.var.user);
 }
 
 /** The signed-in user, or 401. */
