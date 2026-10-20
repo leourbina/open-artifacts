@@ -705,3 +705,23 @@ describe("hosted mocks: move and public links", () => {
     });
   });
 });
+
+describe("hosted mocks: owners and admins can't be restricted", () => {
+  it("PUT memberRestricted on the owner or an admin is 400 restrict_admin", async () => {
+    fresh({ hosted: true });
+    const owner = fixtures.members[0]?.id as string;
+    const r = await call("PUT", R.memberRestricted(owner));
+    expect(r.status).toBe(400);
+    expect((await errCode(r)).code).toBe("restrict_admin");
+    const bob = fixtures.members[1]?.id as string;
+    expect((await call("PATCH", R.member(bob), { role: "admin" })).status).toBe(
+      200,
+    );
+    const admin = await call("PUT", R.memberRestricted(bob));
+    expect((await errCode(admin)).code).toBe("restrict_admin");
+    const ms = z
+      .array(Strict.Member)
+      .parse(await json(await call("GET", R.members)));
+    expect(ms.find((m) => m.id === bob)?.restriction).toBeNull();
+  });
+});

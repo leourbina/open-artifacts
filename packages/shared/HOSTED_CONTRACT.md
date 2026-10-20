@@ -127,7 +127,7 @@ every flag that is on.
 | `GET R.restrictedGroups` | → `RestrictedGroup[]` | org admin |
 | `PUT R.restrictedGroup(groupId)` | (no body) → `RestrictedGroup`; 409 `directory_sync_off` when off or frozen | org admin; audited `restricted.set` |
 | `DELETE R.restrictedGroup(groupId)` | 204, in any mode (lifts a frozen restriction) | org admin; audited `restricted.remove` |
-| `PUT/DELETE R.memberRestricted(id)` `/members/:id/restricted` | (no body) → `Member` | org owner, admin; the MANUAL restricted flag, any sync mode (Team, manual and frozen installs); audited `restricted.set` / `restricted.remove`; never lifts a group restriction |
+| `PUT/DELETE R.memberRestricted(id)` `/members/:id/restricted` | (no body) → `Member` | org owner, admin; the MANUAL restricted flag, any sync mode (Team, manual and frozen installs); audited `restricted.set` / `restricted.remove`; never lifts a group restriction. Org owners and admins can't be restricted: PUT on one is 400 `restrict_admin` |
 
 Personal spaces are never created, patched, deleted or given members here: 400 `space_personal`.
 
@@ -201,6 +201,7 @@ These are the names P2 and P3 use; the contract wins. There is no
 | `turnstile_required` | 400 | code request with no Turnstile token while Turnstile is configured |
 | `turnstile_failed` | 403 | Turnstile token rejected |
 | `reauth_required` | 401 | break-glass routes need a fresh Google sign-in |
+| `restrict_admin` | 400 | `PUT R.memberRestricted(id)` on an org owner or admin |
 
 ## Test hooks (`hosted/test-hooks.ts`, types only)
 

@@ -795,8 +795,13 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
         "*/api/v1/members/:id/restricted",
         authed(({ params }) => {
           const m = memberOf(params.id as string);
-          if (!m || !isAdmin() || m.role === "owner") return notFound();
+          if (!m || !isAdmin()) return notFound();
           const on = method === "put";
+          if (on && (m.role === "owner" || m.role === "admin"))
+            return err(
+              "restrict_admin",
+              "Owners and admins can't be restricted",
+            );
           if (on !== manualRestricted.has(m.id)) {
             if (on) manualRestricted.add(m.id);
             else manualRestricted.delete(m.id);

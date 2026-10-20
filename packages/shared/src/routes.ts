@@ -185,6 +185,7 @@ export const R = {
    * PUT (no body) -> Member; DELETE -> Member: set or clear the MANUAL
    * restricted flag (org owner, admin; any sync mode). Audited
    * restricted.set / restricted.remove. DELETE never lifts a group restriction.
+   * Org owners and admins can't be restricted: PUT on one is 400 restrict_admin.
    */
   memberRestricted: (id: string) => `/api/v1/members/${seg(id)}/restricted`,
   /** DELETE -> 204: reset a member's Google link (owner, admin; never the owner's link). */
