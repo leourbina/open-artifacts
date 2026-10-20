@@ -79,3 +79,39 @@ export const dataDocTooLargeMessage = (plan: Plan): string =>
  */
 export const mcpTooLargeMessage = (plan: Plan): string =>
   `Request body exceeds ${mcpBodyLimit(plan) / 1024} KB on this instance. Large files: create_upload({ path, size, contentType }), PUT the bytes to the returned url, then publish_artifact({ id: artifactId, title, files: { "<path>": { uploadId } } }). Data docs on this instance are limited to ${dataDocLimit(plan) / 1024} KB; clients that escape non-ASCII as \\u inflate the request, so send UTF-8 or use the REST data API. Workers Paid allows ${LIMITS.dataDocBytesPaid / 1024 / 1024} MB.`;
+
+/**
+ * Daily caps the usage page measures against, per plan (GET /usage `limit`).
+ * 0 means no daily cap: Workers Paid bills monthly included amounts and
+ * overage, which are not daily caps. cpu_p99_ms is per invocation, not daily:
+ * Free 10 ms; Paid the default 30 s (the repo sets no `limits.cpu_ms`).
+ * cpu_limit_hits is a count with no cap on either plan.
+ * Sources: https://developers.cloudflare.com/workers/platform/pricing/ and
+ * https://developers.cloudflare.com/workers/platform/limits/
+ */
+export const USAGE_LIMITS = {
+  free: {
+    requests: 100_000,
+    d1_reads: 5_000_000,
+    d1_writes: 100_000,
+    do_requests: 100_000,
+    cpu_limit_hits: 0,
+    cpu_p99_ms: 10,
+    kv_writes: 1_000,
+  },
+  paid: {
+    requests: 0,
+    d1_reads: 0,
+    d1_writes: 0,
+    do_requests: 0,
+    cpu_limit_hits: 0,
+    cpu_p99_ms: 30_000,
+    kv_writes: 0,
+  },
+} as const satisfies Record<Plan, Record<string, number>>;
+
+/** The usage `limit` of metric `key` on `plan` (0: no daily cap). */
+export const usageLimit = (
+  plan: Plan,
+  key: keyof (typeof USAGE_LIMITS)["free"],
+): number => USAGE_LIMITS[plan][key];

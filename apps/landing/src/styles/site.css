@@ -267,6 +267,7 @@ code,
 
 .demo-section,
 .gallery-section,
+.multi-section,
 .story-section {
   margin-top: var(--section-gap);
 }

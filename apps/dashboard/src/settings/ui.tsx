@@ -1,8 +1,18 @@
 // Shared shadcn layout for the settings cards (Design: cards pad 20px,
 // 16px at <= 600px; 12px from header to body; 16px between cards).
-import { Card, CardContent, CardHeader, CardTitle } from "@oa/ui/shadcn";
-import type { ReactNode } from "react";
 
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  Button as ShButton,
+} from "@oa/ui/shadcn";
+import type { ReactNode } from "react";
+import { toast } from "../layout/toast";
+
+/** The settings pages' 880px measure, centered in the shell gutter. */
+export const MEASURE = "mx-auto max-w-[880px]";
 /** The card: its vertical padding and the header-to-body gap. */
 export const CARD =
   "gap-[var(--oa-space-3)] py-[var(--oa-space-5)] shadow-none max-[600px]:py-[var(--oa-space-4)]";
@@ -50,5 +60,60 @@ export function SettingsCard({
         </CardContent>
       </Card>
     </section>
+  );
+}
+
+export const copyText = (text: string, ok: string) => {
+  const failed = () =>
+    toast({
+      title: "Couldn't copy",
+      description: "Copy it by hand.",
+      tone: "danger",
+    });
+  if (!navigator.clipboard) return failed();
+  navigator.clipboard
+    .writeText(text)
+    .then(() => toast({ title: ok, tone: "success" }), failed);
+};
+
+/** Code with its Copy button beside it (never over it); no outer padding, so
+    it fits a card or a dialog. */
+export function CodeBlock({
+  children,
+  copy,
+  label,
+}: {
+  children: ReactNode;
+  copy: string;
+  label: string;
+}) {
+  return (
+    <div className="flex min-w-0 items-start gap-[var(--oa-space-1)] rounded-md bg-secondary">
+      {children}
+      <ShButton
+        variant="ghost"
+        size="sm"
+        className="m-[var(--oa-space-1)] flex-none text-[length:var(--oa-text-sm)]"
+        aria-label={label}
+        onClick={() => copyText(copy, "Copied")}
+      >
+        Copy
+      </ShButton>
+    </div>
+  );
+}
+
+export function Code({ code, label }: { code: string; label: string }) {
+  return (
+    <CodeBlock copy={code} label={label}>
+      <pre
+        // Focusable so keyboard users can scroll a long line.
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: scrollable region
+        tabIndex={0}
+        className="m-0 min-w-0 flex-1 overflow-x-auto p-[var(--oa-space-3)] font-mono text-[length:var(--oa-text-xs)]"
+      >
+        <code>{code}</code>
+      </pre>
+    </CodeBlock>
   );
 }

@@ -9,7 +9,12 @@ installHarness();
 const usage = (metrics: { key: string; used: number; limit: number }[]) =>
   server.use(
     http.get(`*${R.usage}`, () =>
-      HttpResponse.json({ available: true, date: "2026-10-18", metrics }),
+      HttpResponse.json({
+        available: true,
+        plan: "free",
+        date: "2026-10-18",
+        metrics,
+      }),
     ),
   );
 const meter = (name: string) => screen.findByRole("meter", { name });
