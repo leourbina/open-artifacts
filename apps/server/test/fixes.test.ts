@@ -184,7 +184,7 @@ describe("toErrorResponse mapping", () => {
 describe("securityHeaders immutability", () => {
   it("handles immutable headers (redirect)", async () => {
     const app = new Hono();
-    app.use(securityHeaders({ frameDeny: true }));
+    app.use(securityHeaders());
     app.get("/r", () => Response.redirect("http://x.test/", 302));
     const res = await app.request("/r");
     expect(res.status).toBe(302);

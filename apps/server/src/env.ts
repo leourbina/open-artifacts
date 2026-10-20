@@ -55,6 +55,11 @@ export interface Env {
   ENVIRONMENT: "dev" | "production";
   ACCESS_TEAM_DOMAIN: string;
   ACCESS_CLIENT_ID: string;
+  /**
+   * Space-separated https origins allowed to frame /a/:id/full (and the
+   * content host beneath it); unset/empty = none. Validated in http/embed.ts.
+   */
+  EMBED_ORIGINS?: string;
   /** Sender for invite/share emails (an onboarded Email Service domain). */
   EMAIL_FROM?: string;
   // secrets

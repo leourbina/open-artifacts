@@ -5,6 +5,7 @@ import { verifyPat } from "../auth/pat.js";
 import { readSession, sessionCookieName } from "../auth/session.js";
 import type { Env } from "../env.js";
 import { getUser } from "../services/users.js";
+import { frameOpts } from "./embed.js";
 import { ApiError, appOrigin, toErrorResponse } from "./errors.js";
 
 /** Hono Variables set by `session()`; use as `Hono<{ Bindings: Env; Variables: AppVariables }>`. */
@@ -19,7 +20,16 @@ export type AppEnv = { Bindings: Env; Variables: AppVariables };
 export const CONTENT_CSP =
   "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads";
 
-type SecurityOpts = { frameDeny?: boolean; csp?: string };
+/**
+ * `frameAncestors` (a pre-validated source list from frameOpts) replaces
+ * X-Frame-Options with `Content-Security-Policy: frame-ancestors …`; it wins
+ * over `frameDeny`.
+ */
+type SecurityOpts = {
+  frameDeny?: boolean;
+  frameAncestors?: string;
+  csp?: string;
+};
 
 /** `res` with the standard security headers; a copy when its headers are immutable. */
 export function withSecurityHeaders(
@@ -44,16 +54,24 @@ function setSecurityHeaders(h: Headers, opts: SecurityOpts): void {
   h.set("X-Robots-Tag", "noindex, nofollow");
   h.set("X-Content-Type-Options", "nosniff");
   h.set("Referrer-Policy", "strict-origin-when-cross-origin");
-  if (opts.frameDeny) h.set("X-Frame-Options", "DENY");
-  if (opts.csp) h.set("Content-Security-Policy", opts.csp);
+  if (opts.frameAncestors) {
+    h.delete("X-Frame-Options");
+    h.set("Content-Security-Policy", `frame-ancestors ${opts.frameAncestors}`);
+  } else {
+    if (opts.frameDeny) h.set("X-Frame-Options", "DENY");
+    if (opts.csp) h.set("Content-Security-Policy", opts.csp);
+  }
 }
 
+/** App-host security headers; framing per frameOpts (DENY except /a/:id/full with EMBED_ORIGINS). */
 export const securityHeaders =
-  (opts: SecurityOpts = {}): MiddlewareHandler =>
-  async (c, next) => {
+  (): MiddlewareHandler<AppEnv> => async (c, next) => {
     await next();
     // Responses from fetch()/Response.redirect() have immutable headers: re-wrap.
-    c.res = withSecurityHeaders(c.res, opts);
+    c.res = withSecurityHeaders(
+      c.res,
+      frameOpts(c.env, c.req.method, new URL(c.req.url).pathname),
+    );
   };
 
 const BEARER = /^\s*Bearer(?:\s+(.*?))?\s*$/i;

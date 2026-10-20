@@ -1,0 +1,217 @@
+import { env } from "cloudflare:workers";
+import { type Member, newId, viewerPath } from "@oa/shared";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { embedOrigins, frameOpts } from "../src/http/embed.js";
+import worker from "../src/index.js";
+import { publish } from "../src/services/artifacts.js";
+import { getUser } from "../src/services/users.js";
+import { ctx, fakeAssets } from "./assets-stub.js";
+import { login } from "./helpers.js";
+
+const G = "https://open-artifacts.com";
+const CONTENT_CSP =
+  "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads";
+const assets = fakeAssets({
+  "/index.html": {
+    body: "<!doctype html><html><head><title>x</title></head><body></body></html>",
+    type: "text/html",
+  },
+}).fetcher;
+
+const call = (url: string, extra: object = {}, init?: RequestInit) =>
+  worker.fetch(
+    new Request(url, init) as Request<unknown, IncomingRequestCfProperties>,
+    { ...(env as object), ASSETS: assets, ...extra } as never,
+    ctx,
+  );
+const app = (path: string, extra: object = {}, init?: RequestInit) =>
+  call(`http://app.localhost${path}`, extra, init);
+const content = (extra: object = {}) =>
+  call(`http://content.localhost/${newId()}/index.html`, extra);
+
+const prod = (v: string) =>
+  embedOrigins({ EMBED_ORIGINS: v, ENVIRONMENT: "production" });
+const dev = (v: string) =>
+  embedOrigins({ EMBED_ORIGINS: v, ENVIRONMENT: "dev" });
+
+let id: string;
+beforeAll(async () => {
+  const l = await login(`em-${newId().slice(0, 6).toLowerCase()}@x.com`);
+  const owner = (await getUser(env, l.userId)) as Member;
+  id = (
+    await publish(
+      env,
+      owner,
+      {
+        title: "EmbedMe",
+        visibility: "public",
+        format: "markdown",
+        content: "x",
+      } as never,
+      null,
+      undefined,
+      "create",
+    )
+  ).id;
+});
+afterEach(() => vi.restoreAllMocks());
+
+describe("EMBED_ORIGINS parsing", () => {
+  it("keeps bare https origins, normalized and de-duplicated", () => {
+    expect(prod("")).toEqual([]);
+    expect(prod(`  ${G}\thttps://B.example.com:8443 ${G} `)).toEqual([
+      G,
+      "https://b.example.com:8443",
+    ]);
+  });
+
+  it("drops invalid entries and logs once per value", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const bad = [
+      "http://evil.com",
+      `${G}/`,
+      `${G}/path`,
+      `${G}?q`,
+      `${G}#f`,
+      "https://u:p@x.com",
+      "https://*.example.com",
+      "*",
+      "'none'",
+      "'self'",
+      "none",
+      "https:",
+      "data:",
+      "javascript:alert(1)",
+      "https://x.com:443",
+      "https://x.com:99999",
+      "https://exämple.com",
+    ];
+    const v = [...bad, G].join(" ");
+    expect(prod(v)).toEqual([G]);
+    expect(prod(v)).toEqual([G]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain(
+      `dropped ${bad.length} invalid`,
+    );
+  });
+
+  it("allows http://localhost only in dev", () => {
+    const v = "http://localhost:5173 http://gallery.localhost";
+    expect(dev(v)).toEqual([
+      "http://localhost:5173",
+      "http://gallery.localhost",
+    ]);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(prod(v)).toEqual([]);
+    expect(dev("http://localhost.evil.com")).toEqual([]);
+  });
+
+  it("rejects header-injection attempts", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    for (const v of [
+      `${G}\r\nX-Evil: 1`,
+      `${G}\nX-Evil: 1`,
+      `${G};script-src *`,
+      `${G},https://b.com`,
+      `${G}'`,
+      `${G}\u0000`,
+    ])
+      expect(prod(v)).toEqual([]);
+    // Space-separated junk around a good origin never reaches the list.
+    expect(prod(`${G} ; script-src * 'unsafe-inline'`)).toEqual([G]);
+  });
+
+  it("frameOpts relaxes only GET/HEAD /a/:id/full", () => {
+    const e = { EMBED_ORIGINS: G, ENVIRONMENT: "production" as const };
+    const ok = { frameAncestors: `'self' ${G}` };
+    expect(frameOpts(e, "GET", "/a/x/full")).toEqual(ok);
+    expect(frameOpts(e, "HEAD", "/a/x/full")).toEqual(ok);
+    for (const [m, p] of [
+      ["POST", "/a/x/full"],
+      ["GET", "/a/x"],
+      ["GET", "/a/x/full/"],
+      ["GET", "/a/x/y/full"],
+      ["GET", "/a/x/v/1"],
+      ["GET", "/api/v1/artifacts/x/full"],
+      ["GET", "/"],
+    ] as const)
+      expect(frameOpts(e, m, p)).toEqual({ frameDeny: true });
+    expect(frameOpts({ ...e, EMBED_ORIGINS: "" }, "GET", "/a/x/full")).toEqual({
+      frameDeny: true,
+    });
+  });
+});
+
+describe("EMBED_ORIGINS headers", () => {
+  it("default: DENY on every app route, content framed by the app only", async () => {
+    for (const p of [
+      `${viewerPath(id)}/full`,
+      viewerPath(id),
+      "/",
+      "/healthz",
+    ]) {
+      const r = await app(p);
+      expect(r.headers.get("x-frame-options"), p).toBe("DENY");
+      expect(r.headers.get("content-security-policy"), p).toBeNull();
+    }
+    expect((await content()).headers.get("content-security-policy")).toBe(
+      `${CONTENT_CSP}; frame-ancestors http://app.localhost`,
+    );
+  });
+
+  it("set: /full allows 'self' + origins; other routes stay DENY", async () => {
+    const extra = { EMBED_ORIGINS: `${G} https://b.example.com` };
+    const full = await app(`${viewerPath(id)}/full`, extra);
+    expect(full.status).toBe(200);
+    expect(full.headers.get("x-frame-options")).toBeNull();
+    expect(full.headers.get("content-security-policy")).toBe(
+      `frame-ancestors 'self' ${G} https://b.example.com`,
+    );
+    // Anonymous (no cookie, as in a third-party frame): public OG still served.
+    expect(await full.text()).toContain("EmbedMe");
+    const head = await app(`${viewerPath(id)}/full`, extra, { method: "HEAD" });
+    expect(head.headers.get("x-frame-options")).toBeNull();
+    for (const p of [
+      viewerPath(id),
+      `${viewerPath(id)}/v/1`,
+      "/",
+      "/healthz",
+      `/api/v1/artifacts/${id}`,
+      `${viewerPath(id)}/full/`,
+    ]) {
+      const r = await app(p, extra);
+      expect(r.headers.get("x-frame-options"), p).toBe("DENY");
+      expect(r.headers.get("content-security-policy") ?? "", p).not.toContain(
+        G,
+      );
+    }
+    const post = await app(`${viewerPath(id)}/full`, extra, { method: "POST" });
+    expect(post.headers.get("x-frame-options")).toBe("DENY");
+    expect((await content(extra)).headers.get("content-security-policy")).toBe(
+      `${CONTENT_CSP}; frame-ancestors http://app.localhost ${G} https://b.example.com`,
+    );
+  });
+
+  it("injection attempts never reach a header", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const extra = {
+      EMBED_ORIGINS: `${G};script-src * https://x.com https://y.com\r\nX-Evil:1`,
+    };
+    const full = await app(`${viewerPath(id)}/full`, extra);
+    expect(full.headers.get("x-evil")).toBeNull();
+    expect(full.headers.get("x-frame-options")).toBeNull();
+    expect(full.headers.get("content-security-policy")).toBe(
+      "frame-ancestors 'self' https://x.com",
+    );
+    const all = await app(`${viewerPath(id)}/full`, {
+      EMBED_ORIGINS: `${G};script-src *`,
+    });
+    expect(all.headers.get("x-frame-options")).toBe("DENY");
+    expect(all.headers.get("content-security-policy")).toBeNull();
+    expect(
+      (
+        await content({ EMBED_ORIGINS: "'self' * http://evil.com" })
+      ).headers.get("content-security-policy"),
+    ).toBe(`${CONTENT_CSP}; frame-ancestors http://app.localhost`);
+  });
+});

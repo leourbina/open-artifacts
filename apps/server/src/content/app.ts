@@ -2,6 +2,7 @@ import { type Format, isId, normalizePath } from "@oa/shared";
 import { type Context, Hono } from "hono";
 import { methodNotAllowed, ROBOTS } from "../app.js";
 import type { Env } from "../env.js";
+import { contentFrameAncestors } from "../http/embed.js";
 import { ApiError, appOrigin, toErrorResponse } from "../http/errors.js";
 import { CONTENT_CSP } from "../http/middleware.js";
 import { injectRuntime } from "./inject.js";
@@ -394,7 +395,7 @@ contentApp.use(async (c, next) => {
   h.delete("Set-Cookie");
   h.set(
     "Content-Security-Policy",
-    `${CONTENT_CSP}; frame-ancestors ${appOrigin(c.env)}`,
+    `${CONTENT_CSP}; frame-ancestors ${contentFrameAncestors(c.env, appOrigin(c.env))}`,
   );
   h.set("Cross-Origin-Resource-Policy", "cross-origin");
   // Sandboxed (opaque-origin) frames send `Origin: null`: allow any origin,
