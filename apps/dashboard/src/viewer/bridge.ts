@@ -21,6 +21,7 @@ import {
 } from "@oa/shared";
 import type { z } from "zod";
 import { ApiClientError, api, type RequestExtra } from "../api/client";
+import { isEmbed } from "../embed";
 import { isAnonToken, loadAnonToken, saveAnonToken } from "./anonId";
 import { frameLoad, loadArtifactFrame } from "./frame";
 
@@ -107,11 +108,14 @@ export function createBridge(opts: BridgeOptions) {
     onAccessLost,
   } = opts;
   const id = artifact.id; // the only artifact id any route is ever built from
-  const viewer = artifact.capabilities.viewer ? opts.viewer : null;
+  // Framed, the artifact never learns who is viewing, whatever the caller passed.
+  const embed = isEmbed();
+  const viewer = artifact.capabilities.viewer && !embed ? opts.viewer : null;
   // The anonId header rides only on anonymous calls (viewer null for any
   // reason: signed out, or embed mode) to artifacts that allow anonymous
   // writes; never signed in, never into the frame.
-  const anon = opts.viewer === null && artifact.allowAnonymousWrites === true;
+  const anon =
+    (opts.viewer === null || embed) && artifact.allowAnonymousWrites === true;
   /** The first token-less call that mints (writes, anon-id); others wait so one id is minted. */
   let minting: Promise<void> | null = null;
   const subs = new Map<string, Sub>();
@@ -141,9 +145,10 @@ export function createBridge(opts: BridgeOptions) {
 
   const connect = (col: string, s: Sub) => {
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(
-      `${proto}//${location.host}${R.dataSubscribe(id, col)}`,
-    );
+    // Framed: the server treats the socket as anonymous (its cookie still rides along).
+    const path = R.dataSubscribe(id, col);
+    const hint = isEmbed() ? `${path.includes("?") ? "&" : "?"}embed=1` : "";
+    const ws = new WebSocket(`${proto}//${location.host}${path}${hint}`);
     s.ws = ws;
     ws.onopen = () => {
       s.attempt = 0;
