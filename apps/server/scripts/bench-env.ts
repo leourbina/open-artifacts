@@ -370,6 +370,9 @@ export class DOState {
   acceptWebSocket(ws: FakeSocket, tags: string[]) {
     this.sockets.push(Object.assign(ws, { tags }));
   }
+  getTags(ws: FakeSocket) {
+    return ws.tags;
+  }
   waitUntil() {}
 }
 

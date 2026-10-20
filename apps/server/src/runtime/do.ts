@@ -298,8 +298,31 @@ create table if not exists thumb_job (
 `;
 
 type SqlParam = string | number | null;
-/** Per-socket attachment: connect time (ms). */
-type SocketMeta = { t: number };
+/**
+ * Per-socket attachment: connect time (ms); on R.events sockets also whether
+ * the viewer may see publisher names (`named`, also carried as a tag).
+ */
+type SocketMeta = { t: number; named?: boolean };
+
+/**
+ * R.events socket tags. Not DataNames (NAME_RE has no "~"), so they never
+ * collide with a data-subscribe collection tag. Every events socket has
+ * EVENTS_TAG plus exactly one of the viewer-class tags.
+ */
+const EVENTS_TAG = "~ev";
+const EVENTS_NAMED_TAG = "~ev:named";
+const EVENTS_ANON_TAG = "~ev:anon";
+/** Route → DO headers on the events upgrade: the current version and viewer class. */
+export const EVENTS_VERSION_HEADER = "X-OA-Version";
+export const EVENTS_NAMED_HEADER = "X-OA-Named";
+const GONE_FRAME = '{"type":"gone"}';
+
+/** A new version, broadcast to R.events sockets by scheduleIndex. */
+export type VersionEvent = {
+  at: string;
+  by: { kind: "user" | "agent"; name: string | null };
+  restoredFrom?: number;
+};
 
 /**
  * Per-artifact live-page data (spec §6.7): shared docs, per-viewer storage, and a
@@ -875,6 +898,8 @@ export class ArtifactRuntime extends DurableObject<Env> {
         fail("too_large", "artifact data exceeds 50 MB");
     });
     for (const ws of this.ctx.getWebSockets()) {
+      // R.events sockets carry versions, not data: a reset leaves them open.
+      if (this.ctx.getTags(ws).includes(EVENTS_TAG)) continue;
       try {
         ws.close(1012, "data reset");
       } catch {
@@ -1005,18 +1030,34 @@ export class ArtifactRuntime extends DurableObject<Env> {
     };
   }
 
-  /** WebSocket subscribe: Upgrade + `?collection=<DataName>`, tagged for hibernation. */
+  /**
+   * WebSocket upgrades, tagged for hibernation:
+   * - `/events`: R.events (EVENTS_TAG); hello with EVENTS_VERSION_HEADER.
+   * - otherwise data subscribe: `?collection=<DataName>`.
+   */
   override async fetch(req: Request): Promise<Response> {
     if (req.headers.get("Upgrade")?.toLowerCase() !== "websocket")
       return new Response("Expected WebSocket upgrade", { status: 426 });
-    const r = DataNameSchema.safeParse(
-      new URL(req.url).searchParams.get("collection"),
-    );
-    if (!r.success) return new Response("Invalid collection", { status: 400 });
+    const url = new URL(req.url);
+    let tags: string[];
+    let hello: string | null = null;
+    let named: boolean | undefined;
+    if (url.pathname === "/events") {
+      const v = Number(req.headers.get(EVENTS_VERSION_HEADER));
+      if (!Number.isSafeInteger(v) || v < 1)
+        return new Response("Invalid version", { status: 400 });
+      named = req.headers.get(EVENTS_NAMED_HEADER) === "1";
+      tags = [EVENTS_TAG, named ? EVENTS_NAMED_TAG : EVENTS_ANON_TAG];
+      hello = `{"type":"hello","version":${v}}`;
+    } else {
+      const r = DataNameSchema.safeParse(url.searchParams.get("collection"));
+      if (!r.success)
+        return new Response("Invalid collection", { status: 400 });
+      tags = [r.data];
+    }
     if (this.ctx.getWebSockets().length >= MAX_SOCKETS)
       return new Response("Too many subscribers", { status: 429 });
     // Optional per-actor cap (the route passes the authorized actor).
-    const tags = [r.data];
     const actor = req.headers.get(ACTOR_HEADER);
     if (actor !== null) {
       if (!ACTOR_RE.test(actor))
@@ -1029,7 +1070,10 @@ export class ArtifactRuntime extends DurableObject<Env> {
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1], tags);
     const t = this.now();
-    pair[1].serializeAttachment({ t } satisfies SocketMeta);
+    pair[1].serializeAttachment(
+      (named === undefined ? { t } : { t, named }) satisfies SocketMeta,
+    );
+    if (hello) pair[1].send(hello);
     await this.armAt(t + SOCKET_TTL_MS);
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
@@ -1047,16 +1091,21 @@ export class ArtifactRuntime extends DurableObject<Env> {
    * re-enqueue while the alarm runs it is never dropped; an older one is
    * ignored. With `thumb` (publish, restore) and serverThumbnails(env), the same
    * debounce queues a server-side thumbnail of the newest version.
+   * With `event` (publish, restore), `version` frames go to the R.events
+   * sockets first: this is the RPC publish already makes, so live updates
+   * cost no extra request or D1 query.
    */
   async scheduleIndex(
     artifactId: string,
     version: number,
     thumb = false,
+    event?: VersionEvent,
   ): Promise<void> {
     if (typeof artifactId !== "string" || artifactId.length > 64)
       fail("bad_request", "invalid artifact id");
     if (!Number.isSafeInteger(version) || version < 1)
       fail("bad_request", "invalid version");
+    if (event) this.broadcastVersion(version, event);
     const due = this.now() + INDEX_DELAY_MS;
     this.sql.exec(
       `insert into index_job (id, artifact_id, version, attempts, due, seq) values (1, ?, ?, 0, ?, 1)
@@ -1083,6 +1132,47 @@ export class ArtifactRuntime extends DurableObject<Env> {
         due,
       );
     await this.armAt(due);
+  }
+
+  /**
+   * One `version` frame per viewer class, serialized once each: named sockets
+   * get `by.name`, anonymous/embed/guest sockets `{ kind }` only.
+   */
+  private broadcastVersion(version: number, e: VersionEvent): void {
+    const kind = e.by.kind === "agent" ? "agent" : "user";
+    const at = typeof e.at === "string" ? e.at.slice(0, 40) : this.iso();
+    const from =
+      Number.isSafeInteger(e.restoredFrom) && (e.restoredFrom ?? 0) >= 1
+        ? e.restoredFrom
+        : undefined;
+    const frame = (by: { kind: string; name?: string }) =>
+      JSON.stringify({
+        type: "version",
+        version,
+        at,
+        by,
+        ...(from === undefined ? {} : { restoredFrom: from }),
+      });
+    const send = (tag: string, msg: () => string) => {
+      const socks = this.ctx.getWebSockets(tag);
+      if (!socks.length) return;
+      const m = msg();
+      for (const ws of socks) {
+        try {
+          ws.send(m);
+        } catch {
+          // closing socket
+        }
+      }
+    };
+    const name =
+      typeof e.by.name === "string" && e.by.name
+        ? e.by.name.slice(0, 200)
+        : undefined;
+    send(EVENTS_NAMED_TAG, () =>
+      frame(name === undefined ? { kind } : { kind, name }),
+    );
+    send(EVENTS_ANON_TAG, () => frame({ kind }));
   }
 
   /** The pending index job, if any (tests and the alarm). */
@@ -1334,9 +1424,18 @@ export class ArtifactRuntime extends DurableObject<Env> {
   /**
    * Closes every subscriber socket with 4403 (access may have changed: share
    * revoked, visibility changed, artifact deleted). Clients reconnect through
-   * the shell, which re-checks access.
+   * the shell, which re-checks access. R.events sockets get a `gone` frame
+   * first: access isn't re-evaluated per socket here, so every one closes
+   * and the client's reconnect re-checks it (404 = really gone).
    */
   closeSockets(reason: string): number {
+    for (const ws of this.ctx.getWebSockets(EVENTS_TAG)) {
+      try {
+        ws.send(GONE_FRAME);
+      } catch {
+        // closing socket
+      }
+    }
     const all = this.ctx.getWebSockets();
     for (const ws of all) {
       try {

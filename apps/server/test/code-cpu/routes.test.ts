@@ -17,7 +17,7 @@ import {
   setup,
   summarize,
 } from "../../scripts/bench.js";
-import { meterDo } from "../../scripts/bench-env.js";
+import { FakeSocket, meterDo } from "../../scripts/bench-env.js";
 import type { ArtifactRuntime } from "../../src/runtime/do.js";
 
 const BAR_MS = 2;
@@ -38,6 +38,8 @@ const RESET_DO_MS = 8;
  */
 const REF_ME_MS = 0.56;
 const MAX_SCALE = 4;
+/** Open R.events sockets on the "publish with event sockets" rows. */
+const EVENTS_SOCKETS = 50;
 const RUNS = 20;
 const REPEATS = 5;
 const APP = "http://app.localhost";
@@ -110,6 +112,8 @@ function routes(): Scenario[] {
   });
   let dataId = "";
   let resetId = "";
+  let eventsId = "";
+  let evN = 2;
   let docN = 0;
   let writes = 0;
   // A full-size Free data reset: 500 docs filling the 1 MB snapshot cap.
@@ -255,6 +259,54 @@ function routes(): Scenario[] {
         },
       }),
     ),
+    // A publish's version frame to EVENTS_SOCKETS open R.events sockets
+    // (half named, half anonymous): broadcast inside scheduleIndex, the RPC
+    // publish already makes.
+    ...(["worker", "do"] as const).map(
+      (bucket): Scenario => ({
+        name: `publish with ${EVENTS_SOCKETS} event sockets (${bucket})`,
+        budgetMs: BAR_MS,
+        bucket,
+        prepare: async () => {
+          if (!eventsId) {
+            const r = await ok(
+              await call(
+                env,
+                req(
+                  "/api/v1/artifacts",
+                  "POST",
+                  json({ title: "ev", format: "html", content: "<p>1</p>" }),
+                ),
+              ),
+              "publish events",
+            );
+            eventsId = ((await r.json()) as { id: string }).id;
+            const { state } = env.ARTIFACT_RUNTIME.instance(eventsId);
+            for (let i = 0; i < EVENTS_SOCKETS; i++)
+              state.acceptWebSocket(new FakeSocket([]), [
+                "~ev",
+                i % 2 ? "~ev:named" : "~ev:anon",
+              ]);
+          }
+          const socks = env.ARTIFACT_RUNTIME.instance(eventsId).state.sockets;
+          const run = step(
+            env,
+            req(
+              `/api/v1/artifacts/${eventsId}/versions`,
+              "POST",
+              json({ format: "html", content: `<p>${evN++}</p>` }),
+            ),
+            "publish version",
+          );
+          return async () => {
+            const before = socks.map((s) => s.frames);
+            await run();
+            if (socks.some((s, i) => s.frames !== (before[i] ?? 0) + 1))
+              throw new Error("a socket missed the version frame");
+          };
+        },
+      }),
+    ),
     {
       name: "index alarm 64 KB html (do)",
       budgetMs: BAR_MS,
@@ -298,6 +350,8 @@ describe(`code CPU ≤ ${BAR_MS} ms per route (p95, median of ${REPEATS})`, () =
     "data doc write 256 KB (do)",
     "data reset 1 MB (worker)",
     "data reset 1 MB (do)",
+    `publish with ${EVENTS_SOCKETS} event sockets (worker)`,
+    `publish with ${EVENTS_SOCKETS} event sockets (do)`,
     "index alarm 64 KB html (do)",
   ];
   for (const name of names)

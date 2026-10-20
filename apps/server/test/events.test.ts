@@ -1,0 +1,373 @@
+// R.events: live version updates (hello / version / gone) on the artifact's DO.
+import { runInDurableObject } from "cloudflare:test";
+import { env } from "cloudflare:workers";
+import {
+  type ArtifactEvent,
+  ArtifactEventSchema,
+  EVENTS_GONE_CLOSE,
+  type Member,
+  newId,
+  R,
+} from "@oa/shared";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createApp } from "../src/app.js";
+import { createPat } from "../src/auth/pat.js";
+import { appOrigin } from "../src/http/errors.js";
+import { type ArtifactRuntime, runtimeStub } from "../src/runtime/do.js";
+import { publish } from "../src/services/artifacts.js";
+import { getUser } from "../src/services/users.js";
+import { api, login } from "./helpers.js";
+import { connect, tool } from "./mcp-helpers.js";
+
+const app = createApp();
+const tag = newId().slice(0, 6).toLowerCase();
+type U = { cookie: string; userId: string; member: Member; email: string };
+let owner: U;
+let viewer: U;
+let guest: U;
+
+async function mk(prefix: string, role: Member["role"]): Promise<U> {
+  const email = `${prefix}-${tag}@x.com`;
+  const l = await login(email, role);
+  const m = await getUser(env, l.userId);
+  if (!m) throw new Error("no user");
+  return { ...l, member: m, email };
+}
+
+const pub = async (extra: Record<string, unknown> = {}) =>
+  (
+    await publish(
+      env,
+      owner.member,
+      { title: "ev", format: "html", content: "<p>1</p>", ...extra } as never,
+      null,
+      undefined,
+      "create",
+    )
+  ).id;
+
+const UP = { upgrade: "websocket" };
+let ipSeq = 0;
+const ip = () => `198.51.100.${(++ipSeq % 250) + 1}`;
+
+type Sock = {
+  ws: WebSocket;
+  frames: ArtifactEvent[];
+  next: () => Promise<ArtifactEvent>;
+  closed: Promise<number>;
+};
+
+function wrap(ws: WebSocket): Sock {
+  const frames: ArtifactEvent[] = [];
+  const waiters: ((f: ArtifactEvent) => void)[] = [];
+  let read = 0;
+  ws.addEventListener("message", (e) => {
+    const f = ArtifactEventSchema.parse(JSON.parse(String(e.data)));
+    frames.push(f);
+    waiters.shift()?.(f);
+  });
+  const closed = new Promise<number>((res) =>
+    ws.addEventListener("close", (e) => res((e as CloseEvent).code)),
+  );
+  ws.accept();
+  return {
+    ws,
+    frames,
+    closed,
+    next: () => {
+      const i = read++;
+      const f = frames[i];
+      if (f) return Promise.resolve(f);
+      return new Promise((res) => waiters.push(res));
+    },
+  };
+}
+
+/** Opens R.events as `u` (null: anonymous), returning the response if not 101. */
+async function open(
+  id: string,
+  u: U | null,
+  headers: Record<string, string> = {},
+  path = R.events(id),
+): Promise<Sock | Response> {
+  const r = await api(app, path, u?.cookie ?? null, {
+    headers: { ...UP, "cf-connecting-ip": ip(), ...headers },
+  });
+  return r.webSocket ? wrap(r.webSocket) : r;
+}
+async function sock(
+  id: string,
+  u: U | null,
+  headers: Record<string, string> = {},
+  path?: string,
+): Promise<Sock> {
+  const s = await open(id, u, headers, path);
+  if (s instanceof Response) throw new Error(`no websocket (${s.status})`);
+  return s;
+}
+
+/** The version row's user attribution (name, else email). */
+const ownerName = () => owner.member.name ?? owner.email;
+
+const restPublish = async (id: string, u: U, content: string) => {
+  const r = await api(app, R.versions(id), u.cookie, {
+    method: "POST",
+    body: { format: "html", content },
+  });
+  expect(r.status).toBe(201);
+  return ((await r.json()) as { version: number }).version;
+};
+
+beforeAll(async () => {
+  owner = await mk("ev-owner", "member");
+  viewer = await mk("ev-viewer", "member");
+  guest = await mk("ev-guest", "guest");
+});
+
+describe("events socket", () => {
+  it("connect gives hello with the current version; 426 without Upgrade", async () => {
+    const id = await pub({ visibility: "team" });
+    await restPublish(id, owner, "<p>2</p>");
+    const s = await sock(id, viewer);
+    expect(await s.next()).toEqual({ type: "hello", version: 2 });
+    const no = await api(app, R.events(id), viewer.cookie);
+    expect(no.status).toBe(426);
+    s.ws.close();
+  });
+
+  it("a REST publish sends a version event to every socket; names only to members", async () => {
+    const id = await pub({ visibility: "public" });
+    const socks = [
+      await sock(id, owner),
+      await sock(id, viewer),
+      await sock(id, null),
+    ];
+    for (const s of socks) expect((await s.next()).type).toBe("hello");
+    const v = await restPublish(id, owner, "<p>2</p>");
+    const [o, m, a] = await Promise.all(socks.map((s) => s.next()));
+    const by = { kind: "user", name: ownerName() };
+    expect(o).toMatchObject({ type: "version", version: v, by });
+    expect(m).toMatchObject({ type: "version", version: v, by });
+    expect(a).toEqual({
+      type: "version",
+      version: v,
+      at: expect.stringMatching(/^\d{4}-\d\d-\d\dT.*Z$/),
+      by: { kind: "user" },
+    });
+    expect(JSON.stringify(a)).not.toContain("ev-owner");
+    expect(Object.keys(o as object)).toEqual(["type", "version", "at", "by"]);
+    for (const s of socks) s.ws.close();
+  });
+
+  it("embed sockets and guests on a public link never see names", async () => {
+    const id = await pub({ visibility: "public" });
+    const e = await sock(id, owner, {}, `${R.events(id)}?embed=1`);
+    const g = await sock(id, guest);
+    await e.next();
+    await g.next();
+    await restPublish(id, owner, "<p>2</p>");
+    expect((await e.next()) as object).toMatchObject({ by: { kind: "user" } });
+    expect(e.frames[1]).not.toHaveProperty("by.name");
+    expect(await g.next()).not.toHaveProperty("by.name");
+    e.ws.close();
+    g.ws.close();
+  });
+
+  it("a guest with a share on a private artifact sees names", async () => {
+    const id = await pub({ visibility: "private" });
+    const sh = await api(app, R.shares(id), owner.cookie, {
+      method: "PUT",
+      body: { email: guest.email, role: "viewer" },
+    });
+    expect(sh.status).toBe(200);
+    const g = await sock(id, guest);
+    await g.next();
+    await restPublish(id, owner, "<p>2</p>");
+    expect(await g.next()).toMatchObject({
+      by: { kind: "user", name: ownerName() },
+    });
+    g.ws.close();
+  });
+
+  describe("MCP", () => {
+    let client: Awaited<ReturnType<typeof connect>>;
+    beforeAll(async () => {
+      client = await connect((await createPat(env, owner.userId, "ev")).token, {
+        clientInfo: { name: "ev-agent", version: "1.0.0" },
+      });
+    });
+    afterAll(() => client.close());
+
+    it("an MCP publish and restore send version events (agent, restoredFrom)", async () => {
+      const id = await pub({ visibility: "public" });
+      const m = await sock(id, viewer);
+      const a = await sock(id, null);
+      await m.next();
+      await a.next();
+      const r = await tool(client, "publish_artifact", {
+        id,
+        format: "html",
+        content: "<p>2</p>",
+      });
+      expect(r.isError).toBeFalsy();
+      expect(await m.next()).toMatchObject({
+        type: "version",
+        version: 2,
+        by: { kind: "agent", name: "ev" },
+      });
+      expect(await a.next()).toMatchObject({
+        type: "version",
+        version: 2,
+        by: { kind: "agent" },
+      });
+      expect(a.frames[1]).not.toHaveProperty("by.name");
+
+      const rr = await tool(client, "restore_version", { id, version: 1 });
+      expect(rr.isError).toBeFalsy();
+      expect(await m.next()).toMatchObject({
+        type: "version",
+        version: 3,
+        restoredFrom: 1,
+        by: { kind: "agent", name: "ev" },
+      });
+      expect(await a.next()).toMatchObject({ version: 3, restoredFrom: 1 });
+      m.ws.close();
+      a.ws.close();
+    });
+  });
+
+  it("a REST restore sends a version event with restoredFrom", async () => {
+    const id = await pub({ visibility: "team" });
+    await restPublish(id, owner, "<p>2</p>");
+    const s = await sock(id, viewer);
+    expect(await s.next()).toEqual({ type: "hello", version: 2 });
+    const r = await api(app, R.restoreVersion(id, 1), owner.cookie, {
+      method: "POST",
+    });
+    expect(r.status).toBe(201);
+    expect(await s.next()).toMatchObject({
+      type: "version",
+      version: 3,
+      restoredFrom: 1,
+    });
+    s.ws.close();
+  });
+
+  it("delete sends gone then closes 4403", async () => {
+    const id = await pub({ visibility: "team" });
+    const s = await sock(id, viewer);
+    await s.next();
+    const d = await api(app, R.artifact(id), owner.cookie, {
+      method: "DELETE",
+    });
+    expect(d.status).toBe(204);
+    expect(await s.next()).toEqual({ type: "gone" });
+    expect(await s.closed).toBe(EVENTS_GONE_CLOSE);
+    // Reconnect re-checks access.
+    expect(((await open(id, viewer)) as Response).status).toBe(404);
+  });
+
+  it("making it private closes an anonymous socket with gone", async () => {
+    const id = await pub({ visibility: "public" });
+    const s = await sock(id, null);
+    await s.next();
+    const p = await api(app, R.artifact(id), owner.cookie, {
+      method: "PATCH",
+      body: { visibility: "private" },
+    });
+    expect(p.status).toBe(200);
+    expect(await s.next()).toEqual({ type: "gone" });
+    expect(await s.closed).toBe(4403);
+    expect(((await open(id, null)) as Response).status).toBe(404);
+  });
+
+  it("a non-reader gets 404; a bad id 404", async () => {
+    const id = await pub({ visibility: "team" });
+    expect(((await open(id, guest)) as Response).status).toBe(404);
+    expect(((await open(id, null)) as Response).status).toBe(404);
+    const priv = await pub({ visibility: "private" });
+    expect(((await open(priv, viewer)) as Response).status).toBe(404);
+    expect(
+      ((await open("nope", viewer, {}, R.events("nope"))) as Response).status,
+    ).toBe(404);
+  });
+
+  it("a foreign Origin is refused; the app Origin is accepted", async () => {
+    const id = await pub({ visibility: "team" });
+    const r = (await open(id, viewer, {
+      origin: "https://evil.example",
+    })) as Response;
+    expect(r.status).toBe(403);
+    const ok = await sock(id, viewer, {
+      origin: appOrigin(env),
+    });
+    expect((await ok.next()).type).toBe("hello");
+    ok.ws.close();
+  });
+
+  it("embed=1 plus a cookie on a private artifact gives 404; X-OA-Embed too", async () => {
+    const id = await pub({ visibility: "private" });
+    const r = await open(id, owner, {}, `${R.events(id)}?embed=1`);
+    expect((r as Response).status).toBe(404);
+    const h = await open(id, owner, { "x-oa-embed": "1" });
+    expect((h as Response).status).toBe(404);
+    expect((await sock(id, owner)).ws.readyState).toBe(1);
+  });
+
+  it("a public artifact with embed=1 works", async () => {
+    const id = await pub({ visibility: "public" });
+    const s = await sock(id, null, {}, `${R.events(id)}?embed=1`);
+    expect(await s.next()).toEqual({ type: "hello", version: 1 });
+    s.ws.close();
+  });
+
+  it("works without the db capability; data reset leaves event sockets open", async () => {
+    const id = await pub({
+      visibility: "team",
+      capabilities: { db: true, viewer: false, storage: false },
+    });
+    const s = await sock(id, viewer);
+    await s.next();
+    const reset = await api(app, R.dataReset(id), owner.cookie, {
+      method: "PUT",
+      body: { collections: {} },
+    });
+    expect(reset.status).toBe(200);
+    await restPublish(id, owner, "<p>2</p>");
+    expect(await s.next()).toMatchObject({ type: "version", version: 2 });
+    expect(s.ws.readyState).toBe(1);
+    s.ws.close();
+  });
+
+  it("any client message closes the socket (1008)", async () => {
+    const id = await pub({ visibility: "team" });
+    const s = await sock(id, viewer);
+    await s.next();
+    s.ws.send("hi");
+    expect(await s.closed).toBe(1008);
+  });
+
+  it("uses the hibernation API: tagged by viewer class, attachment survives", async () => {
+    // The pool can't force a hibernation; this checks what hibernation keeps:
+    // sockets accepted via ctx.acceptWebSocket with their tags and attachment.
+    const id = await pub({ visibility: "public" });
+    const m = await sock(id, viewer);
+    const a = await sock(id, null);
+    await m.next();
+    await a.next();
+    await runInDurableObject(
+      runtimeStub(env, id) as unknown as DurableObjectStub<ArtifactRuntime>,
+      (_i, state) => {
+        expect(state.getWebSockets("~ev")).toHaveLength(2);
+        const named = state.getWebSockets("~ev:named");
+        expect(named).toHaveLength(1);
+        expect(named[0]?.deserializeAttachment()).toMatchObject({
+          named: true,
+        });
+        expect(state.getWebSockets("~ev:anon")).toHaveLength(1);
+      },
+    );
+    m.ws.close();
+    a.ws.close();
+  });
+});

@@ -32,7 +32,7 @@ import { normEmail } from "../db/email.js";
 import { artifacts, shares, users } from "../db/schema.js";
 import type { Env } from "../env.js";
 import { ApiError, appOrigin } from "../http/errors.js";
-import { runtimeStub } from "../runtime/do.js";
+import { runtimeStub, type VersionEvent } from "../runtime/do.js";
 import { closeRuntimeSockets } from "../runtime/revoke.js";
 import { type ManifestEntry, materialize, planFiles } from "./manifest.js";
 import { getSettings } from "./members.js";
@@ -52,16 +52,20 @@ const later = async (ctx: Ctx | undefined, p: Promise<unknown>) => {
 /**
  * Queues search indexing of `version` on the artifact's DO (C3): one cheap
  * RPC, so extraction never runs on the request's CPU. Never throws: a lost
- * enqueue leaves the artifact searchable by title/description.
+ * enqueue leaves the artifact searchable by title/description. With `event`
+ * (publish, restore) the same RPC pushes the `version` frame to the
+ * artifact's R.events sockets (best effort: a lost one is caught up by the
+ * client's next hello).
  */
 export async function enqueueIndex(
   env: Env,
   id: string,
   version: number,
   thumb = false,
+  event?: VersionEvent,
 ): Promise<void> {
   try {
-    await runtimeStub(env, id).scheduleIndex(id, version, thumb);
+    await runtimeStub(env, id).scheduleIndex(id, version, thumb, event);
   } catch (e) {
     console.error(
       JSON.stringify({
@@ -72,6 +76,22 @@ export async function enqueueIndex(
       }),
     );
   }
+}
+
+/** The R.events `version` attribution, from what the version row stores. */
+export function versionEvent(
+  user: Member,
+  agent: AgentRef | null,
+  at: number,
+  restoredFrom?: number,
+): VersionEvent {
+  return {
+    at: new Date(at).toISOString(),
+    by: agent
+      ? { kind: "agent", name: agent.name }
+      : { kind: "user", name: user.name ?? user.email },
+    ...(restoredFrom === undefined ? {} : { restoredFrom }),
+  };
 }
 
 /**
@@ -300,7 +320,7 @@ export async function publish(
       throw new ApiError("conflict", "An upload was already used");
     throw notFound();
   }
-  await enqueueIndex(env, id, version, true);
+  await enqueueIndex(env, id, version, true, versionEvent(user, agent, now));
   if (accessChanged)
     await closeRuntimeSockets(env, [id], "access changed", ctx);
   return { id, version, url: appOrigin(env) + viewerPath(id) };
@@ -820,10 +840,11 @@ export async function restoreVersion(
       format: Format;
     }>();
   if (!src) throw notFound();
+  const now = Date.now();
   const res = await env.DB.batch<{ current_version: number }>([
     ...allocateVersion(env.DB, {
       id,
-      now: Date.now(),
+      now,
       agent,
       userId: user.id,
       format: src.format,
@@ -836,7 +857,7 @@ export async function restoreVersion(
   ]);
   const version = res[0]?.results[0]?.current_version;
   if (version === undefined) throw notFound();
-  await enqueueIndex(env, id, version, true);
+  await enqueueIndex(env, id, version, true, versionEvent(user, agent, now, v));
   return { id, version, url: appOrigin(env) + viewerPath(id) };
 }
 

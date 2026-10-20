@@ -113,6 +113,14 @@ export const R = {
    * docs (500 Free, 5000 Paid; 400); each doc ≤ dataDocLimit(plan) serialized (413). Idempotent.
    */
   dataReset: (id: string) => `${A}/${seg(id)}/data`,
+  /**
+   * GET Upgrade: websocket; frames are ArtifactEvent (hello, version, gone).
+   * Live version updates for any artifact (no capability needed). Access as
+   * for reading the artifact (404 otherwise), checked on every connect; a
+   * browser Origin other than the app's is refused (403 csrf); `?embed=1`
+   * (or X-OA-Embed: 1) connects anonymously. `gone` is followed by close 4403.
+   */
+  events: (id: string) => `${A}/${seg(id)}/events`,
   /** GET Upgrade: websocket; frames are DataChange */
   dataSubscribe: (id: string, col: string) =>
     `${A}/${seg(id)}/data-subscribe?collection=${seg(col)}`,

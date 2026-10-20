@@ -58,6 +58,7 @@ import {
   UploadCreateInputSchema,
   type UserRef,
 } from "../schemas.js";
+import type { ArtifactEventsMock } from "./events.js";
 import { fixtures } from "./fixtures.js";
 
 export type MockOptions = {
@@ -67,6 +68,12 @@ export type MockOptions = {
   /** Me.instance.plan, and GET /usage `plan` and its limits (default "free"). */
   plan?: Plan;
   update?: InstanceUpdate | null;
+  /**
+   * The R.events mock (createArtifactEvents()): hello reports the store's
+   * currentVersion; publish/restore emit `version`, delete and
+   * visibility/capabilities changes emit `gone`.
+   */
+  events?: ArtifactEventsMock;
 };
 
 const err = (code: ErrorCode, message: string, details?: unknown) =>
@@ -189,6 +196,10 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
   me.instance.plan = plan;
   if (opts.update !== undefined) me.instance.update = opts.update;
   const artifacts: ArtifactSummary[] = f.artifacts;
+  if (opts.events)
+    opts.events.currentVersion = (id) =>
+      artifacts.find((x) => x.id === id && x.deletedAt === null)
+        ?.currentVersion;
   const versions = f.versions;
   const files = new Map(Object.entries(f.files));
   const shares = f.shares;
@@ -253,6 +264,7 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
       format: Format;
       list: FileEntry[];
       bodies: Map<string, string>;
+      restoredFrom?: number;
     },
   ): Response => {
     const list = versions[a.id] ?? [];
@@ -275,6 +287,12 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
     for (const [p, b] of v.bodies) files.set(`${a.id}/${version}/${p}`, b);
     a.currentVersion = version;
     a.updatedAt = createdAt;
+    opts.events?.emitVersion(a.id, {
+      version,
+      at: createdAt,
+      by: { kind: "user", name: me.user.name ?? me.user.email ?? undefined },
+      ...(v.restoredFrom === undefined ? {} : { restoredFrom: v.restoredFrom }),
+    });
     return HttpResponse.json(
       { id: a.id, version, url: me.instance.appUrl + viewerPath(a.id) },
       { status: 201 },
@@ -469,8 +487,12 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
         if (r.data.visibility !== undefined && a.access !== "owner")
           return notFound();
         const { capabilities, ...rest } = r.data;
+        const gone =
+          (rest.visibility !== undefined && rest.visibility !== a.visibility) ||
+          capabilities !== undefined;
         Object.assign(a, rest, { updatedAt: iso() });
         if (capabilities) Object.assign(a.capabilities, capabilities);
+        if (gone) opts.events?.emitGone(a.id);
         return HttpResponse.json(a);
       }, "write")(ctx);
     }),
@@ -478,6 +500,7 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
       A,
       withArt((a) => {
         a.deletedAt = iso();
+        opts.events?.emitGone(a.id);
         return noContent();
       }, "owner"),
     ),
@@ -544,6 +567,7 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
           format: src.format,
           list: structuredClone(src.files),
           bodies,
+          restoredFrom: src.version,
         });
       }, "write"),
     ),
