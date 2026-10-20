@@ -22,5 +22,8 @@
     "build": "tsc -b",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5"
   }
 }
