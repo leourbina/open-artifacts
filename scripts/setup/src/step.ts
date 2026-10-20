@@ -68,6 +68,8 @@ export type Ctx = {
   /** `data` for the current step's line; `human` replaces it in human output. */
   data?: unknown;
   human?: string;
+  /** Set by a step's apply: it had nothing to do, so its line is `skipped`, not `ok`. */
+  skipped?: boolean;
   /** The PAT minted this run, in memory only. */
   pat?: string;
   /** Under --ci: the minted token's row id, revoked at the end of the run. */

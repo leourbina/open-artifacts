@@ -124,6 +124,10 @@ type World = {
   workerVersion?: string;
   /** `wrangler deploy` fails with this stderr. */
   deployFails?: string;
+  /** A stable `wrangler deploy --dry-run` build with this content (a different value is a different bundle). Unset: every build differs, so the deploy is never skipped. */
+  stableBundle?: string;
+  /** `wrangler deploy --dry-run` fails. */
+  dryRunFails?: boolean;
   /** `wrangler rollback` fails with this stderr. */
   rollbackFails?: string;
   /** /healthz reports this `version` (absent: an install without it). */
@@ -224,6 +228,7 @@ export function world(w: World = {}) {
   const versions: string[] = w.workerVersion ? [w.workerVersion] : [];
   let deployCount = 0;
   let published = 0;
+  let dryRuns = 0;
   /** The content of the last publish (kept when a test clears mcpCalls). */
   let lastPublished = "";
   const pubs: { id: string; title: string }[] = [];
@@ -453,6 +458,15 @@ export function world(w: World = {}) {
           return { code: 1, stdout: "", stderr: w.rollbackFails };
         ops.push(`rollback ${rollback[1]}`);
         versions.unshift(rollback[1]);
+      } else if (a === "--version") {
+        stdout = " ⛅️ wrangler 4.151.1\n";
+      } else if (a.startsWith("deploy --dry-run --outdir ")) {
+        if (w.dryRunFails)
+          return { code: 1, stdout: "", stderr: "dry run failed" };
+        const out = a.slice("deploy --dry-run --outdir ".length);
+        const body = w.stableBundle ?? `unstable#${++dryRuns}`;
+        c.files.set(`${out}/index.js`, body);
+        stdout = `--dry-run: exiting now.\n`;
       } else if (a === "deploy") {
         if (w.deployFails)
           return { code: 1, stdout: "", stderr: w.deployFails };

@@ -115,6 +115,8 @@ export async function rollbackCommand(
   }
   state.workerVersion = to;
   state.previousWorkerVersion = live;
+  // The live code is no longer what the hash describes: the next run must deploy.
+  state.deployHash = undefined;
   writeState(fs, root, state);
   report("ok", "rollback", `rolled ${name} back to ${to}`, { from: live, to });
   return 0;

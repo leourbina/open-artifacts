@@ -126,7 +126,9 @@ describe("M2: required permissions come from the calls setup makes", () => {
     [/^GET \/accounts\/[^/]+\/d1\/database$/, "d1:read"],
   ];
   const WRANGLER: [RegExp, string[]][] = [
-    [/^(whoami|auth token)\b/, []],
+    [/^(whoami|auth token|--version)\b/, []],
+    // a dry-run build uploads nothing and needs no permission
+    [/^deploy --dry-run\b/, []],
     [/^d1 (create|execute|migrations apply)\b/, ["d1:edit"]],
     [/^kv namespace create\b/, ["workers_kv_storage:edit"]],
     [/^r2 bucket create\b/, ["workers_r2:edit"]],

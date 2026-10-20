@@ -7,6 +7,7 @@ import {
   fstatSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -15,6 +16,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
@@ -39,8 +41,12 @@ export type Fs = {
    * failure keeps the old file.
    */
   writeSecret?: (path: string, data: string) => void;
-  /** A hash of every file under these paths (names and contents); undefined when none exists. */
-  hashTree?: (paths: string[]) => string | undefined;
+  /** A hash of every file under `base`/`rels` (names relative to `base`, and contents); undefined when none exists. */
+  hashTree?: (base: string, rels: string[]) => string | undefined;
+  /** A new empty temp directory. */
+  tempDir?: () => string;
+  /** Removes a file or directory tree (best effort). */
+  removeTree?: (path: string) => void;
 };
 export type TokenFile = {
   text: string;
@@ -85,10 +91,11 @@ export const realFs: Fs = {
     mkdirSync(dirname(p), { recursive: true });
     writeFileSync(p, d);
   },
-  hashTree: (paths) => {
+  hashTree: (base, rels) => {
     const h = createHash("sha256");
     let any = false;
-    const walk = (p: string) => {
+    const walk = (rel: string) => {
+      const p = join(base, rel);
       let st: ReturnType<typeof statSync>;
       try {
         st = statSync(p);
@@ -97,15 +104,17 @@ export const realFs: Fs = {
       }
       if (st.isDirectory()) {
         for (const n of readdirSync(p).sort())
-          if (n !== "node_modules") walk(join(p, n));
+          if (n !== "node_modules") walk(join(rel, n));
       } else if (st.isFile()) {
         any = true;
-        h.update(`${p}\0`).update(readFileSync(p)).update("\0");
+        h.update(`${rel}\0`).update(readFileSync(p)).update("\0");
       }
     };
-    for (const p of paths) walk(p);
+    for (const r of rels) walk(r);
     return any ? h.digest("hex") : undefined;
   },
+  tempDir: () => mkdtempSync(join(tmpdir(), "oa-bundle-")),
+  removeTree: (p) => rmSync(p, { recursive: true, force: true }),
   // POSIX only: Windows is supported through WSL.
   writeSecret: (p, d) => {
     const dir = dirname(p);

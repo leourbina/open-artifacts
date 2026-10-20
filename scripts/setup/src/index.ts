@@ -524,6 +524,7 @@ export async function run(
   /** Runs one step and reports it; the exit code when it stopped the run. */
   const runStep = async (step: Step): Promise<number | undefined> => {
     human = ctx.data = ctx.human = undefined;
+    ctx.skipped = false;
     try {
       if ((await step.check(state, ctx)) === "done") {
         report(
@@ -542,7 +543,10 @@ export async function run(
         report({ step: step.name, ...r });
         return 2;
       }
-      report({ ...take("ok", "done"), step: step.name });
+      report({
+        ...take(ctx.skipped ? "skipped" : "ok", "done"),
+        step: step.name,
+      });
       return undefined;
     } catch (e) {
       refused = true;

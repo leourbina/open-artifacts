@@ -129,17 +129,36 @@ function planGuard(
   return undefined;
 }
 
-/** Rendered config + repo version + the built bundle (assets and server source); undefined when unknown. */
-function deployHash(ctx: Ctx, _vars: unknown): string | undefined {
-  const config = ctx.fs.read(join(ctx.root, CONFIG));
-  const bundle = ctx.fs.hashTree?.([
-    join(ctx.root, "apps/server/dist-assets"),
-    join(ctx.root, "apps/server/src"),
-  ]);
-  if (config === null || !bundle) return undefined;
-  return createHash("sha256")
-    .update(`${config}\0${repoVersion(ctx)}\0${bundle}`)
-    .digest("hex");
+/**
+ * Hash of what `wrangler deploy` would upload: a dry-run build of the Worker
+ * (so @oa/shared, dependencies and the lockfile are all in it) plus the
+ * rendered config, the wrangler version and the repo version. Built twice: a
+ * non-deterministic bundle, a failed dry run or any missing piece gives
+ * undefined, and an unknown hash never skips a deploy.
+ */
+async function deployHash(ctx: Ctx): Promise<string | undefined> {
+  const fs = ctx.fs;
+  const config = fs.read(join(ctx.root, CONFIG));
+  if (config === null || !fs.hashTree || !fs.tempDir) return undefined;
+  const bundle = async () => {
+    const dir = fs.tempDir?.() as string;
+    try {
+      await ctx.wrangler(["deploy", "--dry-run", "--outdir", dir]);
+      return fs.hashTree?.(dir, ["."]);
+    } finally {
+      fs.removeTree?.(dir);
+    }
+  };
+  try {
+    const wrangler = (await ctx.wrangler(["--version"])).trim();
+    const first = await bundle();
+    if (!first || !wrangler || (await bundle()) !== first) return undefined;
+    return createHash("sha256")
+      .update(`${config}\0${wrangler}\0${repoVersion(ctx)}\0${first}`)
+      .digest("hex");
+  } catch {
+    return undefined;
+  }
 }
 
 export const deploy: Step = {
@@ -211,14 +230,15 @@ export const deploy: Step = {
     const replaced = await readVersion(ctx, state);
     // An identical deploy is a no-op: same rendered config, repo version and built bundle as the
     // live version. An unknown hash (no bundle to read, no live version) never skips.
-    const hash = deployHash(ctx, vars);
+    const hash = await deployHash(ctx);
     if (
       hash &&
       state.deployHash === hash &&
       replaced &&
       replaced === state.workerVersion
     ) {
-      ctx.notes.push(`skipped: already deployed ${state.deployedVersion}`);
+      ctx.notes.push(`already deployed ${state.deployedVersion}`);
+      ctx.skipped = true;
       ctx.data = {
         deployedVersion: state.deployedVersion,
         deploySkipped: true,

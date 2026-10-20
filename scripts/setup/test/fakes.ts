@@ -39,6 +39,7 @@ export function core(o: Core = {}) {
   const answers = [...(o.answers ?? [])];
   const sleeps: number[] = [];
   let clock = 0;
+  let tempCount = 0;
   /** Paths written through writeSecret (0600 files). */
   const secretWrites: string[] = [];
   const deps: Deps = {
@@ -46,15 +47,29 @@ export function core(o: Core = {}) {
     fs: {
       read: (p) => files.get(p) ?? null,
       write: (p, d) => void files.set(p, d),
-      hashTree: (paths) => {
+      hashTree: (base, rels) => {
         const hit = [...files.keys()]
-          .filter((k) => paths.some((p) => k === p || k.startsWith(`${p}/`)))
+          .filter((k) =>
+            rels.some((r) => {
+              const p = r === "." ? base : `${base}/${r}`;
+              return k === p || k.startsWith(`${p}/`);
+            }),
+          )
           .sort();
         return hit.length
           ? createHash("sha256")
-              .update(hit.map((k) => `${k}\0${files.get(k)}`).join("\0"))
+              .update(
+                hit
+                  .map((k) => `${k.slice(base.length)}\0${files.get(k)}`)
+                  .join("\0"),
+              )
               .digest("hex")
           : undefined;
+      },
+      tempDir: () => `/tmp/oa-bundle-${++tempCount}`,
+      removeTree: (p) => {
+        for (const k of [...files.keys()])
+          if (k === p || k.startsWith(`${p}/`)) files.delete(k);
       },
       writeSecret: (p, d) => {
         files.set(p, d);
