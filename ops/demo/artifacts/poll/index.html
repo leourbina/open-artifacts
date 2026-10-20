@@ -237,7 +237,7 @@
       if (OA.viewer && typeof OA.viewer.anonId === "function") anon = await OA.viewer.anonId();
     } catch { anon = null; }
     if (!anon && viewer && typeof viewer.anonId === "string") anon = viewer.anonId;
-    if (anon) return { id: safeId(anon), signedIn: false };
+    if (anon && safeId(anon)) return { id: safeId(anon), signedIn: false };
     return { id: localId(), signedIn: false };
   }
 
@@ -300,9 +300,12 @@
   /* ---------- voting ---------- */
 
   let inFlight = false;
+  /** Every write carries me.id: never write without one. */
+  const hasId = () => Boolean(me) && typeof me.id === "string" && me.id.length > 0;
   function vote(o) {
     if (!ready) { hint(failText || "Still connecting, try again in a moment."); return; }
     if (readOnly || closed) { hint(el.error.textContent || "This poll can't save votes."); return; }
+    if (!hasId()) { hint("Can't tell who you are, so nothing was saved. Reload to try again."); return; }
     if (o === mine && pending === null) { hint(`Your vote is already ${poll.o[o]}.`); return; }
     mine = o;
     pending = o;
@@ -314,7 +317,7 @@
     flush();
   }
   function flush() {
-    if (inFlight || pending === null || timer) return;
+    if (inFlight || pending === null || timer || !hasId()) return;
     const wait = lastWrite + COOLDOWN_MS - Date.now();
     if (wait > 0) { timer = setTimeout(() => { timer = null; flush(); }, wait); return; }
     const o = pending;

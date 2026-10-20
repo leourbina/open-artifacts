@@ -269,7 +269,7 @@
       if (OA.viewer && typeof OA.viewer.anonId === "function") anon = await OA.viewer.anonId();
     } catch { anon = null; }
     if (!anon && viewer && typeof viewer.anonId === "string") anon = viewer.anonId;
-    if (anon) return { id: safeId(anon), signedIn: false };
+    if (anon && safeId(anon)) return { id: safeId(anon), signedIn: false };
     return { id: localId(), signedIn: false };
   }
 
@@ -383,11 +383,14 @@
 
   /* ---------- actions ---------- */
 
+  /** Every write carries me.id: never write without one. */
+  const hasId = () => Boolean(me) && typeof me.id === "string" && me.id.length > 0;
   const seatFor = () => ({ id: me.id, at: Date.now() });
 
   async function write(next) {
     if (busy) { hint(SAVING); return; }
     if (readOnly || closed) { hint(el.error.textContent || "This board can't save moves."); return; }
+    if (!hasId()) { hint(NO_ID); return; }
     busy = true;
     showError("");
     const prev = game;
@@ -651,6 +654,7 @@
   /* ---------- feedback ---------- */
 
   const SAVING = "Saving your last move…";
+  const NO_ID = "Can't tell who you are, so nothing was saved. Reload to try again.";
   let hintTimer = null;
   /** Says why a click did nothing, on the status line and to screen readers, then goes back to the usual status. */
   function hint(msg) {

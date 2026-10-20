@@ -294,7 +294,7 @@
       if (OA.viewer && typeof OA.viewer.anonId === "function") anon = await OA.viewer.anonId();
     } catch { anon = null; }
     if (!anon && viewer && typeof viewer.anonId === "string") anon = viewer.anonId;
-    if (anon) return { id: safeId(anon), signedIn: false };
+    if (anon && safeId(anon)) return { id: safeId(anon), signedIn: false };
     return { id: localId(), signedIn: false };
   }
 
@@ -361,9 +361,12 @@
 
   /* ---------- pinning ---------- */
 
+  /** Every write carries me.id: never write without one. */
+  const hasId = () => Boolean(me) && typeof me.id === "string" && me.id.length > 0;
   function pinCountry(code) {
     if (!ready) { hint(failText || "Still connecting, try again in a moment."); return; }
     if (readOnly || closed) { hint(el.error.textContent || "This map can't save pins."); return; }
+    if (!hasId()) { hint("Can't tell who you are, so nothing was saved. Reload to try again."); return; }
     if (!BY_CODE.has(code)) return;
     if (code === mine && pending === null) { say(`Your pin is already ${BY_CODE.get(code).name}.`); return; }
     mine = code;
@@ -377,7 +380,7 @@
     flush();
   }
   function flush() {
-    if (inFlight || pending === null || timer) return;
+    if (inFlight || pending === null || timer || !hasId()) return;
     const wait = lastWrite + COOLDOWN_MS - Date.now();
     if (wait > 0) { timer = setTimeout(() => { timer = null; flush(); }, wait); return; }
     const c = pending;
