@@ -4,6 +4,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { makeQueryClient } from "./api/queryClient";
 import { isEmbed, lockToPath } from "./embed";
+import { parseHostedParam } from "./hostedParam";
 import { router } from "./router";
 import "./styles.css";
 import "./shadcn.css";
@@ -175,6 +176,8 @@ async function startMocks() {
       emailEnabled,
       plan: params.get("mock")?.startsWith("paid") ? "paid" : "free",
       update,
+      // ?hosted=1 (or tokens, see hostedParam.ts): the hosted M1 mocks.
+      hosted: parseHostedParam(params.get("hosted")),
     }),
   ).start({
     onUnhandledRequest: "bypass",
