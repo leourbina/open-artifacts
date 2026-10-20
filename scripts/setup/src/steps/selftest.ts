@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { homeOf, patTokenFile } from "../secret-file.ts";
 import type { Ctx, Step } from "../step.ts";
 import { workerBindings } from "../worker.ts";
 
@@ -183,8 +184,9 @@ function viewUrl(ctx: Ctx, raw?: string): string | undefined {
   return undefined;
 }
 
-export const selftest: Step = {
-  name: "selftest",
+/** Healthz (with the PLAN check), OIDC discovery and the EMAIL binding: needs no token, so it runs before owner-token. */
+export const healthcheck: Step = {
+  name: "healthcheck",
   always: true,
   check: async () => "todo",
   async apply(state, ctx) {
@@ -215,22 +217,57 @@ export const selftest: Step = {
         );
       ctx.notes.push("EMAIL binding deployed");
     }
-    if (!ctx.pat) {
+    ctx.notes.push("healthz and OIDC discovery ok");
+    return undefined;
+  },
+};
+
+/** The PAT saved by owner-token on an earlier run, when it still looks like one. */
+function savedPat(ctx: Ctx): string | undefined {
+  const file = patTokenFile(homeOf(ctx.deps.env), ctx.opts.appHost);
+  const text = ctx.fs.read(file)?.trim();
+  return text && /^oa_pat_\S+$/.test(text) ? text : undefined;
+}
+
+/** After owner-token: the MCP connection and the Welcome publish, with this run's PAT or the saved one. */
+export const selftest: Step = {
+  name: "selftest",
+  always: true,
+  check: async () => "todo",
+  async apply(state, ctx) {
+    const fromFile = !ctx.pat && !ctx.opts.ci;
+    const token = ctx.pat ?? (fromFile ? savedPat(ctx) : undefined);
+    if (!token) {
       ctx.notes.push(
-        "healthz and OIDC discovery ok; MCP check skipped: no token minted this run (rerun with --new-owner-token to test it)",
+        "MCP check skipped: no saved token (rerun with --new-owner-token to test it)",
       );
       ctx.data = { mcp: "skipped" };
       return undefined;
     }
-    const { id: artifactId, url: welcomeUrl } = await mcp(
-      ctx,
-      ctx.pat,
-      state.welcomeArtifactId,
-    );
+    let artifactId: string;
+    let welcomeUrl: string | undefined;
+    try {
+      ({ id: artifactId, url: welcomeUrl } = await mcp(
+        ctx,
+        token,
+        state.welcomeArtifactId,
+      ));
+    } catch (e) {
+      if (!fromFile || !/HTTP 401/.test((e as Error).message)) throw e;
+      ctx.notes.push(
+        "MCP check skipped: the saved agent token was rejected (401); rerun with --new-owner-token to test it",
+      );
+      ctx.data = { mcp: "skipped" };
+      return undefined;
+    }
     ctx.welcomeUrl = viewUrl(ctx, welcomeUrl);
     state.welcomeArtifactId = artifactId;
-    const shown = await content(ctx, ctx.pat, artifactId);
-    ctx.notes.push(`healthz, OIDC discovery, MCP publish, content ok`);
+    const shown = await content(ctx, token, artifactId);
+    ctx.notes.push(
+      fromFile
+        ? "MCP publish and content ok (with the saved agent token)"
+        : "MCP publish and content ok",
+    );
     ctx.data = {
       mcp: "ok",
       artifactId,

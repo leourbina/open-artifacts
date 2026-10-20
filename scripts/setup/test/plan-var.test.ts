@@ -202,7 +202,7 @@ describe("selftest checks /healthz plan", () => {
   it("fails with a clear message on a mismatch", async () => {
     const w = world({ subscriptions: PAID, healthPlan: "free" });
     expect(await run([...BASE, "--solo"], w.deps, ROOT)).toBe(1);
-    const l = line(w, "selftest");
+    const l = line(w, "healthcheck");
     expect(l.status).toBe("error");
     expect(l.message).toContain("PLAN");
     expect(l.message).toContain("paid");

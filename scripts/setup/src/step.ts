@@ -97,6 +97,8 @@ export type Step = {
   name: string;
   /** Runs on every setup (deploy, selftest): its todo is not drift, --strict ignores it. */
   always?: boolean;
+  /** Still runs (and prints) when one of these steps failed; the run keeps the failure's exit code. */
+  runAfterFailureOf?: string[];
   check: (state: State, ctx: Ctx) => Promise<"done" | "todo">;
   apply: (state: State, ctx: Ctx) => Promise<ActionRequired | undefined>;
 };

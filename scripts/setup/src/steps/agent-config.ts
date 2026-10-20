@@ -107,17 +107,9 @@ export const snippets = (
 
 export const agentConfig: Step = {
   name: "agent-config",
-  async check(_state, ctx) {
-    if (ctx.pat) return "todo";
-    if (ctx.opts.upgrade) {
-      ctx.notes.push(
-        "skipped (--upgrade); pass --new-owner-token for snippets",
-      );
-      return "done";
-    }
-    await agentConfig.apply(_state, ctx);
-    return "done";
-  },
+  always: true,
+  runAfterFailureOf: ["selftest"],
+  check: async () => "todo",
   async apply(_state, ctx) {
     const url = `https://${ctx.opts.appHost}/mcp`;
     const ci = ctx.opts.ci;

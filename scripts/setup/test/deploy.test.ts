@@ -30,6 +30,7 @@ const ALL = [
   "secrets",
   "email",
   "deploy",
+  "healthcheck",
   "owner-token",
   "selftest",
   "agent-config",
@@ -187,27 +188,77 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     });
   });
 
-  it("a rerun skips all but deploy and selftest; selftest skips MCP without a fresh token", async () => {
+  it("a rerun runs deploy, healthcheck, selftest and agent-config; selftest uses the saved PAT file", async () => {
     const w = await installed();
     expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    const always = ["deploy", "healthcheck", "selftest", "agent-config"];
     expect(statuses(w)).toEqual(
-      ALL.map(
-        (s) => `${s}:${s === "deploy" || s === "selftest" ? "ok" : "skipped"}`,
-      ),
+      ALL.map((s) => `${s}:${always.includes(s) ? "ok" : "skipped"}`),
     );
     expect(w.ops).toEqual(["build", "migrate open-artifacts", "deploy"]);
     expect(w.db.tokens).toHaveLength(1);
     expect(w.hits).toEqual([
-      "GET /healthz", // the version guard (prereqs), then selftest's
+      "GET /healthz", // the version guard (prereqs), then healthcheck's
       "GET /healthz",
       "GET /cdn-cgi/access/sso/oidc/cid-new/.well-known/openid-configuration",
+      "mcp initialize",
+      "mcp notifications/initialized",
+      "mcp tools/list",
+      "mcp tools/call",
+      "GET content-url",
+      "GET content no auth",
+      "GET content no auth",
     ]);
+    expect(line(w, "selftest").data).toMatchObject({
+      mcp: "ok",
+      welcomeUrl: "https://app.example.com/a/art1",
+    });
+    expect(w.mcpCalls[0].arguments.id).toBe("art1");
+    const cfg = line(w, "agent-config");
+    expect(cfg.data.snippets.claudeCode).not.toContain("--header");
+    expect(w.lines.join("\n")).not.toMatch(/oa_pat_/);
+  });
+
+  it("#6: an --upgrade without the PAT file skips the MCP check with a note", async () => {
+    const w = await installed();
+    for (const k of [...w.files.keys()])
+      if (k.endsWith("-pat-token")) w.files.delete(k);
+    expect(await run([...HOSTS, "--upgrade"], w.deps, ROOT)).toBe(0);
     expect(line(w, "selftest").message).toMatch(
       /MCP check skipped.*--new-owner-token/,
     );
     expect(line(w, "selftest").data).toEqual({ mcp: "skipped" });
+    expect(w.hits.some((h) => h.startsWith("mcp"))).toBe(false);
+  });
+
+  it("#6: a rerun whose saved PAT is rejected (401) notes it and still exits 0", async () => {
+    const w = await installed();
+    for (const k of w.files.keys())
+      if (k.endsWith("-pat-token"))
+        w.files.set(k, `oa_pat_${"1".repeat(32)}\n`);
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    const l = line(w, "selftest");
+    expect(l.message).toMatch(/saved agent token was rejected \(401\)/);
+    expect(l.data).toEqual({ mcp: "skipped" });
+  });
+
+  it("#6: healthcheck runs before owner-token, so a failing health check mints nothing", async () => {
+    const w = world({ healthzDown: true });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(1);
+    expect(line(w, "healthcheck")).toMatchObject({ status: "error" });
+    expect(line(w, "owner-token")).toBeUndefined();
+    expect(w.db.tokens).toHaveLength(0);
+    expect(w.secretWrites).toEqual([]);
+    expect(line(w, "agent-config")).toBeUndefined();
+  });
+
+  it("#21: agent-config still prints when the selftest fails, and the run exits 1", async () => {
+    const w = world({ noPublishTool: true });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(1);
+    expect(line(w, "selftest")).toMatchObject({ status: "error" });
     const cfg = line(w, "agent-config");
-    expect(cfg.data.snippets.claudeCode).not.toContain("--header");
+    expect(cfg).toMatchObject({ status: "ok" });
+    expect(cfg.data.url).toBe("https://app.example.com/mcp");
     expect(w.lines.join("\n")).not.toMatch(/oa_pat_/);
   });
 
@@ -236,12 +287,13 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     expect(w.db.tokens).toHaveLength(3);
   });
 
-  it("--upgrade runs only deploy and selftest; --new-owner-token adds a token", async () => {
+  it("--upgrade runs only the always-steps; --new-owner-token adds a token", async () => {
     const w = await installed();
     expect(await run([...HOSTS, "--upgrade"], w.deps, ROOT)).toBe(0);
     expect(statuses(w)).toEqual(
       ALL.map(
-        (s) => `${s}:${s === "deploy" || s === "selftest" ? "ok" : "skipped"}`,
+        (s) =>
+          `${s}:${["deploy", "healthcheck", "selftest", "agent-config"].includes(s) ? "ok" : "skipped"}`,
       ),
     );
     expect(w.ops).toEqual(["build", "migrate open-artifacts", "deploy"]);
@@ -251,6 +303,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     expect(await run(argv, w.deps, ROOT)).toBe(0);
     expect(statuses(w).slice(5)).toEqual([
       "deploy:ok",
+      "healthcheck:ok",
       "owner-token:ok",
       "selftest:ok",
       "agent-config:ok",
@@ -374,11 +427,11 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     expect(w.sleeps).toEqual([1000, 2000, 4000]);
     const down = world({ healthFails: 1000 });
     expect(await run(HOSTS, down.deps, ROOT)).toBe(1);
-    expect(line(down, "selftest").message).toContain("/healthz");
+    expect(line(down, "healthcheck").message).toContain("/healthz");
     const total = down.sleeps.reduce((a, b) => a + b, 0);
     expect(total).toBeGreaterThanOrEqual(55_000);
     expect(total).toBeLessThanOrEqual(65_000);
-    patContained(down, patOf(down));
+    expect(down.db.tokens).toHaveLength(0); // #6: nothing minted before the health check passes
   });
 
   it("selftest errors when tools/list lacks publish_artifact", async () => {
@@ -415,7 +468,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     await run(HOSTS, w.deps, ROOT);
     await run(HOSTS, w.deps, ROOT);
     await run([...HOSTS, "--upgrade", "--new-owner-token"], w.deps, ROOT);
-    expect(w.lines.length).toBe(30); // + a final state line per run
+    expect(w.lines.length).toBe(33); // + a final state line per run
     for (const l of w.lines)
       expect(Object.keys(JSON.parse(l))).toEqual(
         expect.arrayContaining(["step", "status", "message"]),

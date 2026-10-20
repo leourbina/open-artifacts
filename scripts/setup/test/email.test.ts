@@ -54,7 +54,7 @@ describe("team/solo and the email step", () => {
     });
     expect(line(w.lines, "email")).toMatchObject({ status: "skipped" });
     expect(line(w.lines, "selftest").status).toBe("ok");
-    expect(line(w.lines, "selftest").message).toContain("EMAIL binding");
+    expect(line(w.lines, "healthcheck").message).toContain("EMAIL binding");
   });
 
   it("reads DNS by DoH when the token cannot read DNS records", async () => {
@@ -179,11 +179,11 @@ describe("team/solo and the email step", () => {
     expect(w.state()).toMatchObject({ team: true, email: true });
   });
 
-  it("selftest fails when the deployed Worker lacks the EMAIL binding", async () => {
+  it("healthcheck fails when the deployed Worker lacks the EMAIL binding", async () => {
     const w = world({ dns: onboarded(D), dropSendEmail: true });
     expect(await run(TEAM, w.deps, ROOT)).toBe(1);
     const l = parse(w.lines).at(-1);
-    expect(l).toMatchObject({ step: "selftest", status: "error" });
+    expect(l).toMatchObject({ step: "healthcheck", status: "error" });
     expect(l.message).toContain("EMAIL");
   });
 

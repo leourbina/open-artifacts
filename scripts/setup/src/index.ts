@@ -19,7 +19,7 @@ import {
 import { prereqs } from "./steps/prereqs.ts";
 import { resources } from "./steps/resources.ts";
 import { secrets } from "./steps/secrets.ts";
-import { selftest } from "./steps/selftest.ts";
+import { healthcheck, selftest } from "./steps/selftest.ts";
 import { withTokenFiles } from "./token-files.ts";
 import { isTokenCommand, tokenCommand } from "./token-page.ts";
 
@@ -30,6 +30,7 @@ export const STEPS: Step[] = [
   secrets,
   email,
   deploy,
+  healthcheck,
   ownerToken,
   selftest,
   agentConfig,
@@ -518,37 +519,47 @@ export async function run(
         if (deployed.sources[k] === "flag") state[k] = deployed.live[k];
     writeState(fs, root, state);
   };
-  const runSteps = async (): Promise<number> => {
-    for (const step of steps) {
-      human = ctx.data = ctx.human = undefined;
-      try {
-        if ((await step.check(state, ctx)) === "done") {
-          report({ ...take("skipped", "already done"), step: step.name });
-          continue;
-        }
-        // Check-time notes explain the todo; apply reports its own.
-        ctx.notes.length = 0;
-        const r = await step.apply(state, ctx);
-        if (r) {
-          refused = true;
-          ctx.notes.length = 0;
-          report({ step: step.name, ...r });
-          return 2;
-        }
-        report({ ...take("ok", "done"), step: step.name });
-      } catch (e) {
+  /** Runs one step and reports it; the exit code when it stopped the run. */
+  const runStep = async (step: Step): Promise<number | undefined> => {
+    human = ctx.data = ctx.human = undefined;
+    try {
+      if ((await step.check(state, ctx)) === "done") {
+        report({ ...take("skipped", "already done"), step: step.name });
+        return undefined;
+      }
+      // Check-time notes explain the todo; apply reports its own.
+      ctx.notes.length = 0;
+      const r = await step.apply(state, ctx);
+      if (r) {
         refused = true;
         ctx.notes.length = 0;
-        const message = (e as Error).message;
-        if (e instanceof NeedInput) {
-          report({ step: step.name, status: "action_required", message });
-          return 2;
-        }
-        report({ step: step.name, status: "error", message });
-        return (e as { exitCode?: number }).exitCode ?? 1;
-      } finally {
-        persist();
+        report({ step: step.name, ...r });
+        return 2;
       }
+      report({ ...take("ok", "done"), step: step.name });
+      return undefined;
+    } catch (e) {
+      refused = true;
+      ctx.notes.length = 0;
+      const message = (e as Error).message;
+      if (e instanceof NeedInput) {
+        report({ step: step.name, status: "action_required", message });
+        return 2;
+      }
+      report({ step: step.name, status: "error", message });
+      return (e as { exitCode?: number }).exitCode ?? 1;
+    } finally {
+      persist();
+    }
+  };
+  const runSteps = async (): Promise<number> => {
+    for (const [i, step] of steps.entries()) {
+      const code = await runStep(step);
+      if (code === undefined) continue;
+      // E.g. agent-config still prints after a failed selftest.
+      for (const later of steps.slice(i + 1))
+        if (later.runAfterFailureOf?.includes(step.name)) await runStep(later);
+      return code;
     }
     writeState(fs, root, state);
     if (json) {
