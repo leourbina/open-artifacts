@@ -2,9 +2,15 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { State } from "../state.ts";
 import type { Ctx, Step } from "../step.ts";
+import { resolveVars, TUNABLES } from "../tunables.ts";
 import { repoVersion } from "../version-guard.ts";
 import { currentVersion, deployedVars, workerBindings } from "../worker.ts";
-import { names, renderedConfig, stripComments } from "./resources.ts";
+import {
+  applyTunables,
+  names,
+  renderedConfig,
+  stripComments,
+} from "./resources.ts";
 import { ACCESS_SECRET, listSecrets } from "./secrets.ts";
 
 const CONFIG = "apps/server/wrangler.jsonc";
@@ -89,6 +95,46 @@ async function readVersion(ctx: Ctx, state: State) {
   }
 }
 
+/**
+ * Settles the tunable vars (flag, saved state, live value) and sets them in the
+ * rendered config, so a value set in the dashboard survives the deploy.
+ */
+function settleVars(state: State, ctx: Ctx, live: Live) {
+  const bindings = live === "unreadable" ? [] : (live ?? []);
+  const { values, kept, ignored, ignoredSaved } = resolveVars({
+    flags: ctx.opts.varFlags,
+    state: state.vars ?? {},
+    live: Object.fromEntries(
+      bindings
+        .filter((b) => b.type === "plain_text")
+        .map((b) => [b.name, b.text]),
+    ),
+  });
+  ctx.tunables = values;
+  for (const k of kept) ctx.notes.push(`kept live ${k}`);
+  for (const k of ignoredSaved) ctx.notes.push(`ignored invalid saved ${k}`);
+  for (const k of ignored) ctx.notes.push(`ignored invalid live ${k}`);
+  if (live === "unreadable") {
+    const at = Object.keys(TUNABLES).filter(
+      (k) =>
+        state.vars?.[k] === undefined && ctx.opts.varFlags[k] === undefined,
+    );
+    if (at.length)
+      ctx.notes.push(
+        `could not read live vars; dashboard-set ${at.join(", ")} may be overwritten`,
+      );
+  }
+  if (!ctx.opts.check) {
+    const file = join(ctx.root, CONFIG);
+    const text = ctx.fs.read(file);
+    if (text !== null) {
+      const next = applyTunables(text, values);
+      if (next !== text) ctx.fs.write(file, next);
+    }
+  }
+  return Object.fromEntries(Object.entries(values).filter(([, v]) => v !== ""));
+}
+
 type Live = Awaited<ReturnType<typeof workerBindings>> | "unreadable";
 
 /**
@@ -171,7 +217,17 @@ export const deploy: Step = {
       ctx.mustRun = true;
       ctx.notes.push(`Worker ${ctx.opts.name} never deployed`);
     }
-    if (ctx.opts.check) ctx.data = ctx.version;
+    if (ctx.opts.check) {
+      const vars = settleVars(
+        state,
+        ctx,
+        await readLive(ctx, state.accountId ?? ""),
+      );
+      ctx.data = {
+        ...ctx.version,
+        ...(Object.keys(vars).length ? { vars } : {}),
+      };
+    }
     // A pending downgrade refusal is drift too: report it instead of a clean check.
     if (ctx.opts.check) {
       try {
@@ -191,7 +247,10 @@ export const deploy: Step = {
     return "todo";
   },
   async apply(state, ctx) {
+    const live = await readLive(ctx, state.accountId ?? "");
+    const tuned = settleVars(state, ctx, live);
     const vars = renderedVars(ctx);
+    const shown = Object.keys(tuned).length ? { vars: tuned } : {};
     // The version guard ran in prereqs, before anything had a side effect.
     const ver = ctx.version;
     if (ver?.downgrade)
@@ -201,7 +260,6 @@ export const deploy: Step = {
     const cfg = JSON.parse(
       stripComments(ctx.fs.read(join(ctx.root, CONFIG)) ?? "{}"),
     ) as Rendered;
-    const live = await readLive(ctx, state.accountId ?? "");
     const dropped = drops(ctx, live, cfg);
     if (dropped.length)
       throw new Error(
@@ -244,7 +302,9 @@ export const deploy: Step = {
         deployedVersion: state.deployedVersion,
         deploySkipped: true,
         ...ver,
+        ...shown,
       };
+      state.vars = Object.keys(tuned).length ? tuned : undefined;
       return undefined;
     }
     const out = await ctx.wrangler(["deploy"]);
@@ -257,8 +317,9 @@ export const deploy: Step = {
     state.deployedVersion = repoVersion(ctx);
     state.deployHash = hash;
     state.planVar = ctx.opts.planVar;
+    state.vars = Object.keys(tuned).length ? tuned : undefined;
     ctx.notes.push(`deployed ${state.deployedVersion}`);
-    ctx.data = { deployedVersion: state.deployedVersion, ...ver };
+    ctx.data = { deployedVersion: state.deployedVersion, ...ver, ...shown };
     return undefined;
   },
 };
