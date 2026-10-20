@@ -7,7 +7,7 @@ import {
   type Settings,
   type SettingsPatch,
 } from "@oa/shared";
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, isNotNull, isNull } from "drizzle-orm";
 import { getDb } from "../db/client.js";
 import { normEmail } from "../db/email.js";
 import {
@@ -145,7 +145,15 @@ export async function removeMember(
   await revokeAllGrants(env, id);
   const to = owner.id;
   await db.batch([
-    db.update(artifacts).set({ ownerId: to }).where(eq(artifacts.ownerId, id)),
+    // Split live/deleted: owner_id is only indexed by the two partial indexes (#248).
+    db
+      .update(artifacts)
+      .set({ ownerId: to })
+      .where(and(eq(artifacts.ownerId, id), isNull(artifacts.deletedAt))),
+    db
+      .update(artifacts)
+      .set({ ownerId: to })
+      .where(and(eq(artifacts.ownerId, id), isNotNull(artifacts.deletedAt))),
     db
       .update(versions)
       .set({ createdBy: to })

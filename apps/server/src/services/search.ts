@@ -310,8 +310,8 @@ const CURRENT =
  */
 
 /**
- * Replaces the artifact's FTS row (by rowid) with version `version`'s text, if
- * it is still current (live, not superseded): otherwise a no-op. Non-pdf
+ * Replaces the artifact's FTS row (by rowid) with version `version`'s text
+ * (skipped when unchanged), if it is still current (live, not superseded): otherwise a no-op. Non-pdf
  * versions are marked text_indexed. A pdf keeps body text a viewer already
  * contributed for this version. Throws on D1/R2/extraction errors (the DO
  * alarm retries).
@@ -358,13 +358,16 @@ export async function indexVersionOrThrow(
   }
   const guard = [artifactId, version] as const;
   await env.DB.batch([
+    // One FTS write instead of delete + insert (#248: each bills a row), and
+    // none when the row already holds this text and title/description.
     env.DB.prepare(
-      `delete from artifact_search where rowid = ? and ${CURRENT}`,
-    ).bind(row.rid, ...guard),
-    env.DB.prepare(
-      `insert into artifact_search (rowid, artifact_id, title, description, body)
-       select rowid, id, ${UNMARKED}, ? from artifacts
-       where id = ? and current_version = ? and deleted_at is null`,
+      `insert or replace into artifact_search (rowid, artifact_id, title, description, body)
+       select a.rid, a.id, a.t, a.d, ?1 from (
+         select rowid as rid, id, ${unmarkSql("title")} as t, ${unmarkSql("description")} as d
+         from artifacts where id = ?2 and current_version = ?3 and deleted_at is null
+       ) a
+       where not exists (select 1 from artifact_search s
+         where s.rowid = a.rid and s.body = ?1 and s.title is a.t and s.description is a.d)`,
     ).bind(body, ...guard),
     // pdf: text_indexed stays 1 only if its contributed text survived.
     env.DB.prepare(
@@ -486,25 +489,18 @@ function pickSnippet(body: string, desc: string, title: string): string {
 }
 
 /**
- * Signed-in only (401). FTS MATCH of the sanitized query, joined to artifacts
- * through listFilterSql(caller, "all") (live, visible rows only), ordered by
- * bm25 then id, with an offset cursor capped at MAX_OFFSET.
+ * The search SELECT (exported for the EXPLAIN test): FTS MATCH `m` joined to
+ * live, visible artifacts, bm25 order, `limit + 1` rows from `offset`.
  */
-export async function search(
+export function searchQuery(
   env: Env,
-  caller: Caller,
-  q: string,
-  cursor?: string,
-  limit = 25,
-): Promise<Page<SearchHit>> {
-  if (caller.kind !== "user")
-    throw new ApiError("unauthorized", "Sign in required");
-  const m = sanitizeQuery(q);
-  if (!m) throw bad("q has no searchable words", "q");
-  const offset = cursor === undefined ? 0 : decodeOffset(cursor);
-  const me = caller.user.id;
+  caller: Caller & { kind: "user" },
+  m: string,
+  offset: number,
+  limit: number,
+) {
   const email = normEmail(caller.user.email);
-  const rows = await getDb(env)
+  return getDb(env)
     .select({
       a: artifacts,
       ownerEmail: users.email,
@@ -529,6 +525,27 @@ export async function search(
     .orderBy(sql`bm25(${artifactSearch})`, artifacts.id)
     .limit(limit + 1)
     .offset(offset);
+}
+
+/**
+ * Signed-in only (401). FTS MATCH of the sanitized query, joined to artifacts
+ * through listFilterSql(caller, "all") (live, visible rows only), ordered by
+ * bm25 then id, with an offset cursor capped at MAX_OFFSET.
+ */
+export async function search(
+  env: Env,
+  caller: Caller,
+  q: string,
+  cursor?: string,
+  limit = 25,
+): Promise<Page<SearchHit>> {
+  if (caller.kind !== "user")
+    throw new ApiError("unauthorized", "Sign in required");
+  const m = sanitizeQuery(q);
+  if (!m) throw bad("q has no searchable words", "q");
+  const offset = cursor === undefined ? 0 : decodeOffset(cursor);
+  const me = caller.user.id;
+  const rows = await searchQuery(env, caller, m, offset, limit);
   const page = rows.slice(0, limit);
   const next = offset + limit;
   return {
