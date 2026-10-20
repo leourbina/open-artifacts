@@ -245,14 +245,14 @@ test("5. public with anonymous writes; the anon write limit is enforced", async 
       { timeout: 10_000 },
     )
     .toMatch(/voted tabs|rate.?limit|too many/i);
-  if (await err.textContent()) {
-    await expect(err).toContainText(/rate.?limit|too many/i);
-  } else {
-    for (let i = 2; i <= 31; i++) await vote.click();
-    await expect(err).toContainText(/rate.?limit|too many/i, {
-      timeout: 10_000,
-    });
-  }
+  // The limiter's window is minute-aligned, so 31 clicks can straddle a
+  // window reset and never hit the limit. Two windows of 30 plus one (61)
+  // always do: click until the limit shows.
+  const limited = async () =>
+    /rate.?limit|too many/i.test((await err.textContent()) ?? "");
+  // Responses land asynchronously; extra clicks after the limit are harmless.
+  for (let i = 2; i <= 61 && !(await limited()); i++) await vote.click();
+  await expect(err).toContainText(/rate.?limit|too many/i, { timeout: 10_000 });
   await anonCtx.close();
 });
 
