@@ -1,4 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -24,7 +30,7 @@ const manifest = (over: Record<string, unknown> = {}) => ({
 });
 
 type Fixture = {
-  approved?: string[];
+  approved?: string[] | null;
   ids?: Record<string, string>;
   slugs: Record<
     string,
@@ -39,10 +45,11 @@ const fixture = (f: Fixture) => {
   const dir = mkdtempSync(join(tmpdir(), "demo-"));
   mkdirSync(join(dir, "artifacts"), { recursive: true });
   mkdirSync(join(dir, "seed"), { recursive: true });
-  writeFileSync(
-    join(dir, "publish.json"),
-    JSON.stringify({ approved: f.approved ?? Object.keys(f.slugs) }),
-  );
+  if (f.approved !== null)
+    writeFileSync(
+      join(dir, "publish.json"),
+      JSON.stringify({ approved: f.approved ?? Object.keys(f.slugs) }),
+    );
   if (f.ids) writeFileSync(join(dir, "ids.json"), JSON.stringify(f.ids));
   for (const [slug, s] of Object.entries(f.slugs)) {
     mkdirSync(join(dir, "artifacts", slug), { recursive: true });
@@ -68,6 +75,7 @@ type Req = { method: string; path: string; body?: string; auth?: string };
 type Srv = {
   versions?: Record<string, { version: number; message: string | null }[]>;
   data?: Record<string, Record<string, unknown[]>>;
+  live?: Record<string, unknown>;
 };
 const server = (s: Srv = {}) => {
   const reqs: Req[] = [];
@@ -91,6 +99,17 @@ const server = (s: Srv = {}) => {
       (m = u.pathname.match(/^\/api\/v1\/artifacts\/([^/]+)\/versions$/))
     )
       return json(s.versions?.[m[1] as string] ?? []);
+    if (
+      method === "GET" &&
+      (m = u.pathname.match(/^\/api\/v1\/artifacts\/([^/]+)$/))
+    )
+      return json(
+        s.live?.[m[1] as string] ?? {
+          visibility: "public",
+          capabilities: { db: true, viewer: true, storage: false },
+          allowAnonymousWrites: true,
+        },
+      );
     if (method === "POST" && u.pathname === "/api/v1/artifacts") {
       const id = `N${++n}b2c3d4E5f6g7h8`;
       return json({ id, version: 1, url: `https://x.test/${id}` });
@@ -267,11 +286,173 @@ describe("run: publishing", () => {
   it("a new slug is created, prints NEW and fails with the instruction", async () => {
     const fx = fixture({ slugs: { poll: {} } });
     const s = server();
-    const r = await exec(fx, s);
+    const r = await exec(fx, s, { create: true });
     expect(r.code).toBe(1);
     expect(r.text).toMatch(/NEW poll N1b2c3d4E5f6g7h8/);
     expect(r.text).toContain("commit ids.json");
     expect(publishes(s.reqs)[0]?.path).toBe("/api/v1/artifacts");
+  });
+
+  it("without create, a slug with no id fails fast before any request", async () => {
+    const fx = fixture({
+      ids: { gallery: GAL },
+      slugs: { poll: {}, gallery: {} },
+    });
+    const s = server();
+    const r = await exec(fx, s);
+    expect(r.code).toBe(1);
+    expect(r.text).toContain(
+      "slug poll has no id; run Demo publish with create=true, then commit ids.json",
+    );
+    expect(s.reqs).toEqual([]);
+  });
+
+  it("sends explicit values for every capability and allowAnonymousWrites", async () => {
+    const fx = fixture({
+      ids: { poll: POLL },
+      slugs: {
+        poll: {
+          manifest: {
+            title: "t",
+            visibility: "private",
+            capabilities: { db: true },
+          },
+        },
+      },
+    });
+    const s = server();
+    await exec(fx, s);
+    const body = JSON.parse(publishes(s.reqs)[0]?.body as string);
+    expect(body.capabilities).toEqual({
+      db: true,
+      viewer: false,
+      storage: false,
+    });
+    expect(body.allowAnonymousWrites).toBe(false);
+    expect(body.visibility).toBe("private");
+  });
+
+  it("republishes unchanged content when the live settings differ", async () => {
+    const fx = fixture({ ids: { poll: POLL }, slugs: { poll: {} } });
+    const first = server();
+    await exec(fx, first);
+    const message = JSON.parse(
+      publishes(first.reqs)[0]?.body as string,
+    ).message;
+    const versions = { [POLL]: [{ version: 3, message }] };
+    for (const live of [
+      {
+        visibility: "private",
+        capabilities: { db: true, viewer: true, storage: false },
+        allowAnonymousWrites: true,
+      },
+      {
+        visibility: "public",
+        capabilities: { db: true, viewer: false, storage: false },
+        allowAnonymousWrites: true,
+      },
+      {
+        visibility: "public",
+        capabilities: { db: true, viewer: true, storage: false },
+        allowAnonymousWrites: false,
+      },
+    ]) {
+      const s = server({ versions, live: { [POLL]: live } });
+      await exec(fx, s);
+      expect(publishes(s.reqs), JSON.stringify(live)).toHaveLength(1);
+    }
+    const same = server({ versions });
+    await exec(fx, same);
+    expect(publishes(same.reqs)).toEqual([]);
+  });
+
+  it("includes the manifest settings in the content hash", async () => {
+    const a = fixture({ ids: { poll: POLL }, slugs: { poll: {} } });
+    const b = fixture({
+      ids: { poll: POLL },
+      slugs: { poll: { manifest: manifest({ allowAnonymousWrites: false }) } },
+    });
+    const sa = server();
+    const sb = server();
+    await exec(a, sa);
+    await exec(b, sb);
+    expect(JSON.parse(publishes(sa.reqs)[0]?.body as string).message).not.toBe(
+      JSON.parse(publishes(sb.reqs)[0]?.body as string).message,
+    );
+  });
+
+  it("a missing publish.json means nothing is approved: publish and --write-seed succeed", async () => {
+    const fx = fixture({
+      approved: null,
+      ids: { poll: POLL },
+      slugs: { poll: {} },
+    });
+    const s = server();
+    const r = await exec(fx, s);
+    expect(r.code).toBe(0);
+    expect(s.reqs).toEqual([]);
+    const out = join(fx.dir, "seed-out.json");
+    expect(
+      await run(
+        { demoDir: fx.dir, baseUrl: "", apply: false, writeSeed: out },
+        {},
+        () => {},
+      ),
+    ).toBe(0);
+    expect(JSON.parse(readFileSync(out, "utf8"))).toEqual({});
+  });
+
+  it("refuses a symlinked slug folder, a symlinked file and a symlinked artifacts dir", async () => {
+    const fx = fixture({ ids: { poll: POLL }, slugs: { poll: {}, real: {} } });
+    // slug folder is a symlink
+    const dir2 = fixture({ ids: { poll: POLL }, slugs: { other: {} } }).dir;
+    symlinkSync(join(dir2, "artifacts/other"), join(fx.dir, "artifacts/link"));
+    writeFileSync(join(fx.dir, "publish.json"), '{"approved":["link"]}');
+    const s = server();
+    const r = await exec(fx, s);
+    expect(r.code).toBe(1);
+    expect(r.text).toMatch(/link.*symlink/);
+    expect(s.reqs).toEqual([]);
+    // a symlinked file inside a slug
+    const fx2 = fixture({ ids: { poll: POLL }, slugs: { poll: {} } });
+    symlinkSync("/etc/hosts", join(fx2.dir, "artifacts/poll/hosts.txt"));
+    const r2 = await exec(fx2, server());
+    expect(r2.code).toBe(1);
+    expect(r2.text).toMatch(/symlink/);
+    // a symlinked artifacts directory
+    const fx3 = fixture({ ids: { poll: POLL }, slugs: { poll: {} } });
+    const target = fixture({ slugs: { poll: {} } }).dir;
+    const { renameSync, rmSync } = await import("node:fs");
+    renameSync(join(fx3.dir, "artifacts"), join(fx3.dir, "artifacts-real"));
+    symlinkSync(join(target, "artifacts"), join(fx3.dir, "artifacts"));
+    const r3 = await exec(fx3, server());
+    expect(r3.code).toBe(1);
+    expect(r3.text).toMatch(/symlink/);
+    rmSync(join(fx3.dir, "artifacts"));
+  });
+
+  it("skips dotfiles and dot directories", async () => {
+    const fx = fixture({
+      ids: { poll: POLL },
+      slugs: {
+        poll: {
+          files: {
+            "index.html": "<p>x</p>",
+            ".env": "SECRET=1",
+            ".git/config": "x",
+            "sub/.hidden": "y",
+            "sub/ok.txt": "z",
+          },
+        },
+      },
+    });
+    const s = server();
+    await exec(fx, s);
+    const body = JSON.parse(publishes(s.reqs)[0]?.body as string);
+    expect(Object.keys(body.files).sort()).toEqual([
+      "index.html",
+      "sub/ok.txt",
+    ]);
   });
 
   it("an invalid manifest fails the run before any publish", async () => {
@@ -325,7 +506,7 @@ describe("run: publishing", () => {
       },
     });
     const s2 = server();
-    await exec(fx2, s2);
+    await exec(fx2, s2, { create: true });
     const g2 = publishes(s2.reqs).find((x) => x.path.includes(GAL));
     expect(JSON.parse(g2?.body as string).message).not.toBe(g.message);
   });
@@ -350,52 +531,74 @@ describe("run: publishing", () => {
 
 describe("run: seeding", () => {
   const seed = { artifact: "poll", collections: { game: { game: { a: 1 } } } };
-  it("seeds an artifact with no data", async () => {
-    const fx = fixture({ ids: { poll: POLL }, slugs: { poll: { seed } } });
+  const seedPuts = (r: Req[]) =>
+    r.filter((x) => x.method === "PUT" && x.path.endsWith("/data"));
+  it("seeds an artifact created in this run", async () => {
+    const fx = fixture({ slugs: { poll: { seed } } });
     const s = server();
-    await exec(fx, s);
-    const put = s.reqs.find(
-      (x) => x.method === "PUT" && x.path === `/api/v1/artifacts/${POLL}/data`,
-    );
-    expect(JSON.parse(put?.body as string)).toEqual({
+    await exec(fx, s, { create: true });
+    const put = seedPuts(s.reqs);
+    expect(put).toHaveLength(1);
+    expect(put[0]?.path).toBe("/api/v1/artifacts/N1b2c3d4E5f6g7h8/data");
+    expect(JSON.parse(put[0]?.body as string)).toEqual({
       collections: seed.collections,
     });
   });
-  it("never reseeds existing data", async () => {
+  it("never seeds an existing artifact, empty or not", async () => {
     const fx = fixture({ ids: { poll: POLL }, slugs: { poll: { seed } } });
-    const s = server({ data: { [POLL]: { game: [{ id: "game" }] } } });
-    await exec(fx, s);
-    expect(
-      s.reqs.some((x) => x.method === "PUT" && x.path.endsWith("/data")),
-    ).toBe(false);
+    for (const data of [undefined, { [POLL]: { game: [{ id: "game" }] } }]) {
+      const s = server({ data });
+      await exec(fx, s);
+      expect(seedPuts(s.reqs)).toEqual([]);
+      expect(s.reqs.some((x) => x.path.includes("/data/"))).toBe(false);
+    }
   });
-  it("does not seed a slug with no collections", async () => {
+  it("does not seed a new slug with no collections", async () => {
     const fx = fixture({
-      ids: { poll: POLL },
       slugs: { poll: { seed: { artifact: "poll", collections: {} } } },
     });
     const s = server();
-    await exec(fx, s);
-    expect(s.reqs.some((x) => x.path.includes("/data"))).toBe(false);
+    await exec(fx, s, { create: true });
+    expect(seedPuts(s.reqs)).toEqual([]);
   });
 });
 
 describe("buildSeed (the one source for the reset)", () => {
-  it("keys approved slugs' non-empty seeds by id", () => {
+  const noDb = { title: "t", visibility: "public" };
+  it("keys seeds by id, and emits empty collections for db slugs with no seed", () => {
     const fx = fixture({
-      approved: ["poll", "ttt", "gallery"],
-      ids: { poll: POLL, ttt: GAL },
+      approved: ["poll", "ttt", "gallery", "noid", "nodb"],
+      ids: {
+        poll: POLL,
+        ttt: GAL,
+        gallery: "H1b2c3d4E5f6g7h8",
+        nodb: "K1b2c3d4E5f6g7h8",
+      },
       slugs: {
         poll: { seed: { collections: {} } },
         ttt: {
           seed: { artifact: "ttt", collections: { game: { game: { x: 1 } } } },
         },
-        gallery: {},
+        gallery: { manifest: noDb },
+        noid: {},
+        nodb: { manifest: noDb, seed: { collections: { c: { d: 1 } } } },
       },
     });
     expect(buildSeed(fx.dir)).toEqual({
+      [POLL]: { collections: {} },
       [GAL]: { collections: { game: { game: { x: 1 } } } },
+      K1b2c3d4E5f6g7h8: { collections: { c: { d: 1 } } },
     });
+  });
+  it("emits empty collections for a db slug with no seed file at all", () => {
+    const fx = fixture({
+      ids: { poll: POLL },
+      slugs: { poll: {} },
+    });
+    expect(buildSeed(fx.dir)).toEqual({ [POLL]: { collections: {} } });
+  });
+  it("is empty when nothing is approved", () => {
+    expect(buildSeed(fixture({ approved: null, slugs: {} }).dir)).toEqual({});
   });
 });
 

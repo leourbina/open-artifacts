@@ -13,19 +13,21 @@
 //   unknown or unapproved slugs are left untouched. The substituted text is part of
 //   the content hash, stored in the version message as `src:<sha256>`: an unchanged
 //   hash is skipped.
-// - A slug with an id publishes a new version; one without is created, printed as
-//   `NEW <slug> <id>` and the run fails (commit ids.json).
-// - After a publish, a slug seed is written with the owner PUT /api/v1/artifacts/:id/data
-//   only when every seed collection is empty. The nightly reset reseeds; use
-//   --write-seed to build its input from the same per-slug seeds (one source of truth).
+// - A slug with an id publishes a new version. A slug without one fails fast, before any
+//   request, unless --create is given: then it is created, printed as `NEW <slug> <id>`
+//   and the run fails (commit ids.json). A missing publish.json approves nothing.
+// - Only an artifact created in this run is seeded (owner PUT /api/v1/artifacts/:id/data).
+//   Existing artifacts are never seeded here: the nightly reset does it. --write-seed
+//   builds the reset's input from the same per-slug seeds (one source of truth).
+// - Symlinks anywhere under artifacts/ are refused; dotfiles are skipped.
 // - Dry run by default (no network). The token is read from --token-file or OA_TOKEN,
 //   sent only as the Authorization header, and scrubbed from every output line.
 import { createHash } from "node:crypto";
 import {
   existsSync,
+  lstatSync,
   readdirSync,
   readFileSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
@@ -55,6 +57,8 @@ export type Options = {
   baseUrl: string;
   tokenFile?: string;
   apply: boolean;
+  /** Allow creating artifacts for slugs with no id (manual runs only). */
+  create?: boolean;
   writeSeed?: string;
 };
 
@@ -109,7 +113,9 @@ export function substitute(
 const readJson = (p: string): unknown => JSON.parse(readFileSync(p, "utf8"));
 
 function readApproved(dir: string): string[] {
-  const j = readJson(join(dir, "publish.json"));
+  const pj = join(dir, "publish.json");
+  if (!existsSync(pj)) return []; // owned by the demo artifacts change; absent = nothing approved
+  const j = readJson(pj);
   const a = isObj(j) ? j.approved : undefined;
   if (
     !Array.isArray(a) ||
@@ -139,6 +145,8 @@ type SlugSeed = { collections: Record<string, Record<string, unknown>> };
 function readSeed(dir: string, slug: string): SlugSeed | undefined {
   const p = join(dir, "seed", `${slug}.json`);
   if (!existsSync(p)) return undefined;
+  if (lstatSync(p).isSymbolicLink())
+    throw new Error(`seed/${slug}.json is a symlink`);
   const j = readJson(p);
   const c = isObj(j) ? j.collections : undefined;
   if (!isObj(c))
@@ -155,14 +163,22 @@ function readSeed(dir: string, slug: string): SlugSeed | undefined {
   return Object.keys(collections).length ? { collections } : undefined;
 }
 
-/** The reset's input: `{ <artifactId>: { collections } }` from the approved slugs' seeds. */
+/** The reset's input: `{ <artifactId>: { collections } }` for every approved slug with an id. */
 export function buildSeed(dir: string): Record<string, SlugSeed> {
   const ids = readIds(dir);
   const out: Record<string, SlugSeed> = {};
   for (const slug of readApproved(dir)) {
-    const seed = readSeed(dir, slug);
     const id = ids[slug];
-    if (seed && id) out[id] = seed;
+    if (!id) continue;
+    const seed = readSeed(dir, slug);
+    if (seed) {
+      out[id] = seed;
+      continue;
+    }
+    // A db artifact with no seed is reset to empty, so anonymous writes do not pile up.
+    const m = readJson(join(dir, "artifacts", slug, "manifest.json"));
+    if (isObj(m) && isObj(m.capabilities) && m.capabilities.db === true)
+      out[id] = { collections: {} };
   }
   return out;
 }
@@ -174,6 +190,9 @@ function listFiles(root: string): string[] {
   const walk = (d: string) => {
     for (const e of readdirSync(d, { withFileTypes: true })) {
       const p = join(d, e.name);
+      if (e.isSymbolicLink())
+        throw new Error(`${relative(root, p)} is a symlink; refusing`);
+      if (e.name.startsWith(".")) continue;
       if (e.isDirectory()) walk(p);
       else if (e.isFile()) out.push(p);
     }
@@ -182,9 +201,27 @@ function listFiles(root: string): string[] {
   return out.sort();
 }
 
+/** The settings an artifact must have, with every default explicit. */
+function settingsOf(m: Record<string, unknown>) {
+  const c = (m.capabilities ?? {}) as Record<string, unknown>;
+  return {
+    title: m.title as string,
+    description: (m.description as string | undefined) ?? "",
+    visibility: m.visibility as string,
+    capabilities: {
+      db: c.db === true,
+      viewer: c.viewer === true,
+      storage: c.storage === true,
+    },
+    allowAnonymousWrites: m.allowAnonymousWrites === true,
+  };
+}
+type Settings = ReturnType<typeof settingsOf>;
+
 type Plan = {
   slug: string;
   manifest: Record<string, unknown>;
+  settings: Settings;
   files: FileData[];
   hash: string;
 };
@@ -195,14 +232,26 @@ function plan(
   ids: Record<string, string>,
   approved: string[],
 ): Plan {
-  const root = join(dir, "artifacts", slug);
-  if (!existsSync(root) || !statSync(root).isDirectory())
-    throw new Error(`${slug}: no artifacts/${slug} directory`);
+  // lstat every component from ops/demo/artifacts down: no symlinks anywhere.
+  const base = join(dir, "artifacts");
+  const root = join(base, slug);
+  for (const p of [base, root]) {
+    if (!existsSync(p))
+      throw new Error(`${slug}: no artifacts/${slug} directory`);
+    const st = lstatSync(p);
+    if (st.isSymbolicLink())
+      throw new Error(`${slug}: ${relative(dir, p)} is a symlink; refusing`);
+    if (!st.isDirectory())
+      throw new Error(`${slug}: ${relative(dir, p)} is not a directory`);
+  }
   const mp = join(root, "manifest.json");
   if (!existsSync(mp)) throw new Error(`${slug}: manifest.json is missing`);
+  if (lstatSync(mp).isSymbolicLink())
+    throw new Error(`${slug}: manifest.json is a symlink; refusing`);
   const manifest = readJson(mp);
   const errs = validateManifest(manifest);
   if (errs.length) throw new Error(`${slug}: ${errs.join("; ")}`);
+  const m = manifest as Record<string, unknown>;
   const files: FileData[] = [];
   for (const abs of listFiles(root)) {
     const path = relative(root, abs).split(sep).join("/");
@@ -219,18 +268,14 @@ function plan(
   }
   if (!files.some((f) => f.path === "index.html"))
     throw new Error(`${slug}: index.html is missing`);
+  const settings = settingsOf(m);
   const h = createHash("sha256");
-  h.update(JSON.stringify(manifest));
+  h.update(JSON.stringify(settings));
   for (const f of files)
     h.update(
       `\0${f.path}\0${createHash("sha256").update(f.bytes).digest("hex")}`,
     );
-  return {
-    slug,
-    manifest: manifest as Record<string, unknown>,
-    files,
-    hash: h.digest("hex"),
-  };
+  return { slug, manifest: m, settings, files, hash: h.digest("hex") };
 }
 
 export function parseArgs(argv: string[], env: NodeJS.ProcessEnv): Options {
@@ -239,9 +284,11 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv): Options {
   let demoDir = defaultDir;
   let apply = false;
   let writeSeed: string | undefined;
+  let create = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--apply") apply = true;
+    else if (a === "--create") create = true;
     else if (a === "--base-url") baseUrl = argv[++i];
     else if (a === "--token-file") tokenFile = argv[++i];
     else if (a === "--demo-dir") demoDir = argv[++i] ?? demoDir;
@@ -262,7 +309,7 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv): Options {
     u.hostname !== "127.0.0.1"
   )
     throw new Error("--base-url must be https (or localhost)");
-  return { demoDir, baseUrl: u.origin, tokenFile, apply };
+  return { demoDir, baseUrl: u.origin, tokenFile, apply, create };
 }
 
 function readToken(o: Options, env: NodeJS.ProcessEnv): string {
@@ -312,10 +359,18 @@ export async function run(
       fail((e as Error).message);
     }
   }
+  if (o.apply && !o.create)
+    for (const p of plans)
+      if (!ids[p.slug])
+        fail(
+          `slug ${p.slug} has no id; run Demo publish with create=true, then commit ids.json`,
+        );
   if (failed) return 1;
   if (!o.apply) {
     for (const p of plans)
-      log(`would publish ${p.slug} (${p.files.length} files)`);
+      log(
+        `would ${ids[p.slug] ? "publish" : "create"} ${p.slug} (${p.files.length} files)`,
+      );
     log("dry run: nothing changed; pass --apply to publish");
     return 0;
   }
@@ -351,8 +406,26 @@ export async function run(
           api(`/api/v1/artifacts/${encodeURIComponent(id)}/versions`),
         )) as { message?: string | null }[];
         if (versions[0]?.message === `src:${p.hash}`) {
-          log(`unchanged ${p.slug}`);
-          continue;
+          const live = (await call(
+            "GET",
+            api(`/api/v1/artifacts/${encodeURIComponent(id)}`),
+          )) as {
+            visibility?: string;
+            capabilities?: Record<string, boolean>;
+            allowAnonymousWrites?: boolean;
+          };
+          const want = p.settings;
+          const same =
+            live.visibility === want.visibility &&
+            live.allowAnonymousWrites === want.allowAnonymousWrites &&
+            (["db", "viewer", "storage"] as const).every(
+              (k) => (live.capabilities?.[k] ?? false) === want.capabilities[k],
+            );
+          if (same) {
+            log(`unchanged ${p.slug}`);
+            continue;
+          }
+          log(`settings drifted for ${p.slug}; republishing`);
         }
       }
       const m = p.manifest;
@@ -393,13 +466,9 @@ export async function run(
         format: "html",
         entry: "index.html",
         files,
-        visibility: m.visibility,
-        ...(m.capabilities !== undefined
-          ? { capabilities: m.capabilities }
-          : {}),
-        ...(m.allowAnonymousWrites !== undefined
-          ? { allowAnonymousWrites: m.allowAnonymousWrites }
-          : {}),
+        visibility: p.settings.visibility,
+        capabilities: p.settings.capabilities,
+        allowAnonymousWrites: p.settings.allowAnonymousWrites,
         message: `src:${p.hash}`,
       };
       const existing = ids[p.slug] !== undefined;
@@ -419,26 +488,15 @@ export async function run(
       }
       id = res.id;
 
-      const seed = readSeed(o.demoDir, p.slug);
+      // Only an artifact created in this run is seeded; the nightly reset handles the rest.
+      const seed = existing ? undefined : readSeed(o.demoDir, p.slug);
       if (seed) {
-        let empty = true;
-        for (const col of Object.keys(seed.collections)) {
-          const page = (await call(
-            "GET",
-            api(
-              `/api/v1/artifacts/${encodeURIComponent(id)}/data/${col}?limit=1`,
-            ),
-          )) as { items?: unknown[] };
-          if (page.items?.length) empty = false;
-        }
-        if (empty) {
-          await call(
-            "PUT",
-            api(`/api/v1/artifacts/${encodeURIComponent(id)}/data`),
-            seed,
-          );
-          log(`seeded ${p.slug}`);
-        } else log(`kept existing data for ${p.slug}`);
+        await call(
+          "PUT",
+          api(`/api/v1/artifacts/${encodeURIComponent(id)}/data`),
+          seed,
+        );
+        log(`seeded ${p.slug}`);
       }
     } catch (e) {
       fail(`${p.slug}: ${(e as Error).message}`);

@@ -1,12 +1,18 @@
 name: Demo publish
 # Publishes the approved demo artifacts (ops/demo/publish.json) to demo.open-artifacts.com.
 # Off until the repository variable DEMO_ENABLED is 'true'. The demo's own PAT only.
-# A new slug is created once and the run fails: commit ops/demo/ids.json with the NEW id.
+# Only a dispatch with create=true creates artifacts (then the run fails: commit ops/demo/ids.json
+# with the NEW ids); push runs never do.
 on:
   push:
     branches: [main]
     paths: ["ops/demo/**"]
   workflow_dispatch:
+    inputs:
+      create:
+        description: Create artifacts for slugs with no id in ops/demo/ids.json (then commit ids.json)
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -18,6 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
@@ -28,10 +36,15 @@ jobs:
           umask 077
           printf '%s' "$DEMO_OA_TOKEN" > "$RUNNER_TEMP/pat"
       - name: Publish the approved artifacts
-        run: >-
-          node --experimental-strip-types scripts/demo/publish.ts
-          --base-url https://demo.open-artifacts.com
-          --token-file "$RUNNER_TEMP/pat" --apply
+        env:
+          # Push runs never create artifacts: only a dispatch with create=true does.
+          CREATE: ${{ github.event_name == 'workflow_dispatch' && inputs.create && 'true' || 'false' }}
+        run: |
+          args=()
+          if [ "$CREATE" = true ]; then args+=(--create); fi
+          node --experimental-strip-types scripts/demo/publish.ts \
+            --base-url https://demo.open-artifacts.com \
+            --token-file "$RUNNER_TEMP/pat" "${args[@]}" --apply
       - name: Check healthz
         run: curl -fsS --retry 5 --retry-delay 5 --retry-all-errors https://demo.open-artifacts.com/healthz
       - name: Remove the PAT file

@@ -1126,6 +1126,31 @@ describe("demo instance workflows", () => {
     // TODO: once ci/release-cadence merges, assert verify-release `needs` deploy-demo.
   });
 
+  describe("checkouts in demo workflows", () => {
+    const checkouts = (
+      jobs: Record<
+        string,
+        { steps?: { uses?: string; with?: Record<string, unknown> }[] }
+      >,
+    ) =>
+      Object.values(jobs).flatMap((j) =>
+        (j.steps ?? []).filter((s) =>
+          String(s.uses ?? "").startsWith("actions/checkout"),
+        ),
+      );
+    it("never persist credentials", () => {
+      for (const f of demoFiles) {
+        const co = checkouts(wf(f).jobs);
+        expect(co.length, f).toBeGreaterThan(0);
+        for (const s of co)
+          expect(s.with?.["persist-credentials"], f).toBe(false);
+      }
+      const dd = checkouts({ d: wf("release-please.yml").jobs["deploy-demo"] });
+      expect(dd.length).toBeGreaterThan(0);
+      for (const s of dd) expect(s.with?.["persist-credentials"]).toBe(false);
+    });
+  });
+
   describe("prod-setup.sh modes by workflow", () => {
     const modesIn = (f: string) =>
       [...JSON.stringify(wf(f)).matchAll(/prod-setup\.sh ([a-z-]+)/g)].map(

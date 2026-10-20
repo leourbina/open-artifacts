@@ -62,6 +62,16 @@ describe("demo-reset.yml", () => {
   });
 });
 
+describe("demo-reset.yml checkout", () => {
+  it("does not persist credentials", () => {
+    const co = steps.filter((s) =>
+      String(s.uses ?? "").startsWith("actions/checkout"),
+    );
+    expect(co.length).toBeGreaterThan(0);
+    for (const s of co) expect(s.with?.["persist-credentials"]).toBe(false);
+  });
+});
+
 describe("the reset seed has one source of truth", () => {
   it("builds the seed from the per-slug seeds before resetting", () => {
     const iBuild = steps.findIndex((s) =>

@@ -64,4 +64,26 @@ describe("demo-publish.yml", () => {
     expect(last.if).toBe("always()");
     expect(last.run).toContain("pat");
   });
+  it("only a dispatch with create=true can create artifacts", () => {
+    expect(w.on.workflow_dispatch.inputs.create).toMatchObject({
+      type: "boolean",
+      default: false,
+    });
+    const step = steps.find((s) => run(s).includes("scripts/demo/publish.ts"));
+    expect(step.env.CREATE).toContain(
+      "github.event_name == 'workflow_dispatch'",
+    );
+    expect(step.env.CREATE).toContain("inputs.create");
+    expect(step.run).toMatch(/\[ "\$CREATE" = true \].*--create/);
+    // --create appears nowhere unconditionally.
+    expect(
+      step.run.replace(/if \[.*?\]; then args\+=\(--create\); fi/, ""),
+    ).not.toContain("--create");
+  });
+  it("checks out without persisting credentials", () => {
+    for (const s of steps.filter((s) =>
+      String(s.uses ?? "").startsWith("actions/checkout"),
+    ))
+      expect(s.with?.["persist-credentials"]).toBe(false);
+  });
 });
