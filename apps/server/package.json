@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "version:emit": "node --experimental-strip-types scripts/emit-version.ts",
-    "build": "pnpm run version:emit && node --experimental-strip-types scripts/emit-tool-manifest.ts &&node --experimental-strip-types scripts/emit-consent-template.ts && node --experimental-strip-types scripts/emit-email-templates.ts && pnpm --filter @oa/dashboard run --if-present build && pnpm --filter @oa/render build --if-present && pnpm --filter @oa/runtime build --if-present && node scripts/assemble-assets.mjs && node scripts/check-worker-size.mjs",
+    "build": "pnpm run version:emit && node --experimental-strip-types scripts/emit-tool-manifest.ts && node --experimental-strip-types scripts/emit-skill.ts && node --experimental-strip-types scripts/emit-consent-template.ts && node --experimental-strip-types scripts/emit-email-templates.ts && pnpm --filter @oa/dashboard run --if-present build && pnpm --filter @oa/render build --if-present && pnpm --filter @oa/runtime build --if-present && node scripts/assemble-assets.mjs && node scripts/check-worker-size.mjs",
     "dev": "echo \"@oa/server dev: placeholder\"",
     "test": "pnpm run version:emit && vitest run --exclude \"test/smoke/**\" --passWithNoTests",
     "test:cpu": "pnpm run version:emit && vitest run -c vitest.cpu.config.ts",

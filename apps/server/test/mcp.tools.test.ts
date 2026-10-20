@@ -543,19 +543,26 @@ describe("tool manifest", () => {
     expect(text("publish_artifact")).toContain(`≤${kb} inline`);
     expect(text("publish_artifact")).toContain("else create_upload");
     expect(text("create_upload")).toContain(`over the ${kb} inline limit`);
-    expect(INSTRUCTIONS).toContain(`limited to ${kb} per call`);
-    expect(INSTRUCTIONS).toContain(`≤${kb} inline, else create_upload`);
+    const ins = INSTRUCTIONS("free");
+    expect(ins).toContain(`limited to ${kb} per call`);
+    expect(ins).toContain(`≤${kb} inline, else create_upload`);
     // The old inline limit; the Free data-doc limit is also 256 KB, so drop
     // that one phrase first.
-    const docFree = `${LIMITS.dataDocBytesFree / 1024} KB per document`;
+    const docFree = `${LIMITS.dataDocBytesFree / 1024} KB`;
     expect(
-      JSON.stringify(TOOL_DEFS) + INSTRUCTIONS.replace(docFree, ""),
+      JSON.stringify(manifest) +
+        ins
+          .replaceAll(`${docFree} per document`, "")
+          .replaceAll(`data document over ${docFree}`, ""),
     ).not.toMatch(/\b256 KB\b/);
   });
 
-  it("instructions state both plans' data-doc limits", () => {
-    expect(INSTRUCTIONS).toContain(
-      `${LIMITS.dataDocBytesFree / 1024} KB per document on Free-plan instances (${LIMITS.dataDocBytesPaid / 1024 / 1024} MB on Paid)`,
+  it("instructions state the plan's data-doc limit", () => {
+    expect(INSTRUCTIONS("free")).toContain(
+      `${LIMITS.dataDocBytesFree / 1024} KB per document on this instance (free plan; Workers Paid allows ${LIMITS.dataDocBytesPaid / 1024 / 1024} MB)`,
+    );
+    expect(INSTRUCTIONS("paid")).toContain(
+      `${LIMITS.dataDocBytesPaid / 1024 / 1024} MB per document on this instance (paid plan),`,
     );
   });
 });
