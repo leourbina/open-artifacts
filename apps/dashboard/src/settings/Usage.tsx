@@ -121,7 +121,11 @@ const CPU_KEYS: ReadonlySet<Metric["key"]> = new Set([
   "cpu_limit_hits",
   "cpu_p99_ms",
 ]);
-const ms = (n: number) => `${Number(n.toFixed(1))} ms`;
+/** CPU time: milliseconds, or seconds from 1 s (Workers Paid's 30 s cap). */
+const ms = (n: number) =>
+  n >= 1000
+    ? `${Number((n / 1000).toFixed(1))} s`
+    : `${Number(n.toFixed(1))} ms`;
 
 function CpuCard({ metrics }: { metrics: Metric[] }) {
   const hitsM = metrics.find((m) => m.key === "cpu_limit_hits");
@@ -219,10 +223,11 @@ function P99Row({ metric, idle }: { metric: Metric; idle: boolean }) {
 }
 
 /** The plan positioning line, for the people who can change the plan. */
-function PlanLine() {
+function PlanLine({ plan }: { plan: "free" | "paid" | undefined }) {
   const me = useMe();
   const role = me.status === "authed" ? me.me.user.role : null;
-  if (role !== "owner" && role !== "admin") return null;
+  // On Paid there is nothing to upgrade to. TODO(#279): Design's Paid copy.
+  if ((role !== "owner" && role !== "admin") || plan === "paid") return null;
   return (
     <p className="m-0 text-[length:var(--oa-text-sm)] text-[var(--oa-text-2)]">
       Workers Free is sized for one person. Workers Paid ($5 a month) is sized
@@ -244,6 +249,16 @@ function PlanLine() {
 function Meter({ metric }: { metric: Metric }) {
   const { name, what } = LABELS[metric.key];
   const used = Math.max(metric.used, 0);
+  // A limit of 0 is no daily cap (Workers Paid): the count alone, no bar.
+  if (!(metric.limit > 0))
+    return (
+      <SettingsCard id={`oa-meter-${metric.key}`} title={name}>
+        <div className="tabular-nums">
+          <b className={BIG}>{fmt(used)}</b>
+        </div>
+        <p className={muted}>{what}</p>
+      </SettingsCard>
+    );
   const pct = percent(used, metric.limit);
   const tone = toneOf(pct);
   const reached = pct >= 100;
@@ -331,7 +346,7 @@ function alerts(metrics: Metric[]) {
       </Banner>
     );
   return metrics
-    .filter((m) => toneOf(percent(m.used, m.limit)) === "danger")
+    .filter((m) => m.limit > 0 && toneOf(percent(m.used, m.limit)) === "danger")
     .map((m) => {
       const pct = percent(m.used, m.limit);
       const name = LABELS[m.key].name;
@@ -371,7 +386,7 @@ export function Usage() {
           Refresh
         </Button>
       </div>
-      <PlanLine />
+      <PlanLine plan={q.data?.plan} />
       {q.isError ? (
         <Banner
           tone="danger"

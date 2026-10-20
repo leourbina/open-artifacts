@@ -156,6 +156,10 @@ export const useSettings = () =>
     queryKey: qk.settings,
     queryFn: ({ signal }) => api.get(R.settings, SettingsSchema, signal),
   });
+/** `plan` (#279) until the shared contract carries it; absent on older servers. */
+const UsageWithPlanSchema = UsageSchema.extend({
+  plan: z.enum(["free", "paid"]).optional(),
+});
 /** Keeps only the metrics this build knows, so one new server metric never blanks the page. */
 const LenientUsageSchema = z.preprocess((raw) => {
   if (typeof raw !== "object" || raw === null) return raw;
@@ -166,7 +170,7 @@ const LenientUsageSchema = z.preprocess((raw) => {
     ...raw,
     metrics: metrics.filter((m) => known.safeParse(m).success),
   };
-}, UsageSchema);
+}, UsageWithPlanSchema);
 export const useUsage = (
   opts: { enabled?: boolean; staleTime?: number } = {},
 ) =>

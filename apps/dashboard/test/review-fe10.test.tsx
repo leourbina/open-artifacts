@@ -40,11 +40,12 @@ describe("usage review", () => {
     expect(c.textContent).not.toMatch(/near limit/);
   });
 
-  it("limit 0 with usage is not a calm 0% meter", async () => {
+  it("limit 0 (no daily cap) is never a calm 0% meter", async () => {
     usage([{ key: "requests", used: 5, limit: 0 }]);
     mount("/settings/usage");
-    const c = await card("Worker requests");
+    const c = await screen.findByRole("region", { name: "Worker requests" });
     expect(c.textContent).not.toMatch(/(^|\D)0%/);
+    expect(screen.queryByRole("meter", { name: "Worker requests" })).toBeNull();
   });
 
   it("raises the near-limit banner", async () => {
