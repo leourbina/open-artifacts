@@ -65,7 +65,7 @@
 - [ ] **Step 2–4:** Run (FAIL), implement, run (PASS).
 - [ ] **Step 5:** Commit `test(redline): harness and refusal assertions`.
 
-### Task 3: Test identity provider (staging only)
+### Task 3: Test identity provider (staging only; dropped if Backend's fixture covers it)
 
 **Files:**
 - Create: `apps/test-idp/` (a Worker: OIDC discovery, JWKS, `/authorize` that issues an ID token for any `{email, hd, tid}` given in the query, `/token`)
@@ -76,6 +76,10 @@ Deployed only to the staging account at `idp.<staging-domain>`; its signing key 
 - [ ] **Step 1:** Write the failing tests: discovery and JWKS shape; ID token claims echo the requested `email`, `hd`, `tid`, `aud`, `nonce`; tokens verify against the published JWKS.
 - [ ] **Step 2–4:** Run (FAIL), implement, run (PASS).
 - [ ] **Step 5:** Commit `feat(test-idp): staging-only OIDC issuer for red-line tests`.
+
+### Task 3b: Reuse Backend's surface probes
+
+P3 ships `apps/server/test/authz/surfaces.ts` (every HTTP surface as a probe) and `scripts/authz-probe.ts`. Tasks 4 and 5 drive those probes with A's credentials against B and expect `expectRefused` on every surface, so a surface Backend adds is covered without a P5 change. A test fails if the probe list is shorter than the server's `ROUTE_POLICY` manifest.
 
 ### Task 4: Credential cases (available now)
 

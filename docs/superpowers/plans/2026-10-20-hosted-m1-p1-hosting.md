@@ -30,6 +30,7 @@ The 1,000-namespace KV cap matters only because each install gets its own namesp
 | Binding | Used by | Operations | Holds customer data |
 |---|---|---|---|
 | `OAUTH_KV` (one per install) | `@cloudflare/workers-oauth-provider` (reads `env.OAUTH_KV` directly: 19 get, 9 put with `expirationTtl`, 6 delete, 7 prefix `list` with cursor); `services/usage.ts` reads its id for KV analytics | MCP OAuth clients, grants, tokens (hashed) | Yes |
+| P3 content-URL deny list (planned, behind a flag) | content host | revoked user ids, ~60 s TTL | User ids only; must live in the install's own namespace (no new namespace), and moves with `OAUTH_KV` in M2 |
 | Platform `HOSTS` (this plan, one total) | dispatch Worker | host → install ID | No (metadata only) |
 
 Nothing else in `apps/server/src` uses KV. Spec 3 rules out the obvious fix (one shared KV with per-install key prefixes): it would be a shared store holding customer data.
@@ -123,15 +124,16 @@ it("rejects reserved, uppercase, dotted and too-long slugs", () => {
 - Consumes: `names()`, `Install` (Task 2).
 - Produces:
   - `buildBundle(root: string): Promise<{ modules: { name: string; type: "esm" | "wasm"; bytes: Uint8Array }[]; mainModule: string; assetsDir: string; version: string }>`
-  - `userWorkerMetadata(i: { id; appHost; contentHost; ownerEmail; vars }, r: { d1Id; kvId; version }, opts: { firstUpload: boolean }): UploadMetadata` — bindings mirror `apps/server/wrangler.template.jsonc` with values from `names(id)`; `observability: { enabled: true, logs: { enabled: true, invocation_logs: true, head_sampling_rate: 1 } }`; `tags: [id, "v" + version]`; `migrations` only when `firstUpload` (`new_sqlite_classes: ["ArtifactRuntime"]`, tag `v1`); no `routes`, no `triggers`.
+  - `userWorkerMetadata(i: { id; appHost; contentHost; ownerEmail; vars }, r: { d1Id; kvId; version; rlNs: number; doMigrationTag: string | null }): UploadMetadata` — bindings mirror `apps/server/wrangler.template.jsonc` with values from `names(id)`; `observability: { enabled: true, logs: { enabled: true, invocation_logs: true, head_sampling_rate: 1 } }`; `tags: [id, "v" + version]`; `migrations` taken from the template's `migrations` list: every tag after the install's recorded `do_migration_tag` is sent (`old_tag`/`new_tag`), so new Durable Object classes (P3 adds `DirectorySync` and `UserPresence`) arrive on upgrade, not only on create; no `routes`, no `triggers`.
   - `opts.testHooks?: boolean` (default false): when true adds var `TEST_HOOKS="1"` (P5's contract); only `oa:hosted create --test-hooks` sets it, and `upgrade` keeps the install's saved value.
-  - `ratelimits[].namespace_id` = the install's own `rl_ns` (never the template's `1001`).
+  - `ratelimits[k].namespace_id` = `rlNs + k` for the k-th template entry (`RL_ANON`, and P2's `RL_AUTH`), never a template literal. `rl_ns` is allocated in blocks of 8.
   - `TEMPLATE_BINDINGS_EXCLUDED: Record<string, string>`: binding name → reason (filled from Task 1; `routes` and `crons` are always excluded).
 
 - [ ] **Step 1: Write the failing tests**
   - `every template binding is mapped or explicitly excluded`: parse `apps/server/wrangler.template.jsonc`, collect binding names and var names; each must appear in `userWorkerMetadata(...).bindings` or in `TEMPLATE_BINDINGS_EXCLUDED`. This is the drift guard: a new server binding fails this test until hosted handles it.
+  - `hosted vars`: `FEATURES` (P3; M1 FinQore value `spaces,sync,guests-ro,content-revoke`) and P2's `AUTH_PROVIDERS`, `AUTH_DOMAINS`, `AUTH_BROKER_URL`, `INSTALL_ID` come from `vars`, validated by the same allowlist pattern as setup's `tunables.ts`.
   - `vars carry the install's own hosts`: `APP_HOST`, `CONTENT_HOST`, `OWNER_EMAIL`, `WORKER_NAME === names(id).script`, `PLAN === "paid"`, `ENVIRONMENT === "production"`.
-  - `migrations only on the first upload`.
+  - `Durable Object migrations`: a null tag sends every template tag; tag `v1` sends only later tags; the latest tag sends none.
   - `each install gets its own ratelimit namespace_id`: two installs' metadata never share a `namespace_id`, and neither is `1001`.
   - `no secret names appear in bindings` (`SESSION_SECRET`, `CONTENT_SIGNING_KEY`, `ACCESS_CLIENT_SECRET`, `ANALYTICS_TOKEN`).
 - [ ] **Step 2:** Run; expect FAIL.
@@ -149,14 +151,15 @@ it("rejects reserved, uppercase, dotted and too-long slugs", () => {
 **Interfaces:**
 - Consumes: Tasks 2 and 3.
 - Produces:
-  - `cfClient(o: { accountId: string; token: string; fetch?: typeof fetch }): Cf` with typed calls: `d1Create/d1Get/d1Query/d1Delete`, `r2Create/r2Delete`, `kvCreate/kvDelete/kvPut/kvGet/kvDeleteKey`, `nsScriptUpload(ns, script, metadata, modules)`, `nsScriptDelete(ns, script)`, `nsSecretPut(ns, script, name, value)`, `nsAssetsUpload(ns, script, dir)` (assets upload session, then completion JWT into metadata). Retries 429 and 5xx with backoff (3 tries); never includes request bodies in errors.
-  - Platform D1 table `installs(id TEXT PRIMARY KEY, slug TEXT UNIQUE, app_host TEXT UNIQUE, content_host TEXT UNIQUE, owner_email TEXT, d1_id TEXT, kv_id TEXT, version TEXT, previous_version TEXT, rl_ns INTEGER UNIQUE, state TEXT CHECK(state IN ('creating','active','upgrading','deleting')), created_at INTEGER, updated_at INTEGER)`. No customer data.
+  - `cfClient(o: { accountId: string; token: string; fetch?: typeof fetch }): Cf` with typed calls: `d1Create/d1Get/d1Query/d1Delete`, `r2Create/r2Delete`, `kvCreate/kvDelete/kvPut/kvGet/kvDeleteKey`, `nsScriptUpload(ns, script, metadata, modules)`, `nsScriptDelete(ns, script)`, `nsSecretPut(ns, script, name, value)`, `nsSecretList(ns, script)`, `nsAssetsUpload(ns, script, dir)` (assets upload session, then completion JWT into metadata). Retries 429 and 5xx with backoff (3 tries); never includes request bodies in errors.
+  - Platform D1 table `installs(id TEXT PRIMARY KEY, slug TEXT UNIQUE, app_host TEXT UNIQUE, content_host TEXT UNIQUE, owner_email TEXT, d1_id TEXT, kv_id TEXT, version TEXT, previous_version TEXT, rl_ns INTEGER UNIQUE, do_migration_tag TEXT, state TEXT CHECK(state IN ('creating','active','upgrading','deleting')), created_at INTEGER, updated_at INTEGER)`. No customer data.
   - Platform KV `HOSTS`: key = lowercase host, value = install ID. Written last on create, removed first on delete.
   - `new WfpProvisioner(o: { cf: Cf; namespace: string; platformDb: string; hostsKv: string; domains; releases: R2BucketName; patDir: string })`.
-- Create order, each step idempotent by checking first: insert `installs` row (`creating`) → D1 → R2 → KV → apply `apps/server/migrations/*.sql` in order via `d1Query`, recording applied names in a `d1_migrations` table the same way wrangler does → secrets (`SESSION_SECRET`, `CONTENT_SIGNING_KEY`: 48 random bytes base64url) only when the script doesn't exist yet → upload script with assets → `HOSTS` keys → `/healthz` until `{ ok: true }` (60 s) → mint owner PAT by SQL insert (reuse the `owner-token.ts` SQL and hashing; `newPat()` from `@oa/shared`) into `<patDir>/<appHost>-pat-token`, mode 0600, O_NOFOLLOW → MCP selftest (publish and read back a private Welcome artifact, as setup's `selftest.ts`) → row `active`.
+- Create order, each step idempotent by checking first: insert `installs` row (`creating`) → D1 → R2 → KV → apply `apps/server/migrations/*.sql` in order via `d1Query`, recording applied names in a `d1_migrations` table the same way wrangler does → per-install secrets, each 48 random bytes base64url, sent only when the script doesn't have them yet (`nsSecretList` first, so an upgrade that introduces a new secret adds just that one): `SESSION_SECRET`, `CONTENT_SIGNING_KEY`, `DIRECTORY_TOKEN_KEY` (P3), `BROKER_KEY` (P2; also written to the auth broker's registry with `{installId, origin, domains}`, P2's contract) → upload script with assets → `HOSTS` keys → `/healthz` until `{ ok: true }` (60 s) → mint owner PAT by SQL insert (reuse the `owner-token.ts` SQL and hashing; `newPat()` from `@oa/shared`) into `<patDir>/<appHost>-pat-token`, mode 0600, O_NOFOLLOW → MCP selftest (publish and read back a private Welcome artifact, as setup's `selftest.ts`) → row `active`.
 
 - [ ] **Step 1: Write the failing tests** (against `fake-cf.ts`, an in-memory Cloudflare with call log)
   - `creates every resource named by install id and maps both hosts`.
+  - `an upgrade that introduces DIRECTORY_TOKEN_KEY puts only that secret and leaves the others untouched`.
   - `secrets are 48-byte random, differ between two installs, and never appear in the call log's printable fields or thrown errors`.
   - `resumes after an upload failure without duplicating resources or re-sending secrets`: fail `nsScriptUpload` once, rerun `create` with the same id; assert one D1, one R2, one KV, secret puts counted once.
   - `hosts are written last`: the call log shows `kvPut(HOSTS)` after `nsScriptUpload`.
