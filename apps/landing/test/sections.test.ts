@@ -88,6 +88,11 @@ describe("landing sections", () => {
     expect(index).toContain('aria-label="Next artifacts"');
   });
 
+  it("the copy button copies the unambiguous setup phrase", () => {
+    expect(index).toContain('data-copy="install open-artifacts.com/llms.txt"');
+    expect(index).not.toMatch(/set up open-artifacts\.com/i);
+  });
+
   it("the hero keeps the library screenshot", () => {
     expect(index).toMatch(/class="frame hero-shot"/);
   });

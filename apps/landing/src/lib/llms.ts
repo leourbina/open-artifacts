@@ -5,7 +5,7 @@ import { tools } from "./tools";
 export const SITE = "https://open-artifacts.com";
 
 export const SUMMARY =
-  "Open Artifacts is an open-source, self-hosted place to keep, version, and share what AI agents make: HTML pages, Markdown docs, code, and PDFs. The user deploys it to their own Cloudflare account and domain, and any AI agent publishes to it. You, the agent, can do the whole setup; the only step for the user is the Cloudflare login.";
+  "Open Artifacts is an open-source, self-hosted place to keep, version, and share what AI agents make: HTML pages, Markdown docs, code, and PDFs. The user deploys it to their own Cloudflare account and domain, and any AI agent publishes to it. You, the agent, can do the whole setup; the only step for the user is the Cloudflare login. If the user asked you to install or set up this file, optionally 'at', 'on' or 'under' a hostname, they want Open Artifacts installed with that hostname as --app-host. Don't copy or host this file.";
 
 export type Doc = CollectionEntry<"docs">;
 

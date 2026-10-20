@@ -8,7 +8,9 @@ import Gallery from "./gallery/Gallery.astro";
 import Multiplayer from "./Multiplayer.astro";
 import Shot from "./Shot.astro";
 
-const prompt = "set up open-artifacts.com/llms.txt";
+const prompt = "install open-artifacts.com/llms.txt";
+// The chip keeps the URL on one line when the phrase wraps.
+const [promptLead, promptUrl] = prompt.split(/(?<=install )/);
 
 const features = [
   {
@@ -126,7 +128,7 @@ const plans = [
             pnpm install.
           </p>
           <span class="step-chip mono" aria-hidden="true"
-            ><span class="caret">{"\u203a"}</span> <span class="chip-t">{prompt}</span></span
+            ><span class="caret">{"\u203a"}</span><span>{promptLead}<span class="nowrap">{promptUrl}</span></span></span
           >
         </li>
         <li>
@@ -136,7 +138,7 @@ const plans = [
             Access sign-in app, deploys to both domains, and adds the MCP server to your agent.
           </p>
           <span class="step-chip" aria-hidden="true">
-            <span class="chip-t">Allow Wrangler to manage your account?</span> <span class="mini-btn">Allow</span>
+            Allow Wrangler to manage your account? <span class="mini-btn">Allow</span>
           </span>
         </li>
         <li>
@@ -146,7 +148,7 @@ const plans = [
             Q4 data migration plan and share it with a teammate.
           </p>
           <span class="step-chip" aria-hidden="true">
-            <span class="mono chip-t">artifacts.example.com/a/7Hq3…</span>
+            <span class="mono">artifacts.example.com/a/7Hq3…</span>
             <span class="badge team">Team</span>
           </span>
         </li>

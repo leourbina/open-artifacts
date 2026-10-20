@@ -210,9 +210,13 @@ code,
   color: var(--oa-text-2);
   font-size: 18px;
 }
+/* The prompt box shares the agent wiring's center line and width below it,
+   with its label on the box's left edge. The headline and subcopy above stay
+   left-aligned. */
 .cta {
-  max-width: 760px;
-  margin-top: 40px;
+  max-width: 720px;
+  margin: 40px auto 0;
+  text-align: left;
 }
 .cta-label {
   color: var(--oa-text-2);
@@ -220,6 +224,7 @@ code,
   font-weight: 500;
 }
 .cta-row {
+  text-align: left;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -233,9 +238,9 @@ code,
   flex: 1;
   user-select: all;
   min-width: 0;
-  font-size: clamp(15px, 2.4vw, 24px);
+  font-size: clamp(15px, 1.8vw, 19px);
   font-weight: 500;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 .cta-note {
   min-height: 1.5em;
@@ -296,7 +301,7 @@ code,
   list-style: none;
   counter-reset: step;
 }
-@media (min-width: 860px) {
+@media (min-width: 1024px) {
   .steps {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     align-items: stretch;
@@ -305,16 +310,11 @@ code,
   .steps p {
     margin-bottom: 12px;
   }
+  /* Chips sit at the bottom of each column at one height that fits the
+     setup phrase in full (three lines), so it is never cut off. */
   .steps .step-chip {
-    height: 36px;
+    min-height: calc(3lh + 12px);
     margin-top: auto;
-    white-space: nowrap;
-    overflow: hidden;
-  }
-  .step-chip .chip-t {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 }
 .steps li {
@@ -362,6 +362,12 @@ code,
 }
 .caret {
   color: var(--oa-text-muted);
+}
+.step-chip.mono {
+  align-items: flex-start;
+}
+.nowrap {
+  white-space: nowrap;
 }
 .mini-btn {
   flex: none;
