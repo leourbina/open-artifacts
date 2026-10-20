@@ -62,6 +62,22 @@ const unknown = async (method = "POST") =>
     ),
   );
 
+// Forget today's run marker, so the next valid trigger runs the job.
+const freshDay = () =>
+  env.DB.prepare("delete from nightly_runs where nonce = 'run'").run();
+
+const keyPair = async () =>
+  (await crypto.subtle.generateKey({ name: "Ed25519" }, true, [
+    "sign",
+    "verify",
+  ])) as CryptoKeyPair;
+const rawPub = async (k: CryptoKeyPair) =>
+  b64urlEncode(
+    new Uint8Array(
+      (await crypto.subtle.exportKey("raw", k.publicKey)) as ArrayBuffer,
+    ),
+  );
+
 const real = nightlyJob.run;
 const run = vi.spyOn(nightlyJob, "run").mockResolvedValue([]);
 
@@ -83,6 +99,7 @@ describe("POST /__oa/nightly", () => {
   });
 
   it("a valid signature returns 202 with an empty body and runs the job", async () => {
+    await freshDay();
     run.mockClear();
     const r = await post(body());
     expect(r.status).toBe(202);
@@ -230,6 +247,124 @@ describe("POST /__oa/nightly", () => {
       for (const s of spies) s.mockRestore();
     }
   });
+});
+
+describe("POST /__oa/nightly: once per day", () => {
+  it("two valid nonces on the same day both get 202; the job runs once", async () => {
+    await freshDay();
+    run.mockClear();
+    expect((await post(body())).status).toBe(202);
+    expect((await post(body())).status).toBe(202);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("concurrent valid nonces on a fresh day run the job once", async () => {
+    await freshDay();
+    run.mockClear();
+    const rs = await Promise.all(Array.from({ length: 5 }, () => post(body())));
+    expect(rs.map((r) => r.status)).toEqual([202, 202, 202, 202, 202]);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("POST /__oa/nightly: NIGHTLY_PUBKEY", () => {
+  for (const [name, key] of [
+    ["31 bytes", () => b64urlEncode(new Uint8Array(31).fill(7))],
+    ["33 bytes", () => b64urlEncode(new Uint8Array(33).fill(7))],
+    ["not base64url", () => `${pub.slice(0, -1)}!`],
+    ["padded base64", () => `${pub}=`],
+  ] as const)
+    it(`a key of ${name} gives the 404 (never 500) on every request`, async () => {
+      run.mockClear();
+      for (let i = 0; i < 3; i++) {
+        const r = await post(body(), { env: { NIGHTLY_PUBKEY: key() } });
+        expect(await snap(r)).toEqual(await unknown());
+      }
+      expect(run).not.toHaveBeenCalled();
+    });
+
+  it("a rotated key is re-imported: the new key verifies, the old one does not", async () => {
+    const next = await keyPair();
+    const nextPub = await rawPub(next);
+    expect((await post(body())).status).toBe(202); // caches the old key
+    const raw = body();
+    const sigNew = await sign(raw, next.privateKey);
+    expect(
+      (await post(raw, { sig: sigNew, env: { NIGHTLY_PUBKEY: nextPub } }))
+        .status,
+    ).toBe(202);
+    expect(
+      (await post(body(), { env: { NIGHTLY_PUBKEY: nextPub } })).status,
+    ).toBe(404);
+    // And back again.
+    expect((await post(body())).status).toBe(202);
+  });
+});
+
+describe("POST /__oa/nightly: rejections are byte-identical to POST /__oa/nope", () => {
+  const bytes = async (r: Response) => ({
+    status: r.status,
+    statusText: r.statusText,
+    headers: [...r.headers.entries()],
+    body: [...new Uint8Array(await r.arrayBuffer())],
+  });
+  // The same request (headers, body) at an unknown path on the same host.
+  const pair = async (
+    raw: string,
+    opts: { sig?: string; host?: string; env?: Record<string, unknown> } = {},
+  ) => {
+    const sig = opts.sig ?? (await sign(raw));
+    const host = opts.host ?? APP;
+    const req = (path: string) =>
+      new Request(`${host}${path}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-oa-nightly-sig": sig,
+        },
+        body: raw,
+      });
+    const e = E({ NIGHTLY_PUBKEY: pub, ...opts.env });
+    return [
+      await bytes(await callWorker(req("/__oa/nightly"), e)),
+      await bytes(await callWorker(req("/__oa/nope"), e)),
+    ];
+  };
+  const now = () => Math.floor(Date.now() / 1000);
+  const cases: [string, () => Promise<unknown[]>][] = [
+    [
+      "bad sig",
+      async () => {
+        const raw = body();
+        return pair(raw, { sig: await sign(`${raw}x`) });
+      },
+    ],
+    ["stale ts", () => pair(body({ ts: now() - 360 }))],
+    ["future ts", () => pair(body({ ts: now() + 360 }))],
+    [
+      "used nonce",
+      async () => {
+        const raw = body();
+        expect((await post(raw)).status).toBe(202);
+        return pair(raw);
+      },
+    ],
+    [
+      "unset NIGHTLY_PUBKEY",
+      () => pair(body(), { env: { NIGHTLY_PUBKEY: undefined } }),
+    ],
+    ["wrong host", () => pair(body({ installHost: "other.example.com" }))],
+    ["oversize", () => pair(body({ pad: "x".repeat(1100) } as Body))],
+    ["content host", () => pair(body(), { host: "https://content.localhost" })],
+  ];
+  for (const [name, f] of cases)
+    it(name, async () => {
+      run.mockClear();
+      const [got, ref] = await f();
+      expect((got as { status: number }).status).toBe(404);
+      expect(got).toEqual(ref);
+      expect(run).not.toHaveBeenCalled();
+    });
 });
 
 describe("sweepNightlyRuns", () => {

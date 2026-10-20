@@ -97,8 +97,9 @@ export function createApp(
   app.all(SKILL_PATH, methodNotAllowed);
   app.all(UPGRADE_PATH, methodNotAllowed);
   // Signed nightly trigger (hosted installs): public, before session, no D1
-  // until the signature verifies. Any method; every failure is the 404 below.
-  app.all(NIGHTLY_PATH, nightly);
+  // until the signature verifies. POST only; other methods match no route and
+  // get the plain 404, like every rejection here.
+  app.post(NIGHTLY_PATH, nightly);
 
   // c.var.user (Bearer PAT wins over the cookie) for Worker routes only, so
   // SPA/asset requests never touch D1 (beyond the shell's instance-name read). Elsewhere caller() sees anonymous.

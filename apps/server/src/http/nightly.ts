@@ -26,6 +26,8 @@ const notFound = () => toErrorResponse(new ApiError("not_found", "Not found"));
 /** The job, behind a seam the tests spy on. */
 export const nightlyJob = { run: runNightly };
 
+// Per isolate, keyed by the key string: a rotated NIGHTLY_PUBKEY re-imports.
+// A malformed key (not base64url, not 32 bytes) throws: the 404, never a 500.
 let cached: { pub: string; key: Promise<CryptoKey> } | undefined;
 function verifyKey(pub: string): Promise<CryptoKey> {
   if (cached?.pub !== pub) {
@@ -43,8 +45,22 @@ function verifyKey(pub: string): Promise<CryptoKey> {
   return cached.key;
 }
 
-/** True when the request is a fresh, correctly signed trigger for this host. */
-async function accept(c: Context<AppEnv>, pub: string): Promise<boolean> {
+/** Claims (day, key) in nightly_runs; true only for the one insert that wins. */
+const claim = async (db: D1Database, day: string, key: string) =>
+  (await db
+    .prepare(
+      "INSERT INTO nightly_runs (day, nonce) VALUES (?, ?) ON CONFLICT DO NOTHING RETURNING nonce",
+    )
+    .bind(day, key)
+    .first()) !== null;
+
+/** Marks the day's job as started; never a valid nonce (those are 16+ chars). */
+const RUN_KEY = "run";
+
+type Verdict = false | { day: string };
+
+/** The day, when the request is a fresh, correctly signed trigger for this host. */
+async function accept(c: Context<AppEnv>, pub: string): Promise<Verdict> {
   const sig = c.req.header("x-oa-nightly-sig") ?? "";
   if (!SIG.test(sig)) return false;
   const sigBytes = b64urlDecode(sig);
@@ -65,24 +81,24 @@ async function accept(c: Context<AppEnv>, pub: string): Promise<boolean> {
   if (typeof nonce !== "string" || !NONCE.test(nonce)) return false;
   // Keyed by the signed ts's day, so a replay always hits the same row.
   const day = new Date(ts * 1000).toISOString().slice(0, 10);
-  const won = await c.env.DB.prepare(
-    "INSERT INTO nightly_runs (day, nonce) VALUES (?, ?) ON CONFLICT DO NOTHING RETURNING nonce",
-  )
-    .bind(day, nonce)
-    .first();
-  return won !== null;
+  return (await claim(c.env.DB, day, nonce)) && { day };
 }
 
 export async function nightly(c: Context<AppEnv>): Promise<Response> {
   const pub = c.env.NIGHTLY_PUBKEY;
   if (!pub || c.req.method !== "POST") return notFound();
-  let ok = false;
+  let ok: Verdict = false;
+  let first = false;
   try {
     ok = await accept(c, pub);
+    // Once per day: only the request that claims the day's run row runs it;
+    // later valid triggers that day still get 202.
+    if (ok) first = await claim(c.env.DB, ok.day, RUN_KEY);
   } catch {
     // Malformed key, body or JSON, or D1: the same 404, never logged.
+    ok = false;
   }
   if (!ok) return notFound();
-  c.executionCtx.waitUntil(nightlyJob.run(c.env, c.executionCtx));
+  if (first) c.executionCtx.waitUntil(nightlyJob.run(c.env, c.executionCtx));
   return c.body(null, 202);
 }
