@@ -4,7 +4,7 @@
 
 **Goal:** The dashboard shows spaces (library, publish, move), gives admins a page to map Google groups (or, on Team, people) to spaces with viewer, editor and manager roles, lets admins transfer a departed person's personal artifacts, and offers a hosted sign-in page (Google plus emailed codes), while a self-hosted install looks and behaves exactly as today.
 
-**Architecture:** Every hosted feature is gated on new optional `Me.instance` fields (`spaces`, `authMode`, `directory`), so an older or self-hosted server renders today's UI unchanged. Permissions come from a new server-computed `artifact.can` block (fallback: today's `access`), read through one helper so no component decides edit rights itself. Contract schemas, routes and MSW handlers land first in `@oa/shared` so every UI task is test-first against mocks; the real suite follows once Backend P2/P3 ship.
+**Architecture:** Every hosted feature is gated on new optional `Me` fields (`me.spaces`, `me.hosted`, `me.authProvider`) or, signed out, on `/auth/providers`, so an older or self-hosted server renders today's UI unchanged. Permissions come from a new server-computed `artifact.can` block (fallback: today's `access`), read through one helper so no component decides edit rights itself. Contract schemas, routes and MSW handlers land first in `@oa/shared` so every UI task is test-first against mocks; the real suite follows once Backend P2/P3 ship.
 
 **Tech Stack:** React 19, TanStack Router and Query, `@oa/ui` and `@oa/ui/shadcn`, zod, MSW (`@oa/shared/mocks`), vitest plus Testing Library, Playwright (mock config and `playwright.real.config.ts`).
 
@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Copy: no em dashes in any user-facing string; say "any AI agent".
-- Self-hosted is unchanged: with `instance.spaces` absent or false and `instance.authMode` absent or `"access"`, no new control renders and `/sign-in` is today's Access page (existing `e2e/signin-split.spec.ts` stays green unedited).
+- Self-hosted is unchanged: with `me.spaces` and `me.hosted` absent or null and `/auth/providers` absent or `mode: "access"`, no new control renders and `/sign-in` is today's Access page (existing `e2e/signin-split.spec.ts` stays green unedited).
 - Personal artifacts belong to the person: admins can't browse or read them. The UI never lists, links or requests another user's personal space or its artifacts; a transfer shows a count only.
 - Read-only is enforced on the server; the UI must not offer edit, rename, restore, publish-to, move, share or delete to a role that lacks it (read from `artifactCan`, Task 3).
 - A tier change never widens access: in frozen or manual mode the UI offers no control that adds a group, and copy never implies sync will resume on its own.
@@ -38,20 +38,23 @@
 
 No hosted P2 or P3 plan exists yet (`git ls-tree origin/main docs/superpowers/plans` has only the 2026-10-18 plans; no open PR). P4 assumes the shapes below; each is **pending Backend P2/P3**. Task 1 adds them to `@oa/shared` as the proposal; when Backend's plan lands, Task 1 is reconciled to Backend's exact shapes before any later task merges.
 
-**Me additions** (pending P2/P3), all optional on `MeSchema.instance`:
+**Me additions** (pending P2/P3). Field names `me.spaces`, `me.hosted`, `me.authProvider` are Backend's (coordinator, 2026-10-20); the shapes are P4's proposal until P2/P3 publish their "API contract for P4". All optional at the top level of `MeSchema`:
 
 ```ts
-authMode: z.enum(["access", "direct"]).optional(),           // absent = "access"
-spaces: z.boolean().optional(),                               // RBAC feature on
-tier: z.enum(["self_hosted", "trial", "team", "business"]).optional(),
-directory: z.object({                                         // null: no IdP connected
-  provider: z.enum(["google"]),
-  mode: z.enum(["sync", "manual", "frozen"]),                 // frozen = Team after sync
-  lastSyncAt: z.string().nullable(),
-  error: z.string().nullable(),
-}).nullable().optional(),
+spaces: z.array(SpaceRefSchema.extend({ myRole: SpaceRoleSchema })).nullable().optional(),
+  // absent or null: RBAC off (self-hosted default). Else my memberships, my personal space included (kind "personal").
+hosted: z.object({
+  tier: z.enum(["trial", "team", "business"]),
+  directory: z.object({                                       // null: no IdP connected yet
+    provider: z.enum(["google"]),
+    mode: z.enum(["sync", "manual", "frozen"]),               // frozen = Team after sync
+    lastSyncAt: z.string().nullable(),
+    error: z.string().nullable(),
+  }).nullable(),
+}).nullable().optional(),                                     // absent or null: not a hosted install
+authProvider: z.enum(["access", "google", "email_code", "dev"]).optional(), // how this session signed in
 ```
-and on `MeSchema`: `personalSpaceId: z.string().nullable().optional()` (null for guests).
+Spaces gate on `me.spaces`, not `me.hosted`: the spec puts RBAC in the open-source product behind config, so a self-hoster may turn it on.
 
 **Spaces** (pending P3):
 
@@ -74,20 +77,21 @@ SpaceAccessSchema = z.object({ groups: z.array(GroupGrantSchema), members: z.arr
 DirectoryGroupSchema = z.object({ id: z.string(), name: z.string(), email: z.string(), memberCount: z.number().int().nullable() });
 ```
 - `GET /api/v1/spaces/:id/access` (admin, or manager read-only) -> `SpaceAccess`. "All members" is always in `groups` with `builtIn: true` (role may be absent from the list meaning no access; proposal: present with its role, removed by `DELETE`).
-- `PUT /api/v1/spaces/:id/groups/:groupId` `{ role }` -> `GroupGrant`; `DELETE` -> 204. 409 `conflict` when `directory.mode !== "sync"` (except `all_members`).
+- `PUT /api/v1/spaces/:id/groups/:groupId` `{ role }` -> `GroupGrant`; `DELETE` -> 204. 409 `conflict` when `me.hosted.directory.mode !== "sync"` (except `all_members`).
 - `PUT /api/v1/spaces/:id/members/:userId` `{ role }` -> `MemberGrant`; `DELETE` -> 204. Allowed in `manual` and `frozen` modes; 409 in `sync`.
 - `GET /api/v1/directory/groups?q=` (admin) -> `DirectoryGroup[]` (max 20, prefix match on name or email).
 
 **Artifacts** (pending P3):
 - `ArtifactSummarySchema` gains `space: SpaceRefSchema.nullable().optional()` and `can: z.object({ edit, share, move, delete: z.boolean() }).optional()`.
-- `ListQuerySchema` gains `space: z.string().optional()` (a space id; `personal` alias = my personal space).
+- `ListQuerySchema` gains `space: z.string().optional()` (a space id; `personal` alias = my personal space). Search (`R.search`) takes the same `space` filter.
 - `PublishShape` gains `spaceId: IdSchema.optional()` (default: my personal space). 403 `forbidden` when not editor or manager there.
 - `POST /api/v1/artifacts/:id/move` `{ spaceId }` -> `ArtifactSummary`. Needs `can.move` on the artifact and editor or manager on the target. When the target has `publicLinks: false`, a public artifact becomes `team` (response shows it).
 - `PATCH artifact { visibility: "public" }` in a space with `publicLinks: false` -> 403 `forbidden`.
 
 **Departed people and transfer** (pending P3):
 - `MemberSchema` gains `status: z.enum(["active", "suspended", "removed"]).optional()` and `pendingTransfer: z.number().int().optional()` (count of personal artifacts awaiting transfer; only for owner/admin callers).
-- `POST /api/v1/members/:id/transfer` `{ to: { kind: "user", userId } | { kind: "space", spaceId } }` (owner/admin) -> `{ moved: number }`. 400 when `userId` is the departed person or a guest; 409 when the person is still `active`.
+- `POST /api/v1/members/:id/transfer` `{ to: { kind: "user", userId } | { kind: "space", spaceId } }` (owner/admin) -> `{ moved: number }`. 400 when `userId` is the departed person or a guest; 409 when the person is still `active`. This is the departed bulk transfer.
+- Single transfer: `POST /api/v1/artifacts/:id/transfer` with the same `to` -> `ArtifactSummary`, for the owner of a personal artifact handing it on. P4 uses only the bulk form; the single form is listed so the shapes line up, with no P4 UI (add a task if the user wants it).
 
 **Sign-in** (pending P2):
 - `GET /auth/providers` (public, no session) -> `AuthProvidersSchema = z.object({ mode: z.enum(["access", "direct"]), google: z.boolean(), emailCode: z.boolean() })`.
@@ -141,13 +145,14 @@ Tests: `packages/shared/test/hosted-schemas.test.ts`; `apps/dashboard/test/{host
 - Test: `packages/shared/test/hosted-schemas.test.ts`, `packages/shared/test/mocks.test.ts`
 
 **Interfaces:**
-- Produces: every schema and route in "Contracts we need from Backend", exported from `@oa/shared` with types (`Space`, `SpaceRef`, `SpaceRole`, `SpaceAccess`, `GroupGrant`, `MemberGrant`, `DirectoryGroup`, `ArtifactCan`, `AuthProviders`, `TransferInput`, `TransferResult`); `fixtures.spaces: Space[]` (personal `sp_personal_ada`, shared `sp_eng` editor, `sp_exec` viewer, `sp_clients` manager with `publicLinks: false`); `createHandlers({ hosted: true })`.
+- Produces: every schema and route in "Contracts we need from Backend", exported from `@oa/shared` with types (`Space`, `SpaceRef`, `MySpace`, `SpaceRole`, `SpaceAccess`, `GroupGrant`, `MemberGrant`, `DirectoryGroup`, `ArtifactCan`, `AuthProviders`, `TransferInput`, `TransferResult`); `fixtures.spaces: Space[]` (personal `sp_personal_ada`, shared `sp_eng` editor, `sp_exec` viewer, `sp_clients` manager with `publicLinks: false`); `createHandlers({ hosted: true })` (sets `me.spaces`, `me.hosted` with directory mode `sync`, `me.authProvider: "google"`).
 
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
 test("me without hosted fields parses", () => {
-  expect(MeSchema.parse(fixtures.me).instance.spaces).toBeUndefined();
+  const me = MeSchema.parse(fixtures.me);
+  expect([me.spaces, me.hosted, me.authProvider]).toEqual([undefined, undefined, undefined]);
 });
 test("artifact without space or can parses", () => {
   expect(ArtifactSummarySchema.parse(fixtures.artifacts[0]).can).toBeUndefined();
@@ -243,7 +248,7 @@ Expected: PASS.
 - Produces:
   - `artifactCan(a: ArtifactSummary): ArtifactCan` → `a.can` when present, else `{ edit: access !== "viewer", share: access === "owner", move: access === "owner", delete: access === "owner" }`.
   - `canPublishTo(s: Space): boolean` → `s.kind === "personal" || s.myRole === "editor" || s.myRole === "manager"`.
-  - `useHosted(): { spaces: boolean; authMode: "access" | "direct"; directory: Me["instance"]["directory"] | null }` from `useMe` (defaults: false, "access", null).
+  - `useHosted(): { spaces: MySpace[] | null; hosted: NonNullable<Me["hosted"]> | null; authProvider: Me["authProvider"] | null }` from `useMe` (each null when absent). `MySpace` is the `me.spaces` element type.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -305,7 +310,7 @@ it("filters persist when switching space", ...);   // format=html kept
 Run: `pnpm --filter @oa/dashboard test -- spaces-library`
 Expected: FAIL on the `space=` request.
 
-- [ ] **Step 3: Implement** `validateSearch` passes `space` through `str()`; `useSpaces({ enabled: hosted.spaces })`.
+- [ ] **Step 3: Implement** `validateSearch` passes `space` through `str()`; `useSpaces({ enabled: useHosted().spaces !== null })`.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -464,7 +469,7 @@ Expected: PASS.
 
 **Files:**
 - Create: `apps/dashboard/src/settings/spaces/Spaces.tsx`
-- Modify: `apps/dashboard/src/router.tsx` (`gated("/settings/spaces", ADMINS, "/settings/agents", Spaces)`), `apps/dashboard/src/settings/SettingsLayout.tsx` (tab "Spaces", roles owner/admin, shown only when `useHosted().spaces`)
+- Modify: `apps/dashboard/src/router.tsx` (`gated("/settings/spaces", ADMINS, "/settings/agents", Spaces)`), `apps/dashboard/src/settings/SettingsLayout.tsx` (tab "Spaces", roles owner/admin, shown only when `useHosted().spaces !== null`)
 - Test: `apps/dashboard/test/spaces-admin.test.tsx`
 
 **Interfaces:**
@@ -505,8 +510,8 @@ Expected: PASS.
 - Test: `apps/dashboard/test/space-access.test.tsx`
 
 **Interfaces:**
-- Consumes: `useSpaceAccess`, `usePutGroupGrant`, `useDeleteGroupGrant`, `useDirectoryGroups`, `useHosted().directory`.
-- Produces: `<SpaceAccess spaceId={string} />` (renders the Task 11 manual editor when `directory.mode !== "sync"`), `<GroupSearch onPick={(g: DirectoryGroup) => void} exclude={string[]} />`.
+- Consumes: `useSpaceAccess`, `usePutGroupGrant`, `useDeleteGroupGrant`, `useDirectoryGroups`, `useHosted().hosted?.directory`.
+- Produces: `<SpaceAccess spaceId={string} />` (renders the Task 11 manual editor when `hosted.directory?.mode !== "sync"`), `<GroupSearch onPick={(g: DirectoryGroup) => void} exclude={string[]} />`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -515,7 +520,7 @@ it("All members is always listed and can't be removed, only set to a role or no 
 it("role choices are exactly Viewer, Editor, Manager", ...);
 it("adding a group PUTs its role; already-mapped groups are excluded from search", ...);
 it("removing a group asks for confirmation then DELETEs", ...);
-it("shows last sync time and a sync error from directory", ...);
+it("shows last sync time and a sync error from me.hosted.directory", ...);
 it("no directory connected: group search is absent and says to connect Google", ...); // copy per D5
 ```
 
