@@ -5,5 +5,6 @@
   "capabilities": {
     "db": true
   },
-  "description": "What's happening across the demos today: poll votes, games in progress, moves, pixels and countries, updated live about once a minute."
+  "description": "What's happening across the demos today: poll votes, games in progress, moves, pixels and countries, updated live about once a minute.",
+  "reset": false
 }
