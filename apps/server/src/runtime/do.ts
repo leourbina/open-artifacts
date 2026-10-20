@@ -95,8 +95,14 @@ export function anonWritesPerMin(v: string | undefined): number {
 const ROW_OVERHEAD = 64;
 /** Broadcasts inline the doc only up to this many bytes; larger docs go out as data:null. */
 const BROADCAST_INLINE_BYTES = 16 * 1024;
-/** Hibernated sockets per DO; fetch returns 429 past it. */
+/** Hibernated data-subscribe sockets per DO; fetch returns 429 past it. */
 const MAX_SOCKETS = 200;
+/** R.events sockets per DO from signed-in viewers (their own pool). */
+const MAX_EVENTS_SOCKETS = 200;
+/** R.events sockets per DO from anonymous (ip:) viewers (their own pool). */
+const MAX_ANON_EVENTS_SOCKETS = 100;
+/** R.events sockets per anonymous actor (an IPv4 address or IPv6 /56). */
+const MAX_ANON_EVENTS_PER_ACTOR = 3;
 /** Sockets per actor (X-OA-Actor on the upgrade request); fetch returns 429 past it. */
 const MAX_SOCKETS_PER_ACTOR = 20;
 /** Max socket lifetime: a revocation the server missed can't outlive a signed URL. */
@@ -307,15 +313,21 @@ type SocketMeta = { t: number; named?: boolean };
 /**
  * R.events socket tags. Not DataNames (NAME_RE has no "~"), so they never
  * collide with a data-subscribe collection tag. Every events socket has
- * EVENTS_TAG plus exactly one of the viewer-class tags.
+ * EVENTS_TAG, one budget-pool tag (signed-in or ip) and one viewer-class tag
+ * (named or anon); its per-actor tag is "ea:{actor}" (data sockets: "a:").
  */
 const EVENTS_TAG = "~ev";
 const EVENTS_NAMED_TAG = "~ev:named";
 const EVENTS_ANON_TAG = "~ev:anon";
+const EVENTS_USER_TAG = "~ev:u";
+const EVENTS_IP_TAG = "~ev:ip";
 /** Route → DO headers on the events upgrade: the current version and viewer class. */
 export const EVENTS_VERSION_HEADER = "X-OA-Version";
 export const EVENTS_NAMED_HEADER = "X-OA-Named";
-const GONE_FRAME = '{"type":"gone"}';
+/** Why R.events sockets get `gone`: a soft delete, or any other access change. */
+export type GoneReason = "deleted" | "changed";
+const GONE_DELETED = '{"type":"gone","reason":"deleted"}';
+const GONE_CHANGED = '{"type":"gone","reason":"changed"}';
 
 /** A new version, broadcast to R.events sockets by scheduleIndex. */
 export type VersionEvent = {
@@ -1039,6 +1051,9 @@ export class ArtifactRuntime extends DurableObject<Env> {
     if (req.headers.get("Upgrade")?.toLowerCase() !== "websocket")
       return new Response("Expected WebSocket upgrade", { status: 426 });
     const url = new URL(req.url);
+    const actor = req.headers.get(ACTOR_HEADER);
+    if (actor !== null && !ACTOR_RE.test(actor))
+      return new Response("Invalid actor", { status: 400 });
     let tags: string[];
     let hello: string | null = null;
     let named: boolean | undefined;
@@ -1046,26 +1061,45 @@ export class ArtifactRuntime extends DurableObject<Env> {
       const v = Number(req.headers.get(EVENTS_VERSION_HEADER));
       if (!Number.isSafeInteger(v) || v < 1)
         return new Response("Invalid version", { status: 400 });
+      // Own budgets, apart from data sockets: anonymous (ip:) actors share a
+      // smaller pool and get 3 sockets each, so they starve neither live
+      // data nor signed-in viewers' events.
+      const anon = actor === null || actor.startsWith("ip:");
+      const pool = anon ? EVENTS_IP_TAG : EVENTS_USER_TAG;
+      if (
+        this.ctx.getWebSockets(pool).length >=
+        (anon ? MAX_ANON_EVENTS_SOCKETS : MAX_EVENTS_SOCKETS)
+      )
+        return new Response("Too many subscribers", { status: 429 });
       named = req.headers.get(EVENTS_NAMED_HEADER) === "1";
-      tags = [EVENTS_TAG, named ? EVENTS_NAMED_TAG : EVENTS_ANON_TAG];
+      tags = [EVENTS_TAG, pool, named ? EVENTS_NAMED_TAG : EVENTS_ANON_TAG];
+      if (actor !== null) {
+        const tag = `ea:${actor}`;
+        if (
+          this.ctx.getWebSockets(tag).length >=
+          (anon ? MAX_ANON_EVENTS_PER_ACTOR : MAX_SOCKETS_PER_ACTOR)
+        )
+          return new Response("Too many subscriptions", { status: 429 });
+        tags.push(tag);
+      }
       hello = `{"type":"hello","version":${v}}`;
     } else {
       const r = DataNameSchema.safeParse(url.searchParams.get("collection"));
       if (!r.success)
         return new Response("Invalid collection", { status: 400 });
       tags = [r.data];
-    }
-    if (this.ctx.getWebSockets().length >= MAX_SOCKETS)
-      return new Response("Too many subscribers", { status: 429 });
-    // Optional per-actor cap (the route passes the authorized actor).
-    const actor = req.headers.get(ACTOR_HEADER);
-    if (actor !== null) {
-      if (!ACTOR_RE.test(actor))
-        return new Response("Invalid actor", { status: 400 });
-      const tag = `a:${actor}`;
-      if (this.ctx.getWebSockets(tag).length >= MAX_SOCKETS_PER_ACTOR)
-        return new Response("Too many subscriptions", { status: 429 });
-      tags.push(tag);
+      const data =
+        this.ctx.getWebSockets().length -
+        this.ctx.getWebSockets(EVENTS_TAG).length;
+      if (data >= MAX_SOCKETS)
+        return new Response("Too many subscribers", { status: 429 });
+      // Optional per-actor cap (the route passes the authorized actor).
+      if (actor !== null) {
+        const tag = `a:${actor}`;
+        if (this.ctx.getWebSockets(tag).length >= MAX_SOCKETS_PER_ACTOR)
+          return new Response("Too many subscriptions", { status: 429 });
+        tags.push(tag);
+      }
     }
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1], tags);
@@ -1426,12 +1460,14 @@ export class ArtifactRuntime extends DurableObject<Env> {
    * revoked, visibility changed, artifact deleted). Clients reconnect through
    * the shell, which re-checks access. R.events sockets get a `gone` frame
    * first: access isn't re-evaluated per socket here, so every one closes
-   * and the client's reconnect re-checks it (404 = really gone).
+   * and the client's reconnect re-checks it (404 = really gone). `gone` is
+   * the frame's reason: "deleted" for a soft delete, else "changed".
    */
-  closeSockets(reason: string): number {
+  closeSockets(reason: string, gone: GoneReason = "changed"): number {
+    const frame = gone === "deleted" ? GONE_DELETED : GONE_CHANGED;
     for (const ws of this.ctx.getWebSockets(EVENTS_TAG)) {
       try {
-        ws.send(GONE_FRAME);
+        ws.send(frame);
       } catch {
         // closing socket
       }

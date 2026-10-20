@@ -119,6 +119,19 @@ export function ipKey(ip: string): string | null {
 }
 
 /**
+ * The anonymous R.events actor key: IPv4 as is; IPv6 as its /56
+ * ("2001:db8:1:200::/56"), since one subscriber typically holds a /56 of
+ * /64s, so the DO's per-actor events cap (3) can't be multiplied by 256.
+ */
+export function eventsIpKey(ip: string): string | null {
+  const k = ipKey(ip);
+  if (!k?.endsWith("::/64")) return k;
+  const g = k.slice(0, -5).split(":");
+  const g3 = Number.parseInt(g[3] ?? "0", 16) & 0xff00;
+  return `${g.slice(0, 3).join(":")}:${g3.toString(16)}::/56`;
+}
+
+/**
  * Applies RL_ANON to `key`. Fails closed (503) when the binding is missing
  * outside ENVIRONMENT=dev (the test pool and local dev have none).
  */
@@ -395,7 +408,7 @@ export function mountRuntime(app: AppType): void {
         r.level !== "viewer" ||
         r.artifact.visibility !== "public";
     } else {
-      const key = ipKey(c.req.header("cf-connecting-ip") ?? "");
+      const key = eventsIpKey(c.req.header("cf-connecting-ip") ?? "");
       if (!key)
         throw new ApiError("rate_limited", "Anonymous access is unavailable");
       await anonLimit(c, `ev:ip:${key}`, "connections");

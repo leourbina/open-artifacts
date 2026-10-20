@@ -14,6 +14,7 @@ import { createApp } from "../src/app.js";
 import { createPat } from "../src/auth/pat.js";
 import { appOrigin } from "../src/http/errors.js";
 import { type ArtifactRuntime, runtimeStub } from "../src/runtime/do.js";
+import { eventsIpKey } from "../src/runtime/routes.js";
 import { publish } from "../src/services/artifacts.js";
 import { getUser } from "../src/services/users.js";
 import { api, login } from "./helpers.js";
@@ -261,7 +262,7 @@ describe("events socket", () => {
       method: "DELETE",
     });
     expect(d.status).toBe(204);
-    expect(await s.next()).toEqual({ type: "gone" });
+    expect(await s.next()).toEqual({ type: "gone", reason: "deleted" });
     expect(await s.closed).toBe(EVENTS_GONE_CLOSE);
     // Reconnect re-checks access.
     expect(((await open(id, viewer)) as Response).status).toBe(404);
@@ -276,7 +277,7 @@ describe("events socket", () => {
       body: { visibility: "private" },
     });
     expect(p.status).toBe(200);
-    expect(await s.next()).toEqual({ type: "gone" });
+    expect(await s.next()).toEqual({ type: "gone", reason: "changed" });
     expect(await s.closed).toBe(4403);
     expect(((await open(id, null)) as Response).status).toBe(404);
   });
@@ -369,5 +370,89 @@ describe("events socket", () => {
     );
     m.ws.close();
     a.ws.close();
+  });
+});
+
+describe("events socket: access changes and budgets", () => {
+  const status = async (p: Promise<Sock | Response>) => {
+    const s = await p;
+    if (s instanceof Response) return s.status;
+    s.ws.close();
+    return 101;
+  };
+
+  it("a publish that makes it private sends anonymous sockets gone, never the version", async () => {
+    const id = await pub({ visibility: "public" });
+    const s = await sock(id, null);
+    await s.next();
+    const r = await api(app, R.versions(id), owner.cookie, {
+      method: "POST",
+      body: { format: "html", content: "<p>2</p>", visibility: "private" },
+    });
+    expect(r.status).toBe(201);
+    expect(await s.next()).toEqual({ type: "gone", reason: "changed" });
+    expect(await s.closed).toBe(4403);
+    expect(s.frames.some((f) => f.type === "version")).toBe(false);
+  });
+
+  it("eventsIpKey: IPv4 as is, IPv6 by /56", () => {
+    expect(eventsIpKey("203.0.113.7")).toBe("203.0.113.7");
+    expect(eventsIpKey("2001:db8:1:1ff:a::1")).toBe("2001:db8:1:100::/56");
+    expect(eventsIpKey("2001:db8:1:ff::1")).toBe("2001:db8:1:0::/56");
+    expect(eventsIpKey("junk")).toBeNull();
+  });
+
+  it("3 anonymous events sockets per /56; a 4th from another /64 in it is refused", async () => {
+    const id = await pub({ visibility: "public" });
+    const at = (ip: string) => ({ "cf-connecting-ip": ip });
+    const held = [
+      await sock(id, null, at("2001:db8:5:100::1")),
+      await sock(id, null, at("2001:db8:5:1ff::1")),
+      await sock(id, null, at("2001:db8:5:150::9")),
+    ];
+    expect(await status(open(id, null, at("2001:db8:5:1aa::1")))).toBe(429);
+    expect(await status(open(id, null, at("2001:db8:5:200::1")))).toBe(101);
+    // Members aren't limited by the anonymous caps.
+    for (let i = 0; i < 5; i++)
+      expect(await status(open(id, viewer))).toBe(101);
+    for (const s of held) s.ws.close();
+  });
+
+  it("anonymous events sockets at the pool cap starve neither data sockets nor members", async () => {
+    const id = await pub({
+      visibility: "public",
+      capabilities: { db: true, viewer: false, storage: false },
+    });
+    const held: Sock[] = [];
+    // 34 IPv4 actors × 3 = 102, over the 100-socket anonymous pool.
+    let refused = 0;
+    for (let a = 0; a < 34; a++)
+      for (let k = 0; k < 3; k++) {
+        const s = await open(id, null, {
+          "cf-connecting-ip": `192.0.2.${a + 1}`,
+        });
+        if (s instanceof Response) {
+          expect(s.status).toBe(429);
+          refused++;
+        } else held.push(s);
+      }
+    expect(held).toHaveLength(100);
+    expect(refused).toBe(2);
+    // Live data still connects (its own pool), anonymously and signed in.
+    for (const [cookie, ip] of [
+      [null, "192.0.2.200"],
+      [viewer.cookie, "192.0.2.201"],
+    ] as const) {
+      const d = await api(app, R.dataSubscribe(id, "c"), cookie, {
+        headers: { ...UP, "cf-connecting-ip": ip },
+      });
+      expect(d.status).toBe(101);
+      d.webSocket?.accept();
+      d.webSocket?.close();
+    }
+    // Members' events sockets have their own pool.
+    expect(await status(open(id, viewer))).toBe(101);
+    expect(await status(open(id, owner))).toBe(101);
+    for (const s of held) s.ws.close();
   });
 });

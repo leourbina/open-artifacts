@@ -320,9 +320,10 @@ export async function publish(
       throw new ApiError("conflict", "An upload was already used");
     throw notFound();
   }
+  // Access changed: close first (gone "changed"), awaited, so a socket that
+  // may have lost access never sees this version; reconnects get hello.
+  if (accessChanged) await closeRuntimeSockets(env, [id], "access changed");
   await enqueueIndex(env, id, version, true, versionEvent(user, agent, now));
-  if (accessChanged)
-    await closeRuntimeSockets(env, [id], "access changed", ctx);
   return { id, version, url: appOrigin(env) + viewerPath(id) };
 }
 
@@ -927,7 +928,7 @@ export async function softDelete(
       "update artifacts set deleted_at = ?, purge_attempts = 0, purge_after = null where id = ? and deleted_at is null",
     ).bind(Date.now(), id),
   ]);
-  await closeRuntimeSockets(env, [id], "artifact deleted", ctx);
+  await closeRuntimeSockets(env, [id], "artifact deleted", ctx, "deleted");
 }
 
 /** Owner only, within LIMITS.softDeleteDays; re-indexes the current version. */

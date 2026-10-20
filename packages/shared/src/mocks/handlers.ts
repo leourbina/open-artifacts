@@ -492,7 +492,7 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
           capabilities !== undefined;
         Object.assign(a, rest, { updatedAt: iso() });
         if (capabilities) Object.assign(a.capabilities, capabilities);
-        if (gone) opts.events?.emitGone(a.id);
+        if (gone) opts.events?.emitGone(a.id, "changed");
         return HttpResponse.json(a);
       }, "write")(ctx);
     }),
@@ -500,7 +500,7 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
       A,
       withArt((a) => {
         a.deletedAt = iso();
-        opts.events?.emitGone(a.id);
+        opts.events?.emitGone(a.id, "deleted");
         return noContent();
       }, "owner"),
     ),

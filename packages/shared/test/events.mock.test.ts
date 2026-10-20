@@ -76,7 +76,7 @@ describe("R.events mock", () => {
     });
     events.emitGone("x1");
     await s.count(3);
-    expect(s.frames[2]).toEqual({ type: "gone" });
+    expect(s.frames[2]).toEqual({ type: "gone", reason: "deleted" });
     expect(await s.closed).toBe(EVENTS_GONE_CLOSE);
   });
 
@@ -107,7 +107,7 @@ describe("R.events mock", () => {
     });
     expect((await req(R.artifact(id), "DELETE")).status).toBe(204);
     await s.count(4);
-    expect(s.frames[3]).toEqual({ type: "gone" });
+    expect(s.frames[3]).toEqual({ type: "gone", reason: "deleted" });
     expect(await s.closed).toBe(4403);
   });
 });

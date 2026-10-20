@@ -4,7 +4,8 @@
  *   const events = createArtifactEvents();
  *   server.use(...createHandlers({ events }), ...events.handlers);
  *   events.emitVersion(id, { version: 3, restoredFrom: 1 });
- *   events.emitGone(id); // { type: "gone" }, then close 4403
+ *   events.emitGone(id); // { type: "gone", reason: "deleted" }, then close 4403
+ *   events.emitGone(id, "changed"); // visibility, share, capabilities
  *
  * On connect a socket gets `{ type: "hello", version }` (the mock store's
  * currentVersion when wired through createHandlers({ events }), else 1).
@@ -39,8 +40,8 @@ export type ArtifactEventsMock = {
       restoredFrom?: number;
     },
   ): number;
-  /** Sends `{ type: "gone" }` and closes with 4403 every open socket of `id`. */
-  emitGone(id: string): number;
+  /** Sends `{ type: "gone", reason }` and closes with 4403 every open socket of `id`. */
+  emitGone(id: string, reason?: "deleted" | "changed"): number;
   /** Open sockets for `id`. */
   connections(id: string): number;
   /** Set by createHandlers({ events }): the version a hello reports. */
@@ -80,11 +81,11 @@ export function createArtifactEvents(): ArtifactEventsMock {
       for (const c of set) send(c, frame);
       return set.size;
     },
-    emitGone(id) {
+    emitGone(id, reason = "deleted") {
       const set = clients.get(id) ?? new Set<Client>();
       const n = set.size;
       for (const c of [...set]) {
-        send(c, { type: "gone" });
+        send(c, { type: "gone", reason });
         set.delete(c);
         // Next task: an immediate close would drop the queued gone frame.
         setTimeout(() => c.close(EVENTS_GONE_CLOSE, "gone"), 0);

@@ -168,6 +168,11 @@ export async function removeMember(
     db.delete(users).where(eq(users.id, id)),
   ]);
   // Live sockets the member opened via shares stay open otherwise (best effort, capped).
+  // Accepted ceiling: their sockets on TEAM artifacts (data-subscribe and
+  // R.events, which may carry publisher names) are not closed here, since that
+  // would be one DO RPC per team artifact. They close at the socket TTL
+  // rotation (4408, at most LIMITS.signedUrlTtlSec = 10 min), and the
+  // reconnect is refused. See docs/security/security.md.
   const shared = await db
     .select({ id: shares.artifactId })
     .from(shares)

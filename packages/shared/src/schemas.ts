@@ -618,8 +618,9 @@ export type ArtifactEventBy = z.infer<typeof ArtifactEventBySchema>;
  * - hello: on connect, the artifact's current version.
  * - version: a publish or restore created version `version`; `restoredFrom`
  *   (restores only) is the version it copies.
- * - gone: access changed (deleted, visibility, share, capabilities, member
- *   removed); the socket then closes with EVENTS_GONE_CLOSE (4403).
+ * - gone: access changed; the socket then closes with EVENTS_GONE_CLOSE
+ *   (4403). reason "deleted": soft delete; "changed": visibility,
+ *   capabilities, share revoked or member removed.
  *   Reconnect to re-check access (404 = no longer readable).
  * Sockets also close with 4408 near the signed-URL TTL: reconnect.
  */
@@ -632,7 +633,10 @@ export const ArtifactEventSchema = z.discriminatedUnion("type", [
     by: ArtifactEventBySchema,
     restoredFrom: z.number().int().min(1).optional(),
   }),
-  z.object({ type: z.literal("gone") }),
+  z.object({
+    type: z.literal("gone"),
+    reason: z.enum(["deleted", "changed"]),
+  }),
 ]);
 export type ArtifactEvent = z.infer<typeof ArtifactEventSchema>;
 /** The close code that follows a `gone` frame on R.events. */
