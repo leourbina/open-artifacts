@@ -12,7 +12,7 @@ import {
   type Schemas,
 } from "./bridge.js";
 
-export { RuntimeError } from "./bridge.js";
+export { RuntimeError, type RuntimeErrorCode } from "./bridge.js";
 
 export type Theme = "light" | "dark";
 export type Viewer = { email: string; name: string | null };
@@ -44,7 +44,7 @@ export interface Collection {
 }
 
 export interface OpenArtifacts {
-  /** Resolves on the shell's `welcome` (at once in the raw view). */
+  /** Resolves on the shell's `welcome` (at once in the raw view, or when no shell answers). */
   ready: Promise<void>;
   viewer: { get(): Promise<Viewer | null> };
   db: { collection(name: string): Collection };
@@ -121,7 +121,12 @@ function systemTheme(): Theme {
 }
 
 const ignore = (e: unknown) => {
-  if (!(e instanceof RuntimeError && e.code === "capability_denied"))
+  if (
+    !(
+      e instanceof RuntimeError &&
+      (e.code === "capability_denied" || e.code === "no_shell")
+    )
+  )
     console.error("openArtifacts:", e);
 };
 
@@ -313,9 +318,9 @@ export function createRuntime(opts: RuntimeOptions = {}): OpenArtifacts {
   };
 
   opts.signal?.addEventListener("abort", () => bridge.dispose());
-  if (bridge.raw) welcomed();
+  bridge.onNoShell(welcomed);
   // Renderer pages (markdown/code/pdf) send their own hello.
-  else if (kind === "html") bridge.hello(kind);
+  if (!bridge.raw && kind === "html") bridge.hello(kind);
   return api;
 }
 

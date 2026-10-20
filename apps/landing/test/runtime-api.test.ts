@@ -14,4 +14,10 @@ describe("runtime-api docs", () => {
     expect(doc).toContain("{ docs: [], deleted: [], resync: true }");
     expect(doc).toMatch(/if \(e\.resync\) return refetch\(\);/);
   });
+
+  // packages/runtime rejects every call with code "no_shell" outside the viewer.
+  it("documents the no_shell error", () => {
+    expect(doc).toMatch(/\| `no_shell` \|/);
+    expect(doc).toContain('e.code === "no_shell"');
+  });
 });

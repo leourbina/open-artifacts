@@ -1,7 +1,15 @@
 import type { ArtifactToShell, DataDoc } from "@oa/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CALL_TIMEOUT_MS, RAW_VIEW_MESSAGE } from "../src/bridge.js";
-import { createRuntime, type OpenArtifacts } from "../src/index.js";
+import {
+  CALL_TIMEOUT_MS,
+  HANDSHAKE_MS,
+  RAW_VIEW_MESSAGE,
+} from "../src/bridge.js";
+import {
+  createRuntime,
+  type OpenArtifacts,
+  RuntimeError,
+} from "../src/index.js";
 import * as schemas from "../src/schemas.js";
 
 type Call = Extract<ArtifactToShell, { type: "call" }>;
@@ -196,6 +204,8 @@ describe("bridge", () => {
     const settled = vi.fn();
     p.catch(settled);
     await flush();
+    fromShell({ oa: 1, type: "theme", theme: "light" }); // the shell is there
+    await flush();
     await vi.advanceTimersByTimeAsync(CALL_TIMEOUT_MS - 1);
     expect(settled).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
@@ -205,19 +215,69 @@ describe("bridge", () => {
     });
   });
 
-  it("raw view (no parent) rejects every call with capability_denied", async () => {
+  it("raw view (no parent) rejects every call at once with no_shell", async () => {
     Object.defineProperty(window, "parent", {
       value: window,
       configurable: true,
     });
     const oa = start();
     await expect(oa.ready).resolves.toBeUndefined();
-    const denied = { code: "capability_denied", message: RAW_VIEW_MESSAGE };
+    const noShell = { code: "no_shell", message: RAW_VIEW_MESSAGE };
     await expect(oa.db.collection("c").set("a", 1)).rejects.toMatchObject(
-      denied,
+      noShell,
     );
-    await expect(oa.viewer.get()).rejects.toMatchObject(denied);
-    await expect(oa.storage.list()).rejects.toMatchObject(denied);
+    await expect(oa.viewer.get()).rejects.toMatchObject(noShell);
+    await expect(oa.storage.list()).rejects.toMatchObject(noShell);
+    await expect(oa.viewer.get()).rejects.toBeInstanceOf(RuntimeError);
+  });
+
+  it("a parent that never answers: no_shell after HANDSHAKE_MS, then at once", async () => {
+    vi.useFakeTimers();
+    const oa = start();
+    const p = oa.viewer.get();
+    const settled = vi.fn();
+    p.catch(settled);
+    let ready = false;
+    void oa.ready.then(() => {
+      ready = true;
+    });
+    await flush();
+    await vi.advanceTimersByTimeAsync(HANDSHAKE_MS - 1);
+    expect(settled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(p).rejects.toMatchObject({
+      code: "no_shell",
+      message: RAW_VIEW_MESSAGE,
+    });
+    expect(ready).toBe(true);
+    parent.postMessage.mockClear();
+    await expect(oa.storage.get("k")).rejects.toMatchObject({
+      code: "no_shell",
+    });
+    expect(parent.postMessage).not.toHaveBeenCalled();
+    // A late shell is ignored: the runtime already settled on no shell.
+    fromShell({ oa: 1, type: "theme", theme: "dark" });
+    await flush();
+    expect(oa.theme).not.toBe("dark");
+  });
+
+  it("a shell that welcomes in time keeps calls alive past HANDSHAKE_MS", async () => {
+    vi.useFakeTimers();
+    const oa = start();
+    await flush();
+    fromShell({
+      oa: 1,
+      type: "welcome",
+      capabilities: { db: true, viewer: false, storage: true },
+      viewer: null,
+      theme: "light",
+    });
+    await flush();
+    const p = oa.storage.get("k");
+    await flush();
+    await vi.advanceTimersByTimeAsync(HANDSHAKE_MS * 2);
+    reply(calls("storage.get")[0]?.id ?? "", null);
+    await expect(p).resolves.toBeNull();
   });
 
   it("rejects invalid params locally (RUNTIME_PARAMS), sending nothing", async () => {
