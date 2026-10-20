@@ -128,7 +128,7 @@ Installs are configured (by Backend's P2 settings) with `rl-a` and `rl-b` bound 
   - `an ID token with no hd claim and a B-domain email` → no session.
   - `an ID token minted for A's client (aud) replayed at B` → no session.
   - `A's OIDC state/nonce replayed at B` → no session.
-  - Broker: `A's `BROKER_SIGNING_KEY` (with A's `BROKER_KID`) redeeming as B`, `B's assertion at A`, `a tampered install id at the broker callback` → refused.
+  - Broker: `A's `BROKER_SIGNING_KEY` (its kid derived from A's public key) redeeming as B`, `B's assertion at A`, `a tampered install id at the broker callback` → refused.
   - One-time codes: `a code issued by A for x@b.redline.test, entered at B` → refused; `a code requested at B for an address not invited to B` → no code sent (hook shows none) and a generic response; `a guest of A who is invited to B gets read-only on B only` (guest can't publish via MCP or data API on B).
 - [ ] **Step 2:** Run; expect PASS (same stop rule).
 - [ ] **Step 3:** Mark proof levels. Until the user creates the two real test Workspace tenants, a *validly signed* Google token with the wrong `hd` or `aud` can't be produced live; those cases run only against P2's fake-Google fixture. The suite reports them as `unproven-live`, the Platform status page shows them so, and FinQore's go-live is gated on them turning `proven`.
