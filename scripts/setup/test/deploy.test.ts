@@ -39,13 +39,19 @@ const WELCOME = readFileSync(
   "utf8",
 );
 const line = (w: W, step: string) => parsed(w).find((j) => j.step === step);
-const patOf = (w: W): string => line(w, "owner-token").data.token;
+/** The PAT as saved to its 0600 file (the owner-token line carries only the path). */
+const patOf = (w: W): string => {
+  const file = line(w, "owner-token").data.tokenFile as string;
+  return (w.files.get(file) ?? "").trim();
+};
 
-/** The PAT is only in owner-token's line: never state, files, argv, prompts, agent-config or other steps. */
+/** The PAT is only in its token file: never in a line, state, other files, argv or prompts. */
 function patContained(w: W, pat: string) {
   expect(isPat(pat)).toBe(true);
-  const others = w.lines.filter((l) => !/^(\{"step":"|. )owner-token/.test(l));
-  const hay = [...others, ...w.files.values(), ...w.argv, ...w.prompts];
+  const file = [...w.files.keys()].find((k) => k.endsWith("-pat-token")) ?? "";
+  expect(w.secretWrites).toContain(file);
+  const others = [...w.files].filter(([k]) => k !== file).map(([, v]) => v);
+  const hay = [...w.lines, ...others, ...w.argv, ...w.prompts];
   expect(hay.join("\n")).not.toContain(pat);
   expect(w.sqls.join("\n")).toContain(
     createHash("sha256").update(pat).digest("hex"),
@@ -161,8 +167,8 @@ describe("deploy, owner-token, selftest, agent-config", () => {
       expect(s).not.toContain(pat);
     }
     expect(JSON.stringify(cfg)).not.toContain(pat);
-    expect(cfg.snippets.claudeCode).toMatch(
-      /^read -rs OA_TOKEN\nclaude mcp add --transport http open-artifacts https:\/\/app\.example\.com\/mcp --header "Authorization: Bearer \$OA_TOKEN"\nunset OA_TOKEN$/,
+    expect(cfg.snippets.claudeCode).toBe(
+      'claude mcp add --transport http open-artifacts https://app.example.com/mcp --header "Authorization: Bearer $(cat ~/.open-artifacts/app-example-com-pat-token)"',
     );
     expect(cfg.snippets.codex).toContain("[mcp_servers.open-artifacts]");
     expect(JSON.parse(cfg.snippets.cursor)).toEqual({
@@ -203,7 +209,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     );
     expect(line(w, "selftest").data).toEqual({ mcp: "skipped" });
     const cfg = line(w, "agent-config");
-    expect(cfg.data.snippets.claudeCode).toContain("$OA_TOKEN");
+    expect(cfg.data.snippets.claudeCode).toContain("$(cat ~/.open-artifacts/");
     expect(w.lines.join("\n")).not.toMatch(/oa_pat_/);
   });
 
@@ -384,23 +390,24 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     expect(w.mcpCalls).toEqual([]);
   });
 
-  it("human output shows the token once in owner-token, plus agent-config snippets", async () => {
+  it("human output names the token file in owner-token, never the token, plus agent-config snippets", async () => {
     const w = world();
     const human = HOSTS.filter((a) => a !== "--json");
     expect(await run(human, w.deps, ROOT)).toBe(0);
     const tokenId = JSON.parse(w.files.get(STATE) ?? "").ownerTokenId;
     const own = w.lines.find((l) => l.startsWith("✓ owner-token")) ?? "";
-    const pat = own.match(/oa_pat_\w+/)?.[0] ?? "";
-    expect(own.split(pat)).toHaveLength(2);
+    expect(own).not.toMatch(/oa_pat_/);
+    const file =
+      [...w.files.keys()].find((k) => k.endsWith("-pat-token")) ?? "";
+    const pat = (w.files.get(file) ?? "").trim();
     expect(own).toContain(tokenId);
+    expect(own).toContain("-pat-token");
     const cfg = w.lines.find((l) => l.startsWith("✓ agent-config")) ?? "";
     expect(cfg).toContain("claude mcp add --transport http");
-    expect(cfg).toContain("read -rs OA_TOKEN");
-    expect(cfg).toContain("owner-token step");
+    expect(cfg).toContain("$(cat ~/.open-artifacts/app-example-com-pat-token)");
+    expect(cfg).toContain("{file:~/.open-artifacts/app-example-com-pat-token}");
     expect(cfg).not.toContain(pat);
     expect(cfg).toContain("bearer_token_env_var");
-    for (const l of w.lines.filter((x) => !x.startsWith("✓ owner-token")))
-      expect(l).not.toContain(pat);
     patContained(w, pat);
   });
 

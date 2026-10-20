@@ -37,11 +37,17 @@ export function core(o: Core = {}) {
   const prompts: string[] = [];
   const answers = [...(o.answers ?? [])];
   const sleeps: number[] = [];
+  /** Paths written through writeSecret (0600 files). */
+  const secretWrites: string[] = [];
   const deps: Deps = {
     env: o.env ?? {},
     fs: {
       read: (p) => files.get(p) ?? null,
       write: (p, d) => void files.set(p, d),
+      writeSecret: (p, d) => {
+        files.set(p, d);
+        secretWrites.push(p);
+      },
       readToken: (p) =>
         files.has(p)
           ? {
@@ -63,5 +69,5 @@ export function core(o: Core = {}) {
     sleep: async (ms) => void sleeps.push(ms),
   };
   const state = () => JSON.parse(files.get(STATE) ?? "{}");
-  return { deps, files, lines, prompts, state, sleeps };
+  return { deps, files, lines, prompts, state, sleeps, secretWrites };
 }

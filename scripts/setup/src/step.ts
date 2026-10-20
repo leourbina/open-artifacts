@@ -47,6 +47,8 @@ export type Opts = {
   /** False under --yes or --json: never prompt. */
   interactive: boolean;
   json: boolean;
+  /** --print-token: report the minted token in data.token (otherwise only data.tokenFile). */
+  printToken: boolean;
   /** CI mode: implies --json; the owner token lives in memory only and is revoked at the end. */
   ci: boolean;
   /** With --ci: revoke every live setup-ci token of the owner and exit. */

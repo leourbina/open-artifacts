@@ -1,4 +1,6 @@
 import { createHash, randomInt } from "node:crypto";
+import { homedir } from "node:os";
+import { patTokenFile } from "../secret-file.ts";
 import { writeState } from "../state.ts";
 import type { Ctx, Step } from "../step.ts";
 import { names } from "./resources.ts";
@@ -176,10 +178,27 @@ export const ownerToken: Step = {
       );
     const revoked = revoke?.meta?.changes ?? 0;
     ctx.pat = token;
+    // Not under --ci: the token is revoked at the end of the run, so a file would only go stale.
+    let tokenFile: string | undefined;
+    if (!ci) {
+      tokenFile = patTokenFile(
+        ctx.deps.env.HOME ?? homedir(),
+        ctx.opts.appHost,
+      );
+      try {
+        if (!ctx.fs.writeSecret)
+          throw new Error("this fs cannot write secret files");
+        ctx.fs.writeSecret(tokenFile, `${token}\n`);
+      } catch (e) {
+        throw new Error(
+          `minted owner token ${id} but could not save it to ${tokenFile} (${(e as Error).message}); rerun with --new-owner-token`,
+        );
+      }
+    }
     ctx.notes.push(
       ci
         ? "owner token minted for selftest (not printed; revoked at end of run)"
-        : `minted owner token ${id}; shown once, store it now`,
+        : `minted owner token ${id}; saved to ${tokenFile} (don't read or print it; point your client config at it)`,
     );
     const stale = ci ? (res[1]?.meta?.changes ?? 0) : 0;
     if (stale > 0) ctx.notes.push(`revoked ${stale} stale setup-ci tokens`);
@@ -200,8 +219,12 @@ export const ownerToken: Step = {
       ctx.data = { tokenId: id };
       return undefined;
     }
-    ctx.data = { tokenId: id, token };
-    ctx.human = `  token: ${token}`;
+    ctx.data = {
+      tokenId: id,
+      tokenFile,
+      ...(ctx.opts.printToken ? { token } : {}),
+    };
+    if (ctx.opts.printToken) ctx.human = `  token: ${token}`;
     return undefined;
   },
 };

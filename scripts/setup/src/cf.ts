@@ -1,11 +1,13 @@
 import { execFile } from "node:child_process";
 import {
+  chmodSync,
   closeSync,
   constants,
   fstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -26,6 +28,11 @@ export type Fs = {
    * descriptor that was checked: null when it does not exist.
    */
   readToken?: (path: string) => TokenFile | null;
+  /**
+   * A secret file: its directory 0700, any existing file removed, then the file
+   * created exclusively (no symlink followed) with mode 0600.
+   */
+  writeSecret?: (path: string, data: string) => void;
 };
 export type TokenFile = {
   text: string;
@@ -65,6 +72,24 @@ export const realFs: Fs = {
     writeFileSync(p, d);
   },
   // POSIX only: Windows is supported through WSL.
+  writeSecret: (p, d) => {
+    mkdirSync(dirname(p), { recursive: true, mode: 0o700 });
+    chmodSync(dirname(p), 0o700);
+    rmSync(p, { force: true });
+    const fd = openSync(
+      p,
+      constants.O_WRONLY |
+        constants.O_CREAT |
+        constants.O_EXCL |
+        constants.O_NOFOLLOW,
+      0o600,
+    );
+    try {
+      writeFileSync(fd, d);
+    } finally {
+      closeSync(fd);
+    }
+  },
   readToken: (p) => {
     let fd: number | undefined;
     try {

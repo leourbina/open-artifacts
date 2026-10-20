@@ -97,6 +97,7 @@ async function resolve(
       "allow-downgrade": { type: "boolean", default: false },
       strict: { type: "boolean", default: false },
       "new-owner-token": { type: "boolean", default: false },
+      "print-token": { type: "boolean", default: false },
       json: { type: "boolean", default: false },
       ci: { type: "boolean", default: false },
       "revoke-ci-tokens": { type: "boolean", default: false },
@@ -222,6 +223,7 @@ async function resolve(
     check: v.check,
     strict: v.strict,
     newOwnerToken: v["new-owner-token"],
+    printToken: v["print-token"],
     allowDowngrade: v["allow-downgrade"],
     // Decided in prereqs: flag, then the plan (Paid only), then saved state.
     browser: false,
@@ -319,7 +321,11 @@ async function checkOnly(
 
 export const HELP = `Usage: pnpm oa:setup [options]
   --name <n>  --app-host <h>  --content-host <h>  --owner-email <e>  --account-id <id>
-  --yes  --upgrade  --check [--strict]  --json  --ci [--revoke-ci-tokens]  --new-owner-token
+  --yes  --upgrade  --check [--strict]  --json  --ci [--revoke-ci-tokens]  --new-owner-token  --print-token
+  --print-token  Also report the minted owner token as data.token (and in human output).
+                Without it setup saves the token to ~/.open-artifacts/<app-host>-pat-token
+                (0600) and reports only data.tokenFile. Not used with --ci, whose token
+                is revoked at the end of the run.
   --allow-downgrade  Deploy a checkout older than the deployed version (from /healthz
                 version, else saved state). Without it setup stops with action_required
                 before the D1 migrations. D1 is not rolled back. --check reports
