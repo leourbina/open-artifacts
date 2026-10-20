@@ -159,6 +159,39 @@ describe("#5: DNS-aware health checks", () => {
     },
   );
 
+  it("#5: NXDOMAIN is missing even when the Answer holds a dangling CNAME", async () => {
+    const w = world();
+    w.deps.dnsWaitMs = 60_000;
+    const real = w.deps.fetch;
+    w.deps.fetch = async (input, init) => {
+      const u = new URL(String(input));
+      if (u.hostname === "cloudflare-dns.com")
+        return Response.json({
+          Status: 3,
+          Answer: [
+            { name: "app.example.com.", type: 5, data: "gone.example.net." },
+          ],
+        });
+      if (u.hostname === "app.example.com")
+        throw dnsError("ENOTFOUND", u.hostname);
+      return real(input, init);
+    };
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(1);
+    expect(line(w, "healthcheck").message).toContain(
+      "no public A, AAAA or CNAME record",
+    );
+  });
+
+  it("#5: AAAA is not asked when A is already live", async () => {
+    const w = world();
+    const doh = breakHost(w, "app.example.com", "ENOTFOUND", {
+      doh: () => "A",
+    });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(2);
+    expect(doh.every((h) => h.includes(" A "))).toBe(true);
+    expect(doh.some((h) => h.includes(" AAAA "))).toBe(false);
+  });
+
   it("#5: NXDOMAIN is a missing record", async () => {
     const w = world();
     w.deps.dnsWaitMs = 60_000;
@@ -204,9 +237,10 @@ describe("#5: DNS-aware health checks", () => {
     ["darwin", MAC],
     [
       "linux",
-      "Wait a few minutes or run `resolvectl flush-caches` (systemd-resolved)",
+      "Wait a few minutes or run `sudo resolvectl flush-caches` (systemd-resolved)",
     ],
-    ["win32", "Flush your OS DNS cache or wait a few minutes"],
+    ["win32", "Wait a few minutes or run `ipconfig /flushdns` (Windows)"],
+    ["freebsd", "Flush your OS DNS cache or wait a few minutes"],
   ])("#5: the flush hint on %s", async (platform, hint) => {
     const w = world();
     w.deps.platform = platform;

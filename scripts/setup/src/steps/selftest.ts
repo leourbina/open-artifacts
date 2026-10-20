@@ -50,6 +50,8 @@ async function ask(
       Answer?: { type?: unknown }[];
     };
     if (body.Status !== 0 && body.Status !== 3) return "unknown";
+    // NXDOMAIN is missing, even with a dangling CNAME in the Answer.
+    if (body.Status === 3) return "missing";
     const live =
       Array.isArray(body.Answer) &&
       body.Answer.some((a) => DOH_LIVE.has(a?.type as number));
@@ -61,9 +63,11 @@ async function ask(
 
 /** Does public DNS have a record for `host`? Either family counts. */
 async function publicState(ctx: Ctx, host: string): Promise<Public> {
-  const r = [await ask(ctx, host, "A"), await ask(ctx, host, "AAAA")];
-  if (r.includes("live")) return "live";
-  return r.includes("unknown") ? "unknown" : "missing";
+  const a = await ask(ctx, host, "A");
+  if (a === "live") return "live";
+  const aaaa = await ask(ctx, host, "AAAA");
+  if (aaaa === "live") return "live";
+  return a === "unknown" || aaaa === "unknown" ? "unknown" : "missing";
 }
 
 function flushHint(ctx: Ctx): string {
@@ -71,7 +75,9 @@ function flushHint(ctx: Ctx): string {
   if (p === "darwin")
     return "Wait a few minutes or run `sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder` (macOS)";
   if (p === "linux")
-    return "Wait a few minutes or run `resolvectl flush-caches` (systemd-resolved)";
+    return "Wait a few minutes or run `sudo resolvectl flush-caches` (systemd-resolved)";
+  if (p === "win32")
+    return "Wait a few minutes or run `ipconfig /flushdns` (Windows)";
   return "Flush your OS DNS cache or wait a few minutes";
 }
 
