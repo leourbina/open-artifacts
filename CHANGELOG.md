@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.13.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.12.0...v0.13.0) (2026-10-20)
+
+
+### Features
+
+* **server:** anonymous id tokens carry issued-at and renew after 30 days ([#334](https://github.com/open-artifacts-ai/open-artifacts/issues/334)) ([df8d6c3](https://github.com/open-artifacts-ai/open-artifacts/commit/df8d6c350b301a612c7326a36f317b6af60e318a))
+* **setup:** EMBED_ALLOW_SAME_SITE tunable ([#333](https://github.com/open-artifacts-ai/open-artifacts/issues/333)) ([e03b94a](https://github.com/open-artifacts-ai/open-artifacts/commit/e03b94a9e1cbc336fd89b55465844b2f30abba6b))
+
+
+### Performance Improvements
+
+* **server:** fewer D1 rows per publish ([#248](https://github.com/open-artifacts-ai/open-artifacts/issues/248)) ([#335](https://github.com/open-artifacts-ai/open-artifacts/issues/335)) ([24b477a](https://github.com/open-artifacts-ai/open-artifacts/commit/24b477a453c0f7b74168d5ccd4009a2287bf77fe))
+
 ## [0.12.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.11.0...v0.12.0) (2026-10-20)
 
 
