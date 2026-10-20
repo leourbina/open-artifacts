@@ -6,6 +6,7 @@ import {
   createSideEffects,
   truncateUtf8,
 } from "../src/viewer/useArtifactSideEffects";
+import { asFrame, FakeFrame, stamped } from "./fake-frame";
 
 let n = 0;
 const art = (o: Partial<ArtifactSummary> = {}) =>
@@ -216,7 +217,9 @@ describe("bridge follow-ups", () => {
   const post = vi.fn();
   const contentWindow = { postMessage: post };
   const live: { dispose(): void }[] = [];
+  let frame = new FakeFrame(contentWindow);
   beforeEach(() => {
+    frame = new FakeFrame(contentWindow);
     FakeWS.all = [];
     post.mockReset();
     win = new EventTarget();
@@ -231,7 +234,8 @@ describe("bridge follow-ups", () => {
   });
   const mk = (extra: object = {}) => {
     const b = createBridge({
-      iframe: { contentWindow } as unknown as HTMLIFrameElement,
+      iframe: asFrame(frame),
+      url: "https://content.test/a/v1/index.html",
       artifact: art(),
       version: 1,
       viewer: null,
@@ -245,7 +249,11 @@ describe("bridge follow-ups", () => {
   };
   const send = (data: unknown) => {
     const ev = new Event("message");
-    Object.assign(ev, { data, source: contentWindow, origin: "null" });
+    Object.assign(ev, {
+      data: stamped(frame, data),
+      source: contentWindow,
+      origin: "null",
+    });
     win.dispatchEvent(ev);
   };
   const sub = async () => {

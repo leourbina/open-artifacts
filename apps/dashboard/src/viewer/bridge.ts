@@ -22,12 +22,15 @@ import {
 import type { z } from "zod";
 import { ApiClientError, api, type RequestExtra } from "../api/client";
 import { isAnonToken, loadAnonToken, saveAnonToken } from "./anonId";
+import { frameLoad, loadArtifactFrame } from "./frame";
 
 type Viewer = { email: string; name: string | null };
 type Theme = "light" | "dark";
 
 export interface BridgeOptions {
   iframe: HTMLIFrameElement;
+  /** The content URL: the bridge loads it into `iframe` with a fresh nonce. */
+  url: string;
   artifact: ArtifactSummary;
   version: number;
   /** This version's format; the artifact's own is only the current version's. */
@@ -41,6 +44,8 @@ export interface BridgeOptions {
   onHello?: () => void;
   /** A data subscription was closed with 4403: access was revoked. */
   onAccessLost?: () => void;
+  /** The frame navigated somewhere we didn't send it: the bridge is disposed. */
+  onRenavigated?: () => void;
 }
 
 const BACKOFF_BASE_MS = 1_000;
@@ -84,6 +89,13 @@ const qs = (p: { cursor?: string; limit?: number }) => {
   return s ? `?${s}` : "";
 };
 
+/**
+ * One bridge per intentional frame load. It loads `opts.url` itself (through
+ * loadArtifactFrame, so with a fresh nonce) and accepts a message only if its
+ * source is the frame's window and it carries that nonce. A `load` that isn't
+ * the one it started is a renavigation (by the artifact or anything that can
+ * navigate the frame): the bridge disposes itself and answers nothing more.
+ */
 export function createBridge(opts: BridgeOptions) {
   const {
     iframe,
@@ -377,7 +389,7 @@ export function createBridge(opts: BridgeOptions) {
     if (disposed) return;
     if (e.source !== iframe.contentWindow || e.origin !== "null") return;
     const m = parseArtifactMessage(e.data);
-    if (!m) return;
+    if (!m || m.nonce !== current.nonce) return;
     switch (m.type) {
       case "hello":
         reply({
@@ -416,16 +428,31 @@ export function createBridge(opts: BridgeOptions) {
     }
   };
 
+  const dispose = () => {
+    disposed = true;
+    abort.abort();
+    window.removeEventListener("message", onMessage);
+    iframe.removeEventListener("load", onLoad);
+    for (const s of subs.values()) stop(s);
+    subs.clear();
+  };
+  const onLoad = () => {
+    if (disposed) return;
+    if (frameLoad(iframe) === current && current.expected) {
+      current.expected = false;
+      return;
+    }
+    // Not our src assignment: whatever is in the frame now never had the nonce.
+    dispose();
+    opts.onRenavigated?.();
+  };
+
   window.addEventListener("message", onMessage);
+  iframe.addEventListener("load", onLoad);
+  const current = loadArtifactFrame(iframe, opts.url);
 
   return {
-    dispose() {
-      disposed = true;
-      abort.abort();
-      window.removeEventListener("message", onMessage);
-      for (const s of subs.values()) stop(s);
-      subs.clear();
-    },
+    dispose,
     requestThumbnail(): boolean {
       if (disposed) return false;
       thumbPending = true;

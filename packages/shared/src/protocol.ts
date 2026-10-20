@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ERROR_CODES } from "./errors.js";
 import { FORMATS } from "./formats.js";
 import { LIMITS } from "./limits.js";
+import { shellNonce } from "./nonce.js";
 import {
   type Capabilities,
   CapabilitiesSchema,
@@ -59,15 +60,24 @@ export const AnonIdSchema = z.string().regex(/^[A-Za-z0-9_-]{8}$/);
 export const AnonViewerSchema = z.strictObject({ anonId: AnonIdSchema });
 export type AnonViewer = z.infer<typeof AnonViewerSchema>;
 
+/**
+ * Every artifact to shell message may carry `nonce`: the per-load value the shell
+ * put in the frame URL (see nonce.ts). The shell drops messages without its
+ * current nonce.
+ */
+const nonce = z.string().max(64).optional();
+
 export const ArtifactToShellSchema = z.union([
   z.strictObject({
     oa: z.literal(1),
+    nonce,
     type: z.literal("hello"),
     protocol: z.number().int().min(1).max(1000),
     kind: z.enum(FORMATS),
   }),
   z.strictObject({
     oa: z.literal(1),
+    nonce,
     type: z.literal("call"),
     id: z.string().max(200),
     method: z.enum(RUNTIME_METHODS),
@@ -75,6 +85,7 @@ export const ArtifactToShellSchema = z.union([
   }),
   z.strictObject({
     oa: z.literal(1),
+    nonce,
     type: z.literal("pdf.text"),
     version: z.number().int(),
     text: z
@@ -87,6 +98,7 @@ export const ArtifactToShellSchema = z.union([
   }),
   z.strictObject({
     oa: z.literal(1),
+    nonce,
     type: z.literal("thumb.ready"),
     dataUrl: z
       .string()
@@ -95,6 +107,7 @@ export const ArtifactToShellSchema = z.union([
   }),
   z.strictObject({
     oa: z.literal(1),
+    nonce,
     type: z.literal("resize"),
     height: z.number().finite().min(0).max(100_000),
   }),
@@ -166,9 +179,11 @@ export const METHOD_CAPABILITY: Record<RuntimeMethod, keyof Capabilities> = {
   "storage.list": "storage",
 };
 
+/** Posts to the parent shell, adding this load's nonce when there is one. */
 export function sendToShell(msg: ArtifactToShell): void {
   if (typeof window === "undefined" || window.parent === window) return;
-  window.parent.postMessage(msg, "*");
+  const n = shellNonce();
+  window.parent.postMessage(n ? { ...msg, nonce: n } : msg, "*");
 }
 
 export function parseArtifactMessage(data: unknown): ArtifactToShell | null {

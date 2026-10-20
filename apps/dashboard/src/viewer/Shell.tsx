@@ -149,10 +149,14 @@ function Viewer({
     );
   };
 
+  // Every intentional load (first load, a refreshed URL before the first load,
+  // Reload) gets a fresh bridge, which loads the frame with a fresh nonce.
+  const src = frame.src ?? url;
   useEffect(() => {
-    if (!el) return;
+    if (!el || !src) return;
     const b = createBridge({
       iframe: el,
+      url: src,
       ...latest.current,
       version,
       formatOf: () => formatRef.current,
@@ -171,7 +175,7 @@ function Viewer({
       b.dispose();
       bridge.current = null;
     };
-  }, [el, version, qc, artifact.id, onHello]);
+  }, [el, src, version, qc, artifact.id, onHello]);
 
   useEffect(() => bridge.current?.setTheme(theme), [theme]);
 
@@ -213,11 +217,11 @@ function Viewer({
                 }}
               />
             )}
+            {/* No src prop: the bridge sets it (loadArtifactFrame). */}
             <iframe
               key={frame.key}
               ref={setEl}
               className="oa-vframe"
-              src={frame.src ?? url}
               onLoad={onFrameLoad}
               title={artifact.title}
               sandbox={SANDBOX}

@@ -2,6 +2,7 @@ import { ANON_ID_HEADER, type ArtifactSummary, LIMITS, R } from "@oa/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ANON_ID_KEY, resetAnonMemory } from "../src/viewer/anonId";
 import { createBridge } from "../src/viewer/bridge";
+import { asFrame, FakeFrame, stamped } from "./fake-frame";
 
 const ART = {
   id: "art1",
@@ -31,13 +32,19 @@ let win = new EventTarget();
 const live: { dispose(): void }[] = [];
 const post = vi.fn();
 const contentWindow = { postMessage: post };
-const iframe = { contentWindow } as unknown as HTMLIFrameElement;
+let frame = new FakeFrame(contentWindow);
+let iframe = asFrame(frame);
+const URL_ = "https://content.test/a/v1/index.html";
 let fetchMock: ReturnType<typeof vi.fn>;
 
-const send = (data: unknown, o: { source?: unknown; origin?: string } = {}) => {
+/** Sends as the frame's runtime: stamped with the current nonce unless `raw`. */
+const send = (
+  data: unknown,
+  o: { source?: unknown; origin?: string; raw?: boolean } = {},
+) => {
   const ev = new Event("message");
   Object.assign(ev, {
-    data,
+    data: o.raw ? data : stamped(frame, data),
     source: "source" in o ? o.source : contentWindow,
     origin: o.origin ?? "null",
   });
@@ -54,6 +61,7 @@ const mk = (art = ART) => {
 const mkRaw = (art: ArtifactSummary) =>
   createBridge({
     iframe,
+    url: URL_,
     artifact: art,
     version: 1,
     viewer: VIEWER,
@@ -66,6 +74,8 @@ const json = (b: unknown, status = 200) =>
 
 beforeEach(() => {
   FakeWS.all = [];
+  frame = new FakeFrame(contentWindow);
+  iframe = asFrame(frame);
   win = new EventTarget();
   post.mockReset();
   fetchMock = vi.fn(async () => json(DOC));
@@ -238,6 +248,7 @@ const webp = (n = 0) =>
 describe("pdf / thumb / resize", () => {
   const opts = (art = ART) => ({
     iframe,
+    url: URL_,
     artifact: art,
     version: 1,
     viewer: null,
