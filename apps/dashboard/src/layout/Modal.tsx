@@ -30,8 +30,7 @@ export function Modal({
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent
-        // The primitive paints --background (the page gray); a dialog is a surface.
-        className="gap-[var(--oa-space-4)] bg-popover text-popover-foreground sm:max-w-[440px]"
+        className="gap-[var(--oa-space-4)] sm:max-w-[440px]"
         // No Radix Trigger (the dialog is controlled), so put focus back on
         // whatever opened it, as a trigger would.
         onOpenAutoFocus={() => {

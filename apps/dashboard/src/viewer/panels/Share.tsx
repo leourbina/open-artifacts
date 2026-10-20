@@ -26,6 +26,7 @@ import {
   usePutShare,
   useShares,
 } from "../../api/queries";
+import { useSingleFlight } from "../../api/useSingleFlight";
 import { emailEnabled } from "../../auth/emailEnabled";
 import { useMe } from "../../auth/useMe";
 import { CopyLink } from "../../layout/CopyLink";
@@ -134,18 +135,25 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
 
   const save = (p: ArtifactPatch) =>
     patch.mutate(p, { onError: (e) => fail(e, "Couldn't save") });
+  // One request per action: a double click or Enter can't send two.
+  const visOnce = useSingleFlight();
+  const inviteOnce = useSingleFlight();
+  const removeOnce = useSingleFlight();
   const commitVisibility = (v: Visibility) =>
-    patch.mutate(
-      {
-        visibility: v,
-        ...(artifact.allowAnonymousWrites && { allowAnonymousWrites: false }),
-      },
-      {
-        onError: (e) => {
-          setPending(null);
-          fail(e, "Couldn't save");
+    visOnce((done) =>
+      patch.mutate(
+        {
+          visibility: v,
+          ...(artifact.allowAnonymousWrites && { allowAnonymousWrites: false }),
         },
-      },
+        {
+          onSettled: done,
+          onError: (e) => {
+            setPending(null);
+            fail(e, "Couldn't save");
+          },
+        },
+      ),
     );
   const setCap = (k: (typeof CAPS)[number][0], on: boolean) =>
     save({
@@ -158,15 +166,18 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
     const e = parseEmail(email);
     setInvalid(!e);
     if (!e) return;
-    put.mutate(
-      { email: e, role },
-      {
-        onSuccess: (r) => {
-          setEmail("");
-          setShared({ email: e, emailed: r.emailed });
+    inviteOnce((done) =>
+      put.mutate(
+        { email: e, role },
+        {
+          onSettled: done,
+          onSuccess: (r) => {
+            setEmail("");
+            setShared({ email: e, emailed: r.emailed });
+          },
+          onError: (x) => fail(x, "Couldn't share"),
         },
-        onError: (x) => fail(x, "Couldn't share"),
-      },
+      ),
     );
   };
   // location.origin is the app host, which is where viewerPath lives.
@@ -366,9 +377,12 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
                     className="size-[30px] flex-none p-0"
                     aria-label={`Remove ${s.email}`}
                     onClick={() =>
-                      del.mutate(s.email, {
-                        onError: (x) => fail(x, "Couldn't remove"),
-                      })
+                      removeOnce((done) =>
+                        del.mutate(s.email, {
+                          onSettled: done,
+                          onError: (x) => fail(x, "Couldn't remove"),
+                        }),
+                      )
                     }
                   >
                     ×
