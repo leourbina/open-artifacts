@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import type { State } from "../state.ts";
 import type { Ctx, Step } from "../step.ts";
-import { deployedVars, workerBindings } from "../worker.ts";
+import { currentVersion, deployedVars, workerBindings } from "../worker.ts";
 import { names, renderedConfig, stripComments } from "./resources.ts";
 import { ACCESS_SECRET, listSecrets } from "./secrets.ts";
 
@@ -73,6 +73,18 @@ function drops(ctx: Ctx, live: Live, cfg: Rendered) {
       `${lost.join(" and ")} (thumbnails): pass --browser to keep them, or --no-browser to remove them`,
     );
   return out;
+}
+
+/** The live Worker version id before a deploy; unreadable or split reads as none, with a note. */
+async function readVersion(ctx: Ctx, state: State) {
+  try {
+    return await currentVersion(ctx.api, ctx.opts.name, state.accountId ?? "");
+  } catch (e) {
+    ctx.notes.push(
+      `warning: could not read the live Worker version (${(e as Error).message}); previousWorkerVersion left unset, so --rollback has no target`,
+    );
+    return undefined;
+  }
 }
 
 type Live = Awaited<ReturnType<typeof workerBindings>> | "unreadable";
@@ -185,7 +197,14 @@ export const deploy: Step = {
     }
     const d1 = names(ctx.opts.name).d1;
     await ctx.wrangler(["d1", "migrations", "apply", d1, "--remote"]);
-    await ctx.wrangler(["deploy"]);
+    const replaced = await readVersion(ctx, state);
+    const out = await ctx.wrangler(["deploy"]);
+    state.previousWorkerVersion = replaced;
+    state.workerVersion = out.match(/Current Version ID:\s*(\S+)/)?.[1];
+    if (!state.workerVersion)
+      ctx.notes.push(
+        "warning: could not read the new version id from wrangler's output; --rollback will refuse until the next deploy",
+      );
     state.deployedVersion = repoVersion(ctx);
     state.planVar = ctx.opts.planVar;
     ctx.notes.push(`deployed ${state.deployedVersion}`);

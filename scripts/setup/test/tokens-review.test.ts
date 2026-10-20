@@ -115,7 +115,7 @@ describe("M2: required permissions come from the calls setup makes", () => {
     ],
     [/^GET \/accounts\/[^/]+\/access\/organizations$/, "access_acct:read"],
     [
-      /^GET \/accounts\/[^/]+\/workers\/scripts\/[^/]+\/settings$/,
+      /^GET \/accounts\/[^/]+\/workers\/scripts\/[^/]+\/(settings|deployments)$/,
       "workers_scripts:read",
     ],
     [/^GET \/accounts\/[^/]+\/r2\/buckets\/[^/]+$/, "workers_r2:read"],

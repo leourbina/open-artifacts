@@ -16,6 +16,10 @@ export type State = {
   accessClientId?: string;
   teamDomain?: string;
   deployedVersion?: string;
+  /** The Worker version id the last deploy serves (what --rollback reports as `from`). */
+  workerVersion?: string;
+  /** The version id the last deploy replaced: the target of --rollback. Unset on a first install. */
+  previousWorkerVersion?: string;
   /** The setup-minted owner token row; the token itself is never stored. */
   ownerTokenId?: string;
   /** The selftest's private welcome artifact, updated in place on later runs. */

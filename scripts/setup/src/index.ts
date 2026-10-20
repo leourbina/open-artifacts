@@ -3,6 +3,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { type Deps, makeApi, makeWrangler, realDeps, realFs } from "./cf.ts";
 import { readOnlyDeps } from "./readonly.ts";
+import { rollbackCommand } from "./rollback.ts";
 import { readState, type State, statePath, writeState } from "./state.ts";
 import { type Ctx, NeedInput, type Opts, type Step } from "./step.ts";
 import { access } from "./steps/access.ts";
@@ -226,6 +227,8 @@ const REPORTED = [
   "team",
   "email",
   "emailDomain",
+  "workerVersion",
+  "previousWorkerVersion",
 ] as const;
 
 /** --check: every step's check(), never apply; the rebuilt state goes in the last line. */
@@ -309,6 +312,13 @@ export const HELP = `Usage: pnpm oa:setup [options]
                 are listed (zoneScope) for the zone-scoped tokens.
   --repo <owner/name>  With --token-links/--token-page: store each token as a
                 GitHub secret there (gh secret set) instead of an env var.
+  --rollback    Roll the Worker back to the version the last deploy replaced
+                (state previousWorkerVersion; wrangler rollback), run nothing else,
+                and swap the two ids so a second --rollback undoes it. With --json:
+                {step:"rollback", status:"ok", data:{from, to}}. No saved previous
+                version: exit 2 (roll back in the dashboard: Workers → <name> →
+                Deployments). Never touches D1: migrations are additive, so the code
+                rolls back and the data stays. Not with --upgrade, --check or --ci.
   -h, --help`;
 
 /** Runs setup; resolves to the exit code (0 ok, 2 action_required, 1 error). */
@@ -323,6 +333,7 @@ export async function run(
     return 0;
   }
   if (isTokenCommand(argv)) return tokenCommand(argv, deps, root);
+  if (argv.includes("--rollback")) return rollbackCommand(argv, deps, root);
   const ci = argv.includes("--ci");
   const json = argv.includes("--json") || ci;
   let human: string | undefined;

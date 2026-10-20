@@ -39,3 +39,29 @@ export async function deployedVars(
   );
   return PINNED.some((k) => vars.has(k)) ? vars : undefined;
 }
+
+type Deployments = {
+  deployments?: { versions?: { version_id: string; percentage: number }[] }[];
+};
+
+/**
+ * The version id serving all traffic, from `GET .../workers/scripts/{name}/deployments`
+ * (newest first). Undefined when no Worker is deployed (404); throws when
+ * traffic is split or empty, since no single version is "current".
+ */
+export async function currentVersion(
+  api: Ctx["api"],
+  name: string,
+  accountId: string,
+) {
+  const path = `/accounts/${accountId}/workers/scripts/${encodeURIComponent(name)}/deployments`;
+  const res = await api<Deployments>("GET", path).catch((e) => {
+    if ((e as { status?: number }).status === 404) return undefined;
+    throw e;
+  });
+  if (!res) return undefined;
+  const vs = res.deployments?.[0]?.versions ?? [];
+  if (vs.length !== 1 || vs[0].percentage !== 100)
+    throw new Error("traffic is split across versions or not readable");
+  return vs[0].version_id;
+}
