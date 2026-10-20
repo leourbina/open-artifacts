@@ -227,7 +227,7 @@
   let focusIndex = 4;
   let freshCell = -1;  // the cell to animate
 
-  /* ---------- identity (as in the poll) ---------- */
+  /* ---------- identity (as in the poll); used only for seat labels ---------- */
 
   const safeId = (s) => String(s).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 100);
   function randomId() {
@@ -307,13 +307,9 @@
 
   /**
    * Accepts a new state only if it follows from the previous one by a single
-   * claim, leave, move or start over. Once the server stamps anonymous writes
-   * as "anon:<anonId>", the writer must also be the one holding that seat.
+   * claim, leave, move or start over. Seats are first come, first served.
    */
-  function legal(prev, next, updatedBy) {
-    const by = String(updatedBy || "");
-    const writer = by.startsWith("anon:") ? safeId(by.slice(5)) : null;
-    const owns = (seat) => Boolean(seat) && (writer === null || seat.id === writer);
+  function legal(prev, next) {
     const seatLive = (seat) => live(seat, SKEW_MS);
     if (next.x && next.o && next.x.id === next.o.id) return false;
 
@@ -321,35 +317,31 @@
     for (let i = 0; i < 9; i += 1) if (prev.board[i] !== next.board[i]) changed.push(i);
 
     if (changed.length === 0) {
-      // Claim or leave: each changed seat goes to the writer from a free seat, or is let go.
+      // Claim or leave: a seat is let go, or taken when it is free.
       for (const m of MARKS) {
         const a = prev[slot(m)], b = next[slot(m)];
-        if (sameSeat(a, b)) continue;
-        if (b === null) { if (seatLive(a) && !owns(a)) return false; continue; }
-        if (writer !== null && b.id !== writer) return false;
+        if (sameSeat(a, b) || b === null) continue;
         if (seatLive(a) && a.id !== b.id) return false;
       }
       return true;
     }
 
     if (isEmpty(next.board)) {
-      // Start over: by a seated player, or by anyone once no one is seated.
-      const seated = MARKS.filter((m) => seatLive(prev[slot(m)]));
-      if (seated.length && !seated.some((m) => owns(prev[slot(m)]))) return false;
+      // Start over: seats stay with their holders.
       for (const m of MARKS) {
         const a = prev[slot(m)], b = next[slot(m)];
-        if (!sameSeat(a, b) && !(a && b && a.id === b.id && owns(a))) return false;
+        if (!sameSeat(a, b) && !(a && b && a.id === b.id)) return false;
       }
       return true;
     }
 
-    // A move: one empty cell, the right mark, by that seat's live holder.
+    // A move: one empty cell, the right mark, by a seat that is still held.
     if (changed.length !== 1 || outcome(prev.board)) return false;
     const i = changed[0];
     const m = turnOf(prev.board);
     if (prev.board[i] !== "" || next.board[i] !== m) return false;
     const seat = prev[slot(m)], after = next[slot(m)];
-    if (!seatLive(seat) || !owns(seat) || !after || after.id !== seat.id) return false;
+    if (!seatLive(seat) || !after || after.id !== seat.id) return false;
     return sameSeat(prev[slot(other(m))], next[slot(other(m))]);
   }
 
@@ -369,7 +361,7 @@
       if (d.id !== DOC_ID) continue;
       if (!d.data) { load().catch(() => {}); continue; } // too large to broadcast inline
       const next = normalize(d.data);
-      if (!next || !legal(game, next, d.updatedBy)) continue; // ignore forged or out-of-turn writes
+      if (!next || !legal(game, next)) continue; // skip writes that break the rules
       setGame(next, true);
     }
   }
