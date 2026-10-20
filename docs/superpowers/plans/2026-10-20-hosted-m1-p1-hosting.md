@@ -61,13 +61,13 @@ All installs share one Cloudflare account, so some state is shared even though n
 - **P2's `HOSTED=1`** is set on every hosted install (Task 3).
 - **Backups:** export is `NotInM1`, so FinQore has no R2 or Durable Object backup in M1. **User-accepted on 2026-10-21** (via the Manager): FinQore runs without backup or export until M2. D1 Time Travel (30 days) covers the database only.
 
-## Hosted domains (user, 2026-10-21; content domain pending)
+## Hosted domains (user, 2026-10-21; content and staging pending)
 
-- App suffix: **`app.open-artifacts.com`**; tenants at `<slug>.app.open-artifacts.com`. `app.open-artifacts.com` goes in the Public Suffix List private section, so each tenant is its own site.
-- Content suffix: proposed **`content.open-artifacts.com`** (tenants at `<slug>.content.open-artifacts.com`), also in the PSL private section, so tenants' untrusted content is neither same-site with each other nor with `open-artifacts.com`, `demo.` or `staging.`. Pending the user's confirmation; a separate registrable domain also works.
-- Staging namespace: `app-stg.open-artifacts.com` and `content-stg.open-artifacts.com`, also PSL-listed, so P5's same-site check can prove it on `rl-a`/`rl-b`.
-- TLS: these hostnames are two levels below the zone apex, which Universal SSL doesn't cover. Options: one Advanced Certificate Manager certificate for `*.app`, `*.content`, `*.app-stg` and `*.content-stg` (**$10/month**, a user gate), or a Workers Custom Domain per tenant hostname (a free certificate each, but the provisioner then needs zone write on `open-artifacts.com`). Recommended: ACM.
-- No DNS, route or certificate change until the Manager confirms the content domain and the user approves the cost.
+- **App suffix: `open-artifacts.app`** (bought by the user, in our Cloudflare account). Tenants at `<slug>.open-artifacts.app`: one level, so Universal SSL covers them for free; no Advanced Certificate Manager.
+- **PSL:** the whole `open-artifacts.app` goes in the Public Suffix List private section (it's tenant-only, so nothing else needs cross-subdomain cookies). Steps: a `_psl.open-artifacts.app` TXT record holding the PSL pull-request URL, then the PR to publicsuffix/list with the domain's purpose and contact. It takes weeks to reach browsers; FinQore alone is fine before then, and a second tenant waits on it (P5 marks same-site cases `unproven` until then).
+- **Content suffix:** a second registrable domain at one level (`<slug>.<content-domain>`), also PSL-listed. The user is choosing it.
+- **Staging (proposal): its own pair of registrable domains**, mirroring prod (`<slug>.<stg-app-domain>`, `<slug>.<stg-content-domain>`), both PSL-listed and one level deep. Why not `<slug>-stg.open-artifacts.app`: the staging dispatch Worker's routes would sit on the prod zone, so the staging CI token would need route rights on a prod zone (prod and staging tokens never cross), and a prod slug ending in `-stg` could be captured by the staging route. A mirror pair also lets P5's `rl-a`/`rl-b` prove exactly prod's site layout. Cheaper fallback: staging on `open-artifacts.com` at one level (`<slug>-stg.open-artifacts.com`), which already holds staging and the demo, with P5's same-site case staying `unproven` on staging.
+- No DNS, route or PSL write until the Manager confirms the content and staging domains.
 
 ## Global Constraints
 
