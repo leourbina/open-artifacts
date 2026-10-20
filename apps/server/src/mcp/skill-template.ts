@@ -111,7 +111,7 @@ const snippetBlock = (s: Snippet, label: string) =>
       ? [s.code]
       : [`\`\`\`${s.language === "bash" ? "sh" : s.language}`, s.code, "```"]),
     "",
-    ...(s.hint ? [`Note: ${s.hint}.`, ""] : []),
+    ...(s.hint ? [`Note: ${s.hint}`, ""] : []),
     `Verify: ${s.verify}`,
   ].join("\n");
 
@@ -126,7 +126,9 @@ export const clientsSection = (): string => {
       return [
         `### ${a}`,
         oauth && snippetBlock(oauth, "OAuth"),
-        token ? snippetBlock(token, "Token") : `Token: none; ${a}: use OAuth.`,
+        token
+          ? snippetBlock(token, "Token")
+          : `Token: none. ${a} can't read a token file, so sign in with OAuth.`,
         `Reload: ${token?.reload ?? oauth?.reload}`,
       ]
         .filter(Boolean)

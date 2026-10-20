@@ -241,10 +241,12 @@ describe("skill.md frontmatter (agentskills.io)", () => {
       expect(setup).toContain(`### ${c.agent}\n`);
       expect(setup).toContain(`Verify: ${fill(c.verify ?? "?")}`);
       expect(setup).toContain(`Reload: ${c.reload}`);
-      if (c.hint) expect(setup).toContain(`Note: ${fill(c.hint)}.`);
+      if (c.hint) expect(setup).toContain(`Note: ${fill(c.hint)}`);
     }
     expect(setup).not.toMatch(/oa_pat_/);
-    expect(setup).toContain("Token: none; Cursor: use OAuth.");
+    expect(setup).toContain(
+      "Token: none. Cursor can't read a token file, so sign in with OAuth.",
+    );
     for (const bad of ["OA_TOKEN", "{env:", "${env:", "bearer_token_env_var"])
       expect(md).not.toContain(bad);
   });
