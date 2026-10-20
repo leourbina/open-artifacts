@@ -62,6 +62,9 @@ class World {
   gets() {
     return this.calls.filter((c) => c.method === "GET");
   }
+  posts() {
+    return this.calls.filter((c) => c.method === "POST");
+  }
   install() {
     vi.stubGlobal(
       "fetch",
@@ -104,6 +107,30 @@ class World {
         const m = u.pathname.match(
           /^\/api\/v1\/artifacts\/([^/]+)\/data\/([^/]+)(?:\/([^/]+))?$/,
         );
+        const qm = u.pathname.match(
+          /^\/api\/v1\/artifacts\/([^/]+)\/data\/([^/]+)\/query$/,
+        );
+        if (qm && call.method === "POST") {
+          if (this.noAccess.has(qm[1] as string))
+            return new Response("nf", { status: 404 });
+          const q = JSON.parse(call.body as string) as {
+            where?: Record<string, unknown>;
+            limit?: number;
+            cursor?: string;
+          };
+          const all = (this.cols.get(`${qm[1]}/${qm[2]}`) ?? []).filter((d) =>
+            Object.entries(q.where ?? {}).every(
+              ([k, v]) => (d.data as Record<string, unknown>)?.[k] === v,
+            ),
+          );
+          const start = Number(q.cursor ?? 0);
+          const limit = q.limit ?? 100;
+          return Response.json({
+            items: all.slice(start, start + limit),
+            nextCursor:
+              start + limit < all.length ? String(start + limit) : null,
+          });
+        }
         if (m && this.noAccess.has(m[1] as string))
           return new Response("nf", { status: 404 });
         if (!m) return new Response("nope", { status: 404 });
@@ -420,7 +447,7 @@ describe("counting", () => {
       "moves",
       Array.from({ length: 450 }, (_, i) => ({
         id: `g3-${String(i).padStart(3, "0")}`,
-        data: { at: NOW },
+        data: { g: "g3", at: NOW },
       })),
     );
     await run(w);
@@ -442,6 +469,58 @@ describe("counting", () => {
     const t = w.stat("today") as { truncated: string[]; failed: string[] };
     expect(t.truncated).toContain("countries");
     expect(t.failed).toEqual([]);
+  });
+});
+
+describe("chess moves query", () => {
+  it("counts the current game's moves with POST .../data/moves/query, where g = the table's g", async () => {
+    const w = full();
+    await run(w);
+    const posts = w.posts();
+    expect(posts).toHaveLength(1);
+    expect(posts[0]?.path).toBe(`/api/v1/artifacts/${CHESS}/data/moves/query`);
+    expect(JSON.parse(posts[0]?.body as string)).toEqual({
+      where: { g: "g3" },
+      limit: 200,
+    });
+    // moves of other games (g2) are excluded by the query, not counted
+    expect((w.stat("today") as { moves: { chess: number } }).moves.chess).toBe(
+      2,
+    );
+    // and the moves collection is never listed
+    expect(w.gets().some((c) => c.path.endsWith("/data/moves"))).toBe(false);
+  });
+
+  it("pages the query by cursor, 2 pages at most, then marks moves.chess truncated", async () => {
+    const w = full();
+    w.set(
+      CHESS,
+      "moves",
+      Array.from({ length: 450 }, (_, i) => ({
+        id: `g3-${String(i).padStart(3, "0")}`,
+        data: { g: "g3", at: NOW },
+      })),
+    );
+    await run(w);
+    const posts = w.posts().map((c) => JSON.parse(c.body as string));
+    expect(posts).toHaveLength(2);
+    expect(posts[1]).toEqual({ where: { g: "g3" }, limit: 200, cursor: "200" });
+    const t = w.stat("today") as {
+      moves: { chess: number };
+      truncated: string[];
+    };
+    expect(t.moves.chess).toBe(400);
+    expect(t.truncated).toContain("moves.chess");
+  });
+
+  it("does not query when there is no current game", async () => {
+    const w = full();
+    w.set(CHESS, "table", []);
+    await run(w);
+    expect(w.posts()).toEqual([]);
+    expect((w.stat("today") as { moves: { chess: number } }).moves.chess).toBe(
+      0,
+    );
   });
 });
 

@@ -105,19 +105,27 @@ const headers = (env: Env) => ({
 });
 
 /** A GET; null for 404. Throws on other failures, a spent budget or the deadline. */
-async function get(t: Ctx, path: string): Promise<unknown | null> {
+async function request(
+  t: Ctx,
+  method: "GET" | "POST",
+  path: string,
+  body?: unknown,
+): Promise<unknown | null> {
   if (t.signal.aborted) throw new Error("tick deadline reached");
   if (t.budget <= 0) throw new Error("request budget spent");
   t.budget--;
   const res = await fetch(`${t.base}${path}`, {
-    method: "GET",
+    method,
     headers: headers(t.env),
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     signal: AbortSignal.any([t.signal, AbortSignal.timeout(TIMEOUT_MS)]),
   });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`status ${res.status}`);
   return readJson(res);
 }
+
+const get = (t: Ctx, path: string) => request(t, "GET", path);
 
 const data = (id: string, col: string, doc = "") =>
   `/api/v1/artifacts/${id}/data/${col}${doc ? `/${doc}` : ""}`;
@@ -134,6 +142,8 @@ async function listDocs(
   id: string,
   col: string,
   pages = MAX_PAGES,
+  /** With `where`, the pages come from `POST .../data/:col/query` (docs matching it). */
+  where?: Record<string, string>,
 ): Promise<{ docs: Doc[]; capped: boolean; notFound: boolean }> {
   const docs: Doc[] = [];
   let cursor: string | null = null;
@@ -141,7 +151,15 @@ async function listDocs(
     const q = `limit=${PAGE_LIMIT}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
     let page: { items?: Doc[]; nextCursor?: string | null } | null;
     try {
-      page = (await get(t, `${data(id, col)}?${q}`)) as typeof page;
+      page = (
+        where
+          ? await request(t, "POST", `${data(id, col)}/query`, {
+              where,
+              limit: PAGE_LIMIT,
+              ...(cursor ? { cursor } : {}),
+            })
+          : await get(t, `${data(id, col)}?${q}`)
+      ) as typeof page;
     } catch (e) {
       if (e instanceof TooLarge) return { docs, capped: true, notFound: false };
       throw e;
@@ -292,7 +310,7 @@ export async function tick(
       const table = await getDoc(t, id, "table", "table");
       const g = (table as { g?: unknown } | undefined)?.g;
       if (typeof g !== "string") return;
-      const r = await listDocs(t, id, "moves");
+      const r = await listDocs(t, id, "moves", MAX_PAGES, { g });
       if (r.notFound) return absent("chess");
       s.chess = chessState(table, r.docs, now);
       if (r.capped) t.truncated.add("moves.chess");
