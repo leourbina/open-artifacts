@@ -8,6 +8,9 @@ Real-time demos for demo.open-artifacts.com, built only on `window.openArtifacts
   writes the seed docs. Collections named by UTC day (`name-YYYYMMDD`) need no seed:
   the reset only prunes days older than yesterday.
 - `artifacts.json`: published artifact ids per instance, used by the landing build.
+- `artifacts/gallery/`: the front door. Signed-out visitors to the demo root land on it
+  (`PUBLIC_HOME`). It lists the demos from one `DEMOS` array in the page; add a demo there
+  once it is approved.
 
 ## Identity
 
@@ -23,3 +26,29 @@ not belong to the doc's owner (the poll). Tic-tac-toe uses the id only for its s
 | --- | --- |
 | poll | None: votes live in `votes-YYYYMMDD` (UTC). |
 | tictactoe | `game/game` back to an empty board with both seats open. Clients apply a write only if it is one claim, leave, move or start over from the last state they accepted; seats are first come, first served, and the id is only used for the seat labels. |
+
+## Gallery placeholders
+
+The gallery cannot know artifact ids or the app origin ahead of time, so the source holds
+placeholders that the publish script fills before it uploads the page:
+
+| Placeholder | Replaced with | Source |
+| --- | --- | --- |
+| `{{id:<slug>}}` | the bare artifact id of `artifacts/<slug>`, for example `CkyAe3uSYRnYthKz` | `ops/demo/ids.json` (`{ "<slug>": "<id>" }`) |
+| `{{origin}}` | the app origin with no trailing slash, for example `https://demo.open-artifacts.com` | the instance being published to |
+
+Publish the other demos first, write their ids to `ids.json`, then publish the gallery.
+The page links to `<origin>/a/<id>`. A card whose id is still a placeholder (or not a valid
+id) is left out, so a demo that is not published yet never shows a dead link. If `{{origin}}`
+is left unfilled the page falls back to `location.ancestorOrigins` (Chromium and Safari only),
+then to a relative `/a/<id>`, which resolves against the content host and does not work.
+This needs Platform's publish script to support it.
+
+Navigation out of the artifact frame also depends on the viewer's iframe sandbox. Today it
+is `allow-scripts allow-forms allow-popups allow-modals allow-downloads`, which means:
+
+- `target="_top"` links (Open, the header links) are blocked: there is no
+  `allow-top-navigation-by-user-activation`.
+- The "two windows" popup opens, but it inherits the sandbox, so the app at `/a/<id>` loads
+  in an opaque origin and its assets fail CORS: a blank window. It needs
+  `allow-popups-to-escape-sandbox`.

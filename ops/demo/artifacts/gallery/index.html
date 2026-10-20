@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Open Artifacts demo</title>
+<style>
+  /* Studio tokens (packages/ui/src/tokens/tokens.css), inlined: no external fonts. */
+  :root {
+    color-scheme: light;
+    --oa-bg: #eef0f3;
+    --oa-surface: #ffffff;
+    --oa-surface-2: #f6f7f9;
+    --oa-sunken: #eceef1;
+    --oa-divider: #e0e3e8;
+    --oa-border: #bec4cd;
+    --oa-border-strong: #848b95;
+    --oa-text: #15181c;
+    --oa-text-2: #454c56;
+    --oa-text-muted: #5f6670;
+    --oa-accent: #2350d0;
+    --oa-accent-fg: #1d45b8;
+    --oa-accent-soft: #e7edfc;
+    --oa-accent-text: #ffffff;
+    --oa-focus: #2350d0;
+    --oa-danger: #be2f1c;
+    --oa-danger-soft: #fbe7e3;
+    --oa-success: #157a3a;
+    --oa-font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --oa-font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --oa-radius-md: 6px;
+    --oa-radius-lg: 8px;
+    --oa-shadow-2: 0 0 0 1px var(--oa-border-strong), 0 4px 14px rgba(20, 24, 30, 0.06);
+    --oa-duration: 200ms;
+    --oa-ease: cubic-bezier(0.2, 0, 0, 1);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --oa-bg: #131518;
+      --oa-surface: #1c1f23;
+      --oa-surface-2: #212429;
+      --oa-sunken: #181a1e;
+      --oa-divider: #2c3037;
+      --oa-border: #3b414a;
+      --oa-border-strong: #676e78;
+      --oa-text: #e9ebee;
+      --oa-text-2: #b7bdc6;
+      --oa-text-muted: #9097a1;
+      --oa-accent: #7f9cff;
+      --oa-accent-fg: #a3b8ff;
+      --oa-accent-soft: #1f2a4a;
+      --oa-accent-text: #131518;
+      --oa-focus: #7f9cff;
+      --oa-danger: #ff7f6b;
+      --oa-danger-soft: #3a1e1a;
+      --oa-success: #5bc77f;
+      --oa-shadow-2: 0 0 0 1px var(--oa-border-strong), 0 4px 14px rgba(0, 0, 0, 0.4);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --oa-bg: #131518;
+    --oa-surface: #1c1f23;
+    --oa-surface-2: #212429;
+    --oa-sunken: #181a1e;
+    --oa-divider: #2c3037;
+    --oa-border: #3b414a;
+    --oa-border-strong: #676e78;
+    --oa-text: #e9ebee;
+    --oa-text-2: #b7bdc6;
+    --oa-text-muted: #9097a1;
+    --oa-accent: #7f9cff;
+    --oa-accent-fg: #a3b8ff;
+    --oa-accent-soft: #1f2a4a;
+    --oa-accent-text: #131518;
+    --oa-focus: #7f9cff;
+    --oa-danger: #ff7f6b;
+    --oa-danger-soft: #3a1e1a;
+    --oa-success: #5bc77f;
+    --oa-shadow-2: 0 0 0 1px var(--oa-border-strong), 0 4px 14px rgba(0, 0, 0, 0.4);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    min-height: 100vh;
+    background: var(--oa-bg);
+    color: var(--oa-text);
+    font-family: var(--oa-font-sans);
+    font-size: 14px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    padding: 32px 16px 40px;
+  }
+  main { max-width: 1120px; margin: 0 auto; display: flex; flex-direction: column; gap: 28px; }
+
+  header { display: flex; flex-direction: column; gap: 10px; max-width: 720px; }
+  .kicker { margin: 0; font-family: var(--oa-font-mono); font-size: 13px; color: var(--oa-text-muted); }
+  .live { display: inline-block; width: 7px; height: 7px; margin-right: 8px; border-radius: 50%; background: var(--oa-success); vertical-align: 1px; }
+  h1 { margin: 0; font-size: clamp(22px, 3.2vw, 30px); font-weight: 600; letter-spacing: -0.02em; line-height: 1.2; text-wrap: balance; }
+  .sub { margin: 0; color: var(--oa-text-2); font-size: 15px; text-wrap: pretty; }
+  .links { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 4px 0 0; padding: 0; list-style: none; }
+
+  a { color: var(--oa-accent-fg); text-underline-offset: 3px; }
+  a:hover { text-decoration-thickness: 2px; }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--oa-focus); outline-offset: 2px; border-radius: var(--oa-radius-md); }
+
+  .grid {
+    list-style: none; margin: 0; padding: 0;
+    display: grid; gap: 16px;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+  }
+  .card {
+    display: flex; flex-direction: column;
+    background: var(--oa-surface);
+    border: 1px solid var(--oa-border);
+    border-radius: var(--oa-radius-lg);
+    overflow: hidden;
+    transition: box-shadow var(--oa-duration) var(--oa-ease), border-color var(--oa-duration) var(--oa-ease);
+  }
+  .card:hover { border-color: var(--oa-border-strong); box-shadow: var(--oa-shadow-2); }
+  .thumb { display: block; aspect-ratio: 16 / 10; background: var(--oa-bg); border-bottom: 1px solid var(--oa-divider); }
+  .thumb svg { display: block; width: 100%; height: 100%; }
+  .body { display: flex; flex-direction: column; gap: 6px; padding: 14px 16px 16px; flex: 1 1 auto; }
+  h2 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+  .pitch { margin: 0; color: var(--oa-text-2); text-wrap: pretty; flex: 1 1 auto; }
+  .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-height: 36px; padding: 0 14px;
+    border: 1px solid var(--oa-border); border-radius: var(--oa-radius-md);
+    background: var(--oa-surface); color: var(--oa-text);
+    font: inherit; font-weight: 500; text-decoration: none; cursor: pointer;
+    touch-action: manipulation;
+    transition: border-color var(--oa-duration) var(--oa-ease), background var(--oa-duration) var(--oa-ease);
+  }
+  .btn:hover { border-color: var(--oa-border-strong); text-decoration: none; }
+  .btn.primary { background: var(--oa-accent); border-color: var(--oa-accent); color: var(--oa-accent-text); }
+  .btn.primary:hover { background: var(--oa-accent-fg); border-color: var(--oa-accent-fg); }
+  .hint { margin: 2px 0 0; font-size: 13px; color: var(--oa-text-muted); }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .empty { margin: 0; color: var(--oa-text-muted); }
+  footer { color: var(--oa-text-muted); font-size: 13px; border-top: 1px solid var(--oa-divider); padding-top: 16px; }
+  footer p { margin: 0; text-wrap: pretty; }
+
+  /* Mini-renders: SVG shapes take token colors, so they follow light and dark. */
+  .t-bg { fill: var(--oa-bg); }
+  .t-surface { fill: var(--oa-surface); stroke: var(--oa-border); }
+  .t-pick { fill: var(--oa-accent-soft); stroke: var(--oa-accent); }
+  .t-soft { fill: var(--oa-accent-soft); }
+  .t-osoft { fill: var(--oa-danger-soft); }
+  .t-x { fill: none; stroke: var(--oa-accent); stroke-linecap: round; }
+  .t-o { fill: none; stroke: var(--oa-danger); }
+  .t-text { fill: var(--oa-text); font-family: var(--oa-font-sans); }
+  .t-muted { fill: var(--oa-text-muted); font-family: var(--oa-font-mono); }
+  .t-accent { fill: var(--oa-accent); font-family: var(--oa-font-sans); }
+  .t-danger { fill: var(--oa-danger); font-family: var(--oa-font-sans); }
+  .t-bar { transform-box: fill-box; transform-origin: left; transition: transform 420ms var(--oa-ease); }
+  .card:hover .t-bar { transform: scaleX(1.06); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .card, .btn, .t-bar { transition: none; }
+    .card:hover .t-bar { transform: none; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="kicker"><span class="live" aria-hidden="true"></span>demo.open-artifacts.com</p>
+    <h1>Live, multiplayer artifacts. Made by AI agents, hosted on Cloudflare.</h1>
+    <p class="sub">Each demo is one HTML page with a shared live database. Open it in two windows and they stay in step. Any AI agent can publish one like it.</p>
+    <ul class="links">
+      <li><a href="https://open-artifacts.com" target="_top">open-artifacts.com</a></li>
+      <li><a href="https://github.com/open-artifacts-ai/open-artifacts" target="_top">Source on GitHub</a></li>
+    </ul>
+  </header>
+
+  <section aria-labelledby="demos-h">
+    <h2 id="demos-h" class="sr">Demos</h2>
+    <ul class="grid" id="grid"></ul>
+    <p class="empty" id="empty" hidden>The demos are being set up. Check back soon.</p>
+  </section>
+
+  <footer>
+    <p>Demos reset every night at 00:00 UTC. Votes and moves are anonymous.</p>
+  </footer>
+</main>
+
+<script>
+(() => {
+  "use strict";
+
+  /* The publish script fills APP_ORIGIN and each id from ops/demo/ids.json.
+     A card whose id is still a placeholder is left out. */
+  const APP_ORIGIN = "{{origin}}";
+
+  const DEMOS = [
+    {
+      slug: "poll",
+      title: "Live poll",
+      pitch: "One question a day. Vote, and every open window's bars move.",
+      id: "{{id:poll}}",
+      thumb: "poll",
+    },
+    {
+      slug: "tictactoe",
+      title: "Tic-tac-toe",
+      pitch: "Two seats, everyone else watches. Moves show up everywhere.",
+      id: "{{id:tictactoe}}",
+      thumb: "tictactoe",
+    },
+  ];
+
+  const THUMBS = {
+    poll: `
+      <svg viewBox="0 0 320 200" role="img" aria-hidden="true" focusable="false">
+        <rect class="t-bg" width="320" height="200"/>
+        <text class="t-muted" x="40" y="34" font-size="9">Today's question · resets 00:00 UTC</text>
+        <text class="t-text" x="40" y="56" font-size="13" font-weight="600">Meetings on a normal day?</text>
+        <g>
+          <rect class="t-surface" x="40.5" y="68.5" width="240" height="26" rx="5"/>
+          <rect class="t-soft t-bar" x="41" y="69" width="179" height="25" rx="4.5"/>
+          <rect class="t-pick" x="40.5" y="68.5" width="240" height="26" rx="5" fill-opacity="0" stroke-width="1.5"/>
+          <text class="t-accent" x="50" y="85.5" font-size="10" font-weight="600">✓</text>
+          <text class="t-text" x="61" y="85.5" font-size="10">None</text>
+          <text class="t-text" x="244" y="85.5" font-size="10" text-anchor="end">3</text>
+          <text class="t-muted" x="270" y="85.5" font-size="8" text-anchor="end">75%</text>
+        </g>
+        <g>
+          <rect class="t-surface" x="40.5" y="100.5" width="240" height="26" rx="5"/>
+          <text class="t-text" x="50" y="117.5" font-size="10">One</text>
+          <text class="t-text" x="244" y="117.5" font-size="10" text-anchor="end">0</text>
+          <text class="t-muted" x="270" y="117.5" font-size="8" text-anchor="end">0%</text>
+        </g>
+        <g>
+          <rect class="t-surface" x="40.5" y="132.5" width="240" height="26" rx="5"/>
+          <rect class="t-soft t-bar" x="41" y="133" width="60" height="25" rx="4.5"/>
+          <text class="t-text" x="50" y="149.5" font-size="10">Two or three</text>
+          <text class="t-text" x="244" y="149.5" font-size="10" text-anchor="end">1</text>
+          <text class="t-muted" x="270" y="149.5" font-size="8" text-anchor="end">25%</text>
+        </g>
+        <text class="t-muted" x="40" y="180" font-size="8">4 votes, one per browser. Change your vote any time.</text>
+      </svg>`,
+    tictactoe: `
+      <svg viewBox="0 0 320 200" role="img" aria-hidden="true" focusable="false">
+        <rect class="t-bg" width="320" height="200"/>
+        <rect class="t-surface" x="100.5" y="14.5" width="57" height="18" rx="9"/>
+        <text class="t-accent" x="109" y="27" font-size="8.5" font-weight="600">X:</text>
+        <text class="t-text" x="121" y="27" font-size="8.5">you</text>
+        <rect class="t-surface" x="162.5" y="14.5" width="57" height="18" rx="9"/>
+        <text class="t-danger" x="171" y="27" font-size="8.5" font-weight="600">O:</text>
+        <text class="t-text" x="183" y="27" font-size="8.5">guest</text>
+        <g stroke-width="1">
+          <rect class="t-surface" x="100.5" y="40.5" width="37" height="37" rx="4"/>
+          <rect class="t-pick" x="141.5" y="40.5" width="37" height="37" rx="4"/>
+          <rect class="t-surface" x="182.5" y="40.5" width="37" height="37" rx="4"/>
+          <rect class="t-surface" x="100.5" y="81.5" width="37" height="37" rx="4"/>
+          <rect class="t-pick" x="141.5" y="81.5" width="37" height="37" rx="4"/>
+          <rect class="t-surface" x="182.5" y="81.5" width="37" height="37" rx="4"/>
+          <rect class="t-surface" x="100.5" y="122.5" width="37" height="37" rx="4"/>
+          <rect class="t-pick" x="141.5" y="122.5" width="37" height="37" rx="4"/>
+          <rect class="t-surface" x="182.5" y="122.5" width="37" height="37" rx="4"/>
+        </g>
+        <g stroke-width="3">
+          <circle class="t-o" cx="119" cy="59" r="9"/>
+          <circle class="t-o" cx="201" cy="59" r="9"/>
+          <path class="t-x" d="M152 51l16 16M168 51l-16 16M152 92l16 16M168 92l-16 16M152 133l16 16M168 133l-16 16"/>
+        </g>
+        <text class="t-text" x="100" y="180" font-size="9.5">You win.</text>
+        <rect x="160" y="168" width="60" height="18" rx="4" style="fill: var(--oa-accent)"/>
+        <text x="190" y="180" font-size="8.5" font-weight="500" text-anchor="middle" style="fill: var(--oa-accent-text); font-family: var(--oa-font-sans)">Start over</text>
+      </svg>`,
+  };
+
+  const resolved = (v) => typeof v === "string" && !v.startsWith("{" + "{");
+  const VALID_ID = /^[A-Za-z0-9_-]{4,64}$/;
+
+  /* Artifacts run on a separate content host, so a bare "/a/id" would point there.
+     Use the filled origin, else the embedding page's origin when the browser exposes it. */
+  function appOrigin() {
+    if (resolved(APP_ORIGIN) && /^https?:\/\/[^/]+$/.test(APP_ORIGIN)) return APP_ORIGIN;
+    try {
+      const anc = window.location.ancestorOrigins;
+      if (anc && anc.length && anc[anc.length - 1] !== "null") return anc[anc.length - 1];
+    } catch {}
+    return "";
+  }
+
+  /* Second window: the same size as this one, beside it when there is room. */
+  function openBeside(url) {
+    const sx = window.screenX ?? window.screenLeft ?? 0;
+    const sy = window.screenY ?? window.screenTop ?? 0;
+    const ow = window.outerWidth || 1024;
+    const oh = window.outerHeight || 768;
+    const availW = (screen.availWidth || ow * 2);
+    const availL = screen.availLeft || 0;
+    const w = Math.max(360, Math.min(ow, Math.floor(availW / 2)));
+    const h = Math.max(480, oh);
+    let left = sx + ow;
+    if (left + w > availL + availW) left = Math.max(availL, sx - w);
+    const features = `popup,width=${w},height=${h},left=${left},top=${sy}`;
+    const win = window.open(url, "_blank", features);
+    if (win) { try { win.opener = null; } catch {} }
+    return !!win;
+  }
+
+  function card(demo, href) {
+    const li = document.createElement("li");
+    li.className = "card";
+    li.innerHTML = `
+      <div class="thumb">${THUMBS[demo.thumb] || ""}</div>
+      <div class="body">
+        <h2></h2>
+        <p class="pitch"></p>
+        <div class="actions">
+          <a class="btn primary" target="_top"></a>
+          <button type="button" class="btn">Open in two windows to see it sync</button>
+        </div>
+        <p class="hint">Opens a second window beside this one.</p>
+      </div>`;
+    li.querySelector("h2").textContent = demo.title;
+    li.querySelector(".pitch").textContent = demo.pitch;
+    const a = li.querySelector("a");
+    a.href = href;
+    a.textContent = "Open";
+    a.setAttribute("aria-label", `Open ${demo.title}`);
+    const btn = li.querySelector("button");
+    btn.setAttribute("aria-label", `Open ${demo.title} in two windows to see it sync`);
+    btn.addEventListener("click", () => {
+      /* One popup per click: the new window is the second view, this page navigates to the first. */
+      openBeside(href);
+      try { window.top.location.href = href; } catch {}
+    });
+    return li;
+  }
+
+  function render() {
+    const base = appOrigin();
+    const grid = document.getElementById("grid");
+    grid.replaceChildren();
+    for (const d of DEMOS) {
+      if (!resolved(d.id) || !VALID_ID.test(d.id)) continue;
+      grid.append(card(d, `${base}/a/${d.id}`));
+    }
+    document.getElementById("empty").hidden = grid.children.length > 0;
+  }
+
+  const OA = window.openArtifacts;
+  const setTheme = (t) => { if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; };
+  if (OA) {
+    setTheme(OA.theme);
+    if (typeof OA.onTheme === "function") OA.onTheme(setTheme);
+    if (OA.ready && typeof OA.ready.then === "function") OA.ready.then(() => setTheme(OA.theme)).catch(() => {});
+  }
+  render();
+})();
+</script>
+</body>
+</html>

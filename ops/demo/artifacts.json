@@ -10,6 +10,11 @@
       "instance": "artifacts.leourbina.com",
       "id": "CkyAe3uSYRnYthKz",
       "visibility": "public"
+    },
+    "gallery": {
+      "instance": "artifacts.leourbina.com",
+      "id": "VP4aqRwupYFrv8xx",
+      "visibility": "private"
     }
   }
 }
