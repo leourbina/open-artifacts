@@ -74,6 +74,18 @@ All installs share one Cloudflare account, so some state is shared even though n
 - **Tokens scoped by env:** the staging Cloudflare token gets zone rights (Workers Routes Edit, DNS Read) only on `open-artifacts-staging.app` and `open-artifacts-staging.page`; the prod token only on `open-artifacts.app` and `open-artifacts.page`. Neither can touch the other env's zones or `open-artifacts.com`. Account-level rights (Workers Scripts, WfP, D1, R2, KV) stay as in Global Constraints. The CLI refuses a token whose zone list includes the other env's zones (checked via the token verify and zone list calls before any write).
 - **Gate:** no DNS, route or `_psl` write until the Manager gives an explicit go once all four zones are active.
 
+## Test-hook bundles (agreed with Backend, 2026-10-21; #393)
+
+Backend's test hooks are guarded at build time by the define `__OA_TEST_HOOKS_ALLOWED__` (the template sets `"false"`). So each release has **two bundles from one dry-run config**, differing only in that define:
+- `release` (`false`): uploaded to every install, prod and staging alike, except the red-line pair.
+- `redline` (`true`): uploaded only to `rl-a` and `rl-b`, the only installs with `test_hooks = 1` (staging only). `stg-a`, `stg-b` and self-hosted staging get no hooks; `wrangler.staging.jsonc` is unchanged.
+
+Safeguards, each pinned by a test:
+1. `buildBundle` emits both variants. A test normalizes the one define literal and fails if the two bundles differ in anything else. (The hook code is present in both; only the literal differs.)
+2. A mandatory CI check runs the **release** bundle with `TEST_HOOKS=1` and a valid key and asserts 404 on every `/__test/*` path. This is the real proof that release is inert.
+3. The provisioner refuses to upload `redline` to any install unless `test_hooks = 1` and the env is staging; it refuses `release` on an install with test hooks too, so the red-line pair never silently loses its hooks.
+4. `/healthz` reports `testHooks: true` only when hooks are on; the field is absent otherwise. P5's prod check asserts `testHooks !== true`, and the secret and settings check stays the real proof.
+
 ## Global Constraints
 
 - Same product, same code: the user Worker is the normal `apps/server` build. No hosted-only branches in `apps/server/src`.
