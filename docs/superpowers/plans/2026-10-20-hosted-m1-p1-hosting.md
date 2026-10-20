@@ -15,7 +15,7 @@
 | Item | Finding | Consequence |
 |---|---|---|
 | Cron Triggers in user Workers | **Not supported.** Cloudflare staff on workers-sdk#13840 (2026-05-11); Wrangler now warns that crons are ignored with `--dispatch-namespace`. No `/schedules` API for namespace scripts. | The central scheduler (Task 7) is required, not optional. |
-| Per-customer logs | Workers Logs per user Worker by setting `observability` in the upload metadata, queryable per script through the Workers Observability API. Logpush can cover the whole namespace via the dispatch Worker. | Task 3 sets `observability.enabled`, `logs.invocation_logs`, `head_sampling_rate: 1` on every upload. |
+| Per-customer logs | Workers Logs per user Worker by setting `observability` in the upload metadata, queryable per script through the Workers Observability API. Logpush can cover the whole namespace via the dispatch Worker. | Task 3 sets `observability.enabled`, `logs.enabled`, `head_sampling_rate: 1` and **`invocation_logs: false`** on every upload (signed content paths are bearer credentials). |
 | Live tail per customer | Tail Workers attach per user Worker (`tail_consumers` in upload metadata); a Tail Worker on the dispatch Worker gets two trace items, one for each Worker. | No Tail Worker in M1; Workers Logs is enough for one customer. Recorded in the runbook. |
 | D1 per account | 50,000 databases, 10 GB each (hard), **1 TB total per account** (raisable). | ~100 installs at the 10 GB cap before a raise; fine for M1. |
 | R2 per account | 1,000,000 buckets. | No constraint. |
@@ -47,16 +47,16 @@ All installs share one Cloudflare account, so some state is shared even though n
 
 | Shared thing | Risk | M1 handling |
 |---|---|---|
-| Email Sending quota and sender reputation | One install's sends exhaust or damage another's | Per-install daily cap var (`EMAIL_DAILY_CAP`), with the sum across installs kept under the account limit (checked by `oa:hosted create`); sender address `noreply@<slug>.mail.<app-domain>` per install (DNS at the gate), mapped into `EMAIL_FROM`; an alert at 80% of the account limit in the scheduler's nightly run |
+| Email Sending quota and sender reputation | One install's sends exhaust or damage another's | Per-install daily cap: today `MAX_EMAILS_PER_DAY = 100` is hardcoded in `email/send.ts`; Backend is turning it into the var `EMAIL_DAILY_CAP` (default 100) in P2's email-pool task, with a separate `CODE_EMAILS_PER_DAY` (default 200) for sign-in codes; both count toward the account check. Until that lands, `oa:hosted create` checks `100 × installs` against the account limit, and after it, the sum of the vars; sender address `noreply@<slug>.mail.<app-domain>` per install (DNS at the gate), mapped into `EMAIL_FROM`; an alert at 80% of the account limit in the scheduler's nightly run |
 | Workers Logs | Invocation logs record request URLs, and signed content paths (`/c/<exp>.<sig>/…`) are bearer credentials, readable account-wide | `invocation_logs: false` on user Workers (Backend's central logger redacts URLs, emails and tokens, with a lint test against raw `console.*`; that PR must merge before the first hosted install); the Observability API token is a separate, read-only token held by Platform only; shortest retention available |
-| `ANALYTICS_TOKEN` | An account analytics token would show every install's traffic | Stays in `TEMPLATE_BINDINGS_EXCLUDED`; the Usage page is off in hosted (a `FEATURES` flag) |
+| `ANALYTICS_TOKEN` | An account analytics token would show every install's traffic | Stays in `TEMPLATE_BINDINGS_EXCLUDED`; the Usage page is off in hosted through the `FEATURES` flag `usage_off` (the Usage page and `/api/v1/usage` return 404) |
 | Browser Rendering | Noisy neighbour on thumbnails (low) | Accepted for M1; per-install concurrency cap in M2 |
 | Same-site tenants | `a.<app-domain>` and `b.<app-domain>` are same-site, so SameSite cookies flow between tenants | The app domain goes into the Public Suffix List private section before the second tenant (Task 10 gate; Backend files it too); P5 checks it |
 
 ## Spec gaps closed here (review finding 12)
 
 - **Audit of control-plane actions:** a platform D1 table `hosted_audit(id INTEGER PRIMARY KEY, at INTEGER, actor TEXT, action TEXT, install_id TEXT, detail TEXT)`, append-only (triggers abort `UPDATE` and `DELETE`). Every `oa:hosted` command writes a row before and after it acts (Task 8).
-- **Control-plane token:** the CLI's Cloudflare token can read every customer's D1 and R2. It lives in the macOS keychain (`security find-generic-password -s oa-hosted-<env>`), never in a file, and is created with an expiry of 7 days or less. CI holds only the staging token.
+- **Control-plane token:** the CLI's Cloudflare token can read every customer's D1 and R2. It lives in the macOS keychain (`security find-generic-password -s oa-hosted-<env>`), never in a file, and is created with an expiry of 7 days or less. CI holds only the staging token; for prod it holds just the inventory key and a Workers Scripts Read token (Task 7b).
 - **Custom hostnames:** M4 in the roadmap, not M1. Rule for later: a `HOSTS` key is written only after the Cloudflare for SaaS hostname is active and its ownership verified, and is unique across installs.
 - **P2's `HOSTED=1`** is set on every hosted install (Task 3).
 - **Backups:** export is `NotInM1`, so FinQore has no R2 or Durable Object backup in M1. The Manager is taking this to the user. D1 Time Travel (30 days) covers the database only.
@@ -69,6 +69,7 @@ All installs share one Cloudflare account, so some state is shared even though n
 - Secrets are generated per install and sent to Cloudflare as `secret_text` bindings in the upload; they're never stored, logged or printed. The owner PAT and, on test installs only, the test-hook key go to 0600 files.
 - The control plane's (here: the CLI's) Cloudflare token is scoped to: Workers Scripts Edit, Workers for Platforms Edit, D1 Edit, Workers R2 Storage Edit, Workers KV Storage Edit. No zone or DNS permissions.
 - Upgrades never pass `--allow-downgrade`; the downgrade guard applies.
+- Durable Object class additions ship **one release before** the code that uses them (the class exists, unused, for a release), and every upgrade that carries a new DO migration tag is first proven on `rl-a` and `rl-b` (P5's gate runs it). Task 5 refuses a hosted upgrade whose release adds a tag and code that binds it in the same version (the release metadata records which classes are referenced).
 - Free-plan-style CPU budgets still apply per request; the dispatch Worker adds under 1 ms CPU.
 - Tests run as `env -i PATH="$PATH" HOME="$HOME" pnpm exec vitest run`; never print env.
 - Copy: no em dashes in user-facing copy; say "any AI agent".
@@ -148,10 +149,10 @@ it("refuses equal or nested app and content domains", () => {
 - Consumes: `names()`, `Install` (Task 2).
 - Produces:
   - `buildBundle(root: string): Promise<{ modules: { name: string; type: "esm" | "wasm"; bytes: Uint8Array }[]; mainModule: string; assetsDir: string; version: string }>`
-  - `userWorkerMetadata(i: { id; appHost; contentHost; ownerEmail; vars }, r: { d1Id; kvId; version; rlNs: number; doMigrationTag: string | null }): UploadMetadata` — bindings mirror `apps/server/wrangler.template.jsonc` with values from `names(id)`; `observability: { enabled: true, logs: { enabled: true, invocation_logs: true, head_sampling_rate: 1 } }`; `tags: [id, "v" + version]`; `migrations` taken from the template's `migrations` list: every tag after the install's recorded `do_migration_tag` is sent (`old_tag`/`new_tag`), so new Durable Object classes (P3 adds `DirectorySync` and `UserPresence`) arrive on upgrade, not only on create; no `routes`, no `triggers`.
+  - `userWorkerMetadata(i: { id; appHost; contentHost; ownerEmail; vars }, r: { d1Id; kvId; version; rlNs: number; doMigrationTag: string | null }): UploadMetadata` — bindings mirror `apps/server/wrangler.template.jsonc` with values from `names(id)`; `observability: { enabled: true, logs: { enabled: true, invocation_logs: false, head_sampling_rate: 1 } }`; `tags: [id, "v" + version]`; `migrations` taken from the template's `migrations` list: every tag after the install's recorded `do_migration_tag` is sent (`old_tag`/`new_tag`), so new Durable Object classes (P3 adds `DirectorySync` and `UserPresence`) arrive on upgrade, not only on create; no `routes`, no `triggers`.
   - `i.testHooks: boolean` (from `installs.test_hooks`): when true adds var `TEST_HOOKS="1"` (P5's contract); `upgrade` keeps the saved value. `userWorkerMetadata` throws when `testHooks` is true and the namespace is `oa-prod`.
   - Secrets ride in the upload as `secret_text` bindings: on create, all of them; on later uploads only the ones the script lacks, with `keep_bindings: ["secret_text", "secret_key"]` so existing secrets survive.
-  - Hosted-only vars: `HOSTED="1"` (P2), `INSTALL_ID` (P2; also reported by `/healthz`, see Task 6b), `EMAIL_DAILY_CAP`.
+  - Hosted-only vars: `HOSTED="1"` (P2), `INSTALL_ID` (P2; also reported by `/healthz`, see Task 6b), `EMAIL_DAILY_CAP` and `CODE_EMAILS_PER_DAY` (Backend's P2 vars), and `FEATURES` always including `usage_off`.
   - `ratelimits[k].namespace_id` = `rlNs + k` for the k-th template entry (`RL_ANON`, P2's `RL_AUTH`), never a template literal. `rlNs = 1_000_000 × envIndex + 8 × seq` (staging `envIndex` 1, prod 2), so hosted IDs never overlap self-hosted literals.
   - `TEMPLATE_BINDINGS_EXCLUDED: Record<string, string>`: binding name → reason (filled from Task 1; `routes`, `crons` and `ANALYTICS_TOKEN` are always excluded).
   - Upload metadata sets `observability.logs.invocation_logs: false` (signed content paths are bearer credentials; see Shared account state).
@@ -164,6 +165,7 @@ it("refuses equal or nested app and content domains", () => {
   - `each install gets its own ratelimit namespace_id`: two installs' metadata never share a `namespace_id`; the template has at most 8 `ratelimits` entries, and every literal ID in it is below 1,000,000.
   - `test hooks`: `testHooks: true` adds `TEST_HOOKS` and the `TEST_HOOK_KEY` secret binding; in `oa-prod` it throws; the drift test lists both names.
   - `later uploads send only missing secrets, with keep_bindings secret_text and secret_key`.
+  - `observability`: `logs.invocation_logs` is exactly `false` and `logs.enabled` is `true` for every install.
   - `no secret names appear in bindings` (`SESSION_SECRET`, `CONTENT_SIGNING_KEY`, `ACCESS_CLIENT_SECRET`, `ANALYTICS_TOKEN`).
 - [ ] **Step 2:** Run; expect FAIL.
 - [ ] **Step 3:** Implement. `buildBundle` runs the dry-run build once per release, not per install.
@@ -181,19 +183,20 @@ it("refuses equal or nested app and content domains", () => {
 - Consumes: Tasks 2 and 3.
 - Produces:
   - `cfClient(o: { accountId: string; token: string; fetch?: typeof fetch }): Cf` with typed calls: `d1Create/d1Get/d1Query/d1Delete`, `r2Create/r2Delete`, `kvCreate/kvDelete/kvPut/kvGet/kvDeleteKey`, `nsScriptUpload(ns, script, metadata, modules)`, `nsScriptDelete(ns, script)`, `nsSecretPut(ns, script, name, value)`, `nsSecretList(ns, script)`, `nsAssetsUpload(ns, script, dir)` (assets upload session, then completion JWT into metadata). Retries 429 and 5xx with backoff (3 tries); never includes request bodies in errors.
-  - Platform D1 table `installs(id TEXT PRIMARY KEY, slug TEXT UNIQUE, app_host TEXT UNIQUE, content_host TEXT UNIQUE, owner_email TEXT, d1_id TEXT, kv_id TEXT, version TEXT, previous_version TEXT, rl_ns INTEGER UNIQUE CHECK(rl_ns % 8 = 0), do_migration_tag TEXT, test_hooks INTEGER NOT NULL DEFAULT 0, state TEXT CHECK(state IN ('creating','active','upgrading','deleting')), created_at INTEGER, updated_at INTEGER)`. No customer data.
+  - Platform D1 table `installs(id TEXT PRIMARY KEY, slug TEXT UNIQUE, app_host TEXT UNIQUE, content_host TEXT UNIQUE, owner_email TEXT, d1_id TEXT, kv_id TEXT, version TEXT, previous_version TEXT, rl_ns INTEGER UNIQUE CHECK(rl_ns % 8 = 0), do_migration_tag TEXT, test_hooks INTEGER NOT NULL DEFAULT 0, inputs_hash TEXT NOT NULL, state TEXT CHECK(state IN ('creating','active','upgrading','deleting')), created_at INTEGER, updated_at INTEGER)`. No customer data.
   - Platform KV `HOSTS`: key = lowercase host, value = install ID. Written last on create, removed first on delete.
   - `new WfpProvisioner(o: { cf: Cf; namespace: string; platformDb: string; hostsKv: string; domains; releases: R2BucketName; patDir: string })`.
-- Resume: `create` with a slug whose row is `creating` resumes that row (or pass `resumeId`); a slug whose row is `active` fails. `rl_ns` is allocated when the row is first inserted.
+- Resume: `create` with a slug whose row is `creating` resumes that row (or pass `resumeId`); a slug whose row is `active` fails. The row stores `inputs_hash` (sha256 of canonical JSON of owner email, vars and testHooks); a resume with different inputs is refused before any Cloudflare call. `rl_ns` is allocated when the row is first inserted.
 - Create order, each step idempotent by checking first: insert `installs` row (`creating`, `rl_ns`, `test_hooks`) and a `hosted_audit` row → D1 → R2 → KV → apply `apps/server/migrations/*.sql` in order via `d1Query`, recording applied names in a `d1_migrations` table the same way wrangler does → upload the script with assets and **all secrets as `secret_text` bindings** (48 random bytes base64url each: `SESSION_SECRET`, `CONTENT_SIGNING_KEY`, `DIRECTORY_TOKEN_KEY` (P3), and on test installs `TEST_HOOK_KEY`, also written to `<patDir>/<appHost>-hook-key`, 0600). A rerun after a successful upload skips this step (the script exists).
-  → **Broker keypair** (P2 v3: a per-install Ed25519 key, private half in the install, public half in the broker registry). Generated once per attempt and written to both sides; if either side is missing on a rerun, a **new** keypair is generated and written to both (rotation), so the two can never disagree and the control plane never stores a private key.
+  → **Broker keypair** (P2 v3 contract, 2026-10-21): install secret `BROKER_SIGNING_KEY` (Ed25519 private key, PKCS#8 DER, base64url without padding) and var `BROKER_KID`; registry KV `BROKER_REGISTRY` (one namespace in total, metadata only), key = install ID, value `{ installId, origin, keys: [{ kid, x }], disabled? }` where `x` is the raw 32-byte public key, base64url without padding, at most 2 active keys. Order on create and on repair: generate a pair and a new `kid` → **add** `{kid, x}` to the registry entry (it now holds at most 2) → upload `BROKER_SIGNING_KEY` and `BROKER_KID` together → remove any other key from the entry. If a rerun finds the install's `BROKER_KID` missing from the entry, or the entry missing, it runs the same sequence again (a rotation), so a half-done write always heals and the two sides never disagree. The control plane never stores the private key.
   → `HOSTS` keys → `/healthz` until `{ ok: true, installId }` (120 s, longer than the dispatch Worker's 60 s KV cache) → mint owner PAT by SQL insert (reuse the `owner-token.ts` SQL and hashing; `newPat()` from `@oa/shared`) into `<patDir>/<appHost>-pat-token`, mode 0600, O_NOFOLLOW → MCP selftest (publish and read back a private Welcome artifact, as setup's `selftest.ts`) → row `active`, audit row.
 
 - [ ] **Step 1: Write the failing tests** (against `fake-cf.ts`, an in-memory Cloudflare with call log)
   - `creates every resource named by install id and maps both hosts`.
   - `an upgrade that introduces DIRECTORY_TOKEN_KEY sends only that secret binding, with keep_bindings, and leaves the others untouched`.
-  - `resume by slug`: a `creating` row is resumed; an `active` slug fails before any Cloudflare call.
-  - `broker keypair stays consistent`: fail the registry write after the secret is uploaded; the rerun rotates both sides, and the registry's public key matches the install's private key (checked by a signature round trip in the fake).
+  - `resume by slug`: a `creating` row is resumed; an `active` slug fails, and a resume with a different owner, vars or testHooks is refused, both before any Cloudflare call.
+  - `broker keypair stays consistent`: fail between the registry add and the secret upload, and again between the upload and the old-key removal; each rerun heals, the entry never holds more than 2 keys, ends with exactly the install's `BROKER_KID`, and its `x` verifies a signature made with `BROKER_SIGNING_KEY` (round trip in the fake).
+  - `drift test names`: `BROKER_SIGNING_KEY` is a secret binding, `BROKER_KID` a var; `BROKER_KEY` appears nowhere.
   - `testHooks in oa-prod is refused before any Cloudflare call`; on staging the hook-key file is 0600 and its value never appears in output.
   - `secrets are 48-byte random, differ between two installs, and never appear in the call log's printable fields or thrown errors`.
   - `resumes after an upload failure without duplicating resources`: fail `nsScriptUpload` once, rerun `create` with the same slug; assert one D1, one R2, one KV, and the final script has every secret binding.
@@ -227,6 +230,7 @@ it("refuses equal or nested app and content domains", () => {
   - `rollback with no previous version is a clear error, not a re-upload`.
   - `rollback across a Durable Object migration tag is refused, and a failed upgrade across one reports forward-fix instead of rolling back`.
   - `rollback uploads exactly the stored metadata of the previous version`.
+  - `an upgrade whose release adds a DO class and first uses it in the same version is refused`.
   - `delete requires confirm === id and unmaps hosts before anything else`: call log order.
   - `delete is idempotent after a partial failure`.
 - [ ] **Step 2:** Run; expect FAIL.
@@ -294,6 +298,22 @@ Fallback (only if Task 1 shows `scheduled()` isn't available through the namespa
 - [ ] **Step 4:** Rerun; expect PASS.
 - [ ] **Step 5:** Commit `feat(scheduler): nightly jobs for hosted installs`.
 
+### Task 7b: Platform inventory Worker (for P5's prod check)
+
+P5 must prove no prod install has test hooks without putting an account-wide D1 token in CI (D1 read can read every customer's database).
+
+**Files:**
+- Create: `apps/inventory/package.json`, `wrangler.jsonc` (bindings: `PLATFORM_DB` only; secret `INVENTORY_KEY`; `workers_dev: true`, no custom route, so no DNS change), `src/index.ts`
+- Test: `apps/inventory/test/inventory.test.ts`
+
+**Interfaces:**
+- Produces: `GET /installs` with `Authorization: Bearer <INVENTORY_KEY>` → `{ installs: [{ id, appHost, contentHost, state, testHooks }] }`. Any other path or method, or a wrong or missing key (constant-time compare), → 404. Reads only the `installs` table, selecting only those columns.
+- CI's prod probe holds two credentials: the inventory key, and a token with only Workers Scripts Read (plus Workers for Platforms Read if namespace script settings need it, confirmed in Task 1). That's enough to list each prod script's secret names and settings, and it can't read any customer data.
+
+- [ ] **Step 1: Write the failing tests**: `wrong or missing key → 404`; `returns only the listed columns` (a fixture row with extra columns doesn't leak them); `other paths → 404`; `the Worker has no binding except PLATFORM_DB` (parse `wrangler.jsonc`).
+- [ ] **Step 2–4:** Run (FAIL), implement, run (PASS).
+- [ ] **Step 5:** Commit `feat(inventory): read-only install list for the prod probe`.
+
 ### Task 8: `SetupProvisioner` and the `oa:hosted` CLI
 
 **Files:**
@@ -323,7 +343,7 @@ Fallback (only if Task 1 shows `scheduled()` isn't available through the namespa
 - Create: `.github/workflows/hosted-staging.yml`
 - Modify: `scripts/ci/check-ci.test.ts` (or the existing workflow invariant tests) for the new workflow
 
-Workflow: on push to main (paths `apps/server/**`, `packages/**`, `apps/dispatch/**`, `apps/scheduler/**`) and dispatch; concurrency `hosted-staging`; `permissions: contents: read`; builds once, `oa:hosted publish-release --env staging`, deploys `apps/dispatch` and `apps/scheduler` to staging, `oa:hosted upgrade` for the two staging installs `stg-a` and `stg-b` (created once by hand at the gate), writes their PAT files from secrets `HOSTED_STG_A_PAT`/`HOSTED_STG_B_PAT` with umask 077, then runs smoke against both. P5's release gate uses its own pair `rl-a`/`rl-b` and its own concurrency group `redline`, so this workflow can never cancel or overwrite a pending red-line run. Four staging installs are created at the gate: `stg-a`, `stg-b`, `rl-a`, `rl-b` (all `--test-hooks`). The existing `deploy-staging.yml` keeps running smoke against self-hosted staging, so both modes run on every main push.
+Workflow: on push to main (paths `apps/server/**`, `packages/**`, `apps/dispatch/**`, `apps/scheduler/**`) and dispatch; concurrency `hosted-staging`; `permissions: contents: read`; builds once, `oa:hosted publish-release --env staging`, deploys `apps/dispatch` and `apps/scheduler` to staging, `oa:hosted upgrade` for the two staging installs `stg-a` and `stg-b` (created once by hand at the gate), writes their PAT files from secrets `HOSTED_STG_A_PAT`/`HOSTED_STG_B_PAT` with umask 077, then runs smoke against both. P5's release gate uses its own pair `rl-a`/`rl-b` and its own concurrency group `redline`, so this workflow can never cancel or overwrite a pending red-line run. Four staging installs are created at the gate: `stg-a` and `stg-b` (no test hooks; smoke uses owner PATs only), and `rl-a` and `rl-b` (`--test-hooks`, the only installs with hooks). The existing `deploy-staging.yml` keeps running smoke against self-hosted staging, so both modes run on every main push.
 
 - [ ] **Step 1:** Write the failing tests: `smoke reads OA_SMOKE_TARGETS and runs every suite per target`; workflow invariants (`concurrency`, `permissions`, secrets only via files, no `echo` of secrets).
 - [ ] **Step 2–4:** Run (FAIL), implement, run (PASS).
@@ -332,7 +352,7 @@ Workflow: on push to main (paths `apps/server/**`, `packages/**`, `apps/dispatch
 ### Task 10: FinQore, hand-provisioned (gated)
 
 **Files:**
-- Modify: `docs/ops/hosted.md` (runbook: create, check, upgrade, rollback, logs per install via the Observability API filtered by script name)
+- Modify: `docs/ops/hosted.md` (runbook: create, check, upgrade, rollback, logs per install via the Observability API filtered by script name; and: if a pending red-line run was replaced or cancelled for a release, rerun it from the Actions tab before that release deploys anywhere, since deploy-prod waits on its success)
 
 - [ ] **Step 1:** Ask the Manager for: the hosted app and content domains (bought or chosen by the user, separate registrable domains, see P5), the DNS wildcard records and the dispatch Worker routes on them, the per-install mail subdomain records, and go-ahead to create `finqore`. Stop until all are confirmed. File the app domain for the Public Suffix List private section (with Backend) now; it must be published before a second tenant goes live.
 - [ ] **Step 1b:** FinQore's go-live is also gated on P5's sign-in cases being `proven` live (real test Workspace tenants), not just against the fixture.

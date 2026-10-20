@@ -4,7 +4,7 @@
 
 **Goal:** Prove, on every release and against two real hosted installs, that nothing from tenant A works against tenant B, and block the release when it doesn't; and prove the migration skill imports a real Claude export into spaces correctly and idempotently.
 
-**Architecture:** A vitest suite in `tests/redline/` runs over HTTP against two staging installs (`stg-a`, `stg-b`, from P1) with identities obtained through Backend-owned test hooks that exist only on installs provisioned with them. A job in `release-please.yml` deploys the tagged build to both installs and runs the suite before `deploy-prod`, so a failure stops the release from reaching anyone. A separate harness in `tests/import/` checks an install after an agent ran the migration skill.
+**Architecture:** A vitest suite in `tests/redline/` runs over HTTP against two staging installs (`rl-a`, `rl-b`, from P1) with identities obtained through Backend-owned test hooks that exist only on installs provisioned with them. A job in `release-please.yml` deploys the tagged build to both installs and runs the suite before `deploy-prod`, so a failure stops the release from reaching anyone. A separate harness in `tests/import/` checks an install after an agent ran the migration skill.
 
 **Tech Stack:** TypeScript, vitest (node), `@modelcontextprotocol/sdk` client, `ws`, GitHub Actions.
 
@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - The anti-goal: data leaking between customers, or one customer signing in to another's artifacts, is a failure even if everything else works.
-- The suite runs only against installs provisioned with test hooks (`stg-a`, `stg-b`); it refuses any target whose `/healthz` doesn't report `testHooks: true`.
+- The suite runs only against installs provisioned with test hooks (`rl-a`, `rl-b`; `stg-a`/`stg-b` have none); it refuses any target whose `/healthz` doesn't report `testHooks: true`.
 - Test hooks must not exist on any other install. Because hooks fail closed (a wrong key and "hooks off" both return 404), a 404 proves nothing on its own. The prod check is positive (Task 2): for every row in prod's `installs` table, `/healthz` reports `testHooks: false` **and** the script's secret list and settings (read with a read-only prod token) contain neither `TEST_HOOK_KEY` nor `TEST_HOOKS`. P1's provisioner refuses `testHooks` in the `oa-prod` namespace whatever the CLI flags.
 - Every assertion is about B refusing A's credential: the expected result is a 401, 403 or 404 with no B data in the body, never "anything but 200". Each refusal is meaningful only next to two successes on the same request: B's own credential succeeds at B, and A's credential succeeds at A (`crossCheck`, Task 2). A broken B that refuses everything fails the run.
 - Credentials (PATs, hook keys, session cookies) live in 0600 files or GitHub secrets, never in argv, logs or test names; failure messages print status and a body hash, not the body.
@@ -61,9 +61,9 @@
 
 **Interfaces:**
 - Produces:
-  - `loadTargets(): { a: Target; b: Target; prod: ProdProbe }` from `REDLINE_TARGETS` (JSON) with `Target = { name; installId: string; app: string; content: string; patFile: string; hookKeyFile: string }` and `ProdProbe = { tokenFile: string; accountId: string }` (a read-only token: D1 read on the platform DB, Workers Scripts read); reads secrets from the files.
+  - `loadTargets(): { a: Target; b: Target; prod: ProdProbe }` from `REDLINE_TARGETS` (JSON) with `Target = { name; installId: string; app: string; content: string; patFile: string; hookKeyFile: string }` and `ProdProbe = { inventoryUrl: string; inventoryKeyFile: string; scriptsTokenFile: string; accountId: string }` (P1 Task 7b's inventory Worker for ids and hosts, and a token with only Workers Scripts Read for secret names and settings; no D1 token in CI); reads secrets from the files.
   - `crossCheck(req: (cred: Cred, host: Target) => Request, o: { a: Target; b: Target; credA: Cred; credB: Cred; ok?: (r: Response) => boolean }): Promise<void>`: asserts `ok(fetch(req(credB, b)))` and `ok(fetch(req(credA, a)))` (default `ok` is 2xx or 101), then `expectRefused(fetch(req(credA, b)), b)`. Every cross-tenant case in Tasks 4–6 uses it.
-  - `prodClean(p: ProdProbe): Promise<void>`: for every `installs` row in prod, `/healthz.testHooks === false`, `/healthz.installId === row.id`, and the script's secret list and settings contain neither `TEST_HOOK_KEY` nor `TEST_HOOKS`.
+  - `prodClean(p: ProdProbe): Promise<void>`: for every install the prod inventory Worker returns (`testHooks` must be false there too), `/healthz.testHooks === false`, `/healthz.installId === row.id`, and the script's secret list and settings contain neither `TEST_HOOK_KEY` nor `TEST_HOOKS`.
   - `hook(t: Target, path: string, body): Promise<unknown>`.
   - `asA/asB` helpers that build `fetch` init with a credential and `redirect: "manual"`.
   - `expectRefused(res: Response, b: Target): Promise<void>`: status in 401, 403, 404, or a 3xx without `set-cookie` whose `location` is B's own sign-in; body (when present) contains none of the marker strings seeded into B (Task 2 seeds a private artifact on each install whose title and content include `REDLINE-<install>-<random>`).
@@ -96,7 +96,7 @@ Every case goes through `crossCheck` (B's credential succeeds at B, A's at A, th
   - `B's private artifact id fetched with A's credentials at A` (404: ids don't cross installs).
   - `A's OAuth refresh token and an unredeemed A authorization code at B's /token` → `invalid_grant`, no token issued.
   - `A's invite link and share email link opened at B` (signed in to B as a B member) → no membership or share created on B.
-- [ ] **Step 2:** Run against `stg-a`/`stg-b`; expect PASS. Any FAIL is a red-line bug: stop, file it with the Manager as a blocker, don't weaken the test.
+- [ ] **Step 2:** Run against `rl-a`/`rl-b`; expect PASS. Any FAIL is a red-line bug: stop, file it with the Manager as a blocker, don't weaken the test.
 - [ ] **Step 3:** Commit `test(redline): tokens, sessions, OAuth and signed URLs don't cross installs`.
 
 ### Task 5: Live data and transport cases (available now)
@@ -121,14 +121,14 @@ Every case goes through `crossCheck` (B's credential succeeds at B, A's at A, th
 **Files:**
 - Create: `tests/redline/test/signin.test.ts`
 
-Installs are configured (by Backend's P2 settings) with `stg-a` and `stg-b` bound to different domains. The cases come from P2's `SIGNIN_NEGATIVE_CASES`, run live against both installs and against the staging auth broker (`auth.<staging-hosted>`), whose cases are the riskiest.
+Installs are configured (by Backend's P2 settings) with `rl-a` and `rl-b` bound to different domains. The cases come from P2's `SIGNIN_NEGATIVE_CASES`, run live against both installs and against the staging auth broker (`auth.<staging-hosted>`), whose cases are the riskiest.
 - [ ] **Step 1: Write the tests** (drive P2's catalog live)
   - `an ID token with hd=a… at B's callback` → no session.
   - `an ID token with B's email domain but hd=a…` → no session (domain from the token, not the email).
   - `an ID token with no hd claim and a B-domain email` → no session.
   - `an ID token minted for A's client (aud) replayed at B` → no session.
   - `A's OIDC state/nonce replayed at B` → no session.
-  - Broker: `A's BROKER_KEY redeeming as B`, `B's assertion at A`, `a tampered install id at the broker callback` → refused.
+  - Broker: `A's `BROKER_SIGNING_KEY` (with A's `BROKER_KID`) redeeming as B`, `B's assertion at A`, `a tampered install id at the broker callback` → refused.
   - One-time codes: `a code issued by A for x@b.redline.test, entered at B` → refused; `a code requested at B for an address not invited to B` → no code sent (hook shows none) and a generic response; `a guest of A who is invited to B gets read-only on B only` (guest can't publish via MCP or data API on B).
 - [ ] **Step 2:** Run; expect PASS (same stop rule).
 - [ ] **Step 3:** Mark proof levels. Until the user creates the two real test Workspace tenants, a *validly signed* Google token with the wrong `hd` or `aud` can't be produced live; those cases run only against P2's fake-Google fixture. The suite reports them as `unproven-live`, the Platform status page shows them so, and FinQore's go-live is gated on them turning `proven`.
@@ -158,6 +158,8 @@ Job `redline`:
 - [ ] **Step 2–4:** Run (FAIL), implement, run (PASS).
 - [ ] **Step 5:** Commit `ci: the red-line suite gates every release`.
 
+Runbook (P1 `docs/ops/hosted.md`): a red-line run replaced or cancelled for a release is rerun from the Actions tab; prod waits on its success.
+
 ### Task 8: Import validation harness
 
 **Files:**
@@ -176,12 +178,12 @@ The migration skill itself is Backend's scope C and isn't on main yet. This task
 ### Task 9: Real-export validation (gated, after P3 and the skill)
 
 - [ ] **Step 1:** Ask the Manager to get the user to export their claude.ai data to a local folder and give the path. The export never leaves their machine.
-- [ ] **Step 2:** On `stg-a` (spaces from P3 created: `Engineering`, `Personal`), have an agent run the migration skill as the user, then run `checkImport` twice (after the first run and after a rerun).
+- [ ] **Step 2:** On `rl-a` (spaces from P3 created: `Engineering`, `Personal`), have an agent run the migration skill as the user, then run `checkImport` twice (after the first run and after a rerun).
 - [ ] **Step 3:** Record counts and problems (no titles or content) in `docs/ops/hosted.md` and on the status page; file each problem with Backend.
-- [ ] **Step 4:** Delete the imported artifacts from `stg-a` with the owner's PAT.
+- [ ] **Step 4:** Delete the imported artifacts from `rl-a` with the owner's PAT.
 
 ---
 
 ## Dependencies and order
 
-Tasks 1–5 and 7–8 can start once P1's `stg-a`/`stg-b` and `rl-a`/`rl-b` exist (P1 Task 9). Task 6 waits on P2; Task 9 on P3 and Backend's migration skill. Until Task 6 lands, the release gate runs Tasks 4–5 only, and the status page says so.
+Tasks 1–5 and 7–8 can start once P1's `rl-a`/`rl-b` exist (P1 Task 9) and, for the prod check, P1 Task 7b's inventory Worker. Task 6 waits on P2; Task 9 on P3 and Backend's migration skill. Until Task 6 lands, the release gate runs Tasks 4–5 only, and the status page says so.
