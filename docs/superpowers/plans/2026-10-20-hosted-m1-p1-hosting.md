@@ -61,13 +61,18 @@ All installs share one Cloudflare account, so some state is shared even though n
 - **P2's `HOSTED=1`** is set on every hosted install (Task 3).
 - **Backups:** export is `NotInM1`, so FinQore has no R2 or Durable Object backup in M1. **User-accepted on 2026-10-21** (via the Manager): FinQore runs without backup or export until M2. D1 Time Travel (30 days) covers the database only.
 
-## Hosted domains (user, 2026-10-21; content and staging pending)
+## Hosted domains (user decision, 2026-10-21)
 
-- **App suffix: `open-artifacts.app`** (bought by the user, in our Cloudflare account). Tenants at `<slug>.open-artifacts.app`: one level, so Universal SSL covers them for free; no Advanced Certificate Manager.
-- **PSL:** the whole `open-artifacts.app` goes in the Public Suffix List private section (it's tenant-only, so nothing else needs cross-subdomain cookies). Steps: a `_psl.open-artifacts.app` TXT record holding the PSL pull-request URL, then the PR to publicsuffix/list with the domain's purpose and contact. It takes weeks to reach browsers; FinQore alone is fine before then, and a second tenant waits on it (P5 marks same-site cases `unproven` until then).
-- **Content suffix:** a second registrable domain at one level (`<slug>.<content-domain>`), also PSL-listed. The user is choosing it.
-- **Staging (proposal): its own pair of registrable domains**, mirroring prod (`<slug>.<stg-app-domain>`, `<slug>.<stg-content-domain>`), both PSL-listed and one level deep. Why not `<slug>-stg.open-artifacts.app`: the staging dispatch Worker's routes would sit on the prod zone, so the staging CI token would need route rights on a prod zone (prod and staging tokens never cross), and a prod slug ending in `-stg` could be captured by the staging route. A mirror pair also lets P5's `rl-a`/`rl-b` prove exactly prod's site layout. Cheaper fallback: staging on `open-artifacts.com` at one level (`<slug>-stg.open-artifacts.com`), which already holds staging and the demo, with P5's same-site case staying `unproven` on staging.
-- No DNS, route or PSL write until the Manager confirms the content and staging domains.
+| Env | App suffix | Content suffix | Dispatch namespace |
+|---|---|---|---|
+| prod | `open-artifacts.app` (tenants `<slug>.open-artifacts.app`) | `open-artifacts.page` (`<slug>.open-artifacts.page`) | `oa-prod` |
+| staging | `open-artifacts-staging.app` | `open-artifacts-staging.page` | `oa-staging` |
+
+- All four are separate registrable domains in our Cloudflare account, and every tenant hostname is one level deep, so Universal SSL covers them (no Advanced Certificate Manager).
+- `hosts(slug, domains)` (Task 2) already refuses equal or nested app and content domains; the CLI (Task 8) takes the pair from a fixed per-env table (`DOMAINS[env]`), never from flags, and a test pins the table to the values above.
+- **PSL:** all four domains go in the Public Suffix List private section, each whole domain as a suffix (they are tenant-only). For each: a `_psl.<domain>` TXT record holding the publicsuffix/list PR URL, then one PR listing all four with purpose and contact. Weeks to reach browsers; FinQore alone is fine before then, a second prod tenant waits on it, and P5 marks same-site cases `unproven` until the entries ship.
+- **Tokens scoped by env:** the staging Cloudflare token gets zone rights (Workers Routes Edit, DNS Read) only on `open-artifacts-staging.app` and `open-artifacts-staging.page`; the prod token only on `open-artifacts.app` and `open-artifacts.page`. Neither can touch the other env's zones or `open-artifacts.com`. Account-level rights (Workers Scripts, WfP, D1, R2, KV) stay as in Global Constraints. The CLI refuses a token whose zone list includes the other env's zones (checked via the token verify and zone list calls before any write).
+- **Gate:** no DNS, route or `_psl` write until the Manager gives an explicit go once all four zones are active.
 
 ## Global Constraints
 
@@ -336,6 +341,7 @@ P5 must prove no prod install has test hooks without putting an account-wide D1 
   - CLI: `pnpm oa:hosted <create|upgrade|rollback|delete|status|publish-release> --env <staging|prod> [--install <id>] [--slug <s>] [--owner <email>] [--to <version>] [--confirm <id>] [--test-hooks]`. `--test-hooks` is refused with `--env prod`. Token from the macOS keychain (`security find-generic-password -w -s oa-hosted-<env>`, read through stdin-free `execFile`, never a file or argv); CI (staging only) reads it from a 0600 file written from a secret. Every command writes `hosted_audit` rows before and after it acts (actor = `git config user.email` or the CI run URL). Prints one JSON line per step; never prints secrets or the PAT. `--env prod` refuses a staging token file and vice versa (namespace names `oa-staging` and `oa-prod` are fixed per env).
 - [ ] **Step 1: Write the failing tests**
   - `setup adapter maps a successful run to Install and a failed upgrade to ok:false`.
+  - `DOMAINS[env] equals the decided suffixes`, and `a token whose zones include the other env's domains is refused before any write`.
   - `the CLI refuses prod with the staging token`; `prod reads only from the keychain, never a file`.
   - `every command writes a before and after hosted_audit row, and the table refuses UPDATE and DELETE`.
   - `--test-hooks with --env prod exits 1 before any call`.
@@ -362,7 +368,7 @@ Workflow: on push to main (paths `apps/server/**`, `packages/**`, `apps/dispatch
 **Files:**
 - Modify: `docs/ops/hosted.md` (runbook: create, check, upgrade, rollback, logs per install via the Observability API filtered by script name; and: if a pending red-line run was replaced or cancelled for a release, rerun it from the Actions tab before that release deploys anywhere, since deploy-prod waits on its success)
 
-- [ ] **Step 1:** Ask the Manager for: the hosted app and content domains (bought or chosen by the user, separate registrable domains, see P5), the DNS wildcard records and the dispatch Worker routes on them, the per-install mail subdomain records, and go-ahead to create `finqore`. Stop until all are confirmed. File the app domain for the Public Suffix List private section (with Backend) now; it must be published before a second tenant goes live.
+- [ ] **Step 1:** Ask the Manager for the explicit go on: wildcard DNS records and dispatch Worker routes on `open-artifacts.app` and `open-artifacts.page` (and the staging pair for Task 9), the per-install mail subdomain records, the four `_psl` TXT records and the PSL PR, and go-ahead to create `finqore`. Stop until all are confirmed. File all four domains for the PSL private section (one PR, with Backend); they must be published before a second prod tenant goes live.
 - [ ] **Step 1b:** FinQore's go-live is also gated on P5's sign-in cases being `proven` live (real test Workspace tenants), not just against the fixture.
 - [ ] **Step 2:** `pnpm oa:hosted create --env prod --slug finqore --owner <FinQore admin email from the Manager>`; check `/healthz`, the Welcome artifact, a nightly run in the scheduler logs the next day.
 - [ ] **Step 3:** Record the install ID (not the PAT) in the runbook and the Platform status page; hand the PAT file to the user with the hidden-save convention, never in chat.
