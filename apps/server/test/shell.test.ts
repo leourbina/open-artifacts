@@ -120,6 +120,26 @@ describe("OG shell", () => {
     expect(a).not.toContain("SecretDescXyz");
   });
 
+  it("/a/:id/full serves the same shell, headers and canonical og:url", async () => {
+    const id = await mk("public", "FullTitle", "FullDesc");
+    const [a, f] = await Promise.all([
+      get(viewerPath(id)),
+      get(`${viewerPath(id)}/full`),
+    ]);
+    expect(f.status).toBe(200);
+    for (const h of [
+      "cache-control",
+      "x-robots-tag",
+      "content-security-policy",
+    ])
+      expect(f.headers.get(h)).toBe(a.headers.get(h));
+    expect(await f.text()).toBe(await a.text());
+    const priv = await mk("private", "SecretFullXyz", "D");
+    const p = await (await get(`${viewerPath(priv)}/full`)).text();
+    expect(p).toBe(await (await get(viewerPath(newId()))).text());
+    expect(p).not.toContain("SecretFullXyz");
+  });
+
   it("other /a/ paths fall through to the SPA", async () => {
     const id = await mk("public", "T", "D");
     const t = await (await get(`/a/${id}/diff/1/2`)).text();

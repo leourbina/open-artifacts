@@ -158,6 +158,8 @@ export function mountShell(app: AppType): void {
     });
   };
   app.get("/a/:id", (c) => shell(c, c.req.param("id")));
+  // Chromeless viewer (#290): same shell, checks and OG; og:url stays canonical.
+  app.get("/a/:id/full", (c) => shell(c, c.req.param("id")));
   app.get("/a/:id/v/:v", async (c, next) => {
     const v = c.req.param("v");
     if (!VERSION_NUM.test(v)) return next();
