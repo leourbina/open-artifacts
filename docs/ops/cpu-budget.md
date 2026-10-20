@@ -129,6 +129,8 @@ fill of its `{{tokens}}`, memoized per isolate (host, plan and version are
 fixed per deploy), with no session, D1 or Markdown work.
 `test/skill.cpu.test.ts` asserts a first fill < 1 ms and the memoized route
 < 2 ms end to end. On staging, measure it like `GET /healthz`.
+`GET /upgrade.md` works the same way (`scripts/emit-upgrade.ts`,
+`test/upgrade.cpu.test.ts`, same budgets).
 
 ## How we measure
 
