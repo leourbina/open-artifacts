@@ -218,8 +218,9 @@ export function mountShell(app: AppType): void {
   };
   app.get("/a/:id", (c) => shell(c, c.req.param("id")));
   // Chromeless viewer (#290): same shell, checks and OG; og:url stays canonical.
-  // Framed (any non-document Sec-Fetch-Dest): mark embed mode so the SPA runs
-  // anonymously (X-OA-Embed). The shell itself never reads the session.
+  // Framed (any non-document Sec-Fetch-Dest): add the oa-embed meta, a hint
+  // for the dashboard's embed mode. The shell never reads the session, so this
+  // render is not where anonymity is enforced (that is client-side).
   app.get("/a/:id/full", (c) =>
     shell(c, c.req.param("id"), undefined, isFramedFetch(c.req.raw)),
   );

@@ -229,20 +229,32 @@ describe("EMBED_ORIGINS headers", () => {
     expect(r.headers.get("x-frame-options")).toBeNull();
   });
 
-  it("warns about same-site embed origins (last two labels)", () => {
+  it("rejects same-site origins unless EMBED_ALLOW_SAME_SITE=1", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const e = {
       ENVIRONMENT: "production" as const,
       APP_HOST: "artifacts.open-artifacts.com",
+      EMBED_ORIGINS: `${G} https://x.open-artifacts.com https://gallery.example.org`,
     };
-    expect(
-      embedOrigins({
-        ...e,
-        EMBED_ORIGINS: `${G} https://gallery.example.org`,
-      }),
-    ).toEqual([G, "https://gallery.example.org"]);
+    expect(embedOrigins(e)).toEqual(["https://gallery.example.org"]);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(warn.mock.calls[0]?.[0])).toContain(`${G} is same-site`);
+    expect(String(warn.mock.calls[0]?.[0])).toContain("same-site");
+    expect(String(warn.mock.calls[0]?.[1])).toContain(G);
+    for (const v of ["", "0", "true", "yes"])
+      expect(embedOrigins({ ...e, EMBED_ALLOW_SAME_SITE: v })).toEqual([
+        "https://gallery.example.org",
+      ]);
+    expect(embedOrigins({ ...e, EMBED_ALLOW_SAME_SITE: "1" })).toEqual([
+      G,
+      "https://x.open-artifacts.com",
+      "https://gallery.example.org",
+    ]);
+    // End to end: a same-site-only list leaves /full at DENY.
+    const full = await app(`${viewerPath(id)}/full`, {
+      APP_HOST: "app.example.com",
+      EMBED_ORIGINS: "https://gallery.example.com",
+    });
+    expect(full.headers.get("x-frame-options")).toBe("DENY");
   });
 
   it("injection attempts never reach a header", async () => {
@@ -290,17 +302,13 @@ const EMBED = { "x-oa-embed": "1" };
 const META = `<meta name="oa-embed" content="1">`;
 const inner = createApp();
 
-describe("embed mode (anonymous inside a framed /full)", () => {
-  it("framed /full with a valid cookie and NO hint renders signed-out (+ embed meta); top-level has no meta", async () => {
+describe("embed-mode hints (enforcement is client-side; these are hints)", () => {
+  it("framed /full carries the oa-embed meta; top-level /full and /a/:id don't", async () => {
     const full = `${viewerPath(id)}/full`;
     const framed = await (
-      await app(full, {}, { headers: { cookie, "sec-fetch-dest": "iframe" } })
-    ).text();
-    const framedAnon = await (
       await app(full, {}, { headers: { "sec-fetch-dest": "iframe" } })
     ).text();
     expect(framed).toContain(META);
-    expect(framed).toBe(framedAnon);
     for (const dest of ["document", null]) {
       const h: Record<string, string> = { cookie };
       if (dest) h["sec-fetch-dest"] = dest;

@@ -60,6 +60,12 @@ export interface Env {
    * content host beneath it); unset/empty = none. Validated in http/embed.ts.
    */
   EMBED_ORIGINS?: string;
+  /**
+   * "1" keeps EMBED_ORIGINS entries that are same-site with APP_HOST (they
+   * get Lax cookies in the frame); anything else drops them. Set it only once
+   * the client embed mode is deployed.
+   */
+  EMBED_ALLOW_SAME_SITE?: string;
   /** Sender for invite/share emails (an onboarded Email Service domain). */
   EMAIL_FROM?: string;
   // secrets
