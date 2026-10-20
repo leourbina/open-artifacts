@@ -137,6 +137,7 @@ describe("variant edges", () => {
     "dialog",
     "scroll-area",
     "dropdown-menu",
+    "popover",
     "sidebar",
     "sheet",
   ])("%s: focus is a solid ring outline, no translucent rings", (name) => {

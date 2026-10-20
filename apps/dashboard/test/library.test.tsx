@@ -116,18 +116,17 @@ describe("Library", () => {
     );
     mount("/");
     await link(a1.title as string);
-    fireEvent.change(screen.getByRole("combobox", { name: "Agent" }), {
-      target: { value: "Alpha" },
-    });
+    fireEvent.click(screen.getByRole("combobox", { name: "Agent" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Alpha" }));
     await waitFor(() =>
       expect(
         screen.queryByRole("link", { name: a2.title as string }),
       ).toBeNull(),
     );
-    const opts = Array.from(
-      (screen.getByRole("combobox", { name: "Agent" }) as HTMLSelectElement)
-        .options,
-    ).map((o) => o.textContent);
+    fireEvent.click(screen.getByRole("combobox", { name: "Agent" }));
+    const opts = (await screen.findAllByRole("option")).map(
+      (o) => o.textContent,
+    );
     expect(opts).toContain("Beta");
   });
 

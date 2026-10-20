@@ -1,4 +1,5 @@
 import "@testing-library/jest-dom/vitest";
+import { toast } from "@oa/ui/shadcn";
 import { cleanup } from "@testing-library/react";
 import { afterEach } from "vitest";
 
@@ -17,3 +18,12 @@ if (!window.matchMedia)
       removeListener: () => {},
       dispatchEvent: () => false,
     }) as MediaQueryList;
+
+// jsdom has no scrollIntoView; Radix Select scrolls the chosen item into view.
+if (!Element.prototype.scrollIntoView)
+  Element.prototype.scrollIntoView = () => {};
+
+// Sonner keeps toasts in module state; start each test with none.
+afterEach(() => {
+  toast.dismiss();
+});
