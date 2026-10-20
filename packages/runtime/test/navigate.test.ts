@@ -1,0 +1,144 @@
+import type { ArtifactToShell } from "@oa/shared";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntime } from "../src/index.js";
+import * as schemas from "../src/schemas.js";
+
+const N = "AbCdEfGhIjKlMnOpQrSt_-";
+const APP = "https://app.example";
+
+const flush = async () => {
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+};
+
+let parent: { postMessage: ReturnType<typeof vi.fn> };
+let ctl: AbortController;
+const realParent = window.parent;
+const navs = () =>
+  parent.postMessage.mock.calls
+    .map((c) => c[0] as ArtifactToShell)
+    .filter((m) => m.type === "navigate");
+const fromShell = (data: unknown) =>
+  window.dispatchEvent(
+    new MessageEvent("message", { data, source: parent as unknown as Window }),
+  );
+const welcome = async (appOrigin: string | null = APP) => {
+  fromShell({
+    oa: 1,
+    type: "welcome",
+    capabilities: { db: false, viewer: false, storage: false },
+    viewer: null,
+    theme: "light",
+    ...(appOrigin ? { appOrigin } : {}),
+  });
+  await flush();
+};
+/** Clicks inside a fresh link; returns whether the runtime prevented it. */
+const click = async (
+  href: string,
+  attrs: Record<string, string> = {},
+  init: MouseEventInit = {},
+) => {
+  const a = document.createElement("a");
+  a.href = href;
+  for (const [k, v] of Object.entries(attrs)) a.setAttribute(k, v);
+  const span = document.createElement("span");
+  a.append(span);
+  document.body.append(a);
+  let prevented = false;
+  a.addEventListener("click", (ev) => {
+    prevented = ev.defaultPrevented;
+    // Keep the test document from navigating.
+    ev.preventDefault();
+  });
+  span.dispatchEvent(
+    new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      ...init,
+    }),
+  );
+  a.remove();
+  await flush();
+  return prevented;
+};
+
+beforeEach(async () => {
+  delete (window as unknown as Record<string, unknown>).__oaShellNonce;
+  history.replaceState(null, "", `/p#oa=${N}`);
+  ctl = new AbortController();
+  parent = { postMessage: vi.fn() };
+  Object.defineProperty(window, "parent", {
+    value: parent,
+    configurable: true,
+  });
+  createRuntime({ loadSchemas: async () => schemas, signal: ctl.signal });
+  await flush();
+});
+afterEach(() => {
+  ctl.abort();
+  Object.defineProperty(window, "parent", {
+    value: realParent,
+    configurable: true,
+  });
+});
+
+describe("oa:navigate", () => {
+  it.each(["/a/abc_-1", "/a/abc/full", "/a/abc/v/12"])(
+    "an app-origin %s link posts navigate with the nonce and is prevented",
+    async (p) => {
+      await welcome();
+      expect(await click(`${APP}${p}?x=1#h`)).toBe(true);
+      expect(navs()).toEqual([
+        { oa: 1, type: "navigate", url: `${APP}${p}?x=1#h`, nonce: N },
+      ]);
+    },
+  );
+
+  it("_self target navigates too", async () => {
+    await welcome();
+    expect(await click(`${APP}/a/abc`, { target: "_self" })).toBe(true);
+    expect(navs()).toHaveLength(1);
+  });
+
+  it.each([
+    ["_blank target", `${APP}/a/abc`, { target: "_blank" }],
+    ["named target", `${APP}/a/abc`, { target: "w" }],
+    ["download", `${APP}/a/abc`, { download: "" }],
+    ["another origin", "https://other.example/a/abc", {}],
+    ["another app path", `${APP}/settings`, {}],
+    ["a deeper /a/ path", `${APP}/a/abc/edit`, {}],
+  ])("%s is untouched", async (_n, href, attrs) => {
+    await welcome();
+    expect(await click(href, attrs)).toBe(false);
+    expect(navs()).toEqual([]);
+  });
+
+  it.each([
+    { ctrlKey: true },
+    { metaKey: true },
+    { shiftKey: true },
+    { altKey: true },
+    { button: 1 },
+  ])("modifier or non-primary click %o is untouched", async (init) => {
+    await welcome();
+    expect(await click(`${APP}/a/abc`, {}, init)).toBe(false);
+    expect(navs()).toEqual([]);
+  });
+
+  it("before welcome, or a welcome without appOrigin, is untouched", async () => {
+    expect(await click(`${APP}/a/abc`)).toBe(false);
+    await welcome(null);
+    expect(await click(`${APP}/a/abc`)).toBe(false);
+    expect(navs()).toEqual([]);
+  });
+
+  it("an already prevented click is untouched", async () => {
+    await welcome();
+    const stop = (e: Event) => e.preventDefault();
+    window.addEventListener("click", stop, true);
+    await click(`${APP}/a/abc`);
+    window.removeEventListener("click", stop, true);
+    expect(navs()).toEqual([]);
+  });
+});

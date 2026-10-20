@@ -61,3 +61,10 @@ export function shellNonce(): string | undefined {
   }
   return n;
 }
+
+/**
+ * Viewer paths an in-artifact link may ask the shell to open (oa:navigate):
+ * `/a/<id>`, `/a/<id>/full` or `/a/<id>/v/<n>`. The runtime and the shell
+ * both match on it.
+ */
+export const NAVIGATE_PATH_RE = /^\/a\/[A-Za-z0-9_-]+(\/full|\/v\/\d+)?$/;

@@ -1,9 +1,10 @@
-import type {
-  DataDoc,
-  DataQueryInput,
-  Format,
-  Page,
-  ShellToArtifact,
+import {
+  type DataDoc,
+  type DataQueryInput,
+  type Format,
+  NAVIGATE_PATH_RE,
+  type Page,
+  type ShellToArtifact,
 } from "@oa/shared";
 import {
   type Bridge,
@@ -242,8 +243,40 @@ export function createRuntime(opts: RuntimeOptions = {}): OpenArtifacts {
     }
   };
 
+  /** From the shell's welcome; until then links behave as usual. */
+  let appOrigin: string | undefined;
+  // Framed, a link to the app would load the app inside the sandboxed frame
+  // (which it refuses): ask the shell to navigate the viewer instead.
+  const onClick = (e: MouseEvent) => {
+    if (
+      !appOrigin ||
+      e.defaultPrevented ||
+      e.button !== 0 ||
+      e.ctrlKey ||
+      e.metaKey ||
+      e.shiftKey ||
+      e.altKey ||
+      !(e.target instanceof Element)
+    )
+      return;
+    const a = e.target.closest("a[href]");
+    if (!(a instanceof HTMLAnchorElement) || a.hasAttribute("download")) return;
+    const t = a.target;
+    if (t && t !== "_self") return;
+    let u: URL;
+    try {
+      u = new URL(a.href, location.href);
+    } catch {
+      return;
+    }
+    if (u.origin !== appOrigin || !NAVIGATE_PATH_RE.test(u.pathname)) return;
+    e.preventDefault();
+    bridge.send({ oa: 1, type: "navigate", url: u.href });
+  };
+
   bridge.on((m) => {
     if (m.type === "welcome") {
+      appOrigin = m.appOrigin;
       setTheme(m.theme);
       welcomed();
     } else if (m.type === "theme") setTheme(m.theme);
@@ -364,6 +397,7 @@ export function createRuntime(opts: RuntimeOptions = {}): OpenArtifacts {
     },
   };
 
+  if (!bridge.raw) document.addEventListener("click", onClick, true);
   // Every format loads the runtime, so this covers renderer pages too.
   // Artifact content can forge or suppress oa:interacted: it is only a hint for
   // whether the viewer auto-swaps versions; nothing security-relevant may depend on it.
@@ -372,6 +406,7 @@ export function createRuntime(opts: RuntimeOptions = {}): OpenArtifacts {
     : onFirstInteraction(() => bridge.send({ oa: 1, type: "interacted" }));
   opts.signal?.addEventListener("abort", () => {
     stopInteract();
+    document.removeEventListener("click", onClick, true);
     bridge.dispose();
   });
   if (bridge.raw) welcomed();
