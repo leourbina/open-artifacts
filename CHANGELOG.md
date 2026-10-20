@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.9.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.8.0...v0.9.0) (2026-10-20)
+
+
+### Features
+
+* **dashboard:** file-based token snippets in Settings → Agents ([#322](https://github.com/open-artifacts-ai/open-artifacts/issues/322)) ([d3ea8e6](https://github.com/open-artifacts-ai/open-artifacts/commit/d3ea8e6cfecf2b21ec3c26ad8587baaf05ba8864))
+* **runtime:** per-load nonce on every bridge message ([#306](https://github.com/open-artifacts-ai/open-artifacts/issues/306)) ([944e934](https://github.com/open-artifacts-ai/open-artifacts/commit/944e934d0bac65482dff84dcfc80c7d4970fe7b7))
+* **server:** per-instance overrides for live-data limits ([#303](https://github.com/open-artifacts-ai/open-artifacts/issues/303)) ([e48e179](https://github.com/open-artifacts-ai/open-artifacts/commit/e48e1796bfc05db270bd28df775ea21898ad4731))
+
 ## [0.8.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.7.0...v0.8.0) (2026-10-20)
 
 
