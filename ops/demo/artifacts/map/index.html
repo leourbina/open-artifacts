@@ -286,11 +286,12 @@
     let viewer = null;
     try { viewer = await OA.viewer.get(); } catch { viewer = null; }
     if (viewer && viewer.email) return { id: `u-${await hash(viewer.email)}`, signedIn: true };
-    // viewer.anonId(), or the { anonId } that viewer.get() returns on servers before it.
-    let anon = viewer && typeof viewer.anonId === "string" ? viewer.anonId : null;
+    // viewer.anonId(), else the { anonId } that viewer.get() returns on servers before it.
+    let anon = null;
     try {
-      if (!anon && OA.viewer && typeof OA.viewer.anonId === "function") anon = await OA.viewer.anonId();
+      if (OA.viewer && typeof OA.viewer.anonId === "function") anon = await OA.viewer.anonId();
     } catch { anon = null; }
+    if (!anon && viewer && typeof viewer.anonId === "string") anon = viewer.anonId;
     if (anon) return { id: safeId(anon), signedIn: false };
     return { id: localId(), signedIn: false };
   }
