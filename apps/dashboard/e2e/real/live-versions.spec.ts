@@ -70,6 +70,10 @@ test("touched (typed in the frame): the chip, and the typing survives", async ({
   ).toBeVisible({ timeout: 3_000 });
   await expect(frame.locator("#note")).toHaveValue("half typed");
   await page.getByRole("button", { name: "View version 2" }).click();
+  // The chip stays until the preloaded frame has swapped in.
+  await expect(
+    page.getByRole("button", { name: "View version 2" }),
+  ).toHaveCount(0);
   await expect(page.locator("iframe.oa-vframe")).toHaveCount(1);
   await expect(artifactFrame(page).locator("#v")).toHaveText("version 2");
 });

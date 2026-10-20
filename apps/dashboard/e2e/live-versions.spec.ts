@@ -70,6 +70,8 @@ const touchFrame = (page: Page) =>
 
 /** Attached to the report; also saved to $SHOTS_DIR (the PR's shots). */
 const shot = async (page: Page, name: string) => {
+  // Past the 200 ms enter animation.
+  await page.waitForTimeout(250);
   const body = await page.screenshot();
   await test.info().attach(name, { body, contentType: "image/png" });
   if (process.env.SHOTS_DIR)
