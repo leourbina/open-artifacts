@@ -49,6 +49,13 @@ describe("ops-demo-ops-deploy.yml", () => {
     expect(iBuild).toBeGreaterThanOrEqual(0);
     expect(iBuild).toBeLessThan(iDeploy);
   });
+  it("checks out without persisting credentials", () => {
+    const co = steps.filter((s) =>
+      String(s.uses ?? "").startsWith("actions/checkout"),
+    );
+    expect(co.length).toBeGreaterThan(0);
+    for (const s of co) expect(s.with?.["persist-credentials"]).toBe(false);
+  });
   it("deploys the demo-ops config", () => {
     expect(text).toContain("../demo-ops/wrangler.jsonc");
     expect(text).toMatch(/wrangler deploy/);
