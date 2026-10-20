@@ -292,7 +292,9 @@ async function checkOnly(
         step: step.name,
         status: r,
         message: notes ? `${r}: ${notes}` : r,
-        ...(step.name === "deploy" && ctx.data ? { data: ctx.data } : {}),
+        ...((step.name === "deploy" || step.name === "prereqs") && ctx.data
+          ? { data: ctx.data }
+          : {}),
       });
     } catch (e) {
       ctx.notes.length = 0;

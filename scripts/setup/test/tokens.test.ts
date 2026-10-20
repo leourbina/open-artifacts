@@ -385,4 +385,15 @@ describe("#18/#19: the prereqs report", () => {
     ).toBe(url);
     expect(again.message).toBe("prerequisites ok");
   });
+  it("#18: --check prints prereqs data (warnings, notes, tokens)", async () => {
+    const w = world({ subscriptions: [{ rate_plan: { id: "free" } }] });
+    await run(HOSTS, w.deps, ROOT);
+    w.lines.length = 0;
+    const check = [...HOSTS.filter((a) => a !== "--yes"), "--check"];
+    await run(check, w.deps, ROOT);
+    const l = prereqs(w);
+    expect(l.data.warnings.length).toBeGreaterThan(0);
+    expect(l.data.tokens.length).toBeGreaterThan(0);
+    expect(l.message).toBe("done");
+  });
 });
