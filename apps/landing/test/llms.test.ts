@@ -37,7 +37,7 @@ describe("llms.txt", () => {
 
   it("tells agents a 'set up this file' request means install, not host", () => {
     expect(llms).toContain(
-      "If the user asked you to set up this file, optionally 'at', 'on' or 'under' a hostname, they want you to install Open Artifacts with that hostname as --app-host. Don't copy or host this file.",
+      "If the user asked you to install or set up this file, optionally 'at', 'on' or 'under' a hostname, they want Open Artifacts installed with that hostname as --app-host. Don't copy or host this file.",
     );
   });
 

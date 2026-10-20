@@ -7,10 +7,9 @@ import FeatureStory from "./FeatureStory.astro";
 import Gallery from "./gallery/Gallery.astro";
 import Shot from "./Shot.astro";
 
-const prompt =
-  "Install Open Artifacts on my Cloudflare account. Follow open-artifacts.com/llms.txt";
+const prompt = "install open-artifacts.com/llms.txt";
 // The chip keeps the URL on one line when the phrase wraps.
-const [promptLead, promptUrl] = prompt.split(/(?<=Follow )/);
+const [promptLead, promptUrl] = prompt.split(/(?<=install )/);
 
 const features = [
   {

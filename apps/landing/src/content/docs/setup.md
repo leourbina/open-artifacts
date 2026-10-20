@@ -6,7 +6,7 @@ order: 1
 
 Open Artifacts runs on your own Cloudflare account and domain. The easiest way to install it is to tell your coding agent:
 
-> Install Open Artifacts on my Cloudflare account at artifacts.example.com. Follow open-artifacts.com/llms.txt
+> install open-artifacts.com/llms.txt at artifacts.example.com
 
 The agent follows the steps below. The only thing you do yourself is approve the Cloudflare login in your browser.
 

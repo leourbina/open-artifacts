@@ -89,9 +89,7 @@ describe("landing sections", () => {
   });
 
   it("the copy button copies the unambiguous setup phrase", () => {
-    expect(index).toContain(
-      'data-copy="Install Open Artifacts on my Cloudflare account. Follow open-artifacts.com/llms.txt"',
-    );
+    expect(index).toContain('data-copy="install open-artifacts.com/llms.txt"');
     expect(index).not.toMatch(/set up open-artifacts\.com/i);
   });
 
