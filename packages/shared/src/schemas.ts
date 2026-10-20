@@ -600,6 +600,48 @@ export const DataChangeSchema = z.object({
 });
 export type DataChange = z.infer<typeof DataChangeSchema>;
 
+/**
+ * Who published a version, on the R.events socket. `name` (the user's name or
+ * email, or the agent's name) goes only to signed-in viewers who are team
+ * members (owner/admin/member) or have access through a share; anonymous and
+ * embed sockets, and guests reading a public link, get `{ kind }` only.
+ */
+export const ArtifactEventBySchema = z.object({
+  kind: z.enum(["user", "agent"]),
+  name: z.string().optional(),
+});
+export type ArtifactEventBy = z.infer<typeof ArtifactEventBySchema>;
+
+/**
+ * Frames on the R.events socket (server to client only; any client message
+ * closes it with 1008):
+ * - hello: on connect, the artifact's current version.
+ * - version: a publish or restore created version `version`; `restoredFrom`
+ *   (restores only) is the version it copies.
+ * - gone: access changed; the socket then closes with EVENTS_GONE_CLOSE
+ *   (4403). reason "deleted": soft delete; "changed": visibility,
+ *   capabilities, share revoked or member removed.
+ *   Reconnect to re-check access (404 = no longer readable).
+ * Sockets also close with 4408 near the signed-URL TTL: reconnect.
+ */
+export const ArtifactEventSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("hello"), version: z.number().int().min(1) }),
+  z.object({
+    type: z.literal("version"),
+    version: z.number().int().min(1),
+    at: z.string(),
+    by: ArtifactEventBySchema,
+    restoredFrom: z.number().int().min(1).optional(),
+  }),
+  z.object({
+    type: z.literal("gone"),
+    reason: z.enum(["deleted", "changed"]),
+  }),
+]);
+export type ArtifactEvent = z.infer<typeof ArtifactEventSchema>;
+/** The close code that follows a `gone` frame on R.events. */
+export const EVENTS_GONE_CLOSE = 4403;
+
 export const DataQuerySchema = z.strictObject({
   where: WhereSchema.optional(),
   orderBy: DataKeySchema.optional(),

@@ -17,13 +17,26 @@ import {
 } from "@oa/shared";
 import type { Context } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { type Caller, caller, requireAccess } from "../auth/authz.js";
+import {
+  accessLevel,
+  type Caller,
+  caller,
+  requireAccess,
+  TEAM_ROLES,
+} from "../auth/authz.js";
 import { cappedJson, readCapped } from "../http/body.js";
 import { ApiError, appOrigin } from "../http/errors.js";
 import type { AppEnv } from "../http/middleware.js";
 import type { AppType } from "../routes/index.js";
 import { type AnonId, resolveAnonId } from "./anon-id.js";
-import { ACTOR_HEADER, publicActor, runtimeCall, runtimeStub } from "./do.js";
+import {
+  ACTOR_HEADER,
+  EVENTS_NAMED_HEADER,
+  EVENTS_VERSION_HEADER,
+  publicActor,
+  runtimeCall,
+  runtimeStub,
+} from "./do.js";
 
 // Literals so Hono infers params; must equal R.data* / R.storage* in @oa/shared.
 const ART = "/api/v1/artifacts/:id";
@@ -32,6 +45,7 @@ const COL = `${ART}/data/:col`;
 const QUERY = `${COL}/query`;
 const DOC = `${COL}/:doc`;
 const SUBSCRIBE = `${ART}/data-subscribe`;
+const EVENTS = `${ART}/events`;
 const COUNT = `${ART}/data-count/:col`;
 const ANON_ID = `${ART}/anon-id`;
 const STORAGE = `${ART}/storage`;
@@ -102,6 +116,19 @@ export function ipKey(ip: string): string | null {
     .slice(0, 4)
     .map((g) => Number.parseInt(g, 16).toString(16))
     .join(":")}::/64`;
+}
+
+/**
+ * The anonymous R.events actor key: IPv4 as is; IPv6 as its /56
+ * ("2001:db8:1:200::/56"), since one subscriber typically holds a /56 of
+ * /64s, so the DO's per-actor events cap (3) can't be multiplied by 256.
+ */
+export function eventsIpKey(ip: string): string | null {
+  const k = ipKey(ip);
+  if (!k?.endsWith("::/64")) return k;
+  const g = k.slice(0, -5).split(":");
+  const g3 = Number.parseInt(g[3] ?? "0", 16) & 0xff00;
+  return `${g.slice(0, 3).join(":")}:${g3.toString(16)}::/56`;
 }
 
 /**
@@ -354,6 +381,52 @@ export function mountRuntime(app: AppType): void {
     return stub(c, g).fetch(url, {
       headers: { Upgrade: "websocket", [ACTOR_HEADER]: g.actor },
     });
+  });
+
+  // WebSocket feed of ArtifactEvent frames (live versions), served by the
+  // artifact's DO. Read access only: no capability, works for every artifact.
+  app.get(EVENTS, async (c) => {
+    const origin = c.req.header("origin");
+    if (origin !== undefined && origin !== appOrigin(c.env))
+      throw new ApiError("csrf", "Cross-site request");
+    const artifactId = c.req.param("id") ?? "";
+    if (!isId(artifactId)) throw new ApiError("not_found", "Not found");
+    // Embed mode is downgrade-only (caller() also honours ?embed=1).
+    const who: Caller =
+      c.req.header("x-oa-embed") === "1" ? { kind: "anonymous" } : caller(c);
+    const r = await accessLevel(c.env, who, artifactId);
+    if (!r) throw new ApiError("not_found", "Not found");
+    let actor: string;
+    let named = false;
+    if (who.kind === "user") {
+      actor = `u:${who.user.id}`;
+      // Publisher names: team members, and anyone whose access is more than
+      // a public link (owner, editor, or a viewer share/team access on a
+      // non-public artifact). Guests reading a public link get `{ kind }`.
+      named =
+        TEAM_ROLES.includes(who.user.role) ||
+        r.level !== "viewer" ||
+        r.artifact.visibility !== "public";
+    } else {
+      const key = eventsIpKey(c.req.header("cf-connecting-ip") ?? "");
+      if (!key)
+        throw new ApiError("rate_limited", "Anonymous access is unavailable");
+      await anonLimit(c, `ev:ip:${key}`, "connections");
+      actor = `ip:${key}`;
+    }
+    if (c.req.header("upgrade")?.toLowerCase() !== "websocket")
+      return c.text("Expected WebSocket upgrade", 426);
+    return runtimeStub(c.env, artifactId).fetch(
+      "https://runtime.invalid/events",
+      {
+        headers: {
+          Upgrade: "websocket",
+          [ACTOR_HEADER]: actor,
+          [EVENTS_VERSION_HEADER]: String(r.artifact.currentVersion),
+          [EVENTS_NAMED_HEADER]: named ? "1" : "0",
+        },
+      },
+    );
   });
 
   app.get(STORAGE, async (c) => {
