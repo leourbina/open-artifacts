@@ -25,7 +25,6 @@ import {
   UsageSchema,
   VersionInfoSchema,
 } from "@oa/shared";
-import { toast } from "@oa/ui";
 import {
   useInfiniteQuery,
   useMutation,
@@ -33,6 +32,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { z } from "zod";
+import { toast } from "../layout/toast";
 import { ApiClientError, api } from "./client";
 
 const failToast = (e: unknown, fallback: string) =>

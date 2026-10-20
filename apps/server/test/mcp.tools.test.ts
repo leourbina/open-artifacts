@@ -545,6 +545,17 @@ describe("tool manifest", () => {
     expect(text("create_upload")).toContain(`over the ${kb} inline limit`);
     expect(INSTRUCTIONS).toContain(`limited to ${kb} per call`);
     expect(INSTRUCTIONS).toContain(`≤${kb} inline, else create_upload`);
-    expect(JSON.stringify(TOOL_DEFS) + INSTRUCTIONS).not.toMatch(/\b256 KB\b/);
+    // The old inline limit; the Free data-doc limit is also 256 KB, so drop
+    // that one phrase first.
+    const docFree = `${LIMITS.dataDocBytesFree / 1024} KB per document`;
+    expect(
+      JSON.stringify(TOOL_DEFS) + INSTRUCTIONS.replace(docFree, ""),
+    ).not.toMatch(/\b256 KB\b/);
+  });
+
+  it("instructions state both plans' data-doc limits", () => {
+    expect(INSTRUCTIONS).toContain(
+      `${LIMITS.dataDocBytesFree / 1024} KB per document on Free-plan instances (${LIMITS.dataDocBytesPaid / 1024 / 1024} MB on Paid)`,
+    );
   });
 });

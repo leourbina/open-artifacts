@@ -12,6 +12,7 @@ import {
 } from "@oa/ui/shadcn";
 import { useState } from "react";
 import { useUpdateMe } from "../api/queries";
+import { useSingleFlight } from "../api/useSingleFlight";
 import {
   NAME_MAX,
   nameLength,
@@ -44,6 +45,7 @@ export function DisplayNamePrompt({ me }: { me: Me }) {
   const [name, setName] = useState(me.suggestedName ?? "");
   const [error, setError] = useState<string | null>(null);
   const update = useUpdateMe();
+  const once = useSingleFlight();
   const open = me.needsDisplayName && !dismissed;
   const trimmed = name.trim();
   const tooLong = nameLength(trimmed) > NAME_MAX;
@@ -76,9 +78,11 @@ export function DisplayNamePrompt({ me }: { me: Me }) {
             e.preventDefault();
             if (!nameOk(trimmed) || update.isPending) return;
             setError(null);
-            update.mutate(
-              { displayName: trimmed },
-              { onError: (err) => setError(saveError(err)) },
+            once((done) =>
+              update.mutate(
+                { displayName: trimmed },
+                { onError: (err) => setError(saveError(err)), onSettled: done },
+              ),
             );
           }}
         >

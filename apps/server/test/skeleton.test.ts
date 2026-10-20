@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import worker from "../src/index.js";
+import { VERSION } from "../src/version.gen.js";
 
 const call = (url: string, init?: RequestInit) =>
   worker.fetch(
@@ -15,7 +16,11 @@ describe("skeleton", () => {
   it("GET /healthz on app host", async () => {
     const res = await call(`${APP}/healthz`);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, plan: "free" });
+    expect(await res.json()).toEqual({
+      ok: true,
+      plan: "free",
+      version: VERSION,
+    });
   });
 
   for (const base of [APP, CONTENT]) {
