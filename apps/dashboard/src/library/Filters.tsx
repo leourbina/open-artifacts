@@ -1,5 +1,15 @@
 import { type Format, FormatSchema } from "@oa/shared";
-import { Button, SegmentedControl } from "@oa/ui";
+import {
+  Button,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  ToggleGroup,
+  ToggleGroupItem,
+} from "@oa/ui/shadcn";
+import { BAR } from "./ui";
 
 const LABEL: Record<Format, string> = {
   html: "HTML",
@@ -7,10 +17,14 @@ const LABEL: Record<Format, string> = {
   code: "Code",
   pdf: "PDF",
 };
+// Radix items can't hold "", so "All" travels as a sentinel.
+const ALL = "__all";
 const FORMATS = [
-  { value: "", label: "All formats" },
+  { value: ALL, label: "All formats" },
   ...FormatSchema.options.map((value) => ({ value, label: LABEL[value] })),
 ];
+const TEXT = "text-[length:var(--oa-text-sm)]";
+const ITEM = `h-[30px] px-[var(--oa-space-3)] ${TEXT}`;
 
 export type FilterProps = {
   format: Format | undefined;
@@ -23,38 +37,77 @@ export type FilterProps = {
   onView: (v: "grid" | "list") => void;
 };
 
+/** A single-choice switch: a toggle group that never deselects. */
+function Choice<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (v: T) => void;
+}) {
+  return (
+    <ToggleGroup
+      type="single"
+      variant="outline"
+      size="sm"
+      aria-label={label}
+      value={value}
+      onValueChange={(v) => v && onChange(v as T)}
+    >
+      {options.map((o) => (
+        <ToggleGroupItem key={o.value} value={o.value} className={ITEM}>
+          {o.label}
+        </ToggleGroupItem>
+      ))}
+    </ToggleGroup>
+  );
+}
+
 export function Filters(p: FilterProps) {
   const agents =
     p.agent && !p.agents.includes(p.agent) ? [...p.agents, p.agent] : p.agents;
   return (
-    <div className="lib-bar">
-      <SegmentedControl
-        aria-label="Format"
+    <div className={BAR}>
+      <Choice
+        label="Format"
         options={FORMATS}
-        value={p.format ?? ""}
-        onChange={(v) => p.onFormat(v ? (v as Format) : undefined)}
+        value={p.format ?? ALL}
+        onChange={(v) => p.onFormat(v === ALL ? undefined : (v as Format))}
       />
-      <select
-        aria-label="Agent"
-        className="lib-select"
-        value={p.agent ?? ""}
-        onChange={(e) => p.onAgent(e.target.value || undefined)}
+      <Select
+        value={p.agent ?? ALL}
+        onValueChange={(v) => p.onAgent(v === ALL ? undefined : v)}
       >
-        <option value="">All agents</option>
-        {agents.map((a) => (
-          <option key={a} value={a}>
-            {a}
-          </option>
-        ))}
-      </select>
+        <SelectTrigger
+          aria-label="Agent"
+          size="sm"
+          className={`min-w-[140px] ${TEXT}`}
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent position="popper">
+          <SelectItem value={ALL} className={TEXT}>
+            All agents
+          </SelectItem>
+          {agents.map((a) => (
+            <SelectItem key={a} value={a} className={TEXT}>
+              {a}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
       {(p.format || p.agent) && (
-        <Button variant="ghost" onClick={p.onClear}>
+        <Button variant="ghost" size="sm" className={TEXT} onClick={p.onClear}>
           Clear filters
         </Button>
       )}
-      <span className="lib-spacer" />
-      <SegmentedControl
-        aria-label="Layout"
+      <span className="flex-1" />
+      <Choice
+        label="Layout"
         options={[
           { value: "grid", label: "Grid" },
           { value: "list", label: "List" },

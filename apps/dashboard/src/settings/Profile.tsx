@@ -1,5 +1,4 @@
 import type { Me } from "@oa/shared";
-import { toast } from "@oa/ui";
 import {
   Button,
   Card,
@@ -10,6 +9,7 @@ import {
 } from "@oa/ui/shadcn";
 import { useState } from "react";
 import { useUpdateMe } from "../api/queries";
+import { useSingleFlight } from "../api/useSingleFlight";
 import {
   NAME_MAX,
   nameLength,
@@ -18,6 +18,7 @@ import {
   TOO_LONG,
 } from "../auth/displayName";
 import { useMe } from "../auth/useMe";
+import { toast } from "../layout/toast";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { CARD, INSET } from "./ui";
 
@@ -35,6 +36,7 @@ function ProfileForm({ me }: { me: Me }) {
   const [error, setError] = useState<string | null>(null);
   const [justSaved, setJustSaved] = useState(false);
   const update = useUpdateMe();
+  const once = useSingleFlight();
   const name = draft ?? me.displayName ?? me.suggestedName ?? "";
   const trimmed = name.trim();
   const dirty = trimmed !== saved;
@@ -49,16 +51,19 @@ function ProfileForm({ me }: { me: Me }) {
             e.preventDefault();
             if (!dirty || !nameOk(trimmed) || update.isPending) return;
             setError(null);
-            update.mutate(
-              { displayName: trimmed },
-              {
-                onSuccess: () => {
-                  setDraft(null);
-                  setJustSaved(true);
-                  toast({ title: "Display name saved", tone: "success" });
+            once((done) =>
+              update.mutate(
+                { displayName: trimmed },
+                {
+                  onSuccess: () => {
+                    setDraft(null);
+                    setJustSaved(true);
+                    toast({ title: "Display name saved", tone: "success" });
+                  },
+                  onError: (err) => setError(saveError(err)),
+                  onSettled: done,
                 },
-                onError: (err) => setError(saveError(err)),
-              },
+              ),
             );
           }}
         >

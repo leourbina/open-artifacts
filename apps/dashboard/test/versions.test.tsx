@@ -315,7 +315,7 @@ describe("versions and diff details", () => {
 });
 
 describe("panel focus", () => {
-  it("moves focus into the panel and back to the toggle on close", async () => {
+  it("moves focus to the active tab and back to the toggle on close", async () => {
     mount(viewerPath(OWNED));
     const toggle = await screen.findByRole("button", { name: "Versions" });
     toggle.focus();
@@ -323,7 +323,10 @@ describe("panel focus", () => {
     const aside = await screen.findByRole("complementary", {
       name: "Side panel",
     });
-    await waitFor(() => expect(aside).toHaveFocus());
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "Versions" })).toHaveFocus(),
+    );
+    expect(aside).not.toHaveFocus();
     fireEvent.click(screen.getByRole("button", { name: "Close panel" }));
     await waitFor(() => expect(toggle).toHaveFocus());
   });

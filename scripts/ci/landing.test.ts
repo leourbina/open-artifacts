@@ -34,7 +34,9 @@ describe("check-landing-dist.ts (release gate)", () => {
     ]);
   };
   it("passes on a clean dist", () => {
-    expect(check("<h1>Open Artifacts</h1>").code).toBe(0);
+    expect(
+      check('<head><meta charset="utf-8"></head><h1>Open Artifacts</h1>').code,
+    ).toBe(0);
   });
   it("fails on a TODO", () => {
     expect(check("<p>TODO</p>").code).toBe(1);
