@@ -4,7 +4,7 @@ import {
   TokenCreatedSchema,
   TokenCreateInputSchema,
 } from "@oa/shared";
-import { Button, Dialog, Input } from "@oa/ui";
+import { Button, Dialog, Input, Kbd } from "@oa/ui";
 import {
   Button as ShButton,
   Input as ShInput,
@@ -119,6 +119,7 @@ function SnippetTabs({
                 <Code
                   code={s.code}
                   label={s.language === "bash" ? "Copy command" : "Copy config"}
+                  wrap={variant === "token"}
                 />
               )}
             </>
@@ -331,9 +332,10 @@ function CreateDialog({ onClose }: { onClose: () => void }) {
                 Save this token to a file so your agent can use it without it
                 ever appearing in chat. Copy the token above, run this line in a
                 terminal, and paste the token when asked. The input stays
-                hidden. In Claude Code, type <code>! </code> and then the line.
+                hidden. In Claude Code, type <Kbd>!</Kbd> and a space, then
+                paste the line.
               </p>
-              <Code code={saveTokenCommand()} label="Copy save command" />
+              <Code code={saveTokenCommand()} label="Copy save command" wrap />
               <p className={muted}>
                 Then set up your client below. Never paste the token into chat
                 or into a config file.

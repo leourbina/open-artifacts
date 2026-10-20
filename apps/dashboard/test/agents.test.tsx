@@ -207,6 +207,10 @@ describe("Agents settings", () => {
     expect(shown.textContent).toContain(
       "Then set up your client below. Never paste the token into chat or into a config file.",
     );
+    expect(shown.textContent).toContain(
+      "In Claude Code, type ! and a space, then paste the line.",
+    );
+    expect(shown.querySelector("kbd")?.textContent).toBe("!");
     const save = secretSnippet(FILE, SECRET_LABELS.pat);
     expect(
       [...shown.querySelectorAll("pre")].map((p) => p.textContent),

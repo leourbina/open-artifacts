@@ -102,14 +102,27 @@ export function CodeBlock({
   );
 }
 
-export function Code({ code, label }: { code: string; label: string }) {
+/** `wrap` breaks long lines (anywhere) instead of scrolling them. */
+export function Code({
+  code,
+  label,
+  wrap = false,
+}: {
+  code: string;
+  label: string;
+  wrap?: boolean;
+}) {
   return (
     <CodeBlock copy={code} label={label}>
       <pre
-        // Focusable so keyboard users can scroll a long line.
-        // biome-ignore lint/a11y/noNoninteractiveTabindex: scrollable region
-        tabIndex={0}
-        className="min-w-0 flex-1 overflow-x-auto p-[var(--oa-space-3)] font-mono text-[length:var(--oa-text-xs)]"
+        // Focusable so keyboard users can scroll a long line (wrapped ones
+        // don't scroll).
+        tabIndex={wrap ? undefined : 0}
+        className={`min-w-0 flex-1 p-[var(--oa-space-3)] font-mono text-[length:var(--oa-text-xs)] ${
+          wrap
+            ? "[overflow-wrap:anywhere] whitespace-pre-wrap"
+            : "overflow-x-auto"
+        }`}
       >
         <code>{code}</code>
       </pre>
