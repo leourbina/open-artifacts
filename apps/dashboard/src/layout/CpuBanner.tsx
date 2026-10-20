@@ -52,13 +52,15 @@ const GaugeIcon = (
  */
 export function CpuBanner({
   role,
+  plan,
   className = "",
 }: {
   role: Me["user"]["role"] | undefined;
+  plan: Me["instance"]["plan"] | undefined;
   /** The page's content column, so the banner's edges line up with it. */
   className?: string;
 }) {
-  const { admin, hits, recent, today, paid } = useCpuSignals(role);
+  const { admin, hits, recent, today, paid } = useCpuSignals(role, plan);
   const [dismissed, setDismissed] = useState(read);
   const n = hits ?? 0;
   if (role === "guest" || dismissed === today || !(n >= 3 || recent))
@@ -86,15 +88,21 @@ export function CpuBanner({
           icon={GaugeIcon}
           onDismiss={dismiss}
         >
+          {/* Before today's count arrives: no number rather than a guess. */}
           <p>
-            Your instance hit the 30-second per-request limit{" "}
-            {times(Math.max(n, 1))} today. Retrying usually works. If it keeps
-            happening, please report it so we can fix it.
+            Your instance hit the 30-second per-request limit
+            {n > 0 ? ` ${times(n)}` : ""} today. Retrying usually works. If it
+            keeps happening, please report it so we can fix it.
           </p>
           <div className="oa-cpu-acts">
-            <AppLink className="oa-btn oa-sm oa-primary" href="/settings/usage">
-              View usage
-            </AppLink>
+            {admin && (
+              <AppLink
+                className="oa-btn oa-sm oa-primary"
+                href="/settings/usage"
+              >
+                View usage
+              </AppLink>
+            )}
             <a
               className="oa-cpu-link inline-flex items-center gap-1"
               href={`${REPO_URL}/issues/new`}

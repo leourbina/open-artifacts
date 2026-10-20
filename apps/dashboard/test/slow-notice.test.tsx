@@ -229,6 +229,15 @@ describe("viewer slow notice", () => {
   });
 
   it("Workers Paid: the 30-second line, no Learn more, no upsell after reloads (#279)", async () => {
+    // The plan comes from Me.
+    server.use(
+      http.get(`*${R.me}`, () =>
+        HttpResponse.json({
+          ...fixtures.me,
+          instance: { ...fixtures.me.instance, plan: "paid" },
+        }),
+      ),
+    );
     usage(1, "paid");
     mount(viewerPath(ID));
     const f = await frame();

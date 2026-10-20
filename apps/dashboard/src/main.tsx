@@ -150,7 +150,11 @@ async function startMocks() {
   };
   await setupWorker(
     ...extra,
-    ...createHandlers({ quotaExceeded, emailEnabled }),
+    ...createHandlers({
+      quotaExceeded,
+      emailEnabled,
+      plan: params.get("mock")?.startsWith("paid") ? "paid" : "free",
+    }),
   ).start({
     onUnhandledRequest: "bypass",
   });

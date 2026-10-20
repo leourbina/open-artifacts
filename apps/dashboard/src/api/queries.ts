@@ -156,21 +156,26 @@ export const useSettings = () =>
     queryKey: qk.settings,
     queryFn: ({ signal }) => api.get(R.settings, SettingsSchema, signal),
   });
-/** `plan` (#279) until the shared contract carries it; absent on older servers. */
-const UsageWithPlanSchema = UsageSchema.extend({
-  plan: z.enum(["free", "paid"]).optional(),
-});
-/** Keeps only the metrics this build knows, so one new server metric never blanks the page. */
+/** `instance.plan` defaults to Free, for a server older than #279. */
+export const LenientMeSchema = z.preprocess((raw) => {
+  if (typeof raw !== "object" || raw === null) return raw;
+  const { instance } = raw as { instance?: unknown };
+  if (typeof instance !== "object" || instance === null) return raw;
+  return { ...raw, instance: { plan: "free", ...instance } };
+}, MeSchema);
+/** Keeps only the metrics this build knows, so one new server metric never blanks the page;
+    `plan` defaults to Free, for a server older than #279. */
 const LenientUsageSchema = z.preprocess((raw) => {
   if (typeof raw !== "object" || raw === null) return raw;
   const { metrics } = raw as { metrics?: unknown };
   if (!Array.isArray(metrics)) return raw;
   const known = UsageSchema.shape.metrics.element;
   return {
+    plan: "free",
     ...raw,
     metrics: metrics.filter((m) => known.safeParse(m).success),
   };
-}, UsageWithPlanSchema);
+}, UsageSchema);
 export const useUsage = (
   opts: { enabled?: boolean; staleTime?: number } = {},
 ) =>
@@ -296,7 +301,8 @@ export const useRemoveMember = () =>
 export const useUpdateMe = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (patch: MePatch) => api.send("PATCH", R.me, patch, MeSchema),
+    mutationFn: (patch: MePatch) =>
+      api.send("PATCH", R.me, patch, LenientMeSchema),
     onSuccess: (me) => qc.setQueryData(qk.me, me),
   });
 };

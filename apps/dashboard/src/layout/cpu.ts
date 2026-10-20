@@ -25,9 +25,12 @@ export const utcDay = (t = Date.now()) =>
 /**
  * What the shell knows about CPU-limit trouble today: `hits` from usage (owners and
  * admins only, null when unknown), whether this tab just got a 1102, and
- * whether the instance is on Workers Paid (also from usage).
+ * whether the instance is on Workers Paid.
  */
-export function useCpuSignals(role: Role | null | undefined) {
+export function useCpuSignals(
+  role: Role | null | undefined,
+  plan: Me["instance"]["plan"] | undefined,
+) {
   // `role` comes from the caller: a fresh useMe observer here would refetch an
   // errored /me on mount and flip the caller back to loading.
   const admin = role === "owner" || role === "admin";
@@ -45,7 +48,7 @@ export function useCpuSignals(role: Role | null | undefined) {
       ? (data.metrics.find((m) => m.key === "cpu_limit_hits")?.used ?? null)
       : null;
   const recent = at !== null && now - at < RECENT_MS && utcDay(at) === today;
-  // Only owners and admins can read usage, so members never learn the plan.
-  const paid = data?.plan === "paid";
+  // From Me, so members know it too; an older server without it reads as Free.
+  const paid = plan === "paid";
   return { admin, hits, recent, today, paid };
 }

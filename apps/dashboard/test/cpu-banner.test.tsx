@@ -186,8 +186,20 @@ describe("CPU banner", () => {
 
   describe("on Workers Paid (#279)", () => {
     const PAID_TITLE = "Some requests hit Cloudflare's CPU limit";
+    /** The plan comes from Me, for every role. */
+    const paidMe = (role: "owner" | "admin" | "member" = "owner") =>
+      server.use(
+        http.get(`*${R.me}`, () =>
+          HttpResponse.json({
+            ...fixtures.me,
+            user: { ...fixtures.me.user, role },
+            instance: { ...fixtures.me.instance, plan: "paid" },
+          }),
+        ),
+      );
 
     it("reports the 30-second limit and never pitches an upgrade", async () => {
+      paidMe();
       usage(4, DAY, "paid");
       mount("/");
       await screen.findByText(PAID_TITLE, {}, SLOW);
@@ -206,20 +218,36 @@ describe("CPU banner", () => {
       expect(document.body.textContent).not.toMatch(/Workers Paid|See plans/);
     });
 
-    it("a 1102 before any count reads '1 time'", async () => {
+    it("a 1102 before any count has no number", async () => {
+      paidMe();
       usage(0, DAY, "paid");
       recordCpuLimit();
       mount("/");
       expect(
         await screen.findByText(
-          /30-second per-request limit 1 time today\./,
+          "Your instance hit the 30-second per-request limit today. Retrying usually works. If it keeps happening, please report it so we can fix it.",
           {},
           SLOW,
         ),
       ).toBeTruthy();
     });
 
+    it("members get the Paid copy too, without View usage", async () => {
+      paidMe("member");
+      recordCpuLimit();
+      mount("/");
+      await screen.findByText(PAID_TITLE, {}, SLOW);
+      expect(screen.queryByRole("link", { name: "View usage" })).toBeNull();
+      expect(
+        screen.getByRole("link", { name: /Report an issue/ }),
+      ).toBeTruthy();
+      expect(document.body.textContent).not.toMatch(
+        /Workers Paid|See plans|instance owner/,
+      );
+    });
+
     it("stays hidden under 3 hits and dismisses like the Free banner", async () => {
+      paidMe();
       usage(2, DAY, "paid");
       mount("/");
       await noBanner();
@@ -233,8 +261,16 @@ describe("CPU banner", () => {
       expect(localStorage.getItem("oa.cpuBanner.dismissed")).toBe(DAY);
     });
 
-    it("Free (explicit plan) keeps the Free banner", async () => {
-      usage(4, DAY, "free");
+    it("an instance without a plan reads as Free", async () => {
+      server.use(
+        http.get(`*${R.me}`, () => {
+          const { plan: _, ...instance } = fixtures.me.instance as {
+            plan?: string;
+          } & typeof fixtures.me.instance;
+          return HttpResponse.json({ ...fixtures.me, instance });
+        }),
+      );
+      usage(4, DAY);
       mount("/");
       await banner();
       expect(screen.getByRole("link", { name: /See plans/ })).toBeTruthy();

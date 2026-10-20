@@ -154,6 +154,7 @@ function Layout() {
             {/* In the page's content column: the settings measure there. */}
             <CpuBanner
               role={me?.user.role}
+              plan={me?.instance.plan}
               className={/^\/settings(\/|$)/i.test(path) ? MEASURE : ""}
             />
             <Outlet />
