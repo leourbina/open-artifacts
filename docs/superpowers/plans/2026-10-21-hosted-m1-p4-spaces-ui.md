@@ -1273,7 +1273,7 @@ it("turnstile_failed keeps the email and resets the widget", async () => {
 it("no copy contains an em dash", async () => {
   mountHosted("/sign-in?error=tenant");
   await screen.findByRole("alert");
-  expect(document.body.textContent).not.toContain("—");
+  expect(document.body.textContent).not.toContain("\u2014");
 });
 // m1-a11y.spec.ts, m2-a11y.spec.ts: axe and keyboard pass for /sign-in?hosted=1, its code step, and ?error=tenant
 // m2-hostile.spec.ts: a hostile email (bidi override, 300 chars, "<script>") shows the field error and never renders markup; a hostile next ("//evil.example") is never navigated to
