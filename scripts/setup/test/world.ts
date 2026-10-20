@@ -55,6 +55,10 @@ type World = {
   policies?: Obj[];
   /** GET Access policies/apps answer with this status (checked per request, so it may be set after an install). */
   accessReadStatus?: number;
+  /** GET Access policies/apps fail at the network with this message (a timeout, ECONNRESET). */
+  accessReadThrows?: string;
+  /** Worker secret names `secret list` hides (checked per call). */
+  hideSecrets?: string[];
   apps?: Obj[];
   /** Worker secret names; undefined means the Worker does not exist yet. */
   secrets?: string[];
@@ -436,7 +440,7 @@ export function world(w: World = {}) {
       if (a.startsWith("secret list ")) {
         if (!secrets)
           return { code: 1, stdout: "", stderr: 'Worker "x" not found.' };
-        stdout = `wrangler 4.151.1 [x]\n${JSON.stringify(secrets.map((name) => ({ name })))}`;
+        stdout = `wrangler 4.151.1 [x]\n${JSON.stringify(secrets.filter((n) => !w.hideSecrets?.includes(n)).map((name) => ({ name })))}`;
       } else if (put) {
         values.push(opts?.input ?? "");
         if (put[1] === w.putFails)
@@ -672,6 +676,8 @@ export function world(w: World = {}) {
             : { auth_domain: "team.cloudflareaccess.com" },
         );
       }
+      if (acc && m === "GET" && w.accessReadThrows)
+        throw new Error(w.accessReadThrows);
       if (acc && m === "GET" && w.accessReadStatus)
         return envelope(null, w.accessReadStatus, [
           { code: 10000, message: "gateway timeout" },
