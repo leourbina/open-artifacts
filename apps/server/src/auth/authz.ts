@@ -129,13 +129,20 @@ export function listFilterSql(
           ? [team]
           : [mine, sharedWithMe, team];
   const present = parts.filter((p): p is SQL => p !== undefined);
-  const visible = present.length ? or(...present) : undefined;
-  if (!visible) return sql`0`;
-  const live = and(isNull(artifacts.deletedAt), visible);
-  const out = includeDeleted
-    ? or(live, and(isNotNull(artifacts.deletedAt), mine, visible))
-    : live;
-  return out ?? sql`0`;
+  if (!present.length) return sql`0`;
+  // `deleted_at is null` inside every branch: only then does SQLite plan each
+  // branch on its partial index (MULTI-INDEX OR) rather than walking all live
+  // rows; there are no non-partial owner/visibility indexes (#248).
+  const branches = present.map((p) => and(isNull(artifacts.deletedAt), p));
+  if (includeDeleted)
+    branches.push(
+      and(
+        isNotNull(artifacts.deletedAt),
+        mine,
+        ...(present.includes(mine) ? [] : [or(...present)]),
+      ),
+    );
+  return or(...branches) ?? sql`0`;
 }
 
 /**

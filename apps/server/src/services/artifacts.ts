@@ -508,7 +508,7 @@ const ISO_DATE =
 
 /**
  * The list SELECT (exported for the EXPLAIN test). The visibility filter is
- * listFilterSql, whose top-level `deleted_at is null` lets SQLite use the
+ * listFilterSql, whose per-branch `deleted_at is null` lets SQLite use the
  * partial live indexes; order is the keyset (updated_at desc, id desc).
  */
 export function listQuery(env: Env, caller: Caller, q: ListQuery) {
