@@ -88,7 +88,7 @@ Every call returns a promise. A failed call rejects with an error that has a `co
 
 | `code` | Meaning |
 |---|---|
-| `no_shell` | No viewer shell to reach the server. In the raw view every call fails at once; in a frame, a call fails if no shell has answered within a few seconds. |
+| `no_shell` | No viewer shell to reach the server. Outside the viewer (for example, the artifact's file opened directly), every call fails at once; in a frame, a call fails if no shell has answered within a few seconds. |
 | `capability_denied` | The artifact didn't declare that capability, or the viewer isn't allowed (for example, an anonymous write). |
 | `bad_request` | Invalid parameters, such as a bad collection name or a value that can't be sent. |
 | `rate_limited`, `too_large`, `quota_exceeded` | A limit was reached. |
@@ -107,4 +107,4 @@ try {
 
 ## How it works
 
-The artifact runs in a sandboxed iframe with no credentials. Each call goes by `postMessage` to the viewer shell around it, which checks the call and makes it with the viewer's session. Raw view drops the shell, so the runtime API isn't available there: every call rejects at once with `no_shell`.
+The artifact runs in a sandboxed iframe with no credentials. Each call goes by `postMessage` to the viewer shell around it, which checks the call and makes it with the viewer's session. Opened outside the viewer, the artifact has no shell, so every call rejects at once with `no_shell`.
