@@ -1,5 +1,16 @@
 import type { InstanceUpdate } from "@oa/shared";
-import { type ComponentProps, forwardRef, type MouseEvent } from "react";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+  useSidebar,
+} from "@oa/ui/shadcn";
+import {
+  type ComponentProps,
+  forwardRef,
+  type MouseEvent,
+  useState,
+} from "react";
 import { ArrowIcon, BreakingNote, LINK, UpgradeActions, v } from "./update";
 
 /** The dot on the chip and on the phone menu trigger: accent, or warning for a breaking release. */
@@ -87,5 +98,43 @@ export function UpdatePanel({
         Details in Settings
       </a>
     </div>
+  );
+}
+
+/**
+ * The chip in the sidebar footer (the sheet's on phones) and its popover:
+ * 292px above it, or the drawer's width on phones. Non-modal; Esc closes it
+ * and returns focus to the chip.
+ */
+export function UpdateChip({
+  update,
+  onSettings,
+}: {
+  update: InstanceUpdate;
+  onSettings: (e: MouseEvent<HTMLAnchorElement>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const { isMobile } = useSidebar();
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <UpdateChipButton update={update} />
+      </PopoverTrigger>
+      <PopoverContent
+        side="top"
+        align="start"
+        sideOffset={8}
+        aria-label="Update available"
+        className={`p-[14px] ${isMobile ? "w-(--radix-popover-trigger-width)" : "w-[292px]"}`}
+      >
+        <UpdatePanel
+          update={update}
+          onSettings={(e) => {
+            setOpen(false);
+            onSettings(e);
+          }}
+        />
+      </PopoverContent>
+    </Popover>
   );
 }

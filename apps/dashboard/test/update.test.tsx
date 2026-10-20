@@ -159,3 +159,40 @@ describe("Settings → Instance Version card", () => {
     expect(screen.queryByText("Update available")).toBeNull();
   });
 });
+
+describe("sidebar chip", () => {
+  const chip = () =>
+    screen.queryByRole("button", { name: /^Update available/ });
+
+  it("admin with an update: chip with the new version; popover on click", async () => {
+    serve(NEWER, "admin");
+    mount("/");
+    await screen.findByRole("heading", { name: "Library" });
+    const c = await waitFor(() => {
+      const el = chip();
+      if (!el) throw new Error("no chip");
+      return el;
+    });
+    expect(c).toHaveTextContent("Update availablev0.15.0");
+    expect(c).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(c);
+    const pop = await screen.findByRole("dialog", { name: "Update available" });
+    expect(pop).toHaveTextContent("v0.14.2");
+    expect(pop).toHaveTextContent("Details in Settings");
+    expect(c).toHaveAttribute("aria-expanded", "true");
+  });
+
+  for (const [label, update, role] of [
+    ["member", NEWER, "member"],
+    ["null update", null, "owner"],
+    ["up to date", { ...NEWER, updateAvailable: false }, "owner"],
+    ["custom", { ...NEWER, custom: true, updateAvailable: false }, "owner"],
+  ] as const)
+    it(`${label}: no chip`, async () => {
+      serve(update, role);
+      mount("/");
+      await screen.findByRole("heading", { name: "Library" });
+      await wait(50);
+      expect(chip()).toBeNull();
+    });
+});

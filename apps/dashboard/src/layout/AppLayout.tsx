@@ -4,6 +4,7 @@ import {
   Sidebar as ShSidebar,
   SidebarBrand,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarHeader,
@@ -29,7 +30,7 @@ import { CpuBanner } from "./CpuBanner";
 import { DisplayNamePrompt } from "./DisplayNamePrompt";
 import { QuotaBanner } from "./QuotaBanner";
 import { Toaster } from "./toast";
-import { UpdateDot } from "./UpdateChip";
+import { UpdateChip, UpdateDot } from "./UpdateChip";
 import { instanceUpdate, shouldNudge } from "./update";
 
 const icon = (d: string) => (
@@ -279,6 +280,7 @@ function Sidebar({ me, path }: { me: Me | null; path: string }) {
   const on = (p: string) => path === p || path.startsWith(`${p}/`);
   const go = useGo();
   const home = guest ? "/shared" : "/";
+  const update = instanceUpdate(me);
   return (
     <ShSidebar variant="inset">
       <SidebarHeader
@@ -355,6 +357,14 @@ function Sidebar({ me, path }: { me: Me | null; path: string }) {
           </SidebarGroup>
         </nav>
       </SidebarContent>
+      {shouldNudge(update) && (
+        <SidebarFooter className="in-data-[mobile=true]:px-2 in-data-[mobile=true]:pb-3">
+          <UpdateChip
+            update={update}
+            onSettings={(e) => go(e, "/settings/instance")}
+          />
+        </SidebarFooter>
+      )}
     </ShSidebar>
   );
 }
