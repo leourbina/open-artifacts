@@ -62,22 +62,28 @@ export function parseVarFlags(
 /**
  * The vars to render: the flag, then saved state, then the live Worker's value,
  * else the template default. An empty flag or saved value clears. `kept` lists
- * the values that came only from the live Worker (set in the dashboard).
+ * the values that came only from the live Worker (set in the dashboard);
+ * `ignored` lists live values that failed validation and were dropped.
  */
 export function resolveVars(o: {
   flags: Record<string, string>;
   state: Record<string, string>;
   live: Record<string, string | undefined>;
-}): { values: Record<string, string>; kept: string[] } {
+}): { values: Record<string, string>; kept: string[]; ignored: string[] } {
   const values: Record<string, string> = {};
   const kept: string[] = [];
+  const ignored: string[] = [];
   for (const name of Object.keys(TUNABLES)) {
-    const live = o.live[name]?.trim() || undefined;
+    let live = o.live[name]?.trim() || undefined;
+    if (live && TUNABLES[name]?.check(live)) {
+      ignored.push(name);
+      live = undefined;
+    }
     const v = o.flags[name] ?? o.state[name] ?? live;
     if (v === undefined) continue;
     values[name] = v;
     if (o.flags[name] === undefined && o.state[name] === undefined && live)
       kept.push(`${name}=${live}`);
   }
-  return { values, kept };
+  return { values, kept, ignored };
 }

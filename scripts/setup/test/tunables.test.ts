@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { HELP, run } from "../src/index.ts";
-import { renderConfig } from "../src/steps/resources.ts";
+import { applyTunables, renderConfig } from "../src/steps/resources.ts";
 import { parseVarFlags, resolveVars, TUNABLES } from "../src/tunables.ts";
 import { ROOT, STATE } from "./fakes.ts";
 import { HOSTS, world } from "./world.ts";
@@ -148,7 +148,71 @@ describe("resolveVars precedence", () => {
   });
 });
 
+describe("live values are validated", () => {
+  it("drops an invalid live value, reports it, and falls back", () => {
+    const r = resolveVars({
+      flags: {},
+      state: {},
+      live: {
+        ANON_WRITES_PER_MIN: "9999",
+        PUBLIC_HOME: "nope",
+        DATA_DOC_BYTES: "5",
+      },
+    });
+    expect(r.values).toEqual({ DATA_DOC_BYTES: "5" });
+    expect(r.ignored.sort()).toEqual(["ANON_WRITES_PER_MIN", "PUBLIC_HOME"]);
+    expect(r.kept).toEqual(["DATA_DOC_BYTES=5"]);
+  });
+
+  it("a saved value still beats an invalid live one, with no note needed for it", () => {
+    const r = resolveVars({
+      flags: {},
+      state: { ANON_WRITES_PER_MIN: "5" },
+      live: { ANON_WRITES_PER_MIN: "x" },
+    });
+    expect(r.values.ANON_WRITES_PER_MIN).toBe("5");
+  });
+
+  it("setup notes 'ignored invalid live NAME' and does not render it", async () => {
+    const w = world({
+      workerBindings: [
+        { type: "plain_text", name: "ANON_WRITES_PER_MIN", text: "9999" },
+      ],
+    });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    expect(line(w, "deploy").message).toContain(
+      "ignored invalid live ANON_WRITES_PER_MIN",
+    );
+    expect(cfgVars(w).ANON_WRITES_PER_MIN ?? "").toBe("");
+  });
+});
+
 describe("renderConfig tunables", () => {
+  const lastVar = `{
+  "name": "x",
+  "vars": {
+    "ENVIRONMENT": "production",
+    "PLAN": "free",
+    "PUBLIC_HOME": ""
+  }
+}`;
+  it("keeps strict JSON when a tunable is the last var: set, then cleared", () => {
+    const set = applyTunables(lastVar, { PUBLIC_HOME: ID });
+    expect(JSON.parse(set).vars.PUBLIC_HOME).toBe(ID);
+    const set2 = applyTunables(set, { PUBLIC_HOME: "" });
+    expect(JSON.parse(set2).vars).toEqual({
+      ENVIRONMENT: "production",
+      PLAN: "free",
+    });
+    const added = applyTunables(lastVar, { EMBED_ORIGINS: "https://a.test" });
+    expect(JSON.parse(added).vars.EMBED_ORIGINS).toBe("https://a.test");
+    expect(JSON.parse(added).vars.PUBLIC_HOME).toBe("");
+  });
+
+  it("leaves the text alone with nothing to set", () => {
+    expect(applyTunables(lastVar, {})).toBe(lastVar);
+  });
+
   const vars = {
     WORKER_NAME: "w",
     APP_HOST: "a.example.com",

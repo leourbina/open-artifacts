@@ -56,29 +56,22 @@ export const stripComments = (text: string) =>
   );
 
 /**
- * Sets the tunable vars in rendered config text: drops any line for those
- * names (never the last var, so no trailing comma), then inserts each non-empty
- * one after the `"vars": {` line. Empty values are simply not rendered.
+ * Sets the tunable vars in rendered config text by parsing it, setting or
+ * deleting keys of `vars` (an empty value is deleted: not rendered), and
+ * serializing it back. Untouched when there is nothing to set.
  */
 export function applyTunables(
   text: string,
   tunables: Record<string, string>,
 ): string {
-  const names = Object.keys(tunables);
-  if (!names.length) return text;
-  return text
-    .split("\n")
-    .filter((l) => !names.some((k) => l.trim().startsWith(`"${k}":`)))
-    .join("\n")
-    .replace(/^(\s*"vars":\s*\{)$/m, (open) =>
-      names
-        .filter((k) => tunables[k] !== "")
-        .reduce(
-          (acc, k) =>
-            `${acc}\n    ${JSON.stringify(k)}: ${JSON.stringify(tunables[k])},`,
-          open,
-        ),
-    );
+  if (!Object.keys(tunables).length) return text;
+  const cfg = JSON.parse(stripComments(text));
+  cfg.vars ??= {};
+  for (const [k, v] of Object.entries(tunables)) {
+    if (v === "") delete cfg.vars[k];
+    else cfg.vars[k] = v;
+  }
+  return `${JSON.stringify(cfg, null, 2)}\n`;
 }
 
 /** Fills `{{KEY}}` with JSON-escaped values, then asserts the result is valid production config. */

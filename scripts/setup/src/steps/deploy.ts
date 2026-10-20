@@ -101,7 +101,7 @@ async function readVersion(ctx: Ctx, state: State) {
  */
 function settleVars(state: State, ctx: Ctx, live: Live) {
   const bindings = live === "unreadable" ? [] : (live ?? []);
-  const { values, kept } = resolveVars({
+  const { values, kept, ignored } = resolveVars({
     flags: ctx.opts.varFlags,
     state: state.vars ?? {},
     live: Object.fromEntries(
@@ -112,6 +112,7 @@ function settleVars(state: State, ctx: Ctx, live: Live) {
   });
   ctx.tunables = values;
   for (const k of kept) ctx.notes.push(`kept live ${k}`);
+  for (const k of ignored) ctx.notes.push(`ignored invalid live ${k}`);
   if (!ctx.opts.check) {
     const file = join(ctx.root, CONFIG);
     const text = ctx.fs.read(file);
