@@ -1064,7 +1064,10 @@ export class ArtifactRuntime extends DurableObject<Env> {
       // Own budgets, apart from data sockets: anonymous (ip:) actors share a
       // smaller pool and get 3 sockets each, so they starve neither live
       // data nor signed-in viewers' events.
-      const anon = actor === null || actor.startsWith("ip:");
+      // The route always passes an actor ("u:{id}" or "ip:{v4 or /56}"):
+      // without one the per-actor cap couldn't apply, so refuse.
+      if (actor === null) return new Response("Missing actor", { status: 400 });
+      const anon = actor.startsWith("ip:");
       const pool = anon ? EVENTS_IP_TAG : EVENTS_USER_TAG;
       if (
         this.ctx.getWebSockets(pool).length >=
@@ -1073,15 +1076,13 @@ export class ArtifactRuntime extends DurableObject<Env> {
         return new Response("Too many subscribers", { status: 429 });
       named = req.headers.get(EVENTS_NAMED_HEADER) === "1";
       tags = [EVENTS_TAG, pool, named ? EVENTS_NAMED_TAG : EVENTS_ANON_TAG];
-      if (actor !== null) {
-        const tag = `ea:${actor}`;
-        if (
-          this.ctx.getWebSockets(tag).length >=
-          (anon ? MAX_ANON_EVENTS_PER_ACTOR : MAX_SOCKETS_PER_ACTOR)
-        )
-          return new Response("Too many subscriptions", { status: 429 });
-        tags.push(tag);
-      }
+      const tag = `ea:${actor}`;
+      if (
+        this.ctx.getWebSockets(tag).length >=
+        (anon ? MAX_ANON_EVENTS_PER_ACTOR : MAX_SOCKETS_PER_ACTOR)
+      )
+        return new Response("Too many subscriptions", { status: 429 });
+      tags.push(tag);
       hello = `{"type":"hello","version":${v}}`;
     } else {
       const r = DataNameSchema.safeParse(url.searchParams.get("collection"));

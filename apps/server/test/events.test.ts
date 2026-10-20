@@ -395,6 +395,27 @@ describe("events socket: access changes and budgets", () => {
     expect(s.frames.some((f) => f.type === "version")).toBe(false);
   });
 
+  it("an actor is required: no IP at the route is refused, no actor at the DO is 400", async () => {
+    const id = await pub({ visibility: "public" });
+    // The route never forwards an anonymous caller without an IP key (as
+    // data-subscribe: 429 rate_limited "Anonymous access is unavailable").
+    const r = await app.fetch(
+      new Request(`http://app.localhost${R.events(id)}`, { headers: UP }),
+      env as never,
+      { waitUntil() {}, passThroughOnException() {} } as never,
+    );
+    expect(r.status).toBe(429);
+    // Defensively, the DO itself refuses an events upgrade with no actor.
+    const d = await runtimeStub(env, id).fetch(
+      "https://runtime.invalid/events",
+      {
+        headers: { Upgrade: "websocket", "X-OA-Version": "1" },
+      },
+    );
+    expect(d.status).toBe(400);
+    expect(await d.text()).toBe("Missing actor");
+  });
+
   it("eventsIpKey: IPv4 as is, IPv6 by /56", () => {
     expect(eventsIpKey("203.0.113.7")).toBe("203.0.113.7");
     expect(eventsIpKey("2001:db8:1:1ff:a::1")).toBe("2001:db8:1:100::/56");
@@ -454,5 +475,5 @@ describe("events socket: access changes and budgets", () => {
     expect(await status(open(id, viewer))).toBe(101);
     expect(await status(open(id, owner))).toBe(101);
     for (const s of held) s.ws.close();
-  });
+  }, 60_000); // ~100 upgrades: slow when the whole suite shares the CPU
 });
