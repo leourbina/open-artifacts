@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { State } from "../state.ts";
 import type { Ctx, Step } from "../step.ts";
@@ -128,6 +129,19 @@ function planGuard(
   return undefined;
 }
 
+/** Rendered config + repo version + the built bundle (assets and server source); undefined when unknown. */
+function deployHash(ctx: Ctx, _vars: unknown): string | undefined {
+  const config = ctx.fs.read(join(ctx.root, CONFIG));
+  const bundle = ctx.fs.hashTree?.([
+    join(ctx.root, "apps/server/dist-assets"),
+    join(ctx.root, "apps/server/src"),
+  ]);
+  if (config === null || !bundle) return undefined;
+  return createHash("sha256")
+    .update(`${config}\0${repoVersion(ctx)}\0${bundle}`)
+    .digest("hex");
+}
+
 export const deploy: Step = {
   name: "deploy",
   always: true,
@@ -195,6 +209,23 @@ export const deploy: Step = {
     const d1 = names(ctx.opts.name).d1;
     await ctx.wrangler(["d1", "migrations", "apply", d1, "--remote"]);
     const replaced = await readVersion(ctx, state);
+    // An identical deploy is a no-op: same rendered config, repo version and built bundle as the
+    // live version. An unknown hash (no bundle to read, no live version) never skips.
+    const hash = deployHash(ctx, vars);
+    if (
+      hash &&
+      state.deployHash === hash &&
+      replaced &&
+      replaced === state.workerVersion
+    ) {
+      ctx.notes.push(`skipped: already deployed ${state.deployedVersion}`);
+      ctx.data = {
+        deployedVersion: state.deployedVersion,
+        deploySkipped: true,
+        ...ver,
+      };
+      return undefined;
+    }
     const out = await ctx.wrangler(["deploy"]);
     state.previousWorkerVersion = replaced;
     state.workerVersion = out.match(/Current Version ID:\s*(\S+)/)?.[1];
@@ -203,6 +234,7 @@ export const deploy: Step = {
         "warning: could not read the new version id from wrangler's output; --rollback will refuse until the next deploy",
       );
     state.deployedVersion = repoVersion(ctx);
+    state.deployHash = hash;
     state.planVar = ctx.opts.planVar;
     ctx.notes.push(`deployed ${state.deployedVersion}`);
     ctx.data = { deployedVersion: state.deployedVersion, ...ver };

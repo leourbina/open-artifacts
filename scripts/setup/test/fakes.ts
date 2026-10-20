@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { Deps, Exec } from "../src/cf.ts";
 
@@ -45,6 +46,16 @@ export function core(o: Core = {}) {
     fs: {
       read: (p) => files.get(p) ?? null,
       write: (p, d) => void files.set(p, d),
+      hashTree: (paths) => {
+        const hit = [...files.keys()]
+          .filter((k) => paths.some((p) => k === p || k.startsWith(`${p}/`)))
+          .sort();
+        return hit.length
+          ? createHash("sha256")
+              .update(hit.map((k) => `${k}\0${files.get(k)}`).join("\0"))
+              .digest("hex")
+          : undefined;
+      },
       writeSecret: (p, d) => {
         files.set(p, d);
         secretWrites.push(p);

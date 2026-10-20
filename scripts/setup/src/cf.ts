@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   closeSync,
@@ -7,9 +8,11 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
@@ -36,6 +39,8 @@ export type Fs = {
    * failure keeps the old file.
    */
   writeSecret?: (path: string, data: string) => void;
+  /** A hash of every file under these paths (names and contents); undefined when none exists. */
+  hashTree?: (paths: string[]) => string | undefined;
 };
 export type TokenFile = {
   text: string;
@@ -79,6 +84,27 @@ export const realFs: Fs = {
   write: (p, d) => {
     mkdirSync(dirname(p), { recursive: true });
     writeFileSync(p, d);
+  },
+  hashTree: (paths) => {
+    const h = createHash("sha256");
+    let any = false;
+    const walk = (p: string) => {
+      let st: ReturnType<typeof statSync>;
+      try {
+        st = statSync(p);
+      } catch {
+        return;
+      }
+      if (st.isDirectory()) {
+        for (const n of readdirSync(p).sort())
+          if (n !== "node_modules") walk(join(p, n));
+      } else if (st.isFile()) {
+        any = true;
+        h.update(`${p}\0`).update(readFileSync(p)).update("\0");
+      }
+    };
+    for (const p of paths) walk(p);
+    return any ? h.digest("hex") : undefined;
   },
   // POSIX only: Windows is supported through WSL.
   writeSecret: (p, d) => {

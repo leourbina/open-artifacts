@@ -18,6 +18,8 @@ export type State = {
   deployedVersion?: string;
   /** The Worker version id the last deploy serves (what --rollback reports as `from`). */
   workerVersion?: string;
+  /** Hash of the rendered config, repo version and built bundle of the last deploy; an identical rerun skips `wrangler deploy`. */
+  deployHash?: string;
   /** The version id the last deploy replaced: the target of --rollback. Unset on a first install. */
   previousWorkerVersion?: string;
   /** The setup-minted owner token row; the token itself is never stored. */
