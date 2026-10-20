@@ -8,7 +8,7 @@ An HTML artifact can keep data with `window.openArtifacts`. Polls, trackers, and
 
 ## Ready and theme
 
-`openArtifacts.ready` is a promise that resolves once the viewer shell has connected; wait for it before your first call. In the raw view, with no shell, it resolves at once.
+`openArtifacts.ready` is a promise that resolves once the viewer shell has connected; wait for it before your first call. Outside the viewer, with no shell, it resolves at once.
 
 `openArtifacts.theme` is `"light"` or `"dark"`. It starts from the viewer's system setting and follows the shell's theme once it connects. `onTheme(callback)` calls back whenever it changes and returns a function that stops listening.
 
@@ -82,6 +82,29 @@ await votes.set(crypto.randomUUID(), { option: "Lisbon" });
 | Writes per viewer | {LIMIT_VIEWER_WRITES} |
 | Anonymous writes per IP | {LIMIT_ANON_WRITES} |
 
+## Errors
+
+Every call returns a promise. A failed call rejects with an error that has a `code` and a `message`:
+
+| `code` | Meaning |
+|---|---|
+| `no_shell` | No viewer shell to reach the server. Outside the viewer (for example, the artifact's file opened directly), every call fails at once; in a frame, a call fails if no shell has answered within a few seconds. |
+| `capability_denied` | The artifact didn't declare that capability, or the viewer isn't allowed (for example, an anonymous write). |
+| `bad_request` | Invalid parameters, such as a bad collection name or a value that can't be sent. |
+| `rate_limited`, `too_large`, `quota_exceeded` | A limit was reached. |
+| `not_found`, `unauthorized`, `conflict`, `internal` | Other server errors. |
+
+Handle `no_shell` by showing the page without live data:
+
+```js
+try {
+  render(await openArtifacts.db.collection("votes").list());
+} catch (e) {
+  if (e.code === "no_shell") showStatic();
+  else throw e;
+}
+```
+
 ## How it works
 
-The artifact runs in a sandboxed iframe with no credentials. Each call goes by `postMessage` to the viewer shell around it, which checks the call and makes it with the viewer's session. Raw view drops the shell, so the runtime API isn't available there.
+The artifact runs in a sandboxed iframe with no credentials. Each call goes by `postMessage` to the viewer shell around it, which checks the call and makes it with the viewer's session. Opened outside the viewer, the artifact has no shell, so every call rejects at once with `no_shell`.

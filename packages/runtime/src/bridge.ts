@@ -9,13 +9,18 @@ import type {
 } from "@oa/shared";
 
 export const CALL_TIMEOUT_MS = 15_000;
+/** Framed, before any shell message: a call waiting this long rejects with no_shell. */
+export const HANDSHAKE_MS = 3_000;
 export const RAW_VIEW_MESSAGE =
   "Open this artifact in Open Artifacts to use live data";
+
+/** API error codes, plus `no_shell`: no viewer shell to reach the server. */
+export type RuntimeErrorCode = ErrorCode | "no_shell";
 
 /** Rejection value of every runtime call: `{ code, message }` (an Error). */
 export class RuntimeError extends Error {
   constructor(
-    public code: ErrorCode,
+    public code: RuntimeErrorCode,
     message: string,
   ) {
     super(message);
@@ -31,12 +36,14 @@ type Pending = {
   resolve: (v: unknown) => void;
   reject: (e: RuntimeError) => void;
   timer: ReturnType<typeof setTimeout>;
+  /** The handshake bound, set while no shell message has arrived. */
+  hs?: ReturnType<typeof setTimeout>;
 };
 
 export type Listener = (m: ShellToArtifact) => void;
 
 export interface Bridge {
-  /** True in the raw view (no parent shell): every call rejects. */
+  /** True in the raw view (no parent shell): every call rejects with no_shell. */
   readonly raw: boolean;
   call<M extends RuntimeMethod>(
     method: M,
@@ -67,6 +74,9 @@ const newCallId = (): string => {
 export function createBridge(loadSchemas: () => Promise<Schemas>): Bridge {
   const win = window;
   const raw = win.parent === win;
+  /** Set by the first shell message; a late shell is still accepted. */
+  let shell = false;
+  const noShell = () => new RuntimeError("no_shell", RAW_VIEW_MESSAGE);
   const pending = new Map<string, Pending>();
   const listeners = new Set<Listener>();
   const schemas: Promise<Schemas | null> = raw
@@ -76,12 +86,12 @@ export function createBridge(loadSchemas: () => Promise<Schemas>): Bridge {
         return null;
       });
   let inbox: Promise<unknown> = schemas;
-
   const settle = (id: string): Pending | undefined => {
     const p = pending.get(id);
     if (p) {
       pending.delete(id);
       clearTimeout(p.timer);
+      clearTimeout(p.hs);
     }
     return p;
   };
@@ -89,6 +99,7 @@ export function createBridge(loadSchemas: () => Promise<Schemas>): Bridge {
   const handle = (s: Schemas | null, data: unknown) => {
     const m = s?.parseShellMessage(data);
     if (!s || !m) return;
+    shell = true;
     if (m.type !== "result") {
       for (const l of [...listeners]) {
         try {
@@ -122,10 +133,7 @@ export function createBridge(loadSchemas: () => Promise<Schemas>): Bridge {
   return {
     raw,
     call(method, params) {
-      if (raw)
-        return Promise.reject(
-          new RuntimeError("capability_denied", RAW_VIEW_MESSAGE),
-        );
+      if (raw) return Promise.reject(noShell());
       const id = newCallId();
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
@@ -137,6 +145,11 @@ export function createBridge(loadSchemas: () => Promise<Schemas>): Bridge {
           resolve: resolve as (v: unknown) => void,
           reject,
           timer,
+          hs: shell
+            ? undefined
+            : setTimeout(() => {
+                if (!shell) settle(id)?.reject(noShell());
+              }, HANDSHAKE_MS),
         });
         const fail = (code: ErrorCode, message: string) =>
           settle(id)?.reject(new RuntimeError(code, message));
@@ -169,7 +182,10 @@ export function createBridge(loadSchemas: () => Promise<Schemas>): Bridge {
     },
     dispose() {
       win.removeEventListener("message", onMessage);
-      for (const p of pending.values()) clearTimeout(p.timer);
+      for (const p of pending.values()) {
+        clearTimeout(p.timer);
+        clearTimeout(p.hs);
+      }
       pending.clear();
       listeners.clear();
     },

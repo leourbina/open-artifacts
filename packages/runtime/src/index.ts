@@ -12,7 +12,7 @@ import {
   type Schemas,
 } from "./bridge.js";
 
-export { RuntimeError } from "./bridge.js";
+export { RuntimeError, type RuntimeErrorCode } from "./bridge.js";
 
 export type Theme = "light" | "dark";
 export type Viewer = { email: string; name: string | null };
@@ -121,7 +121,12 @@ function systemTheme(): Theme {
 }
 
 const ignore = (e: unknown) => {
-  if (!(e instanceof RuntimeError && e.code === "capability_denied"))
+  if (
+    !(
+      e instanceof RuntimeError &&
+      (e.code === "capability_denied" || e.code === "no_shell")
+    )
+  )
     console.error("openArtifacts:", e);
 };
 
