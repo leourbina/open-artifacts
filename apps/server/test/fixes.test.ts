@@ -14,7 +14,7 @@ import worker from "../src/index.js";
 import { mountRoutes } from "../src/routes/index.js";
 
 const CSP =
-  "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; frame-ancestors http://app.localhost";
+  "sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads; frame-ancestors http://app.localhost";
 let assetCalls: string[] = [];
 const ASSETS = {
   fetch(req: Request) {

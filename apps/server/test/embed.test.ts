@@ -19,7 +19,7 @@ import { api, login } from "./helpers.js";
 
 const G = "https://open-artifacts.com";
 const CONTENT_CSP =
-  "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads";
+  "sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads";
 const assets = fakeAssets({
   "/index.html": {
     body: "<!doctype html><html><head><title>x</title></head><body></body></html>",

@@ -21,7 +21,7 @@ afterAll(async () => {
   }
 });
 const CSP_SANDBOX =
-  "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; frame-ancestors ";
+  "sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads; frame-ancestors ";
 
 describe.skipIf(!base || !pat)("staging smoke: content host", () => {
   it("serves a signed content URL in the sandbox; expired token → 404", async () => {

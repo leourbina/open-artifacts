@@ -4,8 +4,7 @@ import { verifyPat } from "./auth/pat.js";
 import { contentApp } from "./content/app.js";
 import { scheduled } from "./cron.js";
 import type { Env } from "./env.js";
-import { frameOpts } from "./http/embed.js";
-import { withSecurityHeaders } from "./http/middleware.js";
+import { appHostOpts, withSecurityHeaders } from "./http/middleware.js";
 import { serveAppHost } from "./mcp/oauth.js";
 import {
   capMcpBody,
@@ -63,7 +62,7 @@ export default {
     const res = pat?.[1]
       ? await mcpWithPat(req, env, ctx, pat[1])
       : await serveAppHost(req, env, ctx, app);
-    return withSecurityHeaders(res, frameOpts(env, req.method, url.pathname));
+    return withSecurityHeaders(res, appHostOpts(env, req.method, url.pathname));
   },
   scheduled,
 } satisfies ExportedHandler<Env>;

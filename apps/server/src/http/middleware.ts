@@ -1,4 +1,4 @@
-import type { Member } from "@oa/shared";
+import { ARTIFACT_SANDBOX_ATTR, type Member } from "@oa/shared";
 import type { Context, MiddlewareHandler } from "hono";
 import { getCookie } from "hono/cookie";
 import { verifyPat } from "../auth/pat.js";
@@ -17,8 +17,19 @@ export type AppVariables = {
 };
 export type AppEnv = { Bindings: Env; Variables: AppVariables };
 
-export const CONTENT_CSP =
-  "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads";
+export const CONTENT_CSP = `sandbox ${ARTIFACT_SANDBOX_ATTR}`;
+
+/**
+ * Sign-in pages a client may open in a popup (web MCP connectors run OAuth in
+ * one and read the result through window.opener): no COOP there, or the
+ * popup loses its opener. Exact pathnames only, never prefixes.
+ */
+export const COOP_EXEMPT: ReadonlySet<string> = new Set([
+  "/oauth/authorize", // GET consent page, POST consent decision
+  "/auth/login",
+  "/auth/callback",
+  "/auth/dev-login",
+]);
 
 /**
  * `frameAncestors` (a pre-validated source list from frameOpts) replaces
@@ -29,7 +40,24 @@ type SecurityOpts = {
   frameDeny?: boolean;
   frameAncestors?: string;
   csp?: string;
+  /** Cross-Origin-Opener-Policy: same-origin (app host only; see appHostOpts). */
+  coop?: boolean;
 };
+
+/**
+ * App-host security options for a request: framing per frameOpts, plus
+ * `Cross-Origin-Opener-Policy: same-origin` (a popup opened from an artifact
+ * can't reach back into our pages) except on COOP_EXEMPT. Never on the
+ * content host.
+ */
+export const appHostOpts = (
+  env: Env,
+  method: string,
+  pathname: string,
+): SecurityOpts => ({
+  ...frameOpts(env, method, pathname),
+  coop: !COOP_EXEMPT.has(pathname),
+});
 
 /** `res` with the standard security headers; a copy when its headers are immutable. */
 export function withSecurityHeaders(
@@ -54,6 +82,8 @@ function setSecurityHeaders(h: Headers, opts: SecurityOpts): void {
   h.set("X-Robots-Tag", "noindex, nofollow");
   h.set("X-Content-Type-Options", "nosniff");
   h.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  if (opts.coop) h.set("Cross-Origin-Opener-Policy", "same-origin");
+  else h.delete("Cross-Origin-Opener-Policy");
   if (opts.frameAncestors) {
     h.delete("X-Frame-Options");
     const fa = `frame-ancestors ${opts.frameAncestors}`;
@@ -71,7 +101,7 @@ export const securityHeaders =
     // Responses from fetch()/Response.redirect() have immutable headers: re-wrap.
     c.res = withSecurityHeaders(
       c.res,
-      frameOpts(c.env, c.req.method, new URL(c.req.url).pathname),
+      appHostOpts(c.env, c.req.method, new URL(c.req.url).pathname),
     );
   };
 
