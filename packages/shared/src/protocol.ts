@@ -46,10 +46,11 @@ const Theme = ThemeSchema;
 
 /**
  * Anonymous id (artifacts with allowAnonymousWrites): the shell sends its
- * signed token "<id>.<sig>" in this request header on anonymous runtime calls,
- * and the server returns a new one in the same response header whenever it
- * mints one (anonymous writes and R.anonId only; missing, malformed or forged
- * token). The token never enters the artifact frame.
+ * signed token "<id>.<iat>.<sig>" (legacy v1: "<id>.<sig>") in this request
+ * header on anonymous runtime calls, and the server returns a new one in the
+ * same response header whenever it mints one (anonymous writes and R.anonId
+ * only; missing, malformed or forged token: new id; v1 or older than 30 days:
+ * same id). The token never enters the artifact frame.
  */
 export const ANON_ID_HEADER = "X-OA-Anon-Id";
 /** Length of the per-artifact public anonId (updatedBy "anon:<short>"). */
