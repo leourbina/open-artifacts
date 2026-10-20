@@ -45,6 +45,7 @@ matching row.
 | upload PUT | 8 / 5 | 0.36 |
 | publish `{ uploadId }` | 17 / 5 | 0.52 |
 | data doc write 256 KB (Worker / DO) | - | 0.88 / 0.51 |
+| data reset 500 docs / 1 MB (Worker / DO; DO bar 8 ms) | - | 0.69 / 3.5 |
 | index alarm (DO) | 12 / 12 | 0.53 (64 KB html) |
 
 The 1 KB publish control is the worst staging row while doing almost no
