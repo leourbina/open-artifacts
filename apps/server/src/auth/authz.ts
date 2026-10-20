@@ -1,4 +1,4 @@
-import type { AccessLevel, ListQuery, Member, Role } from "@oa/shared";
+import type { AccessLevel, ListQuery, Member } from "@oa/shared";
 import {
   and,
   eq,
@@ -17,12 +17,14 @@ import { artifacts, shares } from "../db/schema.js";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
 import type { AppEnv } from "../http/middleware.js";
+import { TEAM_ROLES } from "./policy.js";
+
+/** Roles that see `team` artifacts (defined in policy.ts). */
+export { TEAM_ROLES };
 
 export type Caller = { kind: "user"; user: Member } | { kind: "anonymous" };
 export type ArtifactRow = typeof artifacts.$inferSelect;
 
-/** Roles that see `team` artifacts. Guests never do. */
-export const TEAM_ROLES: readonly Role[] = ["owner", "admin", "member"];
 // "manager" (hosted M1 contract) is never produced yet; P3 sets its semantics.
 const RANK: Record<AccessLevel, number> = {
   viewer: 1,
