@@ -21,6 +21,7 @@ import { Crumbs } from "./Crumbs";
 import { FullScreenEscape } from "./FullScreenEscape";
 import { frameLoad, SANDBOX, safeContentUrl } from "./frame";
 import { isPanelTab, type PanelTab, SidePanel } from "./panels/SidePanel";
+import { RenavNotice } from "./RenavNotice";
 import { SlowNotice } from "./SlowNotice";
 import { TitleBar } from "./TitleBar";
 import { useArtifactSideEffects } from "./useArtifactSideEffects";
@@ -124,6 +125,20 @@ function Viewer({
     key: 0,
     src: null,
   });
+  // The renavigation notice: the frame left the page we loaded, so its bridge
+  // is gone. Only artifacts with live data lose anything. Each later load in
+  // that frame is another navigation and brings a dismissed notice back.
+  const caps = artifact.capabilities;
+  const live = caps.db || caps.viewer || caps.storage;
+  const renavigated = useRef(false);
+  const [renav, setRenav] = useState(false);
+  const onRenavigated = useCallback(() => {
+    renavigated.current = true;
+    // No bridge, so no hello: the slow notice would be wrong.
+    clearTimeout(slowTimer.current);
+    setSlow(false);
+    setRenav(live);
+  }, [live]);
   const onHello = useCallback(() => {
     helloSeen.current = true;
     clearTimeout(slowTimer.current);
@@ -136,6 +151,10 @@ function Viewer({
       // calls loadArtifactFrame. That load isn't the artifact: it must neither
       // freeze the content URL nor arm the slow timer.
       if (!frameLoad(e.currentTarget)) return;
+      if (renavigated.current) {
+        setRenav(live);
+        return;
+      }
       contentLoaded();
       reloading.current = false;
       clearTimeout(slowTimer.current);
@@ -144,7 +163,7 @@ function Viewer({
         if (!helloSeen.current) setSlow(true);
       }, SLOW_MS);
     },
-    [contentLoaded],
+    [contentLoaded, live],
   );
   useEffect(() => () => clearTimeout(slowTimer.current), []);
   const reload = () => {
@@ -153,6 +172,8 @@ function Viewer({
     helloSeen.current = false;
     clearTimeout(slowTimer.current);
     setSlow(false);
+    renavigated.current = false;
+    setRenav(false);
     setReloads((r) => r + 1);
     const ready = content.fresh()
       ? Promise.resolve(content.current)
@@ -182,13 +203,14 @@ function Viewer({
       // The refetch 404s if access is gone, which the shell then handles.
       onAccessLost: () =>
         void qc.invalidateQueries({ queryKey: qk.artifact(artifact.id) }),
+      onRenavigated,
     });
     bridge.current = b;
     return () => {
       b.dispose();
       bridge.current = null;
     };
-  }, [el, src, version, qc, artifact.id, onHello]);
+  }, [el, src, version, qc, artifact.id, onHello, onRenavigated]);
 
   useEffect(() => bridge.current?.setTheme(theme), [theme]);
 
@@ -216,6 +238,12 @@ function Viewer({
         ) : null}
         {url && (
           <div className="oa-vmain">
+            {renav && (
+              <RenavNotice
+                onReload={reload}
+                onDismiss={() => setRenav(false)}
+              />
+            )}
             {slow && (
               <SlowNotice
                 cpu={(cpu.hits ?? 0) > 0 || cpu.recent}
