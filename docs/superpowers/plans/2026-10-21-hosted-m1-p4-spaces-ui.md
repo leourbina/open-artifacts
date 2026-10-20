@@ -24,7 +24,10 @@
 - Errors: no access is 404. The 11 hosted codes each have one owning task and one UI string (see "Error codes, tasks and copy"); `rate_limited` and `unauthorized` with `details.reason` belong to Task 14. The UI shows its own mapped copy (`errorCopy`, Task 2) and falls back to the server's `message`.
 - Groups are keyed by `groupId` (Google's stable id) in every route the UI calls; emails and names are display only.
 - Restriction: `Member.restriction { manual, groups }` caps a member at viewer everywhere. Admins set or clear only the manual flag (`R.memberRestricted`); a group restriction is lifted only by removing the restricted group, and the UI never implies otherwise.
-- Every refused sign-in lands on `/sign-in?error=` (including `no_access`); the dashboard never sends a direct-mode visitor to `/no-access`.
+- Every refused sign-in lands on `/sign-in?error=` (including `no_access`); the dashboard never sends a direct-mode visitor to `/no-access`. `?error=` is parsed with `SignInErrorSchema` and never echoed.
+- Open redirects: every `next` the dashboard builds into a link, sends, or navigates to goes through `safeNext` (Task 2): relative, one leading `/`, no `//`, `/\`, scheme or control characters; else `/`.
+- `reauth_required` (401) never signs the owner out: `reportApiError` ignores it, and the directory page offers a fresh Google sign-in instead (Tasks 2, 17).
+- Move and Transfer exist only with the `spaces` feature: `canOf` forces `move` and `transfer` false without it, so self-hosted owners see exactly today's actions (Task 1).
 - Sign-in codes: `CODE_POLICY.length` is 8; input goes through the contract's `normalizeCode` (spaces and hyphens stripped). No 6-digit logic anywhere.
 - Turnstile: the code-request step has a slot that renders the widget when the email provider carries `turnstileSiteKey`, and sends `turnstileToken`. Turnstile and a request-id cookie are pending Backend's security review; the slot copes with either outcome (no key = no widget).
 - Boundary: this track never edits `packages/shared` or `apps/server`. A missing or wrong shape is a message to Backend.
@@ -36,7 +39,7 @@
 1. **A self-hosted instance after upgrade.** Signed-in pages make no request to `R.spaces`, `R.directory` or any hosted route, and render nothing new. `/sign-in` does request `AUTH.providers` (it must, to know the mode); a 404 or `mode: "access"` renders today's Access page unchanged. Pinned in Task 1 (`no features: no hosted request from signed-in pages`) and Task 14 (`providers 404 renders today's page`, `access mode renders today's page`).
 2. **A viewer, a guest or a contractor opens an artifact.** No edit, share, move or delete; a viewer with `can.dataWrite` still votes; a guest or contractor sees the read-only notice and no data-write affordance; a stale tab that tries anyway shows the server's message. Pinned in Task 3.
 3. **An admin handling a departed person.** Counts only, never titles or artifact requests; the departed person and guests can't be successors; more than 100 artifacts finish through the cursor loop; reopening resumes from a fresh summary. Pinned in Task 13.
-4. **Emailed code typos and abuse.** `2468-1357` and `2468 1357` verify; a wrong code shows attempts left; the fifth wrong try expires it; `no_pending` returns to the email step; `rate_limited` shows the wait; Turnstile failure keeps the email; nothing reveals whether an address can sign in. Pinned in Task 14.
+4. **Emailed code typos, abuse and hostile links.** A `next` of `//evil.example` (in the URL or from the server) never leaves the app; an unknown `?error=` is never echoed. `2468-1357` and `2468 1357` verify; a wrong code shows attempts left; the fifth wrong try expires it; `no_pending` returns to the email step; `rate_limited` shows the wait; Turnstile failure keeps the email; nothing reveals whether an address can sign in. Pinned in Task 14.
 5. **FinQore's directory goes unhealthy.** Owners and admins see the sync-health banner (and the "agent tokens not re-verified" note) after an hour; members never do; a held sweep waits for the owner's confirmation; a stale owner gets `reauth_required` and a fresh Google sign-in link instead of a dead page. Pinned in Tasks 4, 17 and 18.
 
 ---
@@ -55,7 +58,7 @@ P4 adopts the contract exactly. What each area of the UI reads:
 | Sign-in | `SIGN_IN_PAGE`, `AUTH.providers` (`AuthProviders { mode, providers: access{start} \| google{start, domains} \| email{domainCodes, guests, turnstileSiteKey?} }`), `AUTH.loginGoogle`, `AUTH.codeRequest` (`CodeRequest { email, next?, turnstileToken? }` → 202 `CodeRequested { maskedEmail, expiresIn, resendAfter, codeLength }`), `AUTH.codeVerify` (`{ code }` plus cookie → `CodeVerified { next, user, readOnly }`; 401 `details.reason` `invalid_code{attemptsLeft} \| expired \| no_pending`; 429 locked), `SignInError` (`tenant \| identity_conflict \| removed \| no_access \| expired \| failed`; every refusal lands here); `turnstile_required` 400 `details.field: "turnstile"`; locked verify 429 `{ retryAfter, scope: "ip" }`, `CODE_POLICY`, `normalizeCode` |
 | Mocks | `createHandlers({ hosted: true \| HostedMockOptions })` with `mode`, `providers`, `turnstile`, `tier`, `directory`, `unhealthy`, `features`. Store: personal space per member; Engineering `SpEngNpQrSt2uVwX` (caller manager, `allMembersRole: "viewer"`, holds "Meeting notes" `De6gHjKmNp7qRsTu`); Exec `SpExcNpQrSt3uVwX` (caller viewer, `publicLinks: false`); Clients `SpCliNpQrSt4uVwX` (admin view, `myRole: null`); Ada `Ab3dEfGhJk4mNpQr` (owner, `identities: ["google"]`); Bob `Bc4eFgHjKm5nPqRs`; Carol `Cr7tNpQrSt8uVwXy` suspended, `{ live: 2, deleted: 1 }`; groups `gEng01` (eng@), `gExec02` (exec@), `gSales03` (sales@), `gCon04` (restricted Contractors, member Dan `Dn8uPqRsTu9vWxYz`, `cap: "restricted"`); held sweep `gSales03` (`wouldRemove: 4`); `public_links_off` on PATCH and publish; `HOSTED_MOCK_CODE` `24681357`; `MOCK_DOMAIN` `example.com`; masked `b***@example.com`; Turnstile site key `1x00000000000000000000AA` |
 
-**Mismatches with the contract (`ed1105c`):** none. Out of P4's M1 scope by design: the single-artifact transfer (`R.transferArtifact`) has no UI yet, and the audit log (`R.audit`) is M4. Pending Backend's security review: Turnstile on domain code requests and a request-id cookie; Task 14's slot covers both outcomes.
+**Mismatches with the contract (`ed1105c`):** none. **Asked of Backend (mocks):** the mock's code verify should return `safeNext(next)` like the server; until then Task 14 overrides verify with a hostile `next` to prove the dashboard's own guard. Out of P4's M1 scope by design: the single-artifact transfer (`R.transferArtifact`) has no UI yet, and the audit log (`R.audit`) is M4. Pending Backend's security review: Turnstile on domain code requests and a request-id cookie; Task 14's slot covers both outcomes.
 
 ## Error codes, tasks and copy
 
@@ -70,7 +73,7 @@ P4 adopts the contract exactly. What each area of the UI reads:
 | `use_move` | 400 | `spaceId` on publish to an existing artifact (the upload never sends one; defensive) | 7 | "This artifact already exists. Use Move to change its space." |
 | `invalid_successor` | 400 | transfer to a guest, a restricted member or an inactive member | 13 | "Choose an active member who isn't a guest or restricted." |
 | `member_active` | 409 | departed-person transfer on someone who is active again | 13 | "This person is active again, so their artifacts stay with them." |
-| `directory_sync_off` | 409 | mapping or restricted-group change, or Sync now, while sync is off or frozen | 11, 17, 18 | "Directory sync is off, so groups can't be changed here." |
+| `directory_sync_off` | 409 | mapping or restricted-group change while sync is off or frozen; Sync now while off | 11, 18; 17 | "Directory sync is off, so groups can't be changed here." (Sync now has its own: "Sync is off. Connect Google Workspace to sync.") |
 | `turnstile_required` | 400 (`details.field: "turnstile"`) | code request without a token | 14 | "Complete the verification first." (shown at the Turnstile slot) |
 | `turnstile_failed` | 403 | code request with a rejected token | 14 | "Verification failed. Try again." |
 | `reauth_required` | 401 | directory routes for a stale owner | 17 | "For your security, sign in with Google again to manage the directory." |
@@ -140,10 +143,10 @@ Only `apps/dashboard` changes.
 - `settings/spaces/` (create): `Spaces.tsx`, `SpaceAccess.tsx`, `GroupPicker.tsx`.
 - `settings/Directory.tsx` (create), `settings/Transfer.tsx` (create), `settings/Members.tsx` (modify).
 - `pages/SignIn.tsx` (modify), `pages/CodeSignIn.tsx` (create), `pages/Turnstile.tsx` (create), `pages/NoAccess.tsx` (modify: direct mode redirects to `/sign-in?error=no_access`).
-- `api/errorCopy.ts` (create): code to UI string.
+- `api/errorCopy.ts` (create): code to UI string; `auth/safeNext.ts` (create); `api/queryClient.ts` (modify: reauth exemption, hosted `roleGated` routes).
 - `main.tsx` (modify: `?hosted=` mock switch), `router.tsx`, `library/{Library,ArtifactCard,ArtifactRow}.tsx`, `library/{useLibraryQuery,useSearchQuery}.ts`, `upload/{UploadDialog,DropZone}.tsx`, `upload/uploadPipeline.ts`, `viewer/{TitleBar,Shell}.tsx`, `viewer/panels/{Details,Versions,Share}.tsx`, `settings/SettingsLayout.tsx` (modify).
 
-Tests: `apps/dashboard/test/{contract,hosted-queries,permissions,hosted-chrome,spaces-library,spaces-publish,spaces-move,share-public-off,spaces-admin,space-access,transfer,signin-hosted,restricted,reset-identity,directory,error-copy}.test.tsx`; `test/harness.tsx` (modify); `e2e/{spaces,signin-hosted,directory}.spec.ts` (create); the 13 specs above; `e2e/real/spaces.spec.ts` (create), `e2e/real/consent.spec.ts`, `e2e/real/fixtures.ts` (modify).
+Tests: `apps/dashboard/test/{safe-next,query-client,error-copy}.test.ts`; `apps/dashboard/test/{contract,hosted-queries,permissions,hosted-chrome,spaces-library,spaces-publish,spaces-move,share-public-off,spaces-admin,space-access,transfer,signin-hosted,restricted,reset-identity,directory}.test.tsx`; `test/harness.tsx` (modify); `e2e/{spaces,signin-hosted,directory}.spec.ts` (create); the 13 specs above; `e2e/real/{spaces.spec,hosted-fixtures}.ts` (create), `e2e/real/consent.spec.ts`, `e2e/real/fixtures.ts`, `playwright.real.config.ts` (modify).
 
 ---
 
@@ -158,11 +161,11 @@ Tests: `apps/dashboard/test/{contract,hosted-queries,permissions,hosted-chrome,s
 
 **Interfaces:**
 - Produces:
-  - `contract.ts` re-exports every hosted type and constant the dashboard uses (`ArtifactCan`, `MySpace`, `Space`, `SpaceRef`, `SpaceRole`, `SpaceKind`, `SpaceMember`, `GroupMapping`, `RestrictedGroup`, `DirectoryGroup`, `SyncStatus`, `DirectoryConnectError`, `FeatureFlag`, `Tier`, `CapReason`, `InstanceDirectory`, `InstanceSignIn`, `MeAuth`, `TransferSummary`, `TransferInput`, `TransferResult`, `AuthProviders`, `CodeRequest`, `CodeRequested`, `CodeVerified`, `SignInError`, `CODE_POLICY`, `TRANSFER_PAGE`, `SPACE_MANAGER_FIELDS`, `SIGN_IN_PAGE`, `normalizeCode`, `artifactCan`). No other dashboard file imports these from `@oa/shared`.
+  - `contract.ts` re-exports every hosted type and constant the dashboard uses (`ArtifactCan`, `MySpace`, `Space`, `SpaceRef`, `SpaceRole`, `SpaceKind`, `SpaceMember`, `GroupMapping`, `RestrictedGroup`, `DirectoryGroup`, `SyncStatus`, `DirectoryConnectError`, `FeatureFlag`, `Tier`, `CapReason`, `InstanceDirectory`, `InstanceSignIn`, `MeAuth`, `TransferSummary`, `TransferInput`, `TransferResult`, `AuthProviders`, `CodeRequest`, `CodeRequested`, `CodeVerified`, `SignInError`, `SignInErrorSchema`, `DirectoryConnectErrorSchema`, `CodeVerifyFailureDetails`, `CodeRateLimitedDetails`, `TurnstileRequiredDetails`, `Restriction`, `HeldSweep`, `GroupRef`, `SpacesQuery`, `SpaceCreateInput` (= `z.input<typeof SpaceCreateSchema>`), `DirectoryMode`, `CODE_POLICY`, `TRANSFER_PAGE`, `SPACE_MANAGER_FIELDS`, `SIGN_IN_PAGE`, `normalizeCode`, `artifactCan`). No other dashboard file imports these from `@oa/shared`.
   - `features(me: Me | null): FeatureFlag[]` → `me?.instance.features ?? []`; `hasFeature(me: Me | null, f: FeatureFlag): boolean`.
-  - `canOf(a: ArtifactSummary): ArtifactCan` → `a.can ?? artifactCan(a.access, { personal: true, cap: null })`.
+  - `canOf(a: ArtifactSummary, feats: FeatureFlag[]): ArtifactCan` → `a.can ?? artifactCan(a.access, { personal: true, cap: null })`, then `move` and `transfer` forced false unless `feats` includes `spaces` (the fallback gives an owner `move: true`, and self-hosted must not show Move or Transfer).
   - `readAuthProviders(raw: unknown): AuthProviders` → parsed, else `{ mode: "access", providers: [{ id: "access", start: AUTH.login }] }`.
-  - `harness.tsx`: `mountHosted(path: string, opts?: true | HostedMockOptions, me?: (m: Me) => Me): Router` (prepends `createHandlers({ hosted: opts })`; `me` rewrites the hosted `/me` body); `calls(method?: string): { path: string; search: URLSearchParams; body: unknown }[]` (records every request from the call on).
+  - `harness.tsx`: `mountHosted(path: string, opts?: true | HostedMockOptions, me?: (m: Me) => Me, overrides?: HttpHandler[]): Router` (prepends `createHandlers({ hosted: opts })`, then `overrides` ahead of it, so a test's handler wins even for the first request; `me` rewrites the hosted `/me` body); `calls(method?: string): { path: string; search: URLSearchParams; body: unknown }[]` (records every request from the call on).
   - `main.tsx`: mock-only `parseHostedParam(raw: string | null): HostedMockOptions | undefined` for `?hosted=`, comma tokens `1` (defaults), `access`, `email-only`, `turnstile`, `unhealthy`, `trial`, `team`, `business`, `frozen`, `sync-off`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -170,6 +173,7 @@ Tests: `apps/dashboard/test/{contract,hosted-queries,permissions,hosted-chrome,s
 ```ts
 import { fixtures } from "@oa/shared/mocks";
 import { canOf, features, hasFeature, readAuthProviders } from "../src/api/contract";
+import type { Me } from "@oa/shared";
 import { parseHostedParam } from "../src/main";
 
 test("me without hosted fields has no features", () => {
@@ -179,12 +183,18 @@ test("me without hosted fields has no features", () => {
 
 test("canOf derives the action table when the server omits can", () => {
   const a = { ...fixtures.artifacts[0], access: "editor" as const, can: undefined };
-  expect(canOf(a)).toEqual({ edit: true, share: false, setVisibility: false, delete: false, transfer: false, move: false, dataWrite: true });
+  expect(canOf(a, [])).toEqual({ edit: true, share: false, setVisibility: false, delete: false, transfer: false, move: false, dataWrite: true });
 });
 
-test("canOf prefers the server's can", () => {
-  const can = { edit: false, share: false, setVisibility: false, delete: false, transfer: false, move: false, dataWrite: false };
-  expect(canOf({ ...fixtures.artifacts[0], can })).toBe(can);
+test("self-hosted owner: no move or transfer", () => {
+  const a = { ...fixtures.artifacts[0], access: "owner" as const, can: undefined };
+  expect(canOf(a, [])).toMatchObject({ share: true, setVisibility: true, delete: true, move: false, transfer: false });
+  expect(canOf(a, ["spaces"])).toMatchObject({ move: true, transfer: true });
+});
+
+test("canOf keeps the server's can when spaces are on", () => {
+  const can = { edit: true, share: true, setVisibility: true, delete: true, transfer: false, move: true, dataWrite: true };
+  expect(canOf({ ...fixtures.artifacts[0], can }, ["spaces"])).toEqual(can);
 });
 
 test("readAuthProviders falls back to access mode", () => {
@@ -235,25 +245,102 @@ Expected: PASS, those four specs unedited.
 
 - [ ] **Step 5: Commit** `feat(dashboard): consume the hosted contract`
 
-### Task 2: Query hooks and sign-in calls
+### Task 2: Query hooks, sign-in calls, error copy, safe redirects
 
 **Depends on:** Task 1.
 
 **Files:**
-- Modify: `apps/dashboard/src/api/queries.ts`
-- Create: `apps/dashboard/src/api/auth.ts`
-- Test: `apps/dashboard/test/hosted-queries.test.tsx`, `apps/dashboard/test/qk.test.ts`
+- Modify: `apps/dashboard/src/api/queries.ts`, `apps/dashboard/src/api/queryClient.ts` (`reportApiError`, `roleGated`)
+- Create: `apps/dashboard/src/api/auth.ts`, `apps/dashboard/src/api/errorCopy.ts`, `apps/dashboard/src/auth/safeNext.ts`
+- Test: `apps/dashboard/test/hosted-queries.test.tsx`, `apps/dashboard/test/qk.test.ts`, `apps/dashboard/test/error-copy.test.ts`, `apps/dashboard/test/safe-next.test.ts`, `apps/dashboard/test/query-client.test.ts`
 
 **Interfaces:**
 - Consumes: `contract.ts`; `R.*`, `AUTH.*`.
 - Produces:
-  - `qk.spaces(q?)` = `["spaces", q ?? {}]`, `qk.space(id)` = `["spaces", id]`, `qk.spaceMembers(id)` = `["spaces", id, "members"]`, `qk.spaceMappings(id)` = `["spaces", id, "mappings"]`, `qk.directory` = `["directory"]`, `qk.restrictedGroups` = `["directory", "restricted"]`, `qk.directoryGroups(q)` = `["directory", "groups", q]`, `qk.memberTransfer(id)` = `["members", id, "transfer"]`; `qk.members` stays `["members"]`, with `useMembers(status?)` keyed `["members", status ?? "active"]`.
-  - Hooks: `useSpaces(q?: SpacesQuery, enabled?)` (infinite), `useSpace(id, enabled?)`, `useCreateSpace()`, `usePatchSpace(id)`, `useDeleteSpace()`, `useSpaceMembers(id)` (infinite), `usePutSpaceMember(id)` (`{ userId, role }`), `useDeleteSpaceMember(id)`, `useSpaceMappings(id)`, `usePutMapping(id)` (`{ groupId, role }`), `useDeleteMapping(id)`, `useRestrictedGroups()`, `usePutRestrictedGroup()` (`groupId`), `useDeleteRestrictedGroup()` (`groupId`), `useSetRestricted()` (`{ memberId, restricted: boolean }` → PUT or DELETE `R.memberRestricted`), `useAddSelfToSpace(id)` (`{ role }` → `R.spaceMemberSelf`), `useDirectory(enabled?)`, `useDirectoryGroups(q)` (infinite; enabled at 2+ characters), `useDirectorySync()`, `useConfirmHeld()` (`groupId`), `useDisconnectDirectory()`, `useMoveArtifact(id)` (`mutateAsync(spaceId)`), `useTransferSummary(memberId)`, `useRunTransfer(memberId)` (one page per `mutateAsync(TransferInput)`), `useResetIdentity()` (`mutateAsync(memberId)`).
+  - `qk.spaces(q?)` = `["spaces", q ?? {}]`, `qk.space(id)` = `["spaces", id]`, `qk.spaceMembers(id)` = `["spaces", id, "members"]`, `qk.spaceMappings(id)` = `["spaces", id, "mappings"]`, `qk.directory` = `["directory"]`, `qk.restrictedGroups` = `["directory", "restricted"]`, `qk.directoryGroups(q)` = `["directory", "groups", q]`, `qk.memberTransfer(id)` = `["members", id, "transfer"]`; `useMembers(status?)` keyed `["members", status ?? "active"]` (so `["members"]` still invalidates every list).
+  - Hooks: `useSpaces(q?: z.input<typeof SpacesQuerySchema>, enabled?)` (infinite), `useSpace(id, enabled?)`, `useCreateSpace()` (`SpaceCreateInput`), `usePatchSpace(id)`, `useDeleteSpace()`, `useSpaceMembers(id)` (infinite), `usePutSpaceMember(id)` (`{ userId, role }`), `useDeleteSpaceMember(id)`, `useAddSelfToSpace(id)` (`{ role }` → `R.spaceMemberSelf`), `useSpaceMappings(id)`, `usePutMapping(id)` (`{ groupId, role }`), `useDeleteMapping(id)` (`groupId`), `useRestrictedGroups()`, `usePutRestrictedGroup()` (`groupId`), `useDeleteRestrictedGroup()` (`groupId`), `useSetRestricted()` (`{ memberId, restricted: boolean }` → PUT or DELETE `R.memberRestricted`), `useDirectory(enabled?)`, `useDirectoryGroups(q)` (infinite; enabled at 2+ characters), `useDirectorySync()`, `useConfirmHeld()` (`groupId`), `useDisconnectDirectory()`, `useMoveArtifact(id)` (`mutateAsync(spaceId)`), `useTransferSummary(memberId)`, `useRunTransfer(memberId)` (one page per `mutateAsync(TransferInput)`), `useResetIdentity()` (`mutateAsync(memberId)`).
   - `api/auth.ts`: `useAuthProviders()` (`retry: false`, through `readAuthProviders`), `requestCode(input: CodeRequest): Promise<CodeRequested>`, `verifyCode(code: string): Promise<CodeVerified>`; both send `X-OA-Request: 1` and throw `ApiClientError` with `details`.
+  - `api/errorCopy.ts`: `errorCopy(e: unknown, fallback: string): string` (the table's string for the 11 hosted codes, else the `ApiClientError` message, else `fallback`).
+  - `auth/safeNext.ts`: `safeNext(raw: unknown): string` returns `raw` only when it is a string that starts with exactly one `/`, whose second character is neither `/` nor `\`, with no scheme and no control or whitespace characters (`/[\u0000-\u001f\u007f\s]/`); otherwise `"/"`.
+  - `queryClient.ts`: `reportApiError` ignores a 401 whose `code === "reauth_required"` (the session is valid; only break-glass needs a fresh Google sign-in). `roleGated` also matches `R.directory` and everything under `/api/v1/directory/`, `R.spaceMappings`, and `/api/v1/audit`.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
+// qk.test.ts
+it("hosted keys nest under their roots", () => {
+  expect(qk.spaces()).toEqual(["spaces", {}]);
+  expect(qk.spaceMembers("SpEngNpQrSt2uVwX")).toEqual(["spaces", "SpEngNpQrSt2uVwX", "members"]);
+  expect(qk.spaceMappings("SpEngNpQrSt2uVwX")).toEqual(["spaces", "SpEngNpQrSt2uVwX", "mappings"]);
+  expect(qk.restrictedGroups).toEqual(["directory", "restricted"]);
+  expect(qk.directoryGroups("sa")).toEqual(["directory", "groups", "sa"]);
+  expect(qk.memberTransfer("Cr7tNpQrSt8uVwXy")).toEqual(["members", "Cr7tNpQrSt8uVwXy", "transfer"]);
+});
+
+// safe-next.test.ts
+it.each([
+  ["/mine", "/mine"],
+  ["/a/De6gHjKmNp7qRsTu?v=2#top", "/a/De6gHjKmNp7qRsTu?v=2#top"],
+  ["//evil.example", "/"],
+  ["//evil.example/path", "/"],
+  ["/\\evil.example", "/"],
+  ["https://evil.example", "/"],
+  ["javascript:alert(1)", "/"],
+  ["/x\u0000y", "/"],
+  ["/x y", "/"],
+  ["mine", "/"],
+  ["", "/"],
+  [undefined, "/"],
+  [42, "/"],
+])("safeNext(%j) is %j", (raw, out) => {
+  expect(safeNext(raw)).toBe(out);
+});
+
+// error-copy.test.ts
+it.each([
+  ["space_forbidden", "You can't publish to this space. Ask a space manager for editor access."],
+  ["space_personal", "Personal spaces can't be used here."],
+  ["space_not_empty", "Move or delete this space's artifacts first, including the trash."],
+  ["public_links_off", "Public links are turned off for this space."],
+  ["use_move", "This artifact already exists. Use Move to change its space."],
+  ["invalid_successor", "Choose an active member who isn't a guest or restricted."],
+  ["member_active", "This person is active again, so their artifacts stay with them."],
+  ["directory_sync_off", "Directory sync is off, so groups can't be changed here."],
+  ["turnstile_required", "Complete the verification first."],
+  ["turnstile_failed", "Verification failed. Try again."],
+  ["reauth_required", "For your security, sign in with Google again to manage the directory."],
+])("%s", (code, copy) => {
+  expect(errorCopy(new ApiClientError(code as ErrorCode, "server text", 400), "x")).toBe(copy);
+});
+it("other codes fall back to the server message, then the fallback", () => {
+  expect(errorCopy(new ApiClientError("not_found", "Not found", 404), "x")).toBe("Not found");
+  expect(errorCopy(new Error("boom"), "Couldn't save.")).toBe("Couldn't save.");
+});
+
+// query-client.test.ts
+it("a 401 reauth_required does not sign the owner out", () => {
+  const client = makeQueryClient();
+  client.setQueryData(qk.me, fixtures.me);
+  const e = Object.assign(new ApiClientError("reauth_required", "Sign in again", 401), { method: "GET", path: "/api/v1/directory" });
+  reportApiError(client, e);
+  expect(client.getQueryState(qk.me)?.status).toBe("success");
+});
+it("any other 401 still marks /me failed", async () => {
+  const client = makeQueryClient();
+  client.setQueryData(qk.me, fixtures.me);
+  reportApiError(client, Object.assign(new ApiClientError("unauthorized", "Sign in", 401), { method: "GET", path: "/api/v1/artifacts" }));
+  await waitFor(() => expect(client.getQueryState(qk.me)?.status).toBe("error"));
+});
+it.each(["/api/v1/directory", "/api/v1/directory/groups", "/api/v1/directory/restricted-groups/gCon04", "/api/v1/spaces/SpEngNpQrSt2uVwX/mappings", "/api/v1/audit"])(
+  "a 404 from %s refreshes /me", (path) => {
+    const client = makeQueryClient();
+    const spy = vi.spyOn(client, "invalidateQueries");
+    reportApiError(client, Object.assign(new ApiClientError("not_found", "Not found", 404), { method: "GET", path }));
+    expect(spy).toHaveBeenCalledWith({ queryKey: qk.me, exact: true });
+  },
+);
+
+// hosted-queries.test.tsx
 it("useSpaces pages Clients, Engineering and Exec for an admin", async () => {
   mountHosted("/");
   const { result } = renderHook(() => useSpaces({ kind: "shared" }), { wrapper });
@@ -273,11 +360,12 @@ it("move invalidates the artifact, the library and spaces", async () => {
   );
 });
 
-it("mapping 409 toasts the failure title and the server message", async () => {
+it("a mapping 409 toasts the title and the mapped copy", async () => {
   mountHosted("/", { directory: "frozen" });
   const { result } = renderHook(() => usePutMapping("SpEngNpQrSt2uVwX"), { wrapper });
   await result.current.mutateAsync({ groupId: "gEng01", role: "manager" }).catch(() => {});
   expect(await screen.findByText("Couldn't change access.")).toBeVisible();
+  expect(screen.getByText("Directory sync is off, so groups can't be changed here.")).toBeVisible();
 });
 
 it("directory group search waits for two characters", async () => {
@@ -317,45 +405,21 @@ it("useAuthProviders reads a 404 as access mode", async () => {
 });
 ```
 
-(`wrapper` provides `lastClient`; `renderHook` comes from Testing Library.)
+(`wrapper` provides `lastClient`; `renderHook` comes from Testing Library; `makeQueryClient` from `src/api/queryClient.ts`.)
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `pnpm --filter @oa/dashboard test -- hosted-queries qk`
-Expected: FAIL, hooks not exported.
+Run: `pnpm --filter @oa/dashboard test -- hosted-queries qk error-copy safe-next query-client`
+Expected: FAIL, modules and hooks not found.
 
-- [ ] **Step 3b: Error copy.** Create `api/errorCopy.ts`: `errorCopy(e: unknown, fallback: string): string` returns the table's string for the 11 hosted codes, else the `ApiClientError` message, else `fallback`. Test in `test/error-copy.test.ts`:
-
-```ts
-it.each([
-  ["space_forbidden", "You can't publish to this space. Ask a space manager for editor access."],
-  ["space_personal", "Personal spaces can't be used here."],
-  ["space_not_empty", "Move or delete this space's artifacts first, including the trash."],
-  ["public_links_off", "Public links are turned off for this space."],
-  ["use_move", "This artifact already exists. Use Move to change its space."],
-  ["invalid_successor", "Choose an active member who isn't a guest or restricted."],
-  ["member_active", "This person is active again, so their artifacts stay with them."],
-  ["directory_sync_off", "Directory sync is off, so groups can't be changed here."],
-  ["turnstile_required", "Complete the verification first."],
-  ["turnstile_failed", "Verification failed. Try again."],
-  ["reauth_required", "For your security, sign in with Google again to manage the directory."],
-])("%s", (code, copy) => {
-  expect(errorCopy(new ApiClientError(code as ErrorCode, "server text", 400), "x")).toBe(copy);
-});
-it("other codes fall back to the server message, then the fallback", () => {
-  expect(errorCopy(new ApiClientError("not_found", "Not found", 404), "x")).toBe("Not found");
-  expect(errorCopy(new Error("boom"), "Couldn't save.")).toBe("Couldn't save.");
-});
-```
-
-- [ ] **Step 3: Implement** with `useInvalidating`; toast descriptions come from `errorCopy`; failure titles: "Couldn't create the space.", "Couldn't save the space.", "Couldn't delete the space.", "Couldn't change access.", "Couldn't move the artifact.", "Couldn't transfer the artifacts.", "Couldn't reset the sign-in.", "Couldn't start a sync.", "Couldn't apply the change.", "Couldn't disconnect."
+- [ ] **Step 3: Implement** `safeNext.ts`, `errorCopy.ts`, the `queryClient.ts` changes, `api/auth.ts` and the hooks (with `useInvalidating`; toast descriptions from `errorCopy`). Failure titles: "Couldn't create the space.", "Couldn't save the space.", "Couldn't delete the space.", "Couldn't change access.", "Couldn't move the artifact.", "Couldn't transfer the artifacts.", "Couldn't reset the sign-in.", "Couldn't start a sync.", "Couldn't apply the change.", "Couldn't disconnect.", "Couldn't change the restriction."
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `pnpm --filter @oa/dashboard test -- hosted-queries qk error-copy`
+Run: `pnpm --filter @oa/dashboard test -- hosted-queries qk error-copy safe-next query-client && pnpm --filter @oa/dashboard typecheck`
 Expected: PASS.
 
-- [ ] **Step 5: Commit** `feat(dashboard): hosted query hooks and sign-in calls`
+- [ ] **Step 5: Commit** `feat(dashboard): hosted hooks, error copy, safeNext; reauth keeps the session`
 
 ### Task 3: Actions follow `can`; the read-only notice follows `can.dataWrite`
 
@@ -363,52 +427,93 @@ Expected: PASS.
 
 **Files:**
 - Create: `apps/dashboard/src/auth/permissions.ts`
-- Modify: `viewer/TitleBar.tsx:142-143`, `viewer/panels/Details.tsx:29-30`, `viewer/panels/Versions.tsx:22`, `viewer/panels/Share.tsx:109`, `viewer/Shell.tsx` (notice), `upload/DropZone.tsx:35`, `library/Library.tsx` (DropZone `allowed`)
-- Test: `apps/dashboard/test/permissions.test.tsx`
+- Modify (each `access` check becomes a `can` field, per line):
+  - `viewer/useArtifactSideEffects.ts:36`: `canEdit` → `canOf(artifact, []).edit` (edit doesn't depend on features; managers now upload thumbnails and PDF text).
+  - `viewer/TitleBar.tsx:142-143`: `isOwner` splits in two. The menu's Delete (`:200`) uses `can.delete`; the Share button (`:268`) uses `can.share || can.setVisibility`. `canEdit` → `can.edit`.
+  - `viewer/panels/Details.tsx:29-30`: `canEdit` → `can.edit`; the Delete artifact button (`:146`, was `owner`) → `can.delete`. Its Owner row (`:143`) reads "Created by" when `space.kind === "shared"`.
+  - `viewer/panels/Versions.tsx:22`: `canRestore` → `can.edit`.
+  - `viewer/panels/Share.tsx`: `:109` `owner` is removed in favour of two values, `vis = can.setVisibility` and `people = can.share`. `:207` (visibility toggle vs badge) → `vis`; `:238` (Save visibility) → `vis`; `:266` (Add people) → `people`; `:362` (per-person role select and remove) → `people`; `:406` (capability checkboxes) → `vis`; `:417` (anonymous writes) → `vis`.
+  - `viewer/Shell.tsx`: the read-only notice.
+  - `upload/DropZone.tsx:35` and `library/Library.tsx:103,185`: `allowed` = signed in, not a guest, and `cap === null` (restricted members can't create).
+- Test: `apps/dashboard/test/permissions.test.tsx`, `apps/dashboard/test/sideeffects.test.ts`
 
 **Interfaces:**
 - Consumes: `canOf`, `features`, `useMe`.
-- Produces: `useHosted(): { features: FeatureFlag[]; tier: Tier | null; spaces: MySpace[]; personalSpaceId: string | null; readOnly: boolean; cap: CapReason | null; signIn: InstanceSignIn | null; directory: InstanceDirectory | null }`; `canPublishTo(s: { kind: SpaceKind; myRole: SpaceRole | null }, cap: CapReason | null): boolean` → `cap === null && (kind === "personal" || myRole === "editor" || myRole === "manager")`; `accessLabel(level: AccessLevel): "Owner" | "Manager" | "Editor" | "Viewer"`.
+- Produces: `useHosted(): { features: FeatureFlag[]; tier: Tier | null; spaces: MySpace[]; personalSpaceId: string | null; readOnly: boolean; cap: CapReason | null; signIn: InstanceSignIn | null; directory: InstanceDirectory | null }`; `useCan(a: ArtifactSummary): ArtifactCan` (= `canOf(a, useHosted().features)`); `canPublishTo(s: { kind: SpaceKind; myRole: SpaceRole | null }, cap: CapReason | null): boolean` → `cap === null && (kind === "personal" || myRole === "editor" || myRole === "manager")`; `accessLabel(level: AccessLevel): "Owner" | "Manager" | "Editor" | "Viewer"`.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-const viewerCan = { edit: false, share: false, setVisibility: false, delete: false, transfer: false, move: false, dataWrite: true };
+const none = { edit: false, share: false, setVisibility: false, delete: false, transfer: false, move: false, dataWrite: true };
+const managerCan = { ...none, edit: true, share: true, setVisibility: true, delete: true, move: true };
 const serve = (a: object) => server.use(http.get(`*${R.artifact(arts[0].id)}`, () => HttpResponse.json({ ...arts[0], ...a })));
 
 it("viewer sees no edit affordance but keeps data writes", async () => {
-  serve({ access: "viewer", can: viewerCan, capabilities: { db: true, viewer: false, storage: false } });
+  serve({ access: "viewer", can: none, capabilities: { db: true, viewer: false, storage: false } });
   mount(`/a/${arts[0].id}`);
   await screen.findByRole("heading", { name: arts[0].title });
-  for (const name of ["Rename", "Restore", "Delete", "Save visibility", "Move"])
+  for (const name of ["Rename", "Restore", "Delete", "Share", "Move"])
     expect(screen.queryByRole("button", { name })).toBeNull();
   expect(screen.queryByText("You can view this, but not change it.")).toBeNull();
 });
 
 it("guest sees the read-only notice when can.dataWrite is false", async () => {
-  serve({ access: "viewer", can: { ...viewerCan, dataWrite: false }, capabilities: { db: true, viewer: false, storage: false } });
+  serve({ access: "viewer", can: { ...none, dataWrite: false }, capabilities: { db: true, viewer: false, storage: false } });
   mount(`/a/${arts[0].id}`);
   expect(await screen.findByText("You can view this, but not change it.")).toBeVisible(); // copy per D10
 });
 
 it("no notice on an artifact without live data", async () => {
-  serve({ access: "viewer", can: { ...viewerCan, dataWrite: false }, capabilities: { db: false, viewer: false, storage: false } });
+  serve({ access: "viewer", can: { ...none, dataWrite: false }, capabilities: { db: false, viewer: false, storage: false } });
   mount(`/a/${arts[0].id}`);
   await screen.findByRole("heading", { name: arts[0].title });
   expect(screen.queryByText("You can view this, but not change it.")).toBeNull();
 });
 
-it("space manager is labelled Manager, never Owner", async () => {
-  serve({ access: "manager", can: { ...viewerCan, edit: true, share: true, setVisibility: true, delete: true, move: true } });
+it("a space manager gets Share and Delete, is labelled Manager, never Owner", async () => {
+  serve({ access: "manager", can: managerCan, space: { id: "SpEngNpQrSt2uVwX", kind: "shared", name: "Engineering", publicLinks: true } });
   mount(`/a/${arts[0].id}`);
-  expect(await screen.findByText("Manager")).toBeVisible();
+  expect(await screen.findByRole("button", { name: "Share" })).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+  expect(screen.getByRole("menuitem", { name: "Delete" })).toBeVisible();
+  expect(screen.getByText("Manager")).toBeVisible();
   expect(screen.queryByText(/you own this/i)).toBeNull();
+});
+
+it("share without delete: Share shows, Delete doesn't", async () => {
+  serve({ access: "editor", can: { ...none, edit: true, share: true, setVisibility: true } });
+  mount(`/a/${arts[0].id}`);
+  expect(await screen.findByRole("button", { name: "Share" })).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+  expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
+});
+
+// in test/sideeffects.test.ts, with that file's art() and setup() helpers:
+it("requests a thumbnail for a space manager", () => {
+  const { fx, requestThumbnail } = setup(art({ access: "manager" }));
+  fx.onHello();
+  expect(requestThumbnail).toHaveBeenCalledTimes(1);
+});
+it("never requests one for a viewer", () => {
+  const { fx, requestThumbnail } = setup(art({ access: "viewer" }));
+  fx.onHello();
+  expect(requestThumbnail).not.toHaveBeenCalled();
 });
 
 it("readOnly guest gets no Create artifact control", async () => {
   mountHosted("/shared", true, (m) => ({ ...m, user: { ...m.user, role: "guest" }, auth: { method: "code", readOnly: true, cap: "guest", expiresAt: null } }));
   await screen.findByRole("heading", { name: "Library" });
   expect(screen.queryByRole("button", { name: "Create artifact" })).toBeNull();
+});
+
+it("a restricted member (role member, cap restricted) can't create anywhere", async () => {
+  mountHosted("/", true, (m) => ({ ...m, user: { ...m.user, role: "member" }, auth: { method: "google", readOnly: false, cap: "restricted", expiresAt: null } }));
+  await screen.findByRole("heading", { name: "Library" });
+  expect(screen.queryByRole("button", { name: "Create artifact" })).toBeNull();
+  fireEvent.drop(document.body, { dataTransfer: { files: [new File(["# x"], "a.md")], types: ["Files"] } });
+  expect(screen.queryByRole("dialog", { name: "Create artifact" })).toBeNull();
+  expect(canPublishTo({ kind: "personal", myRole: "manager" }, "restricted")).toBe(false);
+  expect(canPublishTo({ kind: "shared", myRole: "editor" }, "restricted")).toBe(false);
 });
 
 it("404 on rename toasts the server message and keeps the title", async () => {
@@ -426,27 +531,27 @@ it("canPublishTo", () => {
   expect(canPublishTo({ kind: "shared", myRole: "viewer" }, null)).toBe(false);
   expect(canPublishTo({ kind: "shared", myRole: null }, null)).toBe(false);
   expect(canPublishTo({ kind: "shared", myRole: "editor" }, null)).toBe(true);
-  expect(canPublishTo({ kind: "personal", myRole: "manager" }, "restricted")).toBe(false);
+  expect(canPublishTo({ kind: "personal", myRole: "manager" }, null)).toBe(true);
 });
 
 it("accessLabel", () => {
-  expect(["owner", "manager", "editor", "viewer"].map((l) => accessLabel(l as AccessLevel))).toEqual(["Owner", "Manager", "Editor", "Viewer"]);
+  expect((["owner", "manager", "editor", "viewer"] as const).map(accessLabel)).toEqual(["Owner", "Manager", "Editor", "Viewer"]);
 });
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `pnpm --filter @oa/dashboard test -- permissions`
+Run: `pnpm --filter @oa/dashboard test -- permissions sideeffects`
 Expected: FAIL, module not found.
 
-- [ ] **Step 3: Implement** `permissions.ts`; replace every `access` rights check with `canOf(artifact)`; the Shell shows the notice when `(capabilities.db || capabilities.storage) && !canOf(a).dataWrite`.
+- [ ] **Step 3: Implement** `permissions.ts` and the per-line replacements above. The Shell shows the notice when `(capabilities.db || capabilities.storage) && !can.dataWrite`.
 
 - [ ] **Step 4: Run the full suite**
 
 Run: `pnpm --filter @oa/dashboard test`
-Expected: PASS, including `share.test.tsx`, `versions.test.tsx`, `shell.test.tsx` unedited.
+Expected: PASS, including `share.test.tsx`, `versions.test.tsx`, `shell.test.tsx`, `sideeffects.test.ts` unedited apart from the two new side-effects cases (the fallback gives a self-hosted owner edit, share, setVisibility and delete, exactly as today).
 
-- [ ] **Step 5: Commit** `refactor(dashboard): actions follow can; read-only notice`
+- [ ] **Step 5: Commit** `refactor(dashboard): actions follow can; read-only notice; restricted members can't create`
 
 ### Task 4: Hosted chrome (sync-health banner, usage off)
 
@@ -524,8 +629,8 @@ Expected: PASS.
 - Test: `apps/dashboard/test/spaces-library.test.tsx`
 
 **Interfaces:**
-- Consumes: `useHosted`, `useSpace`.
-- Produces: search param `space?: string`; `LibraryFilters.space?: string`, sent as `scope=mine` when it equals `personalSpaceId`, else `scope=space&spaceId=<id>`; search adds `spaceId`; `useCurrentSpace(): { space: SpaceRef | null; set(id?: string): void }` (resolves from `me.spaces`, then `useSpace(id)`; a 404 clears the param).
+- Consumes: `useHosted`.
+- Produces: search param `space?: string`; `LibraryFilters.space?: string`, sent as `scope=mine` when it equals `personalSpaceId`, else `scope=space&spaceId=<id>`; search adds `spaceId`; `useCurrentSpace(): { space: SpaceRef | null; set(id?: string): void }` (resolves only from `personalSpaceId` and `me.spaces`; any other id clears the param with no lookup request).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -552,8 +657,15 @@ it("?space=<personal> requests scope=mine", async () => {
   await waitFor(() => expect(seen.find((c) => c.path === "/api/v1/artifacts")?.search.get("scope")).toBe("mine"));
 });
 
-it("an unknown space clears the param", async () => {
+it("an unknown space clears the param without a lookup", async () => {
+  const seen = calls("GET");
   const router = mountHosted("/?space=SpNopeNpQrSt9uVw");
+  await waitFor(() => expect(router.state.location.search).toEqual({}));
+  expect(seen.some((c) => c.path === "/api/v1/spaces/SpNopeNpQrSt9uVw")).toBe(false);
+});
+
+it("Clients (admin view, no role) isn't a library space: the param clears", async () => {
+  const router = mountHosted("/?space=SpCliNpQrSt4uVwX");
   await waitFor(() => expect(router.state.location.search).toEqual({}));
 });
 
@@ -619,6 +731,13 @@ it("shared-space cards show the space and say Created by", async () => {
   expect(within(card).getByText("Engineering")).toBeVisible();
   expect(within(card).getByText(/^Created by /)).toBeVisible();
 });
+
+it("Details says Created by in a shared space and Owner in a personal one", async () => {
+  mountHosted("/a/De6gHjKmNp7qRsTu");
+  fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+  expect(screen.getByRole("term", { name: "Created by" })).toBeVisible();
+  expect(screen.queryByRole("term", { name: "Owner" })).toBeNull();
+});
 // e2e/spaces.spec.ts (mock, /?hosted=1): switcher reachable by keyboard; 375 and 1280, light and dark
 // library-layout.spec.ts, card-inset.spec.ts: hosted variants at 375 and 1280 keep today's measurements
 ```
@@ -648,7 +767,7 @@ Expected: PASS.
 
 **Interfaces:**
 - Consumes: `useHosted`, `canPublishTo`, `useCurrentSpace`.
-- Produces: `uploadArtifact` input `spaceId?: string`, sent on create only; `<SpacePicker value={string | undefined} onChange={(id: string) => void} include={(s: MySpace | "personal") => boolean} label={string} />`.
+- Produces: `uploadArtifact` input `spaceId?: string`, sent on create only; `<SpacePicker value={string | undefined} onChange={(id: string) => void} label={string} include?={(s: MySpace | "personal") => boolean} />` (always filters by `canPublishTo(s, cap)`; `include` narrows further).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -666,6 +785,13 @@ it("preselects My space when the library's space isn't publishable", async () =>
   mountHosted("/?space=SpExcNpQrSt3uVwX");
   await openUploadWith([new File(["# x"], "a.md")]);
   expect(await screen.findByRole("combobox", { name: "Space" })).toHaveTextContent("My space");
+});
+
+it("a restricted member's picker is empty", async () => {
+  mountHosted("/", true, (m) => ({ ...m, user: { ...m.user, role: "member" }, auth: { method: "google", readOnly: false, cap: "restricted", expiresAt: null } }));
+  render(<SpacePicker value={undefined} onChange={() => {}} label="Space" />, { wrapper });
+  fireEvent.click(await screen.findByRole("combobox", { name: "Space" }));
+  expect(screen.queryAllByRole("option")).toEqual([]);
 });
 
 it("publish body carries spaceId", async () => {
@@ -718,17 +844,27 @@ Expected: PASS.
 - Test: `apps/dashboard/test/spaces-move.test.tsx`
 
 **Interfaces:**
-- Consumes: `useMoveArtifact`, `SpacePicker`, `canOf`, `canPublishTo`.
-- Produces: `<MoveDialog artifact={ArtifactSummary} onClose={() => void} />`; targets are shared spaces only (never a personal space) and exclude the current one.
+- Consumes: `useMoveArtifact`, `SpacePicker`, `useCan`, `canPublishTo`, `errorCopy`.
+- Produces: `<MoveDialog artifact={ArtifactSummary} onClose={() => void} />`. The Move button renders only when `useCan(a).move` (false without the `spaces` feature, Task 1). Targets are shared spaces only, publishable, and not the current one.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
 const NOTES = "De6gHjKmNp7qRsTu";
+const ENG_REF = { id: "SpEngNpQrSt2uVwX", kind: "shared" as const, name: "Engineering", publicLinks: true };
 const OPS = { id: "SpOpsNpQrSt5uVwX", kind: "shared" as const, name: "Ops", publicLinks: false, myRole: "editor" as const };
+const managerCan = { edit: true, share: true, setVisibility: true, delete: true, transfer: false, move: true, dataWrite: true };
+const notes = (o: object = {}) => ({ ...arts.find((a) => a.id === NOTES)!, access: "manager", space: ENG_REF, can: managerCan, ...o });
 const withOps = (m: Me) => ({ ...m, spaces: [...(m.spaces ?? []), OPS] });
 
-it("Move shows when can.move", async () => {
+it("self-hosted: no Move, even for the owner", async () => {
+  mount(`/a/${arts[0].id}`); // fixtures.me, no features; arts[0] is Ada's, access owner
+  await screen.findByRole("heading", { name: arts[0].title });
+  expect(screen.getByRole("button", { name: "Delete artifact" })).toBeVisible(); // owner actions still render
+  expect(screen.queryByRole("button", { name: "Move" })).toBeNull();
+});
+
+it("hosted: Move shows when can.move", async () => {
   mountHosted(`/a/${NOTES}`);
   expect(await screen.findByRole("button", { name: "Move" })).toBeVisible();
 });
@@ -740,20 +876,19 @@ it("targets are shared, publishable and not the current space", async () => {
   expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Ops"]); // not My space, Engineering or Exec
 });
 
-it("moving a public artifact into a public-off space warns first", async () => {
-  server.use(http.get(`*${R.artifact(NOTES)}`, async ({ request }) => {
-    const a = await (await fetch(request.url, { headers: { authorization: "Bearer mock" } })).json();
-    return HttpResponse.json({ ...a, visibility: "public" });
-  }));
-  mountHosted(`/a/${NOTES}`, true, withOps);
+it("moving a public artifact into a public-off space warns first (copy pending Backend)", async () => {
+  mountHosted(`/a/${NOTES}`, true, withOps, [http.get(`*${R.artifact(NOTES)}`, () => HttpResponse.json(notes({ visibility: "public" })))]);
   fireEvent.click(await screen.findByRole("button", { name: "Move" }));
   await chooseOption("Move to", "Ops");
-  expect(screen.getByText("Ops doesn't allow public links. The artifact becomes visible to the team instead.")).toBeVisible(); // copy per D4
+  expect(screen.getByRole("note", { name: "Public links" })).toBeVisible();
+  // The warning's text is PENDING the manager's confirmation with Backend that a move rewrites
+  // the artifact to team. Until then the test asserts only that the note exists; Design writes
+  // the copy once Backend confirms (or the warning becomes a block if the move is refused).
 });
 
 it("after a move the panel shows the new space", async () => {
-  server.use(http.post(`*${R.moveArtifact(NOTES)}`, () => HttpResponse.json({ ...arts.find((a) => a.id === NOTES), space: { id: OPS.id, kind: "shared", name: "Ops", publicLinks: false } })));
   mountHosted(`/a/${NOTES}`, true, withOps);
+  server.use(http.post(`*${R.moveArtifact(NOTES)}`, () => HttpResponse.json(notes({ space: { id: OPS.id, kind: "shared", name: "Ops", publicLinks: false } }))));
   fireEvent.click(await screen.findByRole("button", { name: "Move" }));
   await chooseOption("Move to", "Ops");
   fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Move" }));
@@ -761,24 +896,33 @@ it("after a move the panel shows the new space", async () => {
   expect(screen.getByText("Ops")).toBeVisible();
 });
 
-it("space_forbidden keeps the dialog open with the message", async () => {
-  server.use(http.post(`*${R.moveArtifact(NOTES)}`, () => HttpResponse.json({ error: { code: "space_forbidden", message: "server text" } }, { status: 403 })));
+it("space_forbidden keeps the dialog open with the copy", async () => {
   mountHosted(`/a/${NOTES}`, true, withOps);
+  server.use(http.post(`*${R.moveArtifact(NOTES)}`, () => HttpResponse.json({ error: { code: "space_forbidden", message: "server text" } }, { status: 403 })));
   fireEvent.click(await screen.findByRole("button", { name: "Move" }));
   await chooseOption("Move to", "Ops");
   fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Move" }));
   expect(await within(screen.getByRole("dialog")).findByText("You can't publish to this space. Ask a space manager for editor access.")).toBeVisible();
 });
+
+it("space_personal (defensive) shows its copy", async () => {
+  mountHosted(`/a/${NOTES}`, true, withOps);
+  server.use(http.post(`*${R.moveArtifact(NOTES)}`, () => HttpResponse.json({ error: { code: "space_personal", message: "server text" } }, { status: 400 })));
+  fireEvent.click(await screen.findByRole("button", { name: "Move" }));
+  await chooseOption("Move to", "Ops");
+  fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Move" }));
+  expect(await within(screen.getByRole("dialog")).findByText("Personal spaces can't be used here.")).toBeVisible();
+});
 ```
 
-(`chooseOption(label, option)` opens the combobox named `label` and clicks `option`.)
+(`chooseOption(label, option)` opens the combobox named `label` and clicks `option`. Handlers for later requests use `server.use` after mounting; a handler for the first request goes in `mountHosted`'s `overrides`.)
 
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `pnpm --filter @oa/dashboard test -- spaces-move`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement per D3, D4.**
+- [ ] **Step 3: Implement per D3, D4.** The public-off note is a `role="note"` region labelled "Public links"; its text waits for Backend's confirmation.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -796,51 +940,59 @@ Expected: PASS.
 - Test: `apps/dashboard/test/share-public-off.test.tsx`
 
 **Interfaces:**
-- Consumes: `artifact.space.publicLinks`, `canOf(a).setVisibility`.
+- Consumes: `artifact.space.publicLinks`, `useCan(a).setVisibility`, `useCan(a).share`, `errorCopy`.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
 const full = { edit: true, share: true, setVisibility: true, delete: true, transfer: false, move: true, dataWrite: true };
-const inExec = { ...arts[0], access: "manager", space: { id: "SpExcNpQrSt3uVwX", kind: "shared", name: "Exec", publicLinks: false }, can: full };
-const serve = (a: object) => server.use(http.get(`*${R.artifact(arts[0].id)}`, () => HttpResponse.json(a)));
+const exec = { id: "SpExcNpQrSt3uVwX", kind: "shared", name: "Exec", publicLinks: false };
+const eng = { id: "SpEngNpQrSt2uVwX", kind: "shared", name: "Engineering", publicLinks: true };
+const serve = (a: object) => server.use(http.get(`*${R.artifact(arts[0].id)}`, () => HttpResponse.json({ ...arts[0], ...a })));
+// openShare(): clicks the title bar's Share button and waits for the panel heading "Visibility".
 
 it("public is not selectable in a public-off space", async () => {
-  serve(inExec);
+  serve({ access: "manager", space: exec, can: full });
   mount(`/a/${arts[0].id}`);
   await openShare();
-  expect(await screen.findByRole("radio", { name: "Public" })).toBeDisabled(); // or absent, per D9
+  expect(screen.getByRole("radio", { name: "Public" })).toBeDisabled(); // or absent, per D9
   expect(screen.getByText("Public links are turned off for this space.")).toBeVisible();
 });
 
 it("no space (self-hosted): Share panel unchanged", async () => {
   mount(`/a/${arts[0].id}`);
   await openShare();
-  expect(await screen.findByRole("radio", { name: "Public" })).toBeEnabled();
+  expect(screen.getByRole("radio", { name: "Public" })).toBeEnabled();
   expect(screen.queryByText("Public links are turned off for this space.")).toBeNull();
 });
 
-it("a 403 public_links_off from a stale tab shows the space note and keeps the old visibility", async () => {
-  serve({ ...arts[0], access: "manager", space: { id: "SpEngNpQrSt2uVwX", kind: "shared", name: "Engineering", publicLinks: true }, can: full, visibility: "team" });
-  server.use(http.patch(`*${R.artifact(arts[0].id)}`, () => HttpResponse.json({ error: { code: "public_links_off", message: "Public links are off in this space" } }, { status: 403 })));
+it("a 403 public_links_off from a stale tab shows the copy and keeps the old visibility", async () => {
+  serve({ access: "manager", space: eng, can: full, visibility: "team" });
+  server.use(http.patch(`*${R.artifact(arts[0].id)}`, () => HttpResponse.json({ error: { code: "public_links_off", message: "server text" } }, { status: 403 })));
   mount(`/a/${arts[0].id}`);
   await openShare();
-  fireEvent.click(await screen.findByRole("radio", { name: "Public" }));
+  fireEvent.click(screen.getByRole("radio", { name: "Public" }));
   fireEvent.click(screen.getByRole("button", { name: "Save visibility" }));
   expect(await screen.findByText("Public links are turned off for this space.")).toBeVisible();
   expect(screen.getByRole("radio", { name: "Team" })).toBeChecked();
 });
 
-it("without setVisibility there is no visibility control", async () => {
-  serve({ ...inExec, access: "editor", can: { ...full, share: false, setVisibility: false, delete: false, move: false } });
+it("people can be shared without visibility rights (share true, setVisibility false)", async () => {
+  serve({ access: "editor", space: eng, can: { ...full, setVisibility: false, delete: false, move: false } });
   mount(`/a/${arts[0].id}`);
   await openShare();
-  expect(screen.queryByRole("radiogroup", { name: "Visibility" })).toBeNull();
+  expect(screen.queryByRole("radio", { name: "Public" })).toBeNull(); // the badge shows instead
+  expect(screen.getByRole("heading", { name: "Add people" })).toBeVisible();
+});
+
+it("an editor without share or setVisibility gets no Share button", async () => {
+  serve({ access: "editor", space: eng, can: { ...full, share: false, setVisibility: false, delete: false, move: false } });
+  mount(`/a/${arts[0].id}`);
+  await screen.findByRole("heading", { name: arts[0].title });
+  expect(screen.queryByRole("button", { name: "Share" })).toBeNull();
 });
 // share-layout.spec.ts: hosted public-off variant keeps the panel layout at 375 and 1280
 ```
-
-(`openShare()` clicks the title bar's Share button and waits for the panel.)
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -872,6 +1024,15 @@ Expected: PASS.
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
+it("?space=<personal id> is refused: the detail never opens and the param clears", async () => {
+  const seen = calls("GET");
+  const router = mountHosted("/settings/spaces?space=Ab3dEfGhJk4mNpQr");
+  await screen.findByRole("list", { name: "Spaces" });
+  await waitFor(() => expect(router.state.location.search).toEqual({}));
+  expect(screen.queryByRole("heading", { level: 2, name: "Ada Lovelace" })).toBeNull();
+  expect(seen.some((c) => c.path === "/api/v1/spaces/Ab3dEfGhJk4mNpQr")).toBe(false);
+});
+
 it("guests are redirected to /shared", async () => {
   const router = mountHosted("/settings/spaces", true, (m) => ({ ...m, user: { ...m.user, role: "guest" } }));
   await waitFor(() => expect(router.state.location.pathname).toBe("/shared"));
@@ -976,7 +1137,7 @@ it("lists Engineering's group mapping", async () => {
 
 it("role choices are exactly Viewer, Editor, Manager", async () => {
   mountHosted(ENG);
-  fireEvent.click(within(await screen.findByRole("row", { name: /eng@example.com/ })).getByRole("combobox", { name: "Role" }));
+  fireEvent.click(within(await screen.findByRole("row", { name: /eng@example.com/ })).getByRole("combobox", { name: "Role for eng@example.com" }));
   expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Viewer", "Editor", "Manager"]);
 });
 
@@ -992,22 +1153,23 @@ it("adding a group PUTs viewer keyed by groupId; mapped groups are excluded from
 
 it("frozen: no control adds or changes a mapping", async () => {
   mountHosted(ENG, { directory: "frozen" });
-  await screen.findByRole("heading", { name: "Engineering" });
+  const row = await screen.findByRole("row", { name: /eng@example.com/ }); // the mapping still shows
+  expect(row).toHaveTextContent("Editor");
   expect(screen.queryByRole("combobox", { name: "Add a group" })).toBeNull();
-  expect(screen.queryByRole("combobox", { name: "Role" })).toBeNull();
+  expect(within(row).queryByRole("combobox", { name: "Role for eng@example.com" })).toBeNull();
 });
 
 it("a 409 directory_sync_off shows the message and restores the role", async () => {
   server.use(http.put("*/api/v1/spaces/:id/mappings/:g", () => HttpResponse.json({ error: { code: "directory_sync_off", message: "server text" } }, { status: 409 })));
   mountHosted(ENG);
-  await chooseOption("Role", "Manager");
+  await chooseOption("Role for eng@example.com", "Manager");
   expect(await screen.findByText("Directory sync is off, so groups can't be changed here.")).toBeVisible();
-  expect(screen.getByRole("combobox", { name: "Role" })).toHaveTextContent("Editor"); // the mock maps eng@ as editor
+  expect(screen.getByRole("combobox", { name: "Role for eng@example.com" })).toHaveTextContent("Editor"); // the mock maps eng@ as editor
 });
 
 it("mappings are hidden from space managers who aren't admins", async () => {
   mountHosted(ENG, true, (m) => ({ ...m, user: { ...m.user, role: "member" } }));
-  await screen.findByRole("heading", { name: "Engineering" });
+  expect(await screen.findByRole("table", { name: "Members" })).toBeVisible(); // the page did render
   expect(screen.queryByRole("table", { name: "Groups" })).toBeNull();
 });
 ```
@@ -1074,7 +1236,7 @@ it("capped members say they can only view", async () => {
 it("guests can be given Viewer only", async () => {
   one({ userId: "gst1", user: { id: "gst1", name: null, email: "guest@client.com" }, status: "active", role: "viewer", source: "manual", manualRole: "viewer", syncRole: null, groups: [], cap: "guest" });
   mountHosted(ENG);
-  fireEvent.click(within(await screen.findByRole("row", { name: /guest@client.com/ })).getByRole("combobox", { name: "Role" }));
+  fireEvent.click(within(await screen.findByRole("row", { name: /guest@client.com/ })).getByRole("combobox", { name: "Role for guest@client.com" }));
   expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Viewer"]);
 });
 
@@ -1083,6 +1245,7 @@ it("frozen on Team: the banner names Business and never says sync resumes", asyn
   const banner = await screen.findByRole("status", { name: "Membership frozen" });
   expect(banner).toHaveTextContent("Group sync is part of Business."); // copy per D6
   expect(banner.textContent).not.toMatch(/resume/i);
+  expect(within(await screen.findByRole("row", { name: /Bob Builder/ })).getByRole("combobox", { name: "Role for Bob Builder" })).toBeEnabled(); // synced rows editable by hand
 });
 ```
 
@@ -1110,7 +1273,7 @@ Expected: PASS.
 - Test: `apps/dashboard/test/transfer.test.tsx`
 
 **Interfaces:**
-- Consumes: `useMembers("suspended,removed")`, `useTransferSummary`, `useRunTransfer`, `useSpaces({ kind: "shared" })`.
+- Consumes: `useMembers("suspended,removed")` (only with `hasFeature(me, "spaces")`), `useTransferSummary`, `useRunTransfer`, `useSpaces({ kind: "shared" })`.
 - Produces: `<TransferDialog member={Member} onClose={() => void} />`; `runAll(run: (i: TransferInput) => Promise<TransferResult>, to: TransferInput["to"], onProgress: (moved: number, remaining: number) => void): Promise<number>`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1121,6 +1284,14 @@ const openFor = async (name: string) => {
   fireEvent.click(within(await screen.findByRole("row", { name: new RegExp(name) })).getByRole("button", { name: "Transfer artifacts" }));
   return screen.findByRole("dialog");
 };
+
+it("self-hosted: no Transfer control and no status request", async () => {
+  const seen = calls("GET");
+  mount("/settings/members");
+  expect(await screen.findByRole("row", { name: /Bob Builder/ })).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Transfer artifacts" })).toBeNull();
+  expect(seen.some((c) => c.search.get("status") !== null)).toBe(false);
+});
 
 it("Carol (suspended) offers Transfer; Bob (active) doesn't", async () => {
   mountHosted("/settings/members");
@@ -1214,14 +1385,14 @@ Expected: PASS.
 
 **Interfaces:**
 - Consumes: `useAuthProviders`, `requestCode`, `verifyCode`, `normalizeCode`, `CODE_POLICY`, `SignInError`.
-- Produces: `SignIn({ error?: string; next?: string })`; `<CodeSignIn next={string | undefined} turnstileSiteKey={string | undefined} />`; `<Turnstile siteKey={string} onToken={(t: string | null) => void} />` (loads `https://challenges.cloudflare.com/turnstile/v0/api.js` once, renders `data-testid="turnstile"` with `data-sitekey`; nothing without a key).
+- Produces: `SignIn({ error?: string; next?: string })` where `error` goes through `SignInErrorSchema.safeParse` (unknown values show the `failed` copy and are never rendered) and `next` through `safeNext`; `<CodeSignIn next={string} turnstileSiteKey={string | undefined} />` (receives the already-safe `next`, sends it on the code request, and on success calls `location.assign(safeNext(verified.next))`, never the prop); `isCompleteCode(raw: string, length: number): boolean` → `new RegExp(`^\\d{${length}}$`).test(normalizeCode(raw))`; `<Turnstile siteKey={string} onToken={(t: string | null) => void} />` (loads `https://challenges.cloudflare.com/turnstile/v0/api.js` once, renders `data-testid="turnstile"` with `data-sitekey`; nothing without a key).
 
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
 // requestThroughUi(email): types "Work email", clicks "Email me a code", waits for "8-digit code".
 // typeCode(c): fills "8-digit code", clicks "Sign in".
-// turnstileCallback(t): calls the onToken the window.turnstile stub captured.
+// turnstileCallback(t): calls the onToken the window.turnstile stub captured; turnstileReset is that stub's reset (a vi.fn, cleared in beforeEach).
 
 it("providers 404 renders today's page", async () => {
   server.use(http.get("*/auth/providers", () => new HttpResponse(null, { status: 404 })));
@@ -1233,6 +1404,32 @@ it("access mode renders today's page", async () => {
   mountHosted("/sign-in", { mode: "access" });
   expect(await screen.findByRole("link", { name: "Continue with Cloudflare Access" })).toBeVisible();
   expect(screen.queryByRole("button", { name: "Email me a code" })).toBeNull();
+});
+
+it("an unknown ?error= shows the failed copy and never echoes the value", async () => {
+  mountHosted("/sign-in?error=%3Cscript%3Ealert(1)%3C%2Fscript%3E");
+  expect(await screen.findByRole("alert")).toHaveTextContent("Sign-in didn't finish. Try again.");
+  expect(document.body.innerHTML).not.toContain("<script>alert(1)");
+  expect(document.body.textContent).not.toContain("alert(1)");
+});
+
+it("a hostile next never reaches the Google link or the code request", async () => {
+  const seen = calls("POST");
+  mountHosted("/sign-in?next=%2F%2Fevil.example");
+  expect(await screen.findByRole("link", { name: "Continue with Google" })).toHaveAttribute("href", "/auth/login/google?next=%2F");
+  await requestThroughUi("bob@example.com");
+  expect(seen.find((c) => c.path === "/auth/code/request")!.body).toEqual({ email: "bob@example.com", next: "/" });
+});
+
+it("a hostile next from the server is never assigned", async () => {
+  const assign = vi.fn();
+  vi.stubGlobal("location", { ...location, assign });
+  server.use(http.post("*/auth/code/verify", () => HttpResponse.json({ next: "//evil.example", user: fixtures.members[1], readOnly: false })));
+  mountHosted("/sign-in?next=%2Fmine");
+  await requestThroughUi("bob@example.com");
+  await typeCode("24681357");
+  await waitFor(() => expect(assign).toHaveBeenCalledWith("/"));
+  vi.unstubAllGlobals();
 });
 
 it("direct: Google navigates to its start with next; no Access or self-hosted copy", async () => {
@@ -1272,7 +1469,23 @@ it("request shows the masked address, resend timer and expiry", async () => {
   vi.useRealTimers();
 });
 
-it.each(["2468-1357", "2468 1357", " 24681357 "])("code %j verifies and navigates to next", async (typed) => {
+it("isCompleteCode", () => {
+  expect(isCompleteCode("2468-1357", 8)).toBe(true);
+  expect(isCompleteCode("2468 1357", 8)).toBe(true);
+  expect(isCompleteCode("2468135", 8)).toBe(false);
+  expect(isCompleteCode("2468135a", 8)).toBe(false);
+  expect(isCompleteCode("246813579", 8)).toBe(false);
+});
+
+it("a 404 from the code request says codes aren't available", async () => {
+  server.use(http.post("*/auth/code/request", () => HttpResponse.json({ error: { code: "not_found", message: "Not found" } }, { status: 404 })));
+  mountHosted("/sign-in");
+  fireEvent.change(await screen.findByRole("textbox", { name: "Work email" }), { target: { value: "bob@example.com" } });
+  fireEvent.click(screen.getByRole("button", { name: "Email me a code" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Email codes aren't available here. Use Google instead."); // copy per D8
+});
+
+it.each(["2468-1357", "2468 1357", " 24681357 "])("code %j verifies and navigates to the server's next", async (typed) => {
   const assign = vi.fn();
   vi.stubGlobal("location", { ...location, assign });
   mountHosted("/sign-in?next=%2Fmine");
@@ -1322,13 +1535,29 @@ it("rate_limited shows the wait", async () => {
   expect(await screen.findByRole("alert")).toHaveTextContent("Too many codes requested. Try again in 60 minutes.");
 });
 
-it("Turnstile slot renders with a site key and sends the token", async () => {
+it("Turnstile slot renders with a site key, sends the token once, then resets", async () => {
   const seen = calls("POST");
   mountHosted("/sign-in", { turnstile: true });
   expect(await screen.findByTestId("turnstile")).toHaveAttribute("data-sitekey", "1x00000000000000000000AA");
   act(() => turnstileCallback("tok-1"));
   await requestThroughUi("bob@example.com");
-  expect(seen.find((c) => c.path === "/auth/code/request")!.body).toEqual({ email: "bob@example.com", turnstileToken: "tok-1" });
+  expect(seen.filter((c) => c.path === "/auth/code/request").map((c) => c.body)).toEqual([{ email: "bob@example.com", next: "/", turnstileToken: "tok-1" }]);
+  expect(turnstileReset).toHaveBeenCalledTimes(1); // tokens are single-use
+});
+
+it("Resend resets the widget and sends a fresh token", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const seen = calls("POST");
+  mountHosted("/sign-in", { turnstile: true });
+  await screen.findByTestId("turnstile");
+  act(() => turnstileCallback("tok-1"));
+  await requestThroughUi("bob@example.com");
+  await act(() => vi.advanceTimersByTimeAsync(60_000));
+  act(() => turnstileCallback("tok-2"));
+  fireEvent.click(screen.getByRole("button", { name: "Resend code" }));
+  await waitFor(() => expect(seen.filter((c) => c.path === "/auth/code/request").map((c) => (c.body as { turnstileToken: string }).turnstileToken)).toEqual(["tok-1", "tok-2"]));
+  expect(turnstileReset).toHaveBeenCalledTimes(2);
+  vi.useRealTimers();
 });
 
 it("no site key: no widget and no token", async () => {
@@ -1336,7 +1565,8 @@ it("no site key: no widget and no token", async () => {
   mountHosted("/sign-in");
   await requestThroughUi("bob@example.com");
   expect(screen.queryByTestId("turnstile")).toBeNull();
-  expect(seen.find((c) => c.path === "/auth/code/request")!.body).toEqual({ email: "bob@example.com" });
+  expect(seen.find((c) => c.path === "/auth/code/request")!.body).toEqual({ email: "bob@example.com", next: "/" });
+  expect(turnstileReset).not.toHaveBeenCalled();
 });
 
 it("turnstile_failed keeps the email and resets the widget", async () => {
@@ -1347,6 +1577,7 @@ it("turnstile_failed keeps the email and resets the widget", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Email me a code" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("Verification failed. Try again.");
   expect(screen.getByRole("textbox", { name: "Work email" })).toHaveValue("bob@example.com");
+  expect(turnstileReset).toHaveBeenCalledTimes(1);
 });
 
 it("turnstile_required shows at the slot and sends nothing more", async () => {
@@ -1356,6 +1587,7 @@ it("turnstile_required shows at the slot and sends nothing more", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Email me a code" }));
   const slot = screen.getByTestId("turnstile").parentElement!;
   expect(await within(slot).findByText("Complete the verification first.")).toBeVisible();
+  expect(screen.queryByRole("textbox", { name: "8-digit code" })).toBeNull(); // still on the email step
 });
 
 it("a locked verify (429, scope ip) shows the wait", async () => {
@@ -1391,7 +1623,7 @@ it("no copy contains an em dash", async () => {
 Run: `pnpm --filter @oa/dashboard test -- signin-hosted`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement per D8.** Code field: `inputMode="numeric"`, `autoComplete="one-time-code"`, placeholder `1234 5678` built from `codeLength`; the client check is the contract's `normalizeCode`; Google is a full-page navigation to the provider's `start` plus `?next=`; on verify success, `location.assign(next)`.
+- [ ] **Step 3: Implement per D8.** Code field: `inputMode="numeric"`, `autoComplete="one-time-code"`, placeholder `1234 5678` built from `codeLength`; the client check is `isCompleteCode(value, codeLength)`; the Turnstile widget resets after every code request (success or failure) and on Resend; Google is a full-page navigation to the provider's `start` plus `?next=`; on verify success, `location.assign(next)`.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1462,7 +1694,13 @@ it("works in frozen and Team installs (manual flag, any sync mode)", async () =>
 it("never offered on the owner, on guests, or without the spaces feature", async () => {
   mountHosted("/settings/members");
   expect(within(await screen.findByRole("row", { name: /Ada Lovelace/ })).queryByRole("button", { name: "Restrict" })).toBeNull();
-  // self-hosted: mount("/settings/members") shows no Restrict button on any row
+  expect(within(screen.getByRole("row", { name: /Bob Builder/ })).getByRole("button", { name: "Restrict" })).toBeVisible(); // control exists on others
+});
+
+it("self-hosted: no Restrict control on any row", async () => {
+  mount("/settings/members");
+  expect(await screen.findByRole("row", { name: /Bob Builder/ })).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Restrict" })).toBeNull();
 });
 // invite-link.spec.ts: hosted Members rows with the Restrict control keep the layout at 375 and 1280
 ```
@@ -1550,11 +1788,32 @@ Expected: PASS.
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-it("owner sees the binding and a healthy status", async () => {
+it("owner sees the binding, a healthy status and the last success", async () => {
   mountHosted("/settings/directory");
   expect(await screen.findByText("example.com")).toBeVisible();
   expect(screen.getByText("Connected by ada@example.com")).toBeVisible();
-  expect(screen.getByRole("status", { name: "Sync status" })).toHaveTextContent("Healthy");
+  const s = screen.getByRole("status", { name: "Sync status" });
+  expect(s).toHaveTextContent("Healthy");
+  expect(s).toHaveTextContent(/Last synced /);
+});
+
+const STATUS = {
+  mode: "google", healthy: true, state: "ok", unhealthySince: null, lastError: null, nextRunAt: null, alertedAt: null, customerMismatch: null, held: [],
+  binding: { provider: "google", customerId: "C01abc", domain: "example.com", connectedBy: "ada@example.com", connectedAt: "2026-10-01T09:00:00.000Z" },
+  lastSuccessAt: "2026-10-20T09:00:00.000Z", staleAt: "2026-10-27T09:00:00.000Z",
+};
+const serveStatus = (o: object) => [http.get("*/api/v1/directory", () => HttpResponse.json({ ...STATUS, ...o }))];
+
+it("an unhealthy directory says when synced members lose access (staleAt)", async () => {
+  mountHosted("/settings/directory", true, undefined, serveStatus({ healthy: false, state: "backoff", unhealthySince: "2026-10-20T10:00:00.000Z" }));
+  expect(await screen.findByRole("status", { name: "Sync status" })).toHaveTextContent(/If sync doesn't recover by .*27.*, synced members lose access\./); // copy per D12
+});
+
+it("a customer mismatch names the expected Workspace", async () => {
+  mountHosted("/settings/directory", true, undefined, serveStatus({ healthy: false, state: "customer_mismatch", customerMismatch: { expected: "C01abc", actual: "C09xyz" } }));
+  const s = await screen.findByRole("status", { name: "Sync status" });
+  expect(s).toHaveTextContent("Wrong Google Workspace");
+  expect(s).toHaveTextContent("Reconnect with the example.com Workspace."); // copy per D12
 });
 
 it("mode off: the owner connects through a full-page link", async () => {
@@ -1600,11 +1859,11 @@ it("Sync now POSTs", async () => {
   await waitFor(() => expect(seen.at(-1)?.path).toBe("/api/v1/directory/sync"));
 });
 
-it("Sync now while sync is off shows the directory_sync_off copy", async () => {
+it("Sync now while sync is off shows its own copy", async () => {
   server.use(http.post("*/api/v1/directory/sync", () => HttpResponse.json({ error: { code: "directory_sync_off", message: "server text" } }, { status: 409 })));
   mountHosted("/settings/directory");
   fireEvent.click(await screen.findByRole("button", { name: "Sync now" }));
-  expect(await screen.findByText("Directory sync is off, so groups can't be changed here.")).toBeVisible();
+  expect(await screen.findByText("Sync is off. Connect Google Workspace to sync.")).toBeVisible(); // Sync now's own 409 copy, per D12
 });
 
 it("Disconnect warns that memberships freeze and nobody loses access", async () => {
@@ -1614,10 +1873,11 @@ it("Disconnect warns that memberships freeze and nobody loses access", async () 
 });
 
 it("reauth_required offers a fresh Google sign-in back to this page", async () => {
-  mountHosted("/settings/directory");
-  server.use(http.get("*/api/v1/directory", () => HttpResponse.json({ error: { code: "reauth_required", message: "Sign in again" } }, { status: 401 })));
+  mountHosted("/settings/directory", true, undefined, [http.get("*/api/v1/directory", () => HttpResponse.json({ error: { code: "reauth_required", message: "Sign in again" } }, { status: 401 }))]);
   expect(await screen.findByText("For your security, sign in with Google again to manage the directory.")).toBeVisible();
   expect(screen.getByRole("link", { name: "Sign in with Google again" })).toHaveAttribute("href", "/auth/login/google?next=%2Fsettings%2Fdirectory");
+  expect(screen.queryByRole("link", { name: "Continue with Cloudflare Access" })).toBeNull(); // still signed in: no sign-in page
+  expect(lastClient.getQueryState(["me"])?.status).toBe("success");
 });
 // e2e/directory.spec.ts (mock, ?hosted=1 and ?hosted=unhealthy): 375 and 1280, light and dark, keyboard
 ```
@@ -1627,7 +1887,7 @@ it("reauth_required offers a fresh Google sign-in back to this page", async () =
 Run: `pnpm --filter @oa/dashboard test -- directory`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement per D12.** Status labels by `SyncStatus.state`: `ok` "Healthy", `backoff` "Retrying", `auth_failed` "Google access lost", `customer_mismatch` "Wrong Google Workspace", `never` "Not synced yet". A `reauth_required` on any directory call shows the reauth link instead of the page.
+- [ ] **Step 3: Implement per D12.** Shows `lastSuccessAt` ("Last synced …"), `staleAt` while unhealthy ("If sync doesn't recover by …, synced members lose access."; it is `lastSuccessAt` plus 7 days, after which synced users fail closed) and `customerMismatch`. Status labels by `SyncStatus.state`: `ok` "Healthy", `backoff` "Retrying", `auth_failed` "Google access lost", `customer_mismatch` "Wrong Google Workspace", `never` "Not synced yet". A `reauth_required` on any directory call shows the reauth link instead of the page.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1715,90 +1975,181 @@ Expected: PASS.
 
 ### Task 19: Real end-to-end suite on a hosted-mode server
 
-**Depends on:** Tasks 3 to 18; Backend P2 and P3 merged; staging with test hooks on.
-
-Adds one case for restriction: `test("a restricted member sees no Create artifact control and the API refuses a create")` (session for a member of `gCon04`; expect `page.getByRole("button", { name: "Create artifact" })` to have count 0 and `POST /api/v1/artifacts` to answer 403 `space_forbidden`).
+**Depends on:** Tasks 3 to 18; Backend P2 and P3 merged (server honours `FEATURES`, direct sign-in and the test hooks).
 
 **Files:**
-- Create: `apps/dashboard/e2e/real/spaces.spec.ts`
-- Modify: `apps/dashboard/e2e/real/consent.spec.ts` (direct-mode variant), `e2e/real/fixtures.ts` (`hostedSession(input: TestSessionInput): Promise<string>` via `TEST_HOOKS` session, returning the cookie; `latestCode(email: string): Promise<string>` via `TEST_HOOKS` otp latest)
+- Create: `apps/dashboard/e2e/real/hosted-fixtures.ts`, `apps/dashboard/e2e/real/spaces.spec.ts`
+- Modify: `apps/dashboard/e2e/real/fixtures.ts` (`hostedConfig()`), `apps/dashboard/playwright.real.config.ts` (a `hosted` project that starts the dev server with `hostedConfig()`), `apps/dashboard/e2e/real/consent.spec.ts` (a direct-mode describe block, `hosted` project only)
 - Test: the specs themselves
 
 **Interfaces:**
-- Consumes: real endpoints; `TEST_HOOKS`, `TestSessionInput`, `OtpLatestInput`.
+- Consumes: `TEST_HOOKS`, `TestSessionInput`, `OtpLatestInput`, `R.*`, `AUTH.*`.
+- Produces (in `hosted-fixtures.ts`):
+  - `hostedConfig(): Record<string, unknown>` = `devConfig()` plus `FEATURES: "spaces,sync_google,content_revocation,usage_off"`, `AUTH_PROVIDERS: "google,email"`, `AUTH_DOMAINS: "e2e.test"`, `EMAIL_CODE_DOMAIN: "on"`, `TEST_HOOKS: "1"`, `TEST_HOOKS_KEY` (32+ random characters).
+  - `DOMAIN = "e2e.test"`.
+  - `hostedSession(input: TestSessionInput): Promise<string>` (POST `TEST_HOOKS` session with the key; returns the `cookie` header value); `toCookie(header: string): Cookie` (Playwright cookie for `APP`); `latestCode(email: string): Promise<string>` (POST `TEST_HOOKS` otp latest).
+  - `api(cookie: string)`: `{ get(path), post(path, body), patch(path, body), put(path), del(path) }` (each resolves to the `Response`) with `X-OA-Request: 1`.
+  - `uploadMarkdown(page: Page, name: string): Promise<string>`: sets a one-file `# e2e` markdown on the library drop zone's file input, clicks Create, returns the new artifact id from the URL.
+  - A worker fixture `seed` (once per worker, names with `uniq()`), created through `api(adminCookie)`:
+    `{ admin: { email, cookie }, eng: string, exec: string, engArtifact: string, execArtifact: string, bob: { id, email }, guestEmail: string, sharedWithGuest: string, removed: { id, email }, restricted: { email } }`:
+    - `eng` = `POST R.spaces { name: "Eng " + uniq(), allMembersRole: null, publicLinks: true }`; `exec` the same with `publicLinks: false`.
+    - `engArtifact`, `execArtifact` = `POST R.artifacts { title, format: "markdown", content: "# x", spaceId }`.
+    - `bob` = a member session's `GET R.me` user (email `bob-<uniq>@e2e.test`).
+    - `sharedWithGuest` = an admin personal artifact shared `PUT R.shares(id) { email: guestEmail, role: "viewer" }` with `guestEmail = guest-<uniq>@outside.example`.
+    - `removed`: a member who publishes one personal artifact with its own session, then `DELETE R.member(id)`.
+    - `restricted`: a member with `PUT R.memberRestricted(id)`.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-test("a space viewer sees no edit controls and the API refuses a publish", async ({ page, request }) => {
-  const cookie = await hostedSession({ email: `viewer-${uniq()}@${DOMAIN}`, role: "member", spaces: [{ spaceId: ENG, role: "viewer" }] });
+// spaces.spec.ts (hosted project)
+import { expect, test } from "./hosted-fixtures";
+
+test("a space viewer sees no edit controls and the API refuses a publish", async ({ page, seed }) => {
+  const cookie = await hostedSession({ email: `viewer-${uniq()}@${DOMAIN}`, role: "member", spaces: [{ spaceId: seed.eng, role: "viewer" }] });
   await page.context().addCookies([toCookie(cookie)]);
-  await page.goto(`/a/${engArtifact}`);
+  await page.goto(`/a/${seed.engArtifact}`);
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
   await expect(page.getByRole("button", { name: "Rename" })).toHaveCount(0);
-  const res = await request.post(`/api/v1/artifacts/${engArtifact}/versions`, { headers: { cookie, "X-OA-Request": "1" }, data: { content: "x" } });
-  expect(res.status()).toBe(404);
+  await expect(page.getByRole("button", { name: "Share" })).toHaveCount(0);
+  const res = await api(cookie).post(R.versions(seed.engArtifact), { content: "x" });
+  expect(res.status).toBe(404);
 });
 
-test("an admin never sees another person's personal artifacts", async ({ page }) => {
-  const cookie = await hostedSession({ email: `admin-${uniq()}@${DOMAIN}`, role: "admin" });
-  await page.context().addCookies([toCookie(cookie)]);
-  const asked = page.waitForRequest((r) => r.url().includes(`spaceId=${bobId}`)).then(() => true, () => false);
-  await page.goto(`/?space=${bobId}`);
-  await expect(page).toHaveURL(/\/$/);
-  expect(await Promise.race([asked, page.waitForTimeout(1000).then(() => false)])).toBe(false);
+test("an admin never sees another person's personal space", async ({ page, seed }) => {
+  await page.context().addCookies([toCookie(seed.admin.cookie)]);
+  const asked: string[] = [];
+  page.on("request", (r) => asked.push(r.url()));
+  await page.goto(`/?space=${seed.bob.id}`);
+  await expect(page).toHaveURL(`${APP}/`);
+  await expect(page.getByRole("navigation", { name: "Spaces" }).getByText(seed.bob.email)).toHaveCount(0);
+  expect(asked.filter((u) => u.includes(seed.bob.id))).toEqual([]);
 });
 
-test("an editor publishes into Engineering and moves it to Exec", async ({ page }) => {
-  const cookie = await hostedSession({ email: `ed-${uniq()}@${DOMAIN}`, role: "member", spaces: [{ spaceId: ENG, role: "editor" }, { spaceId: EXEC, role: "editor" }] });
+test("an editor publishes into Eng and moves it to Exec", async ({ page, seed }) => {
+  const cookie = await hostedSession({ email: `ed-${uniq()}@${DOMAIN}`, role: "member", spaces: [{ spaceId: seed.eng, role: "editor" }, { spaceId: seed.exec, role: "editor" }] });
   await page.context().addCookies([toCookie(cookie)]);
-  await page.goto(`/?space=${ENG}`);
-  await uploadMarkdown(page, "move-me.md");
+  await page.goto(`/?space=${seed.eng}`);
+  const id = await uploadMarkdown(page, "move-me.md");
   await page.getByRole("button", { name: "Move" }).click();
   await page.getByRole("combobox", { name: "Move to" }).click();
-  await page.getByRole("option", { name: "Exec" }).click();
+  await page.getByRole("option", { name: /^Exec / }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Move" }).click();
-  await expect(page.getByText("Exec")).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  const a = await (await api(cookie).get(R.artifact(id))).json();
+  expect(a.space.id).toBe(seed.exec);
 });
 
-test("public links off: Share can't make it public; /full shows NotPublic", async ({ page, browser }) => {
-  // manager of EXEC (publicLinks false) opens Share: "Public" disabled; an anonymous context on /a/<id>/full sees "This artifact isn't public"
+test("public links off: Public is disabled, and /full is not public to anonymous", async ({ page, browser, seed }) => {
+  const cookie = await hostedSession({ email: `mgr-${uniq()}@${DOMAIN}`, role: "member", spaces: [{ spaceId: seed.exec, role: "manager" }] });
+  await page.context().addCookies([toCookie(cookie)]);
+  await page.goto(`/a/${seed.execArtifact}`);
+  await page.getByRole("button", { name: "Share" }).click();
+  await expect(page.getByRole("radio", { name: "Public" })).toBeDisabled();
+  const anon = await browser.newPage();
+  await anon.goto(`${APP}/a/${seed.execArtifact}/full`);
+  await expect(anon.getByRole("heading", { name: "This artifact isn't public" })).toBeVisible();
+  const res = await api(cookie).patch(R.artifact(seed.execArtifact), { visibility: "public" });
+  expect([res.status, (await res.json()).error.code]).toEqual([403, "public_links_off"]);
 });
 
-test("transfer moves a removed person's artifacts to a successor", async ({ page }) => {
-  // admin opens Members, Transfer on the removed fixture user, picks the successor, confirms; the summary then reads "0 artifacts"
+test("transfer moves a removed person's artifacts to a successor", async ({ page, seed }) => {
+  await page.context().addCookies([toCookie(seed.admin.cookie)]);
+  await page.goto("/settings/members");
+  await page.getByRole("row", { name: new RegExp(seed.removed.email) }).getByRole("button", { name: "Transfer artifacts" }).click();
+  const d = page.getByRole("dialog");
+  await expect(d.getByText("1 artifact")).toBeVisible();
+  await d.getByRole("combobox", { name: "Give them to" }).click();
+  await page.getByRole("option", { name: seed.bob.email }).click();
+  await d.getByRole("button", { name: "Transfer 1 artifact" }).click();
+  await expect(d).toHaveCount(0);
+  expect(await (await api(seed.admin.cookie).get(R.memberTransfer(seed.removed.id))).json()).toEqual({ live: 0, deleted: 0 });
 });
 
-test("an invited guest signs in with an 8-digit code and sees no edit controls", async ({ page }) => {
-  await page.goto("/sign-in");
-  await page.getByRole("textbox", { name: "Work email" }).fill(guestEmail);
+test("a restricted member can't create, in the UI or the API", async ({ page, seed }) => {
+  const cookie = await hostedSession({ email: seed.restricted.email, role: "member" });
+  await page.context().addCookies([toCookie(cookie)]);
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Library" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Create artifact" })).toHaveCount(0);
+  const res = await api(cookie).post(R.artifacts, { title: "x", format: "markdown", content: "# x" });
+  expect([res.status, (await res.json()).error.code]).toEqual([403, "space_forbidden"]);
+});
+
+test("an invited guest signs in with an 8-digit code and sees no edit controls", async ({ page, seed }) => {
+  await page.goto(`/sign-in?next=${encodeURIComponent(`/a/${seed.sharedWithGuest}`)}`);
+  await page.getByRole("textbox", { name: "Work email" }).fill(seed.guestEmail);
   await page.getByRole("button", { name: "Email me a code" }).click();
-  const code = await latestCode(guestEmail);
+  const code = await latestCode(seed.guestEmail);
   expect(code).toMatch(/^\d{8}$/);
   await page.getByRole("textbox", { name: "8-digit code" }).fill(`${code.slice(0, 4)} ${code.slice(4)}`);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await page.goto(`/a/${sharedWithGuest}`);
+  await expect(page).toHaveURL(`${APP}/a/${seed.sharedWithGuest}`);
   await expect(page.getByRole("button", { name: "Rename" })).toHaveCount(0);
 });
-// consent.spec.ts: "direct mode: an MCP connector popup signs in through /sign-in and reaches consent"
+
+test("a hostile next on /sign-in never leaves the app", async ({ page, seed }) => {
+  await page.goto("/sign-in?next=%2F%2Fevil.example");
+  await page.getByRole("textbox", { name: "Work email" }).fill(seed.guestEmail);
+  await page.getByRole("button", { name: "Email me a code" }).click();
+  await page.getByRole("textbox", { name: "8-digit code" }).fill(await latestCode(seed.guestEmail));
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page).toHaveURL(new RegExp(`^${APP}/`));
+});
+
+// consent.spec.ts, direct-mode block (hosted project)
+test("direct mode: authorize sends a signed-out user to /sign-in, then consent renders", async ({ page }) => {
+  const { client_id } = await registerClient("Direct client");
+  await page.goto(authorize(client_id, REDIRECT));
+  await expect(page).toHaveURL(/\/sign-in\?next=%2Foauth%2Fauthorize/);
+  const email = `consent-${uniq()}@${DOMAIN}`;
+  await page.getByRole("textbox", { name: "Work email" }).fill(email);
+  await page.getByRole("button", { name: "Email me a code" }).click();
+  await page.getByRole("textbox", { name: "8-digit code" }).fill(await latestCode(email));
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByText("Direct client")).toBeVisible();
+  expect(new URL(page.url()).pathname).toBe("/oauth/authorize");
+});
 ```
 
-The two outlined tests follow the same pattern: a `hostedSession` cookie, one navigation, and assertions on the exact strings from Tasks 9 and 13.
+(Each spec also runs once on the existing Access project to prove these routes stay hidden there: `test.skip(project !== "hosted")`.)
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `pnpm --filter @oa/dashboard test:e2e:real -- spaces consent`
-Expected: FAIL until server and UI are both in place.
+Run: `pnpm --filter @oa/dashboard test:e2e:real -- --project=hosted spaces consent`
+Expected: FAIL until the server and UI are both in place.
 
 - [ ] **Step 3: Fix drift**: dashboard-side here; server or shared fixes go to Backend as an issue linked from this PR.
 
 - [ ] **Step 4: Run twice with parallel workers**
 
-Run: `pnpm --filter @oa/dashboard test:e2e:real -- spaces consent --repeat-each=2`
+Run: `pnpm --filter @oa/dashboard test:e2e:real -- --project=hosted spaces consent --repeat-each=2`
 Expected: PASS.
 
 - [ ] **Step 5: Commit** `test(e2e): hosted spaces and direct sign-in on a real server`
 
 ---
+
+## Manager review v5: checklist
+
+| Item | Task(s) |
+|---|---|
+| 1 `reauth_required` keeps the session; hosted admin routes in `roleGated` | 2 (`query-client.test.ts`), 17 (reauth test asserts `/me` still success) |
+| 2 `can` everywhere: side effects, TitleBar split, Details, Share per line | 3 (`permissions.test.tsx`, `sideeffects.test.ts`) |
+| 3 Move and Transfer gated on `spaces`; self-hosted unchanged | 1 (`canOf` tests), 8 (`self-hosted: no Move`), 13 (`self-hosted: no Transfer`) |
+| 4 `safeNext` on the Google href, code-request `next` and `assign(verified.next)`; `//evil.example` | 2 (`safe-next.test.ts`), 14 (three hostile-next tests), 19 (real run) |
+| 5 `?error=` parsed with `SignInErrorSchema`; `<script>` never echoed | 14 |
+| 6 Turnstile single-use: reset after each request and on Resend; the two tests fixed | 14 |
+| 7 Broken tests: Task 8 fixtures, Task 9 roles, 11 and 12 labels, Task 19 seeded fixtures and real assertions, Task 2 files and order | 8, 9, 11, 12, 19, 2 |
+| 8 Restricted member: no Create, DropZone off, picker empty | 3, 7 |
+| Also: `z.input` for `SpacesQuery` and `SpaceCreate`; full `contract.ts` re-exports | 1, 2 |
+| Also: public-off move copy pending Backend | 8 (note asserted, text pending) |
+| Should: `?space=<personal>` refused on `/settings/spaces` | 10 |
+| Should: `useCurrentSpace` never looks up ids outside `me.spaces` | 5 |
+| Should: `/^\d{8}$/` after normalizing; 404 code-request copy | 14 (`isCompleteCode`, 404 test) |
+| Should: Task 17 shows `lastSuccessAt`, `staleAt`, `customerMismatch`; own Sync-now 409 copy; handlers before mount | 17 |
+| Should: vacuous checks in 11, 12, 15 | 11, 12, 15 |
+| Should: Details says "Created by" in shared spaces | 3 (implementation), 6 (test) |
 
 ## Self-review
 
@@ -1808,4 +2159,5 @@ Expected: PASS.
 - **Rulings:** `can` read directly (Task 3; fallback is the contract's own function); `can.dataWrite` drives data-write UI; `manager` access; 409 `directory_sync_off`; moves into personal spaces refused; `spaceId` create-only; sync-health banner; opt-in mocks.
 - **Boundary:** no task lists a file under `packages/shared` or `apps/server`.
 - **Parallelism and specs:** the table matches each Depends on line; each of the 13 touched specs has one owning task.
-- **Type consistency:** `features`, `hasFeature`, `canOf`, `readAuthProviders`, `mountHosted`, `calls`, `parseHostedParam`, `useHosted`, `canPublishTo`, `accessLabel`, `useCurrentSpace`, `SpacePicker`, `runAll`, `requestCode`, `verifyCode`, `Turnstile`, `GroupPicker`, `errorCopy`, `restrictionLabel`, `useSetRestricted`, `useAddSelfToSpace` have one signature each.
+- **v5 review:** every item maps to a task and a named test in the checklist above.
+- **Type consistency:** `features`, `hasFeature`, `canOf`, `readAuthProviders`, `mountHosted`, `calls`, `parseHostedParam`, `useHosted`, `canPublishTo`, `accessLabel`, `useCurrentSpace`, `SpacePicker`, `runAll`, `requestCode`, `verifyCode`, `Turnstile`, `GroupPicker`, `errorCopy`, `restrictionLabel`, `useSetRestricted`, `useAddSelfToSpace`, `safeNext`, `isCompleteCode`, `useCan`, `canOf(a, feats)` have one signature each.
