@@ -47,6 +47,6 @@ test("viewer iframe has the exact sandbox attribute", async ({
   await page.goto(`/a/${id}`);
   await expect(page.locator("iframe.oa-vframe")).toHaveAttribute(
     "sandbox",
-    "allow-scripts allow-forms allow-popups allow-modals allow-downloads",
+    "allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads",
   );
 });
