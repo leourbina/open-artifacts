@@ -99,12 +99,12 @@ test("detail: xs buttons (24px) at 1280, 32px and a More menu at 390", async ({
   const share = page.getByRole("button", { name: "Share", exact: true });
   await expect(share).toBeVisible();
   expect((await share.boundingBox())?.height).toBe(24);
-  await expect(page.getByRole("button", { name: "Open raw" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Full screen" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Versions" })).toBeVisible();
 
   await page.setViewportSize(MOBILE);
   expect((await share.boundingBox())?.height).toBe(32);
-  await expect(page.getByRole("button", { name: "Open raw" })).toBeHidden();
+  await expect(page.getByRole("link", { name: "Full screen" })).toBeHidden();
   await expect(page.getByRole("button", { name: "Versions" })).toBeHidden();
   // One row: the version picker, Share and More share a line.
   const ys = await Promise.all(
@@ -116,7 +116,9 @@ test("detail: xs buttons (24px) at 1280, 32px and a More menu at 390", async ({
   );
   expect(new Set(ys).size).toBe(1);
   await page.getByRole("button", { name: "More actions" }).click();
-  await expect(page.getByRole("menuitem", { name: "Open raw" })).toBeVisible();
+  await expect(
+    page.getByRole("menuitem", { name: "Full screen" }),
+  ).toBeVisible();
   await page.getByRole("menuitem", { name: "Versions" }).click();
   await expect(
     page.getByRole("complementary", { name: "Side panel" }),

@@ -91,8 +91,11 @@ describe("viewer shell", () => {
     expect(screen.getByRole("link", { name: "Sign in" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "More actions" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Share" })).toBeNull();
-    // A button opening a blank tab with opener nulled (see m1-fixes), not a link.
-    expect(screen.getByRole("button", { name: "Open raw" })).toBeEnabled();
+    // Full screen (#290) stays for anonymous visitors, on phones too.
+    expect(screen.getByRole("link", { name: "Full screen" })).toHaveAttribute(
+      "href",
+      `${viewerPath(PUBLIC)}/full`,
+    );
   });
 
   it("anonymous visitor: owner and authors with no name and no email render fine", async () => {

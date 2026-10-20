@@ -31,7 +31,8 @@ import {
   useVersions,
 } from "../api/queries";
 import { toast } from "../layout/toast";
-import { ICON, SM, TXT, VisibilityBadge } from "./ui";
+import { fullPath } from "./paths";
+import { ICON, LINK_BTN, SM, TXT, VisibilityBadge } from "./ui";
 import { useOfferUndo } from "./useOfferUndo";
 
 const TITLE_MAX = 200;
@@ -115,9 +116,6 @@ export function TitleBar({
   artifact,
   version,
   explicitVersion,
-  rawUrl,
-  rawBusy = false,
-  onOpenRaw,
   authed,
   onShare,
   panelOpen,
@@ -126,10 +124,6 @@ export function TitleBar({
   artifact: ArtifactSummary;
   version: number;
   explicitVersion: boolean;
-  rawUrl: string | null;
-  /** The signed URL is being refreshed; "Open raw" is disabled meanwhile. */
-  rawBusy?: boolean;
-  onOpenRaw?: () => void;
   authed: boolean;
   onShare: () => void;
   panelOpen: boolean;
@@ -161,6 +155,8 @@ export function TitleBar({
     [qc, artifact.id],
   );
   const next = viewerPath(artifact.id, explicitVersion ? version : undefined);
+  const full = fullPath(artifact.id);
+  const openFull = () => window.open(full, "_blank", "noopener");
   const label = `v${version}${version === artifact.currentVersion ? " · Current" : ""}`;
   const items: (
     | "separator"
@@ -175,6 +171,14 @@ export function TitleBar({
             () => toast({ title: "Link copied", tone: "success" }),
             () => {},
           ),
+    },
+    {
+      label: "Copy full-screen link",
+      onSelect: () =>
+        void navigator.clipboard?.writeText(location.origin + full).then(
+          () => toast({ title: "Full-screen link copied", tone: "success" }),
+          () => {},
+        ),
     },
     ...(authed && entry
       ? [
@@ -233,18 +237,18 @@ export function TitleBar({
             </DropdownMenuContent>
           </DropdownMenu>
         )}
-        {rawUrl && (
-          // A button, not a link: an href could be middle-clicked after it expired.
-          <ShButton
-            variant="outline"
-            size="xs"
-            className={`${SM} max-[600px]:hidden`}
-            disabled={rawBusy}
-            onClick={onOpenRaw}
-          >
-            Open raw
-          </ShButton>
-        )}
+        {/* On phones it moves into the ••• menu, which only signed-in
+            viewers have. */}
+        <ShButton
+          asChild
+          variant="outline"
+          size="xs"
+          className={`${LINK_BTN} ${authed ? "max-[600px]:hidden" : ""}`}
+        >
+          <a href={full} target="_blank" rel="noopener noreferrer">
+            Full screen
+          </a>
+        </ShButton>
         {authed && (
           <ShButton
             variant="outline"
@@ -280,15 +284,12 @@ export function TitleBar({
                 <TooltipContent>More actions</TooltipContent>
               </Tooltip>
               <DropdownMenuContent align="end" className={TXT}>
-                {rawUrl && (
-                  <DropdownMenuItem
-                    className="min-[601px]:hidden"
-                    disabled={rawBusy}
-                    onSelect={() => onOpenRaw?.()}
-                  >
-                    Open raw
-                  </DropdownMenuItem>
-                )}
+                <DropdownMenuItem
+                  className="min-[601px]:hidden"
+                  onSelect={openFull}
+                >
+                  Full screen
+                </DropdownMenuItem>
                 <DropdownMenuItem
                   className="min-[601px]:hidden"
                   onSelect={onPanel}

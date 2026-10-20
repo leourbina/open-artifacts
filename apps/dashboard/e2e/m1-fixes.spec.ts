@@ -1,4 +1,4 @@
-// M1 fixes without a reviewer test: side panel focus ring (11) and Open raw size (12).
+// M1 fixes without a reviewer test: side panel focus ring (11) and the title bar button size (12).
 import { expect, test } from "@playwright/test";
 
 test("side panel shows a focus ring on the active tab when it takes focus", async ({
@@ -18,9 +18,9 @@ test("side panel shows a focus ring on the active tab when it takes focus", asyn
   expect(ring).toBe(true);
 });
 
-test("Open raw matches the height of its neighbours", async ({ page }) => {
+test("Full screen matches the height of its neighbours", async ({ page }) => {
   await page.goto("/a/Cd5fGhJkLm6nPqRs");
-  const raw = page.getByRole("button", { name: "Open raw" });
+  const raw = page.getByRole("link", { name: "Full screen" });
   const versions = page.getByRole("button", { name: "Versions" });
   await expect(raw).toBeVisible();
   const h = async (l: typeof raw) => (await l.boundingBox())?.height;

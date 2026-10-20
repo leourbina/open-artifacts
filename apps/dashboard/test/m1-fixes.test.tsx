@@ -1,4 +1,4 @@
-// M1 fixes without a reviewer test: document.title, quota at /me, Open raw, session expiry, paging.
+// M1 fixes without a reviewer test: document.title, quota at /me, Full screen, session expiry, paging.
 import { AUTH, QUOTA_MESSAGE, type VersionInfo } from "@oa/shared";
 import { fixtures } from "@oa/shared/mocks";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -182,55 +182,34 @@ describe("M1 content URL errors and freshness", () => {
   });
 });
 
-describe("M1 Open raw", () => {
-  const fakeWindow = () => {
-    const w = {
-      opener: {} as unknown,
-      location: { href: "about:blank" },
-      close: vi.fn(),
-    };
-    const open = vi.spyOn(window, "open").mockReturnValue(w as never);
-    return { w, open };
-  };
-  const raw = () => screen.findByRole("button", { name: "Open raw" });
-
-  it("is a button (no href to middle-click), opens a blank tab synchronously and fills it", async () => {
-    mount(`/a/${id("Landing page")}`);
-    const btn = await raw();
-    expect(screen.queryByRole("link", { name: "Open raw" })).toBeNull();
-    const { w, open } = fakeWindow();
-    fireEvent.click(btn);
-    expect(open).toHaveBeenCalledWith("about:blank", "_blank");
-    expect(w.opener).toBeNull();
-    await waitFor(() => expect(w.location.href).toMatch(/^https?:\/\//));
-    expect(w.close).not.toHaveBeenCalled();
-    open.mockRestore();
+describe("Full screen (#290) replaces Open raw", () => {
+  it("is a link to /a/<id>/full in a new tab; no Open raw anywhere", async () => {
+    const aid = id("Landing page");
+    mount(`/a/${aid}`);
+    const link = await screen.findByRole("link", { name: "Full screen" });
+    expect(link).toHaveAttribute("href", `/a/${aid}/full`);
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link.getAttribute("rel")).toContain("noopener");
+    expect(screen.queryByText("Open raw")).toBeNull();
   });
 
-  it("refreshes a stale URL before filling the tab; closes it on failure", async () => {
-    mount(`/a/${id("Landing page")}`);
-    const btn = await raw();
-    let refetches = 0;
-    server.use(
-      http.get("*/api/v1/artifacts/:id/content-url", () => {
-        refetches++;
-        return HttpResponse.json(
-          { error: { code: "internal", message: "boom" } },
-          { status: 500 },
-        );
-      }),
+  it("the ••• menu copies the full-screen link", async () => {
+    const aid = id("Landing page");
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    mount(`/a/${aid}`);
+    fireEvent.keyDown(
+      await screen.findByRole("button", { name: "More actions" }),
+      { key: "Enter" },
     );
-    const now = Date.now();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(now + 11 * 60_000);
-    const { w, open } = fakeWindow();
-    fireEvent.click(btn);
-    expect(open).toHaveBeenCalledWith("about:blank", "_blank");
-    await waitFor(() => expect(w.close).toHaveBeenCalled());
-    expect(w.location.href).toBe("about:blank");
-    expect(refetches).toBe(1);
-    await screen.findByText(/couldn't open/i);
-    clock.mockRestore();
-    open.mockRestore();
+    expect(screen.queryByRole("menuitem", { name: "Open raw" })).toBeNull();
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Copy full-screen link" }),
+    );
+    expect(writeText).toHaveBeenCalledWith(`${location.origin}/a/${aid}/full`);
   });
 });
 

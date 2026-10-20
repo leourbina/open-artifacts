@@ -20,7 +20,7 @@ import { useArtifactSideEffects } from "./useArtifactSideEffects";
 import { useContentUrl } from "./useContentUrl";
 import { useTheme } from "./useTheme";
 import "./viewer.css";
-import { toast } from "../layout/toast";
+import { fullPath } from "./paths";
 
 type Bridge = ReturnType<typeof createBridge>;
 
@@ -39,6 +39,11 @@ function ErrorPanel({ onRetry }: { onRetry?: () => void }) {
   );
 }
 
+/** Slot for the full-screen view's way back (#290): Design is picking it. */
+function FullScreenEscape(_: { artifact: ArtifactSummary }) {
+  return null;
+}
+
 function Viewer({
   artifact,
   version,
@@ -47,7 +52,9 @@ function Viewer({
   viewer,
   role,
   plan,
+  chromeless,
 }: {
+  chromeless: boolean;
   role: Me["user"]["role"] | undefined;
   plan: Me["instance"]["plan"] | undefined;
   artifact: ArtifactSummary;
@@ -58,31 +65,14 @@ function Viewer({
 }) {
   const content = useContentUrl(artifact.id, version);
   const url = safeContentUrl(content.url);
-  const rawUrl = safeContentUrl(content.current);
   const signedOut =
     content.error instanceof ApiClientError && content.error.status === 401;
   useLoginRedirect(
     signedOut,
-    viewerPath(artifact.id, explicitVersion ? version : undefined),
+    chromeless
+      ? fullPath(artifact.id)
+      : viewerPath(artifact.id, explicitVersion ? version : undefined),
   );
-  // The tab opens synchronously (no popup blocking) and is pointed at a URL known
-  // to be fresh, refreshing a stale one first.
-  const openRaw = () => {
-    const w = window.open("about:blank", "_blank");
-    if (!w) return;
-    w.opener = null;
-    const ready = content.fresh()
-      ? Promise.resolve(content.current)
-      : content.refresh();
-    void ready.then((u) => {
-      const safe = safeContentUrl(u);
-      if (safe) w.location.href = safe;
-      else {
-        w.close();
-        toast({ title: "Couldn't open the raw view", tone: "danger" });
-      }
-    });
-  };
   const theme = useTheme();
   const [el, setEl] = useState<HTMLIFrameElement | null>(null);
   const navigate = useNavigate();
@@ -193,19 +183,22 @@ function Viewer({
   if (signedOut) return null;
   return (
     <div className="oa-viewer">
-      <Crumbs title={artifact.title} />
-      <TitleBar
-        artifact={artifact}
-        version={version}
-        explicitVersion={explicitVersion}
-        rawUrl={rawUrl}
-        rawBusy={content.refreshing}
-        onOpenRaw={openRaw}
-        authed={authed}
-        onShare={() => setPanel(true, "share")}
-        panelOpen={panelOpen}
-        onPanel={() => setPanel(!panelOpen)}
-      />
+      {chromeless ? (
+        <FullScreenEscape artifact={artifact} />
+      ) : (
+        <>
+          <Crumbs title={artifact.title} />
+          <TitleBar
+            artifact={artifact}
+            version={version}
+            explicitVersion={explicitVersion}
+            authed={authed}
+            onShare={() => setPanel(true, "share")}
+            panelOpen={panelOpen}
+            onPanel={() => setPanel(!panelOpen)}
+          />
+        </>
+      )}
       <div className="oa-vbody">
         {!url && (content.current || content.error) ? (
           <ErrorPanel onRetry={() => void content.refresh()} />
@@ -239,7 +232,7 @@ function Viewer({
             />
           </div>
         )}
-        {panelOpen && authed && (
+        {panelOpen && authed && !chromeless && (
           <SidePanel
             artifact={artifact}
             tab={tab}
@@ -252,7 +245,17 @@ function Viewer({
   );
 }
 
-export function Shell({ id, v }: { id: string; v?: number }) {
+/** The artifact viewer; `chromeless` is the full-screen view (#290): the frame
+    and bridge only, with the same access and loading states. */
+export function Shell({
+  id,
+  v,
+  chromeless = false,
+}: {
+  id: string;
+  v?: number;
+  chromeless?: boolean;
+}) {
   const q = useArtifact(id);
   const me = useMe();
   // Without an explicit version, pin the one seen first so a background bump never reloads.
@@ -273,7 +276,7 @@ export function Shell({ id, v }: { id: string; v?: number }) {
     expired ||
     status === 401 ||
     (status === 404 && (me.status === "anonymous" || me.status === "error"));
-  useLoginRedirect(toLogin, viewerPath(id, v));
+  useLoginRedirect(toLogin, chromeless ? fullPath(id) : viewerPath(id, v));
   // A private artifact's title is shown only to a signed-in viewer.
   useDocumentTitle(
     q.data && (authed || q.data.visibility !== "private") ? q.data.title : null,
@@ -293,6 +296,7 @@ export function Shell({ id, v }: { id: string; v?: number }) {
       artifact={q.data}
       version={version}
       explicitVersion={v !== undefined}
+      chromeless={chromeless}
       authed={authed}
       role={authed ? me.me.user.role : undefined}
       plan={authed ? me.me.instance.plan : undefined}
