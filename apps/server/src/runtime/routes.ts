@@ -119,11 +119,12 @@ export function ipKey(ip: string): string | null {
 }
 
 /**
- * The anonymous R.events actor key: IPv4 as is; IPv6 as its /56
+ * The anonymous socket actor key (R.events and data subscribe, for the DO's
+ * per-actor caps and RL_ANON): IPv4 as is; IPv6 as its /56
  * ("2001:db8:1:200::/56"), since one subscriber typically holds a /56 of
- * /64s, so the DO's per-actor events cap (3) can't be multiplied by 256.
+ * /64s, so a per-actor socket cap can't be multiplied by 256.
  */
-export function eventsIpKey(ip: string): string | null {
+export function anonIpKey(ip: string): string | null {
   const k = ipKey(ip);
   if (!k?.endsWith("::/64")) return k;
   const g = k.slice(0, -5).split(":");
@@ -155,7 +156,8 @@ async function anonLimit(c: C, key: string, what: string): Promise<void> {
  * - data writes: signed-in "u:{id}"; anonymous only with allowAnonymousWrites
  *   (else 401), after RL_ANON "ip:{key}" (429; 503 if unbound outside dev),
  *   as "ip:{key}|{short}" (ipKey: IPv4, or the IPv6 /64).
- * - subscribe: signed-in "u:{id}"; anonymous "ip:{key}" after RL_ANON "sub:ip:{key}".
+ * - subscribe: signed-in "u:{id}"; anonymous "ip:{key}" after RL_ANON
+ *   "sub:ip:{key}" (anonIpKey: IPv4, or the IPv6 /56).
  * - data reads: anyone with view access (actor unused).
  * - anonId: anonymous writes, and "anonId" (GET anon-id, after RL_ANON
  *   "anonid:ip:{key}"), on an artifact with allowAnonymousWrites only: the
@@ -200,7 +202,8 @@ async function gate(
     if (!r) throw new Error("anonId not minted");
     return r;
   };
-  const key = ipKey(c.req.header("cf-connecting-ip") ?? "");
+  const ip = c.req.header("cf-connecting-ip") ?? "";
+  const key = kind === "subscribe" ? anonIpKey(ip) : ipKey(ip);
   if (!key)
     throw new ApiError("rate_limited", "Anonymous access is unavailable");
   if (kind === "subscribe") {
@@ -408,7 +411,7 @@ export function mountRuntime(app: AppType): void {
         r.level !== "viewer" ||
         r.artifact.visibility !== "public";
     } else {
-      const key = eventsIpKey(c.req.header("cf-connecting-ip") ?? "");
+      const key = anonIpKey(c.req.header("cf-connecting-ip") ?? "");
       if (!key)
         throw new ApiError("rate_limited", "Anonymous access is unavailable");
       await anonLimit(c, `ev:ip:${key}`, "connections");
