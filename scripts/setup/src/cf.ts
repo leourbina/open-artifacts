@@ -4,13 +4,15 @@ import {
   closeSync,
   constants,
   fstatSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
 
@@ -29,8 +31,9 @@ export type Fs = {
    */
   readToken?: (path: string) => TokenFile | null;
   /**
-   * A secret file: its directory 0700, any existing file removed, then the file
-   * created exclusively (no symlink followed) with mode 0600.
+   * A secret file: its directory 0700 (refused if a symlink or not yours), the
+   * data written to a 0600 temp file beside it and renamed over it, so a
+   * failure keeps the old file.
    */
   writeSecret?: (path: string, data: string) => void;
 };
@@ -73,11 +76,20 @@ export const realFs: Fs = {
   },
   // POSIX only: Windows is supported through WSL.
   writeSecret: (p, d) => {
-    mkdirSync(dirname(p), { recursive: true, mode: 0o700 });
-    chmodSync(dirname(p), 0o700);
-    rmSync(p, { force: true });
+    const dir = dirname(p);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    // Never trust a symlinked or foreign directory with a token.
+    const st = lstatSync(dir);
+    if (st.isSymbolicLink() || !st.isDirectory())
+      throw new Error(`${dir} is not a plain directory`);
+    if (process.getuid && st.uid !== process.getuid())
+      throw new Error(`${dir} is not owned by you`);
+    chmodSync(dir, 0o700);
+    // Write beside the target, then rename over it: a failure keeps the old file.
+    const tmp = join(dir, `.${basename(p)}.${process.pid}.tmp`);
+    rmSync(tmp, { force: true });
     const fd = openSync(
-      p,
+      tmp,
       constants.O_WRONLY |
         constants.O_CREAT |
         constants.O_EXCL |
@@ -85,9 +97,15 @@ export const realFs: Fs = {
       0o600,
     );
     try {
-      writeFileSync(fd, d);
-    } finally {
-      closeSync(fd);
+      try {
+        writeFileSync(fd, d);
+      } finally {
+        closeSync(fd);
+      }
+      renameSync(tmp, p);
+    } catch (e) {
+      rmSync(tmp, { force: true });
+      throw e;
     }
   },
   readToken: (p) => {

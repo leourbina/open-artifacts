@@ -167,21 +167,19 @@ describe("deploy, owner-token, selftest, agent-config", () => {
       expect(s).not.toContain(pat);
     }
     expect(JSON.stringify(cfg)).not.toContain(pat);
+    // #2: OAuth clients get only the URL; no token or header in any command.
     expect(cfg.snippets.claudeCode).toBe(
-      'claude mcp add --transport http open-artifacts https://app.example.com/mcp --header "Authorization: Bearer $(cat ~/.open-artifacts/app-example-com-pat-token)"',
+      "claude mcp add --transport http open-artifacts https://app.example.com/mcp",
     );
     expect(cfg.snippets.codex).toContain("[mcp_servers.open-artifacts]");
     expect(JSON.parse(cfg.snippets.cursor)).toEqual({
-      mcpServers: {
-        "open-artifacts": {
-          url: "https://app.example.com/mcp",
-          headers: { Authorization: "Bearer ${env:OA_TOKEN}" },
-        },
-      },
+      mcpServers: { "open-artifacts": { url: "https://app.example.com/mcp" } },
     });
-    expect(
-      JSON.parse(cfg.snippets.opencode).mcp["open-artifacts"],
-    ).toMatchObject({ type: "remote", url: "https://app.example.com/mcp" });
+    expect(JSON.parse(cfg.snippets.opencode).mcp["open-artifacts"]).toEqual({
+      type: "remote",
+      url: "https://app.example.com/mcp",
+      enabled: true,
+    });
     expect(JSON.parse(cfg.snippets.json).mcpServers["open-artifacts"]).toEqual({
       type: "http",
       url: "https://app.example.com/mcp",
@@ -209,7 +207,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     );
     expect(line(w, "selftest").data).toEqual({ mcp: "skipped" });
     const cfg = line(w, "agent-config");
-    expect(cfg.data.snippets.claudeCode).toContain("$(cat ~/.open-artifacts/");
+    expect(cfg.data.snippets.claudeCode).not.toContain("--header");
     expect(w.lines.join("\n")).not.toMatch(/oa_pat_/);
   });
 
@@ -224,7 +222,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
       revoked_at: expect.any(Number),
     });
     expect(w.db.tokens[1].revoked_at).toBeUndefined();
-    expect(w.sqls.at(-2)).toMatch(
+    expect(w.sqls.at(-1)).toMatch(
       /UPDATE tokens SET revoked_at = \d+ WHERE user_id/,
     );
     expect(w.hits).toContain("mcp tools/call");
@@ -404,8 +402,9 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     expect(own).toContain("-pat-token");
     const cfg = w.lines.find((l) => l.startsWith("✓ agent-config")) ?? "";
     expect(cfg).toContain("claude mcp add --transport http");
-    expect(cfg).toContain("$(cat ~/.open-artifacts/app-example-com-pat-token)");
-    expect(cfg).toContain("{file:~/.open-artifacts/app-example-com-pat-token}");
+    expect(cfg).toContain("claude mcp add --transport http");
+    expect(cfg).toContain(`${file}`);
+    expect(cfg).not.toMatch(/--header|Bearer \$\(cat/);
     expect(cfg).not.toContain(pat);
     expect(cfg).toContain("bearer_token_env_var");
     patContained(w, pat);
@@ -540,14 +539,16 @@ describe("B16-6 owner token hardening", () => {
     expect(w.sqls).toHaveLength(1);
   });
 
-  it("a revoke failure after the insert is uncertain and demotes nobody", async () => {
+  it("a revoke failure after the file is saved keeps the new token, demotes nobody and says so", async () => {
     const w = seeded({ failOn: /^UPDATE tokens SET revoked_at/ });
     w.db.users.push({ id: "u0", email: "old@example.com", role: "owner" });
-    expect(await run(HOSTS, w.deps, ROOT)).toBe(2);
-    expect(line(w, "owner-token").message).toContain("state uncertain");
-    expect(w.state().ownerTokenId).toBeUndefined();
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    expect(line(w, "owner-token").message).toContain(
+      "could not revoke the previous token",
+    );
+    expect(w.state().ownerTokenId).toBeTruthy();
+    expect(w.secretWrites).toHaveLength(1);
     expect(role(w, "u0")).toBe("owner");
-    expect(w.sqls).toHaveLength(1);
   });
 
   it("reports the revoked count only when above zero", async () => {
@@ -582,7 +583,7 @@ describe("B16-6 owner token hardening", () => {
     expect(line(w, "owner-token").message).not.toMatch(/demoted/);
   });
 
-  it("sends the mint command (upsert, capped insert, revoke, verify), then the demote command", async () => {
+  it("sends the mint command (upsert, capped insert, verify), then revoke and demote after the file is saved", async () => {
     const w = seeded();
     await run(HOSTS, w.deps, ROOT);
     expect(w.sqls).toHaveLength(2);
@@ -592,8 +593,8 @@ describe("B16-6 owner token hardening", () => {
     const order = [
       /ON CONFLICT\(email\)/,
       /\) < 50/,
-      /SET revoked_at/,
       /SELECT id FROM tokens WHERE id/,
+      /SET revoked_at/,
       /SET role = 'admin'/,
     ].map(at);
     expect(order.every((i) => i >= 0)).toBe(true);
