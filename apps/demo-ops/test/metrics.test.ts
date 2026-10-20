@@ -87,6 +87,19 @@ describe("ticTacToeState", () => {
         .inProgress,
     ).toBe(0);
   });
+  it("clock skew: a seat up to 60 s in the future is fresh, 60 s + 1 ms is not", () => {
+    const ahead = (ms: number) => ({ id: "u", at: NOW + ms });
+    expect(
+      ticTacToeState(ttt("X........", ahead(60_000), ahead(60_000)), NOW)
+        .inProgress,
+    ).toBe(1);
+    expect(
+      ticTacToeState(ttt("X........", ahead(60_001), seat(0)), NOW).inProgress,
+    ).toBe(0);
+    expect(
+      ticTacToeState(ttt("X........", seat(0), ahead(60_001)), NOW).inProgress,
+    ).toBe(0);
+  });
   it("treats a bad or missing doc as zero", () => {
     for (const d of [null, undefined, {}, { board: "x" }, { board: [1, 2] }])
       expect(ticTacToeState(d, NOW)).toEqual({ moves: 0, inProgress: 0 });
@@ -155,6 +168,32 @@ describe("chessState", () => {
       ).inProgress,
     ).toBe(0);
   });
+  it("clock skew: future activity beyond 60 s is not fresh and a bogus move is ignored", () => {
+    const ahead = (ms: number) => ({ id: "u", at: NOW + ms });
+    expect(
+      chessState(
+        table("g1", ahead(60_000), seat(9 * MIN)),
+        [mv("g1", 1, 9 * MIN)],
+        NOW,
+      ).inProgress,
+    ).toBe(1);
+    expect(
+      chessState(
+        table("g1", ahead(60_001), seat(9 * MIN)),
+        [mv("g1", 1, 9 * MIN)],
+        NOW,
+      ).inProgress,
+    ).toBe(0);
+    // a move stamped far in the future must not keep a stale game alive
+    const bogus = { id: "g1-002", data: { at: NOW + 3_600_000 } };
+    expect(
+      chessState(
+        table("g1", seat(9 * MIN), seat(9 * MIN)),
+        [mv("g1", 1, 9 * MIN), bogus],
+        NOW,
+      ).inProgress,
+    ).toBe(0);
+  });
   it("needs moves and both seats", () => {
     expect(chessState(table("g1", seat(0), seat(0)), [], NOW).inProgress).toBe(
       0,
@@ -209,47 +248,117 @@ describe("countries", () => {
 });
 
 describe("hourlyNext", () => {
+  const D = "20261020";
   const H = 13;
-  it("a fresh doc is a baseline: no delta", () => {
-    expect(hourlyNext(undefined, "20261020", H, 40)).toEqual({
-      h: Array(24).fill(0),
-      lastTotal: 40,
-      lastDay: "20261020",
+  const zero = () => Array(24).fill(0);
+  const cur = { votes: 10, tictactoe: 3, chess: 2, pixels: 4, pins: 5 };
+  const doc = (last: Record<string, number>, h = zero()) => ({
+    h,
+    last,
+    lastDay: D,
+  });
+  const sum = (n: { h: number[] } | null) =>
+    (n?.h ?? []).reduce((a, b) => a + b, 0);
+
+  it("a fresh doc is a baseline: no delta, last = the available metrics", () => {
+    expect(hourlyNext(undefined, D, H, cur)).toEqual({
+      h: zero(),
+      last: cur,
+      lastDay: D,
     });
   });
-  it("adds the positive delta to the current hour", () => {
-    const prev = { h: Array(24).fill(0), lastTotal: 10, lastDay: "20261020" };
-    const next = hourlyNext(prev, "20261020", H, 17);
-    expect(next.h[H]).toBe(7);
-    expect(next.lastTotal).toBe(17);
-    expect(next.h.reduce((a, b) => a + b, 0)).toBe(7);
-    // a second tick accumulates
-    expect(hourlyNext(next, "20261020", H, 20).h[H]).toBe(10);
+
+  it("sums the per-metric deltas into the current hour and accumulates", () => {
+    const prev = doc({ votes: 8, tictactoe: 3, chess: 0, pixels: 4, pins: 4 });
+    const n = hourlyNext(prev, D, H, cur);
+    expect(n?.h[H]).toBe(2 + 0 + 2 + 0 + 1);
+    expect(n?.last).toEqual(cur);
+    expect(hourlyNext(n, D, H, { ...cur, votes: 11 })?.h[H]).toBe(6);
   });
-  it("clamps a negative delta to zero but keeps the new baseline", () => {
-    const prev = { h: Array(24).fill(0), lastTotal: 30, lastDay: "20261020" };
-    prev.h[H] = 5;
-    const next = hourlyNext(prev, "20261020", H, 12);
-    expect(next.h[H]).toBe(5);
-    expect(next.lastTotal).toBe(12);
+
+  it("clamps each metric at 0: a drop in one never offsets a rise in another", () => {
+    const prev = doc({ votes: 20, tictactoe: 3, chess: 2, pixels: 4, pins: 2 });
+    const n = hourlyNext(prev, D, H, cur); // votes -10, pins +3
+    expect(n?.h[H]).toBe(3);
+    expect(n?.last.votes).toBe(10);
   });
+
+  it("caps each metric at 5000 per tick", () => {
+    const prev = doc({ votes: 0, pixels: 0 });
+    const n = hourlyNext(prev, D, H, { votes: 99_999, pixels: 5000 });
+    expect(n?.h[H]).toBe(5000 + 5000);
+  });
+
+  it("an unavailable metric adds nothing now and has no baseline when it returns", () => {
+    const prev = doc({ votes: 5, pins: 5 });
+    const down = hourlyNext(prev, D, H, { pins: 6 }); // votes unavailable
+    expect(down?.h[H]).toBe(1);
+    expect(down?.last).toEqual({ pins: 6 });
+    const back = hourlyNext(down, D, H, { votes: 50, pins: 7 });
+    expect(back?.h[H]).toBe(1 + 1); // votes has no baseline: only pins adds
+    expect(back?.last).toEqual({ votes: 50, pins: 7 });
+  });
+
+  it("a metric with no baseline in the previous doc adds nothing", () => {
+    const n = hourlyNext(doc({ pins: 1 }), D, H, { pins: 2, votes: 9 });
+    expect(n?.h[H]).toBe(1);
+  });
+
+  it("returns null when every metric is unavailable and the doc is valid", () => {
+    expect(hourlyNext(doc({ votes: 1 }), D, H, {})).toBeNull();
+  });
+
+  it("with every metric unavailable, an invalid doc is still replaced by a fresh baseline", () => {
+    expect(hourlyNext({ h: [1] }, D, H, {})).toEqual({
+      h: zero(),
+      last: {},
+      lastDay: D,
+    });
+  });
+
   it("resets on a day change", () => {
-    const prev = { h: Array(24).fill(3), lastTotal: 99, lastDay: "20261019" };
-    expect(hourlyNext(prev, "20261020", 0, 4)).toEqual({
-      h: Array(24).fill(0),
-      lastTotal: 4,
-      lastDay: "20261020",
+    const prev = {
+      h: Array(24).fill(3),
+      last: { votes: 99 },
+      lastDay: "20261019",
+    };
+    expect(hourlyNext(prev, D, 0, { votes: 4 })).toEqual({
+      h: zero(),
+      last: { votes: 4 },
+      lastDay: D,
     });
   });
-  it("repairs a malformed doc", () => {
-    for (const bad of [
+
+  it("treats an invalid doc as fresh (adds 0, overwritten)", () => {
+    const good = () => doc({ votes: 1 });
+    const bad: unknown[] = [
       {},
-      { h: [1, 2], lastTotal: 1, lastDay: "20261020" },
-      { h: "x" },
-    ]) {
-      const n = hourlyNext(bad, "20261020", H, 5);
-      expect(n.h).toHaveLength(24);
-      expect(n.lastTotal).toBe(5);
+      "x",
+      { ...good(), h: Array(25).fill(0) },
+      { ...good(), h: Array(23).fill(0) },
+      { ...good(), h: zero().map((_, i) => (i === 3 ? -1 : 0)) },
+      { ...good(), h: zero().map((_, i) => (i === 3 ? 1.5 : 0)) },
+      { ...good(), h: zero().map((_, i) => (i === 3 ? 1e7 + 1 : 0)) },
+      { ...good(), last: { votes: -1 } },
+      { ...good(), last: { votes: 1.5 } },
+      { ...good(), last: { votes: Number.NaN } },
+      { ...good(), last: "x" },
+      { ...good(), last: null },
+    ];
+    for (const b of bad) {
+      const n = hourlyNext(b, D, H, { votes: 500 });
+      expect(n, JSON.stringify(b)).toEqual({
+        h: zero(),
+        last: { votes: 500 },
+        lastDay: D,
+      });
     }
+    // 1e7 itself is allowed
+    const edge = { ...good(), h: zero().map((_, i) => (i === 3 ? 1e7 : 0)) };
+    expect(hourlyNext(edge, D, H, { votes: 2 })?.h[3]).toBe(1e7);
+  });
+
+  it("sum helper sanity", () => {
+    expect(sum(hourlyNext(doc({ votes: 1 }), D, H, { votes: 3 }))).toBe(2);
   });
 });

@@ -9,11 +9,11 @@
  */
 import { isId } from "@oa/shared";
 import {
+  type Current,
   chessState,
   countries,
   type Doc,
   type GameState,
-  type Hourly,
   hourlyNext,
   pixelCount,
   ticTacToeState,
@@ -62,6 +62,8 @@ export const MAX_REQUESTS = 45;
 const WRITES = 2;
 
 class TooLarge extends Error {}
+/** HTTP 403: the token cannot read this source, so it is missing (not failed). */
+class Forbidden extends Error {}
 
 type Ctx = {
   env: Env;
@@ -121,6 +123,7 @@ async function request(
     signal: AbortSignal.any([t.signal, AbortSignal.timeout(TIMEOUT_MS)]),
   });
   if (res.status === 404) return null;
+  if (res.status === 403) throw new Forbidden("forbidden");
   if (!res.ok) throw new Error(`status ${res.status}`);
   return readJson(res);
 }
@@ -250,6 +253,7 @@ export async function tick(
   /** Runs one source; an error or a spent budget makes it 0 and lists it in `failed`. */
   const source = async (
     name: string,
+    src: string,
     id: string | undefined,
     fn: (id: string) => Promise<void>,
   ) => {
@@ -257,6 +261,7 @@ export async function tick(
     try {
       await fn(id);
     } catch (e) {
+      if (e instanceof Forbidden) return absent(src);
       failed.push(name);
       console.warn(
         `demo-ops: ${name} failed: ${e instanceof Error ? e.message : "error"}`,
@@ -273,7 +278,7 @@ export async function tick(
     const ttt = usable("tictactoe");
     const chess = usable("chess");
 
-    await source("votes", poll, async (id) => {
+    await source("votes", "poll", poll, async (id) => {
       const col = `votes-${day}`;
       const n = await countApi(t, id, col);
       if (n !== undefined) {
@@ -285,13 +290,13 @@ export async function tick(
       s.votes = r.docs.length;
       if (r.capped) t.truncated.add("votes");
     });
-    await source("pixels", canvas, async (id) => {
+    await source("pixels", "canvas", canvas, async (id) => {
       const r = await listDocs(t, id, `canvas-${day}`, 1);
       if (r.notFound) return absent("canvas");
       s.pixels = pixelCount(r.docs);
       if (r.capped) t.truncated.add("pixels");
     });
-    await source("pins", map, async (id) => {
+    await source("pins", "map", map, async (id) => {
       const col = `pins-${day}`;
       const exact = await countApi(t, id, col);
       const r = await listDocs(t, id, col);
@@ -303,10 +308,10 @@ export async function tick(
         if (exact === undefined) t.truncated.add("pins");
       }
     });
-    await source("tictactoe", ttt, async (id) => {
+    await source("tictactoe", "tictactoe", ttt, async (id) => {
       s.tictactoe = ticTacToeState(await getDoc(t, id, "game", "game"), now);
     });
-    await source("chess", chess, async (id) => {
+    await source("chess", "chess", chess, async (id) => {
       const table = await getDoc(t, id, "table", "table");
       const g = (table as { g?: unknown } | undefined)?.g;
       if (typeof g !== "string") return;
@@ -350,12 +355,22 @@ export async function tick(
     failed,
   };
   await put(env, t.base, "today", today);
-  // A failed source would make the write total dip and then rebound as fake writes.
-  if (hourlyOk && !failed.length) {
-    const total =
-      s.votes + s.tictactoe.moves + s.chess.moves + s.pixels + s.pins;
-    const next: Hourly = hourlyNext(hourlyPrev, day, hour, total);
-    await put(env, t.base, `hourly-${day}`, next);
+  // Per-metric: only a source that is present, not truncated, not missing and not failed
+  // contributes to the hourly deltas (a source that was down has no baseline on return).
+  if (hourlyOk) {
+    const up = (src: string, label: string, trunc: string) =>
+      !missing.includes(src) &&
+      !failed.includes(label) &&
+      !t.truncated.has(trunc);
+    const cur: Current = {};
+    if (up("poll", "votes", "votes")) cur.votes = s.votes;
+    if (up("canvas", "pixels", "pixels")) cur.pixels = s.pixels;
+    if (up("map", "pins", "pins")) cur.pins = s.pins;
+    if (up("tictactoe", "tictactoe", "moves.tictactoe"))
+      cur.tictactoe = s.tictactoe.moves;
+    if (up("chess", "chess", "moves.chess")) cur.chess = s.chess.moves;
+    const next = hourlyNext(hourlyPrev, day, hour, cur);
+    if (next) await put(env, t.base, `hourly-${day}`, next);
   }
 }
 

@@ -23,7 +23,10 @@ const atOf = (v: unknown): number | null => {
   return null;
 };
 
-const fresh = (at: number, now: number): boolean => now - at <= FRESH_MS;
+/** Within 5 minutes, and not more than 60 s ahead of us (clock skew; a bogus future stamp is not fresh). */
+export const SKEW_MS = 60_000;
+const fresh = (at: number, now: number): boolean =>
+  now - at <= FRESH_MS && at <= now + SKEW_MS;
 
 const LINES = [
   [0, 1, 2],
@@ -74,7 +77,11 @@ export function chessState(
   const newest = Math.max(
     white,
     black,
-    ...mine.map((m) => atOf(m.data) ?? Number.NEGATIVE_INFINITY),
+    // A move stamped in the future must not keep a stale game alive.
+    ...mine.map((m) => {
+      const at = atOf(m.data);
+      return at !== null && at <= now + SKEW_MS ? at : Number.NEGATIVE_INFINITY;
+    }),
   );
   return { moves: mine.length, inProgress: fresh(newest, now) ? 1 : 0 };
 }
@@ -103,31 +110,64 @@ export function countries(docs: Doc[]): number {
   return seen.size;
 }
 
-export type Hourly = { h: number[]; lastTotal: number; lastDay: string };
+export const METRICS = [
+  "votes",
+  "tictactoe",
+  "chess",
+  "pixels",
+  "pins",
+] as const;
+export type Metric = (typeof METRICS)[number];
+/** The current value of each metric that is available this tick (present, not truncated, not missing). */
+export type Current = Partial<Record<Metric, number>>;
+export type Hourly = {
+  h: number[];
+  /** Last value per metric; only metrics that were available that tick. */
+  last: Partial<Record<Metric, number>>;
+  lastDay: string;
+};
+
+export const HOURLY_CELL_MAX = 1e7;
+export const DELTA_CAP = 5000;
+
+const isNat = (v: unknown): v is number =>
+  typeof v === "number" && Number.isInteger(v) && v >= 0;
 
 const validHourly = (v: unknown, day: string): v is Hourly =>
   isObj(v) &&
   v.lastDay === day &&
-  typeof v.lastTotal === "number" &&
-  Number.isFinite(v.lastTotal) &&
   Array.isArray(v.h) &&
   v.h.length === 24 &&
-  v.h.every((x) => Number.isInteger(x) && (x as number) >= 0);
+  v.h.every((x) => isNat(x) && x <= HOURLY_CELL_MAX) &&
+  isObj(v.last) &&
+  Object.values(v.last).every(isNat);
 
 /**
- * The next hourly doc: the change in the write total since the previous tick goes to
- * the current UTC hour (never negative). A missing, malformed or other-day doc is a
- * fresh baseline: nothing is added.
+ * The next hourly doc. Each metric adds its own change since the last tick to the current
+ * UTC hour (clamped at 0, capped at DELTA_CAP), but only when it is available now and was
+ * in the previous doc: a metric that was down has no baseline when it returns, so there is
+ * no spike. A missing, invalid or other-day doc is a fresh baseline (adds nothing).
+ * Returns null when there is nothing to write (a valid doc and no metric available).
  */
 export function hourlyNext(
   prev: unknown,
   day: string,
   hour: number,
-  total: number,
-): Hourly {
-  if (!validHourly(prev, day))
-    return { h: Array(24).fill(0), lastTotal: total, lastDay: day };
+  cur: Current,
+): Hourly | null {
+  const last: Hourly["last"] = {};
+  for (const m of METRICS) if (cur[m] !== undefined) last[m] = cur[m];
+  const valid = validHourly(prev, day);
+  if (!valid) return { h: Array(24).fill(0), last, lastDay: day };
+  if (!Object.keys(last).length) return null;
   const h = [...prev.h];
-  h[hour] = (h[hour] as number) + Math.max(0, total - prev.lastTotal);
-  return { h, lastTotal: total, lastDay: day };
+  let add = 0;
+  for (const m of METRICS) {
+    const now = cur[m];
+    const was = prev.last[m];
+    if (now === undefined || was === undefined) continue;
+    add += Math.min(DELTA_CAP, Math.max(0, now - was));
+  }
+  h[hour] = Math.min(HOURLY_CELL_MAX, (h[hour] as number) + add);
+  return { h, last, lastDay: day };
 }

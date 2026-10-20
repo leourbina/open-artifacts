@@ -45,6 +45,7 @@ class World {
   hang = new Set<string>(); // path substrings that never answer
   big = new Set<string>(); // path substrings that answer over 512 KB
   noAccess = new Set<string>(); // artifact ids that answer 404 to everything
+  status = new Map<string, number>(); // path substring -> forced status
   calls: Call[] = [];
   set(id: string, col: string, docs: Doc[]) {
     this.cols.set(`${id}/${col}`, docs);
@@ -86,6 +87,9 @@ class World {
                 rej(new Error("aborted")),
               ),
             );
+        for (const [sub, code] of this.status)
+          if (u.pathname.includes(sub))
+            return new Response("x", { status: code });
         for (const f of this.fail)
           if (u.pathname.includes(f))
             return new Response("boom", { status: 500 });
@@ -524,28 +528,74 @@ describe("chess moves query", () => {
   });
 });
 
-describe("hourly", () => {
-  const hourly = (w: World) =>
-    w.stat(`hourly-${DAY}`) as {
-      h: number[];
-      lastTotal: number;
-      lastDay: string;
-    };
+describe("403 means missing, not failed", () => {
+  it("a 403 from data-count, a data read or a query marks the source missing", async () => {
+    for (const [sub, name] of [
+      [`/${POLL}/data-count/`, "poll"],
+      [`/${POLL}/data/votes-`, "poll"],
+      [`/${CANVAS}/data/`, "canvas"],
+      [`/${MAP}/data/pins-`, "map"],
+      [`/${TTT}/data/game/game`, "tictactoe"],
+      [`/${CHESS}/data/table/table`, "chess"],
+      [`/${CHESS}/data/moves/query`, "chess"],
+    ] as const) {
+      const w = full();
+      w.status.set(sub, 403);
+      w.count = sub.includes("/data-count/");
+      quiet();
+      await run(w);
+      const t = w.stat("today") as { missing: string[]; failed: string[] };
+      expect(t.missing, sub).toContain(name);
+      expect(t.failed, sub).toEqual([]);
+    }
+  });
 
-  it("the first tick is a baseline; later ticks add the change in writes to the current hour", async () => {
+  it("a missing source does not stop the hourly doc", async () => {
     const w = full();
     await run(w);
-    // votes 7 + ttt moves 3 + chess moves 2 + pixels 3 + pins 5
+    w.status.set(`/${POLL}/`, 403);
+    quiet();
+    w.doc(MAP, `pins-${DAY}`, "p99", { c: "ES" });
+    await run(w);
+    const h = w.stat(`hourly-${DAY}`) as {
+      h: number[];
+      last: Record<string, number>;
+    };
+    expect(h.h[13]).toBe(1); // the new pin
+    expect(h.last.votes).toBeUndefined();
+  });
+
+  it("is logged once per tick, never with the token", async () => {
+    const w = full();
+    w.status.set(`/${POLL}/`, 403);
+    w.status.set(`/${MAP}/`, 403);
+    const logs = quiet();
+    await run(w);
+    expect(
+      logs.filter((l) => l.includes("not found or no access")),
+    ).toHaveLength(1);
+    for (const l of logs) expect(l).not.toContain(TOKEN);
+  });
+});
+
+describe("hourly", () => {
+  type H = { h: number[]; last: Record<string, number>; lastDay: string };
+  const hourly = (w: World) => w.stat(`hourly-${DAY}`) as H;
+  const sum = (w: World) => hourly(w).h.reduce((a, b) => a + b, 0);
+
+  it("the first tick is a baseline; later ticks add per-metric deltas to the current hour", async () => {
+    const w = full();
+    await run(w);
     expect(hourly(w)).toEqual({
       h: Array(24).fill(0),
-      lastTotal: 20,
+      last: { votes: 7, tictactoe: 3, chess: 2, pixels: 3, pins: 5 },
       lastDay: DAY,
     });
     w.doc(POLL, `votes-${DAY}`, "v99", {});
     w.doc(MAP, `pins-${DAY}`, "p99", { c: "ES" });
     await run(w);
     expect(hourly(w).h[13]).toBe(2);
-    expect(hourly(w).lastTotal).toBe(22);
+    expect(hourly(w).last.votes).toBe(8);
     w.doc(POLL, `votes-${DAY}`, "v100", {});
     await run(w);
     expect(hourly(w).h[13]).toBe(3);
@@ -559,49 +609,89 @@ describe("hourly", () => {
     expect(hourly(w).h[5]).toBe(1);
   });
 
-  it("clamps a negative delta to 0 and moves the baseline", async () => {
+  it("a drop in one metric is clamped and does not offset a rise in another", async () => {
     const w = full();
     await run(w);
-    w.set(POLL, `votes-${DAY}`, []); // 7 votes vanish (a reset)
-    await run(w);
-    expect(hourly(w).h.reduce((a, b) => a + b, 0)).toBe(0);
-    expect(hourly(w).lastTotal).toBe(13);
-    w.doc(POLL, `votes-${DAY}`, "v1", {});
+    w.set(POLL, `votes-${DAY}`, []); // 7 votes vanish
+    w.doc(MAP, `pins-${DAY}`, "p99", { c: "ES" }); // +1 pin
     await run(w);
     expect(hourly(w).h[13]).toBe(1);
+    expect(hourly(w).last.votes).toBe(0);
+  });
+
+  it("caps a metric at 5000 per tick", async () => {
+    const w = full();
+    await run(w);
+    w.count = true;
+    w.set(
+      POLL,
+      `votes-${DAY}`,
+      Array.from({ length: 9000 }, (_, i) => ({ id: `v${i}`, data: {} })),
+    );
+    await run(w);
+    expect(hourly(w).h[13]).toBe(5000);
+  });
+
+  it("a failed or truncated source adds nothing and has no baseline when it returns", async () => {
+    const w = full();
+    await run(w);
+    w.fail.add(`/${POLL}/`);
+    quiet();
+    w.doc(MAP, `pins-${DAY}`, "p99", { c: "ES" });
+    await run(w);
+    expect(hourly(w).h[13]).toBe(1);
+    expect(hourly(w).last.votes).toBeUndefined();
+    w.fail.clear();
+    w.doc(POLL, `votes-${DAY}`, "v99", {});
+    await run(w); // votes back with 8 docs: no baseline, so no spike
+    expect(hourly(w).h[13]).toBe(1);
+    expect(hourly(w).last.votes).toBe(8);
+    w.doc(POLL, `votes-${DAY}`, "v100", {});
+    await run(w);
+    expect(hourly(w).h[13]).toBe(2);
+  });
+
+  it("does not write the hourly doc when every metric is unavailable", async () => {
+    const w = full();
+    await run(w);
+    const before = JSON.stringify(hourly(w));
+    for (const id of [POLL, CANVAS, MAP, TTT, CHESS])
+      w.status.set(`/${id}/`, 403);
+    quiet();
+    await run(w);
+    expect(JSON.stringify(hourly(w))).toBe(before);
+    expect(
+      w.puts().filter((c) => c.path.endsWith(`hourly-${DAY}`)),
+    ).toHaveLength(1);
+  });
+
+  it("treats an invalid stored doc as fresh and overwrites it", async () => {
+    for (const bad of [
+      { h: Array(25).fill(0), last: { votes: 1 }, lastDay: DAY },
+      { h: Array(24).fill(2e7), last: { votes: 1 }, lastDay: DAY },
+      { h: Array(24).fill(0), last: { votes: -4 }, lastDay: DAY },
+    ]) {
+      const w = full();
+      w.doc(DASH, "stats", `hourly-${DAY}`, bad);
+      await run(w);
+      expect(hourly(w).h).toEqual(Array(24).fill(0));
+      expect(hourly(w).last.votes).toBe(7);
+    }
   });
 
   it("starts a fresh doc on a new day", async () => {
     const w = full();
     await run(w);
-    const next = Date.UTC(2026, 9, 21, 0, 1, 0);
     w.doc(POLL, "votes-20261021", "v1", {});
-    await run(w, env(), { now: next });
+    await run(w, env(), { now: Date.UTC(2026, 9, 21, 0, 1, 0) });
     const t = w.stat("today") as { day: string; votes: number };
     expect(t.day).toBe("20261021");
     expect(t.votes).toBe(1);
-    expect(w.stat("hourly-20261021")).toMatchObject({ lastDay: "20261021" });
-    expect(
-      (w.stat("hourly-20261021") as { h: number[] }).h.reduce(
-        (a, b) => a + b,
-        0,
-      ),
-    ).toBe(0);
-    // yesterday's doc is left alone
-    expect(hourly(w).lastDay).toBe(DAY);
-  });
-
-  it("is not updated when a source failed (no spurious spike on recovery)", async () => {
-    const w = full();
-    await run(w);
-    const before = JSON.stringify(hourly(w));
-    w.fail.add(`/${POLL}/`);
-    quiet();
-    await run(w);
-    expect(JSON.stringify(hourly(w))).toBe(before);
-    w.fail.clear();
-    await run(w);
-    expect(hourly(w).h.reduce((a, b) => a + b, 0)).toBe(0);
+    const n = w.stat("hourly-20261021") as H;
+    expect(n.lastDay).toBe("20261021");
+    expect(n.h.reduce((a, b) => a + b, 0)).toBe(0);
+    expect(hourly(w).lastDay).toBe(DAY); // yesterday's doc is left alone
+    expect(sum(w)).toBe(0);
   });
 });
 
