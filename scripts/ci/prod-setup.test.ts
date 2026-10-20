@@ -153,3 +153,73 @@ describe("prod-setup.sh", () => {
     });
   });
 });
+
+describe("prod-setup.sh demo modes", () => {
+  const demoEnv = {
+    DEMO_NAME: "open-artifacts-demo",
+    DEMO_APP_HOST: "demo.example.com",
+    DEMO_CONTENT_HOST: "demo-content.example.com",
+    DEMO_OWNER_EMAIL: "o@example.com",
+  };
+  const run = (mode: string, lines: string[], env = demoEnv, exit = 0) => {
+    const body = `cat <<'EOF_FIXTURE'\n${lines.join("\n")}\nEOF_FIXTURE\nexit ${exit}`;
+    const sb = sandbox({ pnpm: body });
+    const r = sb.run(["bash", script("prod-setup.sh"), mode], {
+      env: { GITHUB_STEP_SUMMARY: join(sb.dir, "sum.md"), ...env },
+    });
+    return { ...r, calls: sb.log() };
+  };
+  it("demo-install runs the demo flags and hosts", () => {
+    const r = run("demo-install", [ok("a")]);
+    expect(r.code).toBe(0);
+    const c = r.calls[0] as string;
+    for (const f of [
+      "--ci",
+      "--json",
+      "--solo",
+      "--no-email",
+      "--yes-paid",
+      "--name open-artifacts-demo",
+      "--app-host demo.example.com",
+      "--content-host demo-content.example.com",
+    ])
+      expect(c, f).toContain(f);
+    expect(c).not.toContain("--upgrade");
+    expect(c).not.toContain("--browser");
+  });
+  it("demo-upgrade adds --upgrade; demo-cleanup revokes tokens", () => {
+    expect(run("demo-upgrade", [ok("a")]).calls[0]).toContain("--upgrade");
+    expect(run("demo-cleanup", [ok("a")]).calls[0]).toContain(
+      "--revoke-ci-tokens",
+    );
+  });
+  it("a fake PAT in the output fails the step and is never echoed", () => {
+    for (const m of ["demo-install", "demo-upgrade", "demo-cleanup"]) {
+      const r = run(m, [`{"step":"b","status":"ok","note":"${FAKE}"}`]);
+      expect(r.code, m).not.toBe(0);
+      expect(r.out + r.err).not.toContain(FAKE);
+      expect(r.out + r.err).toContain(
+        "token pattern found in output; aborting",
+      );
+    }
+  });
+  it("an error status fails the step", () => {
+    expect(
+      run("demo-install", [`{"step":"x","status":"error"}`]).code,
+    ).not.toBe(0);
+  });
+  it("refuses the production Worker name or host without running setup", () => {
+    for (const bad of [
+      { DEMO_NAME: "open-artifacts-prod" },
+      { DEMO_APP_HOST: "artifacts.leourbina.com" },
+      { DEMO_NAME: "custom-prod", PROD_NAME: "custom-prod" },
+    ]) {
+      const r = run("demo-install", [ok("a")], { ...demoEnv, ...bad });
+      expect(r.code, JSON.stringify(bad)).toBe(2);
+      expect(r.calls).toEqual([]);
+    }
+  });
+  it("requires the DEMO_* values", () => {
+    expect(run("demo-install", [ok("a")], {} as never).code).not.toBe(0);
+  });
+});

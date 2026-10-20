@@ -72,6 +72,12 @@ function ViewerRoute() {
   return <Shell id={id} v={n} />;
 }
 
+/** Chromeless: the artifact alone, current version, same access as /a/$id. */
+function FullRoute() {
+  const { id } = useParams({ strict: false }) as { id: string };
+  return <Shell id={id} chromeless />;
+}
+
 function DiffRoute() {
   const { id, from, to } = useParams({ strict: false }) as {
     id: string;
@@ -134,6 +140,7 @@ const routeTree = root.addChildren([
   search,
   route("/a/$id", ViewerRoute),
   route("/a/$id/v/$v", ViewerRoute),
+  route("/a/$id/full", FullRoute),
   route("/a/$id/diff/$from/$to", DiffRoute),
   settings.addChildren([
     gated("/settings/profile", [...ADMINS, "member"], "/", Profile),

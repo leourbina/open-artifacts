@@ -129,6 +129,53 @@ export async function withInstanceMeta(
   return new Response(body, { status: res.status, headers });
 }
 
+const HOME_TTL_MS = 60_000;
+/** Per isolate (per D1 binding): PUBLIC_HOME's last check, for HOME_TTL_MS. */
+const homeMemo = new WeakMap<
+  D1Database,
+  { id: string; ok: boolean; at: number }
+>();
+const badHomeLogged = new Set<string>();
+
+/**
+ * PUBLIC_HOME: `/a/<id>/full` when the var names a live public artifact, else
+ * null (unset, invalid, private, missing or deleted: the caller serves "/" as
+ * if unset, so nothing leaks). At most one D1 read per isolate per 60 s.
+ */
+export async function publicHome(
+  env: Env,
+  now = Date.now(),
+): Promise<string | null> {
+  const id = env.PUBLIC_HOME?.trim();
+  if (!id) return null;
+  if (!isId(id)) {
+    if (!badHomeLogged.has(id)) {
+      badHomeLogged.add(id);
+      console.warn("PUBLIC_HOME ignored: not an artifact id");
+    }
+    return null;
+  }
+  let m = homeMemo.get(env.DB);
+  if (!m || m.id !== id || now - m.at >= HOME_TTL_MS) {
+    let ok: boolean;
+    try {
+      ok =
+        (await env.DB.prepare(
+          "select 1 from artifacts where id = ? and visibility = 'public' and deleted_at is null limit 1",
+        )
+          .bind(id)
+          .first()) !== null;
+    } catch {
+      return null;
+    }
+    if (!ok)
+      console.warn(`PUBLIC_HOME ${id} ignored: not a live public artifact`);
+    m = { id, ok, at: now };
+    homeMemo.set(env.DB, m);
+  }
+  return m.ok ? `/a/${id}/full` : null;
+}
+
 export function mountShell(app: AppType): void {
   const shell = async (c: Context<AppEnv>, id: string, v?: number) => {
     const [og, meta, index] = await Promise.all([

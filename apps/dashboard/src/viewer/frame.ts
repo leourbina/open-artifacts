@@ -2,7 +2,7 @@
 export const SANDBOX =
   "allow-scripts allow-forms allow-popups allow-modals allow-downloads";
 
-/** Only http(s) URLs on another origin may be framed or linked as raw content. */
+/** Only http(s) URLs on another origin may be framed. */
 export const safeContentUrl = (u: string | null) => {
   if (!u) return null;
   try {

@@ -4,10 +4,61 @@ const TITLE = "Some requests hit Cloudflare's free CPU limit";
 const banner = (page: Page) =>
   page.getByRole("status").filter({ hasText: TITLE });
 
+/**
+ * Opens `path` and waits for /me, whose `instance.plan` picks the CPU copy,
+ * asserting the plan the test runs under. Copy assertions come after, so none
+ * races /me.
+ */
+const open = async (page: Page, path: string, plan: "free" | "paid") => {
+  const me = page.waitForResponse(
+    (r) => new URL(r.url()).pathname === "/api/v1/me" && r.ok(),
+  );
+  await page.goto(path);
+  const body = (await (await me).json()) as { instance: { plan: string } };
+  expect(body.instance.plan).toBe(plan);
+};
+
+/**
+ * The viewer's slow notice fires SLOW_MS after the frame loads. A fake clock
+ * replaces the wait, and a counter of frame loads says when the timer is armed:
+ * the load listener (React's onLoad) runs in the same dispatch as ours, so once
+ * the count is seen the timer exists and one fast-forward fires it. No retries,
+ * no sleeps, and nothing depends on how long the machine takes. Call before
+ * `open`; returns `slow()`, which waits for the next load and fires the timer.
+ */
+const silentFrame = async (page: Page) => {
+  await page.clock.install();
+  await page.addInitScript(() => {
+    const w = window as unknown as { __frameLoads: number };
+    w.__frameLoads = 0;
+    document.addEventListener(
+      "load",
+      (e) => {
+        if ((e.target as Element).tagName === "IFRAME") w.__frameLoads++;
+      },
+      true,
+    );
+  });
+  // A frame that loads but never says hello.
+  await page.route("https://content.example.com/**", (r) =>
+    r.fulfill({ contentType: "text/html", body: "<p>No runtime here</p>" }),
+  );
+  let loads = 0;
+  return async () => {
+    loads++;
+    await page.waitForFunction(
+      (n) => (window as unknown as { __frameLoads: number }).__frameLoads >= n,
+      loads,
+    );
+    await page.clock.fastForward(8_000);
+    await expect(page.locator(".oa-vnotice")).toBeVisible();
+  };
+};
+
 test("owner: the CPU banner shows today's hits and stays dismissed for the day", async ({
   page,
 }) => {
-  await page.goto("/?mock=cpu");
+  await open(page, "/?mock=cpu", "free");
   await expect(banner(page)).toBeVisible();
   await expect(banner(page)).toContainText(
     "Your instance hit the limit 4 times today",
@@ -37,7 +88,7 @@ test("owner: the CPU banner shows today's hits and stays dismissed for the day",
 test("member: a real 1102 response raises the member banner", async ({
   page,
 }) => {
-  await page.goto("/?mock=cpu&role=member");
+  await open(page, "/?mock=cpu&role=member", "free");
   await expect(banner(page)).toBeVisible();
   await expect(banner(page)).toContainText(
     "A request just hit Cloudflare's free CPU limit.",
@@ -50,7 +101,7 @@ test("member: a real 1102 response raises the member banner", async ({
 });
 
 test("no CPU banner without CPU trouble", async ({ page }) => {
-  await page.goto("/");
+  await open(page, "/", "free");
   await expect(page.getByRole("article").first()).toBeVisible();
   await expect(page.getByText(TITLE)).toHaveCount(0);
 });
@@ -58,42 +109,12 @@ test("no CPU banner without CPU trouble", async ({ page }) => {
 test("viewer: a silent frame gets the CPU notice above it, upsell after 2 reloads", async ({
   page,
 }) => {
-  // The notice fires SLOW_MS after the frame loads. A fake clock replaces the
-  // wait, and a counter of frame loads says when the timer is armed: the load
-  // listener (React's onLoad) runs in the same dispatch as ours, so once the
-  // count is seen the timer exists and one fast-forward fires it. No retries,
-  // no sleeps, and nothing depends on how long the machine takes.
-  await page.clock.install();
-  await page.addInitScript(() => {
-    const w = window as unknown as { __frameLoads: number };
-    w.__frameLoads = 0;
-    document.addEventListener(
-      "load",
-      (e) => {
-        if ((e.target as Element).tagName === "IFRAME") w.__frameLoads++;
-      },
-      true,
-    );
-  });
-  // A frame that loads but never says hello.
-  await page.route("https://content.example.com/**", (r) =>
-    r.fulfill({ contentType: "text/html", body: "<p>No runtime here</p>" }),
-  );
-  await page.goto("/a/Ef7hJkLmNp8qRsTv?mock=cpu");
+  const slow = await silentFrame(page);
+  await open(page, "/a/Ef7hJkLmNp8qRsTv?mock=cpu", "free");
   const notice = page.locator(".oa-vnotice");
   const frame = page.locator("iframe.oa-vframe");
   await expect(frame).toBeVisible();
   await expect(notice).toHaveCount(0);
-  let loads = 0;
-  const slow = async () => {
-    loads++;
-    await page.waitForFunction(
-      (n) => (window as unknown as { __frameLoads: number }).__frameLoads >= n,
-      loads,
-    );
-    await page.clock.fastForward(8_000);
-    await expect(notice).toBeVisible();
-  };
   await slow();
   // Usage (the CPU signal) can land after the notice; wait on it, not on time.
   await expect(notice).toContainText(
@@ -116,7 +137,7 @@ test("viewer: a silent frame gets the CPU notice above it, upsell after 2 reload
 test("Paid: the banner reports the 30-second limit with no upgrade pitch (#279)", async ({
   page,
 }) => {
-  await page.goto("/?mock=paid-cpu");
+  await open(page, "/?mock=paid-cpu", "paid");
   const paid = page
     .getByRole("status")
     .filter({ hasText: "Some requests hit Cloudflare's CPU limit" });
@@ -139,15 +160,13 @@ test("Paid: the banner reports the 30-second limit with no upgrade pitch (#279)"
 test("Paid: a silent frame gets the 30-second notice (#279)", async ({
   page,
 }) => {
-  test.setTimeout(60_000);
-  await page.route("https://content.example.com/**", (r) =>
-    r.fulfill({ contentType: "text/html", body: "<p>No runtime here</p>" }),
-  );
-  await page.goto("/a/Ef7hJkLmNp8qRsTv?mock=paid-cpu");
+  const slow = await silentFrame(page);
+  await open(page, "/a/Ef7hJkLmNp8qRsTv?mock=paid-cpu", "paid");
   const notice = page.locator(".oa-vnotice");
+  await slow();
+  // Usage (the CPU signal) can land after the notice; wait on it, not on time.
   await expect(notice).toContainText(
     "This request hit Cloudflare's 30-second CPU limit. Try again.",
-    { timeout: 12_000 },
   );
   await expect(notice.getByRole("link")).toHaveCount(0);
   await expect(page.locator("iframe.oa-vframe")).toBeVisible();

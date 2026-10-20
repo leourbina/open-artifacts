@@ -4,9 +4,9 @@ import logo from "@oa/ui/brand/logo.svg";
 import logoDark from "@oa/ui/brand/logo-dark.svg";
 import tokensCss from "@oa/ui/tokens.css?raw";
 import "../styles/site.css";
+import rootPackage from "../../../../package.json";
 import Todo from "../components/Todo.astro";
 import { GATES, type GateId, UNRELEASED } from "../lib/release";
-import rootPackage from "../../../../package.json";
 
 // Inline the Studio tokens without their font @import, which would block rendering.
 // The same Google Fonts stylesheet loads below without blocking.

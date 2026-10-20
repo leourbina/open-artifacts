@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import type { State } from "../state.ts";
 import type { Ctx, Step } from "../step.ts";
+import { resolveVars } from "../tunables.ts";
 
 const TEMPLATE = "apps/server/wrangler.template.jsonc";
 const CONFIG = "apps/server/wrangler.jsonc";
@@ -54,6 +55,25 @@ export const stripComments = (text: string) =>
     (_, str) => str ?? "",
   );
 
+/**
+ * Sets the tunable vars in rendered config text by parsing it, setting or
+ * deleting keys of `vars` (an empty value is deleted: not rendered), and
+ * serializing it back. Untouched when there is nothing to set.
+ */
+export function applyTunables(
+  text: string,
+  tunables: Record<string, string>,
+): string {
+  if (!Object.keys(tunables).length) return text;
+  const cfg = JSON.parse(stripComments(text));
+  cfg.vars ??= {};
+  for (const [k, v] of Object.entries(tunables)) {
+    if (v === "") delete cfg.vars[k];
+    else cfg.vars[k] = v;
+  }
+  return `${JSON.stringify(cfg, null, 2)}\n`;
+}
+
 /** Fills `{{KEY}}` with JSON-escaped values, then asserts the result is valid production config. */
 export function renderConfig(
   template: string,
@@ -61,6 +81,7 @@ export function renderConfig(
   browser = true,
   email = false,
   plan: "free" | "paid" = "free",
+  tunables: Record<string, string> = {},
 ): string {
   // The template stays strict JSON (e2e fixtures JSON.parse it), so the
   // browser and email lines are matched by their keys and dropped when off.
@@ -78,12 +99,13 @@ export function renderConfig(
         throw new Error(`no value for template placeholder {{${k}}}`);
       return JSON.stringify(val).slice(1, -1);
     });
-  JSON.parse(stripComments(text));
+  const out = applyTunables(text, tunables);
+  JSON.parse(stripComments(out));
   if (!text.includes(`"PLAN": "${plan}"`))
     throw new Error(`rendered config must contain "PLAN": "${plan}"`);
   if (!text.includes('"ENVIRONMENT": "production"'))
     throw new Error('rendered config must contain "ENVIRONMENT": "production"');
-  return text;
+  return out;
 }
 
 const configVars = (s: State, ctx: Ctx) => ({
@@ -118,6 +140,12 @@ export function renderedConfig(state: State, ctx: Ctx): string {
     ctx.opts.browser,
     ctx.opts.email,
     ctx.opts.planVar,
+    ctx.tunables ??
+      resolveVars({
+        flags: ctx.opts.varFlags,
+        state: state.vars ?? {},
+        live: {},
+      }).values,
   );
 }
 

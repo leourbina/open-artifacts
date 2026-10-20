@@ -26,6 +26,12 @@ export interface Env {
   PLAN?: string;
   /** "off" (any case) makes /skill.md 404 and drops the skill resource; public otherwise. */
   SKILL_MD?: string;
+  /**
+   * An artifact id. Signed-out visitors at "/" get a 302 to its chromeless
+   * viewer when it is live and public; unset, empty, invalid, private,
+   * missing or deleted leaves "/" unchanged.
+   */
+  PUBLIC_HOME?: string;
   // vars
   APP_HOST: string;
   CONTENT_HOST: string;

@@ -137,7 +137,7 @@ describe("M1 signed URL staleness", () => {
         window.dispatchEvent(new Event("focus"));
         await vi.advanceTimersByTimeAsync(0);
       });
-      // "Open raw" must not hand out an expired URL.
+      // A reload must not hand out an expired URL.
       expect(result.current.current).toBe("https://c.test/u2");
     } finally {
       vi.useRealTimers();

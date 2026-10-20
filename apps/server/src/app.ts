@@ -1,5 +1,7 @@
 import { AUTH, planOf } from "@oa/shared";
 import { type Context, Hono, type MiddlewareHandler } from "hono";
+import { getCookie } from "hono/cookie";
+import { readSession, sessionCookieName } from "./auth/session.js";
 import { ApiError, errorJson, toErrorResponse } from "./http/errors.js";
 import {
   type AppEnv,
@@ -9,8 +11,9 @@ import {
   session,
 } from "./http/middleware.js";
 import { SKILL_PATH, serveSkill } from "./mcp/skill.js";
+import { serveUpgrade, UPGRADE_PATH } from "./mcp/upgrade.js";
 import { type AppType, mountRoutes } from "./routes/index.js";
-import { withInstanceMeta } from "./routes/shell.js";
+import { publicHome, withInstanceMeta } from "./routes/shell.js";
 import { VERSION } from "./version.gen.js";
 
 export const ROBOTS = "User-agent: *\nDisallow: /";
@@ -71,11 +74,13 @@ export function createApp(mount: (app: AppType) => void = mountRoutes) {
   app.get("/robots.txt", (c) => c.text(ROBOTS));
   // Public, outside SESSION_PATHS: no session read, no D1.
   app.get(SKILL_PATH, serveSkill);
+  app.get(UPGRADE_PATH, serveUpgrade);
   // Ordering: GET (and HEAD, which Hono routes to GET handlers) match above
   // first; app.all only catches the remaining methods.
   app.all("/healthz", methodNotAllowed);
   app.all("/robots.txt", methodNotAllowed);
   app.all(SKILL_PATH, methodNotAllowed);
+  app.all(UPGRADE_PATH, methodNotAllowed);
 
   // c.var.user (Bearer PAT wins over the cookie) for Worker routes only, so
   // SPA/asset requests never touch D1 (beyond the shell's instance-name read). Elsewhere caller() sees anonymous.
@@ -92,6 +97,20 @@ export function createApp(mount: (app: AppType) => void = mountRoutes) {
     const path = normalizedPath(c.req.url);
     if (path === null || WORKER_PREFIX.test(path) || !c.env.ASSETS) {
       return toErrorResponse(new ApiError("not_found", "Not found"));
+    }
+    // PUBLIC_HOME: a signed-out visitor at exactly "/" goes to a public
+    // artifact. Signed in = a valid session cookie (HMAC only, no D1).
+    if (
+      c.env.PUBLIC_HOME &&
+      new URL(c.req.url).pathname === "/" &&
+      !(await readSession(c.env, getCookie(c, sessionCookieName(c.env))))
+    ) {
+      const to = await publicHome(c.env);
+      if (to)
+        return new Response(null, {
+          status: 302,
+          headers: { Location: to, "Cache-Control": "no-store" },
+        });
     }
     const res = await c.env.ASSETS.fetch(c.req.raw);
     return path.startsWith("/assets/") ? res : withInstanceMeta(c.env, res);
