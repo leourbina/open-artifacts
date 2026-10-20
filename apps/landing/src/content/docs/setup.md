@@ -78,6 +78,7 @@ Setup takes each value from its flag first, then from `.openartifacts/state.json
 | `--yes` | Never prompt. Missing values are errors, and the optional `ANALYTICS_TOKEN` is skipped unless it is set in the environment. Optional with `--json`. |
 | `--upgrade` | Upgrade an existing install: only `deploy` and `selftest` do work. See [Upgrade](/docs/upgrade/). |
 | `--new-owner-token` | Mint a new owner token, and revoke the one setup minted before. |
+| `--allow-downgrade` | Deploy a checkout older than the deployed version (from `/healthz`, else saved state). Without it setup stops with `action_required` before the D1 migrations. D1 is not rolled back. `--check` reports `{repoVersion, liveVersion, downgrade}` on the deploy line. |
 | `--check` | Read-only. Runs each step's check without doing the work, and reports it as `done` or `todo`. Without saved state, it rebuilds the state from Cloudflare by `--name` and reports it on a last `state` line. It changes nothing on Cloudflare and writes no files. |
 | `--strict` | Only with `--check`: exit `2` when any step is `todo`, for example to gate CI. |
 | `--json` | Print one JSON object per line instead of text, and never prompt: a missing value is an `action_required` line naming the flag to pass. The optional `ANALYTICS_TOKEN` is skipped unless it is set in the environment. |
