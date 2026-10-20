@@ -54,6 +54,8 @@ export type Deps = {
   env: Record<string, string | undefined>;
   fs?: Fs;
   sleep?: (ms: number) => Promise<void>;
+  /** Test seam: how long the health checks keep retrying a host that doesn't resolve (default 5 minutes). */
+  dnsWaitMs?: number;
   /** Test seam: process.exit. */
   exit?: (code: number) => void;
   /** Env for wrangler children beyond the process env: a deploy token read from a file. */

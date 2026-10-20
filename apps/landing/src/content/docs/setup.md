@@ -42,7 +42,7 @@ The agent follows the steps below. The only thing you do yourself is approve the
 
    - **0:** every step is done. Go on to step 6.
    - **2:** the last line is `action_required`. If its `message` asks you to pass a flag, such as `--account-id` when the login can reach several accounts, add that flag and run again; ask the user for the value if you don't know it. Otherwise relay the `message` to the user verbatim, with `data.url` if it has one, wait until they say it's done, and run the same command again. Setup saves its progress in `.openartifacts/state.json` and picks up where it stopped.
-   - **1:** the last line is `error`. Show the user its `message` and stop.
+   - **1:** the last line is `error`. Show the user its `message` and stop. If the message names DNS, wait 2 minutes and rerun.
 
    If the `access` step asks for an Access API token, the user creates one at its `data.url`. Save it with this line in your own terminal (in Claude Code, type `! ` then the line). Never paste a token into the chat. If `read` fails, the shell can't hide input, so use a real terminal.
 
@@ -129,7 +129,7 @@ Exit codes: `0` when every step is done, `2` when a step needs the user or a mis
 3. **`access`:** creates the Cloudflare Access for SaaS application and its sign-in policy.
 4. **`secrets`:** stores the Worker secrets. When `ANALYTICS_TOKEN` is set in the environment (a dedicated read-only token with Account Analytics: Read, never your deploy token), it stores it on every run. Otherwise, without `--json` or `--yes`, it offers to store one for the Usage page, with a link that pre-fills the token form.
 5. **`deploy`:** builds the server, applies database migrations, and deploys the Worker.
-6. **`healthcheck`:** before any token is minted, checks `/healthz` (and that its `plan` matches the `PLAN` var setup rendered), the OIDC discovery document and, for email, the `EMAIL` binding. It retries for about a minute while DNS, certificates and the deploy propagate.
+6. **`healthcheck`:** before any token is minted, checks `/healthz` (and that its `plan` matches the `PLAN` var setup rendered), the OIDC discovery document and, for email, the `EMAIL` binding. It retries for about a minute while certificates and the deploy propagate, and for up to 5 minutes while the app or content host doesn't resolve. If it still doesn't, setup asks public DNS (over DoH): a live record means your machine's DNS cache has a stale miss (`action_required`, with the macOS flush command); no record is an error naming the missing record.
 7. **`owner-token`:** mints a personal access token for the owner, unless setup already minted one that's still valid, and saves it to `~/.open-artifacts/<app-host>-pat-token` (mode 0600) without printing it.
 8. **`selftest`:** publishes the Welcome artifact over MCP with this run's token (or, on a rerun, the saved token file) and checks that its content is served. The page is published only when its text changed since the last publish. A missing file is a note, not a failure; a saved token the server rejects (401 or 403) is `action_required` (exit 2) with `data.tokenRejected: true`: rerun with `--new-owner-token` and update the client.
 9. **`agent-config`:** prints the MCP URL and config snippets. It always runs, even when `healthcheck` or `selftest` fails (then with the OAuth snippets only; the token-file fallbacks appear once the token exists).
