@@ -40,11 +40,17 @@ describe("__Host- session cookie", () => {
     );
   });
 
-  const probe = createApp((a) => {
-    const g = a as unknown as Hono<{ Bindings: Env; Variables: AppVariables }>;
-    g.use("/probe", session());
-    g.get("/probe", (c) => c.json({ user: c.var.user }));
-  });
+  const probe = createApp(
+    (a) => {
+      const g = a as unknown as Hono<{
+        Bindings: Env;
+        Variables: AppVariables;
+      }>;
+      g.use("/probe", session());
+      g.get("/probe", (c) => c.json({ user: c.var.user }));
+    },
+    { "GET /probe": { public: "test probe" } },
+  );
   const who = async (cookie: string, e: Env) =>
     (
       (await (

@@ -1,6 +1,11 @@
 import { AUTH, planOf } from "@oa/shared";
 import { type Context, Hono, type MiddlewareHandler } from "hono";
 import { getCookie } from "hono/cookie";
+import {
+  enforcePolicy,
+  type Policy,
+  ROUTE_POLICY,
+} from "./auth/route-policy.js";
 import { readSession, sessionCookieName } from "./auth/session.js";
 import { ApiError, errorJson, toErrorResponse } from "./http/errors.js";
 import {
@@ -62,7 +67,11 @@ const unlessSigned =
   (c, next) =>
     isSignedUpload(c) ? next() : mw(c, next);
 
-export function createApp(mount: (app: AppType) => void = mountRoutes) {
+/** `extraPolicy`: rules for routes a custom `mount` adds (tests). */
+export function createApp(
+  mount: (app: AppType) => void = mountRoutes,
+  extraPolicy: Readonly<Record<string, Policy>> = {},
+) {
   const app: AppType = new Hono<AppEnv>();
   app.use(securityHeaders());
   app.onError((e) => toErrorResponse(e));
@@ -88,6 +97,8 @@ export function createApp(mount: (app: AppType) => void = mountRoutes) {
   // Cookie-authenticated mutations need X-OA-Request: 1 (PATs exempt).
   app.use("/api/v1/*", unlessSigned(csrf()));
   app.use(AUTH.logout, sameOrigin(), csrf());
+  // Every route's access rule (auth/route-policy.ts), before any handler.
+  app.use("*", enforcePolicy({ ...ROUTE_POLICY, ...extraPolicy }));
 
   mount(app);
 

@@ -464,13 +464,19 @@ describe("POST /auth/logout", () => {
 });
 
 describe("session middleware", () => {
-  const probe = createApp((a) => {
-    const g = a as unknown as Hono<{ Bindings: Env; Variables: AppVariables }>;
-    g.use("/probe", session());
-    g.get("/probe", (c) =>
-      c.json({ user: c.var.user, tokenLabel: c.var.tokenLabel }),
-    );
-  });
+  const probe = createApp(
+    (a) => {
+      const g = a as unknown as Hono<{
+        Bindings: Env;
+        Variables: AppVariables;
+      }>;
+      g.use("/probe", session());
+      g.get("/probe", (c) =>
+        c.json({ user: c.var.user, tokenLabel: c.var.tokenLabel }),
+      );
+    },
+    { "GET /probe": { public: "test probe" } },
+  );
   const get = async (headers: Record<string, string>) =>
     (await (
       await probe.fetch(new Request(`${APP}/probe`, { headers }), env, ctx)

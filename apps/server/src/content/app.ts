@@ -1,6 +1,7 @@
 import { type Format, isId, normalizePath, viewerPath } from "@oa/shared";
 import { type Context, Hono } from "hono";
 import { methodNotAllowed, ROBOTS } from "../app.js";
+import { enforceContentPolicy } from "../auth/route-policy.js";
 import type { Env } from "../env.js";
 import { contentFrameAncestors } from "../http/embed.js";
 import { ApiError, appOrigin, toErrorResponse } from "../http/errors.js";
@@ -472,6 +473,7 @@ contentApp.use(async (c, next) => {
   if (c.res.status >= 400 || !h.has("Cache-Control"))
     h.set("Cache-Control", "no-store");
 });
+contentApp.use(enforceContentPolicy());
 contentApp.onError((e) => toErrorResponse(e));
 contentApp.notFound(() => toErrorResponse(notFound()));
 

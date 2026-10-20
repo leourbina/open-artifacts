@@ -7,7 +7,12 @@ import {
 } from "@oa/shared";
 import { and, eq, type SQL, sql } from "drizzle-orm";
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
-import { type Caller, listFilterSql, requireAccess } from "../auth/authz.js";
+import {
+  authorize,
+  type Caller,
+  listFilterSql,
+  rowLevel,
+} from "../auth/authz.js";
 import { getDb } from "../db/client.js";
 import { normEmail } from "../db/email.js";
 import { artifacts, shares, users } from "../db/schema.js";
@@ -413,7 +418,7 @@ export async function putExtractedText(
   v: number,
   text: string,
 ): Promise<void> {
-  const a = await requireAccess(env, caller, id, "viewer");
+  const { artifact: a } = await authorize(env, caller, id, "version.text");
   if (v > a.currentVersion) throw new ApiError("not_found", "Not found");
   if (a.format !== "pdf" || v !== a.currentVersion) return;
   const body = stripMarks(text)
@@ -544,7 +549,6 @@ export async function search(
   const m = sanitizeQuery(q);
   if (!m) throw bad("q has no searchable words", "q");
   const offset = cursor === undefined ? 0 : decodeOffset(cursor);
-  const me = caller.user.id;
   const rows = await searchQuery(env, caller, m, offset, limit);
   const page = rows.slice(0, limit);
   const next = offset + limit;
@@ -565,11 +569,7 @@ export async function search(
             },
             caller,
           ),
-          r.a.ownerId === me
-            ? "owner"
-            : r.shareRole === "editor" || r.shareRole === "viewer"
-              ? r.shareRole
-              : "viewer",
+          rowLevel(caller, r.a, r.shareRole) ?? "viewer",
         ),
         snippet: pickSnippet(r.sb ?? "", r.sd ?? "", r.st ?? ""),
       }),

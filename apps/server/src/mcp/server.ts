@@ -9,7 +9,8 @@ import {
   QUOTA_MESSAGE,
 } from "@oa/shared";
 import { createMcpHandler } from "agents/mcp/server";
-import { type Caller, callerOf } from "../auth/authz.js";
+import { type Caller, callerOf, withAccessCache } from "../auth/authz.js";
+import { enforce, TOOL_POLICY } from "../auth/route-policy.js";
 import type { Env } from "../env.js";
 import {
   ApiError,
@@ -110,6 +111,7 @@ export function createServer(ctx: McpContext): McpServer {
     caller: callerOf(ctx.user),
     agentNow,
   };
+  enforceToolPolicy(server, t);
   registerArtifactTools(server, t);
   registerDataTools(server, t);
   server.registerResource(
@@ -267,4 +269,41 @@ export function mcpHandler(env: Env, factory: () => McpServer) {
     allowedOriginHostnames: [new URL(`http://${env.APP_HOST}`).hostname],
     maxRequestBodySize: mcpBodyCap(env),
   });
+}
+
+/**
+ * Wraps registerTool so every tool runs its TOOL_POLICY entry first (P3 T5):
+ * a tool without an entry can't be registered, and an `artifact` policy
+ * authorizes the tool's `id` input (404 otherwise) before the handler, which
+ * reuses that access row.
+ */
+function enforceToolPolicy(server: McpServer, t: ToolEnv): void {
+  const register = server.registerTool.bind(server) as (
+    name: string,
+    config: unknown,
+    handler: (input: unknown, extra: unknown) => unknown,
+  ) => unknown;
+  const wrapped = (
+    name: string,
+    config: unknown,
+    handler: (input: unknown, extra: unknown) => unknown,
+  ) => {
+    const p = TOOL_POLICY[name];
+    if (!p) throw new Error(`MCP tool ${name} has no TOOL_POLICY entry`);
+    return register(name, config, (input, extra) =>
+      withAccessCache(async () => {
+        const id = (input as { id?: unknown } | undefined)?.id;
+        try {
+          await enforce(p, t.caller, t.env, () =>
+            typeof id === "string" ? id : "",
+          );
+        } catch (e) {
+          return guard(() => Promise.reject(e));
+        }
+        return handler(input, extra);
+      }),
+    );
+  };
+  (server as unknown as { registerTool: typeof wrapped }).registerTool =
+    wrapped;
 }

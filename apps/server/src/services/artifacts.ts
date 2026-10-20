@@ -28,9 +28,9 @@ import {
   canCtx,
   listFilterSql,
   requireAccess,
-  TEAM_ROLES,
+  rowLevel,
 } from "../auth/authz.js";
-import { can } from "../auth/policy.js";
+import { can, isTeamRole } from "../auth/policy.js";
 import { getDb } from "../db/client.js";
 import { normEmail } from "../db/email.js";
 import { artifacts, shares, users } from "../db/schema.js";
@@ -590,7 +590,6 @@ export async function list(
 ): Promise<Page<ArtifactSummary>> {
   if (caller.kind !== "user")
     throw new ApiError("unauthorized", "Sign in required");
-  const me = caller.user.id;
   const rows = await listQuery(env, caller, q);
   const page = rows.slice(0, q.limit);
   const last = page[page.length - 1];
@@ -608,11 +607,7 @@ export async function list(
           },
           caller,
         ),
-        r.a.ownerId === me
-          ? "owner"
-          : r.shareRole === "editor" || r.shareRole === "viewer"
-            ? r.shareRole
-            : "viewer",
+        rowLevel(caller, r.a, r.shareRole, { allowDeleted: true }) ?? "viewer",
       ),
     ),
     nextCursor:
@@ -780,8 +775,7 @@ export async function putThumbnail(
           .bind(id, email)
           .first()
       : null;
-    const team =
-      r.artifact.visibility === "team" && TEAM_ROLES.includes(user.role);
+    const team = r.artifact.visibility === "team" && isTeamRole(user.role);
     firstThumbnail = !!shared || team;
   }
   if (
@@ -928,7 +922,7 @@ export async function softDelete(
   id: string,
   ctx?: Ctx,
 ): Promise<void> {
-  await requireAccess(env, asUser(user), id, "owner");
+  await authorize(env, asUser(user), id, "delete");
   await env.DB.batch([
     env.DB.prepare(
       "delete from artifact_search where rowid = (select rowid from artifacts where id = ?)",
@@ -947,7 +941,7 @@ export async function undelete(
   id: string,
   _ctx?: Ctx,
 ): Promise<ArtifactSummary> {
-  const a = await requireAccess(env, asUser(user), id, "owner", {
+  const { artifact: a } = await authorize(env, asUser(user), id, "undelete", {
     allowDeleted: true,
   });
   if (a.deletedAt != null) {

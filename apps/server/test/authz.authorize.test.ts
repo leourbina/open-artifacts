@@ -241,3 +241,28 @@ describe("callerOf fails closed", () => {
     );
   });
 });
+
+describe("rowLevel", () => {
+  it("an unknown stored visibility is treated as private", async () => {
+    const { rowLevel } = await import("../src/auth/authz.js");
+    const ownerId = (owner.caller as { user: Member }).user.id;
+    const now = Date.now();
+    const row = {
+      id: "x",
+      ownerId,
+      title: "odd",
+      description: null,
+      format: "html",
+      visibility: "everyone",
+      currentVersion: 1,
+      capabilities: "{}",
+      allowAnonymousWrites: 0,
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null,
+    } as unknown as Parameters<typeof rowLevel>[1];
+    expect(rowLevel(other, row, null)).toBeNull();
+    expect(rowLevel({ kind: "anonymous" }, row, null)).toBeNull();
+    expect(rowLevel(owner.caller, row, null)).toBe("owner");
+  });
+});
