@@ -373,7 +373,8 @@ export const HELP = `Usage: pnpm oa:setup [options]
                 prereqs data.planVar (data.plan is the detected plan).
   --var NAME=value  Keep a tunable Worker var across deploys (repeatable; NAME= clears).
                 Names: PUBLIC_HOME (artifact id), EMBED_ORIGINS (https://host[:port],...),
-                ANON_WRITES_PER_MIN (1-600), DATA_DOC_BYTES, DATA_DAILY_WRITES (> 0).
+                EMBED_ALLOW_SAME_SITE (1), ANON_WRITES_PER_MIN (1-600),
+                DATA_DOC_BYTES, DATA_DAILY_WRITES (> 0).
                 Precedence: the flag, then saved state (state.vars), then the live
                 Worker's value, then the template default. So a value set with --var or
                 saved in state wins over a dashboard edit; the dashboard value is kept

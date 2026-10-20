@@ -31,11 +31,12 @@ const err = (name: string, value: string) => {
 };
 
 describe("validators", () => {
-  it("the allowlist is exactly the five tunables", () => {
+  it("the allowlist is exactly the six tunables", () => {
     expect(Object.keys(TUNABLES).sort()).toEqual([
       "ANON_WRITES_PER_MIN",
       "DATA_DAILY_WRITES",
       "DATA_DOC_BYTES",
+      "EMBED_ALLOW_SAME_SITE",
       "EMBED_ORIGINS",
       "PUBLIC_HOME",
     ]);
@@ -66,6 +67,22 @@ describe("validators", () => {
       "https://user@a.example.com",
     ])
       expect(err("EMBED_ORIGINS", bad), bad).toMatch(/EMBED_ORIGINS/);
+  });
+
+  it("EMBED_ALLOW_SAME_SITE: exactly 1, or empty to clear", () => {
+    expect(err("EMBED_ALLOW_SAME_SITE", "1")).toBeUndefined();
+    expect(err("EMBED_ALLOW_SAME_SITE", "")).toBeUndefined();
+    for (const bad of ["0", "true", "on", "11", " 1", "yes"])
+      expect(err("EMBED_ALLOW_SAME_SITE", bad), bad).toMatch(
+        /EMBED_ALLOW_SAME_SITE/,
+      );
+  });
+
+  it("EMBED_ALLOW_SAME_SITE renders as a string var", () => {
+    const text = applyTunables('{\n  "vars": {\n    "PLAN": "free"\n  }\n}', {
+      EMBED_ALLOW_SAME_SITE: "1",
+    });
+    expect(JSON.parse(text).vars.EMBED_ALLOW_SAME_SITE).toBe("1");
   });
 
   it("ANON_WRITES_PER_MIN: an integer 1 to 600", () => {
