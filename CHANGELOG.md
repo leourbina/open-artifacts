@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.18.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.17.1...v0.18.0) (2026-10-20)
+
+
+### Features
+
+* **inventory:** read-only install list for the prod probe ([#358](https://github.com/open-artifacts-ai/open-artifacts/issues/358)) ([3525f8a](https://github.com/open-artifacts-ai/open-artifacts/commit/3525f8a7e324ce5a372c41bfb3a935f3c5a9ad0c))
+* **provision:** install ids, names and the Provisioner interface ([#357](https://github.com/open-artifacts-ai/open-artifacts/issues/357)) ([915b156](https://github.com/open-artifacts-ai/open-artifacts/commit/915b15688c4fb6fe923f9dcad06bc56f0db85fe1))
+* **shared:** hosted M1 contract (auth providers, spaces, roles, directory, mocks) ([#359](https://github.com/open-artifacts-ai/open-artifacts/issues/359)) ([4271a12](https://github.com/open-artifacts-ai/open-artifacts/commit/4271a1258743d0669cdb677bc1a39c9732622390))
+* **viewer:** in-artifact links to /a/&lt;id&gt; navigate the viewer ([#346](https://github.com/open-artifacts-ai/open-artifacts/issues/346)) ([ca6f940](https://github.com/open-artifacts-ai/open-artifacts/commit/ca6f9405f608d7a1104edcefe067691511969e80))
+
+
+### Bug Fixes
+
+* **server:** redact URLs, tokens and emails from logs ([#356](https://github.com/open-artifacts-ai/open-artifacts/issues/356)) ([cd4607a](https://github.com/open-artifacts-ai/open-artifacts/commit/cd4607a7912fc0eb689e5a9b3a3f7211e7125acf))
+* **server:** separate anonymous data-socket pool, IPv6 /56 keys ([#347](https://github.com/open-artifacts-ai/open-artifacts/issues/347)) ([2948f63](https://github.com/open-artifacts-ai/open-artifacts/commit/2948f63bf70f57abc25c38517b8c1e91c83f318e))
+* **smoke:** warm up staging and allow network-scale timeouts ([#360](https://github.com/open-artifacts-ai/open-artifacts/issues/360)) ([792915f](https://github.com/open-artifacts-ai/open-artifacts/commit/792915f28573cc866c5f4ead1d9b5529baf18ed0))
+
 ## [0.17.1](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.17.0...v0.17.1) (2026-10-20)
 
 
