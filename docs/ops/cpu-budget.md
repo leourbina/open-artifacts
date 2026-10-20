@@ -44,7 +44,20 @@ to R2 and never parses the file.
 - `pnpm test:cpu` (`test/publish.cpu.test.ts`) asserts it: a 128 KB
   escape-heavy HTML publish costs < 10 ms more than a tiny one (local D1/R2
   I/O, off-isolate in production, cancels out), and 200 and 250 KB
-  escape-heavy bodies get the 413 in < 2 ms without the body being read.
+  escape-heavy bodies get the 413 without the body being read (the 2 ms
+  time is a report, see below).
+
+## Gates and the report
+
+`pnpm test:cpu` gates CI only on checks that hold on any runner: cost
+relative to a tiny request or a baseline (with at least 5 ms of slack, since
+Workers timers tick in whole ms), size and ratio checks, deterministic
+counts (bytes read, binding calls) and the calibrated code-CPU bar in
+`test/code-cpu` (Node thread CPU). Absolute wall-clock bounds go through
+`budget()` in `test/cpu-time.ts`: every run annotates
+`<label>: <ms> ms (budget <max>)`, and only `pnpm test:cpu:strict`
+(`CPU_STRICT=1`) asserts them, so a slow or noisy runner shows up in the
+report instead of failing a merge.
 
 ## How we measure
 

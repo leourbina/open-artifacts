@@ -104,6 +104,9 @@ focus outline, and each overlay opened from the keyboard.
   (`-outline-offset-2`). Tabs panels get it too, and inactive tab triggers use
   `text-muted-foreground` instead of `text-foreground/60` (below 4.5:1 in
   light). Select's trigger drops `dark:bg-input/30` like Input.
+- **popover:** `rounded-lg` (8px) instead of `rounded-md`, the solid focus
+  outline on the content, and `motion-reduce:animate-none!` so it opens and
+  closes without the zoom/slide under reduced motion. Exports `PopoverClose`.
 - **State indicators:** shadcn's on/active/selected states used `--accent`
   and `--muted`, about 1.05:1 against their surroundings. Toggle and
   ToggleGroup "on" is `bg-brand-soft text-brand-soft-foreground` with a 1px
