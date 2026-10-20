@@ -115,7 +115,7 @@ describe("ci.yml", () => {
     // A mock failure must not skip the real suite; a failed browser install must.
     expect(steps[order[2] as number].id).toBe("install");
     expect(steps[order[5] as number].if).toMatch(
-      /^\$\{\{ !cancelled\(\) && steps\.install\.outcome == 'success' \}\}$/,
+      /^\$\{\{ !cancelled\(\) && steps\.ro\.outputs\.release_only != 'true' && steps\.install\.outcome == 'success' \}\}$/,
     );
     const cache = steps.find((s) =>
       (s.uses ?? "").startsWith("actions/cache@"),
@@ -134,6 +134,116 @@ describe("ci.yml", () => {
     expect(ci("e2e.sh")).toContain(
       "playwright install --with-deps chromium webkit",
     );
+  });
+  describe("release-only fast path", () => {
+    const REQUIRED = ["lint", "typecheck", "test", "build", "e2e"];
+    const HEAVY = ["typecheck", "test", "build", "e2e"];
+    // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
+    type Step = any;
+    const raw = read(".github/workflows/ci.yml");
+    const steps = (job: string): Step[] => w.jobs[job].steps;
+    const ro = (job: string): Step =>
+      steps(job).find((s) => s.id === "ro") as Step;
+
+    it("the required job names still exist", () => {
+      expect(Object.keys(w.jobs)).toEqual(expect.arrayContaining(REQUIRED));
+    });
+    it("no required job has a job-level if or needs (a skipped job counts as passing)", () => {
+      for (const j of REQUIRED) {
+        expect(w.jobs[j].if, `${j} if`).toBeUndefined();
+        expect(w.jobs[j].needs, `${j} needs`).toBeUndefined();
+      }
+      expect(w.jobs.changes).toBeUndefined();
+    });
+    it("each heavy job checks out full history, then runs the release-only step first", () => {
+      for (const j of HEAVY) {
+        const [checkout, ...rest] = steps(j);
+        expect(String(checkout.uses), j).toMatch(/^actions\/checkout@/);
+        expect(checkout.with["fetch-depth"], j).toBe(0);
+        expect(checkout.if, j).toBeUndefined();
+        // only an ungated node setup may sit between the checkout and the step
+        const before = rest.slice(0, rest.indexOf(ro(j)));
+        for (const s of before) {
+          expect(String(s.uses), j).toMatch(/^actions\/setup-node@/);
+          expect(s.if, j).toBeUndefined();
+        }
+        expect(rest.indexOf(ro(j)), j).toBeGreaterThan(-1);
+      }
+    });
+    it("the release-only step takes the script from the base sha, never the working tree, and fails closed", () => {
+      for (const j of HEAVY) {
+        const step = ro(j);
+        expect(step.if, j).toBeUndefined();
+        expect(step.env.BASE_SHA).toContain(
+          "github.event.pull_request.base.sha",
+        );
+        expect(step.env.BASE_SHA).toContain(
+          "github.event.merge_group.base_sha",
+        );
+        expect(step.env.HEAD_SHA).toContain(
+          "github.event.pull_request.head.sha",
+        );
+        expect(step.env.HEAD_SHA).toContain(
+          "github.event.merge_group.head_sha",
+        );
+        expect(step.run, j).toContain(
+          'git show "$BASE_SHA:scripts/ci/release-only.ts"',
+        );
+        // the copy run is the base's, not scripts/ci/release-only.ts in the checkout
+        expect(step.run, j).toContain("$RUNNER_TEMP/release-only.ts");
+        expect(step.run, j).not.toMatch(
+          /node [^\n]*\bscripts\/ci\/release-only\.ts/,
+        );
+        // any error or an output other than exactly release-only is full CI
+        expect(step.run, j).toContain('[ "$out" = "release-only" ]');
+        expect(step.run, j).toMatch(/rel=false/);
+        expect(step.run, j).not.toMatch(/set -e\b/);
+        // no secrets in this step
+        expect(JSON.stringify(step)).not.toMatch(/secrets\./i);
+      }
+    });
+    it("every heavy step is gated on that step's output, and the echo says main is protected, not that CI passed", () => {
+      for (const j of HEAVY) {
+        const all = steps(j);
+        const note = all.find((s) => s.name === "release-only change");
+        expect(note.if, j).toContain("steps.ro.outputs.release_only == 'true'");
+        expect(note.run, j).toContain(
+          "release-only change: skipped (the base commit is on main, which only the merge queue can update)",
+        );
+        expect(note.run, j).not.toMatch(/passed|CI at/);
+        const gated = all.slice(all.indexOf(ro(j)) + 1);
+        for (const s of gated) {
+          if (s === note || String(s.if ?? "") === "failure()") continue;
+          expect(
+            String(s.if ?? ""),
+            `${j}: ${s.name ?? s.run ?? s.uses}`,
+          ).toContain("steps.ro.outputs.release_only != 'true'");
+        }
+      }
+    });
+    it("lint runs in full and checks version consistency", () => {
+      expect(w.jobs.lint.needs).toBeUndefined();
+      expect(steps("lint").every((s) => s.if === undefined)).toBe(true);
+      expect(
+        steps("lint").some((s) =>
+          String(s.run ?? "").includes("version-consistency.ts"),
+        ),
+      ).toBe(true);
+    });
+    it("the fast path is gated only on the release-only step's output, never on labels, the branch name or the author", () => {
+      const conds = Object.values(w.jobs).flatMap((j) => {
+        const job = j as { if?: unknown; steps?: Step[] };
+        return [job.if, ...(job.steps ?? []).map((s) => s.if)].map(String);
+      });
+      for (const c of conds.filter((c) => c.includes("release_only")))
+        expect(c).toMatch(/steps\.ro\.outputs\.release_only/);
+      for (const j of HEAVY)
+        for (const s of steps(j))
+          expect(JSON.stringify([s.if, s.env, s.run])).not.toMatch(
+            /labels|head_ref|ref_name|actor|\.user\.|author|release-please--|startsWith\(github\.ref/,
+          );
+      expect(raw).not.toMatch(/contains\(.*labels/);
+    });
   });
   it("uses node from .nvmrc with pnpm cache", () => {
     const raw = read(".github/workflows/ci.yml");
