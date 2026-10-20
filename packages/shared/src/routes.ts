@@ -146,16 +146,26 @@ export const R = {
   /** PUT SpaceMemberPut -> SpaceMember; DELETE -> 204 (manual row only). Manager or org admin. */
   spaceMember: (id: string, userId: string) =>
     `/api/v1/spaces/${seg(id)}/members/${seg(userId)}`,
+  /**
+   * POST SpaceMemberPut -> 201 SpaceMember: an org admin adds themselves to a
+   * shared space (personal: 400 space_personal). Audited space.admin_self_add;
+   * the space's managers are notified.
+   */
+  spaceMemberSelf: (id: string) => `/api/v1/spaces/${seg(id)}/members/self`,
   /** GET -> GroupMapping[] (org admin). */
   spaceMappings: (id: string) => `/api/v1/spaces/${seg(id)}/mappings`,
-  /** PUT GroupMappingPut -> GroupMapping; DELETE -> 204. 409 directory_sync_off when sync is off or frozen. */
-  spaceMapping: (id: string, group: string) =>
-    `/api/v1/spaces/${seg(id)}/mappings/${seg(group)}`,
+  /** PUT GroupMappingPut -> GroupMapping; DELETE -> 204. 409 directory_sync_off when sync is off or frozen. Keyed by Google group id. */
+  spaceMapping: (id: string, groupId: string) =>
+    `/api/v1/spaces/${seg(id)}/mappings/${seg(groupId)}`,
   /** GET -> RestrictedGroup[] (org admin). */
   restrictedGroups: "/api/v1/directory/restricted-groups",
-  /** PUT (no body) -> RestrictedGroup; DELETE -> 204. 409 directory_sync_off when sync is off or frozen. */
-  restrictedGroup: (group: string) =>
-    `/api/v1/directory/restricted-groups/${seg(group)}`,
+  /**
+   * PUT (no body) -> RestrictedGroup (409 directory_sync_off when sync is off
+   * or frozen); DELETE -> 204 in any mode (frozen restrictions stay in force
+   * until lifted). Keyed by Google group id. Audited restricted.set/remove.
+   */
+  restrictedGroup: (groupId: string) =>
+    `/api/v1/directory/restricted-groups/${seg(groupId)}`,
   /** GET -> SyncStatus (org owner, admin); DELETE -> 204 disconnect (org owner; memberships freeze). */
   directory: "/api/v1/directory",
   /** GET DirectoryGroupsQuery -> Page<DirectoryGroup> (org admin; group picker). */
@@ -167,10 +177,16 @@ export const R = {
   /** POST -> 202 SyncStatus (org owner; "Sync now"). */
   directorySync: "/api/v1/directory/sync",
   /** POST -> 202 SyncStatus (org owner; apply a held sweep). */
-  directoryHeldConfirm: (group: string) =>
-    `/api/v1/directory/held/${seg(group)}/confirm`,
+  directoryHeldConfirm: (groupId: string) =>
+    `/api/v1/directory/held/${seg(groupId)}/confirm`,
   /** GET -> TransferSummary; POST TransferInput -> TransferResult (409 member_active). Org owner, admin. */
   memberTransfer: (id: string) => `/api/v1/members/${seg(id)}/transfer`,
+  /**
+   * PUT (no body) -> Member; DELETE -> Member: set or clear the MANUAL
+   * restricted flag (org owner, admin; any sync mode). Audited
+   * restricted.set / restricted.remove. DELETE never lifts a group restriction.
+   */
+  memberRestricted: (id: string) => `/api/v1/members/${seg(id)}/restricted`,
   /** DELETE -> 204: reset a member's Google link (owner, admin; never the owner's link). */
   memberIdentity: (id: string, provider: "google") =>
     `/api/v1/members/${seg(id)}/identities/${seg(provider)}`,
@@ -190,7 +206,7 @@ export const AUTH = {
   providers: "/auth/providers",
   /** GET ?next -> 302 to Google (404 when Google is off). */
   loginGoogle: "/auth/login/google",
-  /** GET (OAuth) -> 302 next, or SIGN_IN_PAGE?error=SignInError&next, or PAGES.noAccess. */
+  /** GET (OAuth) -> 302 next, or (any refusal, no_access included) SIGN_IN_PAGE?error=SignInError&next. */
   callbackGoogle: "/auth/callback/google",
   /** POST CodeRequest -> 202 CodeRequested. */
   codeRequest: "/auth/code/request",

@@ -240,6 +240,9 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
   const fileBody = (id: string, v: number, path: string) =>
     files.get(`${id}/${v}/${path}`) ?? `mock ${path} (v${v})`;
 
+  /** Owner-level actions; a hosted space manager has them too (not transfer). */
+  const full = (a: ArtifactSummary) =>
+    a.access === "owner" || a.access === "manager";
   /** Resolve a live artifact the caller may use at the given level, else 404. */
   const withArt =
     (
@@ -251,7 +254,7 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
       if (!a || a.deletedAt !== null) return notFound();
       // Anonymous callers see only public artifacts; anything else is 404.
       if (a.visibility !== "public" && isAnon(ctx.request)) return notFound();
-      if (need === "owner" && a.access !== "owner") return notFound();
+      if (need === "owner" && !full(a)) return notFound();
       if (need === "write" && a.access === "viewer") return notFound();
       return fn(a, ctx);
     };
@@ -466,6 +469,11 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
         const refused = h.refuseCappedCreate();
         if (refused) return refused;
       }
+      const noPublic = h?.refusePublic(
+        existing ? existing.space : placed?.space,
+        r.data.visibility,
+      );
+      if (noPublic) return noPublic;
       if (!existing && r.data.id && r.data.title === undefined)
         return badRequest("title is required when creating an artifact");
       if (existing)
@@ -509,8 +517,9 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
       return withArt(async (a) => {
         const r = await body(ctx.request, ArtifactPatchSchema);
         if (r.error) return r.error;
-        if (r.data.visibility !== undefined && a.access !== "owner")
-          return notFound();
+        if (r.data.visibility !== undefined && !full(a)) return notFound();
+        const noPublic = h?.refusePublic(a.space, r.data.visibility);
+        if (noPublic) return noPublic;
         const { capabilities, ...rest } = r.data;
         const gone =
           (rest.visibility !== undefined && rest.visibility !== a.visibility) ||
@@ -531,7 +540,7 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
     ),
     http.post(`${A}/undelete`, ({ params }) => {
       const a = artifacts.find((x) => x.id === params.id);
-      if (!a || a.access !== "owner") return notFound();
+      if (!a || !full(a)) return notFound();
       a.deletedAt = null;
       return HttpResponse.json(a);
     }),

@@ -38,8 +38,8 @@ export type AuthProviders = z.infer<typeof AuthProvidersSchema>;
  * tenant: Google account outside the verified domains; identity_conflict: the
  * account was replaced (admin resets the link); expired: attempt too old or in
  * another tab; failed: anything else; removed: the person was removed or
- * suspended; no_access: a valid identity that isn't admitted (the SPA may
- * also route it to PAGES.noAccess).
+ * suspended; no_access: a valid identity that isn't admitted. Direct mode
+ * always sends refusals to SIGN_IN_PAGE?error=..., never PAGES.noAccess.
  */
 export const SignInErrorSchema = z.enum([
   "tenant",
@@ -111,7 +111,8 @@ export const normalizeCode = (code: string): string =>
 /**
  * POST AUTH.codeVerify (X-OA-Request: 1, __Host-oa_code). 200 CodeVerified
  * (sets __Host-oa_session). 401 unauthorized (CodeVerifyFailureDetails);
- * 429 rate_limited when locked ({ retryAfter, scope: "email" }).
+ * 429 rate_limited when locked ({ retryAfter, scope: "ip" }: a per-address
+ * lock would let anyone lock a victim out).
  */
 export const CodeVerifySchema = z.strictObject({ code: z.string().max(64) });
 export type CodeVerify = z.infer<typeof CodeVerifySchema>;
@@ -120,7 +121,7 @@ export const CodeVerifiedSchema = z.object({
   /** safeNext; the UI does a full page load there. */
   next: z.string(),
   user: MemberSchema,
-  /** Guests under GUEST_ACCESS=read (and restricted members). */
+  /** Capped: a guest while guests_read_only, or a restricted member. */
   readOnly: z.boolean(),
 });
 export type CodeVerified = z.infer<typeof CodeVerifiedSchema>;
@@ -142,13 +143,14 @@ export type CodeVerifyFailureDetails = z.infer<
 
 /**
  * Reference only (server-internal): the __Host-oa_session payload. p is the
- * sign-in method; t optional (defined by P2); e the per-user session epoch.
+ * sign-in method; t the tenant (the verified Google hd, or the email domain
+ * of a domain-code session); e the per-user session epoch.
  */
 export type SessionPayload = {
   uid: string;
   exp: number;
   iat: number;
   p: "access" | "google" | "code" | "dev" | "test";
-  t?: number;
+  t?: string;
   e: number;
 };

@@ -2,7 +2,7 @@
 // identities(provider = "google", subject = DirUser.id): no shape carries a
 // users.directory_id. Health comes from the directory binding plus those links.
 import { z } from "zod";
-import { DirectoryModeSchema } from "./core.js";
+import { DirectoryModeSchema, GroupRefSchema } from "./core.js";
 
 /** A Google Directory user as sync reads it. `id` equals the Google sign-in `sub`. */
 export const DirUserSchema = z.object({
@@ -26,8 +26,7 @@ export const DirectoryBindingSchema = z.object({
 export type DirectoryBinding = z.infer<typeof DirectoryBindingSchema>;
 
 /** A sweep held for the owner (would remove > 50% of a group, min 5, or an empty listing). */
-export const HeldSweepSchema = z.object({
-  group: z.string(),
+export const HeldSweepSchema = GroupRefSchema.extend({
   wouldRemove: z.number().int(),
   members: z.number().int(),
   since: z.string(),
@@ -68,6 +67,7 @@ export type SyncStatus = z.infer<typeof SyncStatusSchema>;
 
 /** GET R.directoryGroups?q&cursor (org admin) -> Page<DirectoryGroup> (live lookup, rate limited). */
 export const DirectoryGroupSchema = z.object({
+  groupId: z.string(),
   email: z.string(),
   name: z.string(),
   memberCount: z.number().int().nullable(),
@@ -155,7 +155,15 @@ export const AuditEventSchema = z.object({
   }),
   action: AuditActionSchema,
   target: z.object({
-    type: z.enum(["space", "artifact", "user", "mapping", "directory"]),
+    /** "group" ids are Google group ids. */
+    type: z.enum([
+      "space",
+      "artifact",
+      "user",
+      "mapping",
+      "group",
+      "directory",
+    ]),
     id: z.string(),
   }),
   spaceId: z.string().nullable(),

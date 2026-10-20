@@ -5,6 +5,7 @@ import { z } from "zod";
 import { UserRefSchema } from "../schemas.js";
 import {
   CapReasonSchema,
+  GroupRefSchema,
   MemberStatusSchema,
   SpaceKindSchema,
   SpaceRefSchema,
@@ -16,8 +17,6 @@ export const SpaceSchema = SpaceRefSchema.extend({
   owner: UserRefSchema.nullable(),
   /** Role every non-guest, non-restricted member gets; null = none. */
   allMembersRole: SpaceRoleSchema.nullable(),
-  /** Stored now, enforced in M4. */
-  outsideSharing: z.boolean(),
   /** Effective; own personal space = "manager"; null = org admin view only. */
   myRole: SpaceRoleSchema.nullable(),
   memberCount: z.number().int(),
@@ -40,7 +39,6 @@ export const SpaceCreateSchema = z.strictObject({
   name: z.string().trim().min(1).max(80),
   allMembersRole: SpaceRoleSchema.nullable().default(null),
   publicLinks: z.boolean().default(true),
-  outsideSharing: z.boolean().default(true),
 });
 export type SpaceCreate = z.infer<typeof SpaceCreateSchema>;
 export type SpaceCreateInput = z.input<typeof SpaceCreateSchema>;
@@ -48,15 +46,15 @@ export type SpaceCreateInput = z.input<typeof SpaceCreateSchema>;
 /**
  * PATCH R.space(id) -> Space. name and publicLinks: space manager or org
  * admin (publicLinks changes are audited; off rewrites the space's public
- * artifacts to team and closes their sockets). allMembersRole, outsideSharing:
- * org owner or admin.
+ * artifacts to team and closes their sockets). allMembersRole: org owner or
+ * admin. (outsideSharing is dropped until M4.) Making an artifact public in a
+ * space with publicLinks off is 403 public_links_off.
  */
 export const SpacePatchSchema = z
   .strictObject({
     name: z.string().trim().min(1).max(80),
     allMembersRole: SpaceRoleSchema.nullable(),
     publicLinks: z.boolean(),
-    outsideSharing: z.boolean(),
   })
   .partial();
 export type SpacePatch = z.infer<typeof SpacePatchSchema>;
@@ -78,21 +76,18 @@ export const SpaceMemberSchema = z.object({
   manualRole: SpaceRoleSchema.nullable(),
   syncRole: SpaceRoleSchema.nullable(),
   /** Mapped groups that grant syncRole. */
-  groups: z.array(z.string()),
+  groups: z.array(GroupRefSchema),
   /** Guest or restricted: effective access is viewer whatever the role. */
   cap: CapReasonSchema.nullable(),
 });
 export type SpaceMember = z.infer<typeof SpaceMemberSchema>;
 
-/** PUT R.spaceMember(id, userId) (space manager, org admin) -> SpaceMember. Sets the manual row. */
+/** PUT R.spaceMember(id, userId) (space manager, org admin) -> SpaceMember. Sets the manual row. Also the body of POST R.spaceMemberSelf(id). */
 export const SpaceMemberPutSchema = z.strictObject({ role: SpaceRoleSchema });
 export type SpaceMemberPut = z.infer<typeof SpaceMemberPutSchema>;
 
 /** GET R.spaceMappings(id) -> GroupMapping[] (bounded; org admin). */
-export const GroupMappingSchema = z.object({
-  group: z.string(),
-  /** Google group name once synced. */
-  name: z.string().nullable(),
+export const GroupMappingSchema = GroupRefSchema.extend({
   role: SpaceRoleSchema,
   memberCount: z.number().int().nullable(),
   lastSyncedAt: z.string().nullable(),
@@ -104,15 +99,14 @@ export const GroupMappingPutSchema = z.strictObject({ role: SpaceRoleSchema });
 export type GroupMappingPut = z.infer<typeof GroupMappingPutSchema>;
 
 /**
- * GET R.restrictedGroups -> RestrictedGroup[] (org admin). Members of a
- * restricted group are capped at viewer everywhere: no allMembersRole, no
- * create (personal space included), no data writes, on REST, MCP and the data API.
- * PUT R.restrictedGroup(group) (empty body) -> RestrictedGroup; DELETE -> 204;
- * both 409 directory_sync_off when sync is off or frozen.
+ * GET R.restrictedGroups -> RestrictedGroup[] (org admin). Restricted members
+ * (a restricted group, or the manual flag R.memberRestricted) are capped at
+ * viewer everywhere: no allMembersRole, no create (personal space included),
+ * no data writes, on REST, MCP and the data API.
+ * PUT R.restrictedGroup(groupId) -> RestrictedGroup, 409 directory_sync_off
+ * when sync is off or frozen; DELETE -> 204 in any mode.
  */
-export const RestrictedGroupSchema = z.object({
-  group: z.string(),
-  name: z.string().nullable(),
+export const RestrictedGroupSchema = GroupRefSchema.extend({
   memberCount: z.number().int().nullable(),
   createdAt: z.string(),
 });

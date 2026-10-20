@@ -87,6 +87,14 @@ export async function accessLevel(
   return null;
 }
 
+/**
+ * Does `level` satisfy `min`? "owner" is exact: a space "manager" (hosted M1,
+ * same rank) never passes an owner check, so single transfer and anything
+ * else owner-only stays with the personal owner.
+ */
+export const meetsLevel = (level: AccessLevel, min: AccessLevel): boolean =>
+  min === "owner" ? level === "owner" : RANK[level] >= RANK[min];
+
 /** The artifact if the caller has at least `min`; otherwise 404 (never 403). */
 export async function requireAccess(
   env: Env,
@@ -96,7 +104,7 @@ export async function requireAccess(
   opts: { allowDeleted?: boolean } = {},
 ): Promise<ArtifactRow> {
   const r = await accessLevel(env, c, artifactId, opts);
-  if (!r || RANK[r.level] < RANK[min])
+  if (!r || !meetsLevel(r.level, min))
     throw new ApiError("not_found", "Not found");
   return r.artifact;
 }

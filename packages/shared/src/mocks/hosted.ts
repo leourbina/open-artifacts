@@ -39,6 +39,7 @@ import {
   type CapReason,
   type DirectoryMode,
   type FeatureFlag,
+  type GroupRef,
   type MySpace,
   type SpaceRef,
   type SpaceRole,
@@ -89,7 +90,7 @@ export type HostedMockOptions = {
   directory?: DirectoryMode;
   /** Sync unhealthy for 2 h: banner and tokensUnverified (default false). */
   unhealthy?: boolean;
-  /** Extra FEATURES flags beyond the defaults (spaces, guests_read_only, content_revocation, usage_off, plus the sync flag). */
+  /** Extra FEATURES flags beyond the defaults (spaces, content_revocation, usage_off, plus the sync flag). guests_read_only is ignored: it is reported from the sign-in config (on when google or email is enabled). */
   features?: FeatureFlag[];
 };
 
@@ -118,14 +119,13 @@ type SpaceRow = {
   ownerId: string | null;
   allMembersRole: SpaceRole | null;
   publicLinks: boolean;
-  outsideSharing: boolean;
   createdAt: string;
 };
 type MemberRow = {
   userId: string;
   manualRole: SpaceRole | null;
   syncRole: SpaceRole | null;
-  groups: string[];
+  groups: GroupRef[];
 };
 
 const T0 = "2026-01-01T00:00:00.000Z";
@@ -174,7 +174,16 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
     status: "suspended",
     identities: ["google"],
   };
-  members.push(carol);
+  const dan: Member = {
+    id: "Dn8uPqRsTu9vWxYz",
+    email: "dan@example.com",
+    name: "Dan Contractor",
+    role: "member",
+    lastSeenAt: null,
+    status: "active",
+    identities: [],
+  };
+  members.push(carol, dan);
   /** Departed members' personal artifacts, counts only (admins never see titles). */
   const departed = new Map([[carol.id, { live: 2, deleted: 1 }]]);
 
@@ -186,7 +195,6 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
     ownerId: m.id,
     allMembersRole: null,
     publicLinks: true,
-    outsideSharing: true,
     createdAt: T0,
   }));
   const shared = (id: string, name: string, x: Partial<SpaceRow> = {}) =>
@@ -197,7 +205,6 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
       ownerId: null,
       allMembersRole: null,
       publicLinks: true,
-      outsideSharing: true,
       createdAt: T0,
       ...x,
     });
@@ -209,6 +216,25 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
   shared(CLIENTS, "Clients");
   const ada = members[0] as Member;
   const bob = members[1] as Member;
+  const G = {
+    eng: { groupId: "gEng01", email: "eng@example.com", name: "Engineering" },
+    exec: { groupId: "gExec02", email: "exec@example.com", name: "Exec" },
+    sales: { groupId: "gSales03", email: "sales@example.com", name: "Sales" },
+    contractors: {
+      groupId: "gCon04",
+      email: "contractors@example.com",
+      name: "Contractors",
+    },
+  } satisfies Record<string, GroupRef>;
+  /** Directory group membership (user ids), as sync would see it. */
+  const groupMembers = new Map<string, string[]>([
+    [G.eng.groupId, [bob.id]],
+    [G.exec.groupId, [ada.id]],
+    [G.sales.groupId, []],
+    [G.contractors.groupId, [dan.id]],
+  ]);
+  /** Manual restricted flags (R.memberRestricted). */
+  const manualRestricted = new Set<string>();
   const rows = new Map<string, MemberRow[]>([
     [
       ENG,
@@ -218,7 +244,7 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
           userId: bob.id,
           manualRole: null,
           syncRole: "editor",
-          groups: ["eng@example.com"],
+          groups: [G.eng],
         },
       ],
     ],
@@ -229,7 +255,7 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
           userId: ada.id,
           manualRole: null,
           syncRole: "viewer",
-          groups: ["exec@example.com"],
+          groups: [G.exec],
         },
       ],
     ],
@@ -240,8 +266,7 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
       ENG,
       [
         {
-          group: "eng@example.com",
-          name: "Engineering",
+          ...G.eng,
           role: "editor",
           memberCount: 1,
           lastSyncedAt: T0,
@@ -252,8 +277,7 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
       EXEC,
       [
         {
-          group: "exec@example.com",
-          name: "Exec",
+          ...G.exec,
           role: "viewer",
           memberCount: 1,
           lastSyncedAt: T0,
@@ -262,18 +286,13 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
     ],
   ]);
   const restricted: RestrictedGroup[] = [
-    {
-      group: "contractors@example.com",
-      name: "Contractors",
-      memberCount: 0,
-      createdAt: T0,
-    },
+    { ...G.contractors, memberCount: 1, createdAt: T0 },
   ];
   const groups: DirectoryGroup[] = [
-    { email: "eng@example.com", name: "Engineering", memberCount: 1 },
-    { email: "exec@example.com", name: "Exec", memberCount: 1 },
-    { email: "sales@example.com", name: "Sales", memberCount: 4 },
-    { email: "contractors@example.com", name: "Contractors", memberCount: 0 },
+    { ...G.eng, memberCount: 1 },
+    { ...G.exec, memberCount: 1 },
+    { ...G.sales, memberCount: 4 },
+    { ...G.contractors, memberCount: 1 },
   ];
   const audit: AuditEvent[] = [];
   const log = (
@@ -323,7 +342,7 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
       directoryMode === "google"
         ? [
             {
-              group: "sales@example.com",
+              ...G.sales,
               wouldRemove: 4,
               members: 4,
               since: T0,
@@ -334,14 +353,33 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
 
   // ---- derived views --------------------------------------------------------
   const isAdmin = () => me.user.role === "owner" || me.user.role === "admin";
-  const cap = (): CapReason | null => me.auth?.cap ?? null;
   const findSpace = (id: unknown) => spaces.find((s) => s.id === id);
   const memberOf = (id: string) => members.find((m) => m.id === id);
+  /** guests_read_only: P2's authConfig.guestsReadOnly, true whenever google or email sign-in is on. */
+  const guestsReadOnly = () => mode === "direct" && providerIds.length > 0;
+  const restrictionOf = (userId: string) => {
+    const gs = restricted
+      .filter((g) => groupMembers.get(g.groupId)?.includes(userId))
+      .map((g) => ({ groupId: g.groupId, email: g.email, name: g.name }));
+    const manual = manualRestricted.has(userId);
+    return manual || gs.length > 0 ? { manual, groups: gs } : null;
+  };
+  const capOf = (u: Member | undefined): CapReason | null =>
+    !u
+      ? null
+      : u.role === "guest" && guestsReadOnly()
+        ? "guest"
+        : restrictionOf(u.id)
+          ? "restricted"
+          : null;
+  const cap = (): CapReason | null => capOf(me.user);
   const roleIn = (s: SpaceRow, userId = me.user.id): SpaceRole | null => {
     if (s.kind === "personal") return s.ownerId === userId ? "manager" : null;
     const u = memberOf(userId);
     const r = rows.get(s.id)?.find((x) => x.userId === userId);
-    const all = u && u.role !== "guest" ? s.allMembersRole : null;
+    // allMembersRole never reaches guests or restricted members.
+    const all =
+      u && u.role !== "guest" && !restrictionOf(u.id) ? s.allMembersRole : null;
     return maxRole(r?.manualRole, r?.syncRole, all);
   };
   const ref = (s: SpaceRow): SpaceRef => ({
@@ -357,7 +395,6 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
       return u ? { id: u.id, email: u.email, name: u.name } : null;
     })(),
     allMembersRole: s.allMembersRole,
-    outsideSharing: s.outsideSharing,
     myRole: roleIn(s),
     memberCount: s.kind === "personal" ? 1 : (rows.get(s.id)?.length ?? 0),
     artifactCount: artifacts.filter(
@@ -379,7 +416,7 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
       manualRole: r.manualRole,
       syncRole: r.syncRole,
       groups: r.groups,
-      cap: u.role === "guest" ? "guest" : null,
+      cap: capOf(u),
     };
   };
   /** Can the caller see this shared space (member or org admin)? */
@@ -394,7 +431,7 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
   const features = (): FeatureFlag[] => [
     ...new Set<FeatureFlag>([
       "spaces",
-      "guests_read_only",
+      ...(guestsReadOnly() ? (["guests_read_only"] as const) : []),
       "content_revocation",
       "usage_off",
       ...(directoryMode === "google"
@@ -402,7 +439,8 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
         : directoryMode === "frozen"
           ? (["sync_frozen"] as const)
           : []),
-      ...(o.features ?? []),
+      // FEATURES can't set guests_read_only.
+      ...(o.features ?? []).filter((f) => f !== "guests_read_only"),
     ]),
   ];
   const providers = (): AuthProviders =>
@@ -452,11 +490,12 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
       banner: unhealthy && isAdmin(),
       tokensUnverified: unhealthy && isAdmin(),
     };
-    const readOnly = me.user.role === "guest";
+    for (const m of members) m.restriction = restrictionOf(m.id);
+    const myCap = cap();
     me.auth = {
       method: me.auth?.method ?? (mode === "access" ? "access" : "google"),
-      readOnly,
-      cap: readOnly ? "guest" : null,
+      readOnly: myCap !== null,
+      cap: myCap,
       expiresAt: me.auth?.expiresAt ?? "2026-12-31T00:00:00.000Z",
     };
     me.personalSpaceId = me.user.id;
@@ -521,6 +560,14 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
     a.access = levelIn(sp) ?? "owner";
     refresh();
   };
+  /** Making an artifact public in a space whose publicLinks is off: 403 public_links_off. */
+  const refusePublic = (
+    space: { publicLinks: boolean } | null | undefined,
+    visibility: string | undefined,
+  ) =>
+    visibility === "public" && space && !space.publicLinks
+      ? err("public_links_off", "Public links are off in this space")
+      : null;
   /** A create by a capped caller (no spaceId) is refused too. */
   const refuseCappedCreate = () =>
     cap() ? err("space_forbidden", "Read-only accounts can't publish") : null;
@@ -547,6 +594,11 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
       ? err("directory_sync_off", "Directory sync is off or frozen")
       : null;
   const sp = "*/api/v1/spaces/:id";
+  const validSuccessor = (u: Member | undefined): u is Member =>
+    !!u &&
+    u.role !== "guest" &&
+    (u.status ?? "active") === "active" &&
+    !restrictionOf(u.id);
 
   const handlers: HttpHandler[] = [
     http.all("*", () => {
@@ -640,7 +692,6 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
           ownerId: u.id,
           allMembersRole: null,
           publicLinks: true,
-          outsideSharing: true,
           createdAt: iso(),
         });
       }
@@ -713,7 +764,7 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
         const to = r.data.to;
         if (to.kind === "user") {
           const u = memberOf(to.userId);
-          if (!u || u.role === "guest" || (u.status ?? "active") !== "active")
+          if (!validSuccessor(u))
             return err("invalid_successor", "Pick an active member");
         } else {
           const s = findSpace(to.spaceId);
@@ -738,6 +789,26 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
           nextCursor: remaining > 0 ? btoa(String(moved)) : null,
         });
       }),
+    ),
+    ...(["put", "delete"] as const).map((method) =>
+      http[method](
+        "*/api/v1/members/:id/restricted",
+        authed(({ params }) => {
+          const m = memberOf(params.id as string);
+          if (!m || !isAdmin() || m.role === "owner") return notFound();
+          const on = method === "put";
+          if (on !== manualRestricted.has(m.id)) {
+            if (on) manualRestricted.add(m.id);
+            else manualRestricted.delete(m.id);
+            log(on ? "restricted.set" : "restricted.remove", {
+              type: "user",
+              id: m.id,
+            });
+          }
+          refresh();
+          return HttpResponse.json(m);
+        }),
+      ),
     ),
     http.delete(
       "*/api/v1/members/:id/identities/:provider",
@@ -795,12 +866,7 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
         const r = await c.body(request, TransferArtifactInputSchema);
         if (r.error) return r.error;
         const u = memberOf(r.data.userId);
-        if (
-          !u ||
-          u.id === me.user.id ||
-          u.role === "guest" ||
-          (u.status ?? "active") !== "active"
-        )
+        if (!validSuccessor(u) || u.id === me.user.id)
           return err("invalid_successor", "Pick an active member");
         const s = findSpace(u.id) as SpaceRow;
         a.space = ref(s);
@@ -923,6 +989,39 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
         return page(list, new URL(request.url).searchParams);
       }),
     ),
+    http.post(
+      `${sp}/members/self`,
+      authed(async ({ request, params }) => {
+        const s = findSpace(params.id);
+        if (!s || !isAdmin()) return notFound();
+        if (s.kind === "personal")
+          return err(
+            "space_personal",
+            "Admins can add themselves to shared spaces only",
+          );
+        const r = await c.body(request, SpaceMemberPutSchema);
+        if (r.error) return r.error;
+        const list = rows.get(s.id) ?? [];
+        rows.set(s.id, list);
+        let row = list.find((x) => x.userId === me.user.id);
+        if (!row) {
+          row = {
+            userId: me.user.id,
+            manualRole: null,
+            syncRole: null,
+            groups: [],
+          };
+          list.push(row);
+        }
+        row.manualRole = r.data.role;
+        // The server also notifies the space's managers.
+        log("space.admin_self_add", { type: "user", id: me.user.id }, s.id, {
+          role: r.data.role,
+        });
+        refresh();
+        return HttpResponse.json(memberView(row), { status: 201 });
+      }),
+    ),
     http.put(
       `${sp}/members/:userId`,
       authed(async ({ request, params }) => {
@@ -974,7 +1073,7 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
       }),
     ),
     http.put(
-      `${sp}/mappings/:group`,
+      `${sp}/mappings/:groupId`,
       authed(async ({ request, params }) => {
         const s = sharedSpace(params.id);
         if (s instanceof Response) return s;
@@ -985,27 +1084,29 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
         if (off) return off;
         const r = await c.body(request, GroupMappingPutSchema);
         if (r.error) return r.error;
+        const g = groups.find((x) => x.groupId === params.groupId);
+        if (!g) return notFound();
         const list = mappings.get(s.id) ?? [];
         mappings.set(s.id, list);
-        const g = groups.find((x) => x.email === params.group);
-        let m = list.find((x) => x.group === params.group);
+        let m = list.find((x) => x.groupId === g.groupId);
         if (!m) {
           m = {
-            group: params.group as string,
-            name: g?.name ?? null,
+            groupId: g.groupId,
+            email: g.email,
+            name: g.name,
             role: r.data.role,
-            memberCount: null,
+            memberCount: g.memberCount,
             lastSyncedAt: null,
           };
           list.push(m);
         }
         m.role = r.data.role;
-        log("mapping.set", { type: "mapping", id: m.group }, s.id);
+        log("mapping.set", { type: "mapping", id: m.groupId }, s.id);
         return HttpResponse.json(m);
       }),
     ),
     http.delete(
-      `${sp}/mappings/:group`,
+      `${sp}/mappings/:groupId`,
       authed(({ params }) => {
         const s = sharedSpace(params.id);
         if (s instanceof Response) return s;
@@ -1013,12 +1114,12 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
         const off = syncOff();
         if (off) return off;
         const list = mappings.get(s.id) ?? [];
-        const i = list.findIndex((x) => x.group === params.group);
+        const i = list.findIndex((x) => x.groupId === params.groupId);
         if (i < 0) return notFound();
         list.splice(i, 1);
         log(
           "mapping.remove",
-          { type: "mapping", id: params.group as string },
+          { type: "mapping", id: params.groupId as string },
           s.id,
         );
         return noContent();
@@ -1030,39 +1131,42 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
       authed(() => (isAdmin() ? HttpResponse.json(restricted) : notFound())),
     ),
     http.put(
-      "*/api/v1/directory/restricted-groups/:group",
+      "*/api/v1/directory/restricted-groups/:groupId",
       authed(({ params }) => {
         if (!isAdmin()) return notFound();
         const off = syncOff();
         if (off) return off;
-        let g = restricted.find((x) => x.group === params.group);
+        const d = groups.find((x) => x.groupId === params.groupId);
+        if (!d) return notFound();
+        let g = restricted.find((x) => x.groupId === d.groupId);
         if (!g) {
-          const d = groups.find((x) => x.email === params.group);
           g = {
-            group: params.group as string,
-            name: d?.name ?? null,
-            memberCount: d?.memberCount ?? null,
+            groupId: d.groupId,
+            email: d.email,
+            name: d.name,
+            memberCount: d.memberCount,
             createdAt: iso(),
           };
           restricted.push(g);
-          log("restricted.set", { type: "directory", id: g.group });
+          log("restricted.set", { type: "group", id: g.groupId });
         }
+        refresh();
         return HttpResponse.json(g);
       }),
     ),
     http.delete(
-      "*/api/v1/directory/restricted-groups/:group",
+      "*/api/v1/directory/restricted-groups/:groupId",
       authed(({ params }) => {
         if (!isAdmin()) return notFound();
-        const off = syncOff();
-        if (off) return off;
-        const i = restricted.findIndex((x) => x.group === params.group);
+        // Any mode: frozen restrictions stay in force until an admin lifts them.
+        const i = restricted.findIndex((x) => x.groupId === params.groupId);
         if (i < 0) return notFound();
         restricted.splice(i, 1);
         log("restricted.remove", {
-          type: "directory",
-          id: params.group as string,
+          type: "group",
+          id: params.groupId as string,
         });
+        refresh();
         return noContent();
       }),
     ),
@@ -1109,15 +1213,15 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
       }),
     ),
     http.post(
-      "*/api/v1/directory/held/:group/confirm",
+      "*/api/v1/directory/held/:groupId/confirm",
       authed(({ params }) => {
         if (me.user.role !== "owner") return notFound();
-        const i = sync.held.findIndex((h) => h.group === params.group);
+        const i = sync.held.findIndex((h) => h.groupId === params.groupId);
         if (i < 0) return notFound();
         sync.held.splice(i, 1);
         log("directory.sweep.confirmed", {
-          type: "directory",
-          id: params.group as string,
+          type: "group",
+          id: params.groupId as string,
         });
         return HttpResponse.json(sync, { status: 202 });
       }),
@@ -1145,5 +1249,6 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
     checkPublish,
     placeNew,
     refuseCappedCreate,
+    refusePublic,
   };
 }

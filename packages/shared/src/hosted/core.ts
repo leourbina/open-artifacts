@@ -33,7 +33,27 @@ export type MemberStatus = z.infer<typeof MemberStatusSchema>;
 export const IdentityProviderSchema = z.enum(["google"]);
 export type IdentityProvider = z.infer<typeof IdentityProviderSchema>;
 
-/** Why a user's access is capped below their roles: guest, or a restricted group. */
+/** A directory group, keyed by Google's stable group id (never the email). */
+export const GroupRefSchema = z.object({
+  groupId: z.string(),
+  email: z.string(),
+  /** Google group name once synced. */
+  name: z.string().nullable(),
+});
+export type GroupRef = z.infer<typeof GroupRefSchema>;
+
+/**
+ * A member's restriction (Member.restriction): manual (R.memberRestricted,
+ * any sync mode) and/or restricted groups they belong to. Restricted if
+ * either applies. Frozen group restrictions stay in force.
+ */
+export const RestrictionSchema = z.object({
+  manual: z.boolean(),
+  groups: z.array(GroupRefSchema),
+});
+export type Restriction = z.infer<typeof RestrictionSchema>;
+
+/** Why a user's access is capped below their roles: guest, or restricted (manual flag or restricted group). */
 export const CapReasonSchema = z.enum(["guest", "restricted"]);
 export type CapReason = z.infer<typeof CapReasonSchema>;
 
@@ -46,13 +66,19 @@ export const DirectoryModeSchema = z.enum(["off", "google", "frozen"]);
 export type DirectoryMode = z.infer<typeof DirectoryModeSchema>;
 
 /**
- * FEATURES env flags (comma list, set per tier by provisioning; self-hosted
- * default empty = today's behaviour). Me.instance.features lists those on.
+ * Instance feature flags, as Me.instance.features reports them.
  * spaces: spaces and roles; sync_google: directory sync running;
  * sync_frozen: Team after trial, synced rows kept and edited by hand;
- * guests_read_only: guests capped at viewer; content_revocation: content URLs
- * check user status and space publicLinks; usage_off: hosted, the Usage page
- * and R.usage are 404.
+ * guests_read_only: guests capped at viewer (REPORTED ONLY, see below);
+ * content_revocation: uid-bound /c/ content tokens re-check the user's
+ * status (the /p/ check on the space's publicLinks applies unconditionally);
+ * usage_off: hosted, the Usage page and R.usage are 404.
+ *
+ * All but guests_read_only come from the FEATURES env (comma list, set per
+ * tier by provisioning; self-hosted default empty = today's behaviour).
+ * guests_read_only has ONE source, P2's authConfig.guestsReadOnly: true
+ * whenever the google or email sign-in provider is enabled, not configurable;
+ * Access-only installs keep today's guest behaviour. FEATURES can't set it.
  */
 export const FEATURE_FLAGS = [
   "spaces",
@@ -66,14 +92,19 @@ export const FeatureFlagSchema = z.enum(FEATURE_FLAGS);
 export type FeatureFlag = z.infer<typeof FeatureFlagSchema>;
 export const FeaturesSchema = z.array(FeatureFlagSchema);
 export type Features = z.infer<typeof FeaturesSchema>;
-/** Parse a FEATURES env value; unknown entries are dropped. */
+/** Flags the FEATURES env may set (every flag except guests_read_only). */
+export const ENV_FEATURE_FLAGS = FEATURE_FLAGS.filter(
+  (f): f is Exclude<FeatureFlag, "guests_read_only"> =>
+    f !== "guests_read_only",
+);
+/** Parse a FEATURES env value. Unknown entries and guests_read_only are dropped. The only parser: import it from here. */
 export const parseFeatures = (raw: string | undefined): FeatureFlag[] => [
   ...new Set(
     (raw ?? "")
       .split(",")
       .map((s) => s.trim())
       .filter((s): s is FeatureFlag =>
-        (FEATURE_FLAGS as readonly string[]).includes(s),
+        (ENV_FEATURE_FLAGS as readonly string[]).includes(s),
       ),
   ),
 ];
@@ -117,7 +148,7 @@ export type AuthMethod = z.infer<typeof AuthMethodSchema>;
 
 export const MeAuthSchema = z.object({
   method: AuthMethodSchema,
-  /** Guest under GUEST_ACCESS=read, or a restricted-group member: hide publish, edit, share and data writes. */
+  /** Capped (a guest while guests_read_only, or a restricted member): hide publish, edit, share and data writes. */
   readOnly: z.boolean(),
   /** Why readOnly, or null. */
   cap: CapReasonSchema.nullable(),
@@ -126,7 +157,10 @@ export const MeAuthSchema = z.object({
 });
 export type MeAuth = z.infer<typeof MeAuthSchema>;
 
-/** Actions the caller may take on one artifact (ArtifactSummary.can). */
+/**
+ * Actions the caller may take on one artifact (ArtifactSummary.can). P3's
+ * internal superset is PolicyAction, so ArtifactAction doesn't clash.
+ */
 export const ARTIFACT_ACTIONS = [
   "edit",
   "share",

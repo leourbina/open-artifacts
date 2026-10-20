@@ -9,6 +9,7 @@ import {
   MeAuthSchema,
   MemberStatusSchema,
   MySpaceSchema,
+  RestrictionSchema,
   SpaceRefSchema,
   TierSchema,
 } from "./hosted/core.js";
@@ -280,6 +281,8 @@ export const MemberSchema = z.object({
   status: MemberStatusSchema.optional(),
   /** Hosted M1: linked sign-in identities (admins may reset "google"). */
   identities: z.array(IdentityProviderSchema).optional(),
+  /** Hosted M1: the member's restriction (manual flag and/or restricted groups); null when unrestricted. */
+  restriction: RestrictionSchema.nullable().optional(),
 });
 export type Member = z.infer<typeof MemberSchema>;
 

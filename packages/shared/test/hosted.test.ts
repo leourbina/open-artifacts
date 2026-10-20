@@ -5,6 +5,7 @@ import {
   ApiErrorSchema,
   ArtifactSummarySchema,
   AUTH,
+  AuditEventSchema,
   AuthProvidersSchema,
   artifactCan,
   CodeRateLimitedDetailsSchema,
@@ -12,6 +13,7 @@ import {
   CodeRequestSchema,
   CodeVerifiedSchema,
   CodeVerifyFailureDetailsSchema,
+  DirectoryGroupSchema,
   ERROR_CODES,
   GroupMappingSchema,
   HealthzSchema,
@@ -25,6 +27,7 @@ import {
   PublishInputSchema,
   parseFeatures,
   R,
+  RestrictedGroupSchema,
   SearchHitSchema,
   SpaceMemberSchema,
   SpacePatchSchema,
@@ -63,6 +66,26 @@ const call = (method: string, path: string, body?: unknown, headers = H) =>
 const json = async (r: Response) => (await r.json()) as any;
 const errCode = async (r: Response) =>
   ApiErrorSchema.parse(await r.json()).error;
+
+/** Response schemas made strict: an unexpected key fails the mock tests. */
+const Strict = {
+  Me: MeSchema.strict(),
+  ArtifactSummary: ArtifactSummarySchema.strict(),
+  SearchHit: SearchHitSchema.strict(),
+  Space: SpaceSchema.strict(),
+  SpaceMember: SpaceMemberSchema.strict(),
+  GroupMapping: GroupMappingSchema.strict(),
+  SyncStatus: SyncStatusSchema.strict(),
+  TransferSummary: TransferSummarySchema.strict(),
+  TransferResult: TransferResultSchema.strict(),
+  CodeVerified: CodeVerifiedSchema.strict(),
+  CodeRequested: CodeRequestedSchema.strict(),
+  AuthProviders: AuthProvidersSchema.strict(),
+  Member: MemberSchema.strict(),
+  RestrictedGroup: RestrictedGroupSchema.strict(),
+  DirectoryGroup: DirectoryGroupSchema.strict(),
+  AuditEvent: AuditEventSchema.strict(),
+};
 
 describe("hosted contract schemas", () => {
   it("every new error code has a status", () => {
@@ -137,6 +160,7 @@ describe("hosted contract schemas", () => {
         spaces: [{ spaceId: "s", role: "editor" }],
       }).spaces,
     ).toHaveLength(1);
+    expect(parseFeatures("guests_read_only,spaces")).toEqual(["spaces"]);
     expect(parseFeatures("spaces, usage_off,bogus,spaces")).toEqual([
       "spaces",
       "usage_off",
@@ -209,7 +233,7 @@ describe("hosted off: responses are byte-identical", () => {
 describe("hosted mocks", () => {
   it("providers -> code request -> verify -> me with spaces -> list with can/space -> move refusal", async () => {
     fresh({ hosted: true });
-    const p = AuthProvidersSchema.parse(
+    const p = Strict.AuthProviders.parse(
       await json(await call("GET", AUTH.providers)),
     );
     expect(p.mode).toBe("direct");
@@ -220,7 +244,7 @@ describe("hosted mocks", () => {
       next: "/a/x",
     });
     expect(rq.status).toBe(202);
-    expect(CodeRequestedSchema.parse(await rq.json())).toEqual({
+    expect(Strict.CodeRequested.parse(await rq.json())).toEqual({
       maskedEmail: "a***@example.com",
       expiresIn: 600,
       resendAfter: 60,
@@ -236,11 +260,11 @@ describe("hosted mocks", () => {
       code: `${HOSTED_MOCK_CODE.slice(0, 4)} ${HOSTED_MOCK_CODE.slice(4)}`,
     });
     expect(ok.status).toBe(200);
-    const v = CodeVerifiedSchema.parse(await ok.json());
+    const v = Strict.CodeVerified.parse(await ok.json());
     expect(v).toMatchObject({ next: "/a/x", readOnly: false });
     expect(v.user.email).toBe("ada@example.com");
 
-    const me = MeSchema.parse(await json(await call("GET", R.me)));
+    const me = Strict.Me.parse(await json(await call("GET", R.me)));
     expect(me.instance.hosted).toBe(true);
     expect(me.instance.tier).toBe("business");
     expect(me.instance.features).toContain("usage_off");
@@ -260,7 +284,7 @@ describe("hosted mocks", () => {
       ["Exec", "viewer"],
     ]);
 
-    const list = PageSchema(ArtifactSummarySchema).parse(
+    const list = PageSchema(Strict.ArtifactSummary).parse(
       await json(await call("GET", `${R.artifacts}?limit=100`)),
     );
     const notes = list.items.find((a) => a.title === "Meeting notes");
@@ -272,7 +296,7 @@ describe("hosted mocks", () => {
     expect(mine?.can?.transfer).toBe(true);
     const viewer = list.items.find((a) => a.access === "viewer");
     expect(viewer?.can).toMatchObject({ edit: false, dataWrite: true });
-    const hits = PageSchema(SearchHitSchema).parse(
+    const hits = PageSchema(Strict.SearchHit).parse(
       await json(await call("GET", `${R.search}?q=notes`)),
     );
     expect(hits.items[0]?.space?.name).toBe("Engineering");
@@ -291,7 +315,7 @@ describe("hosted mocks", () => {
     expect(forbidden.status).toBe(403);
     expect((await errCode(forbidden)).code).toBe("space_forbidden");
     const eng = me.spaces?.find((s) => s.name === "Engineering")?.id as string;
-    const moved = ArtifactSummarySchema.parse(
+    const moved = Strict.ArtifactSummary.parse(
       await json(
         await call("POST", R.moveArtifact(mine?.id as string), {
           spaceId: eng,
@@ -336,13 +360,13 @@ describe("hosted mocks", () => {
   it("guest sign-in is read-only and can't publish", async () => {
     fresh({ hosted: true });
     await call("POST", AUTH.codeRequest, { email: "guest@outside.org" });
-    const v = CodeVerifiedSchema.parse(
+    const v = Strict.CodeVerified.parse(
       await json(
         await call("POST", AUTH.codeVerify, { code: HOSTED_MOCK_CODE }),
       ),
     );
     expect(v.user.role).toBe("guest");
-    const me = MeSchema.parse(await json(await call("GET", R.me)));
+    const me = Strict.Me.parse(await json(await call("GET", R.me)));
     expect(me.auth).toMatchObject({ readOnly: true, cap: "guest" });
     const list = await json(await call("GET", R.artifacts));
     expect(list.items[0].can.dataWrite).toBe(false);
@@ -356,13 +380,13 @@ describe("hosted mocks", () => {
 
   it("spaces, members, mappings, directory, transfer", async () => {
     fresh({ hosted: true });
-    const spaces = PageSchema(SpaceSchema).parse(
+    const spaces = PageSchema(Strict.Space).parse(
       await json(await call("GET", R.spaces)),
     );
     expect(spaces.items[0]?.kind).toBe("personal");
     const clients = spaces.items.find((s) => s.name === "Clients");
     expect(clients?.myRole).toBeNull();
-    const created = SpaceSchema.parse(
+    const created = Strict.Space.parse(
       await json(await call("POST", R.spaces, { name: "Sales" })),
     );
     expect(created).toMatchObject({
@@ -371,22 +395,22 @@ describe("hosted mocks", () => {
       myRole: null,
     });
     const bob = fixtures.members[1]?.id as string;
-    const m = SpaceMemberSchema.parse(
+    const m = Strict.SpaceMember.parse(
       await json(
         await call("PUT", R.spaceMember(created.id, bob), { role: "editor" }),
       ),
     );
     expect(m).toMatchObject({ userId: bob, role: "editor", source: "manual" });
     expect(
-      GroupMappingSchema.parse(
+      Strict.GroupMapping.parse(
         await json(
-          await call("PUT", R.spaceMapping(created.id, "sales@example.com"), {
+          await call("PUT", R.spaceMapping(created.id, "gSales03"), {
             role: "viewer",
           }),
         ),
       ).name,
     ).toBe("Sales");
-    const patched = SpaceSchema.parse(
+    const patched = Strict.Space.parse(
       await json(
         await call("PATCH", R.space(created.id), { publicLinks: false }),
       ),
@@ -400,7 +424,7 @@ describe("hosted mocks", () => {
     );
     expect((await errCode(personal)).code).toBe("space_personal");
 
-    const st = SyncStatusSchema.parse(
+    const st = Strict.SyncStatus.parse(
       await json(await call("GET", R.directory)),
     );
     expect(st).toMatchObject({
@@ -410,7 +434,7 @@ describe("hosted mocks", () => {
     });
     expect(st.held).toHaveLength(1);
     expect(
-      (await call("POST", R.directoryHeldConfirm("sales@example.com"))).status,
+      (await call("POST", R.directoryHeldConfirm("gSales03"))).status,
     ).toBe(202);
     expect((await call("POST", R.directorySync)).status).toBe(202);
 
@@ -422,7 +446,7 @@ describe("hosted mocks", () => {
     ]);
     const carol = departed[0].id as string;
     expect(
-      TransferSummarySchema.parse(
+      Strict.TransferSummary.parse(
         await json(await call("GET", R.memberTransfer(carol))),
       ),
     ).toEqual({
@@ -438,7 +462,7 @@ describe("hosted mocks", () => {
     });
     expect((await errCode(toCarol)).code).toBe("invalid_successor");
     expect(
-      TransferResultSchema.parse(
+      Strict.TransferResult.parse(
         await json(
           await call("POST", R.memberTransfer(carol), {
             to: { kind: "user", userId: bob },
@@ -455,7 +479,7 @@ describe("hosted mocks", () => {
 
   it("frozen sync refuses mapping changes; unhealthy shows the banner", async () => {
     fresh({ hosted: { directory: "frozen", unhealthy: true } });
-    const me = MeSchema.parse(await json(await call("GET", R.me)));
+    const me = Strict.Me.parse(await json(await call("GET", R.me)));
     expect(me.instance.directory).toMatchObject({
       mode: "frozen",
       healthy: false,
@@ -472,7 +496,7 @@ describe("hosted mocks", () => {
 
   it("transfer of a personal artifact and spaceId on publish", async () => {
     fresh({ hosted: true });
-    const me = MeSchema.parse(await json(await call("GET", R.me)));
+    const me = Strict.Me.parse(await json(await call("GET", R.me)));
     const eng = me.spaces?.find((s) => s.name === "Engineering")?.id as string;
     const exec = me.spaces?.find((s) => s.name === "Exec")?.id as string;
     const base = { title: "n", format: "html", content: "x" };
@@ -492,7 +516,7 @@ describe("hosted mocks", () => {
     });
     expect((await errCode(useMove)).code).toBe("use_move");
     const bob = fixtures.members[1]?.id as string;
-    const t = ArtifactSummarySchema.parse(
+    const t = Strict.ArtifactSummary.parse(
       await json(await call("POST", R.transferArtifact(id), { userId: bob })),
     );
     expect(t).toMatchObject({
@@ -501,8 +525,159 @@ describe("hosted mocks", () => {
       owner: { id: bob },
     });
     expect(
-      z.array(MemberSchema).parse(await json(await call("GET", R.members)))[0]
+      z.array(Strict.Member).parse(await json(await call("GET", R.members)))[0]
         ?.status,
     ).toBe("active");
+  });
+});
+
+describe("hosted mocks: restriction, public links, admin self-add, audit", () => {
+  const signIn = async (email: string) => {
+    await call("POST", AUTH.codeRequest, { email });
+    return Strict.CodeVerified.parse(
+      await json(
+        await call("POST", AUTH.codeVerify, { code: HOSTED_MOCK_CODE }),
+      ),
+    );
+  };
+
+  it("a restricted-group member is capped and gets no allMembersRole", async () => {
+    fresh({ hosted: true });
+    const v = await signIn("dan@example.com");
+    expect(v.readOnly).toBe(true);
+    expect(v.user.restriction?.groups.map((g) => g.groupId)).toEqual([
+      "gCon04",
+    ]);
+    const me = Strict.Me.parse(await json(await call("GET", R.me)));
+    expect(me.auth).toMatchObject({ readOnly: true, cap: "restricted" });
+    // Engineering has allMembersRole viewer, which never reaches Dan.
+    expect(me.spaces).toEqual([]);
+    const pub = await call("POST", R.artifacts, {
+      title: "t",
+      format: "html",
+      content: "x",
+    });
+    expect((await errCode(pub)).code).toBe("space_forbidden");
+  });
+
+  it("manual restricted flag: cap on space members, no successor, audited", async () => {
+    fresh({ hosted: { directory: "frozen" } });
+    const bob = fixtures.members[1]?.id as string;
+    const set = Strict.Member.parse(
+      await json(await call("PUT", R.memberRestricted(bob))),
+    );
+    expect(set.restriction).toEqual({ manual: true, groups: [] });
+    const me = Strict.Me.parse(await json(await call("GET", R.me)));
+    const eng = me.spaces?.find((s) => s.name === "Engineering")?.id as string;
+    const ms = PageSchema(Strict.SpaceMember).parse(
+      await json(await call("GET", R.spaceMembers(eng))),
+    );
+    expect(ms.items.find((m) => m.userId === bob)?.cap).toBe("restricted");
+    const id = fixtures.artifacts[0]?.id as string;
+    const t = await call("POST", R.transferArtifact(id), { userId: bob });
+    expect((await errCode(t)).code).toBe("invalid_successor");
+    const cleared = Strict.Member.parse(
+      await json(await call("DELETE", R.memberRestricted(bob))),
+    );
+    expect(cleared.restriction).toBeNull();
+    const audit = PageSchema(Strict.AuditEvent).parse(
+      await json(await call("GET", R.audit)),
+    );
+    expect(audit.items.map((e) => e.action)).toEqual([
+      "restricted.remove",
+      "restricted.set",
+    ]);
+  });
+
+  it("restricted groups by groupId: PUT 409 when frozen, DELETE allowed", async () => {
+    fresh({ hosted: { directory: "frozen" } });
+    const list = z
+      .array(Strict.RestrictedGroup)
+      .parse(await json(await call("GET", R.restrictedGroups)));
+    expect(list.map((g) => g.groupId)).toEqual(["gCon04"]);
+    const put = await call("PUT", R.restrictedGroup("gSales03"));
+    expect((await errCode(put)).code).toBe("directory_sync_off");
+    expect((await call("DELETE", R.restrictedGroup("gCon04"))).status).toBe(
+      204,
+    );
+  });
+
+  it("restricted groups and the group picker with sync on", async () => {
+    fresh({ hosted: true });
+    const g = Strict.RestrictedGroup.parse(
+      await json(await call("PUT", R.restrictedGroup("gSales03"))),
+    );
+    expect(g).toMatchObject({
+      groupId: "gSales03",
+      email: "sales@example.com",
+    });
+    expect((await call("PUT", R.restrictedGroup("nope"))).status).toBe(404);
+    const picker = PageSchema(Strict.DirectoryGroup).parse(
+      await json(await call("GET", `${R.directoryGroups}?q=eng`)),
+    );
+    expect(picker.items.map((x) => x.groupId)).toEqual(["gEng01"]);
+  });
+
+  it("public in a space with publicLinks off is 403 public_links_off", async () => {
+    fresh({ hosted: true });
+    const me = Strict.Me.parse(await json(await call("GET", R.me)));
+    expect(me.spaces?.find((s) => s.name === "Exec")?.publicLinks).toBe(false);
+    // The caller manages Engineering ("Meeting notes"); turn its public links off.
+    const eng = me.spaces?.find((s) => s.name === "Engineering")?.id as string;
+    expect(
+      (await call("PATCH", R.space(eng), { publicLinks: false })).status,
+    ).toBe(200);
+    const notes = fixtures.artifacts.find((a) => a.title === "Meeting notes")
+      ?.id as string;
+    const r = await call("PATCH", R.artifact(notes), { visibility: "public" });
+    expect(r.status).toBe(403);
+    expect((await errCode(r)).code).toBe("public_links_off");
+    const create = await call("POST", R.artifacts, {
+      title: "t",
+      format: "html",
+      content: "x",
+      spaceId: eng,
+      visibility: "public",
+    });
+    expect((await errCode(create)).code).toBe("public_links_off");
+  });
+
+  it("admin self-add to a shared space only, audited", async () => {
+    fresh({ hosted: true });
+    const spaces = PageSchema(Strict.Space).parse(
+      await json(await call("GET", R.spaces)),
+    );
+    const clients = spaces.items.find((s) => s.name === "Clients")
+      ?.id as string;
+    const r = await call("POST", R.spaceMemberSelf(clients), {
+      role: "viewer",
+    });
+    expect(r.status).toBe(201);
+    expect(Strict.SpaceMember.parse(await r.json())).toMatchObject({
+      role: "viewer",
+    });
+    const personal = await call(
+      "POST",
+      R.spaceMemberSelf(fixtures.members[0]?.id as string),
+      { role: "viewer" },
+    );
+    expect((await errCode(personal)).code).toBe("space_personal");
+    const audit = PageSchema(Strict.AuditEvent).parse(
+      await json(await call("GET", R.audit)),
+    );
+    expect(audit.items[0]).toMatchObject({
+      action: "space.admin_self_add",
+      spaceId: clients,
+    });
+  });
+
+  it("guests_read_only is reported from sign-in config, never from FEATURES", async () => {
+    fresh({ hosted: { mode: "access", features: ["guests_read_only"] } });
+    const me = Strict.Me.parse(await json(await call("GET", R.me)));
+    expect(me.instance.features).not.toContain("guests_read_only");
+    server.resetHandlers();
+    fresh({ hosted: true });
+    const me2 = Strict.Me.parse(await json(await call("GET", R.me)));
+    expect(me2.instance.features).toContain("guests_read_only");
   });
 });

@@ -9,8 +9,10 @@ declare const __OA_TEST_HOOKS_ALLOWED__: boolean | undefined;
 /**
  * Build-time guard. False unless the bundler defines
  * `__OA_TEST_HOOKS_ALLOWED__` as true (wrangler `define`, test and staging
- * configs only). Prod builds never define it, so the hooks can't be enabled by
- * an env var alone.
+ * configs only). The release template defines it as false explicitly, so the
+ * hooks can't be enabled by an env var alone. The release check is
+ * behavioural: the release bundle with TEST_HOOKS=1 and a valid key answers
+ * 404 on every hook path.
  */
 export const TEST_HOOKS_ALLOWED: boolean =
   typeof __OA_TEST_HOOKS_ALLOWED__ !== "undefined" &&
@@ -22,7 +24,7 @@ export const TEST_HOOKS = {
   oauthClient: "/__test/oauth-client",
 } as const;
 
-/** POST TEST_HOOKS.session -> TestSessionResult (a real __Host-oa_session value, m: "test"). */
+/** POST TEST_HOOKS.session -> TestSessionResult (a real __Host-oa_session value, p: "test"). */
 export const TestSessionInputSchema = z.strictObject({
   email: z.email(),
   role: RoleSchema,
@@ -53,7 +55,11 @@ export const OAuthClientHookResultSchema = z.object({
 });
 export type OAuthClientHookResult = z.infer<typeof OAuthClientHookResultSchema>;
 
-/** GET /healthz. testHooks: false in tests and prod, true on staging installs. */
+/**
+ * GET /healthz. testHooks: true only on staging installs (hooks mounted);
+ * false in tests and on every release install. Prod is built separately (the
+ * staging bundle is never promoted) and the release asserts testHooks: false.
+ */
 export const HealthzSchema = z.object({
   ok: z.literal(true),
   plan: z.enum(["free", "paid"]),

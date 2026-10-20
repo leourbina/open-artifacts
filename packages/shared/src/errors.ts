@@ -15,6 +15,7 @@ export const ERROR_CODES = [
   "space_forbidden",
   "space_personal",
   "space_not_empty",
+  "public_links_off",
   "use_move",
   "invalid_successor",
   "member_active",
@@ -51,9 +52,11 @@ export const STATUS_FOR: Record<ErrorCode, number> = {
   space_personal: 400,
   /** DELETE a space that still holds artifacts (trash included). */
   space_not_empty: 409,
+  /** Make an artifact public (publish or PATCH visibility) in a space whose publicLinks is off. */
+  public_links_off: 403,
   /** PublishInput.spaceId given with the id of an existing artifact: use R.moveArtifact. */
   use_move: 400,
-  /** Transfer successor is not an active non-guest member. */
+  /** Transfer successor is not an active, non-guest, non-restricted member. */
   invalid_successor: 400,
   /** Departed-person transfer on a member who is still active. */
   member_active: 409,

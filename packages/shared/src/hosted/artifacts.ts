@@ -67,8 +67,9 @@ export type MoveArtifactInput = z.infer<typeof MoveArtifactInputSchema>;
 
 /**
  * POST R.transferArtifact(id) -> ArtifactSummary. Personal artifacts, owner
- * level only (404 otherwise). The successor must be an active non-guest
- * member (400 invalid_successor). Moves it to their personal space and leaves
+ * level only (404 otherwise); single transfer requires level === "owner"
+ * (a space manager can't). The successor must be an active, non-guest,
+ * non-restricted member (400 invalid_successor). Moves it to their personal space and leaves
  * the former owner an editor share.
  */
 export const TransferArtifactInputSchema = z.strictObject({
@@ -85,7 +86,7 @@ export type TransferSummary = z.infer<typeof TransferSummarySchema>;
 
 /**
  * POST R.memberTransfer(id) -> TransferResult; 409 member_active when the
- * member is active. Target user: active non-guest (400 invalid_successor);
+ * member is active. Target user: active, non-guest, non-restricted (400 invalid_successor);
  * target space: shared (400 space_personal). Pages: call again with
  * cursor = nextCursor until it is null.
  */
