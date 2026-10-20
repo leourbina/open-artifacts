@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.19.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.18.0...v0.19.0) (2026-10-20)
+
+
+### Features
+
+* **auth:** direct sign-in config contract, domain parsing, HKDF keys (P2 T1) ([#366](https://github.com/open-artifacts-ai/open-artifacts/issues/366)) ([c7adf42](https://github.com/open-artifacts-ai/open-artifacts/commit/c7adf42ad2d9f1f16fa534d48450f202cefd7a20))
+* **dashboard:** hosted P4 foundation (contract adapter, safeNext, error copy, reauth) ([#376](https://github.com/open-artifacts-ai/open-artifacts/issues/376)) ([e3b872e](https://github.com/open-artifacts-ai/open-artifacts/commit/e3b872e6e66b88eb7db0fdf9c856bbf297625984))
+* **server:** central access decision table (P3 T2) ([#365](https://github.com/open-artifacts-ai/open-artifacts/issues/365)) ([7502394](https://github.com/open-artifacts-ai/open-artifacts/commit/750239415e28669e25646c6657703bf6380c2b58))
+* **shared:** export HostedMockOptions from the mocks entry ([#377](https://github.com/open-artifacts-ai/open-artifacts/issues/377)) ([ef319cc](https://github.com/open-artifacts-ai/open-artifacts/commit/ef319cca72951c3445db880d7ef248ff623635b8))
+
+
+### Bug Fixes
+
+* **shared:** hosted contract follow-ups (move into publicLinks-off space, restrict_admin) ([#370](https://github.com/open-artifacts-ai/open-artifacts/issues/370)) ([d615aa4](https://github.com/open-artifacts-ai/open-artifacts/commit/d615aa46b0f20f97aca0065ebd9aa86891405b7e))
+
 ## [0.18.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.17.1...v0.18.0) (2026-10-20)
 
 
