@@ -403,7 +403,7 @@ describe("ArtifactRuntime errors", () => {
 describe("ArtifactRuntime websocket", () => {
   async function connect(s: ReturnType<typeof stubFor>, collection: string) {
     const res = await s.fetch(`http://do/subscribe?collection=${collection}`, {
-      headers: { Upgrade: "websocket" },
+      headers: { Upgrade: "websocket", "X-OA-Actor": "u:1" },
     });
     expect(res.status).toBe(101);
     const ws = res.webSocket!;
@@ -479,13 +479,18 @@ describe("ArtifactRuntime websocket", () => {
       426,
     );
     const bad = await s.fetch("http://do/subscribe?collection=a.b", {
-      headers: { Upgrade: "websocket" },
+      headers: { Upgrade: "websocket", "X-OA-Actor": "u:1" },
     });
     expect(bad.status).toBe(400);
     const none = await s.fetch("http://do/subscribe", {
-      headers: { Upgrade: "websocket" },
+      headers: { Upgrade: "websocket", "X-OA-Actor": "u:1" },
     });
     expect(none.status).toBe(400);
+    // No actor: no per-actor cap to apply, so refused (not uncapped).
+    const anonymous = await s.fetch("http://do/subscribe?collection=votes", {
+      headers: { Upgrade: "websocket" },
+    });
+    expect(anonymous.status).toBe(400);
   });
 });
 

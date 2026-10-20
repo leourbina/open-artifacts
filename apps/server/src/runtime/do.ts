@@ -96,8 +96,17 @@ export function anonWritesPerMin(v: string | undefined): number {
 const ROW_OVERHEAD = 64;
 /** Broadcasts inline the doc only up to this many bytes; larger docs go out as data:null. */
 const BROADCAST_INLINE_BYTES = 16 * 1024;
-/** Hibernated data-subscribe sockets per DO; fetch returns 429 past it. */
+/** Data-subscribe sockets per DO from signed-in viewers; fetch returns 429 past it. */
 const MAX_SOCKETS = 200;
+/** Data-subscribe sockets per DO from anonymous (ip:) viewers (their own pool). */
+const MAX_ANON_SOCKETS = 100;
+/**
+ * Data-subscribe sockets per anonymous actor (an IPv4 address or IPv6 /56).
+ * A tab holds one socket per subscribed collection: 8 covers a couple of
+ * tabs with a few collections each, and it takes 13 networks (not 5) to
+ * fill the anonymous pool. Floods never crowd members' pool.
+ */
+const MAX_ANON_SOCKETS_PER_ACTOR = 8;
 /** R.events sockets per DO from signed-in viewers (their own pool). */
 const MAX_EVENTS_SOCKETS = 200;
 /** R.events sockets per DO from anonymous (ip:) viewers (their own pool). */
@@ -322,6 +331,9 @@ const EVENTS_NAMED_TAG = "~ev:named";
 const EVENTS_ANON_TAG = "~ev:anon";
 const EVENTS_USER_TAG = "~ev:u";
 const EVENTS_IP_TAG = "~ev:ip";
+/** Data-subscribe budget-pool tags (signed-in or ip); same "~" rule as above. */
+const DATA_USER_TAG = "~d:u";
+const DATA_IP_TAG = "~d:ip";
 /** Route → DO headers on the events upgrade: the current version and viewer class. */
 export const EVENTS_VERSION_HEADER = "X-OA-Version";
 export const EVENTS_NAMED_HEADER = "X-OA-Named";
@@ -1089,19 +1101,25 @@ export class ArtifactRuntime extends DurableObject<Env> {
       const r = DataNameSchema.safeParse(url.searchParams.get("collection"));
       if (!r.success)
         return new Response("Invalid collection", { status: 400 });
-      tags = [r.data];
-      const data =
-        this.ctx.getWebSockets().length -
-        this.ctx.getWebSockets(EVENTS_TAG).length;
-      if (data >= MAX_SOCKETS)
+      // The route always passes the authorized actor; without one there is
+      // no per-actor cap to apply, so refuse rather than skip it.
+      if (actor === null) return new Response("Missing actor", { status: 400 });
+      // Anonymous (ip:) actors get their own smaller pool, so a flood from
+      // many addresses can't lock members out of live data.
+      const anon = actor.startsWith("ip:");
+      const pool = anon ? DATA_IP_TAG : DATA_USER_TAG;
+      if (
+        this.ctx.getWebSockets(pool).length >=
+        (anon ? MAX_ANON_SOCKETS : MAX_SOCKETS)
+      )
         return new Response("Too many subscribers", { status: 429 });
-      // Optional per-actor cap (the route passes the authorized actor).
-      if (actor !== null) {
-        const tag = `a:${actor}`;
-        if (this.ctx.getWebSockets(tag).length >= MAX_SOCKETS_PER_ACTOR)
-          return new Response("Too many subscriptions", { status: 429 });
-        tags.push(tag);
-      }
+      const tag = `a:${actor}`;
+      if (
+        this.ctx.getWebSockets(tag).length >=
+        (anon ? MAX_ANON_SOCKETS_PER_ACTOR : MAX_SOCKETS_PER_ACTOR)
+      )
+        return new Response("Too many subscriptions", { status: 429 });
+      tags = [r.data, pool, tag];
     }
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1], tags);

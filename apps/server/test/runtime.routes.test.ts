@@ -563,7 +563,7 @@ describe("fix round 1", () => {
         ctx,
       );
     expect((await sub({ RL_ANON: deny })).status).toBe(429);
-    expect(keys).toEqual(["sub:ip:2001:db8:9:9::/64"]);
+    expect(keys).toEqual(["sub:ip:2001:db8:9:0::/56"]);
     const prod = await sub({ RL_ANON: undefined, ENVIRONMENT: "production" });
     expect(prod.status).toBe(503);
     const w = await app.fetch(
@@ -622,6 +622,57 @@ describe("fix round 1", () => {
     });
     expect(r.status).toBe(429);
     expect((await open(id, owner)).readyState).toBe(1);
+    for (const w of socks) w.close();
+  });
+
+  /** An anonymous data socket from `ip`: the WebSocket, or the refusal status. */
+  const anon = async (id: string, ip: string) => {
+    const r = await api(app, R.dataSubscribe(id, "c"), null, {
+      headers: { upgrade: "websocket", "cf-connecting-ip": ip },
+    });
+    r.webSocket?.accept();
+    return r.webSocket ?? r.status;
+  };
+
+  it("8 anonymous sockets per IPv6 /56; a 9th from another /64 in it is refused", async () => {
+    const id = await pub({ visibility: "public" });
+    const socks: WebSocket[] = [];
+    for (let i = 0; i < 8; i++) {
+      const w = await anon(
+        id,
+        `2001:db8:7:1${i.toString(16).padStart(2, "0")}::1`,
+      );
+      if (typeof w === "number") throw new Error(`refused ${w}`);
+      socks.push(w);
+    }
+    expect(await anon(id, "2001:db8:7:1ff::9")).toBe(429);
+    const other = await anon(id, "2001:db8:7:200::1");
+    expect(typeof other).not.toBe("number");
+    // Members aren't limited by the anonymous caps.
+    const member: WebSocket[] = [];
+    for (let i = 0; i < 9; i++) member.push(await open(id, viewer));
+    for (const w of member) w.close();
+    for (const w of [...socks, other as WebSocket]) w.close();
+  });
+
+  it("a full anonymous pool (100) still lets members connect", async () => {
+    const id = await pub({ visibility: "public" });
+    const socks: WebSocket[] = [];
+    // 13 IPv4 actors × 8 = 104 attempts over the 100-socket anonymous pool.
+    let refused = 0;
+    for (let a = 0; a < 13; a++)
+      for (let k = 0; k < 8; k++) {
+        const w = await anon(id, `192.0.2.${a + 1}`);
+        if (typeof w === "number") {
+          expect(w).toBe(429);
+          refused++;
+        } else socks.push(w);
+      }
+    expect(socks).toHaveLength(100);
+    expect(refused).toBe(4);
+    expect(await anon(id, "192.0.2.99")).toBe(429);
+    for (const u of [viewer, owner])
+      expect((await open(id, u)).readyState).toBe(1);
     for (const w of socks) w.close();
   });
 });

@@ -14,7 +14,7 @@ import { createApp } from "../src/app.js";
 import { createPat } from "../src/auth/pat.js";
 import { appOrigin } from "../src/http/errors.js";
 import { type ArtifactRuntime, runtimeStub } from "../src/runtime/do.js";
-import { eventsIpKey } from "../src/runtime/routes.js";
+import { anonIpKey } from "../src/runtime/routes.js";
 import { publish } from "../src/services/artifacts.js";
 import { getUser } from "../src/services/users.js";
 import { api, login } from "./helpers.js";
@@ -416,11 +416,11 @@ describe("events socket: access changes and budgets", () => {
     expect(await d.text()).toBe("Missing actor");
   });
 
-  it("eventsIpKey: IPv4 as is, IPv6 by /56", () => {
-    expect(eventsIpKey("203.0.113.7")).toBe("203.0.113.7");
-    expect(eventsIpKey("2001:db8:1:1ff:a::1")).toBe("2001:db8:1:100::/56");
-    expect(eventsIpKey("2001:db8:1:ff::1")).toBe("2001:db8:1:0::/56");
-    expect(eventsIpKey("junk")).toBeNull();
+  it("anonIpKey: IPv4 as is, IPv6 by /56", () => {
+    expect(anonIpKey("203.0.113.7")).toBe("203.0.113.7");
+    expect(anonIpKey("2001:db8:1:1ff:a::1")).toBe("2001:db8:1:100::/56");
+    expect(anonIpKey("2001:db8:1:ff::1")).toBe("2001:db8:1:0::/56");
+    expect(anonIpKey("junk")).toBeNull();
   });
 
   it("3 anonymous events sockets per /56; a 4th from another /64 in it is refused", async () => {

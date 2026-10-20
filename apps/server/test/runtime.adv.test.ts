@@ -158,7 +158,7 @@ describe("B12 adversarial", () => {
   it("BREAK hostile client messages close the socket (subscribe-only)", async () => {
     const s = stubFor();
     const res = await s.fetch("http://do/s?collection=v", {
-      headers: { Upgrade: "websocket" },
+      headers: { Upgrade: "websocket", "X-OA-Actor": "u:1" },
     });
     const ws = res.webSocket!;
     ws.accept();
@@ -178,8 +178,9 @@ describe("B12 adversarial", () => {
     await doAsPaid(s); // 1 MB docs: the Paid limit
     const msgs: string[] = [];
     for (let k = 0; k < 200; k++) {
+      // Distinct signed-in actors: the 200-socket pool, under per-actor caps.
       const r = await s.fetch("http://do/s?collection=v", {
-        headers: { Upgrade: "websocket" },
+        headers: { Upgrade: "websocket", "X-OA-Actor": `u:${k}` },
       });
       const ws = r.webSocket!;
       ws.accept();
@@ -187,7 +188,7 @@ describe("B12 adversarial", () => {
         ws.addEventListener("message", (e) => msgs.push(e.data as string));
     }
     const over = await s.fetch("http://do/s?collection=v", {
-      headers: { Upgrade: "websocket" },
+      headers: { Upgrade: "websocket", "X-OA-Actor": "u:999" },
     });
     expect(over.status).toBe(429);
     expect(await inDo(s, (_i, st) => st.getWebSockets("v").length)).toBe(200);
