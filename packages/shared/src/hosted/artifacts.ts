@@ -58,7 +58,10 @@ export const HostedPublishInputSchema = z
 export type HostedPublishInput = z.infer<typeof HostedPublishInputSchema>;
 
 /**
- * POST R.moveArtifact(id) -> ArtifactSummary. Shared spaces only: a personal
+ * POST R.moveArtifact(id) -> ArtifactSummary. A public artifact moved into a
+ * space with publicLinks off becomes "team" in the same batch and its
+ * anonymous sockets close (as the publicLinks toggle-off).
+ * Shared spaces only: a personal
  * target is 400 space_personal. Needs manager or owner on the artifact (404
  * otherwise) and editor or manager in the target (403 space_forbidden).
  */

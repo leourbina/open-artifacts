@@ -109,6 +109,23 @@ export const parseFeatures = (raw: string | undefined): FeatureFlag[] => [
   ),
 ];
 
+/**
+ * Directory sync state (SyncStatus.state, Me.instance.directory.state).
+ * ok; backoff (429/5xx); auth_failed (401/invalid_grant); customer_mismatch;
+ * scope_missing (a granted scope was revoked: Admin SDK 403
+ * insufficientPermissions; fix copy "reconnect and grant all scopes");
+ * never (no success yet).
+ */
+export const SyncStateSchema = z.enum([
+  "ok",
+  "backoff",
+  "auth_failed",
+  "customer_mismatch",
+  "scope_missing",
+  "never",
+]);
+export type SyncState = z.infer<typeof SyncStateSchema>;
+
 /** Me.instance.directory: the binding mode plus health for the banner. */
 export const InstanceDirectorySchema = z.object({
   mode: DirectoryModeSchema,
@@ -120,6 +137,12 @@ export const InstanceDirectorySchema = z.object({
   banner: z.boolean(),
   /** True while sync is unhealthy: agent PATs and MCP grants aren't capped at 24 h, so they aren't re-verified ("agent tokens not re-verified", owners). */
   tokensUnverified: z.boolean(),
+  /** Sync state for the banner. Org owner and admins only; null for others (members can't read health). */
+  state: SyncStateSchema.nullable(),
+  /** lastSuccessAt + 7 days, when synced users fail closed. Org owner and admins only; null for others. */
+  staleAt: z.string().nullable(),
+  /** Held sweeps waiting for the owner. 0 for non-admins. */
+  heldSweeps: z.number().int(),
 });
 export type InstanceDirectory = z.infer<typeof InstanceDirectorySchema>;
 

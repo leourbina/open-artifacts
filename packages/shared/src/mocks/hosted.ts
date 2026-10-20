@@ -88,6 +88,12 @@ export type HostedMockOptions = {
   tier?: Tier | null;
   /** Directory binding mode (default "google"). */
   directory?: DirectoryMode;
+  /** The failing state when unhealthy (default "backoff"). */
+  unhealthyState?:
+    | "backoff"
+    | "auth_failed"
+    | "customer_mismatch"
+    | "scope_missing";
   /** Sync unhealthy for 2 h: banner and tokensUnverified (default false). */
   unhealthy?: boolean;
   /** Extra FEATURES flags beyond the defaults (spaces, content_revocation, usage_off, plus the sync flag). guests_read_only is ignored: it is reported from the sign-in config (on when google or email is enabled). */
@@ -328,7 +334,12 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
             connectedAt: T0,
           },
     healthy: directoryMode === "off" ? null : !o.unhealthy,
-    state: directoryMode === "off" ? "never" : o.unhealthy ? "backoff" : "ok",
+    state:
+      directoryMode === "off"
+        ? "never"
+        : o.unhealthy
+          ? (o.unhealthyState ?? "backoff")
+          : "ok",
     unhealthySince,
     lastSuccessAt: directoryMode === "off" ? null : (unhealthySince ?? iso()),
     lastError: o.unhealthy
@@ -350,6 +361,11 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
           ]
         : [],
   };
+
+  if (sync.lastSuccessAt)
+    sync.staleAt = new Date(
+      Date.parse(sync.lastSuccessAt) + 7 * 24 * 3600_000,
+    ).toISOString();
 
   // ---- derived views --------------------------------------------------------
   const isAdmin = () => me.user.role === "owner" || me.user.role === "admin";
@@ -489,6 +505,9 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
       unhealthySince: sync.unhealthySince,
       banner: unhealthy && isAdmin(),
       tokensUnverified: unhealthy && isAdmin(),
+      state: isAdmin() ? sync.state : null,
+      staleAt: isAdmin() ? sync.staleAt : null,
+      heldSweeps: isAdmin() ? sync.held.length : 0,
     };
     for (const m of members) m.restriction = restrictionOf(m.id);
     const myCap = cap();
@@ -795,8 +814,13 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
         "*/api/v1/members/:id/restricted",
         authed(({ params }) => {
           const m = memberOf(params.id as string);
-          if (!m || !isAdmin() || m.role === "owner") return notFound();
+          if (!m || !isAdmin()) return notFound();
           const on = method === "put";
+          if (on && (m.role === "owner" || m.role === "admin"))
+            return err(
+              "restrict_admin",
+              "Owners and admins can't be restricted",
+            );
           if (on !== manualRestricted.has(m.id)) {
             if (on) manualRestricted.add(m.id);
             else manualRestricted.delete(m.id);
@@ -850,6 +874,8 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
           return err("space_forbidden", "You can't publish to this space");
         a.space = ref(s);
         a.access = levelIn(s) as AccessLevel;
+        // Public links off in the target: public becomes team in the same
+        // batch (the server also closes its anonymous sockets).
         if (!s.publicLinks && a.visibility === "public") a.visibility = "team";
         log("artifact.move", { type: "artifact", id: a.id }, s.id);
         refresh();

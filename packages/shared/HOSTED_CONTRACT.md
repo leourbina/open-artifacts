@@ -67,7 +67,8 @@ every flag that is on.
 | `RestrictionSchema` | `{ manual, groups: GroupRef[] }` (Member.restriction): restricted if either applies; frozen group restrictions stay in force |
 | `TierSchema` | `trial \| team \| business` (null = self-hosted) |
 | `DirectoryModeSchema` | `off \| google \| frozen` |
-| `InstanceDirectorySchema` | `{ mode, healthy, unhealthySince, banner, tokensUnverified }`. `banner`: unhealthy ≥ 1 h (owner/admin only). `tokensUnverified`: true while unhealthy, since PATs and MCP grants aren't capped at 24 h |
+| `InstanceDirectorySchema` | `{ mode, healthy, unhealthySince, banner, tokensUnverified, state, staleAt, heldSweeps }`. `banner`: unhealthy ≥ 1 h (owner/admin only). `tokensUnverified`: true while unhealthy, since PATs and MCP grants aren't capped at 24 h. `state` (`SyncState`) and `staleAt` (lastSuccessAt + 7 d): owner/admin only, null for others; `heldSweeps`: held sweeps waiting, 0 for non-admins |
+| `SyncStateSchema` | `ok \| backoff \| auth_failed \| customer_mismatch \| scope_missing \| never`. `scope_missing`: a granted scope was revoked (Admin SDK 403 insufficientPermissions); fix copy "reconnect and grant all scopes" |
 | `InstanceSignInSchema` | `{ mode: access \| direct, providers: (access \| google \| email)[] }` |
 | `AuthMethodSchema` | `access \| google \| code \| pat \| oauth \| dev \| test` |
 | `MeAuthSchema` | `{ method, readOnly, cap, expiresAt }` |
@@ -127,7 +128,7 @@ every flag that is on.
 | `GET R.restrictedGroups` | → `RestrictedGroup[]` | org admin |
 | `PUT R.restrictedGroup(groupId)` | (no body) → `RestrictedGroup`; 409 `directory_sync_off` when off or frozen | org admin; audited `restricted.set` |
 | `DELETE R.restrictedGroup(groupId)` | 204, in any mode (lifts a frozen restriction) | org admin; audited `restricted.remove` |
-| `PUT/DELETE R.memberRestricted(id)` `/members/:id/restricted` | (no body) → `Member` | org owner, admin; the MANUAL restricted flag, any sync mode (Team, manual and frozen installs); audited `restricted.set` / `restricted.remove`; never lifts a group restriction |
+| `PUT/DELETE R.memberRestricted(id)` `/members/:id/restricted` | (no body) → `Member` | org owner, admin; the MANUAL restricted flag, any sync mode (Team, manual and frozen installs); audited `restricted.set` / `restricted.remove`; never lifts a group restriction. Org owners and admins can't be restricted: PUT on one is 400 `restrict_admin` |
 
 Personal spaces are never created, patched, deleted or given members here: 400 `space_personal`.
 
@@ -149,7 +150,7 @@ Personal spaces are never created, patched, deleted or given members here: 400 `
 | `GET R.search` | `HostedSearchQuery` | optional `spaceId` |
 | `POST R.artifacts` | `HostedPublishInput` | `spaceId` on create only (existing id: 400 `use_move`); default personal space; not allowed: 403 `space_forbidden` (also any create by a capped caller); `visibility: "public"` where the space's publicLinks is off: 403 `public_links_off` |
 | `PATCH R.artifact(id)` | `ArtifactPatch` | `visibility: "public"` where publicLinks is off: 403 `public_links_off` |
-| `POST R.moveArtifact(id)` | `MoveArtifactInput {spaceId}` → `ArtifactSummary` | manager/owner on the artifact (else 404); shared target only (400 `space_personal`); editor+ in target (else 403 `space_forbidden`) |
+| `POST R.moveArtifact(id)` | `MoveArtifactInput {spaceId}` → `ArtifactSummary` | manager/owner on the artifact (else 404); shared target only (400 `space_personal`); editor+ in target (else 403 `space_forbidden`). A public artifact moved into a space with publicLinks off becomes `team` in the same batch and its anonymous sockets close (as the publicLinks toggle-off); the returned summary shows `visibility: "team"` |
 | `POST R.transferArtifact(id)` | `TransferArtifactInput {userId}` → `ArtifactSummary` | `level === "owner"` only, personal (else 404; a manager can't); successor active, non-guest, non-restricted (400 `invalid_successor`); former owner keeps an editor share |
 | `GET R.members?status=` | `MembersQuery` → `Member[]` | comma list, default `active`; other statuses org owner/admin |
 | `GET R.memberTransfer(id)` | → `TransferSummary {live, deleted}` | counts only; org owner, admin |
@@ -201,6 +202,7 @@ These are the names P2 and P3 use; the contract wins. There is no
 | `turnstile_required` | 400 | code request with no Turnstile token while Turnstile is configured |
 | `turnstile_failed` | 403 | Turnstile token rejected |
 | `reauth_required` | 401 | break-glass routes need a fresh Google sign-in |
+| `restrict_admin` | 400 | `PUT R.memberRestricted(id)` on an org owner or admin |
 
 ## Test hooks (`hosted/test-hooks.ts`, types only)
 
@@ -217,7 +219,7 @@ These are the names P2 and P3 use; the contract wins. There is no
 
 `createHandlers({ hosted: true | HostedMockOptions })`, off by default (existing
 FE tests unchanged). Options: `mode`, `providers`, `turnstile`, `tier`,
-`directory`, `unhealthy`, `features` (`guests_read_only` ignored). Store:
+`directory`, `unhealthy`, `unhealthyState`, `features` (`guests_read_only` ignored). Store:
 personal space per member, Engineering (caller manager, allMembersRole viewer,
 "Meeting notes" lives there), Exec (caller viewer, publicLinks off), Clients
 (admin view); groups `gEng01`, `gExec02`, `gSales03`, `gCon04` (restricted

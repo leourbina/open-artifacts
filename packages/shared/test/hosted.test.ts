@@ -681,3 +681,82 @@ describe("hosted mocks: restriction, public links, admin self-add, audit", () =>
     expect(me2.instance.features).toContain("guests_read_only");
   });
 });
+
+describe("hosted mocks: move and public links", () => {
+  it("moving a public artifact into a space with publicLinks off makes it team", async () => {
+    fresh({ hosted: true });
+    const me = Strict.Me.parse(await json(await call("GET", R.me)));
+    const eng = me.spaces?.find((s) => s.name === "Engineering")?.id as string;
+    expect(
+      (await call("PATCH", R.space(eng), { publicLinks: false })).status,
+    ).toBe(200);
+    const report = fixtures.artifacts.find((a) => a.title === "Q4 report");
+    expect(report?.visibility).toBe("public");
+    const moved = Strict.ArtifactSummary.parse(
+      await json(
+        await call("POST", R.moveArtifact(report?.id as string), {
+          spaceId: eng,
+        }),
+      ),
+    );
+    expect(moved).toMatchObject({
+      visibility: "team",
+      space: { id: eng, publicLinks: false },
+    });
+  });
+});
+
+describe("hosted mocks: owners and admins can't be restricted", () => {
+  it("PUT memberRestricted on the owner or an admin is 400 restrict_admin", async () => {
+    fresh({ hosted: true });
+    const owner = fixtures.members[0]?.id as string;
+    const r = await call("PUT", R.memberRestricted(owner));
+    expect(r.status).toBe(400);
+    expect((await errCode(r)).code).toBe("restrict_admin");
+    const bob = fixtures.members[1]?.id as string;
+    expect((await call("PATCH", R.member(bob), { role: "admin" })).status).toBe(
+      200,
+    );
+    const admin = await call("PUT", R.memberRestricted(bob));
+    expect((await errCode(admin)).code).toBe("restrict_admin");
+    const ms = z
+      .array(Strict.Member)
+      .parse(await json(await call("GET", R.members)));
+    expect(ms.find((m) => m.id === bob)?.restriction).toBeNull();
+  });
+});
+
+describe("hosted mocks: sync banner fields", () => {
+  it("admins see state, staleAt and held sweeps", async () => {
+    fresh({ hosted: { unhealthy: true, unhealthyState: "scope_missing" } });
+    const me = Strict.Me.parse(await json(await call("GET", R.me)));
+    const d = me.instance.directory;
+    expect(d).toMatchObject({
+      state: "scope_missing",
+      heldSweeps: 1,
+      banner: true,
+    });
+    const st = Strict.SyncStatus.parse(
+      await json(await call("GET", R.directory)),
+    );
+    expect(st.state).toBe("scope_missing");
+    expect(d?.staleAt).toBe(st.staleAt);
+    expect(
+      Date.parse(d?.staleAt as string) - Date.parse(st.lastSuccessAt as string),
+    ).toBe(7 * 24 * 3600_000);
+  });
+
+  it("members can't read health", async () => {
+    fresh({ hosted: { unhealthy: true } });
+    await call("POST", AUTH.codeRequest, { email: "bob@example.com" });
+    await call("POST", AUTH.codeVerify, { code: HOSTED_MOCK_CODE });
+    const me = Strict.Me.parse(await json(await call("GET", R.me)));
+    expect(me.instance.directory).toMatchObject({
+      state: null,
+      staleAt: null,
+      heldSweeps: 0,
+      banner: false,
+      tokensUnverified: false,
+    });
+  });
+});
