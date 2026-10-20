@@ -1,11 +1,15 @@
-import { type Usage, UsageSchema } from "@oa/shared";
+import {
+  type Plan,
+  planOf,
+  type Usage,
+  UsageSchema,
+  usageLimit,
+} from "@oa/shared";
 import type { Env } from "../env.js";
 
 const GRAPHQL = "https://api.cloudflare.com/client/v4/graphql";
 const TTL_SECONDS = 300;
 
-/** Free plan: 10 ms CPU per invocation. */
-const FREE_CPU_MS = 10;
 /** Tool results carry the CPU-limit nudge at this many hits today. */
 const NUDGE_HITS = 3;
 
@@ -106,8 +110,13 @@ function parseResponse(
 
 const total = (xs: Rows, k: string) => xs.reduce((n, x) => n + (x[k] ?? 0), 0);
 
-async function query(env: Env, now: Date, date: string): Promise<Usage> {
-  const none: Usage = { available: false, date, metrics: [] };
+async function query(
+  env: Env,
+  plan: Plan,
+  now: Date,
+  date: string,
+): Promise<Usage> {
+  const none: Usage = { available: false, plan, date, metrics: [] };
   const withCpu = !!env.WORKER_NAME;
   const withKv = !!env.OAUTH_KV_ID;
   try {
@@ -132,37 +141,43 @@ async function query(env: Env, now: Date, date: string): Promise<Usage> {
     if (!res.ok) return none;
     const acct = parseResponse(await res.json(), withCpu, withKv);
     if (!acct) return none;
+    const limit = (k: Parameters<typeof usageLimit>[1]) => usageLimit(plan, k);
     return {
       available: true,
+      plan,
       date,
       metrics: [
         {
           key: "requests",
           used: total(acct.workers, "requests"),
-          limit: 100_000,
+          limit: limit("requests"),
         },
         {
           key: "d1_reads",
           used: total(acct.d1, "rowsRead"),
-          limit: 5_000_000,
+          limit: limit("d1_reads"),
         },
         {
           key: "d1_writes",
           used: total(acct.d1, "rowsWritten"),
-          limit: 100_000,
+          limit: limit("d1_writes"),
         },
         {
           key: "do_requests",
           used: total(acct.dos, "requests"),
-          limit: 100_000,
+          limit: limit("do_requests"),
         },
         ...(acct.cpu
           ? [
-              { key: "cpu_limit_hits" as const, used: acct.cpu.hits, limit: 0 },
+              {
+                key: "cpu_limit_hits" as const,
+                used: acct.cpu.hits,
+                limit: limit("cpu_limit_hits"),
+              },
               {
                 key: "cpu_p99_ms" as const,
                 used: acct.cpu.p99Ms,
-                limit: FREE_CPU_MS,
+                limit: limit("cpu_p99_ms"),
               },
             ]
           : []),
@@ -171,7 +186,7 @@ async function query(env: Env, now: Date, date: string): Promise<Usage> {
               {
                 key: "kv_writes" as const,
                 used: total(acct.kv, "requests"),
-                limit: 1_000,
+                limit: limit("kv_writes"),
               },
             ]
           : []),
@@ -189,9 +204,16 @@ const remember = (u: Usage) => {
   return u;
 };
 
-/** The MCP nudge line, from the last cached usage read when it is today's and ≥ 3 hits. */
+/**
+ * The MCP nudge line, from the last cached usage read when it is today's,
+ * on Workers Free and ≥ 3 hits. On Paid there is no 10 ms cap to point at.
+ */
 export function cpuNudge(now = new Date()): string | null {
-  if (!last?.available || last.date !== now.toISOString().slice(0, 10))
+  if (
+    !last?.available ||
+    last.plan !== "free" ||
+    last.date !== now.toISOString().slice(0, 10)
+  )
     return null;
   const n = last.metrics.find((m) => m.key === "cpu_limit_hits")?.used ?? 0;
   return n >= NUDGE_HITS
@@ -199,19 +221,23 @@ export function cpuNudge(now = new Date()): string | null {
     : null;
 }
 
-/** Today's (UTC) free-plan usage; cached 5 minutes per account and date. */
+/** Today's (UTC) usage with the plan's limits; cached 5 minutes per account, plan and date. */
 export async function getUsage(env: Env): Promise<Usage> {
   const now = new Date();
   const date = now.toISOString().slice(0, 10);
-  if (!env.ANALYTICS_TOKEN) return { available: false, date, metrics: [] };
+  const plan = planOf(env.PLAN);
+  if (!env.ANALYTICS_TOKEN)
+    return { available: false, plan, date, metrics: [] };
   const cache = (caches as unknown as { default: Cache }).default;
-  const key = new Request(`https://usage.invalid/${env.CF_ACCOUNT_ID}/${date}`);
+  const key = new Request(
+    `https://usage.invalid/${env.CF_ACCOUNT_ID}/${plan}/${date}`,
+  );
   const hit = await cache.match(key);
   if (hit) {
     const p = UsageSchema.safeParse(await hit.json());
     if (p.success) return remember(p.data);
   }
-  const usage = await query(env, now, date);
+  const usage = await query(env, plan, now, date);
   if (usage.available) {
     remember(usage);
     await cache.put(

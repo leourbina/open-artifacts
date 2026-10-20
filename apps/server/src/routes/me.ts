@@ -1,4 +1,11 @@
-import { MCP_PATH, type Me, type Member, MePatchSchema, R } from "@oa/shared";
+import {
+  MCP_PATH,
+  type Me,
+  type Member,
+  MePatchSchema,
+  planOf,
+  R,
+} from "@oa/shared";
 import type { Context } from "hono";
 import { requireUser } from "../auth/authz.js";
 import { emailEnabled } from "../email/send.js";
@@ -24,6 +31,7 @@ async function toMe(
       appUrl,
       mcpUrl: appUrl + MCP_PATH,
       emailEnabled: emailEnabled(c.env),
+      plan: planOf(c.env.PLAN),
     },
     ...profile,
   };

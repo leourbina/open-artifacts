@@ -119,6 +119,7 @@ export const fixtures: {
       appUrl: "https://app.example.com",
       mcpUrl: "https://app.example.com/mcp",
       emailEnabled: false,
+      plan: "free",
     },
     displayName: null,
     suggestedName: null,

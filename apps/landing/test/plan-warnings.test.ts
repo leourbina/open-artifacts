@@ -43,6 +43,9 @@ describe("plan warnings table", () => {
   it("quotes the Workers Paid message from prereqs", () => {
     const paid = prereqs.match(/ctx\.notes\.unshift\("([^"]+)"\)/)?.[1];
     expect(paid).toBeDefined();
-    expect(section).toContain(`the \`prereqs\` message is "${paid}"`);
+    // prereqs reports ok with a fixed message; the note is data.notes
+    expect(section).toContain(
+      `the \`prereqs\` line says so in \`data.notes\` ("${paid}")`,
+    );
   });
 });
