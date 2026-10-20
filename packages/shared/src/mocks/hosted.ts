@@ -850,6 +850,8 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
           return err("space_forbidden", "You can't publish to this space");
         a.space = ref(s);
         a.access = levelIn(s) as AccessLevel;
+        // Public links off in the target: public becomes team in the same
+        // batch (the server also closes its anonymous sockets).
         if (!s.publicLinks && a.visibility === "public") a.visibility = "team";
         log("artifact.move", { type: "artifact", id: a.id }, s.id);
         refresh();

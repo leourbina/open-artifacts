@@ -681,3 +681,27 @@ describe("hosted mocks: restriction, public links, admin self-add, audit", () =>
     expect(me2.instance.features).toContain("guests_read_only");
   });
 });
+
+describe("hosted mocks: move and public links", () => {
+  it("moving a public artifact into a space with publicLinks off makes it team", async () => {
+    fresh({ hosted: true });
+    const me = Strict.Me.parse(await json(await call("GET", R.me)));
+    const eng = me.spaces?.find((s) => s.name === "Engineering")?.id as string;
+    expect(
+      (await call("PATCH", R.space(eng), { publicLinks: false })).status,
+    ).toBe(200);
+    const report = fixtures.artifacts.find((a) => a.title === "Q4 report");
+    expect(report?.visibility).toBe("public");
+    const moved = Strict.ArtifactSummary.parse(
+      await json(
+        await call("POST", R.moveArtifact(report?.id as string), {
+          spaceId: eng,
+        }),
+      ),
+    );
+    expect(moved).toMatchObject({
+      visibility: "team",
+      space: { id: eng, publicLinks: false },
+    });
+  });
+});
