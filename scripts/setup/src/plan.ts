@@ -50,8 +50,8 @@ export async function detectPlan(ctx: Ctx, accountId: string): Promise<Plan> {
 }
 
 /** What Workers Free means for this app; none on Paid. */
-export function warnings(plan: Plan): Warning[] {
-  if (plan === "paid") return [];
+export function warnings(plan: Plan, paid = false): Warning[] {
+  if (plan === "paid" || paid) return [];
   const w = (code: string, message: string) => ({ code, plan, message });
   return [
     ...(plan === "unknown"
@@ -125,18 +125,11 @@ export async function decide(
     );
   const browser =
     o.browserFlag ??
-    (plan === "paid"
+    (plan === "paid" || o.yesPaid
       ? true
       : plan === "free"
         ? false
         : (state.browser ?? false));
-  if (o.browserFlag && plan !== "paid")
-    extra.push({
-      code: "browser-free",
-      plan,
-      message:
-        "Thumbnails need Cloudflare's Workers Paid plan, so on the free plan they won't work even with --browser.",
-    });
   const planVar: "free" | "paid" =
     o.planFlag ??
     (plan === "paid" || o.yesPaid
@@ -144,6 +137,13 @@ export async function decide(
       : plan === "unknown" && o.upgrade && state.planVar
         ? state.planVar
         : "free");
+  if (o.browserFlag && plan !== "paid" && planVar !== "paid")
+    extra.push({
+      code: "browser-free",
+      plan,
+      message:
+        "Thumbnails need Cloudflare's Workers Paid plan, so on the free plan they won't work even with --browser.",
+    });
   o.planVar = planVar;
   o.team = Boolean(team);
   o.email = email;

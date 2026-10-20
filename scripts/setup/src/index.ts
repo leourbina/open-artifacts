@@ -1,6 +1,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { type Deployed, fromWorker, type Sources } from "./by-name.ts";
 import { type Deps, makeApi, makeWrangler, realDeps, realFs } from "./cf.ts";
 import { readOnlyDeps } from "./readonly.ts";
 import { rollbackCommand } from "./rollback.ts";
@@ -19,6 +20,7 @@ import { prereqs } from "./steps/prereqs.ts";
 import { resources } from "./steps/resources.ts";
 import { secrets } from "./steps/secrets.ts";
 import { selftest } from "./steps/selftest.ts";
+import { withTokenFiles } from "./token-files.ts";
 import { isTokenCommand, tokenCommand } from "./token-page.ts";
 
 export const STEPS: Step[] = [
@@ -49,6 +51,12 @@ const ICON = {
   todo: "○",
 };
 
+/** Token env vars whose values are scrubbed from every reported line. */
+const SECRET_ENV = [
+  "CLOUDFLARE_API_TOKEN",
+  "OA_ACCESS_TOKEN",
+  "ANALYTICS_TOKEN",
+] as const;
 const PAT_RE = /oa_pat_[1-9A-HJ-NP-Za-km-z]+/g;
 const HOST = /^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i;
 const EMAIL = /^[^\s@"\\]+@[a-z0-9.-]+\.[a-z]{2,}$/i;
@@ -68,7 +76,12 @@ function normEmail(raw: string) {
   return e;
 }
 
-async function resolve(argv: string[], deps: Deps, state: State) {
+async function resolve(
+  argv: string[],
+  deps: Deps,
+  state: State,
+  deployed?: Deployed,
+) {
   const { values: v } = parseArgs({
     args: argv,
     strict: true,
@@ -81,11 +94,15 @@ async function resolve(argv: string[], deps: Deps, state: State) {
       yes: { type: "boolean", default: false },
       upgrade: { type: "boolean", default: false },
       check: { type: "boolean", default: false },
+      "allow-downgrade": { type: "boolean", default: false },
       strict: { type: "boolean", default: false },
       "new-owner-token": { type: "boolean", default: false },
       json: { type: "boolean", default: false },
       ci: { type: "boolean", default: false },
       "revoke-ci-tokens": { type: "boolean", default: false },
+      "token-file": { type: "string" },
+      "access-token-file": { type: "string" },
+      "analytics-token-file": { type: "string" },
       browser: { type: "boolean", default: false },
       "no-browser": { type: "boolean", default: false },
       solo: { type: "boolean", default: false },
@@ -106,11 +123,17 @@ async function resolve(argv: string[], deps: Deps, state: State) {
   const json = v.json || v.ci;
   const interactive = !v.yes && !json;
   // Precedence: flag, then saved state, then an interactive prompt.
-  const need = async (flag: string, re: RegExp, saved?: string) => {
+  const need = async (
+    flag: string,
+    re: RegExp,
+    saved?: string,
+    live?: string,
+  ) => {
     const q = `${flag.slice(2).replace("-", " ")}:`;
     const val =
       (v[flag.slice(2) as keyof typeof v] as string | undefined) ??
       saved ??
+      live ??
       (interactive ? await deps.prompt(q) : undefined);
     if (val) return valid(flag, val, re);
     if (json) throw new NeedInput(`pass ${flag} (--json never prompts)`);
@@ -157,17 +180,32 @@ async function resolve(argv: string[], deps: Deps, state: State) {
     // The cleanup-only mode touches D1 by name: no hosts needed.
     appHost: v["revoke-ci-tokens"]
       ? (v["app-host"] ?? state.appHost ?? "")
-      : await need("--app-host", HOST, state.appHost),
+      : await need("--app-host", HOST, state.appHost, deployed?.appHost),
     contentHost: v["revoke-ci-tokens"]
       ? (v["content-host"] ?? state.contentHost ?? "")
-      : await need("--content-host", HOST, state.contentHost),
+      : await need(
+          "--content-host",
+          HOST,
+          state.contentHost,
+          deployed?.contentHost,
+        ),
     ownerEmail: valid(
       "--owner-email",
-      normEmail(await need("--owner-email", /./, state.ownerEmail)),
+      normEmail(
+        await need(
+          "--owner-email",
+          /./,
+          state.ownerEmail,
+          deployed?.ownerEmail,
+        ),
+      ),
       EMAIL,
     ),
     accountId:
-      v["account-id"] ?? state.accountId ?? deps.env.CLOUDFLARE_ACCOUNT_ID,
+      v["account-id"] ??
+      state.accountId ??
+      deployed?.accountId ??
+      deps.env.CLOUDFLARE_ACCOUNT_ID,
     // Flag, then saved state; undefined is decided (asked) in prereqs once the plan is known.
     teamChoice: v.team ? true : v.solo ? false : state.team,
     teamFlag: v.team,
@@ -184,6 +222,7 @@ async function resolve(argv: string[], deps: Deps, state: State) {
     check: v.check,
     strict: v.strict,
     newOwnerToken: v["new-owner-token"],
+    allowDowngrade: v["allow-downgrade"],
     // Decided in prereqs: flag, then the plan (Paid only), then saved state.
     browser: false,
     browserFlag: v.browser ? true : v["no-browser"] ? false : undefined,
@@ -250,6 +289,7 @@ async function checkOnly(
         step: step.name,
         status: r,
         message: notes ? `${r}: ${notes}` : r,
+        ...(step.name === "deploy" && ctx.data ? { data: ctx.data } : {}),
       });
     } catch (e) {
       ctx.notes.length = 0;
@@ -267,6 +307,7 @@ async function checkOnly(
   const data = Object.fromEntries(
     REPORTED.filter((k) => state[k] !== undefined).map((k) => [k, state[k]]),
   );
+  if (ctx.sources) Object.assign(data, { sources: ctx.sources });
   report({
     step: "state",
     status: "ok",
@@ -279,6 +320,24 @@ async function checkOnly(
 export const HELP = `Usage: pnpm oa:setup [options]
   --name <n>  --app-host <h>  --content-host <h>  --owner-email <e>  --account-id <id>
   --yes  --upgrade  --check [--strict]  --json  --ci [--revoke-ci-tokens]  --new-owner-token
+  --allow-downgrade  Deploy a checkout older than the deployed version (from /healthz
+                version, else saved state). Without it setup stops with action_required
+                before the D1 migrations. D1 is not rolled back. --check reports
+                {repoVersion, liveVersion, downgrade} on the deploy line.
+  --upgrade     With no saved state it needs only --name (plus --account-id when the
+                login has several accounts): hosts, owner, plan, team, email domain and
+                thumbnails are read from the deployed Worker's plain-text vars and
+                bindings (never secrets). Flags win, with a note when they differ; the
+                state line and --check report data.sources (worker|flag) per value.
+  --token-file <p>  --access-token-file <p>  --analytics-token-file <p>
+                Read the deploy (CLOUDFLARE_API_TOKEN), Access (OA_ACCESS_TOKEN) or
+                analytics (ANALYTICS_TOKEN) token from a file instead of the env.
+                Order: the env var, the flag's file, then ~/.open-artifacts/<name>-
+                cloudflare-token, -access-token, -analytics-token, then the usual
+                fallback (wrangler login). Refused unless mode 0600 (exit 2); a
+                missing flag file is exit 1, an empty or
+                multi-line one exit 2; symlinks are refused; POSIX only (WSL on Windows). Never printed or
+                stored. --token-links prints the hidden line that saves each one.
   --browser | --no-browser  Server-side thumbnails: the BROWSER binding (Browser Run)
                 and SERVER_THUMBNAILS=on. Paid only: on when the plan reads paid, off
                 on free; on unknown, saved state decides. --browser forces it on
@@ -343,9 +402,20 @@ export async function run(
       : l.data
         ? ` ${JSON.stringify(l.data)}`
         : "";
-    const text = json
+    let text = json
       ? JSON.stringify(l)
       : `${ICON[l.status]} ${l.step}: ${l.message}${extra}`;
+    // Belt and braces: a token echoed by a library or wrangler error never reaches the output.
+    for (const k of SECRET_ENV) {
+      const t = deps.env[k]?.trim();
+      // Short values (test stand-ins) would shred ordinary words.
+      if (t && t.length >= 16)
+        text = text
+          .split(JSON.stringify(t).slice(1, -1))
+          .join("[redacted]")
+          .split(t)
+          .join("[redacted]");
+    }
     // --ci: belt and braces, a PAT echoed by a library error never reaches the output.
     deps.out(ci ? text.replace(PAT_RE, "[redacted]") : text);
   };
@@ -353,9 +423,12 @@ export async function run(
   let fs = rawFs;
   let opts: Opts;
   let state: State;
+  let deployed: Deployed | undefined;
   try {
     state = readState(fs, root);
-    opts = await resolve(argv, deps, state);
+    deps = withTokenFiles(argv, deps, state);
+    deployed = await fromWorker(argv, deps, root, state);
+    opts = await resolve(argv, deps, state, deployed);
   } catch (e) {
     const ar = e instanceof NeedInput;
     const status = ar ? "action_required" : "error";
@@ -398,7 +471,8 @@ export async function run(
     wrangler,
     api,
     accessApi,
-    notes: [],
+    notes: [...(deployed?.notes ?? [])],
+    sources: deployed?.sources,
     prev,
   };
   const msg = (fallback: string) => ctx.notes.splice(0).join("; ") || fallback;
@@ -430,6 +504,14 @@ export async function run(
     }
   }
   if (opts.check) return checkOnly(steps, state, ctx, report);
+  // A refused by-name run must not leave a flag that contradicts the Worker in state.json.
+  let refused = false;
+  const persist = () => {
+    if (refused && deployed)
+      for (const k of Object.keys(deployed.live) as (keyof Sources)[])
+        if (deployed.sources[k] === "flag") state[k] = deployed.live[k];
+    writeState(fs, root, state);
+  };
   const runSteps = async (): Promise<number> => {
     for (const step of steps) {
       human = ctx.data = ctx.human = undefined;
@@ -442,12 +524,14 @@ export async function run(
         ctx.notes.length = 0;
         const r = await step.apply(state, ctx);
         if (r) {
+          refused = true;
           ctx.notes.length = 0;
           report({ step: step.name, ...r });
           return 2;
         }
         report({ ...take("ok", "done"), step: step.name });
       } catch (e) {
+        refused = true;
         ctx.notes.length = 0;
         const message = (e as Error).message;
         if (e instanceof NeedInput) {
@@ -457,7 +541,7 @@ export async function run(
         report({ step: step.name, status: "error", message });
         return (e as { exitCode?: number }).exitCode ?? 1;
       } finally {
-        writeState(fs, root, state);
+        persist();
       }
     }
     writeState(fs, root, state);
@@ -474,9 +558,12 @@ export async function run(
         step: "state",
         status: "ok",
         message: opts.ci ? "final (not written: --ci)" : "final",
-        data: Object.fromEntries(
-          keys.filter((k) => state[k] !== undefined).map((k) => [k, state[k]]),
-        ),
+        data: Object.fromEntries([
+          ...keys
+            .filter((k) => state[k] !== undefined)
+            .map((k) => [k, state[k]]),
+          ...(ctx.sources ? [["sources", ctx.sources]] : []),
+        ]),
       });
     }
     return 0;

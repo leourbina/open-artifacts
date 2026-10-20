@@ -37,6 +37,9 @@ export const filler = (n: number) =>
   Array.from({ length: n }, (_, i) => ({ id: `f${i}`, title: `other-${i}` }));
 
 type World = {
+  /** Extra files (token files) and their modes. */
+  files?: Record<string, string>;
+  fileModes?: Record<string, number>;
   accounts?: string[];
   zones?: string[];
   /** Zone id per zone name (default "z"). */
@@ -111,6 +114,8 @@ type World = {
   subscriptions?: Obj[];
   /** The deployed Worker's settings omit the send_email binding. */
   dropSendEmail?: boolean;
+  /** GET worker settings answers 403 (a token without Workers Scripts Read). */
+  settingsForbidden?: boolean;
   /** GET worker settings answers 500. */
   settingsFail?: boolean;
   /** Process env handed to the setup run. */
@@ -121,8 +126,16 @@ type World = {
   deployFails?: string;
   /** `wrangler rollback` fails with this stderr. */
   rollbackFails?: string;
+  /** /healthz reports this `version` (absent: an install without it). */
+  healthVersion?: string;
+  /** /healthz fails with a network error. */
+  healthzDown?: boolean;
+  /** /healthz answers 200 with this raw HTML body (an Access login page). */
+  healthzBody?: string;
   /** The live deployment splits traffic 50/50 across two versions. */
   splitDeployment?: boolean;
+  /** Extra bindings on the live Worker's settings (send_email, browser, secret_text with a text canary). */
+  workerBindings?: { type: string; name: string; text?: string }[];
   /** GET deployments answers 403 (a token without Workers Scripts Read). */
   deploymentsForbidden?: boolean;
   /** GET deployments answers 500. */
@@ -374,7 +387,9 @@ export function world(w: World = {}) {
   const c = core({
     answers: w.answers,
     env: w.env,
+    modes: w.fileModes,
     files: {
+      ...w.files,
       [join(ROOT, TEMPLATE)]: readFileSync(join(realRoot, TEMPLATE), "utf8"),
       [join(ROOT, WELCOME)]: readFileSync(join(realRoot, WELCOME), "utf8"),
       [join(ROOT, "package.json")]:
@@ -464,6 +479,11 @@ export function world(w: World = {}) {
       if (u.host === "app.example.com") {
         if (u.pathname === "/healthz") {
           hits.push("GET /healthz");
+          if (w.healthzDown) throw new Error("fetch failed");
+          if (w.healthzBody !== undefined)
+            return new Response(w.healthzBody, {
+              headers: { "content-type": "text/html" },
+            });
           if (healthFails-- > 0)
             return new Response("starting", { status: 503 });
           const live = deployedConfig
@@ -474,6 +494,7 @@ export function world(w: World = {}) {
           return Response.json({
             ok: true,
             plan: early ? first : (w.healthPlan ?? live),
+            version: w.healthVersion,
           });
         }
         if (u.pathname === "/mcp") {
@@ -727,6 +748,8 @@ export function world(w: World = {}) {
         });
       }
       const settings = p.match(/\/workers\/scripts\/([^/]+)\/settings$/);
+      if (settings && m === "GET" && w.settingsForbidden)
+        return envelope(null, 403, [{ message: "Authentication error" }]);
       if (settings && m === "GET" && w.settingsFail)
         return envelope(null, 500, [{ message: "internal error" }]);
       if (settings && m === "GET") {
@@ -748,6 +771,7 @@ export function world(w: World = {}) {
             text,
           })),
           ...(secrets ?? []).map((name) => ({ type: "secret_text", name })),
+          ...(w.workerBindings ?? []),
           ...(w.dropSendEmail ? [] : (full?.send_email ?? [])).map(
             (b: { name: string }) => ({ type: "send_email", name: b.name }),
           ),

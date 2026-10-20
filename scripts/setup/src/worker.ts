@@ -13,15 +13,25 @@ type Settings = {
   bindings?: { type: string; name: string; text?: string }[];
 };
 
-/** The live Worker's bindings; undefined when no Worker exists (404). */
-export async function workerBindings(ctx: Ctx, accountId: string) {
-  const path = `/accounts/${accountId}/workers/scripts/${encodeURIComponent(ctx.opts.name)}/settings`;
-  const settings = await ctx.api<Settings>("GET", path).catch((e) => {
+type Binding = NonNullable<Settings["bindings"]>[number];
+
+/** A Worker's bindings; undefined when it does not exist (404). */
+export async function scriptBindings(
+  api: Ctx["api"],
+  name: string,
+  accountId: string,
+): Promise<Binding[] | undefined> {
+  const path = `/accounts/${accountId}/workers/scripts/${encodeURIComponent(name)}/settings`;
+  const settings = await api<Settings>("GET", path).catch((e) => {
     if ((e as { status?: number }).status === 404) return undefined;
     throw e;
   });
   return settings?.bindings;
 }
+
+/** The live Worker's bindings; undefined when no Worker exists (404). */
+export const workerBindings = (ctx: Ctx, accountId: string) =>
+  scriptBindings(ctx.api, ctx.opts.name, accountId);
 
 /**
  * The live Worker's plain-text vars, from `GET .../workers/scripts/{name}/settings`.

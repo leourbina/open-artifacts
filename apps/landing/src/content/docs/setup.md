@@ -44,20 +44,28 @@ The agent follows the steps below. The only thing you do yourself is approve the
    - **2:** the last line is `action_required`. If its `message` asks you to pass a flag, such as `--account-id` when the login can reach several accounts, add that flag and run again; ask the user for the value if you don't know it. Otherwise relay the `message` to the user verbatim, with `data.url` if it has one, wait until they say it's done, and run the same command again. Setup saves its progress in `.openartifacts/state.json` and picks up where it stopped.
    - **1:** the last line is `error`. Show the user its `message` and stop.
 
-   If the `access` step asks for an Access API token, the user creates one at its `data.url`. Ask them to run this in the terminal where setup runs and paste the token, which isn't shown or saved in shell history:
+   If the `access` step asks for an Access API token, the user creates one at its `data.url`. Save it with this line in your own terminal (in Claude Code, type `! ` then the line). Never paste a token into the chat. If `read` fails, the shell can't hide input, so use a real terminal.
 
    ```sh
-   read -rs OA_ACCESS_TOKEN; export OA_ACCESS_TOKEN
+   bash -c 'set -e; umask 077; d="$HOME/.open-artifacts"; mkdir -p "$d"; chmod 700 "$d"; read -rsp "Cloudflare Access token (hidden, then Enter): " T; echo; [ -n "$T" ] || { echo "nothing entered; not saved"; exit 1; }; rm -f "$d/open-artifacts-access-token"; printf "%s" "$T" > "$d/open-artifacts-access-token"; chmod 600 "$d/open-artifacts-access-token"; echo "saved to $d/open-artifacts-access-token"'
    ```
 
-   Then run the same command again. Never put the token on a command line, where shell history keeps it. Setup never saves it. Once Access is set up, runs without the token skip re-checking Access, as long as the app host and Cloudflare account stay the same. The token is needed again only to change the app host or account, or to re-check Access.
+   Use your `--name` in place of `open-artifacts` in that line. `pnpm -s oa:setup --token-links --json` prints the exact line for every token as `saveCommand`. Then run the same setup command again. Setup reads the saved file, keeps the token only in memory, and never prints or saves it.
+
+   The other tokens work the same way, each saved with its own line in your own terminal and never in the chat:
+
+   - Deploy token: `~/.open-artifacts/<name>-cloudflare-token`, or `--token-file <path>`.
+   - Access token: `~/.open-artifacts/<name>-access-token`, or `--access-token-file <path>`.
+   - Analytics token (optional): `~/.open-artifacts/<name>-analytics-token`, or `--analytics-token-file <path>`.
+
+   Once Access is set up, later runs skip re-checking it while the app host and Cloudflare account stay the same. You need the Access token again only to change the app host or account, or to re-check Access.
 
    If the `prereqs` line is `action_required` with "Pass --solo or --team", ask the user "Just you, or a team?" and run again with `--solo` or `--team`.
 
-   **The Workers plan.** The `prereqs` line has `data.plan` (`free`, `paid`, or `unknown`) and `data.warnings`. If it stops because a hostname isn't in a zone on the account, the line carries only `data.missing`, with no plan or warnings; once the zone is added and setup runs again, the plan appears. Relay every `data.warnings[].message` to the user verbatim, and say nothing else about the plan: don't paraphrase the warnings or add free-plan notes of your own.
+   **The Workers plan.** The `prereqs` line has `data.plan` (`free`, `paid`, or `unknown`) and `data.warnings`. If it stops because a hostname isn't in a zone on the account, the line carries only `data.missing`, with no plan or warnings; once the zone is added and setup runs again, the plan appears. Relay every `data.warnings[].message` to the user verbatim, and say nothing else about the plan: don't paraphrase the warnings or add free-plan notes of your own. Relay warnings once; on reruns, relay only new ones.
 
    - **`unknown`** is the common case. `wrangler login` has no billing access, so setup couldn't read the plan and relays the Workers Free notes to be safe. The first warning explains this.
-   - **`paid`**, with no warnings: tell the user Workers Paid was detected. If they chose `--solo`, offer the team path: run setup again with `--team`. Invite emails need an email sending domain (below).
+   - **`paid`** (detected, or confirmed with `--yes-paid`), with no warnings: tell the user Workers Paid was detected. If they chose `--solo`, offer the team path: run setup again with `--team`. Invite emails need an email sending domain (below).
    - **A team on a plan that isn't `paid`:** invite email stays off, except on an `unknown` plan where an earlier run saved `email: true`; then it stays on. Otherwise, if the user confirms the account is on Workers Paid, run again with `--team --yes-paid`.
 
    **Invite email (teams only).** The `email` step checks the sending domain, `mail.<app-host>` unless you pass `--email-domain`. When it returns `action_required`, give the user its `message`, the dashboard link in `data.dashboard`, and the DNS records in `data.records`, verbatim. Wait until they've onboarded the domain in the dashboard, then run setup again; the records can take 5 to 15 minutes to appear. If the domain already has mail records from another provider, setup asks first: relay that `action_required` message, and pass `--yes-email-domain` only if the user agrees. Otherwise pick another `--email-domain`.
@@ -78,12 +86,13 @@ Setup takes each value from its flag first, then from `.openartifacts/state.json
 | `--yes` | Never prompt. Missing values are errors, and the optional `ANALYTICS_TOKEN` is skipped unless it is set in the environment. Optional with `--json`. |
 | `--upgrade` | Upgrade an existing install: only `deploy` and `selftest` do work. See [Upgrade](/docs/upgrade/). |
 | `--new-owner-token` | Mint a new owner token, and revoke the one setup minted before. |
+| `--allow-downgrade` | Deploy a checkout older than the deployed version (from `/healthz`, else saved state). Without it setup stops with `action_required` before the D1 migrations. D1 is not rolled back. `--check` reports `{repoVersion, liveVersion, downgrade}` on the deploy line. |
 | `--check` | Read-only. Runs each step's check without doing the work, and reports it as `done` or `todo`. Without saved state, it rebuilds the state from Cloudflare by `--name` and reports it on a last `state` line. It changes nothing on Cloudflare and writes no files. |
 | `--strict` | Only with `--check`: exit `2` when any step is `todo`, for example to gate CI. |
 | `--json` | Print one JSON object per line instead of text, and never prompt: a missing value is an `action_required` line naming the flag to pass. The optional `ANALYTICS_TOKEN` is skipped unless it is set in the environment. |
 | `--ci` | CI mode: implies `--json`; the owner token is used only for selftest, never printed, and revoked at the end of the run (also on SIGTERM or SIGINT). Requires `--name`; not with `--new-owner-token`. It keeps no `state.json`, so it reuses the welcome artifact by title instead of tracking its id. A SIGKILL or out-of-memory kill can leave a `setup-ci` token live; it is never printed. Find it by the label `setup-ci` in Settings → Tokens. The next `--ci` run revokes it before minting, or run `--ci --revoke-ci-tokens` as an `if: always()` cleanup step. |
 | `--revoke-ci-tokens` | Only with `--ci`: revoke every live `setup-ci` token of the owner and exit. Needs `--name` and the owner email, not the hosts. |
-| `--browser` | Turn on server-side thumbnails (the `BROWSER` binding and `SERVER_THUMBNAILS`) even when setup doesn't read the plan as Workers Paid. Thumbnails need Workers Paid, so setup warns (`browser-free`) on free or unknown. Without either flag, thumbnails are on when the plan reads `paid`, off on `free`, and follow the saved choice when the plan is `unknown`. |
+| `--browser` | Turn on server-side thumbnails (the `BROWSER` binding and `SERVER_THUMBNAILS`) even when setup doesn't read the plan as Workers Paid. Thumbnails need Workers Paid, so setup warns (`browser-free`) on free or unknown, unless Paid is confirmed with `--yes-paid`. Without either flag, thumbnails are on when the plan reads `paid` or you pass `--yes-paid` (add `--no-browser` to keep them off), off on `free`, and follow the saved choice when the plan is `unknown`. |
 | `--no-browser` | Turn server-side thumbnails off. A deploy never removes a live `BROWSER` binding without this flag. `--check` and `--json` report `browser: true` or `false`. |
 | `--solo` | Just you: no invite email, so no `send_email` binding. With `--json`, `--yes` or `--ci`, pass `--solo` or `--team` unless a choice is saved; setup never guesses. Saved in `state.json` as `team: false`. |
 | `--team` | A team: turns on the `email` step, which sets up invite email with Cloudflare Email Sending (Workers Paid only) and renders the `send_email` binding `EMAIL` and the `EMAIL_FROM` var (`noreply@<sending domain>`). Saved in `state.json` as `team`, `email` and `emailDomain`, so `--upgrade` keeps it; `--check` and `--json` report them. Not with `--solo`. |
@@ -96,11 +105,14 @@ Setup takes each value from its flag first, then from `.openartifacts/state.json
 | `--token-page` | Open a local page with the same token links and steps, served on `127.0.0.1` only (a random port). Setup prints its URL (`data.tokenPage.url` with `--json`) and stops on Ctrl-C or after 30 minutes idle. The page has no input fields: you create each token in Cloudflare and store it yourself, so it never passes through your agent. |
 | `--no-open` | With `--token-page`: print the URL without opening a browser. |
 | `--repo` | Only with `--token-links` or `--token-page` (otherwise an error, like `--no-open`): store each token as a GitHub secret in this `owner/name` repo (`gh secret set`) instead of an environment variable. |
+| `--token-file` | Read the deploy token (`CLOUDFLARE_API_TOKEN`) from this file. Order: the env var, this file, `~/.open-artifacts/<name>-cloudflare-token`, then `wrangler login`. The file must be mode 0600: a group- or world-readable one is `action_required` (`chmod 600 <path>`), a missing one is an error, an empty one is `action_required`. Never printed or saved. A symlink, or a file you don't own, is refused. Token files need a POSIX system: on Windows, use WSL. |
+| `--access-token-file` | Read the Access token (`OA_ACCESS_TOKEN`) from this file, else `~/.open-artifacts/<name>-access-token`. Same rules as `--token-file`. |
+| `--analytics-token-file` | Read the optional analytics token (`ANALYTICS_TOKEN`) from this file, else `~/.open-artifacts/<name>-analytics-token`. Same rules as `--token-file`. |
 | `--help` | Print usage and exit (`-h` also works). |
 
 | Environment variable | Meaning |
 |---|---|
-| `OA_ACCESS_TOKEN` | A Cloudflare API token for Access, needed on the first run when the `wrangler login` token can't manage Access, and again to change the app host or account. |
+| `OA_ACCESS_TOKEN` | A Cloudflare API token for Access (or save it to a file, see `--access-token-file`), needed on the first run when the `wrangler login` token can't manage Access, and again to change the app host or account. |
 | `ANALYTICS_TOKEN` | A read-only token (Account Analytics: Read) for the dashboard's Usage page. When set, the `secrets` step stores it as the Worker secret on every run. Never your deploy token. |
 | `CLOUDFLARE_ACCOUNT_ID` | The default for `--account-id`. |
 | `OA_TEAM_DOMAIN` | The Zero Trust team domain (`<team>.cloudflareaccess.com`), used when rebuilding state if the token can't read the Access organization. Setup verifies it before use. |
@@ -122,7 +134,7 @@ Exit codes: `0` when every step is done, `2` when a step needs the user or a mis
 
 ## Plan warnings
 
-The `prereqs` line's `data.warnings` holds one `{ code, plan, message }` per note below, and agents relay each `message` verbatim. With `data.plan` `unknown`, setup sends the first five; with `free`, the same minus `plan-unknown`. `browser-free` appears only with `--browser` on a plan that isn't `paid`.
+The `prereqs` line's `data.warnings` holds one `{ code, plan, message }` per note below, and agents relay each `message` verbatim. With `data.plan` `unknown`, setup sends the first five; with `free`, the same minus `plan-unknown`. `browser-free` appears only with `--browser` on a plan that isn't `paid`. Once Paid is confirmed (`--yes-paid`, `--plan paid`, or a saved plan), none of these warnings are sent, and the `prereqs` message says how it was confirmed.
 
 {PLAN_WARNINGS_TABLE}
 
@@ -130,4 +142,4 @@ On Workers Paid (`data.plan` `paid`), `data.warnings` is empty and the `prereqs`
 
 ## Cloudflare Access permissions
 
-The token from `wrangler login` may not be able to manage Zero Trust (Access). If it can't, the `access` step asks for an API token with Access: Apps and Policies Edit and Access: Organizations Read, and links to a pre-filled form for creating one. Set it as `OA_ACCESS_TOKEN`; in an interactive run, you can paste it at the prompt instead. Setup doesn't keep it. Later runs skip re-checking Access without it, unless the app host or account changes. If the account has no Zero Trust organization yet, setup links to the Zero Trust dashboard to turn it on. Zero Trust's free plan is enough.
+The token from `wrangler login` may not be able to manage Zero Trust (Access). If it can't, the `access` step asks for an API token with Access: Apps and Policies Edit and Access: Organizations Read, and links to a pre-filled form for creating one. Save it with the line from `--token-links` (setup reads `~/.open-artifacts/<name>-access-token`); in an interactive run, you can paste it at the prompt instead. Setup doesn't keep it. Later runs skip re-checking Access without it, unless the app host or account changes. If the account has no Zero Trust organization yet, setup links to the Zero Trust dashboard to turn it on. Zero Trust's free plan is enough.

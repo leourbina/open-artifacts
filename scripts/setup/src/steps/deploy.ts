@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import type { State } from "../state.ts";
 import type { Ctx, Step } from "../step.ts";
+import { repoVersion } from "../version-guard.ts";
 import { currentVersion, deployedVars, workerBindings } from "../worker.ts";
 import { names, renderedConfig, stripComments } from "./resources.ts";
 import { ACCESS_SECRET, listSecrets } from "./secrets.ts";
@@ -127,17 +128,6 @@ function planGuard(
   return undefined;
 }
 
-/** The repo version: root package.json, else the release-please manifest. */
-function repoVersion(ctx: Ctx): string {
-  const json = (p: string) =>
-    JSON.parse(ctx.fs.read(join(ctx.root, p)) ?? "{}");
-  return (
-    json("package.json").version ??
-    json(".release-please-manifest.json")["."] ??
-    "0.0.0"
-  );
-}
-
 export const deploy: Step = {
   name: "deploy",
   always: true,
@@ -147,6 +137,7 @@ export const deploy: Step = {
       ctx.mustRun = true;
       ctx.notes.push(`Worker ${ctx.opts.name} never deployed`);
     }
+    if (ctx.opts.check) ctx.data = ctx.version;
     // A pending downgrade refusal is drift too: report it instead of a clean check.
     if (ctx.opts.check) {
       try {
@@ -167,6 +158,12 @@ export const deploy: Step = {
   },
   async apply(state, ctx) {
     const vars = renderedVars(ctx);
+    // The version guard ran in prereqs, before anything had a side effect.
+    const ver = ctx.version;
+    if (ver?.downgrade)
+      ctx.notes.push(
+        `downgrading ${ver.liveVersion} → ${ver.repoVersion}; D1 is not rolled back`,
+      );
     const cfg = JSON.parse(
       stripComments(ctx.fs.read(join(ctx.root, CONFIG)) ?? "{}"),
     ) as Rendered;
@@ -208,7 +205,7 @@ export const deploy: Step = {
     state.deployedVersion = repoVersion(ctx);
     state.planVar = ctx.opts.planVar;
     ctx.notes.push(`deployed ${state.deployedVersion}`);
-    ctx.data = { deployedVersion: state.deployedVersion };
+    ctx.data = { deployedVersion: state.deployedVersion, ...ver };
     return undefined;
   },
 };

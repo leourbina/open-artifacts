@@ -11,6 +11,7 @@ import {
   type ZoneScope,
   zoneScopeFor,
 } from "../tokens.ts";
+import { downgradeMessage, versionInfo } from "../version-guard.ts";
 import { reusesDeployToken } from "./secrets.ts";
 
 /** Hosts lacking a zone, found by check and reported by apply. */
@@ -189,6 +190,10 @@ export const prereqs: Step = {
       throw new Error(`Node >= 22 required (found ${process.versions.node})`);
     if ((await ctx.deps.exec("pnpm", ["--version"])).code !== 0)
       throw new Error("pnpm not found on PATH");
+    // First, so an older checkout stops before any step has a side effect (--check only reports).
+    ctx.version = await versionInfo(state, ctx);
+    if (ctx.version.downgrade && !ctx.opts.allowDowngrade && !ctx.opts.check)
+      throw new NeedInput(downgradeMessage(ctx.version));
     const who = JSON.parse(await ctx.wrangler(["whoami", "--json"])) as {
       accounts?: { id: string; name: string }[];
     };
@@ -212,8 +217,18 @@ export const prereqs: Step = {
       throw new Error(`--account-id ${id} is not in \`wrangler whoami\``);
     state.accountId = id;
     const plan = await detectPlan(ctx, id);
-    const warns = [...warnings(plan), ...(await decide(state, ctx, plan))];
+    const extra = await decide(state, ctx, plan);
+    const confirmed = plan !== "paid" && ctx.opts.planVar === "paid";
+    const warns = [...warnings(plan, confirmed), ...extra];
     if (plan === "paid") ctx.notes.unshift("Workers Paid detected");
+    else if (confirmed)
+      ctx.notes.unshift(
+        ctx.opts.yesPaid
+          ? "Workers Paid confirmed (--yes-paid)"
+          : ctx.opts.planFlag === "paid"
+            ? "Workers Paid (--plan paid)"
+            : "Workers Paid (saved plan)",
+      );
     ctx.notes.push(...warns.map((w) => w.message));
     const { missing, zones } = await missingHosts(ctx, id);
     const issues = await tokenIssues(state, ctx, { a: id, zones });

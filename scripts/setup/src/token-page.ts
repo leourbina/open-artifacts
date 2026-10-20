@@ -27,12 +27,11 @@ const esc = (v: string) =>
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
 
-export const storeLine = (s: StoreAs) =>
-  s.kind === "gh-secret" ? s.command : `read -rs ${s.name} && export ${s.name}`;
+export const storeLine = (s: StoreAs) => s.command;
 const STORE_LEAD = {
   "gh-secret":
     "Run the line below. It prompts for the value, so the token never shows on screen or in a transcript:",
-  env: "In the terminal where you'll run setup, run the line below and paste the token when it waits. Nothing is shown:",
+  env: "Save it with this line in your own terminal (in Claude Code, type `! ` then the line). Never paste a token into the chat. If `read` fails, the shell can't hide input, so use a real terminal:",
 };
 
 function region(tpl: string, name: string) {
@@ -268,7 +267,9 @@ export async function tokenCommand(
                   `  zones: under Zone Resources pick Specific zone: ${t.zoneScope.zones.join(", ")}`,
                 ]
               : []),
-            `  store: ${storeLine(t.storeAs)}`,
+            t.storeAs.kind === "env"
+              ? `  store: ${STORE_LEAD.env}\n    ${storeLine(t.storeAs)}`
+              : `  store: ${storeLine(t.storeAs)}`,
             `  next: ${t.next}`,
           ].join("\n"),
         );

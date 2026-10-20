@@ -8,7 +8,7 @@ Upgrades keep all your artifacts, versions, shares, and live-page data. Database
 
 ## Steps
 
-1. **Go to the existing install:** `cd` into the `open-artifacts` directory that setup ran from. If it's gone, for example on a new machine or in CI, clone the latest release as in [setup](/docs/setup/) and continue from step 3. Without its saved state, add the install's `--name`, `--app-host`, `--content-host`, and `--owner-email` to the commands below; setup rebuilds the state from Cloudflare by `--name` and never guesses the name in a `--json` run. It also re-verifies Access, so set `OA_ACCESS_TOKEN` (as in setup) if the Cloudflare login can't read Access.
+1. **Go to the existing install:** `cd` into the `open-artifacts` directory that setup ran from. If it's gone, for example on a new machine or in CI, clone the latest release as in [setup](/docs/setup/) and continue from step 3. Without its saved state, add the install's `--name`, `--app-host`, `--content-host`, and `--owner-email` to the commands below; setup rebuilds the state from Cloudflare by `--name` and never guesses the name in a `--json` run. It also re-verifies Access, so you may need the Access token again if the Cloudflare login can't read Access; save it as in [setup](/docs/setup/).
 2. **Check out the latest release.** This is the latest stable GitHub release; pre-releases are skipped. Release tags look like `vX.Y.Z`:
 
    ```sh
@@ -23,7 +23,7 @@ Upgrades keep all your artifacts, versions, shares, and live-page data. Database
 5. **Run the upgrade:** `pnpm -s oa:setup --upgrade --json`. It reuses the hostnames and email saved by setup. Every step runs, but only `deploy` (new database migrations, then a redeploy) and `selftest` do work: `prereqs` and `resources` verify, and `access`, `secrets`, `owner-token`, and `agent-config` report `skipped` unless something is missing. It keeps the existing owner token and needs no `OA_ACCESS_TOKEN` when the state is saved. It never creates resources: if one is missing, it reports `action_required` and asks for a full setup. Go by the exit code, as in setup:
    - **0:** done.
    - **2:** relay the `action_required` line's `message` to the user verbatim, wait until they've done it, then run the same command again.
-   - **1:** show the user the `error` line's `message`. If it says to rerun setup without `--upgrade`, run `pnpm -s oa:setup --json` (it may ask for `OA_ACCESS_TOKEN` again), then the upgrade again.
+   - **1:** show the user the `error` line's `message`. If it says to rerun setup without `--upgrade`, run `pnpm -s oa:setup --json`, then the upgrade again. That run may need the Access token again. Get its save line from `pnpm -s oa:setup --token-links --json` (`saveCommand`) and have the user run it in their own terminal (in Claude Code, type `! ` then the line). Never paste a token into the chat. If `read` fails, the shell can't hide input, so use a real terminal. Setup then reads `~/.open-artifacts/<name>-access-token`.
 6. **Tell the user** which version is now running: the `deploy` line's `data.deployedVersion`.
 
 ## If the Cloudflare login has expired

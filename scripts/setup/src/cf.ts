@@ -1,5 +1,13 @@
 import { execFile } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
@@ -13,6 +21,19 @@ export type Exec = (
 export type Fs = {
   read: (path: string) => string | null;
   write: (path: string, data: string) => void;
+  /**
+   * A token file, opened without following symlinks and read from the same
+   * descriptor that was checked: null when it does not exist.
+   */
+  readToken?: (path: string) => TokenFile | null;
+};
+export type TokenFile = {
+  text: string;
+  /** Permission bits. */
+  mode: number;
+  uid: number;
+  /** A regular file (a symlink, directory or device is not). */
+  isFile: boolean;
 };
 export type Deps = {
   exec: Exec;
@@ -25,6 +46,8 @@ export type Deps = {
   sleep?: (ms: number) => Promise<void>;
   /** Test seam: process.exit. */
   exit?: (code: number) => void;
+  /** Env for wrangler children beyond the process env: a deploy token read from a file. */
+  childEnv?: Record<string, string>;
   /** Test seam: process.on for SIGTERM/SIGINT; returns the unsubscribe. */
   onSignal?: (sig: "SIGTERM" | "SIGINT", h: () => void) => () => void;
 };
@@ -40,6 +63,29 @@ export const realFs: Fs = {
   write: (p, d) => {
     mkdirSync(dirname(p), { recursive: true });
     writeFileSync(p, d);
+  },
+  // POSIX only: Windows is supported through WSL.
+  readToken: (p) => {
+    let fd: number | undefined;
+    try {
+      fd = openSync(
+        p,
+        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      );
+      const st = fstatSync(fd);
+      return {
+        text: st.isFile() ? readFileSync(fd, "utf8") : "",
+        mode: st.mode & 0o777,
+        uid: st.uid,
+        isFile: st.isFile(),
+      };
+    } catch (e) {
+      if ((e as { code?: string }).code === "ENOENT") return null;
+      // A symlink (ELOOP) or anything unreadable is refused, never followed.
+      return { text: "", mode: 0o777, uid: -1, isFile: false };
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+    }
   },
 };
 
@@ -109,7 +155,11 @@ export function makeWrangler(
     o: { input?: string; sensitive?: boolean } = {},
   ): Promise<string> => {
     const id = accountId();
-    const env = id ? { CLOUDFLARE_ACCOUNT_ID: id } : undefined;
+    const extra = {
+      ...(id ? { CLOUDFLARE_ACCOUNT_ID: id } : {}),
+      ...deps.childEnv,
+    };
+    const env = Object.keys(extra).length ? extra : undefined;
     const pnpmArgs = [
       "--dir",
       join(root, "apps/server"),

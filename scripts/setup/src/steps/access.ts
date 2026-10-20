@@ -237,11 +237,15 @@ async function record(
   writeConfig(state, ctx);
 }
 
+/** How the user hands setup an Access token without it entering a chat. */
+const saveFlow = (ctx: Ctx) =>
+  `run \`pnpm -s oa:setup --token-links --json\` to get the save line (\`saveCommand\`); the user runs it in their own terminal (in Claude Code, type \`! \` then the line), and setup then reads ~/.open-artifacts/${ctx.opts.name}-access-token (or the OA_ACCESS_TOKEN env var)`;
+
 /** Lookup with OA_ACCESS_TOKEN or the wrangler token; on 403, ask once (memory only). */
 async function lookupWithToken(ctx: Ctx, accountId: string) {
   const how = ctx.opts.interactive
-    ? "run `read -rs OA_ACCESS_TOKEN; export OA_ACCESS_TOKEN`, or rerun interactively and paste it (kept in memory only)"
-    : "the user must run `read -rs OA_ACCESS_TOKEN; export OA_ACCESS_TOKEN` in the shell that launches setup (an agent cannot answer a hidden prompt) (non-interactive/--json)";
+    ? `${saveFlow(ctx)}, or rerun interactively and paste it (kept in memory only)`
+    : saveFlow(ctx);
   const url = accessUrl(ctx, accountId);
   const create = `Create one (${accessLabels(ctx)}) at ${url}, then ${how}`;
   const lower = `${create[0].toLowerCase()}${create.slice(1)}`;
@@ -374,7 +378,7 @@ export const access: Step = {
       ctx.notes.push(
         ctx.opts.upgrade
           ? "verified from state only (--upgrade); rerun without --upgrade to reconcile Access"
-          : "Access not re-verified: the user must run `read -rs OA_ACCESS_TOKEN; export OA_ACCESS_TOKEN` in the shell that launches setup (an agent cannot answer a hidden prompt) to re-check",
+          : `Access not re-verified: to re-check, ${saveFlow(ctx)}`,
       );
       return "done";
     }
