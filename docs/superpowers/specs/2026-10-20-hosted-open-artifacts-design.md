@@ -44,7 +44,7 @@ Six months after launch: **10 paying companies, each actively using it every wee
 - Installing into a customer's own Cloudflare account. Those customers self-host the open-source version. **(user)**
 - A permanent free tier for the hosted version (only a 14-day trial). **(user)**
 - An admin bulk import from company-wide exports in v1. **(my call)** It can follow later.
-- Enterprise contracts, SLAs and data residency in v1. **(my call)** The Enterprise tier is listed as "contact us".
+- Enterprise contracts, SLAs and data residency in v1. **(my call)** The Enterprise tier exists from the fast follow on, for Okta and SAML customers, sold as "contact us".
 
 ### Anti-goals (user)
 
@@ -67,7 +67,7 @@ Six months after launch: **10 paying companies, each actively using it every wee
 - **Each customer install** is a normal Open Artifacts deploy, at `<company>.<our hosted domain>` by default. A custom domain (`artifacts.company.com`) is a Business-tier feature. **(my call)**
 - **Sign-in: direct, no Access** **(user)**. The server is already a generic OIDC client (PKCE), so it signs in straight against:
   - **Google Workspace and Microsoft Entra** through our own multi-tenant "Sign in with Google/Microsoft" apps. Each install accepts only its customer's verified domain (Google `hd`) or tenant id (Entra `tid`), checked on the server against the ID token, never the email alone. No per-customer connection or cost. **(my call)**
-  - **Okta and generic SAML through WorkOS** **(my call, from the Clerk vs WorkOS evaluation)**. One central auth-broker Worker on the control plane holds the WorkOS API key; installs never do, because that key can read every customer's directory. The broker names the customer's organization on every sign-in. The callback requires an exact match on `organization_id`, `connection_id` and the verified email domain, then hands the install a short-lived signed assertion for that install only. IdP-initiated SAML is turned into a fresh SP-initiated flow. Group sync uses WorkOS Directory Sync's ordered Events API. Suspensions arrive as `state: inactive`, and a deleted directory sends one `dsync.deleted` with no per-user removals; both must revoke access. Buy WorkOS's custom auth domain early so a later exit doesn't force every customer to reconfigure.
+  - **Okta and generic SAML through WorkOS, in the Enterprise tier only** **(user: Enterprise, higher prices; my call: WorkOS, from the Clerk vs WorkOS evaluation)**. Directory Sync is always included, not optional. One central auth-broker Worker on the control plane holds the WorkOS API key; installs never do, because that key can read every customer's directory. The broker names the customer's organization on every sign-in. The callback requires an exact match on `organization_id`, `connection_id` and the verified email domain, then hands the install a short-lived signed assertion for that install only. IdP-initiated SAML is turned into a fresh SP-initiated flow. Group sync uses WorkOS Directory Sync's ordered Events API. Suspensions arrive as `state: inactive`, and a deleted directory sends one `dsync.deleted` with no per-user removals; both must revoke access. Buy WorkOS's custom auth domain early so a later exit doesn't force every customer to reconfigure.
   - **Emailed one-time codes, sent by us** through Cloudflare Email Sending, for invited guests and for the trial before the identity provider is connected. During the trial they're restricted to the company's verified email domain.
   - Why WorkOS over Clerk: WorkOS keeps no shared upstream session or user pool across customers, the customer is bound on every sign-in, setup links can be emailed to IT admins, and its events are ordered and replayable. Clerk was cheaper (about $125 vs $250 per customer per month for SSO plus SCIM) but weaker on tenant binding. Full report: `2026-10-20-hosted-research/okta-saml-provider-eval.md`.
 
@@ -108,7 +108,6 @@ Six months after launch: **10 paying companies, each actively using it every wee
 |---|---|---|
 | Team | $10 per creator per month | Unlimited viewers and artifacts; company sign-in; spaces and roles with members managed by hand; live data, versions, sharing; pool of 10 GB plus 5 GB per creator |
 | Business | $25 per creator per month | Team, plus groups synced from the identity provider (Google, Microsoft), outside-sharing controls, audit log, custom domain; pool of 25 GB plus 10 GB per creator |
-| Okta / SAML add-on | about $250 per month per customer **(my call)** | Okta or SAML sign-in plus SCIM through WorkOS, which costs us about $250 per customer per month |
 
 **The trial and tier changes** (user asked what happens after a trial with group sync; my call):
 
@@ -119,7 +118,7 @@ Six months after launch: **10 paying companies, each actively using it every wee
 - The audit log stays readable (exportable) for 90 days.
 - Moving back up turns sync on again and replaces the frozen lists.
 - The rule for every downgrade: **a tier change never widens access**.
-| Enterprise | Contact us | Not built in v1 |
+| Enterprise | Contact us; priced well above Business **(user: Okta and SAML are for bigger enterprises, at higher prices)** | Business, plus Okta and generic SAML sign-in **with** Directory Sync (SCIM) through WorkOS, which costs us about $250 per customer per month at list. Contracts, invoicing, SLA and data residency come later. |
 
 - A **creator** is anyone who published or edited in the billing period, whether through an agent or by hand. Viewing and commenting are free.
 - **Artifact count is unlimited.** The allowance is only storage and live-data activity, pooled per company, sized so about 95% of customers never see an overage. Above it, there's metered billing, alerts at 80%, and a customer-set cap.
