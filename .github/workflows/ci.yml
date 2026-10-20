@@ -12,6 +12,40 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  # Decides whether the fast path applies: only the script's verdict counts (never
+  # labels, branch names or authors). No secrets. A merge group can batch several
+  # PRs, so its whole base..head range must be release-only.
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      release_only: ${{ steps.r.outputs.release_only }}
+      base: ${{ steps.r.outputs.base }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - id: r
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+        run: |
+          set -u
+          echo "base=$BASE_SHA" >> "$GITHUB_OUTPUT"
+          if [ -z "$BASE_SHA" ] || [ -z "$HEAD_SHA" ]; then
+            echo "not a pull request or merge group: full CI"
+            echo "release_only=false" >> "$GITHUB_OUTPUT"
+          elif out=$(node --experimental-strip-types scripts/ci/release-only.ts "$BASE_SHA" "$HEAD_SHA"); then
+            echo "$out"
+            echo "release_only=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "full CI: $out"
+            echo "release_only=false" >> "$GITHUB_OUTPUT"
+          fi
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -23,6 +57,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
+      - name: version-consistency (package.json, release manifest, CHANGELOG)
+        run: node --experimental-strip-types scripts/ci/version-consistency.ts
       - name: actionlint (runs shellcheck on run blocks)
         env:
           ACTIONLINT_VERSION: 1.7.12
@@ -39,72 +75,125 @@ jobs:
           "$RUNNER_TEMP/actionlint/actionlint" -color .github/workflows/*.yml
   typecheck:
     runs-on: ubuntu-latest
+    needs: changes
     steps:
+      - name: release-only
+        if: ${{ needs.changes.outputs.release_only == 'true' }}
+        env:
+          BASE_SHA: ${{ needs.changes.outputs.base }}
+        run: |
+          echo "release-only change: skipped (main passed full CI at $BASE_SHA)"
       - uses: actions/checkout@v4
+        if: ${{ needs.changes.outputs.release_only != 'true' }}
       - uses: pnpm/action-setup@v4
+        if: ${{ needs.changes.outputs.release_only != 'true' }}
       - uses: actions/setup-node@v4
+        if: ${{ needs.changes.outputs.release_only != 'true' }}
         with:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+        if: ${{ needs.changes.outputs.release_only != 'true' }}
       - run: pnpm typecheck
+        if: ${{ needs.changes.outputs.release_only != 'true' }}
   test:
     runs-on: ubuntu-latest
+    needs: changes
     steps:
+      - name: release-only
+        if: ${{ needs.changes.outputs.release_only == 'true' }}
+        env:
+          BASE_SHA: ${{ needs.changes.outputs.base }}
+        run: |
+          echo "release-only change: skipped (main passed full CI at $BASE_SHA)"
       - uses: actions/checkout@v4
+        if: ${{ needs.changes.outputs.release_only != 'true' }}
       - uses: pnpm/action-setup@v4
+        if: ${{ needs.changes.outputs.release_only != 'true' }}
       - uses: actions/setup-node@v4
+        if: ${{ needs.changes.outputs.release_only != 'true' }}
         with:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+        if: ${{ needs.changes.outputs.release_only != 'true' }}
       - run: pnpm test
+        if: ${{ needs.changes.outputs.release_only != 'true' }}
       # Wall-clock CPU budgets, serial (not under the parallel suite's load).
       - run: pnpm --filter @oa/server test:cpu
+        if: ${{ needs.changes.outputs.release_only != 'true' }}
   build:
     runs-on: ubuntu-latest
+    needs: changes
     steps:
+      - name: release-only
+        if: ${{ needs.changes.outputs.release_only == 'true' }}
+        env:
+          BASE_SHA: ${{ needs.changes.outputs.base }}
+        run: |
+          echo "release-only change: skipped (main passed full CI at $BASE_SHA)"
       - uses: actions/checkout@v4
+        if: ${{ needs.changes.outputs.release_only != 'true' }}
       - uses: pnpm/action-setup@v4
+        if: ${{ needs.changes.outputs.release_only != 'true' }}
       - uses: actions/setup-node@v4
+        if: ${{ needs.changes.outputs.release_only != 'true' }}
         with:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+        if: ${{ needs.changes.outputs.release_only != 'true' }}
       - run: pnpm build
+        if: ${{ needs.changes.outputs.release_only != 'true' }}
   # No secrets: the real suite runs a local `wrangler dev` (ENVIRONMENT=dev in a
   # generated temp config), never staging.
   e2e:
     runs-on: ubuntu-latest
+    needs: changes
     timeout-minutes: 15
     steps:
+      - name: release-only
+        if: ${{ needs.changes.outputs.release_only == 'true' }}
+        env:
+          BASE_SHA: ${{ needs.changes.outputs.base }}
+        run: |
+          echo "release-only change: skipped (main passed full CI at $BASE_SHA)"
       - uses: actions/checkout@v4
+        if: ${{ needs.changes.outputs.release_only != 'true' }}
       - uses: pnpm/action-setup@v4
+        if: ${{ needs.changes.outputs.release_only != 'true' }}
       - uses: actions/setup-node@v4
+        if: ${{ needs.changes.outputs.release_only != 'true' }}
         with:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+        if: ${{ needs.changes.outputs.release_only != 'true' }}
       - id: pw
         run: bash scripts/ci/e2e.sh version
+        if: ${{ needs.changes.outputs.release_only != 'true' }}
       - uses: actions/cache@v4
+        if: ${{ needs.changes.outputs.release_only != 'true' }}
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.pw.outputs.playwright }}
       - id: install
         run: bash scripts/ci/e2e.sh install
+        if: ${{ needs.changes.outputs.release_only != 'true' }}
       - run: bash scripts/ci/e2e.sh hosts
+        if: ${{ needs.changes.outputs.release_only != 'true' }}
       - name: Mock suite
+        if: ${{ needs.changes.outputs.release_only != 'true' }}
         run: bash scripts/ci/e2e.sh mock
       # Runs even when the mock suite failed (not when the browsers didn't install).
       - name: Real-server suite (local wrangler dev)
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        if: ${{ !cancelled() && needs.changes.outputs.release_only != 'true' && steps.install.outcome == 'success' }}
         run: bash scripts/ci/e2e.sh real
       - name: UI real-browser checks (axe contrast, focus)
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        if: ${{ !cancelled() && needs.changes.outputs.release_only != 'true' && steps.install.outcome == 'success' }}
         run: bash scripts/ci/e2e.sh ui
       - name: Landing real-browser checks (no horizontal overflow)
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        if: ${{ !cancelled() && needs.changes.outputs.release_only != 'true' && steps.install.outcome == 'success' }}
         run: bash scripts/ci/e2e.sh landing
       - if: failure()
         uses: actions/upload-artifact@v4

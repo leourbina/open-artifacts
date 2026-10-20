@@ -115,7 +115,7 @@ describe("ci.yml", () => {
     // A mock failure must not skip the real suite; a failed browser install must.
     expect(steps[order[2] as number].id).toBe("install");
     expect(steps[order[5] as number].if).toMatch(
-      /^\$\{\{ !cancelled\(\) && steps\.install\.outcome == 'success' \}\}$/,
+      /^\$\{\{ !cancelled\(\) && needs\.changes\.outputs\.release_only != 'true' && steps\.install\.outcome == 'success' \}\}$/,
     );
     const cache = steps.find((s) =>
       (s.uses ?? "").startsWith("actions/cache@"),
@@ -134,6 +134,84 @@ describe("ci.yml", () => {
     expect(ci("e2e.sh")).toContain(
       "playwright install --with-deps chromium webkit",
     );
+  });
+  describe("release-only fast path", () => {
+    const REQUIRED = ["lint", "typecheck", "test", "build", "e2e"];
+    // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
+    type Step = any;
+    const raw = read(".github/workflows/ci.yml");
+    const ifs = (job: string): string[] =>
+      w.jobs[job].steps.map((s: Step) => String(s.if ?? ""));
+
+    it("the required job names still exist", () => {
+      expect(Object.keys(w.jobs)).toEqual(expect.arrayContaining(REQUIRED));
+    });
+    it("no required job has a job-level if (a skipped job may not satisfy a required check)", () => {
+      for (const j of REQUIRED) expect(w.jobs[j].if, j).toBeUndefined();
+    });
+    it("the changes job has no secrets and read-only contents", () => {
+      const job = w.jobs.changes;
+      expect(job.permissions).toEqual({ contents: "read" });
+      expect(JSON.stringify(job)).not.toMatch(/secrets\./i);
+      expect(JSON.stringify(job)).not.toMatch(/GITHUB_TOKEN|github\.token/);
+      expect(job.if).toBeUndefined();
+    });
+    it("changes runs the script on the PR and merge-group ranges and outputs release_only", () => {
+      const step = w.jobs.changes.steps.find((s: Step) => s.id === "r");
+      expect(step.run).toContain("scripts/ci/release-only.ts");
+      expect(step.env.BASE_SHA).toContain("github.event.pull_request.base.sha");
+      expect(step.env.BASE_SHA).toContain("github.event.merge_group.base_sha");
+      expect(step.env.HEAD_SHA).toContain("github.event.pull_request.head.sha");
+      expect(step.env.HEAD_SHA).toContain("github.event.merge_group.head_sha");
+      expect(w.jobs.changes.outputs.release_only).toContain(
+        "steps.r.outputs.release_only",
+      );
+      const checkout = w.jobs.changes.steps.find((s: Step) =>
+        String(s.uses).startsWith("actions/checkout"),
+      );
+      expect(checkout.with["fetch-depth"]).toBe(0);
+    });
+    it("the four heavy jobs wait for changes, run every time, and gate each heavy step", () => {
+      for (const j of ["typecheck", "test", "build", "e2e"]) {
+        expect([w.jobs[j].needs].flat(), j).toContain("changes");
+        const steps: Step[] = w.jobs[j].steps;
+        const note = steps.find((s) => s.name === "release-only");
+        expect(note.run, j).toContain(
+          "release-only change: skipped (main passed full CI at",
+        );
+        expect(note.if).toContain("release_only == 'true'");
+        for (const s of steps) {
+          if (s === note || String(s.if ?? "") === "failure()") continue;
+          expect(
+            String(s.if ?? ""),
+            `${j}: ${s.name ?? s.run ?? s.uses}`,
+          ).toContain("needs.changes.outputs.release_only != 'true'");
+        }
+      }
+    });
+    it("lint runs in full and checks version consistency", () => {
+      expect(w.jobs.lint.needs).toBeUndefined();
+      expect(ifs("lint").every((i) => i === "")).toBe(true);
+      expect(
+        w.jobs.lint.steps.some((s: Step) =>
+          String(s.run ?? "").includes("version-consistency.ts"),
+        ),
+      ).toBe(true);
+    });
+    it("the fast path is gated only on the script's output, never on labels, the branch name or the author", () => {
+      const conds = Object.values(w.jobs).flatMap((j) => {
+        const job = j as { if?: unknown; steps?: Step[] };
+        return [job.if, ...(job.steps ?? []).map((s) => s.if)].map(String);
+      });
+      for (const c of conds.filter((c) => c.includes("release_only")))
+        expect(c).toMatch(/needs\.changes\.outputs\.release_only/);
+      for (const j of [...REQUIRED, "changes"])
+        for (const s of w.jobs[j].steps as Step[])
+          expect(JSON.stringify([s.if, s.env, s.run])).not.toMatch(
+            /labels|head_ref|ref_name|actor|\.user\.|author|release-please--|startsWith\(github\.ref/,
+          );
+      expect(raw).not.toMatch(/contains\(.*labels/);
+    });
   });
   it("uses node from .nvmrc with pnpm cache", () => {
     const raw = read(".github/workflows/ci.yml");
