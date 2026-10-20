@@ -26,6 +26,8 @@ export type State = {
   pendingRevokeTokenId?: string;
   /** The selftest's private welcome artifact, updated in place on later runs. */
   welcomeArtifactId?: string;
+  /** Hash of the Welcome text last published, so an unchanged page is not published again. */
+  welcomeHash?: string;
   /** The user declined the optional ANALYTICS_TOKEN; don't ask again. */
   analyticsSkipped?: boolean;
   /** Browser Run binding on/off; absent means on. Set by --no-browser, kept across --upgrade. */

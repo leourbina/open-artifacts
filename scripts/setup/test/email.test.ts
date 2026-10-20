@@ -182,7 +182,7 @@ describe("team/solo and the email step", () => {
   it("healthcheck fails when the deployed Worker lacks the EMAIL binding", async () => {
     const w = world({ dns: onboarded(D), dropSendEmail: true });
     expect(await run(TEAM, w.deps, ROOT)).toBe(1);
-    const l = parse(w.lines).at(-1);
+    const l = parse(w.lines).find((j) => j.step === "healthcheck");
     expect(l).toMatchObject({ step: "healthcheck", status: "error" });
     expect(l.message).toContain("EMAIL");
   });

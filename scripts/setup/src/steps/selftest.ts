@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { homeOf, patTokenFile } from "../secret-file.ts";
+import { tokenHash } from "./owner-token.ts";
 import type { Ctx, Step } from "../step.ts";
 import { workerBindings } from "../worker.ts";
 
@@ -58,7 +59,7 @@ async function rpcResult(res: Response, id: number, method: string) {
 }
 
 /** tools/list, then publish (or update) the welcome page; returns its id. */
-async function mcp(ctx: Ctx, token: string, prev?: string) {
+async function mcp(ctx: Ctx, token: string, prev?: string, prevHash?: string) {
   const url = `https://${ctx.opts.appHost}/mcp`;
   const headers: Record<string, string> = {
     authorization: `Bearer ${token}`,
@@ -97,6 +98,10 @@ async function mcp(ctx: Ctx, token: string, prev?: string) {
     throw new Error("MCP tools/list has no publish_artifact");
   const content = ctx.fs.read(join(ctx.root, WELCOME));
   if (content === null) throw new Error(`missing ${WELCOME}`);
+  // The page is published only when its text changed since the last publish.
+  const hash = tokenHash(`${TITLE}\n${content}`);
+  if (prev && prevHash === hash)
+    return { id: prev, url: undefined, hash, unchanged: true };
   const publish = (id?: string) =>
     post("tools/call", {
       name: "publish_artifact",
@@ -135,15 +140,28 @@ async function mcp(ctx: Ctx, token: string, prev?: string) {
   if (r?.isError || typeof out !== "string")
     throw new Error(`MCP publish_artifact: ${text(r)}`);
   const view = r?.structuredContent?.url;
-  return { id: out, url: typeof view === "string" ? view : undefined };
+  return {
+    id: out,
+    url: typeof view === "string" ? view : undefined,
+    hash,
+    unchanged: false,
+  };
 }
 
 /** The private artifact's signed content URL must serve the welcome text; returns the redacted URL. */
-async function content(ctx: Ctx, token: string, id: string): Promise<string> {
+async function content(
+  ctx: Ctx,
+  token: string,
+  id: string,
+  once = false,
+): Promise<string> {
   const api = `https://${ctx.opts.appHost}/api/v1/artifacts/${encodeURIComponent(id)}/content-url`;
-  const res = await until200(ctx, "content-url", api, {
-    headers: { authorization: `Bearer ${token}` },
-  });
+  const init = { headers: { authorization: `Bearer ${token}` } };
+  // One try for an unchanged page: a deleted one answers 404 and is published again.
+  const res = once
+    ? await ctx.deps.fetch(api, init)
+    : await until200(ctx, "content-url", api, init);
+  if (!res.ok) throw new Error(`content-url: HTTP ${res.status}`);
   const { url } = (await res.json()) as { url?: string };
   if (typeof url !== "string") throw new Error("content-url: no url");
   // The signed URL is a bearer capability: report only its origin.
@@ -244,29 +262,44 @@ export const selftest: Step = {
       ctx.data = { mcp: "skipped" };
       return undefined;
     }
-    let artifactId: string;
-    let welcomeUrl: string | undefined;
+    let welcome: Awaited<ReturnType<typeof mcp>>;
+    let shown: string;
     try {
-      ({ id: artifactId, url: welcomeUrl } = await mcp(
+      welcome = await mcp(
         ctx,
         token,
         state.welcomeArtifactId,
-      ));
-    } catch (e) {
-      if (!fromFile || !/HTTP 401/.test((e as Error).message)) throw e;
-      ctx.notes.push(
-        "MCP check skipped: the saved agent token was rejected (401); rerun with --new-owner-token to test it",
+        state.welcomeHash,
       );
-      ctx.data = { mcp: "skipped" };
-      return undefined;
+      try {
+        shown = await content(ctx, token, welcome.id, welcome.unchanged);
+      } catch (e) {
+        if (!welcome.unchanged) throw e;
+        // The unchanged page is gone (deleted?): publish it again.
+        welcome = await mcp(ctx, token, state.welcomeArtifactId, undefined);
+        shown = await content(ctx, token, welcome.id);
+      }
+    } catch (e) {
+      if (!fromFile || !/HTTP 40[13]\b/.test((e as Error).message)) throw e;
+      return {
+        status: "action_required",
+        message:
+          "your saved agent token was rejected; rerun with --new-owner-token to rotate it, then update your client",
+        data: { mcp: "skipped", tokenRejected: true },
+      };
     }
-    ctx.welcomeUrl = viewUrl(ctx, welcomeUrl);
+    const artifactId = welcome.id;
+    ctx.welcomeUrl = welcome.unchanged
+      ? `https://${ctx.opts.appHost}/a/${encodeURIComponent(artifactId)}`
+      : viewUrl(ctx, welcome.url);
     state.welcomeArtifactId = artifactId;
-    const shown = await content(ctx, token, artifactId);
+    state.welcomeHash = welcome.hash;
     ctx.notes.push(
-      fromFile
-        ? "MCP publish and content ok (with the saved agent token)"
-        : "MCP publish and content ok",
+      welcome.unchanged
+        ? "Welcome page unchanged; MCP and content ok"
+        : fromFile
+          ? "MCP publish and content ok (with the saved agent token)"
+          : "MCP publish and content ok",
     );
     ctx.data = {
       mcp: "ok",

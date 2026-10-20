@@ -19,7 +19,7 @@ Upgrades keep all your artifacts, versions, shares, and live-page data. Database
 
    If `TAG` comes back empty or `curl` fails, stop and tell the user: "Open Artifacts has no stable release yet; check back later."
 3. **Install dependencies:** `pnpm install`.
-4. **Preview, if you like:** `pnpm -s oa:setup --upgrade --check --json` is read-only. It reports each step as `done` or `todo` without changing anything, so you can see what the upgrade would do.
+4. **Preview, if you like:** `pnpm -s oa:setup --upgrade --check --json` is read-only. It reports each step as `done` or `todo` without changing anything, so you can see what the upgrade would do. Steps that always run show `todo`; that isn't pending work.
 5. **Run the upgrade:** `pnpm -s oa:setup --upgrade --json`. It reuses the hostnames and email saved by setup. Every step runs, but only `deploy` (new database migrations, then a redeploy), `healthcheck`, `selftest` and `agent-config` do work: `prereqs` and `resources` verify, and `access`, `secrets` and `owner-token` report `skipped` unless something is missing. It keeps the existing owner token and needs no `OA_ACCESS_TOKEN` when the state is saved. It never creates resources: if one is missing, it reports `action_required` and asks for a full setup. Go by the exit code, as in setup:
    - **0:** done.
    - **2:** relay the `action_required` line's `message` to the user verbatim, wait until they've done it, then run the same command again.

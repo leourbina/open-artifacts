@@ -108,7 +108,7 @@ export const snippets = (
 export const agentConfig: Step = {
   name: "agent-config",
   always: true,
-  runAfterFailureOf: ["selftest"],
+  runAfterFailureOf: ["healthcheck", "selftest"],
   check: async () => "todo",
   async apply(_state, ctx) {
     const url = `https://${ctx.opts.appHost}/mcp`;

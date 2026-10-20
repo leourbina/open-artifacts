@@ -204,7 +204,6 @@ describe("deploy, owner-token, selftest, agent-config", () => {
       "mcp initialize",
       "mcp notifications/initialized",
       "mcp tools/list",
-      "mcp tools/call",
       "GET content-url",
       "GET content no auth",
       "GET content no auth",
@@ -213,7 +212,9 @@ describe("deploy, owner-token, selftest, agent-config", () => {
       mcp: "ok",
       welcomeUrl: "https://app.example.com/a/art1",
     });
-    expect(w.mcpCalls[0].arguments.id).toBe("art1");
+    // The Welcome text is unchanged, so it is not published again.
+    expect(w.mcpCalls).toEqual([]);
+    expect(line(w, "selftest").message).toContain("Welcome page unchanged");
     const cfg = line(w, "agent-config");
     expect(cfg.data.snippets.claudeCode).not.toContain("--header");
     expect(w.lines.join("\n")).not.toMatch(/oa_pat_/);
@@ -231,25 +232,92 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     expect(w.hits.some((h) => h.startsWith("mcp"))).toBe(false);
   });
 
-  it("#6: a rerun whose saved PAT is rejected (401) notes it and still exits 0", async () => {
-    const w = await installed();
-    for (const k of w.files.keys())
-      if (k.endsWith("-pat-token"))
-        w.files.set(k, `oa_pat_${"1".repeat(32)}\n`);
-    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
-    const l = line(w, "selftest");
-    expect(l.message).toMatch(/saved agent token was rejected \(401\)/);
-    expect(l.data).toEqual({ mcp: "skipped" });
+  it("#6: a saved PAT rejected with 401 or 403 is action_required (exit 2) with tokenRejected", async () => {
+    for (const status of [401, 403]) {
+      const w = await installed();
+      for (const k of w.files.keys())
+        if (k.endsWith("-pat-token"))
+          w.files.set(k, `oa_pat_${"1".repeat(32)}\n`);
+      const real = w.deps.fetch;
+      w.deps.fetch = async (u, init) =>
+        String(u).endsWith("/mcp") && status === 403
+          ? new Response("{}", { status: 403 })
+          : real(u, init);
+      expect(await run(HOSTS, w.deps, ROOT)).toBe(2);
+      const l = line(w, "selftest");
+      expect(l.status).toBe("action_required");
+      expect(l.message).toContain("saved agent token was rejected");
+      expect(l.message).toContain("--new-owner-token");
+      expect(l.data).toMatchObject({ tokenRejected: true });
+      // exit 2 still prints agent-config
+      expect(line(w, "agent-config")).toMatchObject({ status: "ok" });
+    }
   });
 
-  it("#6: healthcheck runs before owner-token, so a failing health check mints nothing", async () => {
+  it("#6: a 5xx from MCP on a saved PAT stays an error (exit 1)", async () => {
+    const w = await installed();
+    const real = w.deps.fetch;
+    w.deps.fetch = async (u, init) =>
+      String(u).endsWith("/mcp")
+        ? new Response("{}", { status: 503 })
+        : real(u, init);
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(1);
+    expect(line(w, "selftest").status).toBe("error");
+    expect(line(w, "selftest").data?.tokenRejected).toBeUndefined();
+  });
+
+  it("--ci never reads the PAT file", async () => {
+    const w = world({ env: { HOME: "/home/test" } });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    const file =
+      [...w.files.keys()].find((k) => k.endsWith("-pat-token")) ?? "";
+    const fs = w.deps.fs as unknown as { read: (p: string) => string | null };
+    const real = fs.read;
+    const reads: string[] = [];
+    fs.read = (p) => (reads.push(p), real(p));
+    const ci = [...HOSTS.filter((a) => a !== "--yes"), "--ci"];
+    expect(await run(ci, w.deps, ROOT)).toBe(0);
+    expect(reads).not.toContain(file);
+  });
+
+  it("#6: Welcome is published again only when its text changed", async () => {
+    const w = await installed();
+    const WELCOME =
+      [...w.files.keys()].find((k) => k.endsWith("welcome.md")) ?? "";
+    expect(w.state().welcomeHash).toMatch(/^[0-9a-f]{64}$/);
+    w.files.set(WELCOME, `${w.files.get(WELCOME)}\nMore.\n`);
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    expect(w.mcpCalls).toHaveLength(1);
+    expect(w.mcpCalls[0].arguments.id).toBe("art1");
+    const hash = w.state().welcomeHash;
+    w.mcpCalls.length = 0;
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    expect(w.mcpCalls).toEqual([]);
+    expect(w.state().welcomeHash).toBe(hash);
+  });
+
+  it("#6: an unchanged Welcome page that was deleted is published again", async () => {
+    const w = await installed();
+    w.deleted.push("art1");
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    expect(w.mcpCalls.map((c) => c.arguments.id)).toEqual(["art1", undefined]);
+    expect(w.state().welcomeArtifactId).toBe("art2");
+  });
+
+  it("#6: a failing health check mints nothing, and agent-config still prints the OAuth snippets", async () => {
     const w = world({ healthzDown: true });
     expect(await run(HOSTS, w.deps, ROOT)).toBe(1);
     expect(line(w, "healthcheck")).toMatchObject({ status: "error" });
     expect(line(w, "owner-token")).toBeUndefined();
     expect(w.db.tokens).toHaveLength(0);
     expect(w.secretWrites).toEqual([]);
-    expect(line(w, "agent-config")).toBeUndefined();
+    const cfg = line(w, "agent-config");
+    expect(cfg.status).toBe("ok");
+    expect(cfg.data.snippets.claudeCode).toBe(
+      "claude mcp add --transport http open-artifacts https://app.example.com/mcp",
+    );
+    expect(cfg.data.snippets).not.toHaveProperty("opencodeToken");
+    expect(cfg.data.tokenNote).toMatch(/fallback snippets appear once/);
   });
 
   it("#21: agent-config still prints when the selftest fails, and the run exits 1", async () => {
@@ -276,9 +344,9 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     expect(w.sqls.at(-2)).toMatch(
       /UPDATE tokens SET revoked_at = \d+ WHERE user_id/,
     );
-    expect(w.hits).toContain("mcp tools/call");
-    // M5: the welcome artifact is updated in place, not duplicated.
-    expect(w.mcpCalls[0].arguments.id).toBe("art1");
+    // M5: the unchanged welcome artifact is neither duplicated nor published again.
+    expect(w.mcpCalls).toEqual([]);
+    expect(w.state().welcomeArtifactId).toBe("art1");
     patContained(w, patOf(w));
     w.lines.length = 0;
     w.db.tokens[1].revoked_at = 1;
