@@ -4,7 +4,7 @@
 
 **Goal:** Every artifact lives in a space. Access comes from one decision function fed by space roles (set by hand or synced from Google Workspace), shares, visibility and a cap for guests and restricted groups. It is enforced by one middleware on every surface, and directory removals cut live access within minutes.
 
-**Architecture:** Migration `0009_spaces.sql` (after P2's `0008`) adds spaces, user-id-keyed memberships, group mappings, directory state, audit events and `users.status`. Each user gets a personal space whose id is their user id. It is created on every user insert, so today's installs map 1:1 with no access change. `auth/policy.ts` is the pure decision table (`decide`, `can`, `orgCan`). `auth/authz.ts` gathers its inputs in one D1 statement (`authorize`), and `listFilterSql` returns the same level per row. A Hono middleware enforces `ROUTE_POLICY` before every handler, with `TOOL_POLICY` doing the same for each MCP tool. Two new SQLite Durable Object classes:
+**Architecture:** Migration `NNNN_spaces.sql` (the next free number when T1 rebases: after P2's `0008` and the nightly trigger's `0009` (#387), likely `0010`) adds spaces, user-id-keyed memberships, group mappings, directory state, audit events and `users.status`. Each user gets a personal space whose id is their user id. It is created on every user insert, so today's installs map 1:1 with no access change. `auth/policy.ts` is the pure decision table (`decide`, `can`, `orgCan`). `auth/authz.ts` gathers its inputs in one D1 statement (`authorize`), and `listFilterSql` returns the same level per row. A Hono middleware enforces `ROUTE_POLICY` before every handler, with `TOOL_POLICY` doing the same for each MCP tool. Two new SQLite Durable Object classes:
 - `DirectorySync`: one per install. It runs Google polling and the queued access jobs: space-wide socket closes and revocation retries.
 - `UserPresence`: one per user. It records that user's sockets so a revocation closes them at once.
 
@@ -146,7 +146,7 @@ Each surface's gate is enforced by `enforcePolicy` middleware (Task 5) before th
 
 ## File structure
 
-- `apps/server/migrations/0009_spaces.sql` (create): tables, backfill, triggers, indexes.
+- `apps/server/migrations/NNNN_spaces.sql` (create; the next free number, never hardcoded in code or tests): tables, backfill, triggers, indexes.
 - `apps/server/src/db/schema.ts` (modify): Drizzle mirrors.
 - `apps/server/src/auth/policy.ts` (create): `decide`, `can`, `orgCan`, `namedEvents`, `capOf`. No I/O.
 - `apps/server/src/auth/authz.ts` (modify): `authorize`, `listFilterSql`, `loadSpace`.
@@ -182,10 +182,10 @@ Each surface's gate is enforced by `enforcePolicy` middleware (Task 5) before th
 
 ---
 
-### Task 1: Migration 0009 and the rollout window
+### Task 1: The spaces migration and the rollout window
 
 **Files:**
-- Create: `apps/server/migrations/0009_spaces.sql`
+- Create: `apps/server/migrations/NNNN_spaces.sql` (tests find it by suffix: `migrations.find((m) => m.name.endsWith("_spaces.sql"))`)
 - Modify: `apps/server/src/db/schema.ts`, `services/users.ts` (every user insert), `services/artifacts.ts` (create), `services/members.ts` (`removeMember` with the flag off)
 - Test: `apps/server/test/spaces.migration.test.ts`, `apps/server/test/d1-rows.test.ts`
 
@@ -213,12 +213,12 @@ Each surface's gate is enforced by `enforcePolicy` middleware (Task 5) before th
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-it("0009 keeps every (user, artifact) access level", async () => {
+it("the spaces migration keeps every (user, artifact) access level", async () => {
   const before = await snapshotLevels(env, legacyAccessLevel); // seeded at 0008
-  await applyMigration(env, "0009_spaces.sql");
+  await applyMigration(env, SPACES_MIGRATION); // found by suffix, not number
   expect(await snapshotLevels(env, accessLevel)).toEqual(before);
 });
-it("a user inserted after 0009 has a personal space (trigger)", async () => {
+it("a user inserted after the spaces migration has a personal space (trigger)", async () => {
   const u = await insertUser(env, { email: "late@x.com", role: "member" });
   expect(await spaceRow(env, u.id)).toMatchObject({ kind: "personal", owner_user_id: u.id });
 });
@@ -397,7 +397,8 @@ it.each(["cookie", "pat", "oauth"])("suspended user → 401 via %s", async (cred
 it("removed user's personal artifacts stay unreadable by the org owner", async () => { /* 404 */ });
 it("a removed user signing in with a valid Google identity is refused (P2 admission)", async () => { /* 302 /sign-in?error=removed (P2's SignInError; identity conflicts are identity_conflict) */ });
 it("reactivated user's PATs stay revoked", async () => { /* 401 */ });
-it("gatherer: a suspended or removed user resolves to nobody on every surface", async () => { /* pinned from the #367 review; needs users.status (#368) */ });
+it("gatherer: a suspended or removed user resolves to nobody on every surface", async () => { /* getUser returns only status='active' rows (#368) */ });
+it("unsuspend sets status back to active; a removed row stays removed", async () => { /* active; removed */ });
 ```
 
 - [ ] **Step 2: Run.** Expected: 4 failures. **Step 3: Implement.** **Step 4: Run** `pnpm -F @oa/server test members`. Expected: passes.
@@ -594,7 +595,7 @@ it("content host does one D1 statement per request", async () => { expect(statem
   - Granted scopes are a superset of the list above; `hd` equals the install domain.
   - `users.get(sub)` gives `isAdmin = true` (super admin; delegated admins are refused) and a `customerId`.
   - `domains.list(customerId)` contains the install domain.
-- On success it records the `DirectoryBinding` (`provider`, `customerId`, `domain`, `connectedBy`, `connectedAt`), then runs the **initial binding**: a full `users.list` creates or links `identities('google', id)` (setting `directory_bound = 1`, a column P3 adds to P2's table in `0009`) and user rows, with email matching allowed only in this one pass, and sets `restricted` per `restricted_groups`.
+- On success it records the `DirectoryBinding` (`provider`, `customerId`, `domain`, `connectedBy`, `connectedAt`), then runs the **initial binding**: a full `users.list` creates or links `identities('google', id)` (setting `directory_bound = 1`, a column P3 adds to P2's table in the spaces migration) and user rows, with email matching allowed only in this one pass, and sets `restricted` per `restricted_groups`.
 - `crypto.ts`: `seal(token): string` and `open(sealed): string`. Both use AES-GCM with `DIRECTORY_TOKEN_KEY`, AD `install_id + ":" + key_version`, and a 96-bit random IV.
 - `broker.ts`: `accessToken(env): Promise<string>` POSTs the sealed refresh token's plaintext to the broker `/google/directory/token`, authenticated with the install assertion. The install never sees the client secret.
 - Self-hosted: the same `TokenSource` interface with the self-hoster's own Google client, or their own service account; the secrets are theirs.
@@ -673,7 +674,7 @@ it("500-user page parse + diff under 10 ms CPU", async () => { /* cpu */ });
 
 **Interfaces:**
 - `applyGroupDiff(env, groupId, added: string[], removed: string[], actor: AuditActor): Promise<{ narrowed: string[] }>`. It works on user ids, recomputes `space_members(source='sync')` as the max over mappings, recomputes `users.restricted_sync` (by `groupId`; owners and admins in a restricted group are logged and skipped, never restricted), and writes only the rows that changed. `narrowed` goes to `revokeUserLive`.
-- `applyUser(env, u: DirUser, run: string): Promise<void>` (status changes carry `AuditReason` `directory_suspend`, `directory_unsuspend`, `directory_delete` or `directory_new_id`). It matches only through `identities('google', u.id)`. An unknown id creates a new user row and identity (the trigger creates the personal space).
+- `applyUser(env, u: DirUser, run: string): Promise<void>` (status changes carry `AuditReason` `directory_suspend`, `directory_unsuspend`, `directory_delete` or `directory_new_id`). It matches only through `identities('google', u.id)`. An unknown id creates a new user row and identity (the trigger creates the personal space). Unsuspend sets `status = 'active'` only on a `suspended` row; a `removed` row is never revived. `getUser` returns only `active` rows (#368), so a suspension is refused on every surface by that check.
 - `DELETE_USER`, or a `deleted` user in a listing:
   - `setUserStatus("removed")`.
   - `users.email` becomes the placeholder `removed+{userId}@invalid`.
@@ -699,6 +700,7 @@ it("two groups → max role; removal from one keeps the other, no revoke", async
 it("restricted group membership (by groupId) sets users.restricted_sync and caps", async () => { /* restricted_sync = 1 */ });
 it("sign-in group diff adds and removes for that user only", async () => { /* one user's rows changed */ });
 it("rows written equal changed rows only", async () => { /* d1 rows */ });
+it("directory UNSUSPEND_USER sets status active, never revives a removed row", async () => { /* active; removed stays */ });
 it("an owner or admin in a restricted group is skipped and logged", async () => { /* restricted_sync = 0; audit detail */ });
 ```
 
@@ -916,7 +918,7 @@ Rollback: never downgrade; once a shared space exists, fix forward.
 | 1 Recycled email | T6 (P2 admission seam), T12 initial binding, T14 identity-only matching and deletion treatment, T16 `recycledEmailUser` |
 | 2 Public links off and `/p/` | T9 rewrite and close; T11 content statement |
 | 3 Rollout window | T1 create path, trigger, flag-off move |
-| 4 Migration numbers | T1 `0009`, `IF NOT EXISTS` |
+| 4 Migration numbers | T1 takes the next free number at rebase (not hardcoded), `IF NOT EXISTS` |
 | 5 Ad-hoc `ownerId` | T3 removals, T4 SQL level, T5 AST lint |
 | 6 Policy enforcement | T5 middleware, `TOOL_POLICY`, generated cross-user test |
 | 7 Contractors | T2 `cap`, T14 `restricted`, T16 caller |
