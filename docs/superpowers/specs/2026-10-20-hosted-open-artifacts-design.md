@@ -147,6 +147,9 @@ Start with the setup code reused as a library: one normal Worker per install, wi
    - User Workers in a dispatch namespace support Durable Object bindings, alongside D1, R2 and KV, each attached per Worker for isolation.
    - **Durable Object transfers across the dispatch-namespace boundary are not supported**: the source and target must both be inside, or both outside, a dispatch namespace. So requirement 1 (export and import) is the only migration path, and it is mandatory.
 
+5. **No Worker-name assumptions in the app** **(my call)**: the app never relies on its own Worker name, routes, or account-level settings a dispatch namespace lacks. CI runs the e2e suite once inside a dispatch namespace to prove it.
+6. **Rehearse the move** **(my call)**: before about 100 customers, move our own staging install through export, import and cutover, and time it.
+
 **Workers for Platforms pricing (Cloudflare docs, Oct 2026):**
 
 | Item | Price |
