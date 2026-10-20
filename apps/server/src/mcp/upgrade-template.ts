@@ -17,6 +17,7 @@ export const UPGRADE_TOKENS = [
   "name",
   "version",
   "workerName",
+  "hostSlug",
 ] as const;
 export type UpgradeToken = (typeof UPGRADE_TOKENS)[number];
 
@@ -33,6 +34,7 @@ export const UPGRADE_FLAGS = [
   "--account-id",
   "--rollback",
   "--allow-downgrade",
+  "--new-owner-token",
 ] as const;
 
 export const REPO = "open-artifacts-ai/open-artifacts";
@@ -50,7 +52,6 @@ const code = (s: string) => `\`${s}\``;
 const or = (xs: readonly string[]) =>
   xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} or ${xs.at(-1)}`;
 const STEPS_JSON = or(ROLLBACK_STEPS.map((s) => code(`"step":"${s}"`)));
-const STEPS = or(ROLLBACK_STEPS.map(code));
 
 const T = (k: UpgradeToken) => `{{${k}}}`;
 
@@ -58,6 +59,7 @@ const NAME = T("workerName");
 const CF = secretFile("cloudflare", { installName: NAME });
 const ACCESS = secretFile("access", { installName: NAME });
 const ANALYTICS = secretFile("analytics", { installName: NAME });
+const PAT = secretFile("pat", { hostSlug: T("hostSlug") });
 const CF_ENV = `${SECRET_ENV_VARS.cloudflare}="$(cat ${CF})"`;
 const SETUP = `${CF_ENV} pnpm -s oa:setup`;
 
@@ -177,7 +179,11 @@ Never pass \`--allow-downgrade\` unless the user explicitly asks for a downgrade
 
 Roll back only when step 7 exits 1 and its last \`error\` line has ${STEPS_JSON}: those steps run after the deploy, so the new version is live and failing. If it failed at any earlier step, nothing was deployed: do not roll back; show the user the \`message\` and stop.
 
-If step 7 exits 2 instead, with an \`action_required\` line from ${STEPS} (for example, DNS not yet updated), do not roll back: relay the \`message\` verbatim, wait a few minutes, then run step 7 again.
+Exit code 2 is never a reason to roll back. Relay the \`message\` verbatim, then:
+
+- From \`healthcheck\` (DNS not yet updated): wait a few minutes, then run step 7 again.
+- From \`selftest\` with \`"tokenRejected": true\` in its \`data\`: the saved agent token was rejected. Run step 7 again with \`--new-owner-token\` added. Setup issues a new token; the user saves it to \`${PAT}\`, the same file as before, as described under Client setup in ${T("origin")}/skill.md. Never print the token.
+- Anything else: follow the message, as in Exit codes.
 
 Run the rollback in the same directory as step 7: it reads \`.openartifacts/state.json\`, which the upgrade wrote there. From any other directory it exits 2 ("no previous version recorded"); relay that verbatim.
 

@@ -9,6 +9,7 @@ import { VERSION } from "../version.gen.js";
 import { skillEnabled } from "./skill.js";
 import {
   DEFAULT_INSTALL_NAME,
+  hostSlug,
   skillName,
   skillOrigin,
 } from "./skill-common.js";
@@ -36,6 +37,7 @@ export function renderUpgrade(env: UpgradeEnv): Promise<string> {
         name,
         version: VERSION,
         workerName,
+        hostSlug: hostSlug(env.APP_HOST),
       };
       return UPGRADE_TEMPLATE.replace(
         /\{\{(\w+)\}\}/g,

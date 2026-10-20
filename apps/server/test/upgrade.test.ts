@@ -139,7 +139,7 @@ describe("upgrade.md content", () => {
       `--upgrade --name ${WORKER} --json`,
       `"step":"healthcheck"`,
       `"step":"selftest"`,
-      "step 7 exits 2 instead",
+      "Exit code 2 is never a reason to roll back",
       "same directory as step 7",
       `--rollback --name ${WORKER} --json`,
       "the upgrade was rolled back",
@@ -196,6 +196,22 @@ describe("upgrade.md content", () => {
     }
     expect(s8).toContain("do not roll back");
     expect(s8).toContain("run step 7 again");
+  });
+
+  it("exit 2 never rolls back; a rejected agent token reruns with --new-owner-token", async () => {
+    const md = await upgrade();
+    expect(UPGRADE_FLAGS).toContain("--new-owner-token");
+    const s8 = md.split("## 8. ")[1]?.split("\n## ")[0] ?? "";
+    expect(s8).toContain("Exit code 2 is never a reason to roll back");
+    expect(s8).toContain('`"tokenRejected": true`');
+    expect(s8).toContain("`--new-owner-token`");
+    expect(s8).toContain(
+      `\`${secretFile("pat", { hostSlug: "app-localhost" })}\``,
+    );
+    expect(s8).toContain("Client setup in http://app.localhost/skill.md");
+    expect(s8).toContain("Never print the token");
+    // The DNS wait-and-rerun is the healthcheck case only.
+    expect(s8).toMatch(/From `healthcheck` \(DNS[^\n]*run step 7 again/);
   });
 
   it("origin is https for a real host, even on a dev Worker", async () => {
