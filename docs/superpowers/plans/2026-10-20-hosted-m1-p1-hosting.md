@@ -131,7 +131,7 @@ it("rejects reserved, uppercase, dotted and too-long slugs", () => {
 
 - [ ] **Step 1: Write the failing tests**
   - `every template binding is mapped or explicitly excluded`: parse `apps/server/wrangler.template.jsonc`, collect binding names and var names; each must appear in `userWorkerMetadata(...).bindings` or in `TEMPLATE_BINDINGS_EXCLUDED`. This is the drift guard: a new server binding fails this test until hosted handles it.
-  - `hosted vars`: `FEATURES` (P3; M1 FinQore value `spaces,sync,guests-ro,content-revoke`) and P2's `AUTH_PROVIDERS`, `AUTH_DOMAINS`, `AUTH_BROKER_URL`, `INSTALL_ID` come from `vars`, validated by the same allowlist pattern as setup's `tunables.ts`.
+  - `hosted vars`: `FEATURES` (P3's flag list, e.g. `spaces,directory_sync`; Backend owns the names) and P2's `AUTH_PROVIDERS`, `AUTH_DOMAINS`, `AUTH_BROKER_URL`, `INSTALL_ID` come from `vars`, validated by the same allowlist pattern as setup's `tunables.ts`.
   - `vars carry the install's own hosts`: `APP_HOST`, `CONTENT_HOST`, `OWNER_EMAIL`, `WORKER_NAME === names(id).script`, `PLAN === "paid"`, `ENVIRONMENT === "production"`.
   - `Durable Object migrations`: a null tag sends every template tag; tag `v1` sends only later tags; the latest tag sends none.
   - `each install gets its own ratelimit namespace_id`: two installs' metadata never share a `namespace_id`, and neither is `1001`.

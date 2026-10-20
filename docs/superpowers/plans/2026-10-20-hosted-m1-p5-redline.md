@@ -45,7 +45,13 @@
   - `POST /__test/otp/latest {email}` → `{ code }` (after P2: the last one-time code sent to that address on this install).
   - `POST /__test/oauth-client` → `{ clientId, accessToken }` (a completed MCP OAuth grant for the owner, through the real provider).
   - Sign-in binding: hooks on also let the install trust the test issuer `https://idp.<staging-domain>` (Task 3) in addition to Google, with the same `hd`/`tid` checks. The real check code path runs; only the issuer list differs.
-- [ ] **Step 1:** Write the contract doc, send it to Backend, and get their agreement in writing (a reply in the ledger). Changes go into the doc first.
+- Agreed with Backend on 2026-10-21, with their amendments:
+  - Fail closed: hooks are live only when `TEST_HOOKS="1"` **and** `TEST_HOOK_KEY` is at least 32 chars; otherwise `/__test/*` returns 404 and `/healthz` reports `testHooks: false`.
+  - The bearer compare is constant-time. A wrong key gets the same 404, never a 401. Hooks exist on the app host only, never the content host.
+  - Hooks are rate-limited (an `RL_ANON` bucket prefixed `test:`) and every call writes an audit event `test_hook.*`.
+  - `otp/latest`: codes stay hashed. Only while hooks are on, the send path also writes the plaintext to the install's KV under `test:otp:<install>:<email>` with a 10-minute TTL.
+  - `session` takes `spaces?: [{id, role}]` once P3 lands.
+- [ ] **Step 1:** Write the contract doc with the amendments above. The suite adds three checks: a wrong key gets a 404, hooks on the content host get a 404, and a hook call shows up in `audit_events`.
 - [ ] **Step 2:** Commit `docs: red-line test-hook contract`.
 
 ### Task 2: Suite harness
@@ -65,17 +71,9 @@
 - [ ] **Step 2–4:** Run (FAIL), implement, run (PASS).
 - [ ] **Step 5:** Commit `test(redline): harness and refusal assertions`.
 
-### Task 3: Test identity provider (staging only; dropped if Backend's fixture covers it)
+### Task 3: (dropped) test identity provider
 
-**Files:**
-- Create: `apps/test-idp/` (a Worker: OIDC discovery, JWKS, `/authorize` that issues an ID token for any `{email, hd, tid}` given in the query, `/token`)
-- Test: `apps/test-idp/test/idp.test.ts`
-
-Deployed only to the staging account at `idp.<staging-domain>`; its signing key is generated at deploy and never leaves the Worker. It exists so the suite can drive the install's real OIDC callback with a wrong `hd`/`tid`; Google can't mint those.
-
-- [ ] **Step 1:** Write the failing tests: discovery and JWKS shape; ID token claims echo the requested `email`, `hd`, `tid`, `aud`, `nonce`; tokens verify against the published JWKS.
-- [ ] **Step 2–4:** Run (FAIL), implement, run (PASS).
-- [ ] **Step 5:** Commit `feat(test-idp): staging-only OIDC issuer for red-line tests`.
+Backend's ruling (2026-10-21): P5 runs P2's `SIGNIN_NEGATIVE_CASES` catalog and its fake-Google fixture live, instead of a separate issuer. Real-tenant cases are added once the user creates the two test Workspace tenants (P2's user item 6).
 
 ### Task 3b: Reuse Backend's surface probes
 
@@ -120,13 +118,14 @@ Each case: positive control on A, then the same credential on B through `expectR
 **Files:**
 - Create: `tests/redline/test/signin.test.ts`
 
-Installs are configured (by Backend's P2 settings) with `stg-a` bound to `hd=a.redline.test` and `stg-b` to `hd=b.redline.test`.
-- [ ] **Step 1: Write the tests** (drive the real OIDC flow through `apps/test-idp`)
+Installs are configured (by Backend's P2 settings) with `stg-a` and `stg-b` bound to different domains. The cases come from P2's `SIGNIN_NEGATIVE_CASES`, run live against both installs and against the staging auth broker (`auth.<staging-hosted>`), whose cases are the riskiest.
+- [ ] **Step 1: Write the tests** (drive P2's catalog live)
   - `an ID token with hd=a… at B's callback` → no session.
   - `an ID token with B's email domain but hd=a…` → no session (domain from the token, not the email).
   - `an ID token with no hd claim and a B-domain email` → no session.
   - `an ID token minted for A's client (aud) replayed at B` → no session.
   - `A's OIDC state/nonce replayed at B` → no session.
+  - Broker: `A's BROKER_KEY redeeming as B`, `B's assertion at A`, `a tampered install id at the broker callback` → refused.
   - One-time codes: `a code issued by A for x@b.redline.test, entered at B` → refused; `a code requested at B for an address not invited to B` → no code sent (hook shows none) and a generic response; `a guest of A who is invited to B gets read-only on B only` (guest can't publish via MCP or data API on B).
 - [ ] **Step 2:** Run; expect PASS (same stop rule).
 - [ ] **Step 3:** Commit `test(redline): sign-in and one-time codes are bound to their install`.
@@ -157,7 +156,7 @@ The migration skill itself is Backend's scope C and isn't on main yet. This task
 
 **Interfaces:**
 - Produces: `checkImport(o: { target: Target; exportDir: string; owner: string; spaceMap: Record<string, string>; before: Snapshot }): Promise<Report>` where `Report = { expected: number; imported: number; skipped: { ref: string; reason: string }[]; wrongSpace: string[]; wrongOwner: string[]; duplicates: string[]; extraVersions: string[] }`; `snapshot(target): Promise<Snapshot>` (artifact ids, versions, spaces, owners).
-- `expected` comes from parsing the export independently of the skill (artifact identity = the skill's documented idempotency key; ask Backend for it in Task 1's thread).
+- `expected` comes from parsing the export independently of the skill. The identity is Backend's contract (2026-10-21): `importKey = "<source>:<conversationUuid>:<artifactId>"` (`source` is `claude` or `chatgpt`), stored on the artifact with a unique index on (owner, importKey). Republishing the same content returns the artifact unchanged; changed content adds one version, reported as updated.
 - [ ] **Step 1: Write the failing tests** against a fake install: `a correct import reports zero problems`; `a second run with no new artifacts reports zero new artifacts and zero new versions`; `an artifact published to the wrong space or with the wrong owner is reported`; `skipped items must carry a reason`.
 - [ ] **Step 2–4:** Run (FAIL), implement, run (PASS).
 - [ ] **Step 5:** Commit `test(import): checker for agent-run imports into spaces`.
