@@ -5,6 +5,7 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useState } from "react";
 import { ApiClientError } from "../../api/client";
 import { useRestoreVersion, useVersionPages } from "../../api/queries";
+import { useSingleFlight } from "../../api/useSingleFlight";
 import { AppLink } from "../../library/AppLink";
 import { relativeTime } from "../../library/time";
 import { LINK_BTN, SM } from "../ui";
@@ -13,6 +14,7 @@ export function Versions({ artifact }: { artifact: ArtifactSummary }) {
   const { id, currentVersion } = artifact;
   const q = useVersionPages(id);
   const restore = useRestoreVersion(id);
+  const once = useSingleFlight();
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
   const [target, setTarget] = useState<number | null>(null);
@@ -112,23 +114,26 @@ export function Versions({ artifact }: { artifact: ArtifactSummary }) {
               loading={restore.isPending}
               onClick={() =>
                 target !== null &&
-                restore.mutate(target, {
-                  onSuccess: (r) => {
-                    setTarget(null);
-                    void navigate({
-                      to: viewerPath(id, r.version) as string,
-                      search: search as never,
-                    });
-                  },
-                  onError: (e) =>
-                    toast({
-                      title:
-                        e instanceof ApiClientError
-                          ? e.message
-                          : "Couldn't restore",
-                      tone: "danger",
-                    }),
-                })
+                once((done) =>
+                  restore.mutate(target, {
+                    onSuccess: (r) => {
+                      setTarget(null);
+                      void navigate({
+                        to: viewerPath(id, r.version) as string,
+                        search: search as never,
+                      });
+                    },
+                    onError: (e) =>
+                      toast({
+                        title:
+                          e instanceof ApiClientError
+                            ? e.message
+                            : "Couldn't restore",
+                        tone: "danger",
+                      }),
+                    onSettled: done,
+                  }),
+                )
               }
             >
               Restore version
