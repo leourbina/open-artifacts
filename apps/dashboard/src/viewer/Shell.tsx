@@ -13,9 +13,11 @@ import { ApiClientError } from "../api/client";
 import { qk, useArtifact, useVersionInfo } from "../api/queries";
 import { useLoginRedirect } from "../auth/redirect";
 import { useMe } from "../auth/useMe";
+import { isEmbed } from "../embed";
 import { useCpuSignals } from "../layout/cpu";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { NotFound } from "../pages/NotFound";
+import { NotPublic } from "../pages/NotPublic";
 import { createBridge } from "./bridge";
 import { Crumbs } from "./Crumbs";
 import { FullScreenEscape } from "./FullScreenEscape";
@@ -192,6 +194,8 @@ function Viewer({
 
   useEffect(() => bridge.current?.setTheme(theme), [theme]);
 
+  if ((content.notFound || signedOut) && isEmbed())
+    return <NotPublic id={artifact.id} />;
   if (content.notFound) return <NotFound />;
   if (signedOut) return null;
   return (
@@ -295,6 +299,9 @@ export function Shell({
     q.data && (authed || q.data.visibility !== "private") ? q.data.title : null,
   );
 
+  // Framed, never a sign-in redirect (useLoginRedirect is inert there).
+  if (isEmbed() && (toLogin || status === 404 || status === 403))
+    return <NotPublic id={id} />;
   if (toLogin) return null;
   if (status === 404 && authed) return <NotFound />;
   if (q.error && !q.data)

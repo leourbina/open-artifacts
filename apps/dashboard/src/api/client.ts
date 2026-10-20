@@ -1,5 +1,6 @@
 import { ApiErrorSchema, type ErrorCode } from "@oa/shared";
 import type { z } from "zod";
+import { EMBED_HEADER, isEmbed } from "../embed";
 
 /** `cpu_limit` is client-only: Cloudflare's error 1102 page, never sent by the API. */
 export type ClientErrorCode = ErrorCode | "cpu_limit";
@@ -100,6 +101,19 @@ export type RequestExtra = {
   onResponse?: (res: Response) => void;
 };
 
+/**
+ * The fetch options for a request. Framed (embed mode), it is anonymous no
+ * matter what the caller asked for: no credentials, plus the embed hint.
+ */
+export function requestInit(init: RequestInit): RequestInit {
+  if (!isEmbed()) return { credentials: "same-origin", ...init };
+  const headers = {
+    ...Object.fromEntries(new Headers(init.headers)),
+    [EMBED_HEADER]: "1",
+  };
+  return { ...init, headers, credentials: "omit" };
+}
+
 async function request(
   path: string,
   init: RequestInit,
@@ -107,13 +121,15 @@ async function request(
 ): Promise<Response> {
   let res: Response;
   try {
-    res = await fetch(path, {
-      credentials: "same-origin",
-      ...init,
-      ...(extra?.headers
-        ? { headers: { ...(init.headers as object), ...extra.headers } }
-        : {}),
-    });
+    res = await fetch(
+      path,
+      requestInit({
+        ...init,
+        ...(extra?.headers
+          ? { headers: { ...(init.headers as object), ...extra.headers } }
+          : {}),
+      }),
+    );
   } catch (e) {
     if (e instanceof Error && e.name === "AbortError") throw e;
     throw internal(e instanceof Error ? e.message : "Network error", 0);
@@ -213,6 +229,8 @@ export const api = {
     return new Promise((resolve, reject) => {
       const abort = () => new DOMException("Aborted", "AbortError");
       if (signal?.aborted) return reject(abort());
+      // A same-origin XHR always carries cookies; a framed shell never uploads.
+      if (isEmbed()) return reject(internal("Not available embedded", 0));
       const xhr = new XMLHttpRequest();
       const onAbort = () => {
         xhr.abort();

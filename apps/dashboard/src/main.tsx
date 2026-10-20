@@ -3,6 +3,7 @@ import { RouterProvider } from "@tanstack/react-router";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { makeQueryClient } from "./api/queryClient";
+import { isEmbed, lockToPath } from "./embed";
 import { router } from "./router";
 import "./styles.css";
 import "./shadcn.css";
@@ -159,10 +160,12 @@ async function startMocks() {
     );
   // Mock-only: the mocks treat unauthenticated requests as anonymous, and a service worker
   // can't see the cookie header, so authenticate with a bearer token instead.
+  // Like the cookie it stands in for, it never rides on a credentials:"omit" request.
   const realFetch = window.fetch.bind(window);
   window.fetch = (input, init) => {
     const req = new Request(input, init);
-    req.headers.set("Authorization", "Bearer mock");
+    if (req.credentials !== "omit")
+      req.headers.set("Authorization", "Bearer mock");
     return realFetch(req);
   };
   await setupWorker(
@@ -180,6 +183,9 @@ async function startMocks() {
 
 await startMocks();
 const queryClient = makeQueryClient();
+// Framed: stay on the /a/<id>/full we booted on (any other route renders the
+// not-public panel, and stays there).
+if (isEmbed()) lockToPath(router, location.pathname);
 
 const el = document.getElementById("root");
 if (!el) throw new Error("missing #root");
