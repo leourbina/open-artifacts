@@ -1,5 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { R, type TokenCreated } from "@oa/shared";
+import {
+  hostSlug,
+  R,
+  SECRET_LABELS,
+  secretFile,
+  secretSnippet,
+  type TokenCreated,
+} from "@oa/shared";
 import { fixtures } from "@oa/shared/mocks";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
@@ -13,49 +20,48 @@ installHarness();
 
 const URL_ = fixtures.me.instance.mcpUrl;
 const SECRET = "oa_pat_SECRETSECRETSECRETSECRETSECRET12";
+const FILE = secretFile("pat", { hostSlug: hostSlug(location.host) });
+const all = (url: string) => snippets(url, { tokenFile: FILE });
 
 describe("snippets", () => {
-  it("covers 5 agents x 2 variants and contains the url verbatim", () => {
-    const all = snippets(URL_);
-    expect(all).toHaveLength(10);
-    expect(new Set(all.map((s) => s.agent)).size).toBe(5);
-    for (const s of all) expect(s.code).toContain(URL_);
+  it("covers 5 agents over OAuth, 4 over a token file, url verbatim", () => {
+    const list = all(URL_);
+    expect(list.filter((s) => s.variant === "oauth")).toHaveLength(5);
+    expect(
+      list.filter((s) => s.variant === "token").map((s) => s.agent),
+    ).toEqual(["Claude Code", "Codex CLI", "OpenCode", "Generic"]);
+    for (const s of list)
+      if (s.language !== "text") expect(s.code).toContain(URL_);
   });
-  it("token variants read OA_TOKEN and never embed a token", () => {
+  it("token variants read the token file and never embed a token", () => {
+    expect(FILE).toBe("~/.open-artifacts/localhost-3000-pat-token");
     const tok = (agent: string) =>
-      snippets(URL_).find((s) => s.agent === agent && s.variant === "token")
-        ?.code ?? "";
-    for (const s of snippets(URL_)) expect(s.code).not.toContain("oa_pat_");
-    expect(tok("Claude Code")).toBe(
-      `read -rs OA_TOKEN\nclaude mcp add --transport http open-artifacts ${URL_} --header "Authorization: Bearer $OA_TOKEN"\nunset OA_TOKEN`,
-    );
-    expect(tok("Codex CLI")).toBe(
-      `[mcp_servers.open-artifacts]\nurl = "${URL_}"\nbearer_token_env_var = "OA_TOKEN"`,
-    );
-    expect(tok("Cursor")).toContain(
-      '"Authorization": "Bearer ${env:OA_TOKEN}"',
-    );
+      all(URL_).find((s) => s.agent === agent && s.variant === "token")?.code ??
+      "";
+    for (const s of all(URL_)) {
+      expect(s.code).not.toContain("oa_pat_");
+      expect(s.code).not.toContain("OA_TOKEN");
+    }
+    for (const s of all(URL_).filter((s) => s.variant === "token"))
+      expect(s.code).toContain(FILE);
+    expect(tok("Claude Code")).toContain('"headersHelper"');
+    expect(tok("Codex CLI")).toContain("http_headers_helper = ");
     expect(tok("OpenCode")).toContain(
-      '"Authorization": "Bearer {env:OA_TOKEN}"',
+      `"Authorization": "Bearer {file:${FILE}}"`,
     );
     expect(tok("OpenCode")).toContain('"oauth": false');
-    expect(tok("Generic")).toContain("Bearer <YOUR_TOKEN>");
-    for (const s of snippets(URL_).filter((s) => s.variant === "token"))
-      expect(s.hint).toBeTruthy();
-    for (const s of snippets(URL_).filter((s) => s.variant === "oauth"))
+    for (const s of all(URL_).filter((s) => s.variant === "oauth"))
       expect(s.code).not.toContain("Bearer");
   });
   it("escapes per language", () => {
     const evil = `https://x.test/mcp"'\\$(id)`;
-    for (const s of snippets(evil)) {
+    for (const s of all(evil)) {
       if (s.language === "json") {
         const v = JSON.stringify(JSON.parse(s.code));
         expect(v).toContain(JSON.stringify(evil).slice(1, -1));
       }
       if (s.language === "toml")
         expect(s.code).toContain(`url = ${JSON.stringify(evil)}`);
-      if (s.language === "bash")
-        expect(s.code).toContain(`'https://x.test/mcp"'\\''\\$(id)'`);
     }
   });
 });
@@ -80,9 +86,28 @@ describe("Agents settings", () => {
   it("toggles to the Token variant", async () => {
     mount("/settings/agents");
     fireEvent.click(await screen.findByRole("radio", { name: "Token" }));
-    expect(
-      (await screen.findAllByText(/Authorization: Bearer \$OA_TOKEN/))[0],
-    ).toBeTruthy();
+    expect((await screen.findAllByText(/headersHelper/))[0]).toBeTruthy();
+  });
+
+  it("keeps the Cursor tab in the Token variant with an OAuth note", async () => {
+    mount("/settings/agents");
+    fireEvent.click(await screen.findByRole("radio", { name: "Token" }));
+    const tabs = screen.getAllByRole("tab").map((t) => t.textContent);
+    expect(tabs).toEqual([
+      "Claude Code",
+      "Codex CLI",
+      "Cursor",
+      "OpenCode",
+      "Generic",
+    ]);
+    const cursor = screen.getByRole("tab", { name: "Cursor" });
+    fireEvent.mouseDown(cursor);
+    fireEvent.click(cursor);
+    const panel = await screen.findByRole("tabpanel");
+    expect(panel.textContent).toBe(
+      "Cursor signs in with OAuth, so it doesn't need a token.",
+    );
+    expect(within(panel).queryByRole("button")).toBeNull();
   });
 
   it("revokes an OAuth client only after confirm, via DELETE", async () => {
@@ -156,7 +181,7 @@ describe("Agents settings", () => {
         .map((m) => m.state.data),
     ]);
 
-  it("shows a created token once with env-var snippets, then drops it on Done", async () => {
+  it("shows a created token once with the save command, then drops it on Done", async () => {
     let sent: unknown;
     server.use(
       http.post("*/api/v1/tokens", async ({ request }) => {
@@ -175,7 +200,20 @@ describe("Agents settings", () => {
     expect(within(shown).getAllByText(SECRET)[0]?.closest("pre")).toBeNull();
     for (const pre of shown.querySelectorAll("pre"))
       expect(pre.textContent).not.toContain(SECRET);
-    expect(shown.textContent).toContain("OA_TOKEN");
+    expect(shown.textContent).not.toContain("OA_TOKEN");
+    expect(shown.textContent).toContain(
+      "Save this token to a file so your agent can use it without it ever appearing in chat.",
+    );
+    expect(shown.textContent).toContain(
+      "Then set up your client below. Never paste the token into chat or into a config file.",
+    );
+    const save = secretSnippet(FILE, SECRET_LABELS.pat);
+    expect(
+      [...shown.querySelectorAll("pre")].map((p) => p.textContent),
+    ).toContain(save);
+    expect(
+      within(shown).getByRole("button", { name: "Copy save command" }),
+    ).toBeTruthy();
     expect(dump()).not.toContain(SECRET);
     expect(localStorage.length).toBe(0);
     expect(location.href).not.toContain(SECRET);
@@ -185,7 +223,7 @@ describe("Agents settings", () => {
     expect(dump()).not.toContain(SECRET);
   });
 
-  it("keeps the page snippets on OA_TOKEN after a token is created", async () => {
+  it("keeps the page snippets on the token file after a token is created", async () => {
     serveCreate();
     mount("/settings/agents");
     const dlg = await openCreate();
@@ -194,7 +232,7 @@ describe("Agents settings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     fireEvent.click(screen.getByRole("radio", { name: "Token" }));
-    expect(document.body.textContent).toContain("Bearer $OA_TOKEN");
+    expect(document.body.textContent).toContain(FILE);
     expect(document.body.textContent).not.toContain(SECRET);
   });
 
@@ -275,7 +313,7 @@ describe("Agents settings", () => {
 describe("snippets parse in their target format", () => {
   const evil = "https://x.test/mcp?a=\"b\"&c='d'\n$(id)`id`\\\t ";
   it("JSON, TOML and bash round-trip the url", () => {
-    for (const s of snippets(evil)) {
+    for (const s of all(evil)) {
       if (s.language === "json")
         expect(JSON.stringify(JSON.parse(s.code))).toContain("x.test");
       if (s.language === "toml") {
@@ -288,11 +326,13 @@ describe("snippets parse in their target format", () => {
         execFileSync("bash", ["-n", "-c", s.code]);
         const argv = execFileSync("bash", [
           "-c",
-          `claude() { printf '%s\\0' "$@"; }; ${s.code}`,
+          `claude() { printf '%s\\0' "$@"; }; codex() { claude "$@"; }; ${s.code}`,
         ])
           .toString()
           .split("\0");
-        expect(argv[5]).toBe(evil);
+        // OAuth passes the url as an argument; add-json inside the config.
+        const last = argv.at(-2) ?? "";
+        expect(s.variant === "oauth" ? last : JSON.parse(last).url).toBe(evil);
       }
     }
   });

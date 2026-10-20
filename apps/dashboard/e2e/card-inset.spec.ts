@@ -93,6 +93,12 @@ for (const width of [1280, 390]) {
     // The token variant and the empty states line up too.
     await page.getByRole("radio", { name: "Token" }).click();
     expect(await misaligned(page, inset(width))).toEqual([]);
+    // Cursor keeps its tab there, with an OAuth note in place of code.
+    await page.getByRole("tab", { name: "Cursor" }).click();
+    await expect(
+      page.getByText("Cursor signs in with OAuth, so it doesn't need a token."),
+    ).toBeVisible();
+    expect(await misaligned(page, inset(width))).toEqual([]);
     for (const name of ["Example MCP client", "laptop"]) {
       await page.getByRole("button", { name: `Revoke ${name}` }).click();
       await page
@@ -116,6 +122,9 @@ for (const width of [1280, 390]) {
     const dialog = page.getByRole("dialog");
     await expect(
       dialog.getByRole("button", { name: "Copy token" }),
+    ).toBeVisible();
+    await expect(
+      dialog.getByRole("button", { name: "Copy save command" }),
     ).toBeVisible();
     const out = await dialog.evaluate((d) => {
       const r = d.getBoundingClientRect();
