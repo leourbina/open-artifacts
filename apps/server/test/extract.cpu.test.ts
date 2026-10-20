@@ -1,8 +1,9 @@
 // extractText wall-clock budgets (moved from search.test / b8.breaker, whose
 // deterministic byte bounds stay there). Runs serially via vitest.cpu.config.ts.
+// The times are reports (budget(): asserted only under test:cpu:strict).
 import { describe, expect, it } from "vitest";
 import { extractText } from "../src/services/search.js";
-import { medianMs } from "./cpu-time.js";
+import { budget, medianMs } from "./cpu-time.js";
 
 /** 16 KB chunks of pre-encoded bytes (encoding stays outside the timing). */
 const stream = (b: Uint8Array, n = 16 * 1024) => {
@@ -21,7 +22,7 @@ const timed = (html: string) => {
 };
 
 describe("extractText CPU", () => {
-  it("indexes a 200k-char HTML entry in ≤ 100 ms", async () => {
+  it("indexes a 200k-char HTML entry in ≤ 100 ms", async ({ annotate }) => {
     const para =
       "<p>lorem ipsum <b>dolor</b> sit amet</p><script>x()</script>\n";
     const html = para.repeat(Math.ceil(200_000 / para.length));
@@ -33,20 +34,25 @@ describe("extractText CPU", () => {
     const ms = await medianMs(() =>
       extractText("html", new Response(html).body as never),
     );
-    expect(ms).toBeLessThanOrEqual(100);
+    await budget(annotate, "200k-char HTML entry", ms, 100);
   });
 
-  it("all-markup HTML (8 MB comment) stops in ≤ 100 ms", async () => {
-    expect(
-      await timed(`<!--${"a".repeat(8 * 1024 * 1024)}`),
-    ).toBeLessThanOrEqual(100);
+  it("all-markup HTML (8 MB comment) stops in ≤ 100 ms", async ({
+    annotate,
+  }) => {
+    const ms = await timed(`<!--${"a".repeat(8 * 1024 * 1024)}`);
+    await budget(annotate, "8 MB comment", ms, 100);
   });
 
-  it("unterminated tag openers (<a<a<a…) stay linear: ≤ 100 ms", async () => {
-    expect(await timed("<a".repeat(1_000_000))).toBeLessThanOrEqual(100);
+  it("unterminated tag openers (<a<a<a…) stay linear: ≤ 100 ms", async ({
+    annotate,
+  }) => {
+    const ms = await timed("<a".repeat(1_000_000));
+    await budget(annotate, "1M unterminated <a", ms, 100);
   });
 
-  it("8 MB of inline tags: ≤ 100 ms", async () => {
-    expect(await timed("<b>".repeat(2_800_000))).toBeLessThanOrEqual(100);
+  it("8 MB of inline tags: ≤ 100 ms", async ({ annotate }) => {
+    const ms = await timed("<b>".repeat(2_800_000));
+    await budget(annotate, "8 MB of <b>", ms, 100);
   });
 });

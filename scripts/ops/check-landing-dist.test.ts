@@ -53,11 +53,22 @@ describe("check-landing-dist", () => {
     expect(r.out).toMatch(/::error::Landing deploy skipped:.*OA-UNRELEASED/);
   });
   it("passes on a clean dir", () => {
-    put("index.html", "<p>hi</p>");
+    put("index.html", '<html><head><meta charset="utf-8"></head><p>hi</p>');
     put("llms.txt", "setup");
     const r = run();
     expect(r.code).toBe(0);
     expect(r.out).toContain("ok: landing dist clean");
+  });
+  it("fails on a page without a leading utf-8 charset meta", () => {
+    put("ok.html", '<head>\n  <meta charset="UTF-8" />\n<title>x</title>');
+    put("none.html", "<head><title>x</title></head>");
+    put("late.html", '<head><title>x</title><meta charset="utf-8"></head>');
+    const r = run();
+    expect(r.code).toBe(1);
+    expect(r.out).toContain(`missing charset`);
+    expect(r.out).toContain(`${join(dir, "none.html")}:1`);
+    expect(r.out).toContain(`${join(dir, "late.html")}:1`);
+    expect(r.out).not.toContain("ok.html");
   });
   it("exits 2 when dist is missing", () => {
     expect(run(join(dir, "nope")).code).toBe(2);

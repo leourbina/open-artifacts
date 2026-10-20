@@ -7,6 +7,10 @@
 html {
   -webkit-text-size-adjust: 100%;
 }
+:root {
+  /* One vertical rhythm for the landing sections. */
+  --section-gap: clamp(56px, 8vw, 88px);
+}
 body {
   margin: 0;
   background: var(--oa-bg);
@@ -16,6 +20,14 @@ body {
 }
 [hidden] {
   display: none !important;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 img {
   display: block;
@@ -120,7 +132,7 @@ code,
   color: var(--oa-text);
 }
 .site-foot {
-  margin-top: 96px;
+  margin-top: var(--section-gap);
   border-top: 1px solid var(--oa-divider);
   color: var(--oa-text-muted);
   font-size: var(--oa-text-md);
@@ -179,10 +191,18 @@ code,
   line-height: 1.06;
   letter-spacing: -0.03em;
 }
-@media (max-width: 639px) {
-  .hero h1 br {
-    display: none;
-  }
+/* Three fixed lines at every width. */
+.hero h1 span {
+  display: block;
+}
+.hero .lede a {
+  color: var(--oa-text);
+  text-decoration: underline;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+}
+.hero .lede a:hover {
+  text-decoration-color: var(--oa-accent);
 }
 .lede {
   max-width: 60ch;
@@ -245,28 +265,61 @@ code,
   margin-top: 48px;
 }
 
+.demo-section,
+.gallery-section,
+.story-section {
+  margin-top: var(--section-gap);
+}
+.gallery-section .gallery {
+  margin-top: 24px;
+}
+.section-lede {
+  max-width: 64ch;
+  margin-top: 8px;
+  color: var(--oa-text-2);
+}
+
 /* Bands */
 .band {
-  margin-top: 96px;
-  padding: 72px 0;
+  margin-top: var(--section-gap);
+  padding: var(--section-gap) 0;
   background: var(--oa-chrome);
   border-block: 1px solid var(--oa-divider);
 }
 
 .steps {
   display: grid;
-  gap: 32px;
-  margin: 32px 0 0;
+  gap: 24px;
+  margin: 24px 0 0;
   padding: 0;
   list-style: none;
   counter-reset: step;
 }
 @media (min-width: 860px) {
   .steps {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-items: stretch;
+    gap: 32px;
+  }
+  .steps p {
+    margin-bottom: 12px;
+  }
+  .steps .step-chip {
+    height: 36px;
+    margin-top: auto;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .step-chip .chip-t {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 }
 .steps li {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   counter-increment: step;
 }
 .steps h3::before {
@@ -291,58 +344,41 @@ code,
   font-size: 0.9em;
   color: var(--oa-text);
 }
-.step-visual {
-  display: grid;
-  place-items: center;
-  height: 132px;
-  margin-bottom: 20px;
-  padding: 16px;
+/* A one-line glimpse of each step, sized to its content. */
+.step-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  margin-top: 12px;
+  padding: 6px 10px;
   background: var(--oa-surface);
-  border-radius: var(--oa-radius-lg);
+  border-radius: var(--oa-radius-md);
   box-shadow: var(--oa-shadow-1);
+  color: var(--oa-text-2);
   font-size: var(--oa-text-sm);
-  overflow: hidden;
-}
-.term {
-  font-family: var(--oa-font-mono);
-  color: var(--oa-text);
+  overflow-wrap: anywhere;
 }
 .caret {
   color: var(--oa-text-muted);
 }
-.mini-dialog {
-  display: grid;
-  gap: 12px;
-  justify-items: start;
-  padding: 12px 14px;
-  border: 1px solid var(--oa-border);
-  border-radius: var(--oa-radius-md);
-}
 .mini-btn {
-  padding: 4px 10px;
+  flex: none;
+  padding: 2px 8px;
   border-radius: var(--oa-radius-sm);
   background: var(--oa-text);
   color: var(--oa-surface);
   font-weight: 500;
 }
-.mini-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border: 1px solid var(--oa-border);
-  border-radius: var(--oa-radius-md);
-  color: var(--oa-text-2);
-}
 
 /* Features */
 .features {
-  margin-top: 96px;
+  margin-top: var(--section-gap);
 }
 .cards {
   display: grid;
-  gap: 16px;
-  margin: 32px 0 0;
+  gap: 12px;
+  margin: 24px 0 0;
   padding: 0;
   list-style: none;
 }
@@ -357,7 +393,7 @@ code,
   }
 }
 .card {
-  padding: 24px;
+  padding: 20px;
   background: var(--oa-surface);
   border-radius: var(--oa-radius-lg);
   box-shadow: var(--oa-shadow-1);
@@ -369,10 +405,6 @@ code,
 }
 
 /* Plans: two parallel cards, neither styled as the "upgrade". */
-.plans-lede {
-  margin-top: 8px;
-  color: var(--oa-text-2);
-}
 @media (min-width: 960px) {
   .plans .cards {
     grid-template-columns: repeat(2, 1fr);
@@ -393,7 +425,7 @@ code,
 .pair {
   display: grid;
   gap: 24px;
-  margin-top: 48px;
+  margin-top: var(--section-gap);
 }
 @media (min-width: 900px) {
   .pair {
@@ -438,7 +470,7 @@ code,
 }
 
 .source {
-  margin-top: 96px;
+  margin-top: var(--section-gap);
 }
 .source p {
   margin: 8px 0 20px;

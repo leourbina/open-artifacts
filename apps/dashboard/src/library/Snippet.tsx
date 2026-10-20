@@ -14,7 +14,16 @@ export function Snippet({ text }: { text: string }) {
         const s = part.replace(stray, "");
         const key = offset;
         offset += part.length + 1;
-        return i % 2 ? <mark key={key}>{s}</mark> : <span key={key}>{s}</span>;
+        return i % 2 ? (
+          <mark
+            key={key}
+            className="rounded-[2px] bg-[var(--oa-accent-soft)] px-[2px] text-foreground"
+          >
+            {s}
+          </mark>
+        ) : (
+          <span key={key}>{s}</span>
+        );
       })}
     </>
   );

@@ -71,6 +71,16 @@ export {
 } from "./ui/dropdown-menu";
 export { Input } from "./ui/input";
 export { Label } from "./ui/label";
+export {
+  Popover,
+  PopoverAnchor,
+  PopoverClose,
+  PopoverContent,
+  PopoverDescription,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from "./ui/popover";
 export { ScrollArea, ScrollBar } from "./ui/scroll-area";
 export {
   Select,
@@ -122,7 +132,7 @@ export {
   useSidebar,
 } from "./ui/sidebar";
 export { Skeleton } from "./ui/skeleton";
-export { Toaster } from "./ui/sonner";
+export { Toaster, toast } from "./ui/sonner";
 export {
   Table,
   TableBody,

@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.4.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.3.0...v0.4.0) (2026-10-20)
+
+
+### Features
+
+* **dashboard:** artifact detail chrome on @oa/ui/shadcn (migration area 4) ([#244](https://github.com/open-artifacts-ai/open-artifacts/issues/244)) ([23aef70](https://github.com/open-artifacts-ai/open-artifacts/commit/23aef70d601a63aecb9054e78777b0ec6add151d))
+* **dashboard:** invite and share copy says when we email ([#167](https://github.com/open-artifacts-ai/open-artifacts/issues/167)) ([#237](https://github.com/open-artifacts-ai/open-artifacts/issues/237)) ([9034b56](https://github.com/open-artifacts-ai/open-artifacts/commit/9034b5648b42a15a7ad831f97fc11ff005cbbaf1))
+* **dashboard:** Library and search on @oa/ui/shadcn (migration area 3) ([#242](https://github.com/open-artifacts-ai/open-artifacts/issues/242)) ([16cd99f](https://github.com/open-artifacts-ai/open-artifacts/commit/16cd99f30e95dd55256a5841396e2f18577a3673))
+* **dashboard:** Settings on @oa/ui/shadcn (migration area 2) ([#241](https://github.com/open-artifacts-ai/open-artifacts/issues/241)) ([db87aa9](https://github.com/open-artifacts-ai/open-artifacts/commit/db87aa9e6529ffa0b5614e16857755c6e8beb907))
+* **dashboard:** share and invite dialogs, CopyLink and Sonner toasts on @oa/ui/shadcn (migration area 5) ([#249](https://github.com/open-artifacts-ai/open-artifacts/issues/249)) ([8be9ce7](https://github.com/open-artifacts-ai/open-artifacts/commit/8be9ce7119025c32956604458fa2ac24ec2f4b54))
+* **dashboard:** sidebar B (Inset) on the shadcn Sidebar ([#232](https://github.com/open-artifacts-ai/open-artifacts/issues/232)) ([6adf735](https://github.com/open-artifacts-ai/open-artifacts/commit/6adf7352a31689b2647be8ea8b39876d0312c1b5))
+* **dashboard:** sign-in split brand panel ([#233](https://github.com/open-artifacts-ai/open-artifacts/issues/233)) ([55963f1](https://github.com/open-artifacts-ai/open-artifacts/commit/55963f178fcb1b3d127f30a3df9f1139de0fd7b3))
+* **landing:** live desk hero and tighter page rhythm ([#228](https://github.com/open-artifacts-ai/open-artifacts/issues/228)) ([487f7c9](https://github.com/open-artifacts-ai/open-artifacts/commit/487f7c98a18be1cf8357f4583d4aeb755f6ff09d))
+* **server:** /healthz reports the instance version ([#247](https://github.com/open-artifacts-ai/open-artifacts/issues/247)) ([5383b71](https://github.com/open-artifacts-ai/open-artifacts/commit/5383b7152a5267ab788b26d19d33dded4b4c511c))
+* **shared:** Me.instance.emailEnabled ([#167](https://github.com/open-artifacts-ai/open-artifacts/issues/167)) ([#236](https://github.com/open-artifacts-ai/open-artifacts/issues/236)) ([b66f858](https://github.com/open-artifacts-ai/open-artifacts/commit/b66f858a38495c8a5bc8a4a3d87d26a2e3cc80b3))
+* **ui:** export toast() and set Studio Toaster defaults ([#245](https://github.com/open-artifacts-ai/open-artifacts/issues/245)) ([97c72c5](https://github.com/open-artifacts-ai/open-artifacts/commit/97c72c5844cb98b3c19b19520313677d640a4e9f))
+* **ui:** shadcn Popover ([#254](https://github.com/open-artifacts-ai/open-artifacts/issues/254)) ([5baf9b9](https://github.com/open-artifacts-ai/open-artifacts/commit/5baf9b929adc6219f3ae5c5628ce7b6a51dd0851))
+
+
+### Bug Fixes
+
+* **dashboard:** invite form sends once on a fast double Enter ([#252](https://github.com/open-artifacts-ai/open-artifacts/issues/252)) ([5913106](https://github.com/open-artifacts-ai/open-artifacts/commit/59131065be813ee266b87a405edb43391e4bc226))
+* **dashboard:** one request per submit for Profile, display name, Details and restore ([#257](https://github.com/open-artifacts-ai/open-artifacts/issues/257)) ([b9b6a5e](https://github.com/open-artifacts-ai/open-artifacts/commit/b9b6a5e5e1045cdd1e38ede97dd5448fa104b7a6))
+* **mcp:** 401s explain a missing or empty bearer token ([#261](https://github.com/open-artifacts-ai/open-artifacts/issues/261)) ([0eeb439](https://github.com/open-artifacts-ai/open-artifacts/commit/0eeb4399374ba08b6d73c929b058473b4a48693c))
+* **mcp:** instructions state the Free data-doc limit (256 KB), not 1 MB ([#246](https://github.com/open-artifacts-ai/open-artifacts/issues/246)) ([b7fdf1b](https://github.com/open-artifacts-ai/open-artifacts/commit/b7fdf1b1b6836e6174facd46ef637e52d52ecfee))
+* **ui:** dialogs and sheets on the popover surface ([#256](https://github.com/open-artifacts-ai/open-artifacts/issues/256)) ([da9e697](https://github.com/open-artifacts-ai/open-artifacts/commit/da9e6979ee0bc5c434bbf923af5bf70683d7fd0d))
+
+
+### Performance Improvements
+
+* **server:** no thumbnail bookkeeping in alarms when the gate is off; alarm CPU guard and benches ([#223](https://github.com/open-artifacts-ai/open-artifacts/issues/223)) ([c0ce35b](https://github.com/open-artifacts-ai/open-artifacts/commit/c0ce35b00bb138f83cccf968d836d8ce1930c1e5))
+
 ## [0.3.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.2.1...v0.3.0) (2026-10-19)
 
 
