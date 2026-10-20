@@ -90,6 +90,23 @@ async function startMocks() {
         });
       }),
     );
+  // ?mock=update: v0.14.2 with v0.15.0 out; ?mock=uptodate and ?mock=custom
+  // (a -dev build): a check with nothing to upgrade to.
+  const checkedAt = new Date(Date.now() - 5 * 60_000).toISOString();
+  const updates = {
+    update: { current: "0.14.2", custom: false, updateAvailable: true },
+    uptodate: { current: "0.15.0", custom: false, updateAvailable: false },
+    custom: { current: "0.15.0-dev", custom: true, updateAvailable: false },
+  } as const;
+  const u = updates[params.get("mock") as keyof typeof updates];
+  const update = u && {
+    ...u,
+    latestVersion: "0.15.0",
+    breaking: false,
+    notesUrl:
+      "https://github.com/open-artifacts-ai/open-artifacts/releases/tag/v0.15.0",
+    checkedAt,
+  };
   // ?mock=cpu: 4 CPU-limit hits today, and the first two library requests get a 1102 (the first may be aborted).
   if (params.get("mock") === "cpu") {
     let hits = 0;
@@ -154,6 +171,7 @@ async function startMocks() {
       quotaExceeded,
       emailEnabled,
       plan: params.get("mock")?.startsWith("paid") ? "paid" : "free",
+      update,
     }),
   ).start({
     onUnhandledRequest: "bypass",

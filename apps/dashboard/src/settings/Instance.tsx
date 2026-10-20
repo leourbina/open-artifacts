@@ -12,8 +12,11 @@ import {
 } from "@oa/ui/shadcn";
 import { useState } from "react";
 import { useSettings, useUpdateSettings } from "../api/queries";
+import { useMe } from "../auth/useMe";
+import { instanceUpdate } from "../layout/update";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
-import { CARD, errorText, INSET, muted } from "./ui";
+import { CARD, errorText, INSET, muted, STACK } from "./ui";
+import { VersionCard } from "./VersionCard";
 
 const VISIBILITY = [
   { value: "private", label: "Private" },
@@ -27,6 +30,17 @@ const HELP = {
 
 export function Instance() {
   useDocumentTitle("Instance");
+  const state = useMe();
+  const latest = instanceUpdate(state.status === "authed" ? state.me : null);
+  return (
+    <div className={STACK}>
+      {latest && <VersionCard update={latest} />}
+      <InstanceSettings />
+    </div>
+  );
+}
+
+function InstanceSettings() {
   const settings = useSettings();
   const update = useUpdateSettings();
   // Only edited fields live here; everything else reads through from the server.

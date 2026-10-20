@@ -29,6 +29,8 @@ import { CpuBanner } from "./CpuBanner";
 import { DisplayNamePrompt } from "./DisplayNamePrompt";
 import { QuotaBanner } from "./QuotaBanner";
 import { Toaster } from "./toast";
+import { UpdateDot } from "./UpdateChip";
+import { instanceUpdate, shouldNudge } from "./update";
 
 const icon = (d: string) => (
   <svg
@@ -140,7 +142,7 @@ function Layout() {
           header. Below 768px it is full-bleed and the page scrolls. */}
       <div className="relative flex w-full min-w-0 flex-1 flex-col bg-[var(--oa-bg)] md:m-[var(--oa-space-2)] md:ml-0 md:h-[calc(100svh-2*var(--oa-space-2))] md:rounded-[var(--oa-radius-lg)] md:border md:border-[var(--oa-border)] md:peer-data-[state=collapsed]:ml-[var(--oa-space-2)]">
         <header className="sticky top-0 z-[5] flex h-12 flex-none items-center gap-[10px] border-0 border-b border-[var(--oa-divider)] bg-[var(--oa-bg)] px-[var(--oa-space-5)] max-md:px-[var(--oa-space-3)] md:static md:rounded-t-[calc(var(--oa-radius-lg)-1px)]">
-          <SidebarTrigger aria-label="Toggle navigation" />
+          <MenuTrigger me={me} />
           <TopBar me={me} />
         </header>
         {/* Focusable (not tabbable) so the keyboard can scroll it. */}
@@ -163,6 +165,27 @@ function Layout() {
       </div>
       {me && <DisplayNamePrompt key={me.user.id} me={me} />}
     </SidebarProvider>
+  );
+}
+
+/** Opens/collapses the sidebar. On phones, an update puts a dot on it (Design's A). */
+function MenuTrigger({ me }: { me: Me | null }) {
+  const { isMobile } = useSidebar();
+  const update = instanceUpdate(me);
+  const dot = isMobile && shouldNudge(update);
+  return (
+    <span className="relative inline-flex">
+      <SidebarTrigger
+        aria-label={dot ? "Open menu, update available" : "Toggle navigation"}
+      />
+      {dot && (
+        <UpdateDot
+          breaking={update.breaking === true}
+          ring="page"
+          className="pointer-events-none absolute top-[6px] right-[5px]"
+        />
+      )}
+    </span>
   );
 }
 
