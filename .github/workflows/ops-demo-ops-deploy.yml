@@ -24,11 +24,16 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @oa/demo-ops test
       - run: pnpm --filter @oa/shared build
+      - name: Map ops/demo/ids.json to the worker's id vars
+        run: node --experimental-strip-types apps/demo-ops/scripts/vars.ts ops/demo/ids.json > "$RUNNER_TEMP/demo-vars"
       - name: Deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: pnpm --filter @oa/server exec wrangler deploy -c ../demo-ops/wrangler.jsonc
+        run: |
+          args=()
+          while IFS= read -r kv; do args+=(--var "$kv"); done < "$RUNNER_TEMP/demo-vars"
+          pnpm --filter @oa/server exec wrangler deploy -c ../demo-ops/wrangler.jsonc "${args[@]}"
       - name: Set DEMO_OA_TOKEN
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

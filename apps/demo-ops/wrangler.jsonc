@@ -10,7 +10,10 @@
   "vars": {
     "DEMO_BASE_URL": "https://demo.open-artifacts.com",
     "DASHBOARD_ARTIFACT_ID": "",
-    "SOURCE_ARTIFACT_IDS": "",
-    "SOURCE_COLLECTIONS": ""
+    "POLL_ID": "",
+    "CANVAS_ID": "",
+    "MAP_ID": "",
+    "TICTACTOE_ID": "",
+    "CHESS_ID": ""
   }
 }
