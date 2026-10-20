@@ -16,3 +16,10 @@ id per tab (the sandboxed frame has no persistent storage), so a reload counts a
 new browser. Each artifact already prefers `viewer.get().anonId` or
 `openArtifacts.anonId`, and ignores writes stamped `updatedBy: "anon:<id>"` that do
 not belong to the doc's owner or seat.
+
+## Seeds
+
+| Artifact | Seed |
+| --- | --- |
+| poll | None: votes live in `votes-YYYYMMDD` (UTC). |
+| tictactoe | `game/game` back to an empty board with both seats open. Clients check each write against the last state they accepted (one claim, leave, move or start over, by the seat's holder once `anon:` stamps exist), so the reset is what clears a forged board for new visitors. |

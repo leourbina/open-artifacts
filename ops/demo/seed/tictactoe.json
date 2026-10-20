@@ -1,0 +1,9 @@
+{
+  "artifact": "tictactoe",
+  "collections": {
+    "game": {
+      "game": { "board": ["", "", "", "", "", "", "", "", ""], "x": null, "o": null }
+    }
+  },
+  "notes": "One doc, game/game. The reset writes an empty board with both seats open. Seats are { id, at } and free 5 minutes after at (the holder's last claim or move); there is no heartbeat."
+}

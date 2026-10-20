@@ -5,6 +5,11 @@
       "instance": "artifacts.leourbina.com",
       "id": "DKfXiKC1qb7Knqrr",
       "visibility": "private"
+    },
+    "tictactoe": {
+      "instance": "artifacts.leourbina.com",
+      "id": "CkyAe3uSYRnYthKz",
+      "visibility": "private"
     }
   }
 }
