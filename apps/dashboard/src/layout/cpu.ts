@@ -24,7 +24,8 @@ export const utcDay = (t = Date.now()) =>
 
 /**
  * What the shell knows about CPU-limit trouble today: `hits` from usage (owners and
- * admins only, null when unknown) and whether this tab just got a 1102.
+ * admins only, null when unknown), whether this tab just got a 1102, and
+ * whether the instance is on Workers Paid (also from usage).
  */
 export function useCpuSignals(role: Role | null | undefined) {
   // `role` comes from the caller: a fresh useMe observer here would refetch an
@@ -44,5 +45,7 @@ export function useCpuSignals(role: Role | null | undefined) {
       ? (data.metrics.find((m) => m.key === "cpu_limit_hits")?.used ?? null)
       : null;
   const recent = at !== null && now - at < RECENT_MS && utcDay(at) === today;
-  return { admin, hits, recent, today };
+  // Only owners and admins can read usage, so members never learn the plan.
+  const paid = data?.plan === "paid";
+  return { admin, hits, recent, today, paid };
 }

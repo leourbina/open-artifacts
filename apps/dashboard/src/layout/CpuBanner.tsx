@@ -1,6 +1,7 @@
-import type { Me } from "@oa/shared";
+import { type Me, REPO_URL } from "@oa/shared";
 import { Banner } from "@oa/ui";
 import { useState } from "react";
+import { AppLink } from "../library/AppLink";
 import { CPU_DOC, PLANS_URL, useCpuSignals, utcDay } from "./cpu";
 
 const DISMISSED_KEY = "oa.cpuBanner.dismissed";
@@ -57,7 +58,7 @@ export function CpuBanner({
   /** The page's content column, so the banner's edges line up with it. */
   className?: string;
 }) {
-  const { admin, hits, recent, today } = useCpuSignals(role);
+  const { admin, hits, recent, today, paid } = useCpuSignals(role);
   const [dismissed, setDismissed] = useState(read);
   const n = hits ?? 0;
   if (role === "guest" || dismissed === today || !(n >= 3 || recent))
@@ -74,6 +75,39 @@ export function CpuBanner({
     } catch {}
     setDismissed(day);
   };
+  const times = (k: number) => `${k} ${k === 1 ? "time" : "times"}`;
+  // Workers Paid: no upgrade to pitch; a report helps instead.
+  if (paid)
+    return (
+      <div className={`oa-cpu-banner ${className}`}>
+        <Banner
+          tone="warning"
+          title="Some requests hit Cloudflare's CPU limit"
+          icon={GaugeIcon}
+          onDismiss={dismiss}
+        >
+          <p>
+            Your instance hit the 30-second per-request limit{" "}
+            {times(Math.max(n, 1))} today. Retrying usually works. If it keeps
+            happening, please report it so we can fix it.
+          </p>
+          <div className="oa-cpu-acts">
+            <AppLink className="oa-btn oa-sm oa-primary" href="/settings/usage">
+              View usage
+            </AppLink>
+            <a
+              className="oa-cpu-link inline-flex items-center gap-1"
+              href={`${REPO_URL}/issues/new`}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Report an issue
+              {ExtIcon}
+            </a>
+          </div>
+        </Banner>
+      </div>
+    );
   return (
     <div className={`oa-cpu-banner ${className}`}>
       <Banner

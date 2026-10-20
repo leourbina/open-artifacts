@@ -32,19 +32,22 @@ export const UPSELL_AFTER = 2;
  */
 export function SlowNotice({
   cpu,
+  paid = false,
   reloads,
   admin,
   onReload,
   onDismiss,
 }: {
   cpu: boolean;
+  /** Workers Paid: the 30-second limit, nothing to upgrade to. */
+  paid?: boolean;
   reloads: number;
   admin: boolean;
   onReload: () => void;
   onDismiss: () => void;
 }) {
   // Only the people who can change the plan are pointed at it.
-  const upsell = cpu && admin && reloads >= UPSELL_AFTER;
+  const upsell = cpu && !paid && admin && reloads >= UPSELL_AFTER;
   return (
     <div className="oa-vnotice mx-auto my-3 w-[calc(100%-32px)] max-w-[680px]">
       <div
@@ -59,7 +62,9 @@ export function SlowNotice({
         </span>
         <div className="min-w-0 flex-1 max-[560px]:basis-[calc(100%-60px)]">
           <span className="oa-vnotice-text [&_a]:font-medium [&_a]:whitespace-nowrap [&_a]:text-foreground [&_a]:underline-offset-2">
-            {cpu ? (
+            {cpu && paid ? (
+              "This request hit Cloudflare's 30-second CPU limit. Try again."
+            ) : cpu ? (
               <>
                 This artifact may have hit your instance's CPU limit. Reloading
                 usually works.

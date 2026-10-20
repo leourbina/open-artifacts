@@ -215,6 +215,7 @@ function Viewer({
                 cpu={(cpu.hits ?? 0) > 0 || cpu.recent}
                 reloads={reloads}
                 admin={cpu.admin}
+                paid={cpu.paid}
                 onReload={reload}
                 onDismiss={() => {
                   dismissed.current = true;

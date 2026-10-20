@@ -119,7 +119,9 @@ async function startMocks() {
     );
   }
   // ?mock=paid: a Workers Paid instance (#279): no daily caps, 30 s of CPU.
-  if (params.get("mock") === "paid")
+  // ?mock=paid-cpu adds 4 CPU-limit hits today.
+  const paidCpu = params.get("mock") === "paid-cpu";
+  if (params.get("mock") === "paid" || paidCpu)
     extra.push(
       http.get("*/api/v1/usage", () =>
         HttpResponse.json({
@@ -132,7 +134,7 @@ async function startMocks() {
             { key: "d1_writes", used: 120, limit: 0 },
             { key: "do_requests", used: 80, limit: 0 },
             { key: "kv_writes", used: 2300, limit: 0 },
-            { key: "cpu_limit_hits", used: 0, limit: 0 },
+            { key: "cpu_limit_hits", used: paidCpu ? 4 : 0, limit: 0 },
             { key: "cpu_p99_ms", used: 18.2, limit: 30000 },
           ],
         }),
