@@ -432,3 +432,13 @@ a.oa-lpill-gone {
     display: none;
   }
 }
+/* Phones: a tighter chip, so Share and ••• stay on the picker's row. */
+@media (max-width: 639px) {
+  .oa-lchip {
+    gap: 4px;
+    padding-left: 8px;
+  }
+  .oa-lchip-undo {
+    padding: 0 5px;
+  }
+}

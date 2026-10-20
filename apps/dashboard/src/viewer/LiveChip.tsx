@@ -80,7 +80,10 @@ const heldLabel = (u: LiveUpdate) =>
     : { long: `v${u.version} available`, short: `v${u.version}` };
 const swappedLabel = (u: LiveUpdate) =>
   u.restoredFrom !== undefined
-    ? { long: `Restored v${u.restoredFrom} as v${u.version}`, short: "Updated" }
+    ? {
+        long: `Restored v${u.restoredFrom}`,
+        short: `Restored v${u.restoredFrom}`,
+      }
     : { long: `Updated to v${u.version}`, short: "Updated" };
 
 /** Long copy from 640px up; Design's short phone copy below. */

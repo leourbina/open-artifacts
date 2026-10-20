@@ -215,7 +215,10 @@ describe("live versions: restore", () => {
     await api("POST", R.restoreVersion(OWNED, 1));
     const next = await frame(first);
     fireEvent.load(next);
-    expect(await screen.findByText("Restored v1 as v3")).toBeTruthy();
+    // Design: the pill says "Restored v1 · Undo"; the announcement says more.
+    const pill = await screen.findAllByText("Restored v1");
+    expect(pill[0]?.closest(".oa-lchip")?.textContent).toContain("Undo");
+    expect(screen.queryByText("Updated", { exact: true })).toBeNull();
     expect(
       screen.getByRole("button", { name: "Version: v3 · Current" }),
     ).toBeTruthy();

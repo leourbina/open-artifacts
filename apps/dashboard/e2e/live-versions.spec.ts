@@ -199,10 +199,10 @@ for (const width of [1280, 390])
         await expect(view).toHaveCount(0);
         await page.waitForTimeout(300);
         await restore(page, 2);
-        const note =
-          width < 640
-            ? page.getByText("Updated", { exact: true })
-            : page.getByText("Restored v2 as v4");
+        const note = page
+          .locator(".oa-lchip")
+          .getByText("Restored v2", { exact: true })
+          .filter({ visible: true });
         await expect(note).toBeVisible({ timeout: 2_000 });
         await expect(
           page.getByRole("button", { name: "Version: v4 · Current" }),
