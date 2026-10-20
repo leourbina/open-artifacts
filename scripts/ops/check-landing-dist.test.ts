@@ -32,6 +32,12 @@ describe("check-landing-dist", () => {
     );
     expect(r.out).toContain("::error::Landing deploy skipped:");
   });
+  it("fails on an unrendered placeholder in skill.md", () => {
+    put("skill.md", "---\nname: {{name}}\n---\n");
+    const r = run();
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("skill.md:2");
+  });
   it("fails on TODO in llms.txt", () => {
     put("llms.txt", "# setup\nTODO: instructions");
     const r = run();

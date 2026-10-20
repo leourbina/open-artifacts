@@ -74,6 +74,7 @@ export async function llmsTxt(): Promise<string> {
           `- [${d.data.title}](${SITE}/docs/${d.id}.md): ${d.data.description}`,
       ),
       `- [All docs in one file](${SITE}/llms-full.txt)`,
+      `- [Agent Skill](${SITE}/skill.md): installs your instance's skill`,
     ].join("\n"),
   ].join("\n\n");
   return `${await markerLines()}${body}\n`;
