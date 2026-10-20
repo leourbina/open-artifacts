@@ -6,7 +6,7 @@ order: 1
 
 Open Artifacts runs on your own Cloudflare account and domain. The easiest way to install it is to tell your coding agent:
 
-> Set up open-artifacts.com/llms.txt
+> Install Open Artifacts on <host> using open-artifacts.com/llms.txt
 
 The agent follows the steps below. The only thing you do yourself is approve the Cloudflare login in your browser.
 
@@ -25,14 +25,16 @@ The agent follows the steps below. The only thing you do yourself is approve the
    ```sh
    REPO={REPO_URL}
    TAG=$(curl -fsSL {LATEST_RELEASE_API} | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
-   git clone --depth 1 --branch "$TAG" "$REPO" open-artifacts
-   cd open-artifacts
+   git clone --depth 1 --branch "$TAG" "$REPO" ~/open-artifacts
+   cd ~/open-artifacts
    ```
 
+   Clone outside any existing git repository, e.g. `~/open-artifacts`, and tell the user where; upgrades run from there.
+
    If `TAG` comes back empty or `curl` fails, stop and tell the user: "Open Artifacts has no stable release yet; check back later."
-3. **Install dependencies:** `pnpm install`.
-4. **Ask the user to log in to Cloudflare.** Ask them to run `npx wrangler login` and approve access in the browser. On a remote machine or in a container, use `npx wrangler login --device` instead. This is the one step a person has to do.
-5. **Run setup.** First ask the user: "Just you, or a team?" Don't guess. Pass `--solo` for just them, or `--team` for a team, which also sets up invite email on Workers Paid (detected, or confirmed with `--yes-paid`). Use the user's hostnames and email:
+3. **Install dependencies:** `pnpm install`. pnpm may print "Ignored build scripts: esbuild, workerd"; that is expected and harmless, so don't run `pnpm approve-builds`.
+4. **Check the Cloudflare login, then ask the user to log in if needed.** First run `npx wrangler whoami --json` with at least a 3-minute timeout (it can refresh a login). If it lists accounts, skip the login. Otherwise ask them to run `npx wrangler login` and approve access in the browser. On a remote machine or in a container, use `npx wrangler login --device` instead. This is the one step a person has to do.
+5. **Run setup.** First ask the user: "Just you, or a team?" Don't guess. Pass `--solo` for just them, or `--team` for a team, which also sets up invite email on Workers Paid (detected, or confirmed with `--yes-paid`). When they pick a team, ask in the same message whether the account is on Workers Paid (pass `--yes-paid` if so), and tell them upfront that they will create an Access token and onboard the sending domain `mail.<app-host>`. If they gave one hostname, it is `--app-host`: propose `<first-label>-content.<zone>` as `--content-host` (for `artifacts.example.com`, `artifacts-content.example.com`) and the email from `wrangler whoami` as `--owner-email`, and confirm both. Use the user's hostnames and email:
 
    ```sh
    pnpm -s oa:setup --json --app-host artifacts.example.com --content-host artifacts-content.example.com --owner-email you@example.com --name open-artifacts --solo
