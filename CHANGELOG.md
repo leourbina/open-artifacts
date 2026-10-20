@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.1](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.17.0...v0.17.1) (2026-10-20)
+
+
+### Bug Fixes
+
+* **smoke:** accept Cloudflare's weak /skill.md ETag; version-proof tool count test ([#353](https://github.com/open-artifacts-ai/open-artifacts/issues/353)) ([851b3ad](https://github.com/open-artifacts-ai/open-artifacts/commit/851b3ad998b834ded059921d2684cc6442808044))
+
 ## [0.17.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.16.0...v0.17.0) (2026-10-20)
 
 

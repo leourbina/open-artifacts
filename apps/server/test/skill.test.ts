@@ -146,7 +146,12 @@ describe("skill.md drift", () => {
       true,
     );
     expect(md).toContain(`tools/list shows the ${TOOL_DEFS.length} tools`);
-    expect(md.match(/\b17\b/g) ?? []).toHaveLength(1);
+    // The tool count appears once; the version (e.g. 0.17.0) is not a count.
+    expect(
+      md
+        .replaceAll(VERSION, "")
+        .match(new RegExp(`\\b${TOOL_DEFS.length}\\b`, "g")) ?? [],
+    ).toHaveLength(1);
   });
 
   it("has the public interactive artifacts section, after the sharing and live-data sections", async () => {
@@ -366,6 +371,11 @@ describe("GET /skill.md", () => {
     });
     expect(nm.status).toBe(304);
     expect(await nm.text()).toBe("");
+    // A weak validator (Cloudflare compression) still revalidates.
+    const weak = await get(`${APP}/skill.md`, {
+      headers: { "if-none-match": `W/${etag}` },
+    });
+    expect(weak.status).toBe(304);
     const head = await get(`${APP}/skill.md`, { method: "HEAD" });
     expect(head.status).toBe(200);
   });
