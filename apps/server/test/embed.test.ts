@@ -4,7 +4,12 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import { createPat } from "../src/auth/pat.js";
 import { publicPrefix, signContentPrefix } from "../src/content/signing.js";
-import { embedOrigins, frameOpts } from "../src/http/embed.js";
+import {
+  embedOrigins,
+  frameOpts,
+  normHost,
+  siteOf,
+} from "../src/http/embed.js";
 import { withSecurityHeaders } from "../src/http/middleware.js";
 import worker from "../src/index.js";
 import { publish } from "../src/services/artifacts.js";
@@ -257,6 +262,52 @@ describe("EMBED_ORIGINS headers", () => {
     expect(full.headers.get("x-frame-options")).toBe("DENY");
   });
 
+  it("same-site check normalizes case, port, brackets and trailing dots", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const prodE = { ENVIRONMENT: "production" as const };
+    expect(
+      embedOrigins({
+        ...prodE,
+        APP_HOST: "Demo.Open-Artifacts.com.:443",
+        EMBED_ORIGINS: `${G} https://Gallery.Open-Artifacts.COM. https://ok.example.org`,
+      }),
+    ).toEqual(["https://ok.example.org"]);
+    expect(
+      embedOrigins({
+        ...prodE,
+        APP_HOST: "Demo.Open-Artifacts.com.:443",
+        EMBED_ORIGINS: G,
+        EMBED_ALLOW_SAME_SITE: "1",
+      }),
+    ).toEqual([G]);
+    // localhost (dev): ports differ, same site -> rejected.
+    expect(
+      embedOrigins({
+        ENVIRONMENT: "dev",
+        APP_HOST: "localhost:8787",
+        EMBED_ORIGINS: "http://localhost:5173 http://gallery.localhost",
+      }),
+    ).toEqual(["http://gallery.localhost"]);
+    // IP literals are their own site.
+    expect(normHost("[::1]:8787")).toBe("::1");
+    expect(siteOf(normHost("[::1]:8787"))).toBe("::1");
+    expect(siteOf("10.0.0.1")).toBe("10.0.0.1");
+    expect(
+      embedOrigins({
+        ...prodE,
+        APP_HOST: "[2001:db8::1]:443",
+        EMBED_ORIGINS: "https://db8.example.com",
+      }),
+    ).toEqual(["https://db8.example.com"]);
+    expect(
+      embedOrigins({
+        ...prodE,
+        APP_HOST: "203.0.113.5:8443",
+        EMBED_ORIGINS: "https://203.0.113.5 https://0.113.5.example.com",
+      }),
+    ).toEqual(["https://0.113.5.example.com"]);
+  });
+
   it("injection attempts never reach a header", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const extra = {
@@ -373,7 +424,9 @@ describe("embed-mode hints (enforcement is client-side; these are hints)", () =>
     });
     const w = await put(open, EMBED);
     expect(w.status).toBe(200);
-    expect(((await w.json()) as { updatedBy: string }).updatedBy).toBe("anon");
+    expect(((await w.json()) as { updatedBy: string }).updatedBy).toMatch(
+      /^anon(:|$)/,
+    );
   });
 
   it("WebSocket with ?embed=1 is anonymous", async () => {

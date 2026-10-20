@@ -51,14 +51,14 @@ export function embedOrigins(env: EmbedEnv): readonly string[] {
   const dev = env.ENVIRONMENT === "dev";
   // Split on spaces/tabs only: a CR/LF stays inside its entry and fails the shape.
   const entries = raw.split(/[ \t]+/).filter(Boolean);
-  const site = env.APP_HOST ? lastTwo(env.APP_HOST) : "";
+  const site = env.APP_HOST ? siteOf(normHost(env.APP_HOST)) : "";
   const out: string[] = [];
   const dropped: string[] = [];
   const sameSite: string[] = [];
   for (const e of entries) {
     const o = parseOne(e, dev);
     if (o === null || out.length >= MAX_ORIGINS) dropped.push(e);
-    else if (!allowSame && site && lastTwo(new URL(o).hostname) === site)
+    else if (!allowSame && site && siteOf(normHost(new URL(o).host)) === site)
       sameSite.push(o);
     else if (!out.includes(o)) out.push(o);
   }
@@ -76,8 +76,29 @@ export function embedOrigins(env: EmbedEnv): readonly string[] {
   return out;
 }
 
-const lastTwo = (host: string) =>
-  host.toLowerCase().split(".").slice(-2).join(".");
+/**
+ * Lowercase hostname without port, IPv6 brackets or a trailing dot. Parsed as
+ * a URL host (so "Demo.Example.com.:443" -> "demo.example.com"); an
+ * unparsable value falls back to a manual strip, never to "" (fail closed).
+ */
+export function normHost(host: string): string {
+  let h: string;
+  try {
+    h = new URL(`http://${host.trim()}`).hostname;
+  } catch {
+    h = host.trim().toLowerCase().replace(/:\d*$/, "");
+  }
+  return h.replace(/^\[|\]$/g, "").replace(/\.+$/, "");
+}
+
+/**
+ * Cheap same-site key (no public-suffix list): the last two labels of a
+ * name; an IP literal is its own site.
+ */
+export function siteOf(host: string): string {
+  if (host.includes(":") || /^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return host;
+  return host.split(".").slice(-2).join(".");
+}
 
 const FULL_PATH = /^\/a\/[^/]+\/full$/;
 
