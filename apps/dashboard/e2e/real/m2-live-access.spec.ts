@@ -67,11 +67,21 @@ test("a revoked share keeps the open copy, says so, and stops live data", async 
   );
   // Design's gone state (live versions): the frame stays, with a banner.
   await expect(
-    bob.getByText(
-      "You no longer have access. The copy in this tab stays until you leave; live data is off.",
-    ),
+    bob
+      .locator(".oa-lgone")
+      .getByText("This artifact is no longer available to you."),
   ).toBeVisible();
   await expect(bob.locator("iframe.oa-vframe")).toHaveCount(1);
+  // Stopped: no more calls for this artifact (data, content URL, events).
+  const after: string[] = [];
+  bob.on("request", (r) => {
+    if (r.url().includes(`/artifacts/${id}`)) after.push(r.url());
+  });
+  bob.on("websocket", (w) => {
+    if (w.url().includes(`/artifacts/${id}`)) after.push(w.url());
+  });
+  await bob.waitForTimeout(2_000);
+  expect(after).toEqual([]);
   await expect(
     bob.getByRole("heading", { name: "Page not found" }),
   ).toHaveCount(0);

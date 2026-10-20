@@ -2,6 +2,7 @@ import { AUTH, viewerPath } from "@oa/shared";
 import { Button } from "@oa/ui/shadcn";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
+import { toast } from "../layout/toast";
 import { svg } from "./SlowNotice";
 import { SM } from "./ui";
 import type { Gone, LiveUpdate, Swapped } from "./useLiveVersions";
@@ -72,11 +73,14 @@ function usePausableTimer(ms: number, onExpire: () => void) {
 
 const heldLabel = (u: LiveUpdate) =>
   u.restoredFrom !== undefined
-    ? { long: `v${u.restoredFrom} restored as current`, short: `v${u.version}` }
+    ? {
+        long: `v${u.restoredFrom} restored as v${u.version}`,
+        short: `v${u.version}`,
+      }
     : { long: `v${u.version} available`, short: `v${u.version}` };
 const swappedLabel = (u: LiveUpdate) =>
   u.restoredFrom !== undefined
-    ? { long: `v${u.restoredFrom} was restored as current`, short: "Updated" }
+    ? { long: `Restored v${u.restoredFrom} as v${u.version}`, short: "Updated" }
     : { long: `Updated to v${u.version}`, short: "Updated" };
 
 /** Long copy from 640px up; Design's short phone copy below. */
@@ -230,7 +234,7 @@ export function FullLive({
     const open = revealed || hover || focus;
     const label =
       held.restoredFrom !== undefined
-        ? `v${held.restoredFrom} restored as current`
+        ? `v${held.restoredFrom} restored as v${held.version}`
         : `v${held.version} available`;
     const props = {
       className: "oa-lpill",
@@ -305,16 +309,27 @@ export function FullGone({ id, embed }: { id: string; embed: boolean }) {
 
 const WarnIcon = svg("M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2zM8 4.8v3.7M8 11v.2");
 
-/** Deleted or no access while open: the frame stays; a warning banner. */
+/**
+ * Deleted or no longer available while open: the last frame stays, its
+ * bridge and sockets stopped; a warning banner. The owner of a deleted
+ * artifact can Restore it (the 30-day window starts now).
+ */
 export function GoneBanner({
   gone,
+  owner,
   authed,
   next,
+  onRestore,
 }: {
   gone: Gone;
+  owner: boolean;
   authed: boolean;
   next: string;
+  onRestore: () => Promise<void>;
 }) {
+  const [busy, setBusy] = useState(false);
+  const mine = gone === "deleted" && owner;
+  const btn = `${SM} text-foreground hover:text-foreground`;
   return (
     <div className="oa-lgone flex items-center gap-2 border-0 border-b border-border bg-[var(--oa-warning-soft)] px-5 py-[5px] text-[length:var(--oa-text-sm)] leading-[1.45] text-foreground max-[600px]:flex-wrap max-[600px]:px-4">
       <span
@@ -324,27 +339,29 @@ export function GoneBanner({
         {WarnIcon}
       </span>
       <span className="min-w-0 flex-1">
-        {gone === "deleted"
-          ? "This artifact was deleted. You're seeing the copy already open in this tab."
-          : "You no longer have access. The copy in this tab stays until you leave; live data is off."}
+        {mine
+          ? "You deleted this artifact."
+          : "This artifact is no longer available to you."}
       </span>
-      {gone === "deleted" ? (
+      {mine ? (
         <Button
-          asChild
           variant="outline"
           size="xs"
-          className={`${SM} text-foreground hover:text-foreground`}
+          className={btn}
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            onRestore().catch(() => {
+              setBusy(false);
+              toast({ title: "Couldn't restore", tone: "danger" });
+            });
+          }}
         >
-          <Link to="/">Your artifacts</Link>
+          Restore
         </Button>
       ) : (
         !authed && (
-          <Button
-            asChild
-            variant="outline"
-            size="xs"
-            className={`${SM} text-foreground hover:text-foreground`}
-          >
+          <Button asChild variant="outline" size="xs" className={btn}>
             <a href={`${AUTH.login}?next=${encodeURIComponent(next)}`}>
               Sign in
             </a>

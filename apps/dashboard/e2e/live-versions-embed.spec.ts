@@ -76,6 +76,16 @@ test.describe("embed", () => {
           ),
         )
         .toBe(1);
+      // Framed, the events socket always says embed=1 (cookies ride on
+      // WebSockets, so the server must treat it as anonymous).
+      const urls = await frame.evaluate(
+        () =>
+          (window as unknown as { __oaEventsUrls: string[] }).__oaEventsUrls,
+      );
+      const ev = urls.filter((u) => u.includes(`/artifacts/${POLL}/events`));
+      expect(ev.length).toBeGreaterThan(0);
+      for (const u of ev)
+        expect(new URL(u).searchParams.get("embed")).toBe("1");
       await page.waitForTimeout(300);
       await app.frameLocator("iframe.oa-vframe").getByRole("heading").click();
       await frame.evaluate(

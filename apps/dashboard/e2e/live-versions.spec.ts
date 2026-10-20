@@ -194,7 +194,7 @@ for (const width of [1280, 390])
         const view = page.getByRole("button", { name: "View version 3" });
         await expect(view).toBeVisible({ timeout: 2_000 });
         if (width >= 640)
-          await expect(page.getByText("v1 restored as current")).toBeVisible();
+          await expect(page.getByText("v1 restored as v3")).toBeVisible();
         await view.click();
         await expect(view).toHaveCount(0);
         await page.waitForTimeout(300);
@@ -202,7 +202,7 @@ for (const width of [1280, 390])
         const note =
           width < 640
             ? page.getByText("Updated", { exact: true })
-            : page.getByText("v2 was restored as current");
+            : page.getByText("Restored v2 as v4");
         await expect(note).toBeVisible({ timeout: 2_000 });
         await expect(
           page.getByRole("button", { name: "Version: v4 · Current" }),
@@ -213,19 +213,17 @@ for (const width of [1280, 390])
       test(`deleted while open keeps the frame (${tag})`, async ({ page }) => {
         await page.goto(`/a/${LANDING}`);
         await loaded(page);
-        // Deleted elsewhere (an agent): the mock emits gone, then 404s.
+        // Deleted elsewhere (an agent): the mock emits gone "deleted".
         await del(page);
         await expect(
-          page.getByText(
-            "This artifact was deleted. You're seeing the copy already open in this tab.",
-          ),
+          page.locator(".oa-lgone").getByText("You deleted this artifact."),
         ).toBeVisible();
         await expect(page.locator("iframe.oa-vframe")).toHaveCount(1);
         await expect(
           page.getByRole("heading", { name: "Page not found" }),
         ).toHaveCount(0);
         await expect(
-          page.getByRole("link", { name: "Your artifacts" }),
+          page.getByRole("button", { name: "Restore" }),
         ).toBeVisible();
         if (width >= 640) {
           await expect(
@@ -281,7 +279,7 @@ test("an explicit version never swaps: Current is vN selects Current", async ({
   ).toBeVisible();
 });
 
-test("an open menu holds the swap: chip, then swap once it closes", async ({
+test("an open menu means the chip, which stays until View", async ({
   page,
 }) => {
   await page.goto(`/a/${LANDING}`);
@@ -294,9 +292,12 @@ test("an open menu holds the swap: chip, then swap once it closes", async ({
     timeout: 2_000,
   });
   await page.keyboard.press("Escape");
-  await expect(page.getByText(`Updated to v${v}`)).toBeVisible({
-    timeout: 2_000,
-  });
+  const view = page.getByRole("button", { name: `View version ${v}` });
+  await expect(view).toBeVisible();
+  // Design: a version shown as a chip never auto-swaps later.
+  await page.waitForTimeout(1_500);
+  await expect(view).toBeVisible();
+  await expect(page.locator("iframe.oa-vframe")).toHaveCount(1);
 });
 
 test("a burst of versions: one chip with the newest number", async ({

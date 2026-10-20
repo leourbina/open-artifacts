@@ -73,6 +73,7 @@ function Viewer({
   onReady,
   onTouched,
   onAccessLost,
+  onUndelete,
 }: {
   chromeless: boolean;
   /** The live-version chip (title bar) or pill (/full); only on the shown layer. */
@@ -87,6 +88,8 @@ function Viewer({
   onTouched?: () => void;
   /** A data socket closed with 4403: the shell re-checks access. */
   onAccessLost?: () => void;
+  /** The owner's Restore of an artifact deleted while open. */
+  onUndelete?: () => Promise<void>;
   role: Me["user"]["role"] | undefined;
   plan: Me["instance"]["plan"] | undefined;
   artifact: ArtifactSummary;
@@ -95,7 +98,7 @@ function Viewer({
   authed: boolean;
   viewer: { email: string; name: string | null } | null;
 }) {
-  const content = useContentUrl(artifact.id, version);
+  const content = useContentUrl(artifact.id, version, gone !== null);
   const url = safeContentUrl(content.url);
   const signedOut =
     content.error instanceof ApiClientError && content.error.status === 401;
@@ -305,6 +308,8 @@ function Viewer({
           {gone && (
             <GoneBanner
               gone={gone}
+              owner={artifact.access === "owner"}
+              onRestore={onUndelete ?? (async () => {})}
               authed={authed}
               next={viewerPath(artifact.id)}
             />
@@ -528,6 +533,7 @@ function ArtifactShell({
               onReady={() => live.ready(n)}
               onTouched={shown ? live.touched : undefined}
               onAccessLost={live.check}
+              onUndelete={live.undelete}
             />
           </div>
         );

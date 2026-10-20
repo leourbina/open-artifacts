@@ -7,7 +7,7 @@ import { HttpResponse, http } from "msw";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setEmbedForTests } from "../src/embed";
 import { fullPath } from "../src/viewer/paths";
-import { arts, events, installHarness, mount, server } from "./harness";
+import { arts, events, installHarness, mount, seen, server } from "./harness";
 
 installHarness();
 afterEach(() => setEmbedForTests(false));
@@ -200,43 +200,82 @@ describe("live versions: the safe swap", () => {
 });
 
 describe("live versions: restore", () => {
-  it("held: vN restored as current · View", async () => {
+  it("held: vN restored as vM · View", async () => {
     const first = await open(viewerPath(OWNED));
     post(first, "interacted");
     await api("POST", R.restoreVersion(OWNED, 1));
     expect(
       await screen.findByRole("button", { name: "View version 3" }, LONG),
     ).toBeTruthy();
-    expect(screen.getByText("v1 restored as current")).toBeTruthy();
-    expect(document.querySelector('[aria-live="polite"]')?.textContent).toBe(
-      "Version 1 was restored as current.",
-    );
+    expect(screen.getByText("v1 restored as v3")).toBeTruthy();
   });
 
-  it("swapped: vN was restored as current · Undo", async () => {
+  it("swapped: announced as Restored vN as vM; the picker reads vM · Current", async () => {
     const first = await open(viewerPath(OWNED));
     await api("POST", R.restoreVersion(OWNED, 1));
     const next = await frame(first);
     fireEvent.load(next);
-    expect(await screen.findByText("v1 was restored as current")).toBeTruthy();
+    expect(await screen.findByText("Restored v1 as v3")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Version: v3 · Current" }),
+    ).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "Undo, go back to version 2" }),
     ).toBeTruthy();
+    await waitFor(() =>
+      expect(document.querySelector('[aria-live="polite"]')?.textContent).toBe(
+        "Restored v1 as v3.",
+      ),
+    );
   });
 });
 
+describe("live versions: a chip stays until View", () => {
+  it("held while the side panel was open; closing it never auto-swaps that version", async () => {
+    const router = mount(`${viewerPath(OWNED)}?panel=open&tab=versions`);
+    const first = await frame();
+    fireEvent.load(first);
+    post(first, "hello");
+    await waitFor(() => expect(events.connections(OWNED)).toBe(1));
+    await publish();
+    await screen.findByRole("button", { name: "View version 3" }, LONG);
+    await act(() =>
+      router.navigate({
+        to: viewerPath(OWNED) as string,
+        search: { panel: "closed" } as never,
+      }),
+    );
+    await act(() => new Promise((r) => setTimeout(r, 1_200)));
+    expect(screen.getByRole("button", { name: "View version 3" })).toBeTruthy();
+    expect(frames()).toEqual([first]);
+    // A later version, now safe: it swaps (and the chip goes).
+    await publish();
+    const next = await frame(first);
+    fireEvent.load(next);
+    expect(await screen.findByText("Updated to v4")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /View version/ })).toBeNull();
+  });
+});
+
+const GUIDE = idOf("Onboarding guide"); // team, viewer access
+const NEUTRAL = "This artifact is no longer available to you.";
+/** The banner's copy, not the announcer's. */
+const BANNER = { selector: ".oa-lgone span" };
+/** No call for `id` after `from` (artifact, versions, content URL, data). */
+const callsFor = (id: string, from: number) =>
+  seen.slice(from).filter((u) => u.pathname.includes(`/artifacts/${id}`));
+
 describe("live versions: gone", () => {
-  it("deleted while open: banner, frame kept, bridge and socket stopped", async () => {
+  it("deleted, the owner: You deleted this artifact, frame kept, nothing fetched", async () => {
     const first = await open(viewerPath(OWNED));
     await api("DELETE", R.artifact(OWNED));
     expect(
-      await screen.findByText(
-        "This artifact was deleted. You're seeing the copy already open in this tab.",
-      ),
+      await screen.findByText("You deleted this artifact.", BANNER),
     ).toBeTruthy();
+    const after = seen.length;
     expect(frames()).toEqual([first]);
     expect(screen.queryByText("Page not found")).toBeNull();
-    expect(screen.getByRole("link", { name: "Your artifacts" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Restore" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Share" })).toHaveProperty(
       "disabled",
       true,
@@ -246,12 +285,89 @@ describe("live versions: gone", () => {
       true,
     );
     expect(events.connections(OWNED)).toBe(0);
-    // The bridge is gone: a hello gets no welcome.
+    // The bridge is gone: no welcome, and a data call goes nowhere.
     const replies = post(first, "hello");
     expect(replies).not.toHaveBeenCalled();
-    // A refetch's 404 doesn't replace the copy either.
-    await act(() => new Promise((r) => setTimeout(r, 50)));
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: {
+            oa: 1,
+            type: "call",
+            id: "c1",
+            method: "storage.get",
+            params: { key: "k" },
+            nonce: nonceOf(first),
+          },
+          origin: "null",
+          source: first.contentWindow,
+        }),
+      );
+      window.dispatchEvent(new Event("focus"));
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await act(() => new Promise((r) => setTimeout(r, 200)));
+    expect(callsFor(OWNED, after)).toEqual([]);
     expect(frames()).toEqual([first]);
+  });
+
+  it("deleted, the owner: Restore brings it back live", async () => {
+    const first = await open(viewerPath(OWNED));
+    const before = nonceOf(first);
+    await api("DELETE", R.artifact(OWNED));
+    fireEvent.click(await screen.findByRole("button", { name: "Restore" }));
+    await waitFor(() =>
+      expect(
+        screen.queryByText("You deleted this artifact.", BANNER),
+      ).toBeNull(),
+    );
+    await waitFor(() => expect(events.connections(OWNED)).toBe(1));
+    // A fresh load of the frame, with a fresh nonce.
+    await waitFor(() =>
+      expect(nonceOf(frames()[0] as HTMLIFrameElement)).not.toBe(before),
+    );
+  });
+
+  it("deleted, not the owner: the neutral copy, no Restore", async () => {
+    await open(viewerPath(GUIDE), GUIDE);
+    act(() => {
+      events.emitGone(GUIDE, "deleted");
+    });
+    expect(await screen.findByText(NEUTRAL, BANNER)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Restore" })).toBeNull();
+    expect(screen.queryByText("You deleted this artifact.", BANNER)).toBeNull();
+  });
+
+  it("changed, then 404: the neutral copy", async () => {
+    await open(viewerPath(GUIDE), GUIDE);
+    server.use(
+      http.get(`*${R.artifact(GUIDE)}`, () =>
+        HttpResponse.json(
+          { error: { code: "not_found", message: "Not found" } },
+          { status: 404 },
+        ),
+      ),
+    );
+    act(() => {
+      events.emitGone(GUIDE, "changed");
+    });
+    expect(await screen.findByText(NEUTRAL, BANNER)).toBeTruthy();
+    expect(frames()).toHaveLength(1);
+    await act(() => new Promise((r) => setTimeout(r, 50)));
+    expect(events.connections(GUIDE)).toBe(0);
+  });
+
+  it("changed, then hello: carries on, no notice, the data bridge stays", async () => {
+    const first = await open(viewerPath(OWNED));
+    // A capability change: the mock emits gone "changed".
+    await api("PATCH", R.artifact(OWNED), { capabilities: { db: true } });
+    await waitFor(() => expect(events.connections(OWNED)).toBe(1));
+    await act(() => new Promise((r) => setTimeout(r, 50)));
+    expect(screen.queryByText(NEUTRAL, BANNER)).toBeNull();
+    expect(screen.queryByText("You deleted this artifact.", BANNER)).toBeNull();
+    // Still the same frame, and its bridge still answers.
+    expect(frames()).toEqual([first]);
+    expect(post(first, "hello")).toHaveBeenCalled();
   });
 
   it("/full: No longer available · Exit", async () => {
@@ -261,13 +377,6 @@ describe("live versions: gone", () => {
       await screen.findByRole("link", { name: "No longer available · Exit" }),
     ).toBeTruthy();
     expect(frames()).toEqual([first]);
-  });
-
-  it("still readable after a gone (a capability change): carries on", async () => {
-    await open(viewerPath(OWNED));
-    await api("PATCH", R.artifact(OWNED), { capabilities: { db: true } });
-    await waitFor(() => expect(events.connections(OWNED)).toBe(1));
-    expect(screen.queryByText(/no longer have access|was deleted/)).toBeNull();
   });
 });
 

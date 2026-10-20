@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiClientError, api } from "../api/client";
 import { qk } from "../api/queries";
-import { connectArtifactEvents } from "./liveEvents";
+import { connectArtifactEvents, type GoneReason } from "./liveEvents";
 
 /** Design's "Spec for B": act this long after the last event of a burst. */
 export const DEBOUNCE_MS = 1_000;
@@ -15,7 +15,8 @@ export const ANNOUNCE_GAP_MS = 10_000;
 /** A new current version: a publish, or a restore of `restoredFrom`. */
 export type LiveUpdate = { version: number; restoredFrom?: number };
 export type Swapped = LiveUpdate & { prev: number };
-export type Gone = "deleted" | "noaccess";
+/** Deleted (final), or no longer readable by this viewer. */
+export type Gone = "deleted" | "unavailable";
 /** What the shell knows about the frame it shows, since that frame's load. */
 export type FrameState = { hello: boolean; touched: boolean };
 
@@ -37,14 +38,19 @@ export const say = {
   held: (v: number, full: boolean) =>
     `Version ${v} is available. View is ${full ? "at the bottom right" : "in the title bar"}.`,
   swapped: (v: number) => `Updated to version ${v}.`,
-  restored: (from: number) => `Version ${from} was restored as current.`,
-  deleted: "This artifact was deleted. The open copy stays until you leave.",
-  noaccess: "You no longer have access to this artifact.",
+  restored: (from: number, v: number) => `Restored v${from} as v${v}.`,
+  heldRestore: (from: number, v: number, full: boolean) =>
+    `Restored v${from} as v${v}. View is ${full ? "at the bottom right" : "in the title bar"}.`,
+  /** Deleted, to its owner. */
+  deleted: "You deleted this artifact.",
+  unavailable: "This artifact is no longer available to you.",
 };
 
 const updateCopy = (u: LiveUpdate, held: boolean, full: boolean) =>
   u.restoredFrom !== undefined
-    ? say.restored(u.restoredFrom)
+    ? held
+      ? say.heldRestore(u.restoredFrom, u.version, full)
+      : say.restored(u.restoredFrom, u.version)
     : held
       ? say.held(u.version, full)
       : say.swapped(u.version);
@@ -213,19 +219,25 @@ export function useLiveVersions(o: {
     };
   }, []);
   const goGone = useCallback(
-    (access: ArtifactSummary["access"] | undefined) => {
+    (g: Gone) => {
       if (now.current.gone) return;
-      const g: Gone = access === "owner" ? "deleted" : "noaccess";
       sock.current?.close();
       clearTimeout(debounce.current);
       pending.current = null;
+      // Nothing for this artifact is fetched again: the copy on screen stays.
+      qc.setQueryDefaults(qk.artifact(id), { enabled: false });
+      void qc.cancelQueries({ queryKey: qk.artifact(id) });
       setGone(g);
       setHeld(null);
       setSwapped(null);
       setPreload(null);
-      announce(say[g]);
+      announce(
+        g === "deleted" && now.current.o.data?.access === "owner"
+          ? say.deleted
+          : say.unavailable,
+      );
     },
-    [announce],
+    [announce, qc, id],
   );
 
   // A gone frame, a data socket's 4403 or a focus refetch: ask the API.
@@ -250,7 +262,7 @@ export function useLiveVersions(o: {
       sock.current?.resume();
     } catch (e) {
       if (e instanceof ApiClientError && (e.status === 404 || e.status === 403))
-        goGone(now.current.o.data?.access);
+        goGone("unavailable");
       // Signed out: the shell's own 401 handling takes it from here.
       else if (e instanceof ApiClientError && e.status === 401)
         void qc.invalidateQueries({ queryKey: qk.artifact(id) });
@@ -266,7 +278,10 @@ export function useLiveVersions(o: {
 
   // The socket couldn't connect: refetch on window focus instead.
   const down = useRef(false);
+  // Bumped by Restore after a delete: a fresh socket.
+  const [generation, setGeneration] = useState(0);
   useEffect(() => {
+    void generation;
     const s = connectArtifactEvents({
       id,
       embed,
@@ -276,14 +291,19 @@ export function useLiveVersions(o: {
           enqueue({ version: e.version });
         } else enqueue({ version: e.version, restoredFrom: e.restoredFrom });
       },
-      onGone: () => void check(),
+      // Deleted is final; "changed" may not concern this viewer: re-check
+      // (readable: reconnect and carry on; 404: no longer available).
+      onGone: (reason: GoneReason) =>
+        reason === "deleted" ? goGone("deleted") : void check(),
       onDown: () => {
         down.current = true;
       },
     });
     sock.current = s;
     const onFocus = () => {
-      if (down.current) void check();
+      if (!down.current) return;
+      void check();
+      s.retry();
     };
     window.addEventListener("focus", onFocus);
     return () => {
@@ -292,7 +312,17 @@ export function useLiveVersions(o: {
       sock.current = null;
       clearTimeout(debounce.current);
     };
-  }, [id, embed, enqueue, check]);
+  }, [id, embed, enqueue, check, goGone, generation]);
+
+  /** The owner's Restore on the deleted notice (within the 30-day window). */
+  const undelete = useCallback(async () => {
+    await api.send("POST", R.restoreDeleted(id), undefined);
+    qc.setQueryDefaults(qk.artifact(id), { enabled: true });
+    setGone(null);
+    setGeneration((g) => g + 1);
+    void qc.invalidateQueries({ queryKey: qk.artifact(id) });
+    void qc.invalidateQueries({ queryKey: ["artifacts"] });
+  }, [id, qc]);
 
   /** The preloaded frame loaded: it becomes the shown one. */
   const ready = useCallback(
@@ -337,36 +367,6 @@ export function useLiveVersions(o: {
     setPreload({ ...n.held, prev: n.shown, mode: "view" });
   }, []);
 
-  // A menu or dialog held a safe swap back: decide again once it closes.
-  const chromeWasOpen = useRef(false);
-  useEffect(() => {
-    if (!held || !following || preload || gone) return;
-    chromeWasOpen.current = now.current.o.chromeOpen();
-    const t = setInterval(() => {
-      const open = now.current.o.chromeOpen();
-      if (chromeWasOpen.current && !open) {
-        const h = now.current.held;
-        if (
-          h &&
-          isSafeSwap({
-            following: true,
-            ...now.current.o.frame(),
-            chromeOpen: false,
-          })
-        ) {
-          setHeld(null);
-          setPreload({
-            ...h,
-            prev: now.current.shown ?? h.version,
-            mode: "swap",
-          });
-        }
-      }
-      chromeWasOpen.current = open;
-    }, 250);
-    return () => clearInterval(t);
-  }, [held, following, preload, gone]);
-
   return {
     shown,
     latest,
@@ -380,6 +380,7 @@ export function useLiveVersions(o: {
     ready,
     touched,
     check,
+    undelete,
     clearSwapped: useCallback(() => setSwapped(null), []),
   };
 }

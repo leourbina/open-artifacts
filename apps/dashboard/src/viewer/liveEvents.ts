@@ -10,22 +10,38 @@ export const EVENTS_TTL_CLOSE = 4408;
 const BACKOFF_BASE_MS = 1_000;
 const BACKOFF_CAP_MS = 30_000;
 
+export type GoneReason = Extract<ArtifactEvent, { type: "gone" }>["reason"];
+
 export interface ArtifactEventsOptions {
   id: string;
-  /** Embed mode: the socket connects anonymously (`?embed=1`). */
+  /**
+   * Embed mode: always `?embed=1`, so the server treats the socket as
+   * anonymous (browsers send cookies on WebSockets).
+   */
   embed: boolean;
   onEvent: (e: Exclude<ArtifactEvent, { type: "gone" }>) => void;
-  /** A `gone` frame, or a 4403 close: re-check access. No reconnect until `resume`. */
-  onGone: () => void;
-  /** The socket couldn't connect, or dropped: fall back to refetching on focus. */
+  /**
+   * A `gone` frame (or a bare 4403 close, read as "changed"). No reconnect
+   * until `resume`.
+   */
+  onGone: (reason: GoneReason) => void;
+  /**
+   * The socket couldn't connect (a 429, a refusal) or dropped: refetch on
+   * focus. A failed connect isn't retried until `retry`, so no storm.
+   */
   onDown: () => void;
 }
+
+export const eventsUrl = (id: string, embed: boolean) => {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${location.host}${R.events(id)}${embed ? "?embed=1" : ""}`;
+};
 
 /**
  * One R.events socket per viewer. Server to client only: this never sends a
  * frame (the server closes with 1008 if it gets one). Reconnects on 4408 at
- * once and on other drops with backoff; each connect's hello carries the
- * current version, so missed versions are caught up.
+ * once, and with backoff after a connection that worked drops; each
+ * connect's hello carries the current version, so missed ones catch up.
  */
 export function connectArtifactEvents(opts: ArtifactEventsOptions) {
   let ws: WebSocket | null = null;
@@ -33,14 +49,14 @@ export function connectArtifactEvents(opts: ArtifactEventsOptions) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let stopped = false;
   let paused = false;
+  /** A connect failed: wait for `retry` (a window focus) instead. */
+  let idle = false;
 
   const open = () => {
     if (stopped || paused) return;
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const hint = opts.embed ? "?embed=1" : "";
-    const sock = new WebSocket(
-      `${proto}//${location.host}${R.events(opts.id)}${hint}`,
-    );
+    idle = false;
+    let hello = false;
+    const sock = new WebSocket(eventsUrl(opts.id, opts.embed));
     ws = sock;
     sock.onmessage = (e) => {
       if (ws !== sock || typeof e.data !== "string") return;
@@ -52,10 +68,13 @@ export function connectArtifactEvents(opts: ArtifactEventsOptions) {
       }
       const f = ArtifactEventSchema.safeParse(raw);
       if (!f.success) return;
-      if (f.data.type === "hello") attempt = 0;
       if (f.data.type === "gone") {
-        gone(sock);
+        gone(sock, f.data.reason);
         return;
+      }
+      if (f.data.type === "hello") {
+        hello = true;
+        attempt = 0;
       }
       opts.onEvent(f.data);
     };
@@ -63,7 +82,7 @@ export function connectArtifactEvents(opts: ArtifactEventsOptions) {
       if (ws !== sock || stopped) return;
       ws = null;
       if (e?.code === EVENTS_GONE_CLOSE) {
-        gone(sock);
+        gone(sock, "changed");
         return;
       }
       if (e?.code === EVENTS_TTL_CLOSE) {
@@ -72,17 +91,21 @@ export function connectArtifactEvents(opts: ArtifactEventsOptions) {
         return;
       }
       opts.onDown();
+      if (!hello) {
+        idle = true;
+        return;
+      }
       const delay = Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** attempt++);
       timer = setTimeout(open, delay);
     };
   };
 
-  const gone = (sock: WebSocket) => {
+  const gone = (sock: WebSocket, reason: GoneReason) => {
     if (paused) return;
     paused = true;
     if (ws === sock) ws = null;
     sock.close();
-    opts.onGone();
+    opts.onGone(reason);
   };
 
   // Next task: a mount that unmounts at once (StrictMode) never connects.
@@ -93,6 +116,11 @@ export function connectArtifactEvents(opts: ArtifactEventsOptions) {
       if (stopped || !paused) return;
       paused = false;
       attempt = 0;
+      open();
+    },
+    /** After a failed connect: one more try (on window focus). */
+    retry() {
+      if (stopped || paused || !idle) return;
       open();
     },
     close() {

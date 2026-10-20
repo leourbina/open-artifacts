@@ -22,8 +22,11 @@ type Control = { load: () => Promise<string | null>; stale: () => boolean };
  * still inside its lifetime and `refresh()` fetches a new one.
  * `notFound` stops retrying; other errors are in `error` (retried unless 4xx/quota).
  */
-export function useContentUrl(id: string, v: number) {
+export function useContentUrl(id: string, v: number, stopped = false) {
   const client = useQueryClient();
+  // Gone (deleted or no access): keep the URL on screen, never fetch again.
+  const halt = useRef(stopped);
+  halt.current = stopped;
   const [fresh, setFresh] = useState<ContentUrl | null>(null);
   const [loaded, setLoaded] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
@@ -48,6 +51,7 @@ export function useContentUrl(id: string, v: number) {
     // Relative to local fetch time, so client clock skew can't matter.
     const stale = () => Date.now() > fetchedAt + lifetime;
     const load = (): Promise<string | null> => {
+      if (halt.current) return Promise.resolve(null);
       pending ??= api.get(R.contentUrl(id, v), ContentUrlSchema).then(
         (c) => {
           pending = null;

@@ -99,44 +99,57 @@ describe("events socket", () => {
     expect(onEvent).toHaveBeenLastCalledWith({ type: "hello", version: 5 });
   });
 
-  it("reconnects on drops with backoff, and reports it down", () => {
+  it("a failed connect (429, refused): down, and no retry until focus", () => {
+    const { c, onDown } = mk();
+    last().closed(1006); // never said hello
+    expect(onDown).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(120_000);
+    expect(FakeWS.all).toHaveLength(1);
+    c.retry();
+    expect(FakeWS.all).toHaveLength(2);
+    // Retry only after a failure: a live socket isn't doubled.
+    last().frame({ type: "hello", version: 1 });
+    c.retry();
+    expect(FakeWS.all).toHaveLength(2);
+  });
+
+  it("a drop after a working connect reconnects with backoff", () => {
     const { onDown } = mk();
+    last().frame({ type: "hello", version: 1 });
     last().closed(1006);
     expect(onDown).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(999);
     expect(FakeWS.all).toHaveLength(1);
     vi.advanceTimersByTime(1);
     expect(FakeWS.all).toHaveLength(2);
+    // That reconnect fails: no storm, wait for focus.
     last().closed(1006);
-    vi.advanceTimersByTime(1_999);
-    expect(FakeWS.all).toHaveLength(2);
-    vi.advanceTimersByTime(1);
-    expect(FakeWS.all).toHaveLength(3);
-    // A hello resets the backoff.
-    last().frame({ type: "hello", version: 1 });
-    last().closed(1006);
-    vi.advanceTimersByTime(1_000);
-    expect(FakeWS.all).toHaveLength(4);
-  });
-
-  it("gone: reports once, closes, and waits for resume", () => {
-    const { c, onGone, onEvent } = mk();
-    const w = last();
-    w.frame({ type: "gone" });
-    w.closed(4403);
-    expect(onGone).toHaveBeenCalledTimes(1);
-    expect(w.close).toHaveBeenCalled();
-    expect(onEvent).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(60_000);
-    expect(FakeWS.all).toHaveLength(1);
-    c.resume();
+    vi.advanceTimersByTime(120_000);
     expect(FakeWS.all).toHaveLength(2);
   });
 
-  it("a bare 4403 close is gone too", () => {
+  it.each(["deleted", "changed"] as const)(
+    "gone (%s): reports the reason once, closes, waits for resume",
+    (reason) => {
+      const { c, onGone, onEvent } = mk();
+      const w = last();
+      w.frame({ type: "gone", reason });
+      w.closed(4403);
+      expect(onGone).toHaveBeenCalledTimes(1);
+      expect(onGone).toHaveBeenCalledWith(reason);
+      expect(w.close).toHaveBeenCalled();
+      expect(onEvent).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(60_000);
+      expect(FakeWS.all).toHaveLength(1);
+      c.resume();
+      expect(FakeWS.all).toHaveLength(2);
+    },
+  );
+
+  it("a bare 4403 close reads as changed", () => {
     const { onGone } = mk();
     last().closed(4403);
-    expect(onGone).toHaveBeenCalledTimes(1);
+    expect(onGone).toHaveBeenCalledWith("changed");
     vi.advanceTimersByTime(60_000);
     expect(FakeWS.all).toHaveLength(1);
   });
