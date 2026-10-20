@@ -182,6 +182,9 @@ describe("validateManifest", () => {
       /visibility/,
     );
     expect(validateManifest(manifest({ extra: 1 })).join()).toMatch(/extra/);
+    expect(validateManifest(manifest({ reset: "no" })).join()).toMatch(/reset/);
+    expect(validateManifest(manifest({ reset: false }))).toEqual([]);
+    expect(validateManifest(manifest({ reset: true }))).toEqual([]);
     expect(validateManifest(manifest({ title: "" })).join()).toMatch(/title/);
     expect(
       validateManifest(manifest({ title: "x".repeat(201) })).join(),
@@ -627,6 +630,23 @@ describe("buildSeed (the one source for the reset)", () => {
       slugs: { poll: { manifest: manifest({ visibility: "x" }) } },
     });
     expect(() => buildSeed(c.dir)).toThrow(/visibility/);
+  });
+  it("skips slugs whose manifest has reset: false (e.g. the dashboard), even with a seed", () => {
+    const fx = fixture({
+      approved: ["dashboard", "poll", "keep"],
+      ids: { dashboard: GAL, poll: POLL, keep: "K1b2c3d4E5f6g7h8" },
+      slugs: {
+        dashboard: {
+          manifest: manifest({ reset: false }),
+          seed: { collections: { stats: { today: { a: 1 } } } },
+        },
+        poll: {},
+        keep: { manifest: manifest({ reset: true }) },
+      },
+    });
+    expect(Object.keys(buildSeed(fx.dir)).sort()).toEqual(
+      [POLL, "K1b2c3d4E5f6g7h8"].sort(),
+    );
   });
   it("is empty when nothing is approved", () => {
     expect(buildSeed(fixture({ approved: null, slugs: {} }).dir)).toEqual({});

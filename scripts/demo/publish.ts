@@ -45,6 +45,7 @@ const MANIFEST_KEYS = [
   "allowAnonymousWrites",
   "capabilities",
   "description",
+  "reset",
 ];
 const CAP_KEYS = ["db", "viewer", "storage"];
 const defaultDir = join(
@@ -86,6 +87,8 @@ export function validateManifest(m: unknown): string[] {
     (typeof m.description !== "string" || m.description.length > 2000)
   )
     errs.push("description must be a string of at most 2000 characters");
+  if (m.reset !== undefined && typeof m.reset !== "boolean")
+    errs.push("reset must be a boolean");
   if (m.capabilities !== undefined) {
     const c = m.capabilities;
     if (
@@ -173,6 +176,8 @@ export function buildSeed(dir: string): Record<string, SlugSeed> {
   for (const slug of readApproved(dir)) {
     const id = ids[slug];
     if (!id) continue;
+    // `"reset": false` (default true) keeps a slug out of the nightly reset, e.g. the dashboard.
+    if (readManifest(dir, slug).reset === false) continue;
     const seed = readSeed(dir, slug);
     if (seed) {
       out[id] = seed;
