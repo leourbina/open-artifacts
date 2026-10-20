@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.14.0...v0.15.0) (2026-10-20)
+
+
+### Features
+
+* **demo:** real-time demo artifacts (poll, tic-tac-toe) and publish manifest ([#305](https://github.com/open-artifacts-ai/open-artifacts/issues/305)) ([c52a5bc](https://github.com/open-artifacts-ai/open-artifacts/commit/c52a5bcad7a1e36330838bbc11c345550b8cbf1b))
+
 ## [0.14.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.13.0...v0.14.0) (2026-10-20)
 
 
