@@ -1,6 +1,7 @@
 export * from "./agent-clients.js";
 export * from "./errors.js";
 export * from "./formats.js";
+export * from "./hosted/index.js";
 export * from "./ids.js";
 export * from "./limits.js";
 export * from "./meta.js";

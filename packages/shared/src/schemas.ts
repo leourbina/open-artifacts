@@ -1,5 +1,17 @@
 import { z } from "zod";
 import { FORMATS } from "./formats.js";
+import {
+  ArtifactCanSchema,
+  FeaturesSchema,
+  IdentityProviderSchema,
+  InstanceDirectorySchema,
+  InstanceSignInSchema,
+  MeAuthSchema,
+  MemberStatusSchema,
+  MySpaceSchema,
+  SpaceRefSchema,
+  TierSchema,
+} from "./hosted/core.js";
 import { isId } from "./ids.js";
 import { INLINE_TOO_LARGE_MESSAGE, LIMITS } from "./limits.js";
 import { findCaseCollision, normalizePath } from "./paths.js";
@@ -11,7 +23,17 @@ export const RoleSchema = z.enum(["owner", "admin", "member", "guest"]);
 export type Role = z.infer<typeof RoleSchema>;
 export const ShareRoleSchema = z.enum(["viewer", "editor"]);
 export type ShareRole = z.infer<typeof ShareRoleSchema>;
-export const AccessLevelSchema = z.enum(["owner", "editor", "viewer"]);
+/**
+ * The caller's level on one artifact. "owner": the personal owner only;
+ * "manager": a space manager on a shared-space artifact (same actions as owner
+ * except transfer). Hosted M1; older servers never send "manager".
+ */
+export const AccessLevelSchema = z.enum([
+  "owner",
+  "editor",
+  "viewer",
+  "manager",
+]);
 export type AccessLevel = z.infer<typeof AccessLevelSchema>;
 export const IdSchema = z.string().refine(isId, "invalid id");
 
@@ -177,6 +199,10 @@ export const ArtifactSummarySchema = z.object({
   access: AccessLevelSchema,
   capabilities: CapabilitiesSchema,
   allowAnonymousWrites: z.boolean(),
+  /** Hosted M1: the artifact's space. Optional: absent unless spaces are on. */
+  space: SpaceRefSchema.optional(),
+  /** Hosted M1: what the caller may do (artifactCan). Optional: absent unless spaces are on. */
+  can: ArtifactCanSchema.optional(),
 });
 export type ArtifactSummary = z.infer<typeof ArtifactSummarySchema>;
 
@@ -250,6 +276,10 @@ export const MemberSchema = z.object({
   name: z.string().nullable(),
   role: RoleSchema,
   lastSeenAt: z.string().nullable(),
+  /** Hosted M1; absent means active. `GET R.members?status=` filters (default active). */
+  status: MemberStatusSchema.optional(),
+  /** Hosted M1: linked sign-in identities (admins may reset "google"). */
+  identities: z.array(IdentityProviderSchema).optional(),
 });
 export type Member = z.infer<typeof MemberSchema>;
 
@@ -348,6 +378,14 @@ export const MeSchema = z.object({
     plan: z.enum(["free", "paid"]),
     /** Null for members and guests, and before the first good check. Optional: older servers omit it. */
     update: InstanceUpdateSchema.nullable().optional(),
+    /** Hosted M1 (all optional; older and self-hosted servers omit them). A hosted install (HOSTED=1). */
+    hosted: z.boolean().optional(),
+    /** Hosted billing tier; null when self-hosted. */
+    tier: TierSchema.nullable().optional(),
+    /** Sign-in mode and enabled providers (same data as GET AUTH.providers, ids only). */
+    signIn: InstanceSignInSchema.optional(),
+    features: FeaturesSchema.optional(),
+    directory: InstanceDirectorySchema.optional(),
   }),
   /** The name the user chose (PATCH R.me), or null. */
   displayName: z.string().nullable(),
@@ -355,6 +393,12 @@ export const MeSchema = z.object({
   suggestedName: z.string().nullable(),
   /** No chosen name and no usable IdP name: ask the user for one. */
   needsDisplayName: z.boolean(),
+  /** Hosted M1: how this request authenticated. */
+  auth: MeAuthSchema.optional(),
+  /** Hosted M1: the caller's personal space id (equals user.id). */
+  personalSpaceId: z.string().optional(),
+  /** Hosted M1: shared spaces the caller has a role in, by name, at most 200 (then page R.spaces). */
+  spaces: z.array(MySpaceSchema).optional(),
 });
 export type Me = z.infer<typeof MeSchema>;
 

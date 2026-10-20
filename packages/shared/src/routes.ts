@@ -131,6 +131,53 @@ export const R = {
   /** GET -> StorageEntry; PUT StorageSetBody { value } (strict; StorageSetBodySchema) -> StorageEntry; DELETE -> 204. `value` has the data-doc limit (dataDocLimit(plan), 413 too_large). */
   storageKey: (id: string, key: string) =>
     `${A}/${seg(id)}/storage/${seg(key)}`,
+
+  // Hosted M1 (packages/shared/HOSTED_CONTRACT.md). No access is 404.
+  /** POST MoveArtifactInput -> ArtifactSummary (shared target only: 400 space_personal; 403 space_forbidden). */
+  moveArtifact: (id: string) => `${A}/${seg(id)}/move`,
+  /** POST TransferArtifactInput -> ArtifactSummary (personal owner only; 400 invalid_successor). */
+  transferArtifact: (id: string) => `${A}/${seg(id)}/transfer`,
+  /** GET SpacesQuery -> Page<Space>; POST SpaceCreate -> 201 Space (org owner, admin). */
+  spaces: "/api/v1/spaces",
+  /** GET -> Space; PATCH SpacePatch -> Space; DELETE -> 204 (409 space_not_empty). Personal: 400 space_personal. */
+  space: (id: string) => `/api/v1/spaces/${seg(id)}`,
+  /** GET ?cursor&limit -> Page<SpaceMember>. */
+  spaceMembers: (id: string) => `/api/v1/spaces/${seg(id)}/members`,
+  /** PUT SpaceMemberPut -> SpaceMember; DELETE -> 204 (manual row only). Manager or org admin. */
+  spaceMember: (id: string, userId: string) =>
+    `/api/v1/spaces/${seg(id)}/members/${seg(userId)}`,
+  /** GET -> GroupMapping[] (org admin). */
+  spaceMappings: (id: string) => `/api/v1/spaces/${seg(id)}/mappings`,
+  /** PUT GroupMappingPut -> GroupMapping; DELETE -> 204. 409 directory_sync_off when sync is off or frozen. */
+  spaceMapping: (id: string, group: string) =>
+    `/api/v1/spaces/${seg(id)}/mappings/${seg(group)}`,
+  /** GET -> RestrictedGroup[] (org admin). */
+  restrictedGroups: "/api/v1/directory/restricted-groups",
+  /** PUT (no body) -> RestrictedGroup; DELETE -> 204. 409 directory_sync_off when sync is off or frozen. */
+  restrictedGroup: (group: string) =>
+    `/api/v1/directory/restricted-groups/${seg(group)}`,
+  /** GET -> SyncStatus (org owner, admin); DELETE -> 204 disconnect (org owner; memberships freeze). */
+  directory: "/api/v1/directory",
+  /** GET DirectoryGroupsQuery -> Page<DirectoryGroup> (org admin; group picker). */
+  directoryGroups: "/api/v1/directory/groups",
+  /** GET -> 302 to Google consent (org owner). */
+  directoryConnect: "/api/v1/directory/connect",
+  /** GET (OAuth) -> 302 /settings/directory?connected=1 or ?error=DirectoryConnectError. */
+  directoryCallback: "/api/v1/directory/callback",
+  /** POST -> 202 SyncStatus (org owner; "Sync now"). */
+  directorySync: "/api/v1/directory/sync",
+  /** POST -> 202 SyncStatus (org owner; apply a held sweep). */
+  directoryHeldConfirm: (group: string) =>
+    `/api/v1/directory/held/${seg(group)}/confirm`,
+  /** GET -> TransferSummary; POST TransferInput -> TransferResult (409 member_active). Org owner, admin. */
+  memberTransfer: (id: string) => `/api/v1/members/${seg(id)}/transfer`,
+  /** DELETE -> 204: reset a member's Google link (owner, admin; never the owner's link). */
+  memberIdentity: (id: string, provider: "google") =>
+    `/api/v1/members/${seg(id)}/identities/${seg(provider)}`,
+  /** GET ?cursor&limit -> Page<AuditEvent> (org owner, admin). */
+  audit: "/api/v1/audit",
+  /** GET -> NDJSON of AuditEvent. */
+  auditExport: "/api/v1/audit/export",
 } as const;
 
 export const AUTH = {
@@ -138,6 +185,17 @@ export const AUTH = {
   callback: "/auth/callback",
   logout: "/auth/logout",
   devLogin: "/auth/dev-login",
+  // Hosted M1 (P2). JSON only; the SPA at SIGN_IN_PAGE renders sign-in.
+  /** GET -> AuthProviders (public, no-store). */
+  providers: "/auth/providers",
+  /** GET ?next -> 302 to Google (404 when Google is off). */
+  loginGoogle: "/auth/login/google",
+  /** GET (OAuth) -> 302 next, or SIGN_IN_PAGE?error=SignInError&next, or PAGES.noAccess. */
+  callbackGoogle: "/auth/callback/google",
+  /** POST CodeRequest -> 202 CodeRequested. */
+  codeRequest: "/auth/code/request",
+  /** POST CodeVerify -> 200 CodeVerified. */
+  codeVerify: "/auth/code/verify",
 } as const;
 
 export const MCP_PATH = "/mcp";
@@ -146,6 +204,8 @@ export const diffPath = (id: string, from: number, to: number) =>
   `/a/${seg(id)}/diff/${from}/${to}`;
 
 export const PAGES = { noAccess: "/no-access", search: "/search" } as const;
+/** Hosted M1: the SPA sign-in page (?next=&error=SignInError). Kept out of PAGES, whose shape is pinned. */
+export const SIGN_IN_PAGE = "/sign-in";
 
 export const viewerPath = (id: string, v?: number) =>
   v !== undefined ? `/a/${seg(id)}/v/${v}` : `/a/${seg(id)}`;

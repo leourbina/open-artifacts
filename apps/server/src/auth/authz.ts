@@ -23,7 +23,13 @@ export type ArtifactRow = typeof artifacts.$inferSelect;
 
 /** Roles that see `team` artifacts. Guests never do. */
 export const TEAM_ROLES: readonly Role[] = ["owner", "admin", "member"];
-const RANK: Record<AccessLevel, number> = { viewer: 1, editor: 2, owner: 3 };
+// "manager" (hosted M1 contract) is never produced yet; P3 sets its semantics.
+const RANK: Record<AccessLevel, number> = {
+  viewer: 1,
+  editor: 2,
+  manager: 3,
+  owner: 3,
+};
 
 export function caller(c: Context<AppEnv>): Caller {
   const user = c.var.user;

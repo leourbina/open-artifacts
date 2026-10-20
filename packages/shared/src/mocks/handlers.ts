@@ -18,6 +18,8 @@
  * - quotaExceeded: every /api/v1 route answers 503 quota_exceeded.
  * - emailEnabled: sets Me.instance.emailEnabled (default false, from the fixtures).
  * - update: sets Me.instance.update (default null, from the fixtures).
+ * - hosted: opt-in hosted M1 mocks (./hosted.ts): sign-in, spaces, roles, `can`,
+ *   directory, transfer. Off by default, so every existing response is unchanged.
  */
 import { delay, type HttpHandler, HttpResponse, http } from "msw";
 import type { z } from "zod";
@@ -60,6 +62,7 @@ import {
 } from "../schemas.js";
 import type { ArtifactEventsMock } from "./events.js";
 import { fixtures } from "./fixtures.js";
+import { createHostedMock, type HostedMockOptions } from "./hosted.js";
 
 export type MockOptions = {
   latencyMs?: number;
@@ -74,6 +77,8 @@ export type MockOptions = {
    * visibility/capabilities changes emit `gone`.
    */
   events?: ArtifactEventsMock;
+  /** Hosted M1 mocks (true = defaults). Off by default. */
+  hosted?: boolean | HostedMockOptions;
 };
 
 const err = (code: ErrorCode, message: string, details?: unknown) =>
@@ -376,6 +381,18 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
   /** updatedBy for a data write: "anon" for anonymous callers. */
   const writer = (request: Request) => (isAnon(request) ? "anon" : me.user.id);
 
+  const h = opts.hosted
+    ? createHostedMock(opts.hosted === true ? {} : opts.hosted, {
+        me,
+        members,
+        artifacts,
+        shares,
+        err,
+        body,
+        isAnon,
+      })
+    : null;
+
   const pre: HttpHandler[] = [
     http.all("*/api/v1/*", async ({ request }) => {
       if (latencyMs) await delay(latencyMs);
@@ -413,6 +430,7 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
 
   return [
     ...pre,
+    ...(h?.handlers ?? []),
     http.get("*/api/v1/me", () => HttpResponse.json(me)),
     http.patch("*/api/v1/me", async ({ request }) => {
       const r = await body(request, MePatchSchema);
@@ -437,11 +455,17 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
       );
     }),
     http.post("*/api/v1/artifacts", async ({ request }) => {
-      const r = await body(request, PublishInputSchema);
+      const r = await body(request, h?.publishSchema ?? PublishInputSchema);
       if (r.error) return r.error;
       const existing = r.data.id
         ? artifacts.find((a) => a.id === r.data.id)
         : undefined;
+      const placed = h?.checkPublish(r.data, existing);
+      if (placed instanceof Response) return placed;
+      if (h && !existing) {
+        const refused = h.refuseCappedCreate();
+        if (refused) return refused;
+      }
       if (!existing && r.data.id && r.data.title === undefined)
         return badRequest("title is required when creating an artifact");
       if (existing)
@@ -473,6 +497,7 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
         allowAnonymousWrites: r.data.allowAnonymousWrites ?? false,
       };
       artifacts.unshift(a);
+      h?.placeNew(a, placed?.space ?? null);
       versions[a.id] = [];
       return publishTo(a, r.data);
     }),
