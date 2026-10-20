@@ -1,11 +1,15 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
 import {
   BANG_RULE,
+  DEFAULT_INSTALL_NAME,
+  SECRET_ENV_VARS,
+  SECRET_LABELS,
+  secretFile,
   secretRules,
   secretSnippet,
-} from "../../server/src/mcp/skill-common.ts";
+} from "@oa/shared";
+import { describe, expect, it } from "vitest";
 import { TOOL_DEFS } from "../../server/src/mcp/tool-defs.ts";
 
 // Runs against the built site: `pnpm test` builds first.
@@ -25,13 +29,28 @@ describe("skill.md", () => {
   });
 
   it("renders the server's secrets one-liner and rules verbatim", () => {
-    expect(skill).toContain(`\`\`\`sh\n${secretSnippet("cloudflare")}\n\`\`\``);
-    expect(skill).toContain(secretRules("cloudflare"));
+    const file = secretFile("cloudflare", {
+      installName: DEFAULT_INSTALL_NAME,
+    });
+    expect(file).toBe("~/.open-artifacts/open-artifacts-cloudflare-token");
+    const snippet = secretSnippet(file, SECRET_LABELS.cloudflare);
+    expect(skill).toContain(`\`\`\`sh\n${snippet}\n\`\`\``);
+    expect(skill).toContain(
+      secretRules({
+        file,
+        envVar: SECRET_ENV_VARS.cloudflare,
+        command: "pnpm -s oa:setup …",
+      }),
+    );
+    expect(skill).toContain(
+      `CLOUDFLARE_API_TOKEN="$(cat ${file})" pnpm -s oa:setup …`,
+    );
   });
 
   it("hands off to the instance skill and the install guide", () => {
     expect(skill).toContain("<url>/skill.md");
     expect(skill).toContain("https://open-artifacts.com/llms.txt");
+    expect(skill).toContain("--name <name>");
   });
 
   it("stays thin and vendor-neutral", () => {
