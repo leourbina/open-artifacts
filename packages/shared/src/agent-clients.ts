@@ -269,7 +269,7 @@ unset OA_TOKEN`
           },
         },
       }),
-      hint: `Replace ${TOKEN_PLACEHOLDER} with your token, and keep this file out of git.`,
+      hint: `If your client can read the token from a file or an environment variable, use that. If it can't, replace ${TOKEN_PLACEHOLDER} with your token and keep this file out of git.`,
       verify: GENERIC_VERIFY,
       reload: GENERIC_RELOAD,
     });
