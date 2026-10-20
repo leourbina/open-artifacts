@@ -1,5 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/server";
-import { requireAccess } from "../../auth/authz.js";
+import { authorize } from "../../auth/authz.js";
 import { ApiError } from "../../http/errors.js";
 import {
   type RuntimeStub,
@@ -16,8 +16,8 @@ import { toolConfig } from "../tool-defs.js";
  * the capability (403 capability_denied, since access is already proven).
  */
 async function store(t: ToolEnv, id: string): Promise<RuntimeStub> {
-  const a = await requireAccess(t.env, t.caller, id, "viewer");
-  if (a.ownerId !== t.user.id) {
+  const { level, artifact: a } = await authorize(t.env, t.caller, id, "view");
+  if (level !== "owner") {
     const caps = JSON.parse(a.capabilities) as { db?: boolean };
     if (caps.db !== true)
       throw new ApiError(

@@ -22,11 +22,14 @@ import { and, desc, eq, gte, type SQL, sql } from "drizzle-orm";
 import {
   type ArtifactRow,
   accessLevel,
+  authorize,
   type Caller,
+  canCtx,
   listFilterSql,
   requireAccess,
   TEAM_ROLES,
 } from "../auth/authz.js";
+import { can } from "../auth/policy.js";
 import { getDb } from "../db/client.js";
 import { normEmail } from "../db/email.js";
 import { artifacts, shares, users } from "../db/schema.js";
@@ -135,13 +138,14 @@ export async function publish(
             .bind(id)
             .first();
     if (exists) {
-      const a = await requireAccess(env, { kind: "user", user }, id, "editor");
+      const who: Caller = { kind: "user", user };
+      const { level, artifact: a } = await authorize(env, who, id, "publish");
       create = false;
       const sharing =
         input.visibility !== undefined ||
         input.capabilities !== undefined ||
         input.allowAnonymousWrites !== undefined;
-      if (sharing && a.ownerId !== user.id)
+      if (sharing && !can(level, "visibility", canCtx(who, a)))
         throw new ApiError("bad_request", "only the owner can change sharing");
       capabilities = { ...CAPS, ...(JSON.parse(a.capabilities) as object) };
       accessChanged =
@@ -866,12 +870,13 @@ export async function patch(
   p: ArtifactPatch,
   ctx?: Ctx,
 ): Promise<ArtifactSummary> {
-  const a = await requireAccess(env, asUser(user), id, "editor");
+  const who = asUser(user);
+  const { level, artifact: a } = await authorize(env, who, id, "publish");
   const sharing =
     p.visibility !== undefined ||
     p.capabilities !== undefined ||
     p.allowAnonymousWrites !== undefined;
-  if (sharing && a.ownerId !== user.id)
+  if (sharing && !can(level, "visibility", canCtx(who, a)))
     throw new ApiError("bad_request", "only the owner can change sharing");
   const sets: string[] = [];
   const vals: unknown[] = [];

@@ -1,4 +1,4 @@
-import type { AccessLevel, ListQuery, Member } from "@oa/shared";
+import type { AccessLevel, ListQuery, Member, Visibility } from "@oa/shared";
 import {
   and,
   eq,
@@ -17,7 +17,13 @@ import { artifacts, shares } from "../db/schema.js";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
 import type { AppEnv } from "../http/middleware.js";
-import { TEAM_ROLES } from "./policy.js";
+import {
+  type CanCtx,
+  can,
+  decide,
+  type PolicyAction,
+  TEAM_ROLES,
+} from "./policy.js";
 
 /** Roles that see `team` artifacts (defined in policy.ts). */
 export { TEAM_ROLES };
@@ -48,10 +54,12 @@ export function requireUser(c: Context<AppEnv>): Member {
 const callerEmail = (u: Member) => normEmail(u.email);
 
 /**
- * Spec §6.5 rev 2, in order: deleted → null (unless the creator and
- * `allowDeleted`, for undelete); creator → owner; share for the caller's email →
- * share.role; team + owner/admin/member → viewer; public → viewer; else null.
- * Admins get no implicit access to private artifacts.
+ * Spec §6.5 rev 2 as P3's decision table (policy.ts `decide`). Until spaces
+ * exist (P3 T1) every artifact is in its creator's personal space, which
+ * reproduces today's rules exactly: deleted → null (unless the creator and
+ * `allowDeleted`, for undelete); creator → owner; share for the caller's
+ * email → share.role; team + owner/admin/member → viewer; public → viewer;
+ * else null. Admins get no implicit access to private artifacts.
  */
 export async function accessLevel(
   env: Env,
@@ -78,15 +86,52 @@ export async function accessLevel(
   const row = rows[0];
   if (!row) return null;
   const a = row.a;
-  const isCreator = user !== null && a.ownerId === user.id;
-  if (a.deletedAt != null && !(isCreator && opts.allowDeleted)) return null;
-  if (isCreator) return { level: "owner", artifact: a };
-  if (row.shareRole === "viewer" || row.shareRole === "editor")
-    return { level: row.shareRole, artifact: a };
-  if (a.visibility === "team" && user && TEAM_ROLES.includes(user.role))
-    return { level: "viewer", artifact: a };
-  if (a.visibility === "public") return { level: "viewer", artifact: a };
-  return null;
+  const level = decide({
+    caller: user ? { id: user.id, orgRole: user.role } : null,
+    cap: null,
+    artifact: {
+      spaceId: a.ownerId,
+      spaceKind: "personal",
+      visibility: a.visibility as Visibility,
+      deleted: a.deletedAt != null,
+    },
+    space: { publicLinks: true, allMembersRole: null },
+    spaceRole: null,
+    shareRole:
+      row.shareRole === "viewer" || row.shareRole === "editor"
+        ? row.shareRole
+        : null,
+    allowDeleted: opts.allowDeleted === true,
+  });
+  return level ? { level, artifact: a } : null;
+}
+
+/** The context `can` needs for one caller and artifact. */
+export function canCtx(c: Caller, a: ArtifactRow): CanCtx {
+  return {
+    cap: null,
+    personal: true,
+    anonymous: c.kind !== "user",
+    allowAnonymousWrites: a.allowAnonymousWrites === 1,
+  };
+}
+
+/**
+ * The artifact and the caller's level if they may take `action`; otherwise
+ * 404 (never 403). The one check for owner-or-manager actions: never compare
+ * levels for those, ask `can` (a manager fails requireAccess("owner")).
+ */
+export async function authorize(
+  env: Env,
+  c: Caller,
+  artifactId: string,
+  action: PolicyAction,
+  opts: { allowDeleted?: boolean } = {},
+): Promise<{ level: AccessLevel; artifact: ArtifactRow }> {
+  const r = await accessLevel(env, c, artifactId, opts);
+  if (!r || !can(r.level, action, canCtx(c, r.artifact)))
+    throw new ApiError("not_found", "Not found");
+  return r;
 }
 
 /**
