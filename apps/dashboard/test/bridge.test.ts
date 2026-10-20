@@ -1,6 +1,10 @@
 import { ANON_ID_HEADER, type ArtifactSummary, LIMITS, R } from "@oa/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ANON_ID_KEY, resetAnonMemory } from "../src/viewer/anonId";
+import {
+  ANON_ID_KEY,
+  isAnonToken,
+  resetAnonMemory,
+} from "../src/viewer/anonId";
 import { createBridge } from "../src/viewer/bridge";
 import { asFrame, FakeFrame, stamped } from "./fake-frame";
 
@@ -608,6 +612,37 @@ describe("anonymous id", () => {
     await flush();
     expect(headerOf(0)).toBe(TOKEN);
     expect(store.get(ANON_ID_KEY)).toBe(TOKEN2);
+  });
+
+  it("accepts 2-part (v1) and 3-part (v2) tokens, rejects malformed ones", () => {
+    const id = `${"a".repeat(21)}A`;
+    const sig = `${"b".repeat(42)}A`;
+    expect(isAnonToken(`${id}.${sig}`)).toBe(true);
+    expect(isAnonToken(`${id}.t2k9z0.${sig}`)).toBe(true);
+    for (const bad of [
+      `${id}.t2k9z0.x.${sig}`, // 4 parts
+      `${id}.T2K9Z0.${sig}`, // uppercase iat
+      `${id}.t2k9z0.${sig}A`, // wrong sig length
+      `${id}.t2k9z0.${sig.slice(1)}`,
+      `${id}..${sig}`, // empty iat
+      `${id}.${"1".repeat(11)}.${sig}`, // iat too long
+    ])
+      expect(isAnonToken(bad)).toBe(false);
+  });
+
+  it("stores a renewed 3-part token in place of the old one", async () => {
+    vi.stubGlobal("localStorage", okStorage);
+    const RENEWED = `${"a".repeat(21)}A.t2k9z0.${"e".repeat(42)}A`;
+    store.set(ANON_ID_KEY, TOKEN);
+    fetchMock.mockImplementationOnce(async () => withToken(RENEWED));
+    mkAnon(OPT_IN);
+    call("db.set", { collection: "c", id: "d1", data: 1 }, "a");
+    await flush();
+    expect(headerOf(0)).toBe(TOKEN);
+    expect(store.get(ANON_ID_KEY)).toBe(RENEWED);
+    call("db.set", { collection: "c", id: "d1", data: 2 }, "b");
+    await flush();
+    expect(headerOf(1)).toBe(RENEWED);
   });
 
   it("falls back to memory when storage is blocked, never throwing", async () => {

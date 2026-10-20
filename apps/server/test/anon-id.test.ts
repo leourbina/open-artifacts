@@ -11,7 +11,11 @@ import {
 } from "@oa/shared";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
-import { resolveAnonId } from "../src/runtime/anon-id.js";
+import {
+  ANON_TOKEN_MAX_AGE_S,
+  issueAnonToken,
+  resolveAnonId,
+} from "../src/runtime/anon-id.js";
 import {
   type ArtifactRuntime,
   anonWritesPerMin,
@@ -20,12 +24,13 @@ import {
 } from "../src/runtime/do.js";
 import { publish } from "../src/services/artifacts.js";
 import { getUser } from "../src/services/users.js";
+import { b64urlEncode } from "../src/util/crypto.js";
 import { api, login } from "./helpers.js";
 
 const app = createApp();
 const tag = newId().slice(0, 6).toLowerCase();
 let owner: { cookie: string; member: Member };
-const TOKEN_RE = /^[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}$/;
+const TOKEN_RE = /^[A-Za-z0-9_-]{22}\.[0-9a-z]{1,10}\.[A-Za-z0-9_-]{43}$/;
 const BY_RE = /^anon:[A-Za-z0-9_-]{8}$/;
 
 beforeAll(async () => {
@@ -157,18 +162,21 @@ describe("anonId issuance", () => {
     const id = await optIn();
     const good = await mintToken(id);
     const goodShort = (await shortOn(id, good)).short;
-    const [gid = "", gsig = ""] = good.split(".");
+    const [gid = "", giat = "", gsig = ""] = good.split(".");
     const flip = (s: string, i: number) =>
       s.slice(0, i) + (s[i] === "A" ? "B" : "A") + s.slice(i + 1);
     const forged = [
-      `${flip(gid, 0)}.${gsig}`, // claims another id
-      `${gid}.${flip(gsig, 5)}`, // bad signature
-      `${gid}.${"A".repeat(43)}`,
+      `${flip(gid, 0)}.${giat}.${gsig}`, // claims another id
+      `${gid}.${giat}.${flip(gsig, 5)}`, // bad signature
+      `${gid}.${(Number.parseInt(giat, 36) - 1).toString(36)}.${gsig}`, // tampered iat
+      `${gid}.0${giat}.${gsig}`, // non-canonical iat
+      `${gid}.${giat}.${"A".repeat(43)}`,
+      `${gid}.${gsig}`, // v2 sig as a v1 token
       `${gid}`,
-      `${gid}.${gsig}x`,
+      `${gid}.${giat}.${gsig}x`,
       "garbage",
       `${gid}..${gsig}`,
-      `${gsig}.${gid}`,
+      `${gsig}.${giat}.${gid}`,
     ];
     for (const f of forged) {
       const w = await write(id, "f", f);
@@ -283,6 +291,112 @@ describe("anonId issuance", () => {
     const s = await anon(R.storageKey(id, "k"), null);
     expect(s.status).toBe(401);
     expect(s.headers.get(ANON_ID_HEADER)).toBeNull();
+  });
+});
+
+/** A legacy v1 token ("<id>.<sig>", info "oa/anon-id/v1") for `id`. */
+async function v1Token(id: string): Promise<string> {
+  const ikm = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(env.SESSION_SECRET),
+    "HKDF",
+    false,
+    ["deriveKey"],
+  );
+  const k = await crypto.subtle.deriveKey(
+    {
+      name: "HKDF",
+      hash: "SHA-256",
+      salt: new Uint8Array(),
+      info: new TextEncoder().encode("oa/anon-id/v1"),
+    },
+    ikm,
+    { name: "HMAC", hash: "SHA-256", length: 256 },
+    false,
+    ["sign"],
+  );
+  const sig = await crypto.subtle.sign(
+    "HMAC",
+    k,
+    new TextEncoder().encode(`anon:${id}`),
+  );
+  return `${id}.${b64urlEncode(new Uint8Array(sig))}`;
+}
+
+describe("anonId token expiry", () => {
+  const DAY = 86_400;
+  const nowS = Math.floor(Date.now() / 1000);
+  const freshId = () =>
+    b64urlEncode(crypto.getRandomValues(new Uint8Array(16)));
+  const idOf = (t: string | null | undefined) => (t ?? "").split(".")[0];
+
+  it("a v2 token within 30 days is accepted as is", async () => {
+    const id = await optIn();
+    const t = await issueAnonToken(env, freshId(), nowS - 29 * DAY);
+    expect(t).toMatch(TOKEN_RE);
+    const r = await shortOn(id, t);
+    expect(r.issued).toBeNull();
+    expect(await byOf(await write(id, "a", t))).toBe(`anon:${r.short}`);
+  });
+
+  it("an expired token is re-minted with the same id and short id", async () => {
+    const id = await optIn();
+    const bid = freshId();
+    const fresh = await issueAnonToken(env, bid, nowS);
+    const short = (await shortOn(id, fresh)).short;
+    const old = await issueAnonToken(env, bid, nowS - ANON_TOKEN_MAX_AGE_S - 1);
+    const w = await write(id, "a", old);
+    expect(w.status).toBe(200);
+    const renewed = w.headers.get(ANON_ID_HEADER);
+    expect(renewed).toMatch(TOKEN_RE);
+    expect(renewed).not.toBe(old);
+    expect(idOf(renewed)).toBe(bid);
+    expect(await byOf(w)).toBe(`anon:${short}`);
+    // The renewed token is accepted without another re-mint.
+    expect(await shortOn(id, renewed)).toEqual({ short, issued: null });
+    // Exactly at the limit is still valid.
+    const edge = await resolveAnonId(
+      env,
+      id,
+      await issueAnonToken(env, bid, nowS - ANON_TOKEN_MAX_AGE_S),
+      true,
+      nowS * 1000,
+    );
+    expect(edge).toEqual({ short, issued: null });
+  });
+
+  it("a v1 token is upgraded to v2 with the same id and short id", async () => {
+    const id = await optIn();
+    const bid = freshId();
+    const v1 = await v1Token(bid);
+    const first = await shortOn(id, v1);
+    const up = first.issued;
+    expect(up).toMatch(TOKEN_RE);
+    expect(idOf(up)).toBe(bid);
+    expect(first.short).toBe(
+      (await shortOn(id, await issueAnonToken(env, bid, nowS))).short,
+    );
+    expect(await shortOn(id, up)).toEqual({
+      short: first.short,
+      issued: null,
+    });
+    // A forged v1 token gets a new id.
+    const w = await write(id, "f", `${freshId()}.${v1.split(".")[1]}`);
+    expect(idOf(w.headers.get(ANON_ID_HEADER))).not.toBe(bid);
+  });
+
+  it("a future iat (beyond 5 min of skew) is rejected: a new id is minted", async () => {
+    const id = await optIn();
+    const bid = freshId();
+    const skewed = await issueAnonToken(env, bid, nowS + 4 * 60);
+    expect((await shortOn(id, skewed)).issued).toBeNull();
+    const future = await issueAnonToken(env, bid, nowS + 10 * 60);
+    const w = await write(id, "a", future);
+    expect(w.status).toBe(200);
+    const fresh = w.headers.get(ANON_ID_HEADER);
+    expect(fresh).toMatch(TOKEN_RE);
+    expect(idOf(fresh)).not.toBe(bid);
+    expect(await resolveAnonId(env, id, future, false)).toBeNull();
   });
 });
 
