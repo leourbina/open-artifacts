@@ -1,5 +1,6 @@
 import { stmt } from "../db/stmt.js";
 import type { Env } from "../env.js";
+import { sha256Hex } from "../util/crypto.js";
 import type { EmailContent } from "./templates.js";
 
 // Optional notification email via a Cloudflare Email Service `send_email`
@@ -8,8 +9,20 @@ import type { EmailContent } from "./templates.js";
 
 /** Emails one inviter may trigger per UTC day. */
 export const MAX_EMAILS_PER_USER_PER_DAY = 20;
-/** Emails per UTC day, instance-wide (protects the monthly sending quota). */
+/**
+ * Invite and share emails per UTC day, instance-wide (protects the monthly
+ * sending quota): EMAIL_DAILY_CAP, else this. Sign-in codes have their own
+ * pool (auth/codes.ts), so invites can't starve sign-in.
+ */
 export const MAX_EMAILS_PER_DAY = 100;
+const EMAIL_DAILY_CAP_MAX = 100_000;
+
+export function emailDailyCap(env: Pick<Env, "EMAIL_DAILY_CAP">): number {
+  const v = env.EMAIL_DAILY_CAP;
+  if (!v || !/^[1-9]\d*$/.test(v)) return MAX_EMAILS_PER_DAY;
+  const n = Number(v);
+  return n <= EMAIL_DAILY_CAP_MAX ? n : MAX_EMAILS_PER_DAY;
+}
 /** Emails one recipient address may receive per UTC day, instance-wide. */
 export const MAX_EMAILS_PER_RECIPIENT_PER_DAY = 5;
 export const EMAIL_TIMEOUT_MS = 3000;
@@ -22,7 +35,7 @@ const SINGLE_ADDRESS = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+$/;
 /** Sender display name, the same on every email. */
 const FROM_NAME = "Open Artifacts";
 
-export type EmailKind = "invite" | "share";
+export type EmailKind = "invite" | "share" | "code";
 const ERROR_CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
 
 class EmailTimeout extends Error {}
@@ -43,8 +56,9 @@ const logFailed = (kind: EmailKind, reason: string) =>
 
 const utcDay = (now: number) => new Date(now).toISOString().slice(0, 10);
 
-// Counts one email unless today's count is already at the cap (the row resets
-// on a new day). RETURNING is empty when over the cap.
+// Counts one unless the bucket's count is already at the cap (the row resets
+// when the bucket changes: a UTC day here, finer for sign-in codes). RETURNING
+// is empty when over the cap.
 const TAKE = `insert into counters (key, n, day) values (?1, 1, ?2)
   on conflict (key) do update set
     n = case when counters.day = excluded.day then counters.n + 1 else 1 end,
@@ -52,13 +66,28 @@ const TAKE = `insert into counters (key, n, day) values (?1, 1, ?2)
   where counters.day <> excluded.day or counters.n < ?3
   returning n`;
 
-/** Daily cron: drops email counters from before today (they reset anyway). */
+/** Daily cron: drops email and sign-in-code counters from before today (they reset anyway). */
 export async function sweepEmailCounters(env: Env, now = Date.now()) {
   await env.DB.prepare(
-    "delete from counters where key like 'email:%' and day < ?",
+    "delete from counters where (key like 'email:%' or key like 'code:%') and day < ?",
   )
     .bind(utcDay(now))
     .run();
+}
+
+/** A counter cap: key, max, and the bucket it counts in (a day, an hour, …). */
+export type Cap = [key: string, max: number, bucket: string];
+
+/**
+ * Takes one slot under each cap, in one D1 batch (each an atomic conditional
+ * upsert); true per cap that had room. A refused cap's siblings still count.
+ */
+export async function takeEach(env: Env, caps: Cap[]): Promise<boolean[]> {
+  if (caps.length === 0) return [];
+  const rows = await env.DB.batch<{ n: number }>(
+    caps.map(([key, max, bucket]) => stmt(env.DB, TAKE).bind(key, bucket, max)),
+  );
+  return rows.map((r) => r.results.length > 0);
 }
 
 /** True if EMAIL and EMAIL_FROM are both configured. */
@@ -70,27 +99,21 @@ export const emailEnabled = (env: Env): boolean =>
  * upsert). A send refused by one cap may still use a slot of another; that
  * only errs towards sending less.
  */
-async function takeSlot(
-  env: Env,
-  caps: [key: string, max: number][],
-  now: number,
-) {
-  const day = utcDay(now);
-  const rows = await env.DB.batch<{ n: number }>(
-    caps.map(([key, max]) => stmt(env.DB, TAKE).bind(key, day, max)),
-  );
-  return rows.every((r) => r.results.length > 0);
+async function takeSlot(env: Env, caps: Cap[]) {
+  return (await takeEach(env, caps)).every(Boolean);
 }
 
 /**
  * Sends `render()` to the (already validated) address `to` on behalf of
  * `userId`. Rendering runs inside the guard, so a template error is `false`.
  * With `artifactId`, one email per (artifact, recipient) per day, so removing
- * and re-adding a share can't re-mail.
+ * and re-adding a share can't re-mail. Counter keys never hold the address
+ * (a SHA-256 hex stands in). Sign-in codes pass `caps: []`: auth/codes.ts
+ * takes their own pool's slots first.
  */
 export async function sendEmail(
   env: Env,
-  userId: string,
+  userId: string | null,
   to: string,
   render: () => EmailContent,
   opts: {
@@ -99,6 +122,8 @@ export async function sendEmail(
     /** The inviter's/sharer's address; dropped unless one plain address. */
     replyTo?: string;
     now?: number;
+    /** Replaces the invite/share caps (sign-in codes). */
+    caps?: Cap[];
   },
 ): Promise<boolean> {
   const now = opts.now ?? Date.now();
@@ -113,13 +138,20 @@ export async function sendEmail(
     return false;
   }
   try {
-    const caps: [string, number][] = [
-      [`email:${userId}`, MAX_EMAILS_PER_USER_PER_DAY],
-      [ALL_KEY, MAX_EMAILS_PER_DAY],
-      [`email:to:${to}`, MAX_EMAILS_PER_RECIPIENT_PER_DAY],
-    ];
-    if (opts.artifactId) caps.push([`email:a:${opts.artifactId}:${to}`, 1]);
-    if (!(await takeSlot(env, caps, now))) {
+    let caps = opts.caps;
+    if (!caps) {
+      const day = utcDay(now);
+      const toKey = await sha256Hex(to.toLowerCase());
+      caps = [
+        [ALL_KEY, emailDailyCap(env), day],
+        [`email:to:${toKey}`, MAX_EMAILS_PER_RECIPIENT_PER_DAY, day],
+      ];
+      if (userId)
+        caps.push([`email:${userId}`, MAX_EMAILS_PER_USER_PER_DAY, day]);
+      if (opts.artifactId)
+        caps.push([`email:a:${opts.artifactId}:${toKey}`, 1, day]);
+    }
+    if (!(await takeSlot(env, caps))) {
       logFailed(opts.kind, "rate_limited");
       return false;
     }

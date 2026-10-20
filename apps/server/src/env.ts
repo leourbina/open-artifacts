@@ -91,6 +91,8 @@ export interface Env {
   TURNSTILE_SITE_KEY?: string;
   /** Code emails per UTC day (1..10000, default 200). */
   CODE_EMAILS_PER_DAY?: string;
+  /** Invite and share emails per UTC day, instance-wide (1..100000, default 100); set per install by Platform. */
+  EMAIL_DAILY_CAP?: string;
   /** "1" on hosted installs (Me.instance.hosted). */
   HOSTED?: string;
   /** Comma list of FeatureFlag (@oa/shared parseFeatures). */
