@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.11.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.10.0...v0.11.0) (2026-10-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* **server:** get_artifact's downloadUrl is now a signed attachment URL that expires after 10 minutes (public artifacts used to get a non-expiring /p/ URL). Don't store it; call get_artifact again to get a fresh one.
+
+### Features
+
+* **server:** the content host never renders top-level; raw view removed ([#292](https://github.com/open-artifacts-ai/open-artifacts/issues/292)) ([#294](https://github.com/open-artifacts-ai/open-artifacts/issues/294)) ([771e16c](https://github.com/open-artifacts-ai/open-artifacts/commit/771e16cdc5a6dcae851f4132b9d4a92215faf90e))
+
 ## [0.10.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.9.0...v0.10.0) (2026-10-20)
 
 
