@@ -21,6 +21,8 @@ export interface Env {
 export interface DemoAggregate {
   /** Docs per source artifact id (summed over SOURCE_COLLECTIONS; saturates at the page cap). */
   counts: Record<string, number>;
+  /** Source ids whose counts are a lower bound (a page was over the size cap). */
+  truncated: string[];
   updatedAt: string;
 }
 
@@ -31,6 +33,14 @@ const PAGE_LIMIT = 200;
 const MAX_PAGES = 2;
 const TIMEOUT_MS = 5000;
 const MAX_BYTES = 512 * 1024;
+/** A tick must end before the next minute's starts. */
+const TICK_DEADLINE_MS = 40_000;
+/** Subrequests per tick, the dashboard write included (Free plan allows 50). */
+const MAX_REQUESTS = 45;
+
+class TooLarge extends Error {}
+
+type Tick = { signal: AbortSignal; budget: number };
 
 const parseList = (
   raw: string,
@@ -54,7 +64,7 @@ const parseList = (
 /** The JSON body, or throws when it is over MAX_BYTES (declared or read). */
 async function readJson(res: Response): Promise<unknown> {
   const declared = Number(res.headers.get("content-length"));
-  if (declared > MAX_BYTES) throw new Error("response too large");
+  if (declared > MAX_BYTES) throw new TooLarge("response too large");
   const reader = res.body?.getReader();
   if (!reader) return null;
   const chunks: Uint8Array[] = [];
@@ -65,7 +75,7 @@ async function readJson(res: Response): Promise<unknown> {
     size += value.byteLength;
     if (size > MAX_BYTES) {
       await reader.cancel();
-      throw new Error("response too large");
+      throw new TooLarge("response too large");
     }
     chunks.push(value);
   }
@@ -78,41 +88,53 @@ async function readJson(res: Response): Promise<unknown> {
   return JSON.parse(new TextDecoder().decode(buf));
 }
 
-const init = (env: Env, method: string, body?: string): RequestInit => ({
+const init = (
+  env: Env,
+  signal: AbortSignal,
+  method: string,
+  body?: string,
+): RequestInit => ({
   method,
   headers: {
     authorization: `Bearer ${env.DEMO_OA_TOKEN}`,
     "content-type": "application/json",
   },
-  signal: AbortSignal.timeout(TIMEOUT_MS),
+  signal: AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]),
   ...(body === undefined ? {} : { body }),
 });
 
-/** Docs in one collection: up to MAX_PAGES pages of PAGE_LIMIT. */
+/** Docs in one collection (up to MAX_PAGES pages of PAGE_LIMIT) and whether a page was too big. */
 async function countCollection(
   env: Env,
+  t: Tick,
   base: string,
   id: string,
   col: string,
-): Promise<number> {
+): Promise<{ n: number; truncated: boolean }> {
   let n = 0;
   let cursor: string | null = null;
   for (let i = 0; i < MAX_PAGES; i++) {
+    if (t.budget <= 0) throw new Error("request budget spent");
+    t.budget--;
     const q = `limit=${PAGE_LIMIT}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
     const res = await fetch(
       `${base}/api/v1/artifacts/${id}/data/${col}?${q}`,
-      init(env, "GET"),
+      init(env, t.signal, "GET"),
     );
     if (!res.ok) throw new Error(`status ${res.status}`);
-    const page = (await readJson(res)) as {
-      items?: unknown[];
-      nextCursor?: string | null;
-    } | null;
+    let page: { items?: unknown[]; nextCursor?: string | null } | null;
+    try {
+      page = (await readJson(res)) as typeof page;
+    } catch (e) {
+      // One big doc must not hide the source: report what we have as a lower bound.
+      if (e instanceof TooLarge) return { n, truncated: true };
+      throw e;
+    }
     n += Array.isArray(page?.items) ? page.items.length : 0;
     cursor = page?.nextCursor ?? null;
     if (!cursor) break;
   }
-  return n;
+  return { n, truncated: false };
 }
 
 async function tick(env: Env): Promise<void> {
@@ -129,27 +151,48 @@ async function tick(env: Env): Promise<void> {
     return;
   }
   const base = env.DEMO_BASE_URL.replace(/\/+$/, "");
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), TICK_DEADLINE_MS);
+  // One slot is kept for the dashboard write.
+  const t: Tick = { signal: ctl.signal, budget: MAX_REQUESTS - 1 };
   const counts: Record<string, number> = {};
-  for (const id of ids) {
-    try {
-      let total = 0;
-      for (const col of cols)
-        total += await countCollection(env, base, id, col);
-      counts[id] = total;
-    } catch (e) {
-      console.warn(
-        `demo-ops: skipping source ${id}: ${e instanceof Error ? e.message : "error"}`,
-      );
+  const truncated: string[] = [];
+  try {
+    for (const id of ids) {
+      if (t.signal.aborted || t.budget <= 0) {
+        console.warn(
+          "demo-ops: tick deadline or budget reached; skipping the rest",
+        );
+        break;
+      }
+      try {
+        let total = 0;
+        let cut = false;
+        for (const col of cols) {
+          const r = await countCollection(env, t, base, id, col);
+          total += r.n;
+          cut ||= r.truncated;
+        }
+        counts[id] = total;
+        if (cut) truncated.push(id);
+      } catch (e) {
+        console.warn(
+          `demo-ops: skipping source ${id}: ${e instanceof Error ? e.message : "error"}`,
+        );
+      }
     }
+  } finally {
+    clearTimeout(timer);
   }
   const aggregate: DemoAggregate = {
     counts,
+    truncated,
     updatedAt: new Date().toISOString(),
   };
   try {
     const res = await fetch(
       `${base}/api/v1/artifacts/${env.DASHBOARD_ARTIFACT_ID}/data/stats/summary`,
-      init(env, "PUT", JSON.stringify(aggregate)),
+      init(env, new AbortController().signal, "PUT", JSON.stringify(aggregate)),
     );
     if (!res.ok)
       console.error(`demo-ops: dashboard write failed: ${res.status}`);

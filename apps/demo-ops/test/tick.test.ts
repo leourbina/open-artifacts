@@ -148,8 +148,17 @@ describe("demo-ops tick", () => {
       }),
     );
     const gets = calls.filter((c) => c.method === "GET");
-    expect(gets).toHaveLength(10 * 5);
-    expect(new Set(gets.map((c) => idOf(new URL(c.url)))).size).toBe(10);
+    const per = new Map<string, Set<string>>();
+    for (const c of gets) {
+      const u = new URL(c.url);
+      const set = per.get(idOf(u)) ?? new Set<string>();
+      set.add(u.pathname.split("/")[6] as string);
+      per.set(idOf(u), set);
+    }
+    expect(per.size).toBeLessThanOrEqual(10);
+    expect(Math.max(...[...per.values()].map((x) => x.size))).toBe(5);
+    // 10 ids x 5 collections is 50 reads, over the 44 that the budget leaves.
+    expect(gets).toHaveLength(44);
   });
 
   it("is a silent no-op with no ids or no collections", async () => {
@@ -175,7 +184,7 @@ describe("demo-ops tick", () => {
     for (const c of calls) expect(c.signal).toBeInstanceOf(AbortSignal);
   });
 
-  it("skips a response over 512 KB, by content-length or by reading", async () => {
+  it("marks a source truncated (not dropped) when a response is over 512 KB", async () => {
     const { calls } = stub((u) => {
       if (idOf(u) === A)
         return new Response("{}", {
@@ -191,7 +200,57 @@ describe("demo-ops tick", () => {
     });
     quiet();
     await tick(env({ SOURCE_ARTIFACT_IDS: `${A},${B}` }));
-    expect(JSON.parse(puts(calls)[0]?.body as string).counts).toEqual({});
+    const body = JSON.parse(puts(calls)[0]?.body as string);
+    expect(Object.keys(body.counts).sort()).toEqual([A, B].sort());
+    expect(body.truncated.sort()).toEqual([A, B].sort());
+  });
+
+  it("does not list a source as truncated when its pages are small", async () => {
+    const { calls } = stub(() => page(2));
+    await tick(env());
+    expect(JSON.parse(puts(calls)[0]?.body as string).truncated).toEqual([]);
+  });
+
+  it("stops at a total budget of 45 requests per tick, writing last", async () => {
+    const ids = Array.from(
+      { length: 10 },
+      (_, i) => `${String.fromCharCode(65 + i)}1b2c3d4E5f6g7h8`,
+    );
+    const { calls } = stub(() => page(200, "next"));
+    quiet();
+    await tick(
+      env({
+        SOURCE_ARTIFACT_IDS: ids.join(","),
+        SOURCE_COLLECTIONS: "c1,c2,c3,c4,c5",
+      }),
+    );
+    expect(calls).toHaveLength(45);
+    expect(calls.at(-1)?.method).toBe("PUT");
+    expect(puts(calls)).toHaveLength(1);
+  });
+
+  it("past the 40 s tick deadline skips the remaining sources and still writes", async () => {
+    vi.useFakeTimers();
+    try {
+      const { calls } = stub((u, c) => {
+        if (idOf(u) !== A) return page(1);
+        return new Promise<Response>((_, reject) =>
+          c.signal?.addEventListener("abort", () =>
+            reject(new Error("aborted")),
+          ),
+        ) as never;
+      });
+      quiet();
+      const done = tick(env());
+      await vi.advanceTimersByTimeAsync(40_000);
+      await done;
+      const gets = calls.filter((c) => c.method === "GET");
+      expect(gets.map((c) => idOf(new URL(c.url)))).toEqual([A]);
+      expect(puts(calls)).toHaveLength(1);
+      expect(JSON.parse(puts(calls)[0]?.body as string).counts).toEqual({});
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("sends the token as a bearer header and never logs it", async () => {

@@ -40,6 +40,15 @@ describe("ops-demo-ops-deploy.yml", () => {
       expect(has, s.name ?? s.run).toBe(wrangler);
     }
   });
+  it("builds @oa/shared explicitly before the deploy step", () => {
+    const run = steps.map((s) => String(s.run ?? ""));
+    const iBuild = run.findIndex((r) =>
+      r.includes("--filter @oa/shared build"),
+    );
+    const iDeploy = run.findIndex((r) => r.includes("wrangler deploy"));
+    expect(iBuild).toBeGreaterThanOrEqual(0);
+    expect(iBuild).toBeLessThan(iDeploy);
+  });
   it("deploys the demo-ops config", () => {
     expect(text).toContain("../demo-ops/wrangler.jsonc");
     expect(text).toMatch(/wrangler deploy/);
