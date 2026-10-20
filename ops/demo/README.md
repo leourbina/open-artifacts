@@ -44,11 +44,7 @@ is left unfilled the page falls back to `location.ancestorOrigins` (Chromium and
 then to a relative `/a/<id>`, which resolves against the content host and does not work.
 This needs Platform's publish script to support it.
 
-Navigation out of the artifact frame also depends on the viewer's iframe sandbox. Today it
-is `allow-scripts allow-forms allow-popups allow-modals allow-downloads`, which means:
-
-- `target="_top"` links (Open, the header links) are blocked: there is no
-  `allow-top-navigation-by-user-activation`.
-- The "two windows" popup opens, but it inherits the sandbox, so the app at `/a/<id>` loads
-  in an opaque origin and its assets fail CORS: a blank window. It needs
-  `allow-popups-to-escape-sandbox`.
+Navigation out of the artifact frame: the viewer sandbox allows popups that escape the
+sandbox (`allow-popups-to-escape-sandbox`) but no top navigation. So every gallery link opens
+a new tab (`target="_blank" rel="noopener"`), and "Open in two windows" takes two clicks,
+one popup each, because browsers allow one popup per click.

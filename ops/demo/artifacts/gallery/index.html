@@ -138,6 +138,7 @@
   .btn:hover { border-color: var(--oa-border-strong); text-decoration: none; }
   .btn.primary { background: var(--oa-accent); border-color: var(--oa-accent); color: var(--oa-accent-text); }
   .btn.primary:hover { background: var(--oa-accent-fg); border-color: var(--oa-accent-fg); }
+  .ext { width: 0.85em; height: 0.85em; margin-left: 5px; vertical-align: -0.05em; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
   .hint { margin: 2px 0 0; font-size: 13px; color: var(--oa-text-muted); }
   .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .empty { margin: 0; color: var(--oa-text-muted); }
@@ -172,8 +173,8 @@
     <h1>Live, multiplayer artifacts. Made by AI agents, hosted on Cloudflare.</h1>
     <p class="sub">Each demo is one HTML page with a shared live database. Open it in two windows and they stay in step. Any AI agent can publish one like it.</p>
     <ul class="links">
-      <li><a href="https://open-artifacts.com" target="_top">open-artifacts.com</a></li>
-      <li><a href="https://github.com/open-artifacts-ai/open-artifacts" target="_top">Source on GitHub</a></li>
+      <li><a href="https://open-artifacts.com" target="_blank" rel="noopener">open-artifacts.com<svg class="ext" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M5 2H2.5v7.5H10V7M7 1.5h3.5V5M10.5 1.5 5.5 6.5"/></svg><span class="sr"> (opens in new tab)</span></a></li>
+      <li><a href="https://github.com/open-artifacts-ai/open-artifacts" target="_blank" rel="noopener">Source on GitHub<svg class="ext" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M5 2H2.5v7.5H10V7M7 1.5h3.5V5M10.5 1.5 5.5 6.5"/></svg><span class="sr"> (opens in new tab)</span></a></li>
     </ul>
   </header>
 
@@ -288,8 +289,9 @@
     return "";
   }
 
-  /* Second window: the same size as this one, beside it when there is room. */
-  function openBeside(url) {
+  /* Opens a window the same size as this one, beside it when there is room.
+     side 1 is right of this window, side -1 is left of it. */
+  function openBeside(url, side) {
     const sx = window.screenX ?? window.screenLeft ?? 0;
     const sy = window.screenY ?? window.screenTop ?? 0;
     const ow = window.outerWidth || 1024;
@@ -298,12 +300,11 @@
     const availL = screen.availLeft || 0;
     const w = Math.max(360, Math.min(ow, Math.floor(availW / 2)));
     const h = Math.max(480, oh);
-    let left = sx + ow;
-    if (left + w > availL + availW) left = Math.max(availL, sx - w);
-    const features = `popup,width=${w},height=${h},left=${left},top=${sy}`;
-    const win = window.open(url, "_blank", features);
-    if (win) { try { win.opener = null; } catch {} }
-    return !!win;
+    const right = sx + ow, leftOf = sx - w;
+    const fitsRight = right + w <= availL + availW, fitsLeft = leftOf >= availL;
+    let left = side > 0 ? (fitsRight ? right : Math.max(availL, leftOf)) : (fitsLeft ? leftOf : Math.min(right, availL + availW - w));
+    if (side < 0 && !fitsLeft && !fitsRight) left = sx + 40;
+    window.open(url, "_blank", `popup,noopener,width=${w},height=${h},left=${left},top=${sy}`);
   }
 
   function card(demo, href) {
@@ -315,23 +316,34 @@
         <h2></h2>
         <p class="pitch"></p>
         <div class="actions">
-          <a class="btn primary" target="_top"></a>
+          <a class="btn primary" target="_blank" rel="noopener">Open<svg class="ext" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M5 2H2.5v7.5H10V7M7 1.5h3.5V5M10.5 1.5 5.5 6.5"/></svg></a>
           <button type="button" class="btn">Open in two windows to see it sync</button>
         </div>
-        <p class="hint">Opens a second window beside this one.</p>
+        <p class="hint" aria-live="polite">Opens a window beside this one, then a second.</p>
       </div>`;
     li.querySelector("h2").textContent = demo.title;
     li.querySelector(".pitch").textContent = demo.pitch;
     const a = li.querySelector("a");
     a.href = href;
-    a.textContent = "Open";
-    a.setAttribute("aria-label", `Open ${demo.title}`);
+    a.setAttribute("aria-label", `Open ${demo.title} (opens in new tab)`);
     const btn = li.querySelector("button");
     btn.setAttribute("aria-label", `Open ${demo.title} in two windows to see it sync`);
+    const hint = li.querySelector(".hint");
+    let opened = 0;
     btn.addEventListener("click", () => {
-      /* One popup per click: the new window is the second view, this page navigates to the first. */
-      openBeside(href);
-      try { window.top.location.href = href; } catch {}
+      /* Browsers allow one popup per click, so the two windows take two clicks. */
+      opened += 1;
+      openBeside(href, opened === 1 ? 1 : -1);
+      if (opened === 1) {
+        btn.textContent = "Open the second window";
+        btn.setAttribute("aria-label", `Open a second ${demo.title} window`);
+        hint.textContent = "One window is open. Click again for the second, then use both.";
+      } else {
+        opened = 0;
+        btn.textContent = "Open in two windows to see it sync";
+        btn.setAttribute("aria-label", `Open ${demo.title} in two windows to see it sync`);
+        hint.textContent = "Both windows are open. Change something in one and watch the other.";
+      }
     });
     return li;
   }
