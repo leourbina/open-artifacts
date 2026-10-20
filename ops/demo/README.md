@@ -28,6 +28,21 @@ not belong to the doc's owner (the poll). Tic-tac-toe uses the id only for its s
 | tictactoe | `game/game` back to an empty board with both seats open. Clients apply a write only if it is one claim, leave, move or start over from the last state they accepted; seats are first come, first served, and the id is only used for the seat labels. |
 | chess | `table/table` back to game `g0` with both seats open, and every doc in `moves` deleted. Moves are append-only docs (`moves/<g>-<nnn>`, UCI); every window replays them with the inline rules engine and drops any move that is not legal from the last accepted position, in sequence. Seats are first come, first served and free 5 minutes after the last move. |
 | pixels | None: pixels live in `canvas-YYYYMMDD` (UTC), one doc per row (`r00`..`r31`), one key per pixel (`c0`..`c31`, a palette index). A pixel is `update(row, { cN })`, a shallow merge, so painters in the same row never clobber each other. Any visitor can paint any pixel; the 4 second cooldown is per browser. |
+| dashboard | `stats` emptied. Only Platform's demo-ops Worker writes, once a minute, with its token (`allowAnonymousWrites: false`): `stats/today` = `{ day, updatedAt, votes, gamesInProgress: { tictactoe, chess }, moves: { tictactoe, chess }, pixels, countries, pins, truncated? }` and `stats/hourly-YYYYMMDD` = `{ h: [24 writes per UTC hour] }`. A metric named in `truncated` is a lower bound and shows as "400+". The page only reads; it shows a stale badge when `updatedAt` is over 3 minutes old. |
+
+## Fake stats feed
+
+`tools/fake-stats.mjs` stands in for the demo-ops Worker when testing the dashboard against a
+local instance. It writes `stats/today` and `stats/hourly-YYYYMMDD` through the REST data API
+every few seconds, with counts that grow like a busy demo:
+
+```sh
+node ops/demo/tools/fake-stats.mjs --origin http://localhost:8787 --artifact <id> --token <PAT>
+```
+
+`--every <s>` sets the interval (default 3), `--truncate pixels,moves` marks metrics as lower
+bounds, `--age 240` backdates `updatedAt` to show the stale state, and `--once` writes one tick
+and exits. The token is a PAT of the artifact's owner (or set `OA_TOKEN`).
 
 ## Gallery placeholders
 

@@ -1,0 +1,9 @@
+{
+  "title": "Demo activity",
+  "visibility": "public",
+  "allowAnonymousWrites": false,
+  "capabilities": {
+    "db": true
+  },
+  "description": "What's happening across the demos today: poll votes, games in progress, moves, pixels and countries, updated live about once a minute."
+}
