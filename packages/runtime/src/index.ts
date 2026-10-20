@@ -365,6 +365,8 @@ export function createRuntime(opts: RuntimeOptions = {}): OpenArtifacts {
   };
 
   // Every format loads the runtime, so this covers renderer pages too.
+  // Artifact content can forge or suppress oa:interacted: it is only a hint for
+  // whether the viewer auto-swaps versions; nothing security-relevant may depend on it.
   const stopInteract = bridge.raw
     ? () => {}
     : onFirstInteraction(() => bridge.send({ oa: 1, type: "interacted" }));
