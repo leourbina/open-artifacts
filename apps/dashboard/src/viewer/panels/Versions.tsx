@@ -6,6 +6,7 @@ import { useState } from "react";
 import { ApiClientError } from "../../api/client";
 import { useRestoreVersion, useVersionPages } from "../../api/queries";
 import { useSingleFlight } from "../../api/useSingleFlight";
+import { useCan } from "../../auth/permissions";
 import { toast } from "../../layout/toast";
 import { AppLink } from "../../library/AppLink";
 import { relativeTime } from "../../library/time";
@@ -19,7 +20,7 @@ export function Versions({ artifact }: { artifact: ArtifactSummary }) {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
   const [target, setTarget] = useState<number | null>(null);
-  const canRestore = artifact.access !== "viewer";
+  const canRestore = useCan(artifact).edit;
   const items = q.data?.pages.flat() ?? [];
 
   if (q.isPending)

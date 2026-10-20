@@ -9,6 +9,7 @@ import {
   useVersionInfo,
 } from "../../api/queries";
 import { useSingleFlight } from "../../api/useSingleFlight";
+import { useCan } from "../../auth/permissions";
 import { toast } from "../../layout/toast";
 import { useOfferUndo } from "../useOfferUndo";
 
@@ -26,8 +27,7 @@ const fail = (e: unknown, fallback: string) =>
 
 export function Details({ artifact }: { artifact: ArtifactSummary }) {
   const { id } = artifact;
-  const canEdit = artifact.access !== "viewer";
-  const owner = artifact.access === "owner";
+  const can = useCan(artifact);
   const info = useVersionInfo(id, artifact.currentVersion).data;
   const patch = usePatchArtifact(id);
   const del = useDeleteArtifact(id);
@@ -88,7 +88,7 @@ export function Details({ artifact }: { artifact: ArtifactSummary }) {
 
   return (
     <div className="oa-details">
-      {canEdit && (
+      {can.edit && (
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -140,10 +140,10 @@ export function Details({ artifact }: { artifact: ArtifactSummary }) {
         </dd>
         <dt>Created</dt>
         <dd>{new Date(artifact.createdAt).toLocaleString()}</dd>
-        <dt>Owner</dt>
+        <dt>{artifact.space?.kind === "shared" ? "Created by" : "Owner"}</dt>
         <dd>{displayName(artifact.owner)}</dd>
       </dl>
-      {owner && (
+      {can.delete && (
         <>
           <Button variant="danger" onClick={() => setConfirm(true)}>
             Delete artifact

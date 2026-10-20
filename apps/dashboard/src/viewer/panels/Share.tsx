@@ -28,6 +28,7 @@ import {
 } from "../../api/queries";
 import { useSingleFlight } from "../../api/useSingleFlight";
 import { emailEnabled } from "../../auth/emailEnabled";
+import { useCan } from "../../auth/permissions";
 import { useMe } from "../../auth/useMe";
 import { CopyLink } from "../../layout/CopyLink";
 import { Modal } from "../../layout/Modal";
@@ -106,7 +107,9 @@ function RoleSelect({
 
 export function Share({ artifact }: { artifact: ArtifactSummary }) {
   const { id } = artifact;
-  const owner = artifact.access === "owner";
+  const can = useCan(artifact);
+  const vis = can.setVisibility;
+  const people = can.share;
   const shares = useShares(id);
   const patch = usePatchArtifact(id);
   const put = usePutShare(id);
@@ -204,7 +207,7 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
         <h3 id="oa-share-vis" className={H3}>
           Visibility
         </h3>
-        {owner ? (
+        {vis ? (
           <ToggleGroup
             type="single"
             variant="outline"
@@ -235,7 +238,7 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
         <p className={`oa-vis-note mt-[var(--oa-space-2)] ${MUTED}`}>
           {NOTE[staged]}
         </p>
-        {owner && changed && (
+        {vis && changed && (
           <div className="mt-[var(--oa-space-4)] flex items-center gap-[var(--oa-space-2)]">
             <Button
               size="sm"
@@ -263,7 +266,7 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
         )}
       </section>
 
-      {owner && (
+      {people && (
         <section>
           <h3 className={H3}>Add people</h3>
           <form
@@ -359,7 +362,7 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
               <span className={NAME} title={s.email}>
                 {s.email}
               </span>
-              {owner ? (
+              {people ? (
                 <>
                   <RoleSelect
                     label={`Role for ${s.email}`}
@@ -403,7 +406,7 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
             <Checkbox
               label={label}
               checked={artifact.capabilities[k]}
-              disabled={!owner || patch.isPending}
+              disabled={!vis || patch.isPending}
               onCheckedChange={(on) => setCap(k, on === true)}
             />
             <small className="oa-muted">{hint}</small>
@@ -414,7 +417,7 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
             label="Allow anonymous writes"
             checked={artifact.allowAnonymousWrites}
             disabled={
-              !owner ||
+              !vis ||
               patch.isPending ||
               artifact.visibility !== "public" ||
               !artifact.capabilities.db
