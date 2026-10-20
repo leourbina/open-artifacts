@@ -1,11 +1,11 @@
 import { type CallToolResult, McpServer } from "@modelcontextprotocol/server";
 import {
   type AgentRef,
+  dataLimits,
   MCP_PATH,
   type Member,
   mcpBodyLimit,
   mcpTooLargeMessage,
-  planOf,
   QUOTA_MESSAGE,
 } from "@oa/shared";
 import { createMcpHandler } from "agents/mcp/server";
@@ -90,9 +90,11 @@ export async function guard(
 }
 
 export function createServer(ctx: McpContext): McpServer {
+  const { plan, docBytes } = dataLimits(ctx.env);
+  const instructions = INSTRUCTIONS(plan, skillUrl(ctx.env), docBytes);
   const server = new McpServer(
     { name: "open-artifacts", version: VERSION },
-    { instructions: INSTRUCTIONS(planOf(ctx.env.PLAN), skillUrl(ctx.env)) },
+    { instructions },
   );
   const agentNow = (): AgentRef | null => {
     if (!ctx.agent || !ctx.clientVersion) return ctx.agent;
@@ -123,7 +125,7 @@ export function createServer(ctx: McpContext): McpServer {
         {
           uri: uri.href,
           mimeType: "text/markdown",
-          text: INSTRUCTIONS(planOf(ctx.env.PLAN), skillUrl(ctx.env)),
+          text: instructions,
         },
       ],
     }),
@@ -151,27 +153,33 @@ export function createServer(ctx: McpContext): McpServer {
   return server;
 }
 
+type LimitEnv = Pick<Env, "PLAN" | "DATA_DOC_BYTES" | "DATA_DAILY_WRITES">;
+
 /**
  * The /mcp body cap of the instance's plan (LIMITS.mcpBodyBytesFree/Paid),
  * generic for every tool and checked before any parse.
  */
-export const mcpBodyCap = (env: Pick<Env, "PLAN">): number =>
-  mcpBodyLimit(planOf(env.PLAN));
+export const mcpBodyCap = (env: LimitEnv): number => {
+  const { plan, docBytes } = dataLimits(env);
+  return mcpBodyLimit(plan, docBytes);
+};
 
 /**
  * Over the cap: HTTP 413 with a JSON-RPC error, as the SDK's transport answers
  * an oversize body (code -32000, id null: the request was never read). The
  * message gives the create_upload steps and the data-doc limit.
  */
-const tooLarge = (env: Pick<Env, "PLAN">) =>
-  Response.json(
+const tooLarge = (env: LimitEnv) => {
+  const { plan, docBytes } = dataLimits(env);
+  return Response.json(
     {
       jsonrpc: "2.0",
-      error: { code: -32000, message: mcpTooLargeMessage(planOf(env.PLAN)) },
+      error: { code: -32000, message: mcpTooLargeMessage(plan, docBytes) },
       id: null,
     },
     { status: 413 },
   );
+};
 
 /**
  * Reads an MCP request body once, into one buffer, with a running cap: 413 on a
@@ -183,7 +191,7 @@ const tooLarge = (env: Pick<Env, "PLAN">) =>
  */
 export async function capMcpBody(
   req: Request,
-  env: Pick<Env, "PLAN">,
+  env: LimitEnv,
 ): Promise<Request | Response> {
   const cap = mcpBodyCap(env);
   if (Number(req.headers.get("content-length") ?? 0) > cap)

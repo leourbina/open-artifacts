@@ -50,6 +50,8 @@
     "ENVIRONMENT": "production",
     "PLAN": "free",
     "PUBLIC_HOME": "",
+    "DATA_DOC_BYTES": "",
+    "DATA_DAILY_WRITES": "",
     "ACCESS_TEAM_DOMAIN": "{{ACCESS_TEAM_DOMAIN}}",
     "ACCESS_CLIENT_ID": "{{ACCESS_CLIENT_ID}}",
     "CF_ACCOUNT_ID": "{{CF_ACCOUNT_ID}}",

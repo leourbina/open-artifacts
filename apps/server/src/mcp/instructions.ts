@@ -1,7 +1,13 @@
 // Server instructions, also served as the resource RUNTIME_DOC_URI, and the
 // shared sections of the skill (scripts/emit-skill.ts). Vendor-neutral. Plain
 // Node-loadable: imports only @oa/shared.
-import { dataDocLimit, LIMITS, mcpBodyLimit, type Plan } from "@oa/shared";
+import {
+  dataDocLimit,
+  formatKb,
+  LIMITS,
+  mcpBodyLimit,
+  type Plan,
+} from "@oa/shared";
 
 export const RUNTIME_DOC_URI = "openartifacts://docs/runtime";
 
@@ -19,19 +25,28 @@ export type PlanText = {
   quota: string;
 };
 
-/** Bytes as "N KB", or "N MB" from 1 MB up (as dataDocTooLargeMessage). */
+/** Bytes as "N MB" when a whole MB, else as formatKb ("N KB", or exact bytes). */
 export const sizeText = (b: number): string =>
-  b >= 1024 * 1024 ? `${b / 1024 / 1024} MB` : `${b / 1024} KB`;
+  b >= 1024 * 1024 && b % (1024 * 1024) === 0
+    ? `${b / 1024 / 1024} MB`
+    : formatKb(b);
 
-export const planText = (plan: Plan): PlanText => ({
+/**
+ * The plan's words, with the instance's effective data-doc limit `docBytes`
+ * (dataLimits(env).docBytes; default: the plan's).
+ */
+export const planText = (
+  plan: Plan,
+  docBytes: number = dataDocLimit(plan),
+): PlanText => ({
   plan,
-  dataDoc: sizeText(dataDocLimit(plan)),
+  dataDoc: sizeText(docBytes),
   dataDocNote:
     plan === "paid"
       ? ""
       : `; Workers Paid allows ${sizeText(LIMITS.dataDocBytesPaid)}`,
   // KB, as mcpTooLargeMessage states it.
-  mcpBody: `${mcpBodyLimit(plan) / 1024} KB`,
+  mcpBody: formatKb(mcpBodyLimit(plan, docBytes)),
   quota:
     plan === "paid" ? "a daily Cloudflare limit" : "its daily free-plan limit",
 });
@@ -157,13 +172,17 @@ const memo = new Map<string, string>();
  * The server instructions for `plan`. With `skillUrl` (the instance's
  * /skill.md, when served) they end by pointing at it.
  */
-export function INSTRUCTIONS(plan: Plan, skillUrl?: string): string {
-  const key = `${plan}|${skillUrl ?? ""}`;
+export function INSTRUCTIONS(
+  plan: Plan,
+  skillUrl?: string,
+  docBytes: number = dataDocLimit(plan),
+): string {
+  const key = `${plan}|${docBytes}|${skillUrl ?? ""}`;
   let s = memo.get(key);
   if (s === undefined) {
     s = `Open Artifacts hosts the pages, documents and code you publish, with versions, sharing and live data.
 
-${renderSections(planText(plan), (t) => t)}
+${renderSections(planText(plan, docBytes), (t) => t)}
 ${skillUrl ? `\nFull guide: ${skillUrl}\n` : ""}`;
     memo.set(key, s);
   }

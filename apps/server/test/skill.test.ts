@@ -155,6 +155,14 @@ describe("skill.md drift", () => {
     });
   }
 
+  it("states the effective data-doc limit when DATA_DOC_BYTES overrides it", async () => {
+    const md = await skill(
+      E({ PLAN: "paid", DATA_DOC_BYTES: String(1536 * 1024) }),
+    );
+    expect(md).toContain("1536 KB per document on this instance (paid plan)");
+    expect(md).toContain("a request body over 1600 KB");
+  });
+
   it("metadata.version is VERSION, as /healthz reports", async () => {
     const fm = frontmatter(await skill());
     const health = (await (await get(`${APP}/healthz`)).json()) as {
