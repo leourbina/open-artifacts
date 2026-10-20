@@ -21,7 +21,9 @@ import {
   planOf,
   R,
   STATUS_FOR,
+  USAGE_LIMITS,
   UsageSchema,
+  usageLimit,
   viewerPath,
 } from "../src/index.js";
 
@@ -309,6 +311,7 @@ describe("fix round 3", () => {
         appUrl: "a",
         mcpUrl: "b",
         emailEnabled: false,
+        plan: "free",
       },
       displayName: null,
       suggestedName: null,
@@ -376,6 +379,7 @@ describe("UsageSchema", () => {
   it("accepts the CPU-limit metric keys", () => {
     const u = {
       available: true,
+      plan: "free" as const,
       date: "2026-10-19",
       metrics: [
         { key: "cpu_limit_hits", used: 3, limit: 0 },
@@ -390,6 +394,47 @@ describe("UsageSchema", () => {
         metrics: [{ key: "cpu_nope", used: 1, limit: 0 }],
       }).success,
     ).toBe(false);
+  });
+
+  it("requires plan: free or paid", () => {
+    const u = { available: false, date: "2026-10-19", metrics: [] };
+    expect(UsageSchema.safeParse(u).success).toBe(false);
+    expect(UsageSchema.parse({ ...u, plan: "paid" }).plan).toBe("paid");
+    expect(UsageSchema.safeParse({ ...u, plan: "pro" }).success).toBe(false);
+  });
+});
+
+describe("USAGE_LIMITS", () => {
+  it("covers every usage metric key on both plans", () => {
+    const keys = [...UsageSchema.shape.metrics.element.shape.key.options];
+    for (const plan of ["free", "paid"] as const)
+      expect(Object.keys(USAGE_LIMITS[plan]).sort()).toEqual(keys.sort());
+  });
+
+  it("Free: today's daily caps and the 10 ms CPU limit", () => {
+    expect(USAGE_LIMITS.free).toEqual({
+      requests: 100_000,
+      d1_reads: 5_000_000,
+      d1_writes: 100_000,
+      do_requests: 100_000,
+      cpu_limit_hits: 0,
+      cpu_p99_ms: 10,
+      kv_writes: 1_000,
+    });
+  });
+
+  it("Paid: no daily caps (0) and the default 30 s CPU limit", () => {
+    expect(USAGE_LIMITS.paid).toEqual({
+      requests: 0,
+      d1_reads: 0,
+      d1_writes: 0,
+      do_requests: 0,
+      cpu_limit_hits: 0,
+      cpu_p99_ms: 30_000,
+      kv_writes: 0,
+    });
+    expect(usageLimit("paid", "cpu_p99_ms")).toBe(30_000);
+    expect(usageLimit("free", "kv_writes")).toBe(1_000);
   });
 });
 

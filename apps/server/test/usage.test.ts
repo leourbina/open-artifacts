@@ -69,7 +69,7 @@ describe("usage", () => {
   it("no token -> unavailable", async () => {
     const r = await call(admin.cookie, withToken());
     const u = UsageSchema.parse(await r.json());
-    expect(u).toMatchObject({ available: false, metrics: [] });
+    expect(u).toMatchObject({ available: false, plan: "free", metrics: [] });
     expect(u.date).toMatch(/^\d{4}-\d\d-\d\d$/);
   });
 
@@ -80,6 +80,7 @@ describe("usage", () => {
     const e = { ...withToken("tok"), CF_ACCOUNT_ID: "acct-cache" };
     const u = UsageSchema.parse(await (await call(admin.cookie, e)).json());
     expect(u.available).toBe(true);
+    expect(u.plan).toBe("free");
     expect(u.metrics).toEqual([
       { key: "requests", used: 1200, limit: 100000 },
       { key: "d1_reads", used: 3000, limit: 5000000 },
@@ -102,6 +103,40 @@ describe("usage", () => {
     expect(
       spy.mock.calls.filter((c) => String(c[0]).includes("graphql")),
     ).toHaveLength(1);
+  });
+
+  it("PLAN=paid: no daily caps (limit 0), CPU p99 against 30 s", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => gql());
+    const u = await usageFor({
+      ...withToken("tok"),
+      PLAN: "paid",
+      CF_ACCOUNT_ID: "acct-paid",
+    });
+    expect(u.plan).toBe("paid");
+    expect(u.metrics).toEqual([
+      { key: "requests", used: 1200, limit: 0 },
+      { key: "d1_reads", used: 3000, limit: 0 },
+      { key: "d1_writes", used: 40, limit: 0 },
+      { key: "do_requests", used: 77, limit: 0 },
+      { key: "cpu_limit_hits", used: 3, limit: 0 },
+      { key: "cpu_p99_ms", used: 8.5, limit: 30000 },
+      { key: "kv_writes", used: 42, limit: 0 },
+    ]);
+  });
+
+  it("PLAN=paid, no token -> unavailable with plan paid", async () => {
+    const u = await usageFor({ ...withToken(), PLAN: "paid" });
+    expect(u).toMatchObject({ available: false, plan: "paid", metrics: [] });
+  });
+
+  it("cache is per plan: a Free read is not served after PLAN flips to paid", async () => {
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => gql());
+    const e = { ...withToken("tok"), CF_ACCOUNT_ID: "acct-flip" };
+    expect((await usageFor(e)).plan).toBe("free");
+    expect((await usageFor({ ...e, PLAN: "paid" })).plan).toBe("paid");
+    expect(graphqlCalls(spy)).toHaveLength(2);
   });
 
   it("GraphQL errors or bad shape -> available:false, not cached", async () => {
@@ -287,11 +322,11 @@ describe("MCP CPU-limit nudge", () => {
     ).token;
   });
 
-  const listWith = async (hits: number, acct: string) => {
+  const listWith = async (hits: number, acct: string, plan?: string) => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
       gql({}, { cpuHits: [{ sum: { requests: hits } }] }),
     );
-    await usageFor({ ...withToken("tok"), CF_ACCOUNT_ID: acct });
+    await usageFor({ ...withToken("tok"), CF_ACCOUNT_ID: acct, PLAN: plan });
     vi.restoreAllMocks();
     const spy = vi.spyOn(globalThis, "fetch");
     const client = await connect(pat, { env: E(withToken("tok")) });
@@ -330,5 +365,11 @@ describe("MCP CPU-limit nudge", () => {
     });
     expect(r.structuredContent).not.toHaveProperty("cpu_limit_hits");
     expect(JSON.stringify(r.structuredContent)).not.toMatch(NUDGE);
+  });
+
+  it("Workers Paid, 5 hits today -> no nudge (no 10 ms cap to point at)", async () => {
+    const r = await listWith(5, "acct-nudge-paid", "paid");
+    expect(textOf(r)).not.toMatch(NUDGE);
+    expect(r.content).toHaveLength(1);
   });
 });

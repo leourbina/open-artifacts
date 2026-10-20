@@ -15,8 +15,13 @@ export default defineConfig({
   ],
   test: {
     include: ["test/**/*.test.ts"],
-    // Wall-clock budgets run alone (vitest.cpu.config.ts), never under suite load.
-    exclude: ["test/**/*.cpu.test.ts", "**/node_modules/**"],
+    // Wall-clock budgets run alone (vitest.cpu.config.ts), never under suite
+    // load; code-cpu runs in Node (vitest.codecpu.config.ts).
+    exclude: [
+      "test/**/*.cpu.test.ts",
+      "test/code-cpu/**",
+      "**/node_modules/**",
+    ],
     setupFiles: ["./test/setup.ts"],
   },
 });

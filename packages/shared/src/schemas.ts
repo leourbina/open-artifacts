@@ -324,6 +324,8 @@ export const MeSchema = z.object({
     mcpUrl: z.string(),
     /** Server can send invite/share emails; the result's `emailed` reports each send. */
     emailEnabled: z.boolean(),
+    /** The instance's Workers plan (env PLAN), as /healthz reports it. */
+    plan: z.enum(["free", "paid"]),
   }),
   /** The name the user chose (PATCH R.me), or null. */
   displayName: z.string().nullable(),
@@ -492,6 +494,8 @@ export type DataQueryInput = z.input<typeof DataQuerySchema>;
 
 export const UsageSchema = z.object({
   available: z.boolean(),
+  /** The instance's Workers plan (env PLAN); every metric's `limit` follows it. */
+  plan: z.enum(["free", "paid"]),
   date: z.string(),
   metrics: z.array(
     z.object({
