@@ -217,8 +217,11 @@ export const prereqs: Step = {
       throw new Error(`--account-id ${id} is not in \`wrangler whoami\``);
     state.accountId = id;
     const plan = await detectPlan(ctx, id);
-    const warns = [...warnings(plan), ...(await decide(state, ctx, plan))];
+    const extra = await decide(state, ctx, plan);
+    const confirmed = plan !== "paid" && ctx.opts.planVar === "paid";
+    const warns = [...warnings(plan, confirmed), ...extra];
     if (plan === "paid") ctx.notes.unshift("Workers Paid detected");
+    else if (confirmed) ctx.notes.unshift("Workers Paid confirmed (--yes-paid)");
     ctx.notes.push(...warns.map((w) => w.message));
     const { missing, zones } = await missingHosts(ctx, id);
     const issues = await tokenIssues(state, ctx, { a: id, zones });

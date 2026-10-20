@@ -287,6 +287,34 @@ describe("plan detection (prereqs)", () => {
     expect(cfg(w).send_email).toEqual([{ name: "EMAIL" }]);
   });
 
+  it("#7: --yes-paid silences free-plan warnings and notes the confirmation", async () => {
+    for (const subscriptions of [undefined, [{ rate_plan: { id: "free" } }]]) {
+      const w = world({ subscriptions: subscriptions as never });
+      expect(await run([...HOSTS, "--yes-paid"], w.deps, ROOT)).toBe(0);
+      expect(pre(w).data.warnings).toEqual([]);
+      expect(pre(w).message).toContain("Workers Paid confirmed (--yes-paid)");
+    }
+  });
+
+  it("#7: --yes-paid on a detected paid plan adds no confirmation note", async () => {
+    const w = world({ subscriptions: PAID });
+    await run([...HOSTS, "--yes-paid"], w.deps, ROOT);
+    expect(pre(w).message).not.toContain("confirmed");
+  });
+
+  it("#20: --yes-paid turns thumbnails on unless --no-browser", async () => {
+    const on = world();
+    await run([...HOSTS, "--yes-paid"], on.deps, ROOT);
+    expect(cfg(on).browser).toEqual({ binding: "BROWSER" });
+    expect(on.state()).toMatchObject({ browser: true });
+    const off = world();
+    await run([...HOSTS, "--yes-paid", "--no-browser"], off.deps, ROOT);
+    expect(cfg(off).browser).toBeUndefined();
+    const forced = world();
+    await run([...HOSTS, "--yes-paid", "--browser"], forced.deps, ROOT);
+    expect(pre(forced).data.warnings).toEqual([]);
+  });
+
   it("free: warnings shown, --solo", async () => {
     const w = world({ subscriptions: [{ rate_plan: { id: "free" } }] });
     expect(await run(HOSTS, w.deps, ROOT)).toBe(0);

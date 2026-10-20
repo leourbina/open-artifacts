@@ -38,7 +38,16 @@ describe("F1: a deploy never silently drops a live binding", () => {
     expect(l.message).toContain("--no-email");
     expect(w.ops.filter((o) => o === "deploy")).toHaveLength(1);
     w.lines.length = 0;
-    const drop = [...CI, "--upgrade", "--solo", "--no-email", "--plan", "paid"];
+    // TEAM passes --yes-paid, which now turns thumbnails on (#20); drop BROWSER too.
+    const drop = [
+      ...CI,
+      "--upgrade",
+      "--solo",
+      "--no-email",
+      "--no-browser",
+      "--plan",
+      "paid",
+    ];
     expect(await run(drop, w.deps, ROOT)).toBe(0);
     expect(cfg(w)).not.toHaveProperty("send_email");
   });
