@@ -49,6 +49,7 @@
     "SERVER_THUMBNAILS": "on",
     "ENVIRONMENT": "production",
     "PLAN": "free",
+    "PUBLIC_HOME": "",
     "ACCESS_TEAM_DOMAIN": "{{ACCESS_TEAM_DOMAIN}}",
     "ACCESS_CLIENT_ID": "{{ACCESS_CLIENT_ID}}",
     "CF_ACCOUNT_ID": "{{CF_ACCOUNT_ID}}",
