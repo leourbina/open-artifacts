@@ -46,6 +46,9 @@
 - **The broker does the directory token exchange and refresh.** The install keeps only the AES-GCM-encrypted refresh token.
 - **`DIRECTORY_TOKEN_KEY` comes from Platform (P1) provisioning.** It is not a user step.
 - **Token cap during unhealthy sync (decided):** the 24 h cap is browser sessions only; PATs and MCP OAuth grants are exempt but covered by the 7-day stale rule; the owner banner adds "agent tokens not re-verified".
+- **`team` in shared spaces keeps today's meaning** (every uncapped member). The protection is who can widen: only managers and personal owners may set visibility; org owners and admins only by self-adding as manager (audited).
+- **Owners and admins can't be restricted** (`restrict_admin`); sync skips them in restricted groups. A cap also drops every admin power in `orgCan` as belt and braces.
+- **Fail closed on malformed inputs:** `decide` allowlists roles, kinds and flags; capped callers never see trash.
 - **Former open questions, now decided:**
   1. Shares on a departed person's artifacts stay until transfer; no new shares or visibility changes.
   2. A new directory id behind an email cuts that email's shares and memberships.
@@ -394,6 +397,7 @@ it.each(["cookie", "pat", "oauth"])("suspended user → 401 via %s", async (cred
 it("removed user's personal artifacts stay unreadable by the org owner", async () => { /* 404 */ });
 it("a removed user signing in with a valid Google identity is refused (P2 admission)", async () => { /* 302 /sign-in?error=removed (P2's SignInError; identity conflicts are identity_conflict) */ });
 it("reactivated user's PATs stay revoked", async () => { /* 401 */ });
+it("gatherer: a suspended or removed user resolves to nobody on every surface", async () => { /* pinned from the #367 review; needs users.status (#368) */ });
 ```
 
 - [ ] **Step 2: Run.** Expected: 4 failures. **Step 3: Implement.** **Step 4: Run** `pnpm -F @oa/server test members`. Expected: passes.
@@ -458,12 +462,12 @@ it("export streams NDJSON with one line per event", async () => { /* lines.lengt
 **Files:** Create `services/spaces.ts`, `routes/spaces.ts`; Modify `directory/sync-do.ts` (access jobs); Test `apps/server/test/spaces.api.test.ts`
 
 **Interfaces:**
-- Routes and shapes exactly as in PR #359: `R.spaces` (`SpacesQuery` → `Page<Space>`), `R.space(id)`, `R.spaceMembers(id)` (`Page<SpaceMember>`), `R.spaceMember(id, userId)`, `R.spaceMappings(id)`, `R.spaceMapping(id, groupId)`, and the instance-wide `R.restrictedGroups` / `R.restrictedGroup(groupId)` (keyed by `groupId`; groups appear as `GroupRef { groupId, email, name }` everywhere). `PUT R.restrictedGroup` is 409 `directory_sync_off` when sync is off or frozen; `DELETE` works in any mode and lifts a frozen restriction. The manual flag `PUT/DELETE R.memberRestricted(id)` (→ `Member` with `restriction`; org owner or admin; any mode; audited `restricted.set` / `restricted.remove`) covers Team, manual and frozen installs and never lifts a group restriction. Any restriction change calls `revokeUserLive`. Mapping changes and restricted-group adds while sync is off or frozen are 409 `directory_sync_off`. Personal spaces on any of these routes are 400 `space_personal`; deleting a non-empty space is 409 `space_not_empty`.
+- Routes and shapes exactly as in PR #359: `R.spaces` (`SpacesQuery` → `Page<Space>`), `R.space(id)`, `R.spaceMembers(id)` (`Page<SpaceMember>`), `R.spaceMember(id, userId)`, `R.spaceMappings(id)`, `R.spaceMapping(id, groupId)`, and the instance-wide `R.restrictedGroups` / `R.restrictedGroup(groupId)` (keyed by `groupId`; groups appear as `GroupRef { groupId, email, name }` everywhere). `PUT R.restrictedGroup` is 409 `directory_sync_off` when sync is off or frozen; `DELETE` works in any mode and lifts a frozen restriction. The manual flag `PUT/DELETE R.memberRestricted(id)` (→ `Member` with `restriction`; org owner or admin; any mode; audited `restricted.set` / `restricted.remove`) covers Team, manual and frozen installs and never lifts a group restriction. Any restriction change calls `revokeUserLive`. Owners and admins can never be restricted: `R.memberRestricted` on an owner or admin target is 400 `restrict_admin` (contract #370), and `orgCan` also drops every admin power under a cap as belt and braces. Mapping changes and restricted-group adds while sync is off or frozen are 409 `directory_sync_off`. Personal spaces on any of these routes are 400 `space_personal`; deleting a non-empty space is 409 `space_not_empty`.
 - `PATCH R.space(id)`: `SPACE_MANAGER_FIELDS` (`name`, `publicLinks`) for space managers and org admins; `allMembersRole` for org admins. Every `publicLinks` change writes `space.public_links`.
 - **Public links off:**
   - One batch: `update artifacts set visibility = 'team' where space_id = ? and visibility = 'public' and deleted_at is null`, the space update and the audit row.
   - Then the job `closeSpace(spaceId)` closes every socket (anonymous ones included) on each artifact in the space, 50 per alarm, paged by `artifacts_space_live_idx`.
-  - New `public` on that space (PATCH or publish) is 403 `public_links_off`.
+  - New `public` on that space (PATCH or publish) is 403 `public_links_off`, enforced on the visibility route itself (pinned from the #367 review).
 - **Lowering `allMembersRole`, removing a mapping, or removing a member:** the job `revokeUsers(userIds)` runs in pages of 50, with no cap.
 - Admin self-add (`POST R.spaceMemberSelf(id)`, `SpaceMemberPut` → 201 `SpaceMember`, org admin): shared spaces only (else 400 `space_personal`); writes `space.admin_self_add` and emails the space managers.
 
@@ -485,6 +489,7 @@ it("per-user restricted flag caps a member and audits restricted.set", async () 
 it("restricted group PUT while sync is frozen → 409 directory_sync_off; existing frozen restrictions still cap", async () => { /* 409; viewer */ });
 it("restricted group DELETE while frozen lifts the restriction", async () => { /* 204; editor again */ });
 it("manual restricted DELETE never lifts a group restriction", async () => { /* still viewer */ });
+it("restricting an owner or admin → 400 restrict_admin", async () => { /* 400 x2 */ });
 it("space manager may turn public links off; audited space.public_links", async () => { /* 200 */ });
 it("mapping PUT while sync is off → 409 directory_sync_off", async () => { /* 409 */ });
 it("GET /spaces pages with nextCursor", async () => { /* items.length === limit; nextCursor set */ });
@@ -504,9 +509,10 @@ it("spaces flag off → POST /spaces 404, authz unchanged", async () => { /* 404
 - Errors per the contract: a publish or move into a space the caller can't publish to, or any create by a capped caller, is 403 `space_forbidden`; a personal move target is 400 `space_personal`; `spaceId` on an existing artifact is 400 `use_move`; a bad successor is 400 `invalid_successor`; a departed-person transfer on an active member is 409 `member_active`.
 - Fold `HostedPublishInputSchema` into `PublishInputSchema` (`spaceId?`, create only) in `packages/shared/src/schemas.ts` and delete the `Hosted*` schema. The MCP `publish_artifact` input and the generated skill change with it. The target is resolved by `loadSpace(..., "space.publish")`, so another user's personal space is a 404.
 - `moveArtifact(env, user, id, toSpaceId, ctx)`:
-  - Needs `can(level, "move")` and `orgCan("space.publish", roleIn(to))`.
+  - Needs `can(level, "move")` and `orgCan("space.publish", { spaceRole: roleIn(to), cap })` on the target (pinned from the #367 review).
   - Moves into any personal space are 400 `space_personal` (company artifacts stay company-owned). Personal to shared is allowed (`can.move`).
   - Writes `space_id` and the audit row in one batch, then calls `closeRuntimeSockets([id])`.
+  - **Moving a `public` artifact into a shared space with `publicLinks` off** rewrites its visibility to `team` in the same D1 batch as the move (contract #370), then closes its sockets, anonymous data and events included: the same mechanism as Task 9's toggle-off. This is belt and braces with `decide()` (public needs personal or `publicLinks`) and Task 11's content-host check.
 - `transferArtifact(env, user, id, toUserId)` (`R.transferArtifact`, `TransferArtifactInput`): the personal owner only: it checks `level === "owner"` (via `requireAccess(..., "owner")`, which refuses managers), else 404. The target must be active, not a guest and not restricted, else 400 `invalid_successor` (contract wording updated in #359). It moves the artifact to the target's personal space and adds an editor share for the former owner.
 - `transferPersonal(env, admin, fromUserId, input: TransferInput): Promise<TransferResult>`:
   - The source must be `suspended` or `removed` (else 409 `member_active`); a user target must be active, non-guest and non-restricted (else 400 `invalid_successor`), or the target must be a shared space.
@@ -530,9 +536,16 @@ it("departed transfer requires inactive source and pages 100 at a time", async (
 });
 it("MCP publish into a view-only space → 403 space_forbidden; list_spaces omits it", async () => { /* 403; absent */ });
 it("smoke tool count is 18 and the skill lists list_spaces", () => { /* regenerated */ });
+it("moving a public artifact into a no-public-links space: visibility team in the same batch", async () => {
+  const anon = await openAnonSockets(pubArt); // data and events
+  await move(owner, pubArt, noPublicSpace);
+  expect((await row(env, pubArt)).visibility).toBe("team");
+  expect((await fetchP(pubArt)).status).toBe(404);
+  for (const ws of anon) expect(await ws.closed).toMatchObject({ code: 4403 });
+});
 ```
 
-- [ ] **Step 2: Run.** Expected: 10 failed. **Step 3: Implement**, then regenerate with `pnpm -F @oa/server gen`. **Step 4: Run** `pnpm -F @oa/server test spaces.move mcp.tools`. Expected: passes.
+- [ ] **Step 2: Run.** Expected: 11 failed. **Step 3: Implement**, then regenerate with `pnpm -F @oa/server gen`. **Step 4: Run** `pnpm -F @oa/server test spaces.move mcp.tools`. Expected: passes.
 - [ ] **Step 5: Commit** `feat(server): publish into spaces, move, transfer, MCP (P3)`.
 
 ### Task 11: Content host revocation in D1
@@ -630,7 +643,8 @@ it("initial binding links existing users by email once, later passes never match
   - `unhealthy_since` is set on the first failure and cleared on success.
   - Over 1 h unhealthy: `Me.instance.directory.banner` (owners and admins) and `tokensUnverified: true`; browser session age is capped at 24 h (Task 18).
   - At 24 h: one email to owners (`alertedAt`, reset on success).
-  - 429 or 5xx: `state = "backoff"`, 2 to 30 min. `invalid_grant`: `state = "auth_failed"`, retried hourly. Before the first success: `state = "never"`.
+  - 429 or 5xx: `state = "backoff"`, 2 to 30 min. `invalid_grant`: `state = "auth_failed"`, retried hourly. A 403 `insufficientPermissions` from the Admin SDK: `state = "scope_missing"` (contract #370), retried hourly, owners alerted. Before the first success: `state = "never"`.
+  - `Me.instance.directory` carries `{ state, staleAt, heldSweeps }` (contract #370); `state` and `staleAt` for owners and admins only.
 - **Frozen (Team, `DirectoryMode` `frozen`):** user-status polling and listings continue; only group sync stops, and sync rows stay `source = "sync"`.
 
 - [ ] **Step 1: Failing tests**
@@ -645,6 +659,7 @@ it("groups-app remove_user is picked up", async () => { /* row removed after rec
 it("customerId mismatch → state customer_mismatch, synced users denied, owners emailed", async () => { /* 401 */ });
 it("unhealthy 1 h → me.instance.directory.banner; 24 h → owners emailed exactly once (alertedAt); success resets", async () => { /* 1 email */ });
 it("frozen still applies suspensions", async () => { /* suspended */ });
+it("403 insufficientPermissions → state scope_missing; me.instance.directory.state for admins only", async () => { /* scope_missing; absent for members */ });
 it("500-user page parse + diff under 10 ms CPU", async () => { /* cpu */ });
 ```
 
@@ -657,7 +672,7 @@ it("500-user page parse + diff under 10 ms CPU", async () => { /* cpu */ });
 **Files:** Create `directory/apply.ts`, `directory/signin.ts`; Test `apps/server/test/directory.apply.test.ts`
 
 **Interfaces:**
-- `applyGroupDiff(env, groupId, added: string[], removed: string[], actor: AuditActor): Promise<{ narrowed: string[] }>`. It works on user ids, recomputes `space_members(source='sync')` as the max over mappings, recomputes `users.restricted_sync` (by `groupId`), and writes only the rows that changed. `narrowed` goes to `revokeUserLive`.
+- `applyGroupDiff(env, groupId, added: string[], removed: string[], actor: AuditActor): Promise<{ narrowed: string[] }>`. It works on user ids, recomputes `space_members(source='sync')` as the max over mappings, recomputes `users.restricted_sync` (by `groupId`; owners and admins in a restricted group are logged and skipped, never restricted), and writes only the rows that changed. `narrowed` goes to `revokeUserLive`.
 - `applyUser(env, u: DirUser, run: string): Promise<void>` (status changes carry `AuditReason` `directory_suspend`, `directory_unsuspend`, `directory_delete` or `directory_new_id`). It matches only through `identities('google', u.id)`. An unknown id creates a new user row and identity (the trigger creates the personal space).
 - `DELETE_USER`, or a `deleted` user in a listing:
   - `setUserStatus("removed")`.
@@ -684,6 +699,7 @@ it("two groups → max role; removal from one keeps the other, no revoke", async
 it("restricted group membership (by groupId) sets users.restricted_sync and caps", async () => { /* restricted_sync = 1 */ });
 it("sign-in group diff adds and removes for that user only", async () => { /* one user's rows changed */ });
 it("rows written equal changed rows only", async () => { /* d1 rows */ });
+it("an owner or admin in a restricted group is skipped and logged", async () => { /* restricted_sync = 0; audit detail */ });
 ```
 
 - [ ] **Step 2: Run.** Expected: 5 failed. **Step 3: Implement.** **Step 4: Run** `pnpm -F @oa/server test directory.apply`. Expected: passes.
