@@ -960,8 +960,8 @@ describe("release cadence", () => {
   const job = w.jobs.cadence;
   const steps: Step[] = job.steps;
 
-  it("runs every 10 minutes, on dispatch, and after release-please and CI (no check_suite)", () => {
-    expect(w.on.schedule).toEqual([{ cron: "*/10 * * * *" }]);
+  it("runs every 15 minutes, on dispatch, and after release-please and CI (no check_suite)", () => {
+    expect(w.on.schedule).toEqual([{ cron: "*/15 * * * *" }]);
     expect(triggers(w).sort()).toEqual(
       ["schedule", "workflow_dispatch", "workflow_run"].sort(),
     );

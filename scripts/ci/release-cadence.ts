@@ -29,7 +29,7 @@ const QUERY = `query($owner: String!, $name: String!, $head: String!, $branch: S
         title
         createdAt
         isInMergeQueue
-        autoMergeRequest { enabledAt }
+        autoMergeRequest { enabledAt enabledBy { login } }
         commits(last: 1) {
           nodes {
             commit {
@@ -76,6 +76,7 @@ export type ReleasePr = {
   createdAt: string;
   queued: boolean;
   armed: boolean;
+  armedBy?: string;
   rollup: string;
   contexts: Context[];
   oid: string;
@@ -133,6 +134,7 @@ async function snapshot(exec: Exec, repo: string): Promise<Snapshot> {
       createdAt: n.createdAt,
       queued: Boolean(n.isInMergeQueue),
       armed: Boolean(n.autoMergeRequest),
+      armedBy: n.autoMergeRequest?.enabledBy?.login,
       rollup: rollup?.state ?? "NONE",
       contexts,
       oid: String(commit?.oid ?? ""),
@@ -154,13 +156,22 @@ type Opts = {
   repo: string;
   now?: () => number;
   capMs?: number;
+  /** The release App's bot login; only auto-merge it enabled is ever disabled. */
+  appLogin?: string;
 };
 type Plan =
   | { do: "none"; result: ArmResult; msg: string }
   | { do: "disarm"; pr: ReleasePr }
   | { do: "arm"; pr: ReleasePr; capHit: boolean };
 
-function plan(s: Snapshot, now: number, capMs: number): Plan {
+const bare = (l?: string) => String(l ?? "").replace(/\[bot\]$/, "");
+
+function plan(
+  s: Snapshot,
+  now: number,
+  capMs: number,
+  appLogin?: string,
+): Plan {
   const { pr, others } = s;
   if (!pr)
     return {
@@ -180,7 +191,8 @@ function plan(s: Snapshot, now: number, capMs: number): Plan {
     };
   if (pr.armed) {
     // A fresh head must re-qualify under the drain rule.
-    if (others > 0 && !capHit) return { do: "disarm", pr };
+    const ours = Boolean(appLogin) && bare(pr.armedBy) === bare(appLogin);
+    if (ours && others > 0 && !capHit) return { do: "disarm", pr };
     return {
       do: "none",
       result: { action: "already", pr: pr.number },
@@ -208,6 +220,7 @@ export async function willWrite(o: Opts): Promise<boolean> {
     await snapshot(o.exec, o.repo),
     (o.now ?? Date.now)(),
     o.capMs ?? DRAIN_CAP_MS,
+    o.appLogin,
   );
   return p.do !== "none";
 }
@@ -220,6 +233,7 @@ export async function arm(
     await snapshot(o.exec, o.repo),
     (o.now ?? Date.now)(),
     o.capMs ?? DRAIN_CAP_MS,
+    o.appLogin,
   );
   if (p.do === "none") {
     o.log(p.msg);
@@ -291,23 +305,27 @@ export async function blocker(o: {
   log: (line: string) => void;
 }): Promise<BlockerResult> {
   const { pr } = await snapshot(o.exec, o.repo);
-  let issues: { number: number; title: string; createdAt: string }[] =
-    JSON.parse(
-      await gh(o.exec, [
-        "issue",
-        "list",
-        "--repo",
-        o.repo,
-        "--label",
-        "blocker",
-        "--state",
-        "open",
-        "--json",
-        "number,title,createdAt",
-        "--limit",
-        "50",
-      ]),
-    ).filter((i: { title: string }) => i.title.startsWith(BLOCKED));
+  let issues: {
+    number: number;
+    title: string;
+    createdAt: string;
+    body?: string;
+  }[] = JSON.parse(
+    await gh(o.exec, [
+      "issue",
+      "list",
+      "--repo",
+      o.repo,
+      "--label",
+      "blocker",
+      "--state",
+      "open",
+      "--json",
+      "number,title,createdAt,body",
+      "--limit",
+      "50",
+    ]),
+  ).filter((i: { title: string }) => i.title.startsWith(BLOCKED));
 
   // Close stale blockers on every run: a release newer than the issue means it shipped.
   const closed: number[] = [];
@@ -371,6 +389,10 @@ export async function blocker(o: {
     const body = lines.join("\n");
     const existing = issues[0];
     if (existing) {
+      if (existing.title === title && existing.body === body)
+        return closed.length
+          ? { action: "closed", issues: closed }
+          : { action: "none" };
       await gh(o.exec, [
         "issue",
         "edit",
@@ -439,13 +461,20 @@ async function main(argv: string[]) {
   }
   if (mode === "plan") {
     // stdout is appended to $GITHUB_OUTPUT: `write=true` when arm needs the App token
-    console.log(`write=${await willWrite({ exec: realExec, repo })}`);
+    console.log(
+      `write=${await willWrite({ exec: realExec, repo, appLogin: process.env.RELEASE_APP_LOGIN })}`,
+    );
     return 0;
   }
   const log = (s: string) => console.log(s);
   const r =
     mode === "arm"
-      ? await arm({ exec: realExec, repo, log })
+      ? await arm({
+          exec: realExec,
+          repo,
+          log,
+          appLogin: process.env.RELEASE_APP_LOGIN,
+        })
       : await blocker({ exec: realExec, repo, now: Date.now, log });
   console.log(JSON.stringify(r));
   return 0;

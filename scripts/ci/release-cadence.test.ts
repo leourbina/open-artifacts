@@ -30,11 +30,17 @@ type Fixture = {
     state?: string;
     queued?: boolean;
     armed?: boolean;
+    armedBy?: string;
     oid?: string;
     contexts?: Ctx[];
   };
   queue?: { headRefName: string; number: number }[] | null;
-  issues?: { number: number; title: string; createdAt: string }[];
+  issues?: {
+    number: number;
+    title: string;
+    createdAt: string;
+    body?: string;
+  }[];
   release?: { tag_name: string; published_at: string } | null;
 };
 
@@ -54,7 +60,12 @@ function fake(f: Fixture) {
               title: "chore(main): release 0.6.0",
               createdAt: f.pr.createdAt ?? hoursAgo(1),
               isInMergeQueue: f.pr.queued ?? false,
-              autoMergeRequest: f.pr.armed ? { enabledAt: hoursAgo(0) } : null,
+              autoMergeRequest: f.pr.armed
+                ? {
+                    enabledAt: hoursAgo(0),
+                    enabledBy: { login: f.pr.armedBy ?? "oa-release" },
+                  }
+                : null,
               commits: {
                 nodes: [
                   {
@@ -110,7 +121,14 @@ const logs = () => {
 };
 
 const arm_ = (g: ReturnType<typeof fake>, extra: { capMs?: number } = {}) =>
-  arm({ exec: g.exec, repo: REPO, log: logs().log, now: () => NOW, ...extra });
+  arm({
+    exec: g.exec,
+    repo: REPO,
+    log: logs().log,
+    now: () => NOW,
+    appLogin: "oa-release[bot]",
+    ...extra,
+  });
 const green = (minutesAgo: number): Ctx[] => [
   {
     __typename: "CheckRun",
@@ -194,15 +212,50 @@ describe("drain cap and head pinning", () => {
     }
   });
 
+  it("never disarms a human-armed release, nor when the App login is unknown", async () => {
+    const f = {
+      pr: { armed: true, armedBy: "leourbina", contexts: green(5) },
+      queue: QUEUED,
+    };
+    const g = fake(f);
+    expect((await arm_(g)).action).toBe("already");
+    expect(g.wrote("pr merge")).toEqual([]);
+    const g2 = fake({ ...f, pr: { ...f.pr, armedBy: "oa-release" } });
+    expect(
+      (
+        await arm({
+          exec: g2.exec,
+          repo: REPO,
+          log: logs().log,
+          now: () => NOW,
+        })
+      ).action,
+    ).toBe("already");
+    expect(
+      await willWrite({
+        exec: fake(f).exec,
+        repo: REPO,
+        now: () => NOW,
+        appLogin: "oa-release",
+      }),
+    ).toBe(false);
+  });
+
   it("willWrite says whether the run would touch the PR", async () => {
     expect(
-      await willWrite({ exec: fake({}).exec, repo: REPO, now: () => NOW }),
+      await willWrite({
+        exec: fake({}).exec,
+        repo: REPO,
+        now: () => NOW,
+        appLogin: "oa-release",
+      }),
     ).toBe(false);
     expect(
       await willWrite({
         exec: fake({ pr: {} }).exec,
         repo: REPO,
         now: () => NOW,
+        appLogin: "oa-release",
       }),
     ).toBe(true);
     expect(
@@ -210,6 +263,7 @@ describe("drain cap and head pinning", () => {
         exec: fake({ pr: {}, queue: QUEUED }).exec,
         repo: REPO,
         now: () => NOW,
+        appLogin: "oa-release",
       }),
     ).toBe(false);
     expect(
@@ -217,6 +271,7 @@ describe("drain cap and head pinning", () => {
         exec: fake({ pr: { state: "PENDING" } }).exec,
         repo: REPO,
         now: () => NOW,
+        appLogin: "oa-release",
       }),
     ).toBe(false);
     expect(
@@ -224,6 +279,7 @@ describe("drain cap and head pinning", () => {
         exec: fake({ pr: { armed: true }, queue: QUEUED }).exec,
         repo: REPO,
         now: () => NOW,
+        appLogin: "oa-release",
       }),
     ).toBe(true);
     expect(
@@ -231,6 +287,7 @@ describe("drain cap and head pinning", () => {
         exec: fake({ pr: { armed: true } }).exec,
         repo: REPO,
         now: () => NOW,
+        appLogin: "oa-release",
       }),
     ).toBe(false);
   });
@@ -457,6 +514,25 @@ describe("blocker", () => {
     const [edit] = g.wrote("issue edit");
     expect(edit?.[3]).toBe("7");
     expect(body(edit as string[])).toContain("[e2e](https://ci/e2e)");
+  });
+
+  it("does not edit the issue when title and body are unchanged", async () => {
+    const f: Fixture = { pr: { createdAt: hoursAgo(25) } };
+    const first = await run(f);
+    const create = first.g.wrote("issue create")[0] as string[];
+    const { r, g } = await run({
+      ...f,
+      issues: [
+        {
+          number: 7,
+          title: title(create),
+          body: body(create),
+          createdAt: hoursAgo(1),
+        },
+      ],
+    });
+    expect(r).toEqual({ action: "none" });
+    expect(g.wrote("issue edit")).toEqual([]);
   });
 
   it("looks issues up by the blocker label", async () => {

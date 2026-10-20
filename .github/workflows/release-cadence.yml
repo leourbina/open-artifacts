@@ -3,10 +3,10 @@ name: release-cadence
 # keeps one `blocker` issue open while a release is stuck. A manual cut still works:
 # arm the release PR yourself at any time.
 on:
-  # The retry loop: every 10 minutes (also covers the daily 15:00 pass), plus right
+  # The retry loop: every 15 minutes (also covers the daily 15:00 pass), plus right
   # after CI and release-please finish. (check_suite does not fire for Actions suites.)
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "*/15 * * * *"
   workflow_dispatch:
   workflow_run:
     workflows: [release-please, CI]
@@ -36,6 +36,7 @@ jobs:
         name: plan
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_APP_LOGIN: ${{ vars.RELEASE_APP_SLUG }}
         run: node --experimental-strip-types scripts/ci/release-cadence.ts plan --repo "$GITHUB_REPOSITORY" >> "$GITHUB_OUTPUT"
       # The App token exists only right before arming, scoped to the PR merge:
       # merging with GITHUB_TOKEN would trigger no workflows on the merge commit.
@@ -51,6 +52,7 @@ jobs:
         if: ${{ steps.plan.outputs.write == 'true' }}
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          RELEASE_APP_LOGIN: ${{ vars.RELEASE_APP_SLUG }}
         run: node --experimental-strip-types scripts/ci/release-cadence.ts arm --repo "$GITHUB_REPOSITORY"
       - name: blocker
         if: ${{ !cancelled() }}
