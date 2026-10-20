@@ -504,7 +504,7 @@ export async function run(
       report({
         step: "revoke-ci-tokens",
         status: "error",
-        message: `could not revoke setup-ci tokens: ${(e as Error).message}; revoke tokens labelled setup-ci in Settings → Tokens`,
+        message: `could not revoke setup-ci tokens: ${(e as Error).message}; revoke tokens labelled setup-ci in Settings → Agents`,
       });
       return 1;
     }
@@ -594,7 +594,7 @@ export async function run(
           report({
             step: "revoke-ci-token",
             status: "error",
-            message: `could not revoke CI owner token ${id}; action_required: revoke it in Settings → Tokens`,
+            message: `could not revoke CI owner token ${id}; action_required: revoke it in Settings → Agents`,
             data: { tokenId: id },
           });
           revokeFailed = true;

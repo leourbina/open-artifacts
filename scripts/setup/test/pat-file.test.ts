@@ -360,3 +360,29 @@ describe("realFs.writeSecret", () => {
     expect(statSync(join(d, ".open-artifacts")).mode & 0o777).toBe(0o700);
   });
 });
+
+describe("#2: the dashboard tab is Settings → Agents", () => {
+  const dash = readFileSync(
+    join(
+      import.meta.dirname,
+      "../../../apps/dashboard/src/settings/SettingsLayout.tsx",
+    ),
+    "utf8",
+  );
+  it("matches the dashboard's tab label", () => {
+    expect(dash).toMatch(/Agents/);
+  });
+  it("no setup source or doc says Settings → Tokens", () => {
+    for (const f of [
+      "scripts/setup/src/index.ts",
+      "scripts/setup/src/steps/agent-config.ts",
+      "scripts/setup/src/steps/owner-token.ts",
+      "apps/landing/src/content/docs/setup.md",
+      "apps/landing/src/content/docs/connect-agents.md",
+    ])
+      expect(
+        readFileSync(join(import.meta.dirname, "../../..", f), "utf8"),
+        f,
+      ).not.toContain("Settings → Tokens");
+  });
+});
