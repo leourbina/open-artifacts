@@ -8,6 +8,7 @@ import {
   usePatchArtifact,
   useVersionInfo,
 } from "../../api/queries";
+import { useSingleFlight } from "../../api/useSingleFlight";
 import { useOfferUndo } from "../useOfferUndo";
 
 const fmtSize = (n: number) =>
@@ -30,6 +31,8 @@ export function Details({ artifact }: { artifact: ArtifactSummary }) {
   const patch = usePatchArtifact(id);
   const del = useDeleteArtifact(id);
   const offerUndo = useOfferUndo();
+  const saveOnce = useSingleFlight();
+  const removeOnce = useSingleFlight();
   const navigate = useNavigate();
   const [title, setTitle] = useState(artifact.title);
   const [desc, setDesc] = useState(artifact.description ?? "");
@@ -50,31 +53,37 @@ export function Details({ artifact }: { artifact: ArtifactSummary }) {
   const dirty = t !== artifact.title || desc !== (artifact.description ?? "");
 
   const save = () =>
-    patch.mutate(
-      {
-        ...(t !== artifact.title && { title: t }),
-        ...(desc !== (artifact.description ?? "") && { description: desc }),
-      },
-      {
-        onError: (e) => {
-          setTitle(artifact.title);
-          setDesc(artifact.description ?? "");
-          fail(e, "Couldn't save");
+    saveOnce((done) =>
+      patch.mutate(
+        {
+          ...(t !== artifact.title && { title: t }),
+          ...(desc !== (artifact.description ?? "") && { description: desc }),
         },
-      },
+        {
+          onError: (e) => {
+            setTitle(artifact.title);
+            setDesc(artifact.description ?? "");
+            fail(e, "Couldn't save");
+          },
+          onSettled: done,
+        },
+      ),
     );
   const remove = () =>
-    del.mutate(undefined, {
-      onSuccess: () => {
-        setConfirm(false);
-        void navigate({ to: "/" });
-        offerUndo(id, artifact.title);
-      },
-      onError: (e) => {
-        setConfirm(false);
-        fail(e, "Couldn't delete");
-      },
-    });
+    removeOnce((done) =>
+      del.mutate(undefined, {
+        onSuccess: () => {
+          setConfirm(false);
+          void navigate({ to: "/" });
+          offerUndo(id, artifact.title);
+        },
+        onError: (e) => {
+          setConfirm(false);
+          fail(e, "Couldn't delete");
+        },
+        onSettled: done,
+      }),
+    );
 
   return (
     <div className="oa-details">
