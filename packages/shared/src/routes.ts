@@ -116,6 +116,8 @@ export const R = {
   /** GET Upgrade: websocket; frames are DataChange */
   dataSubscribe: (id: string, col: string) =>
     `${A}/${seg(id)}/data-subscribe?collection=${seg(col)}`,
+  /** GET -> AnonViewer ({ anonId }): an anonymous viewer's public id; artifacts with allowAnonymousWrites and the viewer capability only (401 signed in or otherwise). Mints a token like every anonymous runtime call (ANON_ID_HEADER). */
+  anonId: (id: string) => `${A}/${seg(id)}/anon-id`,
   /** GET -> Page<StorageKey> */
   storage: (id: string) => `${A}/${seg(id)}/storage`,
   /** GET -> StorageEntry; PUT StorageSetBody { value } (strict; StorageSetBodySchema) -> StorageEntry; DELETE -> 204. `value` has the data-doc limit (dataDocLimit(plan), 413 too_large). */

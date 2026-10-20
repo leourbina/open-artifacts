@@ -1,4 +1,5 @@
 import {
+  ANON_ID_HEADER,
   type Capabilities,
   CapabilitiesSchema,
   DataNameSchema,
@@ -21,6 +22,7 @@ import { cappedJson, readCapped } from "../http/body.js";
 import { ApiError, appOrigin } from "../http/errors.js";
 import type { AppEnv } from "../http/middleware.js";
 import type { AppType } from "../routes/index.js";
+import { type AnonId, resolveAnonId } from "./anon-id.js";
 import { ACTOR_HEADER, publicActor, runtimeCall, runtimeStub } from "./do.js";
 
 // Literals so Hono infers params; must equal R.data* / R.storage* in @oa/shared.
@@ -31,6 +33,7 @@ const QUERY = `${COL}/query`;
 const DOC = `${COL}/:doc`;
 const SUBSCRIBE = `${ART}/data-subscribe`;
 const COUNT = `${ART}/data-count/:col`;
+const ANON_ID = `${ART}/anon-id`;
 const STORAGE = `${ART}/storage`;
 const KEY = `${STORAGE}/:key`;
 
@@ -51,7 +54,7 @@ const IP_RE = /^[0-9A-Fa-f:.]{2,45}$/;
 const IPV4_RE = /^\d{1,3}(?:\.\d{1,3}){3}$/;
 
 type C = Context<AppEnv>;
-type Gate = { artifactId: string; actor: string };
+type Gate = { artifactId: string; actor: string; anon: AnonId | null };
 
 const NO_CAPS: Capabilities = { db: false, viewer: false, storage: false };
 function capsOf(json: string): Capabilities {
@@ -127,6 +130,11 @@ async function anonLimit(c: C, key: string, what: string): Promise<void> {
  *   as "ip:{key}" (ipKey: IPv4, or the IPv6 /64); stored/returned updatedBy is "anon".
  * - subscribe: signed-in "u:{id}"; anonymous "ip:{key}" after RL_ANON "sub:ip:{key}".
  * - data reads: anyone with view access (actor unused).
+ * - anonId: for anonymous reads and writes on an artifact with
+ *   allowAnonymousWrites only, the ANON_ID_HEADER token is verified (or a new
+ *   one minted, returned by `withAnon`); a write's actor becomes
+ *   "ip:{key}|{short}" (stored updatedBy "anon:{short}"; the DO still rate
+ *   limits by "ip:{key}"). Signed-in callers and other artifacts never get one.
  */
 async function gate(
   c: C,
@@ -143,17 +151,33 @@ async function gate(
       "capability_denied",
       `This artifact did not declare the "${cap}" capability`,
     );
-  if (who.kind === "user") return { artifactId, actor: `u:${who.user.id}` };
-  if (kind === "read") return { artifactId, actor: "" };
-  if (kind === "storage" || (kind === "write" && a.allowAnonymousWrites !== 1))
+  if (who.kind === "user")
+    return { artifactId, actor: `u:${who.user.id}`, anon: null };
+  const optIn = a.allowAnonymousWrites === 1;
+  const anonId = () => resolveAnonId(c.env, c.req.header(ANON_ID_HEADER));
+  if (kind === "read")
+    return { artifactId, actor: "", anon: optIn ? await anonId() : null };
+  if (kind === "storage" || (kind === "write" && !optIn))
     throw new ApiError("unauthorized", "Sign in to save changes");
   const key = ipKey(c.req.header("cf-connecting-ip") ?? "");
   if (!key)
     throw new ApiError("rate_limited", "Anonymous access is unavailable");
-  if (kind === "subscribe")
+  if (kind === "subscribe") {
     await anonLimit(c, `sub:ip:${key}`, "subscriptions");
-  else await anonLimit(c, `ip:${key}`, "writes");
-  return { artifactId, actor: `ip:${key}` };
+    return { artifactId, actor: `ip:${key}`, anon: null };
+  }
+  await anonLimit(c, `ip:${key}`, "writes");
+  const anon = await anonId();
+  return { artifactId, actor: `ip:${key}|${anon.short}`, anon };
+}
+
+/** `res` carrying a newly minted anonId token, if the gate minted one. */
+function withAnon(g: Gate, res: Response): Response {
+  if (!g.anon?.issued) return res;
+  const out = new Response(res.body, res);
+  out.headers.set(ANON_ID_HEADER, g.anon.issued);
+  out.headers.set("cache-control", "no-store");
+  return out;
 }
 
 const enc = new TextEncoder();
@@ -181,6 +205,13 @@ const jsonText = (text: string) =>
 const stub = (c: C, g: Gate) => runtimeStub(c.env, g.artifactId);
 
 export function mountRuntime(app: AppType): void {
+  // viewer.get for an anonymous viewer: the public part of their anonId.
+  app.get(ANON_ID, async (c) => {
+    const g = await gate(c, "viewer.get", "read");
+    if (!g.anon) throw new ApiError("unauthorized", "No anonymous id here");
+    return withAnon(g, c.json({ anonId: g.anon.short }));
+  });
+
   app.get(COL, async (c) => {
     const g = await gate(c, "db.list", "read");
     const p = RUNTIME_PARAMS["db.list"].safeParse({
@@ -190,8 +221,9 @@ export function mountRuntime(app: AppType): void {
     });
     if (!p.success) throw new ApiError("bad_request", "Invalid list request");
     const { collection, cursor, limit: n } = p.data;
-    return c.json(
-      await runtimeCall(() => stub(c, g).list(collection, cursor, n)),
+    return withAnon(
+      g,
+      c.json(await runtimeCall(() => stub(c, g).list(collection, cursor, n))),
     );
   });
 
@@ -208,7 +240,10 @@ export function mountRuntime(app: AppType): void {
     const g = await gate(c, "db.query", "read");
     const col = name(c.req.param("col"), "collection");
     const q = await cappedJson(c, DataQuerySchema, MAX_QUERY_BODY);
-    return c.json(await runtimeCall(() => stub(c, g).query(col, q)));
+    return withAnon(
+      g,
+      c.json(await runtimeCall(() => stub(c, g).query(col, q))),
+    );
   });
 
   app.get(DOC, async (c) => {
@@ -217,7 +252,7 @@ export function mountRuntime(app: AppType): void {
     const id = name(c.req.param("doc"), "document id");
     const d = await runtimeCall(() => stub(c, g).get(col, id));
     if (!d) throw new ApiError("not_found", "Not found");
-    return c.json(d);
+    return withAnon(g, c.json(d));
   });
 
   app.put(DOC, async (c) => {
@@ -235,9 +270,12 @@ export function mountRuntime(app: AppType): void {
       updatedAt,
       updatedBy: publicActor(g.actor),
     }).split('"data":null');
-    return new Response(
-      concat(enc.encode(`${head}"data":`), body, enc.encode(tail ?? "")),
-      { headers: { "content-type": "application/json; charset=UTF-8" } },
+    return withAnon(
+      g,
+      new Response(
+        concat(enc.encode(`${head}"data":`), body, enc.encode(tail ?? "")),
+        { headers: { "content-type": "application/json; charset=UTF-8" } },
+      ),
     );
   });
 
@@ -246,8 +284,11 @@ export function mountRuntime(app: AppType): void {
     const col = name(c.req.param("col"), "collection");
     const id = name(c.req.param("doc"), "document id");
     const body = await rawBody(c);
-    return jsonText(
-      await runtimeCall(() => stub(c, g).updateRaw(col, id, body, g.actor)),
+    return withAnon(
+      g,
+      jsonText(
+        await runtimeCall(() => stub(c, g).updateRaw(col, id, body, g.actor)),
+      ),
     );
   });
 
@@ -256,7 +297,7 @@ export function mountRuntime(app: AppType): void {
     const col = name(c.req.param("col"), "collection");
     const id = name(c.req.param("doc"), "document id");
     await runtimeCall(() => stub(c, g).delete(col, id, g.actor));
-    return c.body(null, 204);
+    return withAnon(g, c.body(null, 204));
   });
 
   // Owner-only atomic replace of all data docs (R.dataReset). The body is capped

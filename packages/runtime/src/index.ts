@@ -15,7 +15,14 @@ import {
 export { RuntimeError, type RuntimeErrorCode } from "./bridge.js";
 
 export type Theme = "light" | "dark";
-export type Viewer = { email: string; name: string | null };
+/**
+ * A signed-in viewer, or `{ anonId }` for an anonymous viewer of an artifact
+ * that allows anonymous writes (the same short id as their docs' updatedBy
+ * "anon:<anonId>"; per browser, resettable, not an account).
+ */
+export type Viewer =
+  | { email: string; name: string | null }
+  | { anonId: string };
 /**
  * A subscribe() delivery. `resync: true` (with empty docs/deleted) means the
  * live connection was re-established and changes may have been missed:

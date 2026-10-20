@@ -42,6 +42,22 @@ const THUMB_RE = /^data:image\/webp;base64,[A-Za-z0-9+/]*={0,2}$/;
 
 const Theme = ThemeSchema;
 
+/**
+ * Anonymous id (artifacts with allowAnonymousWrites): the shell sends its
+ * signed token "<id>.<sig>" in this request header on anonymous runtime calls,
+ * and the server returns a new one in the same response header whenever it
+ * mints one (missing, malformed or forged token). The token never enters the
+ * artifact frame.
+ */
+export const ANON_ID_HEADER = "X-OA-Anon-Id";
+/** Public part of an anonId: its first 8 chars (updatedBy "anon:<short>"). */
+export const ANON_ID_SHORT_LEN = 8;
+/** viewer.get() for an anonymous viewer of an artifact with allowAnonymousWrites. */
+export const AnonViewerSchema = z.strictObject({
+  anonId: z.string().regex(/^[A-Za-z0-9_-]{8}$/),
+});
+export type AnonViewer = z.infer<typeof AnonViewerSchema>;
+
 export const ArtifactToShellSchema = z.union([
   z.strictObject({
     oa: z.literal(1),
@@ -213,7 +229,10 @@ export const RUNTIME_RESULTS = {
   "db.subscribe": z.null(),
   "db.unsubscribe": z.null(),
   "viewer.get": z
-    .object({ email: z.string(), name: z.string().nullable() })
+    .union([
+      z.object({ email: z.string(), name: z.string().nullable() }),
+      AnonViewerSchema,
+    ])
     .nullable(),
   "storage.get": z.unknown(),
   "storage.set": z.null(),

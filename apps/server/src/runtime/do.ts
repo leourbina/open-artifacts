@@ -59,14 +59,36 @@ export async function runtimeCall<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 const enc = new TextEncoder();
-/** "u:{userId}" | "ip:{ip}" | "agent:{userId}", printable ASCII only (no NUL/surrogate collisions). */
-const ACTOR_RE = /^(u|ip|agent):[\x21-\x7e]{1,250}$/;
 /**
- * The updatedBy stored and returned for a write: anonymous writers are "anon"
- * (their "ip:" actor is only the internal rate-limit key, never shown to viewers).
+ * "u:{userId}" | "ip:{ip}" | "ip:{ip}|{anonShort}" | "agent:{userId}", printable
+ * ASCII only (no NUL/surrogate collisions).
  */
-export const publicActor = (actor: string): string =>
-  actor.startsWith("ip:") ? "anon" : actor;
+const ACTOR_RE = /^(u|ip|agent):[\x21-\x7e]{1,250}$/;
+/** The "|{anonShort}" suffix of an anonymous writer with a verified anonId. */
+const ANON_SUFFIX_RE = /\|([A-Za-z0-9_-]{8})$/;
+/**
+ * The updatedBy stored and returned for a write: anonymous writers are
+ * "anon:{anonShort}" with a verified anonId, else "anon" (the "ip:" part is
+ * only the internal rate-limit key, never shown to viewers).
+ */
+export const publicActor = (actor: string): string => {
+  if (!actor.startsWith("ip:")) return actor;
+  const m = ANON_SUFFIX_RE.exec(actor);
+  return m ? `anon:${m[1]}` : "anon";
+};
+/** The per-minute rate key: an anonymous writer's IP, whatever its anonId. */
+const rateKey = (actor: string): string =>
+  actor.startsWith("ip:") ? actor.replace(ANON_SUFFIX_RE, "") : actor;
+/**
+ * Anonymous writes per IP per artifact per minute: env ANON_WRITES_PER_MIN,
+ * an integer clamped to 1..600; unset or not a number -> LIMITS.anonWritesPerMinPerIp.
+ */
+export function anonWritesPerMin(v: string | undefined): number {
+  const t = v?.trim() ?? "";
+  if (!/^\d{1,9}$/.test(t)) return LIMITS.anonWritesPerMinPerIp;
+  const n = Number(t);
+  return Math.min(600, Math.max(1, n));
+}
 /** Fixed per-row overhead counted toward LIMITS.artifactDataBytes. */
 const ROW_OVERHEAD = 64;
 /** Broadcasts inline the doc only up to this many bytes; larger docs go out as data:null. */
@@ -279,7 +301,7 @@ type SocketMeta = { t: number };
 /**
  * Per-artifact live-page data (spec §6.7): shared docs, per-viewer storage, and a
  * hibernating WebSocket feed per collection. No auth here: callers (B13) authorize
- * and pass the actor ("u:{id}" | "ip:{ip}" | "agent:{id}").
+ * and pass the actor ("u:{id}" | "ip:{ip}" | "ip:{ip}|{anonShort}" | "agent:{id}").
  */
 export class ArtifactRuntime extends DurableObject<Env> {
   private ready = false;
@@ -358,10 +380,11 @@ export class ArtifactRuntime extends DurableObject<Env> {
       this.rate.clear();
       this.rateMinute = minute;
     }
-    const n = (this.rate.get(actor) ?? 0) + 1;
-    this.rate.set(actor, n);
-    const cap = actor.startsWith("ip:")
-      ? LIMITS.anonWritesPerMinPerIp
+    const key = rateKey(actor);
+    const n = (this.rate.get(key) ?? 0) + 1;
+    this.rate.set(key, n);
+    const cap = key.startsWith("ip:")
+      ? anonWritesPerMin(this.env.ANON_WRITES_PER_MIN)
       : LIMITS.viewerWritesPerMin;
     if (n > cap) fail("rate_limited", "too many writes; try again in a minute");
   }

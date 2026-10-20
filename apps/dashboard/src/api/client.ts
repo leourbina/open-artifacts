@@ -94,15 +94,34 @@ function toError(
   return new ApiClientError(code, message, status, details);
 }
 
-async function request(path: string, init: RequestInit): Promise<Response> {
+/** Per-call extras: more request headers, and a look at a successful response. */
+export type RequestExtra = {
+  headers?: Record<string, string>;
+  onResponse?: (res: Response) => void;
+};
+
+async function request(
+  path: string,
+  init: RequestInit,
+  extra?: RequestExtra,
+): Promise<Response> {
   let res: Response;
   try {
-    res = await fetch(path, { credentials: "same-origin", ...init });
+    res = await fetch(path, {
+      credentials: "same-origin",
+      ...init,
+      ...(extra?.headers
+        ? { headers: { ...(init.headers as object), ...extra.headers } }
+        : {}),
+    });
   } catch (e) {
     if (e instanceof Error && e.name === "AbortError") throw e;
     throw internal(e instanceof Error ? e.message : "Network error", 0);
   }
-  if (res.ok) return res;
+  if (res.ok) {
+    extra?.onResponse?.(res);
+    return res;
+  }
   const err = toError(
     await res.text().catch(() => ""),
     res.status,
@@ -132,8 +151,9 @@ export const api = {
     path: string,
     schema: z.ZodType<T>,
     signal?: AbortSignal,
+    extra?: RequestExtra,
   ): Promise<T> {
-    return parse(await request(path, { method: "GET", signal }), schema);
+    return parse(await request(path, { method: "GET", signal }, extra), schema);
   },
   /** Raw body as text (for file contents), with its content type. */
   async getText(
@@ -152,15 +172,20 @@ export const api = {
     body: unknown,
     schema?: z.ZodType<T>,
     signal?: AbortSignal,
+    extra?: RequestExtra,
   ): Promise<T> {
     const headers: Record<string, string> = { "X-OA-Request": "1" };
     if (body !== undefined) headers["Content-Type"] = "application/json";
-    const res = await request(path, {
-      method,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal,
-    });
+    const res = await request(
+      path,
+      {
+        method,
+        headers,
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal,
+      },
+      extra,
+    );
     return parse(res, schema);
   },
   /** Same-origin PUT of a raw body (cookie-authed, so it carries the CSRF header). */

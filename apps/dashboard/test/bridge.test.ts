@@ -1,5 +1,6 @@
-import { type ArtifactSummary, LIMITS, R } from "@oa/shared";
+import { ANON_ID_HEADER, type ArtifactSummary, LIMITS, R } from "@oa/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ANON_ID_KEY, resetAnonMemory } from "../src/viewer/anonId";
 import { createBridge } from "../src/viewer/bridge";
 
 const ART = {
@@ -523,5 +524,172 @@ describe("bridge limits", () => {
     expect(post).not.toHaveBeenCalled();
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
     expect(init.signal?.aborted).toBe(true);
+  });
+});
+
+describe("anonymous id", () => {
+  const TOKEN = `${"a".repeat(21)}A.${"b".repeat(42)}A`;
+  const TOKEN2 = `${"c".repeat(21)}A.${"d".repeat(42)}A`;
+  const OPT_IN = { ...ART, allowAnonymousWrites: true } as ArtifactSummary;
+  const mkAnon = (
+    art: ArtifactSummary,
+    viewer: typeof VIEWER | null = null,
+  ) => {
+    const b = createBridge({
+      iframe,
+      artifact: art,
+      version: 1,
+      viewer,
+      theme: "light",
+      onPdfText: vi.fn(),
+      onThumb: vi.fn(),
+    });
+    live.push(b);
+    return b;
+  };
+  const headerOf = (i: number) =>
+    new Headers(
+      (fetchMock.mock.calls[i]?.[1] as RequestInit | undefined)?.headers,
+    ).get(ANON_ID_HEADER);
+  const withToken = (t: string, body: unknown = DOC) =>
+    new Response(JSON.stringify(body), { headers: { [ANON_ID_HEADER]: t } });
+  let store: Map<string, string>;
+  const okStorage = {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => void store.set(k, v),
+  };
+  const blocked = {
+    getItem: () => {
+      throw new DOMException("denied", "SecurityError");
+    },
+    setItem: () => {
+      throw new DOMException("denied", "SecurityError");
+    },
+  };
+  const resultOf = (rid: string) =>
+    post.mock.calls.find((c) => c[0].id === rid)?.[0];
+
+  beforeEach(() => {
+    store = new Map();
+    resetAnonMemory();
+  });
+
+  it("stores a minted token under one key and sends it on later calls", async () => {
+    vi.stubGlobal("localStorage", okStorage);
+    fetchMock.mockImplementationOnce(async () => withToken(TOKEN));
+    mkAnon(OPT_IN);
+    call("db.get", { collection: "c", id: "d1" }, "a");
+    await flush();
+    expect(headerOf(0)).toBeNull();
+    expect([...store]).toEqual([[ANON_ID_KEY, TOKEN]]);
+    call("db.set", { collection: "c", id: "d1", data: 1 }, "b");
+    await flush();
+    expect(headerOf(1)).toBe(TOKEN);
+  });
+
+  it("replaces the token when the server mints a new one", async () => {
+    vi.stubGlobal("localStorage", okStorage);
+    store.set(ANON_ID_KEY, TOKEN);
+    fetchMock.mockImplementationOnce(async () => withToken(TOKEN2));
+    mkAnon(OPT_IN);
+    call("db.get", { collection: "c", id: "d1" });
+    await flush();
+    expect(headerOf(0)).toBe(TOKEN);
+    expect(store.get(ANON_ID_KEY)).toBe(TOKEN2);
+  });
+
+  it("falls back to memory when storage is blocked, never throwing", async () => {
+    vi.stubGlobal("localStorage", blocked);
+    fetchMock.mockImplementationOnce(async () => withToken(TOKEN));
+    mkAnon(OPT_IN);
+    call("db.get", { collection: "c", id: "d1" }, "a");
+    await flush();
+    expect(resultOf("a")).toMatchObject({ ok: true });
+    call("db.get", { collection: "c", id: "d1" }, "b");
+    await flush();
+    expect(headerOf(1)).toBe(TOKEN);
+  });
+
+  it("works with no localStorage at all", async () => {
+    vi.stubGlobal("localStorage", undefined);
+    fetchMock.mockImplementationOnce(async () => withToken(TOKEN));
+    mkAnon(OPT_IN);
+    call("db.get", { collection: "c", id: "d1" }, "a");
+    await flush();
+    call("db.get", { collection: "c", id: "d1" }, "b");
+    await flush();
+    expect(headerOf(1)).toBe(TOKEN);
+  });
+
+  it("ignores a malformed token from the server or storage", async () => {
+    vi.stubGlobal("localStorage", okStorage);
+    store.set(ANON_ID_KEY, "bad token");
+    fetchMock.mockImplementationOnce(async () => withToken("nope"));
+    mkAnon(OPT_IN);
+    call("db.get", { collection: "c", id: "d1" }, "a");
+    await flush();
+    expect(headerOf(0)).toBeNull();
+    expect(store.get(ANON_ID_KEY)).toBe("bad token");
+  });
+
+  it("concurrent first calls wait for one minted token", async () => {
+    vi.stubGlobal("localStorage", okStorage);
+    let release!: (r: Response) => void;
+    fetchMock.mockImplementationOnce(
+      () => new Promise<Response>((r) => (release = r)),
+    );
+    mkAnon(OPT_IN);
+    call("db.get", { collection: "c", id: "d1" }, "a");
+    call("db.get", { collection: "c", id: "d2" }, "b");
+    await flush();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    release(withToken(TOKEN));
+    await flush();
+    await flush();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(headerOf(1)).toBe(TOKEN);
+  });
+
+  it("no header when signed in, even with a stored token", async () => {
+    vi.stubGlobal("localStorage", okStorage);
+    store.set(ANON_ID_KEY, TOKEN);
+    fetchMock.mockImplementation(async () => withToken(TOKEN2));
+    mkAnon(OPT_IN, VIEWER);
+    call("db.set", { collection: "c", id: "d1", data: 1 }, "a");
+    call("viewer.get", {}, "b");
+    await flush();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(headerOf(0)).toBeNull();
+    expect(store.get(ANON_ID_KEY)).toBe(TOKEN);
+    expect(resultOf("b")?.value).toEqual(VIEWER);
+  });
+
+  it("no header on an artifact without allowAnonymousWrites", async () => {
+    vi.stubGlobal("localStorage", okStorage);
+    store.set(ANON_ID_KEY, TOKEN);
+    mkAnon(ART);
+    call("db.get", { collection: "c", id: "d1" }, "a");
+    call("viewer.get", {}, "b");
+    await flush();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(headerOf(0)).toBeNull();
+    expect(resultOf("b")?.value).toBeNull();
+  });
+
+  it("viewer.get gives the frame only the short id, never the token", async () => {
+    vi.stubGlobal("localStorage", okStorage);
+    store.set(ANON_ID_KEY, TOKEN);
+    fetchMock.mockImplementation(async () => json({ anonId: "aaaaaaaa" }));
+    mkAnon(OPT_IN);
+    send({ oa: 1, type: "hello", protocol: 1, kind: "html" });
+    call("viewer.get", {}, "v");
+    await flush();
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(R.anonId("art1"));
+    expect(headerOf(0)).toBe(TOKEN);
+    expect(resultOf("v")).toMatchObject({
+      ok: true,
+      value: { anonId: "aaaaaaaa" },
+    });
+    expect(JSON.stringify(post.mock.calls)).not.toContain(TOKEN.slice(0, 22));
   });
 });
