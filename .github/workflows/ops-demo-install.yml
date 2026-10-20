@@ -8,8 +8,13 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: demo
+  group: demo-deploy
   cancel-in-progress: false
+env:
+  DEMO_NAME: open-artifacts-demo
+  DEMO_APP_HOST: demo.open-artifacts.com
+  DEMO_CONTENT_HOST: demo-content.open-artifacts.com
+  DEMO_OWNER_EMAIL: me@leourbina.com
 jobs:
   install:
     if: github.ref == 'refs/heads/main'
@@ -27,11 +32,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           OA_ACCESS_TOKEN: ${{ secrets.DEMO_OA_ACCESS_TOKEN }}
-        run: >-
-          pnpm -s oa:setup --ci --json
-          --name open-artifacts-demo --app-host demo.open-artifacts.com
-          --content-host demo-content.open-artifacts.com --owner-email me@leourbina.com
-          --solo --no-email --yes-paid
+        run: bash scripts/ci/prod-setup.sh demo-install
       - name: Revoke leaked setup-ci tokens
         if: always()
         timeout-minutes: 3
@@ -39,7 +40,4 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           OA_ACCESS_TOKEN: ${{ secrets.DEMO_OA_ACCESS_TOKEN }}
-        run: >-
-          pnpm -s oa:setup --ci --revoke-ci-tokens
-          --name open-artifacts-demo --app-host demo.open-artifacts.com
-          --content-host demo-content.open-artifacts.com --owner-email me@leourbina.com
+        run: bash scripts/ci/prod-setup.sh demo-cleanup
