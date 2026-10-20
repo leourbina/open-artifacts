@@ -4,7 +4,7 @@
 
 **Goal:** The dashboard shows spaces (library, publish, move), gives admins a page to map Google groups (or, on Team, people) to spaces with viewer, editor and manager roles, lets admins transfer a departed person's personal artifacts, and offers a hosted sign-in page (Google plus emailed codes), while a self-hosted install looks and behaves exactly as today.
 
-**Architecture:** Every hosted feature is gated on new optional `Me` fields (`me.spaces`, `me.hosted`, `me.authProvider`) or, signed out, on `/auth/providers`, so an older or self-hosted server renders today's UI unchanged. Permissions come from a new server-computed `artifact.can` block (fallback: today's `access`), read through one helper so no component decides edit rights itself. Contract schemas, routes and MSW handlers land first in `@oa/shared` so every UI task is test-first against mocks; the real suite follows once Backend P2/P3 ship.
+**Architecture:** Every hosted feature is gated on new optional `Me` fields (`me.spaces`, `me.hosted`, `me.authProvider`) or, signed out, on `/auth/providers`, so an older or self-hosted server renders today's UI unchanged. Permissions come from a new server-computed `artifact.can` block (fallback: today's `access`), read through one helper so no component decides edit rights itself. This track edits only `apps/dashboard`: Backend P2/P3 own every `@oa/shared` change (schemas, routes, error codes, MSW fixtures and handlers). Task 1 consumes their contract PR; every later UI task is test-first against their mocks; the real suite follows once P2/P3 ship.
 
 **Tech Stack:** React 19, TanStack Router and Query, `@oa/ui` and `@oa/ui/shadcn`, zod, MSW (`@oa/shared/mocks`), vitest plus Testing Library, Playwright (mock config and `playwright.real.config.ts`).
 
@@ -22,11 +22,12 @@
 - Emailed codes: guests are read-only; the sign-in page never reveals whether an address is invited (same response for every address).
 - New `Me`/`ArtifactSummary` fields are `.optional()` so older servers still parse (pattern: `MeSchema.instance.update`).
 - Visual choices are Design's: tasks marked **Blocked on D#** start only after the user picks that option. Logic, data and tests in those tasks may be written first against a neutral placeholder layout that uses existing `@oa/ui` primitives.
+- Boundary: this track never edits `packages/shared` or `apps/server`. A missing or wrong shared shape is a message to Backend, not a local patch.
 - No `git stash`. One PR per task (or per small group), through the merge queue.
 
 ## Review Focus
 
-1. **A self-hosted instance after upgrade** (spaces off, Access sign-in): a person expects nothing new to appear and no request to `/api/v1/spaces` or `/auth/providers` to fire. Pinned in Task 1 (`me without hosted fields parses`) and Task 4 (`spaces off: no spaces request, no switcher`).
+1. **A self-hosted instance after upgrade** (spaces off, Access sign-in): a person expects nothing new to appear and no request to `/api/v1/spaces` or `/auth/providers` to fire. Pinned in Task 1 (`me without hosted fields parses through the adapter`) and Task 4 (`spaces off: no spaces request, no switcher`).
 2. **A viewer of a space opening an artifact**: expects no rename, restore, publish, move, share or delete affordance anywhere (viewer, panels, library card menu, upload drop), and a stale tab that tries anyway gets a toast, not a crash. Pinned in Task 3 (`viewer sees no edit affordance`, `403 forbidden on rename toasts`).
 3. **An admin handling a departed person**: expects to see how many personal artifacts await transfer, never their titles, and can't pick the departed person as the successor. Pinned in Task 12 (`transfer never requests the person's artifacts`, `successor list excludes the departed`).
 4. **Emailed code typos and abuse**: a code pasted with spaces or a dash, a wrong or expired code, or a burst of resends (429) should each give a clear, non-enumerating message and keep the email filled in. Pinned in Task 13 (`code normalizes spaces and dashes`, `invalid_code`, `rate_limited`, `same screen for unknown address`).
@@ -36,7 +37,7 @@
 
 ## Contracts we need from Backend
 
-No hosted P2 or P3 plan exists yet (`git ls-tree origin/main docs/superpowers/plans` has only the 2026-10-18 plans; no open PR). P4 assumes the shapes below; each is **pending Backend P2/P3**. Task 1 adds them to `@oa/shared` as the proposal; when Backend's plan lands, Task 1 is reconciled to Backend's exact shapes before any later task merges.
+No hosted P2 or P3 plan exists yet (`git ls-tree origin/main docs/superpowers/plans` has only the 2026-10-18 plans; no open PR). P4 assumes the shapes below; each is **pending Backend P2/P3**, and every one is a Backend deliverable in `packages/shared` (this track doesn't edit it). Where Backend's "API contract for P4" differs, Backend's wins and P4's Task 1 adapter and tests follow it. Backend's contract PR must contain everything under "Shared package deliverables" below.
 
 **Me additions** (pending P2/P3). Field names `me.spaces`, `me.hosted`, `me.authProvider` are Backend's (coordinator, 2026-10-20); the shapes are P4's proposal until P2/P3 publish their "API contract for P4". All optional at the top level of `MeSchema`:
 
@@ -100,6 +101,35 @@ DirectoryGroupSchema = z.object({ id: z.string(), name: z.string(), email: z.str
 - `POST /auth/email-code/verify` `{ email, code }` (code: 6 digits) -> 204 plus session cookie; 400 `invalid_code` (wrong or expired, one message); 429 `rate_limited`.
 - New error codes in `errors.ts`: `forbidden` (403, a role too low for a write; today's owner-only routes keep answering 404) and `invalid_code` (400). `conflict` and `rate_limited` already exist.
 
+**Shared package deliverables** (Backend P3, with P2 for the sign-in parts), in one contract PR that P4 Task 1 is blocked on:
+- `packages/shared/src/schemas.ts`: every schema above, `.optional()` where marked, with exported types `Space`, `SpaceRef`, `MySpace` (element of `me.spaces`), `SpaceRole`, `SpaceAccess`, `GroupGrant`, `MemberGrant`, `DirectoryGroup`, `ArtifactCan`, `AuthProviders`, `TransferInput`, `TransferResult`.
+- `packages/shared/src/routes.ts`: `R.spaces`, `R.space(id)`, `R.spaceAccess(id)`, `R.spaceGroup(id, groupId)`, `R.spaceMember(id, userId)`, `R.directoryGroups`, `R.move(id)`, `R.memberTransfer(id)`, `R.artifactTransfer(id)`; `AUTH.providers`, `AUTH.google`, `AUTH.emailCode`, `AUTH.emailCodeVerify`. Ids percent-encoded via `seg`.
+- `packages/shared/src/errors.ts`: `forbidden` and `invalid_code`.
+- `packages/shared/src/mocks/fixtures.ts`: `fixtures.spaces` with my personal space (`sp_personal_ada`), `sp_eng` (editor), `sp_exec` (viewer), `sp_clients` (manager, `publicLinks: false`); a departed member (`status: "removed"`, `pendingTransfer: 12`); artifacts carrying `space` and `can` in hosted mode.
+- `packages/shared/src/mocks/handlers.ts`: handlers for every route above, stateful per `createHandlers` call, enforcing the 409s, the 403s and the public-off downgrade on move; `/auth/email-code` answers 204 for any address. **A mock switch**: `createHandlers({ hosted?: { authMode: "access" | "direct"; tier: "trial" | "team" | "business"; directoryMode: "sync" | "manual" | "frozen" | null; spaces: boolean } })`. Without `hosted`, `/me` has none of the new fields and `/auth/providers` answers `{ mode: "access", google: false, emailCode: false }` (today's behaviour).
+- Shared tests (Backend's): schema parsing of old and new `Me`/`ArtifactSummary`, `SpaceRoleSchema.options` is exactly `["viewer", "editor", "manager"]`, route encoding, and the mock-switch behaviour above.
+
+## Task order and parallelism
+
+| Task | Depends on | Blocked on Design | Can run in parallel with |
+|---|---|---|---|
+| 1 Consume contract | Backend contract PR (P3, P2) | none | Design work |
+| 2 Hooks | 1 | none | 3 |
+| 3 Permissions | 1 | none | 2 |
+| 4 Library filter | 2 | none | 6, 9, 12, 13 |
+| 5 Switcher, marker | 4 | D1, D2, D3 | 6, 8, 9, 12, 13 |
+| 6 Publish picker | 2 | D4 | 4, 5, 8, 9, 12, 13 |
+| 7 Move | 2, 3, 6 (`SpacePicker`) | D3, D4 | 8, 9, 12, 13 |
+| 8 Public off | 3 | D9 | 4, 5, 6, 9, 12, 13 |
+| 9 Spaces admin | 2 | D5, D9 | 4 to 8, 12, 13 |
+| 10 Group mapping | 9 | D5 | 11 no (same file), 12, 13 |
+| 11 Manual members | 10 | D6 | 12, 13 |
+| 12 Transfer | 2 | D7 | everything from 4 on |
+| 13 Hosted sign-in | 2 | D8 | everything from 4 on |
+| 14 Real e2e | 3 to 13, Backend P2 and P3 merged | none | none |
+
+Every task from 2 on uses Backend's mocks, so all of them depend on Task 1. File overlaps to sequence within a wave: `router.tsx` (4, 9, 13: separate routes), `Library.tsx` (4 then 5), `Details.tsx` (3 then 7), `Share.tsx` (3 then 8), `SpaceAccess.tsx` (10 then 11).
+
 ## Design options needed
 
 Each is a question for Design, who produce options; the user picks. Tasks marked blocked wait on the pick.
@@ -119,12 +149,10 @@ Each is a question for Design, who produce options; the user picks. Tasks marked
 
 ## File Structure
 
-`packages/shared/src`
-- `schemas.ts` (modify): the contract schemas above.
-- `routes.ts` (modify): `R.spaces`, `R.space`, `R.spaceAccess`, `R.spaceGroup`, `R.spaceMember`, `R.directoryGroups`, `R.move`, `R.memberTransfer`; `AUTH.providers`, `AUTH.google`, `AUTH.emailCode`, `AUTH.emailCodeVerify`.
-- `mocks/fixtures.ts`, `mocks/handlers.ts` (modify): spaces fixtures and handlers; `MockOptions.hosted?: boolean` turns the hosted `Me` fields on.
+Only `apps/dashboard` changes. `packages/shared` arrives from Backend (see "Shared package deliverables").
 
 `apps/dashboard/src`
+- `api/contract.ts` (create): the one place the dashboard imports hosted shapes from `@oa/shared`, plus the lenient readers for older servers.
 - `api/queries.ts` (modify): space, access, directory, move, transfer hooks and `qk` keys.
 - `api/auth.ts` (create): sign-in calls (`useAuthProviders`, `startEmailCode`, `verifyEmailCode`); separate because they run signed out.
 - `auth/permissions.ts` (create): `artifactCan`, `canPublishTo`, `useHosted`.
@@ -134,70 +162,64 @@ Each is a question for Design, who produce options; the user picks. Tasks marked
 - `pages/SignIn.tsx` (modify): branch on providers; `pages/EmailCode.tsx` (create): the two-step code form.
 - `library/Library.tsx`, `library/useLibraryQuery.ts`, `router.tsx`, `upload/UploadDialog.tsx`, `upload/uploadPipeline.ts`, `viewer/TitleBar.tsx`, `viewer/panels/{Details,Versions,Share}.tsx`, `settings/SettingsLayout.tsx` (modify).
 
-Tests: `packages/shared/test/hosted-schemas.test.ts`; `apps/dashboard/test/{hosted-queries,permissions,spaces-library,spaces-publish,spaces-move,share-public-off,spaces-admin,space-access,transfer,signin-hosted}.test.tsx`; `apps/dashboard/e2e/{spaces,signin-hosted}.spec.ts`; `apps/dashboard/e2e/real/spaces.spec.ts`.
+Tests: `apps/dashboard/test/{contract,hosted-queries,permissions,spaces-library,spaces-publish,spaces-move,share-public-off,spaces-admin,space-access,transfer,signin-hosted}.test.tsx`; `apps/dashboard/e2e/{spaces,signin-hosted}.spec.ts`; `apps/dashboard/e2e/real/spaces.spec.ts`; `apps/dashboard/test/harness.tsx` (modify: `mountHosted`).
 
 ---
 
-### Task 1: Contracts in `@oa/shared` (schemas, routes, mocks)
+### Task 1: Consume Backend's contract (dashboard adapter)
+
+**Depends on:** Backend P3's contract PR (with P2's sign-in parts) merged to `main`. Blocked until then.
 
 **Files:**
-- Modify: `packages/shared/src/schemas.ts`, `packages/shared/src/routes.ts`, `packages/shared/src/errors.ts`, `packages/shared/src/mocks/fixtures.ts`, `packages/shared/src/mocks/handlers.ts`
-- Test: `packages/shared/test/hosted-schemas.test.ts`, `packages/shared/test/mocks.test.ts`
+- Create: `apps/dashboard/src/api/contract.ts`
+- Modify: `apps/dashboard/test/harness.tsx`
+- Test: `apps/dashboard/test/contract.test.ts`
 
 **Interfaces:**
-- Produces: every schema and route in "Contracts we need from Backend", exported from `@oa/shared` with types (`Space`, `SpaceRef`, `MySpace`, `SpaceRole`, `SpaceAccess`, `GroupGrant`, `MemberGrant`, `DirectoryGroup`, `ArtifactCan`, `AuthProviders`, `TransferInput`, `TransferResult`); `fixtures.spaces: Space[]` (personal `sp_personal_ada`, shared `sp_eng` editor, `sp_exec` viewer, `sp_clients` manager with `publicLinks: false`); `createHandlers({ hosted: true })` (sets `me.spaces`, `me.hosted` with directory mode `sync`, `me.authProvider: "google"`).
+- Consumes: Backend's shared exports (see "Shared package deliverables") and `createHandlers({ hosted })`.
+- Produces:
+  - `contract.ts` re-exports the hosted types the dashboard uses (`Space`, `SpaceRef`, `MySpace`, `SpaceRole`, `SpaceAccess`, `GroupGrant`, `MemberGrant`, `DirectoryGroup`, `ArtifactCan`, `AuthProviders`, `TransferInput`, `TransferResult`) and `SPACE_ROLES: readonly SpaceRole[]`; no dashboard file imports these from `@oa/shared` directly.
+  - `readAuthProviders(raw: unknown): AuthProviders`: parses, and maps a 404 or a parse failure to `{ mode: "access", google: false, emailCode: false }`.
+  - `harness.tsx`: `mountHosted(path: string, hosted: HostedMock)` where `HostedMock` is the `hosted` option of Backend's `createHandlers`.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-test("me without hosted fields parses", () => {
+test("me without hosted fields parses through the adapter", () => {
   const me = MeSchema.parse(fixtures.me);
   expect([me.spaces, me.hosted, me.authProvider]).toEqual([undefined, undefined, undefined]);
 });
-test("artifact without space or can parses", () => {
-  expect(ArtifactSummarySchema.parse(fixtures.artifacts[0]).can).toBeUndefined();
+test("hosted mock me carries spaces, hosted and authProvider", async () => {
+  // createHandlers({ hosted: { authMode: "direct", tier: "team", directoryMode: "frozen", spaces: true } })
+  // GET R.me parses; me.hosted.directory.mode === "frozen"; one personal space in me.spaces
 });
-test("space roles are exactly viewer, editor, manager", () => {
-  expect(SpaceRoleSchema.options).toEqual(["viewer", "editor", "manager"]);
+test("dashboard types line up with the shared schemas", () => {
+  expectTypeOf<ArtifactCan>().toEqualTypeOf<{ edit: boolean; share: boolean; move: boolean; delete: boolean }>();
+  expectTypeOf<SpaceRole>().toEqualTypeOf<"viewer" | "editor" | "manager">();
+  expect(SPACE_ROLES).toEqual(["viewer", "editor", "manager"]);
 });
-test("transfer target is a user or a space", () => {
-  expect(TransferInputSchema.safeParse({ to: { kind: "user", userId: "u1" } }).success).toBe(true);
-  expect(TransferInputSchema.safeParse({ to: { kind: "group", id: "g" } }).success).toBe(false);
+test("readAuthProviders falls back to access mode", () => {
+  expect(readAuthProviders(undefined)).toEqual({ mode: "access", google: false, emailCode: false });
 });
-test("routes encode ids", () => {
-  expect(R.spaceGroup("sp 1", "g/1")).toBe("/api/v1/spaces/sp%201/groups/g%2F1");
-  expect(R.move("a1")).toBe("/api/v1/artifacts/a1/move");
-});
-// mocks.test.ts
-test("hosted spaces list never includes another user's personal space", async () => {
-  const list = await getJson("/api/v1/spaces", { hosted: true });
-  expect(list.filter((s) => s.kind === "personal").map((s) => s.id)).toEqual(["sp_personal_ada"]);
-});
-test("mock move into a public-off space downgrades public to team", ...);
-test("mock email-code returns 204 for any address", ...);
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `pnpm --filter @oa/shared test -- hosted-schemas mocks`
-Expected: FAIL, `SpaceRoleSchema` not exported.
+Run: `pnpm --filter @oa/dashboard test -- contract`
+Expected: FAIL, `../src/api/contract` not found.
 
-- [ ] **Step 3: Implement the schemas, routes, error codes, fixtures and handlers**
+- [ ] **Step 3: Implement `contract.ts` and `mountHosted`.** If a shape differs from this plan, follow Backend's and update this plan's later Interfaces in the same PR; if a shape P4 needs is missing, message Backend and stop (no local patch to `packages/shared`).
 
-Fields optional as listed. Handlers keep state in the existing per-`createHandlers` closure, enforce the 409s and the public-off downgrade, and serve `/auth/providers` as `{ mode: hosted ? "direct" : "access", google: hosted, emailCode: hosted }`.
+- [ ] **Step 4: Run tests and the typecheck**
 
-- [ ] **Step 4: Run tests to verify they pass**
+Run: `pnpm --filter @oa/dashboard test -- contract && pnpm --filter @oa/dashboard typecheck`
+Expected: PASS, no type errors.
 
-Run: `pnpm --filter @oa/shared test && pnpm -r typecheck`
-Expected: PASS; no type errors in server or dashboard.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git commit -am "feat(shared): hosted spaces, RBAC and direct sign-in contracts (pending Backend P2/P3)"
-```
+- [ ] **Step 5: Commit** `feat(dashboard): consume Backend's hosted contract`
 
 ### Task 2: Query hooks and sign-in calls
+
+**Depends on:** Task 1; uses Backend's mocks.
 
 **Files:**
 - Modify: `apps/dashboard/src/api/queries.ts`
@@ -205,7 +227,7 @@ git commit -am "feat(shared): hosted spaces, RBAC and direct sign-in contracts (
 - Test: `apps/dashboard/test/hosted-queries.test.tsx`, `apps/dashboard/test/qk.test.ts`
 
 **Interfaces:**
-- Consumes: Task 1 schemas and routes.
+- Consumes: Task 1 `contract.ts` types and Backend's `R`/`AUTH` routes.
 - Produces:
   - `qk.spaces = ["spaces"]`, `qk.spaceAccess(id) = ["spaces", id, "access"]`, `qk.directoryGroups(q) = ["directory", "groups", q]`.
   - `useSpaces(opts?: { enabled?: boolean })`, `useCreateSpace()`, `usePatchSpace(id)`, `useDeleteSpace()`, `useSpaceAccess(id)`, `usePutGroupGrant(spaceId)` (`{ groupId, role }`), `useDeleteGroupGrant(spaceId)`, `usePutMemberGrant(spaceId)` (`{ userId, role }`), `useDeleteMemberGrant(spaceId)`, `useDirectoryGroups(q: string)` (enabled when `q.trim().length >= 2`), `useMoveArtifact(id)` (`spaceId: string`), `useTransfer(memberId)` (`TransferInput`).
@@ -238,6 +260,8 @@ Expected: PASS.
 - [ ] **Step 5: Commit** `feat(dashboard): space, access, move, transfer and sign-in hooks`
 
 ### Task 3: One permission helper; viewers never see edit
+
+**Depends on:** Task 1; uses Backend's mocks.
 
 **Files:**
 - Create: `apps/dashboard/src/auth/permissions.ts`
@@ -284,6 +308,8 @@ Expected: PASS, including `share.test.tsx`, `versions.test.tsx`, `shell.test.tsx
 
 ### Task 4: Library space filter (URL and query plumbing)
 
+**Depends on:** Task 2; uses Backend's mocks.
+
 **Files:**
 - Modify: `apps/dashboard/src/router.tsx` (library `validateSearch`), `apps/dashboard/src/library/useLibraryQuery.ts`, `apps/dashboard/src/library/Library.tsx`
 - Create: `apps/dashboard/src/spaces/useCurrentSpace.ts`
@@ -320,6 +346,8 @@ Expected: PASS.
 - [ ] **Step 5: Commit** `feat(library): space filter in the URL and query`
 
 ### Task 5: Space switcher and space marker
+
+**Depends on:** Task 4; uses Backend's mocks.
 
 **Blocked on D1, D2, D3.**
 
@@ -358,6 +386,8 @@ Expected: PASS.
 
 ### Task 6: Pick a space when publishing
 
+**Depends on:** Task 2; uses Backend's mocks.
+
 **Blocked on D4.**
 
 **Files:**
@@ -394,6 +424,8 @@ Expected: PASS.
 - [ ] **Step 5: Commit** `feat(upload): choose a space when publishing`
 
 ### Task 7: Move an artifact to another space
+
+**Depends on:** Tasks 2, 3, 6; uses Backend's mocks.
 
 **Blocked on D3, D4.**
 
@@ -432,6 +464,8 @@ Expected: PASS.
 
 ### Task 8: Public links off per space, in the Share panel
 
+**Depends on:** Task 3; uses Backend's mocks.
+
 **Blocked on D9.**
 
 **Files:**
@@ -464,6 +498,8 @@ Expected: PASS.
 - [ ] **Step 5: Commit** `feat(share): respect a space's public-links setting`
 
 ### Task 9: Spaces admin page (list, create, rename, delete, public links)
+
+**Depends on:** Task 2; uses Backend's mocks.
 
 **Blocked on D5, D9.**
 
@@ -503,6 +539,8 @@ Expected: PASS.
 
 ### Task 10: Map Google groups to space roles (sync mode)
 
+**Depends on:** Task 9; uses Backend's mocks.
+
 **Blocked on D5.**
 
 **Files:**
@@ -540,6 +578,8 @@ Expected: PASS.
 
 ### Task 11: Manual members mode (Team tier, frozen sync)
 
+**Depends on:** Task 10; uses Backend's mocks.
+
 **Blocked on D6.**
 
 **Files:**
@@ -574,6 +614,8 @@ Expected: PASS.
 - [ ] **Step 5: Commit** `feat(settings): manual members for Team and frozen sync`
 
 ### Task 12: Transfer a departed person's personal artifacts
+
+**Depends on:** Task 2; uses Backend's mocks.
 
 **Blocked on D7.**
 
@@ -613,6 +655,8 @@ Expected: PASS, `members.test.tsx` unchanged.
 - [ ] **Step 5: Commit** `feat(settings): transfer a departed person's artifacts`
 
 ### Task 13: Hosted sign-in page (Google and emailed codes)
+
+**Depends on:** Task 2; uses Backend's mocks.
 
 **Blocked on D8.**
 
@@ -660,7 +704,7 @@ Expected: PASS, both `signin-split` and `signin-hosted`.
 
 ### Task 14: Real end-to-end suite against a hosted-mode server
 
-**Blocked on Backend P2 and P3 merged, and Tasks 3 to 13.**
+**Depends on:** Tasks 3 to 13; Backend P2 and P3 merged.
 
 **Files:**
 - Create: `apps/dashboard/e2e/real/spaces.spec.ts`
@@ -668,7 +712,7 @@ Expected: PASS, both `signin-split` and `signin-hosted`.
 - Test: the spec itself
 
 **Interfaces:**
-- Consumes: real server endpoints; Task 1 shapes as reconciled with Backend.
+- Consumes: real server endpoints; shapes from Backend's contract.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -686,7 +730,7 @@ test("emailed code signs an invited guest in as read-only", ...);  // code read 
 Run: `pnpm --filter @oa/dashboard test:e2e:real -- spaces`
 Expected: FAIL until the server and UI pieces are in place.
 
-- [ ] **Step 3: Fix any contract drift** in Task 1 shapes (one commit per drift, with the Backend PR linked).
+- [ ] **Step 3: Fix any drift** between the dashboard and the real server: dashboard-side fixes here; server or shared fixes go to Backend as an issue linked from this PR.
 
 - [ ] **Step 4: Run tests to verify they pass, twice with parallel workers**
 
@@ -699,8 +743,10 @@ Expected: PASS.
 
 ## Self-review
 
-- **Spec coverage:** 4.1 sign-in → Task 13 (Google domain lock is server-side; UI shows `error=domain`); emailed codes for guests and trial → 13, 14. 4.2 spaces and personal space → 4, 5; roles → 1, 10, 11; "All members" → 10; Google-style ownership: space artifacts movable by managers → 3 (`can`), 7; personal not browsable by admins → 1 (mock), 5, 9, 12, 14; transfer → 12; per-artifact visibility kept → 8; public links off per space → 8, 9; contractors read-only → 3, 11 (guests viewer only), 14. 4.3 step 3 (connect IdP, map groups) → 10 (connect itself is control plane, M2). 4.5 Team manual members, frozen sync, never widens access → 11. Outside sharing and audit log are M4, out of P4.
+- **Spec coverage:** 4.1 sign-in → Task 13 (Google domain lock is server-side; UI shows `error=domain`); emailed codes for guests and trial → 13, 14. 4.2 spaces and personal space → 4, 5; roles → 1 (adapter), 10, 11; "All members" → 10; Google-style ownership: space artifacts movable by managers → 3 (`can`), 7; personal not browsable by admins → Backend mocks (consumed in 1), 5, 9, 12, 14; transfer → 12; per-artifact visibility kept → 8; public links off per space → 8, 9; contractors read-only → 3, 11 (guests viewer only), 14. 4.3 step 3 (connect IdP, map groups) → 10 (connect itself is control plane, M2). 4.5 Team manual members, frozen sync, never widens access → 11. Outside sharing and audit log are M4, out of P4.
 - **Step scan:** every blocked task names its D-item; logic tests are fixed regardless of the pick.
-- **Type consistency:** `artifactCan`, `canPublishTo`, `useHosted`, `useCurrentSpace`, `SpacePicker`, `useMoveArtifact`, `useTransfer`, `normalizeCode` used with the same signatures across tasks.
+- **Boundary:** no task lists a file under `packages/shared` or `apps/server`; all shared changes are in "Shared package deliverables" as Backend's.
+- **Parallelism:** the table under "Task order and parallelism" matches each task's Depends on line.
+- **Type consistency:** `artifactCan`, `canPublishTo`, `readAuthProviders`, `mountHosted`, `useHosted`, `useCurrentSpace`, `SpacePicker`, `useMoveArtifact`, `useTransfer`, `normalizeCode` used with the same signatures across tasks.
 - **Review Focus:** five lines, each pinned to a named test in its owning task.
 - **Proportion:** signatures, test names and assertions only; no component bodies.
