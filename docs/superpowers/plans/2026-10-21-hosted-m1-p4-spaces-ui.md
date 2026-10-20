@@ -636,7 +636,7 @@ it("expired asks for a new code", ...);
 it("no_pending starts over at the email step", ...);
 it("429 shows the wait from retryAfter and disables Resend", ...);
 it("verify success calls location.assign(next)", ...);
-it("no copy contains an em dash", ...);                         // scan rendered text for "—"
+it("no copy contains an em dash", ...);                         // scan rendered text for "\u2014"
 // m1-a11y / m2-a11y: axe and keyboard pass for /sign-in in direct mode: providers, code entry, each error state
 // e2e/signin-hosted.spec.ts (mock, hosted): 375 and 1280, light and dark; signin-split.spec.ts untouched
 ```
