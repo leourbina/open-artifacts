@@ -14,6 +14,10 @@ permissions:
 jobs:
   release-please:
     if: ${{ github.event_name == 'push' }}
+    # Back-to-back pushes queue instead of racing on the release PR ("Error updating ref").
+    concurrency:
+      group: release-please
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     outputs:
       release_created: ${{ steps.rp.outputs.release_created }}
