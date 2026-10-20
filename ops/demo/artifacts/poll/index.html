@@ -320,8 +320,8 @@
       .catch((err) => {
         if (target !== col) return;
         handleWriteError(err);
-        // Fall back to what the server has.
-        return loadAll().then(render);
+        // Fall back to what the server has, including your own vote.
+        return loadAll().then(() => { mine = votes.has(me.id) ? votes.get(me.id) : null; render(); });
       })
       .finally(() => { inFlight = false; flush(); });
   }
