@@ -8,9 +8,9 @@
   },
   "scripts": {
     "dev": "astro dev",
-    "build": "pnpm --filter @oa/shared build && astro build",
+    "build": "pnpm --filter @oa/server run gen && astro build",
     "preview": "astro preview",
-    "typecheck": "pnpm --filter @oa/shared build && node scripts/astro-check.mjs",
+    "typecheck": "pnpm --filter @oa/server run gen && node scripts/astro-check.mjs",
     "test": "pnpm run build && vitest run",
     "test:browser": "pnpm run build && vitest run -c vitest.browser.config.ts"
   },

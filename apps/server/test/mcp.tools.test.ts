@@ -572,7 +572,8 @@ describe("MCP quota errors", () => {
 });
 
 describe("tool manifest", () => {
-  it("src/mcp/tool-manifest.json is up to date (run the build)", () => {
+  // Gitignored; `pnpm gen` writes it before every test run.
+  it("src/mcp/tool-manifest.json is TOOL_DEFS and covers every tool", () => {
     expect(manifest).toEqual(
       TOOL_DEFS.map(({ name, description }) => ({ name, description })),
     );
