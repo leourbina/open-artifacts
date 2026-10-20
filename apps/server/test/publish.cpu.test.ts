@@ -2,17 +2,21 @@
 // The request's cost is JSON.parse of the body, worst for escape-heavy text:
 // LIMITS.inlineBytes (128 KB) bounds it, and a body past the inline-derived
 // cap is refused from its Content-Length, before it is read or parsed.
-// Runs serially via vitest.cpu.config.ts (median of 5). Absolute times are
+// Runs serially via vitest.cpu.config.ts (median of 7). Absolute times are
 // reports (budget(): asserted only under test:cpu:strict); the gates are the
-// cost over a tiny publish and the unread-body checks.
+// cost over a tiny publish (interleaved pairs, bound scaled to the runner by
+// the tiny publish's own time) and the unread-body checks.
 import { LIMITS, R } from "@oa/shared";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
-import { budget, medianMs } from "./cpu-time.js";
+import { budget, calibrated, medianMs, pairedMs } from "./cpu-time.js";
 import { api, errOf, fetchAndWait, login } from "./helpers.js";
 
 const app = createApp();
 let cookie: string;
+
+/** Local median of a tiny publish (dev laptop, 2026-10-20). */
+const TINY_PUBLISH_REF_MS = 8;
 
 /** HTML whose every byte needs a JSON escape: `"` and `\` (a 2× JSON body). */
 const escapeHeavy = (bytes: number) =>
@@ -23,31 +27,30 @@ beforeAll(async () => {
 });
 
 describe("inline publish CPU", () => {
-  it("a 128 KB escape-heavy HTML publish costs under 10 ms over a tiny one", async () => {
+  it("a 128 KB escape-heavy HTML publish costs under 10 ms over a tiny one", async ({
+    annotate,
+  }) => {
     const content = escapeHeavy(LIMITS.inlineBytes);
     expect(JSON.stringify(content).length).toBeGreaterThan(
       1.9 * LIMITS.inlineBytes,
     );
-    let status = 0;
-    const ms = await medianMs(async () => {
+    const post = (c: string) => async () => {
       const r = await api(app, R.artifacts, cookie, {
         method: "POST",
-        body: { title: "cpu", format: "html", content },
+        body: { title: "cpu", format: "html", content: c },
       });
-      status = r.status;
+      expect(r.status).toBe(201);
       await r.body?.cancel();
-    });
-    expect(status).toBe(201);
-    const tiny = await medianMs(async () => {
-      const r = await api(app, R.artifacts, cookie, {
-        method: "POST",
-        body: { title: "cpu", format: "html", content: "<p>x</p>" },
-      });
-      await r.body?.cancel();
-    });
+    };
     // Wall time here includes local D1/R2 I/O (off-isolate in production), the
     // same for both: the difference is the body's cost (read, parse, checks).
-    expect(ms - tiny).toBeLessThan(10);
+    const t = await pairedMs(post("<p>x</p>"), post(content));
+    await calibrated(annotate, "128 KB publish over a tiny one", {
+      ms: t.delta,
+      baseMs: t.base,
+      refMs: TINY_PUBLISH_REF_MS,
+      maxMs: 10,
+    });
   });
 
   /** POST of `content` with Content-Length; counts reads of the body stream. */

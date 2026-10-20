@@ -1,7 +1,8 @@
 // Data-doc write CPU per plan (env PLAN): 256 KB on Free must fit the
-// 10 ms budget (asserted, over a tiny write: local D1/DO I/O cancels out);
+// 10 ms budget (asserted, over a tiny write: local D1/DO I/O cancels out;
+// interleaved pairs, bound scaled to the runner by the tiny write's own time);
 // a 1 MB doc on Paid is accepted and its cost reported.
-// Runs serially via vitest.cpu.config.ts (median of 5); the report row is an
+// Runs serially via vitest.cpu.config.ts (median of 7); the report row is an
 // annotation: pnpm test:cpu -- test/data-doc.cpu.test.ts --reporter=verbose
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
@@ -12,13 +13,16 @@ import type { Env } from "../src/env.js";
 import { type ArtifactRuntime, runtimeStub } from "../src/runtime/do.js";
 import { publish } from "../src/services/artifacts.js";
 import { getUser } from "../src/services/users.js";
-import { medianMs } from "./cpu-time.js";
+import { calibrated, medianMs, pairedMs } from "./cpu-time.js";
 import { fetchAndWait, login } from "./helpers.js";
 
 const app = createApp();
 const FREE = { ...(env as Env), PLAN: undefined } as Env;
 const PAID = { ...(env as Env), PLAN: "paid" } as Env;
 let owner: { cookie: string; member: Member };
+
+/** Local median of a tiny doc write (dev laptop, 2026-10-20). */
+const TINY_WRITE_REF_MS = 3;
 
 beforeAll(async () => {
   const l = await login("data-doc-cpu@x.com");
@@ -74,11 +78,20 @@ const put = (id: string, bytes: number, e: Env) => {
 };
 
 describe("data-doc write CPU", () => {
-  it("Free: a 256 KB doc write costs < 10 ms over a tiny one", async () => {
+  it("Free: a 256 KB doc write costs < 10 ms over a tiny one", async ({
+    annotate,
+  }) => {
     const id = await art(FREE);
-    const tiny = await medianMs(put(id, 64, FREE));
-    const full = await medianMs(put(id, LIMITS.dataDocBytesFree, FREE));
-    expect(full - tiny).toBeLessThan(10);
+    const t = await pairedMs(
+      put(id, 64, FREE),
+      put(id, LIMITS.dataDocBytesFree, FREE),
+    );
+    await calibrated(annotate, "256 KB doc write over a tiny one", {
+      ms: t.delta,
+      baseMs: t.base,
+      refMs: TINY_WRITE_REF_MS,
+      maxMs: 10,
+    });
   });
 
   it("report: Paid 1 MB doc write", async ({ annotate }) => {

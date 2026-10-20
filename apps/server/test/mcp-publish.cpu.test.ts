@@ -3,18 +3,20 @@
 // read or parse, so an oversize call costs nothing but the auth lookup
 // (asserted). Paid: the cap is a 1 MB doc + 64 KB, so an oversize publish
 // under it is fully parsed before too_large (reported).
-// Runs serially via vitest.cpu.config.ts (median of 5); the report rows are
+// Runs serially via vitest.cpu.config.ts (median of 7); the report rows are
 // annotations: pnpm test:cpu -- test/mcp-publish.cpu.test.ts --reporter=verbose
 import { env } from "cloudflare:workers";
 import { LIMITS } from "@oa/shared";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createPat } from "../src/auth/pat.js";
 import type { Env } from "../src/env.js";
-import { medianMs } from "./cpu-time.js";
+import { calibrated, medianMs, pairedMs } from "./cpu-time.js";
 import { login } from "./helpers.js";
 import { callWorker, MCP_URL } from "./mcp-helpers.js";
 
 let pat: string;
+/** Local median of the auth-only call (dev laptop, 2026-10-20). */
+const AUTH_REF_MS = 2;
 const FREE = { ...(env as Env), PLAN: undefined } as Env;
 const PAID = { ...(env as Env), PLAN: "paid" } as Env;
 const escapeHeavy = (bytes: number) =>
@@ -66,7 +68,9 @@ beforeAll(async () => {
 });
 
 describe("/mcp CPU", () => {
-  it("Free: a body over 320 KB gets the error unread, < 5 ms over auth", async () => {
+  it("Free: a body over 320 KB gets the error unread, < 5 ms over auth", async ({
+    annotate,
+  }) => {
     const over = call(
       { title: "cpu", format: "html", content: escapeHeavy(250 * 1024) },
       FREE,
@@ -76,12 +80,18 @@ describe("/mcp CPU", () => {
     expect(over.state.read).toBe(0);
     // Wall time includes the PAT lookup (local D1 I/O, off-isolate in
     // production): measure it with a call refused before any tool runs.
-    const auth = await medianMs(
+    // The real guard is read === 0; the delta is measured in interleaved
+    // pairs and its bound scaled to the runner by the auth call's own time.
+    const t = await pairedMs(
       call({ format: "html", content: "<p>x</p>" }, FREE).run,
+      over.run,
     );
-    // The real guard is read === 0; the 5 ms delta keeps whole-ms timer
-    // ticks on a noisy runner from failing it.
-    expect((await medianMs(over.run)) - auth).toBeLessThan(5);
+    await calibrated(annotate, "oversize body over auth", {
+      ms: t.delta,
+      baseMs: t.base,
+      refMs: AUTH_REF_MS,
+      maxMs: 5,
+    });
   });
 
   it("report: medians per plan", async ({ annotate }) => {
