@@ -8,7 +8,7 @@ Upgrades keep all your artifacts, versions, shares, and live-page data. Database
 
 ## Steps
 
-1. **Go to the existing install:** `cd` into the directory setup cloned into (by default `~/open-artifacts`). If it's gone, for example on a new machine or in CI, clone the latest release as in [setup](/docs/setup/) and continue from step 3. Without its saved state, add the install's `--name`, `--app-host`, `--content-host`, and `--owner-email` to the commands below; setup rebuilds the state from Cloudflare by `--name` and never guesses the name in a `--json` run. It also re-verifies Access, so you may need the Access token again if the Cloudflare login can't read Access; save it as in [setup](/docs/setup/).
+1. **Go to the existing install:** `cd` into the directory setup cloned into (by default `~/open-artifacts`). If it's gone, for example on a new machine or in CI, clone the latest release as in [setup](/docs/setup/) and continue from step 3. Without its saved state, add the install's `--name` (and `--account-id` if the login has several accounts); setup reads the hosts and owner email from the deployed Worker. It also re-verifies Access, so you may need the Access token again if the Cloudflare login can't read Access; save it as in [setup](/docs/setup/).
 2. **Check out the latest release.** This is the latest stable GitHub release; pre-releases are skipped. Release tags look like `vX.Y.Z`:
 
    ```sh
