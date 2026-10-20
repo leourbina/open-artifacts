@@ -20,6 +20,7 @@ const packages: Record<string, string> = {
   "apps/server": "@oa/server",
   "apps/dashboard": "@oa/dashboard",
   "apps/landing": "@oa/landing",
+  "apps/demo-ops": "@oa/demo-ops",
   "packages/shared": "@oa/shared",
   "packages/ui": "@oa/ui",
   "packages/runtime": "@oa/runtime",

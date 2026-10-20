@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "open-artifacts-demo-ops",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": false,
+  "preview_urls": false,
+  "triggers": { "crons": ["* * * * *"] },
+  "observability": { "enabled": true },
+  "vars": {
+    "DEMO_BASE_URL": "https://demo.open-artifacts.com",
+    "DASHBOARD_ARTIFACT_ID": "",
+    "SOURCE_ARTIFACT_IDS": ""
+  }
+}
