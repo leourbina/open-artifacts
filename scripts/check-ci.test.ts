@@ -952,3 +952,94 @@ describe("workflow jobs that use repo files have a checkout", () => {
     }
   }
 });
+
+describe("release cadence", () => {
+  const w = wf("release-cadence.yml");
+  // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
+  type Step = any;
+  const job = w.jobs.cadence;
+  const steps: Step[] = job.steps;
+
+  it("runs daily at 15:00 UTC, on dispatch, after release-please and on check_suite", () => {
+    expect(w.on.schedule).toEqual([{ cron: "0 15 * * *" }]);
+    expect(triggers(w)).toEqual(
+      expect.arrayContaining([
+        "schedule",
+        "workflow_dispatch",
+        "workflow_run",
+        "check_suite",
+      ]),
+    );
+    expect(w.on.workflow_run.workflows).toEqual(["release-please"]);
+    expect(w.on.workflow_run.types).toEqual(["completed"]);
+    expect(w.on.check_suite.types).toEqual(["completed"]);
+    expect(w.concurrency.group).toBe("release-cadence");
+  });
+
+  it("uses the App token only in the arm step", () => {
+    const withSecrets = steps.filter((s) =>
+      /secrets\.RELEASE_APP/.test(JSON.stringify(s)),
+    );
+    expect(withSecrets).toHaveLength(1);
+    expect(String(withSecrets[0].uses)).toMatch(
+      /^actions\/create-github-app-token@/,
+    );
+    expect(withSecrets[0].id).toBe("app");
+    const usesToken = steps.filter((s) =>
+      JSON.stringify(s).includes("steps.app.outputs.token"),
+    );
+    expect(usesToken.map((s) => s.name)).toEqual(["arm"]);
+    expect(usesToken[0].run).toContain("release-cadence.ts arm");
+    // the blocker step runs with GITHUB_TOKEN, and no other secret is read
+    const blocker = steps.find((s) => s.name === "blocker");
+    expect(blocker.env.GH_TOKEN).toMatch(/^\$\{\{ github\.token \}\}$/);
+    expect(JSON.stringify(w)).not.toMatch(
+      /secrets\.(?!RELEASE_APP_ID|RELEASE_APP_PRIVATE_KEY)/,
+    );
+  });
+
+  it("has minimal permissions: none by default, and only issues are writable", () => {
+    expect(w.permissions).toEqual({});
+    const p = job.permissions as Record<string, string>;
+    expect(Object.entries(p).filter(([, v]) => v === "write")).toEqual([
+      ["issues", "write"],
+    ]);
+    expect(Object.keys(p).sort()).toEqual([
+      "checks",
+      "contents",
+      "issues",
+      "pull-requests",
+      "statuses",
+    ]);
+    expect(p.contents).toBe("read");
+    expect(p["pull-requests"]).toBe("read");
+  });
+
+  it("takes no input from the event into its commands", () => {
+    for (const s of steps) expect(String(s.run ?? "")).not.toMatch(/\$\{\{/);
+  });
+
+  describe("verify-release in release-please.yml", () => {
+    const rp = wf("release-please.yml");
+    const v = rp.jobs["verify-release"];
+    it("runs after both deploys, only when a release was created", () => {
+      expect([v.needs].flat()).toEqual(
+        expect.arrayContaining(["deploy-prod", "deploy-landing"]),
+      );
+      expect(String(v.if)).toContain(
+        "needs.release-please.outputs.release_created == 'true'",
+      );
+      expect(String(v.if)).toContain("always()");
+    });
+    it("can only write issues, and runs the tested script on the new tag", () => {
+      expect(v.permissions).toEqual({ contents: "read", issues: "write" });
+      // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
+      const run = v.steps.find((s: any) =>
+        String(s.run ?? "").includes("verify-release.ts"),
+      );
+      expect(run.run).toContain("--tag");
+      expect(JSON.stringify(v)).not.toMatch(/secrets\./);
+      expect(v.steps[0].with.ref).toContain("tag_name");
+    });
+  });
+});

@@ -1,0 +1,48 @@
+name: release-cadence
+# Arms the release-please PR once it is green and the merge queue has drained, and
+# keeps one `blocker` issue open while a release is stuck. A manual cut still works:
+# arm the release PR yourself at any time.
+on:
+  schedule:
+    - cron: "0 15 * * *"
+  workflow_dispatch:
+  workflow_run:
+    workflows: [release-please]
+    types: [completed]
+  # A retry when checks finish (for example when the queue drains).
+  check_suite:
+    types: [completed]
+permissions: {}
+concurrency:
+  group: release-cadence
+  cancel-in-progress: false
+jobs:
+  cadence:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+      checks: read
+      statuses: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      # The App token exists only for the arm step: merging with GITHUB_TOKEN would
+      # trigger no workflows on the merge commit.
+      - id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      - name: arm
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: node --experimental-strip-types scripts/ci/release-cadence.ts arm --repo "$GITHUB_REPOSITORY"
+      - name: blocker
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node --experimental-strip-types scripts/ci/release-cadence.ts blocker --repo "$GITHUB_REPOSITORY"
