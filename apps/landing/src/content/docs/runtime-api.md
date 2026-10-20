@@ -65,7 +65,7 @@ await votes.set(crypto.randomUUID(), { option: "Lisbon" });
 
 ### Anonymous ids
 
-On an artifact that allows anonymous writes, each anonymous browser gets an `anonId`, so a game or poll can tell two anonymous players apart. Their documents carry `updatedBy: "anon:<anonId>"`; anonymous writes without one stay `"anon"`.
+On an artifact that allows anonymous writes, each anonymous browser gets an `anonId`, so a game or poll can tell two anonymous players apart. Their documents carry `updatedBy: "anon:<anonId>"`. Only documents written before anonymous ids existed still say `"anon"`.
 
 - It belongs to one browser on one device. Another browser or device gets a different id, and clearing site data resets it.
 - It is not a person or an account, so don't treat it as proof of who someone is.
