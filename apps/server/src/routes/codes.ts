@@ -9,6 +9,8 @@ import {
 } from "@oa/shared";
 import type { Context } from "hono";
 import { getCookie } from "hono/cookie";
+import { HTTPException } from "hono/http-exception";
+import { logAuth } from "../auth/audit.js";
 import {
   codesKey,
   deliverCode,
@@ -179,6 +181,7 @@ const rateLimited = (retryAfter: number, scope: "ip" | "email") =>
   );
 
 const unauthorized = (details: CodeVerifyFailureDetails, cookies: string[]) => {
+  logAuth({ provider: "code", outcome: "refused", stage: details.reason });
   const res = errorJson(401, "unauthorized", "Sign-in failed", details);
   for (const k of cookies) res.headers.append("set-cookie", k);
   return res;
@@ -304,7 +307,10 @@ export function mountCodes(app: AppType): void {
       input: parsed.data.code,
       ip: clientIp(c),
     });
-    if ("ipLocked" in r) return rateLimited(r.ipLocked, "ip");
+    if ("ipLocked" in r) {
+      logAuth({ provider: "code", outcome: "refused", stage: "ip_locked" });
+      return rateLimited(r.ipLocked, "ip");
+    }
     const first = r.ok ? await codeEligibility(c.env, cfg, email) : null;
     // A new address gets its row now; role and link are then read again, so
     // a row that a concurrent sign-in or invite created is what's checked.
@@ -341,6 +347,12 @@ export function mountCodes(app: AppType): void {
     await stmt(c.env.DB, "update users set last_seen_at = ?1 where id = ?2")
       .bind(Date.now(), user.id)
       .run();
+    logAuth({
+      provider: "code",
+      outcome: "ok",
+      uid: user.id,
+      tenant: guest ? undefined : domain,
+    });
     const res = c.json({
       next: p.next,
       user,
