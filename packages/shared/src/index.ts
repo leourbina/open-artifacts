@@ -8,5 +8,6 @@ export * from "./nonce.js";
 export * from "./paths.js";
 export * from "./protocol.js";
 export * from "./routes.js";
+export * from "./sandbox.js";
 export * from "./schemas.js";
 export * from "./secrets.js";

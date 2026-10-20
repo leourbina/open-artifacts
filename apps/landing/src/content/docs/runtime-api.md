@@ -124,3 +124,5 @@ try {
 The artifact runs in a sandboxed iframe with no credentials. Each call goes by `postMessage` to the viewer shell around it, which checks the call and makes it with the viewer's session. Opened outside the viewer, the artifact has no shell, so every call rejects at once with `no_shell`.
 
 Live data works on the page the viewer first opens. If the artifact navigates its own frame to another page, for example through a link to another of its files, calls on that page fail with `no_shell`, and reloading the viewer restores them. If a multi-page artifact needs live data, switch views within one page instead of linking between files.
+
+Links: open them with `target="_blank" rel="noopener"`. They open in a new tab: external sites as normal pages, and the artifact's own files in the viewer. A link without a target loads inside the artifact's frame, where live data stops and most external sites refuse to load; `target="_top"` does nothing, because an artifact can't navigate the viewer page.

@@ -1,6 +1,6 @@
 // Review Focus #1 (server side): the content host is an opaque-origin sandbox.
 import { env } from "cloudflare:workers";
-import { type Member, newId } from "@oa/shared";
+import { ARTIFACT_SANDBOX, type Member, newId } from "@oa/shared";
 import { beforeAll, describe, expect, it } from "vitest";
 import { publicPrefix, signContentPrefix } from "../src/content/signing.js";
 import { publish } from "../src/services/artifacts.js";
@@ -14,7 +14,7 @@ import {
 import { login } from "./helpers.js";
 
 const CSP =
-  "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; frame-ancestors http://app.localhost";
+  "sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads; frame-ancestors http://app.localhost";
 let owner: Member;
 
 async function pub(input: Record<string, unknown>): Promise<string> {
@@ -89,6 +89,32 @@ describe("content host sandbox (Review Focus #1)", () => {
     const err = await call("/nope");
     expect(err.status).toBe(404);
     expect(err.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("sandbox tokens: new-tab links escape the sandbox, never top navigation", async () => {
+    const id = await pub({ format: "html", content: "<p>x</p>" });
+    const r = await call(`${await signContentPrefix(env, id, 1)}__view`);
+    const sandbox = (r.headers.get("content-security-policy") ?? "")
+      .split(";")
+      .map((d) => d.trim().split(/\s+/))
+      .find((d) => d[0] === "sandbox");
+    const tokens = sandbox?.slice(1) ?? [];
+    expect(new Set(tokens)).toEqual(
+      new Set([
+        "allow-scripts",
+        "allow-forms",
+        "allow-popups",
+        "allow-popups-to-escape-sandbox",
+        "allow-modals",
+        "allow-downloads",
+      ]),
+    );
+    expect(tokens).toEqual([...ARTIFACT_SANDBOX]);
+    expect(tokens).toHaveLength(6);
+    for (const t of tokens) {
+      expect(t.startsWith("allow-top-navigation"), t).toBe(false);
+      expect(t.startsWith("allow-same-origin"), t).toBe(false);
+    }
   });
 
   it("injects the runtime into an HTML entry without <head> (and without <html>)", async () => {
