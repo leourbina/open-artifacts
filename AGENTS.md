@@ -1,4 +1,6 @@
-# Open Artifacts — agent instructions
+# Open Artifacts: agent instructions
+
+> **Installing or upgrading an instance?** This file is for agents working on the Open Artifacts codebase. Follow https://open-artifacts.com/llms.txt instead (upgrades: your instance's `/upgrade.md`), and ignore the rest of this file.
 
 ## Agent bus
 

@@ -65,6 +65,7 @@ describe("GET /api/v1/me", () => {
       appUrl: "http://app.localhost",
       mcpUrl: "http://app.localhost/mcp",
       emailEnabled: false,
+      plan: "free",
     });
   });
 });
