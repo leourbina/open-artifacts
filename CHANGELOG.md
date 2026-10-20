@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.11.0...v0.12.0) (2026-10-20)
+
+
+### Features
+
+* **server:** EMBED_ORIGINS lets /a/:id/full be framed by listed origins ([#295](https://github.com/open-artifacts-ai/open-artifacts/issues/295)) ([f3e472d](https://github.com/open-artifacts-ai/open-artifacts/commit/f3e472d5710f9d093ccdd323797070476cdaf70c))
+
 ## [0.11.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.10.0...v0.11.0) (2026-10-20)
 
 
