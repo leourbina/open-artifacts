@@ -94,16 +94,15 @@ const server = (s: Srv = {}) => {
       ?.authorization;
     reqs.push({ method, path: u.pathname + u.search, body, auth });
     const json = (v: unknown, status = 200) => Response.json(v, { status });
-    let m: RegExpMatchArray | null;
-    if (
-      method === "GET" &&
-      (m = u.pathname.match(/^\/api\/v1\/artifacts\/([^/]+)\/versions$/))
-    )
+    let m: RegExpMatchArray = "".match(/(?:)/) as RegExpMatchArray;
+    const hit = (re: RegExp): boolean => {
+      const r = u.pathname.match(re);
+      if (r) m = r;
+      return r !== null;
+    };
+    if (method === "GET" && hit(/^\/api\/v1\/artifacts\/([^/]+)\/versions$/))
       return json(s.versions?.[m[1] as string] ?? []);
-    if (
-      method === "GET" &&
-      (m = u.pathname.match(/^\/api\/v1\/artifacts\/([^/]+)$/))
-    )
+    if (method === "GET" && hit(/^\/api\/v1\/artifacts\/([^/]+)$/))
       return json(
         s.live?.[m[1] as string] ?? {
           visibility: "public",
@@ -115,14 +114,11 @@ const server = (s: Srv = {}) => {
       const id = `N${++n}b2c3d4E5f6g7h8`;
       return json({ id, version: 1, url: `https://x.test/${id}` });
     }
-    if (
-      method === "POST" &&
-      (m = u.pathname.match(/^\/api\/v1\/artifacts\/([^/]+)\/versions$/))
-    )
+    if (method === "POST" && hit(/^\/api\/v1\/artifacts\/([^/]+)\/versions$/))
       return json({ id: m[1], version: 2, url: "https://x.test/a" });
     if (
       method === "GET" &&
-      (m = u.pathname.match(/^\/api\/v1\/artifacts\/([^/]+)\/data\/([^/]+)$/))
+      hit(/^\/api\/v1\/artifacts\/([^/]+)\/data\/([^/]+)$/)
     )
       return json({
         items: s.data?.[m[1] as string]?.[m[2] as string] ?? [],
