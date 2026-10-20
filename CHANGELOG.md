@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.9.0...v0.10.0) (2026-10-20)
+
+
+### Features
+
+* **dashboard:** framed /full runs anonymously (embed mode, gates [#295](https://github.com/open-artifacts-ai/open-artifacts/issues/295)) ([#321](https://github.com/open-artifacts-ai/open-artifacts/issues/321)) ([8c13e7d](https://github.com/open-artifacts-ai/open-artifacts/commit/8c13e7da8ed59218ef71739bf4334b7372e4791c))
+* **viewer:** renavigation notice for live-data artifacts ([#326](https://github.com/open-artifacts-ai/open-artifacts/issues/326)) ([e4dfac3](https://github.com/open-artifacts-ai/open-artifacts/commit/e4dfac3821ef7db7cd9f2ba924c4a1bad2134999))
+
 ## [0.9.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.8.0...v0.9.0) (2026-10-20)
 
 
