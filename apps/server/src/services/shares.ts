@@ -10,14 +10,14 @@ import { and, asc, eq } from "drizzle-orm";
 import { callerOf, requireAccess } from "../auth/authz.js";
 import { getDb } from "../db/client.js";
 import { normEmail } from "../db/email.js";
-import { shares } from "../db/schema.js";
+import { shares, users } from "../db/schema.js";
 import { stmt } from "../db/stmt.js";
 import { emailEnabled, sendEmail } from "../email/send.js";
 import { senderName, shareEmail } from "../email/templates.js";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
 import { closeRuntimeSockets } from "../runtime/revoke.js";
-import { getSettings } from "./members.js";
+import { getSettings, removeMember } from "./members.js";
 
 export const MAX_SHARES = 200;
 
@@ -148,4 +148,40 @@ export async function deleteShare(
     .returning({ e: shares.email });
   if (out.length === 0) throw new ApiError("not_found", "Not found");
   await closeRuntimeSockets(env, [id], "share revoked", ctx);
+  // Best effort: the share is already gone, and that is what the caller asked.
+  await removeGuestIfUnshared(env, e, ctx).catch((err) =>
+    console.warn(
+      JSON.stringify({
+        evt: "guest_cleanup_failed",
+        reason: err instanceof ApiError ? err.code : "error",
+      }),
+    ),
+  );
+}
+
+/**
+ * A guest exists only through shares: once the last share to their address
+ * goes, the guest row goes too (removeMember: grants, tokens and sockets
+ * revoked, anything they made reassigned), so they can't sign in again.
+ */
+async function removeGuestIfUnshared(
+  env: Env,
+  email: string,
+  ctx?: Pick<ExecutionContext, "waitUntil">,
+): Promise<void> {
+  const db = getDb(env);
+  const guest = (
+    await db
+      .select({ id: users.id })
+      .from(users)
+      .where(and(eq(users.email, email), eq(users.role, "guest")))
+      .limit(1)
+  )[0];
+  if (!guest) return;
+  const left = await db
+    .select({ a: shares.artifactId })
+    .from(shares)
+    .where(eq(shares.email, email))
+    .limit(1);
+  if (left.length === 0) await removeMember(env, guest.id, ctx);
 }

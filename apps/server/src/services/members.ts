@@ -7,11 +7,12 @@ import {
   type Settings,
   type SettingsPatch,
 } from "@oa/shared";
-import { and, asc, eq, isNotNull, isNull } from "drizzle-orm";
+import { and, asc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { getDb } from "../db/client.js";
 import { normEmail } from "../db/email.js";
 import {
   artifacts,
+  identities,
   reservedArtifacts,
   settings,
   shares,
@@ -100,7 +101,8 @@ export async function patchMember(
   const db = getDb(env);
   const [out] = await db
     .update(users)
-    .set({ role: patch.role })
+    // A role change ends the member's sessions (they re-sign-in with the new role).
+    .set({ role: patch.role, sessionEpoch: sql`${users.sessionEpoch} + 1` })
     .where(eq(users.id, id))
     .returning();
   if (!out) throw new ApiError("not_found", "Not found");
@@ -165,6 +167,7 @@ export async function removeMember(
       .set({ userId: to })
       .where(eq(reservedArtifacts.userId, id)),
     db.delete(tokens).where(eq(tokens.userId, id)),
+    db.delete(identities).where(eq(identities.userId, id)),
     db.delete(users).where(eq(users.id, id)),
   ]);
   // Live sockets the member opened via shares stay open otherwise (best effort, capped).
