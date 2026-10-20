@@ -212,7 +212,9 @@ describe("M2: required permissions come from the calls setup makes", () => {
     w.deps.env.ANALYTICS_TOKEN = "an";
     await run(HOSTS, w.deps, ROOT);
     expect(issue(w, "analytics")).toMatchObject({ status: "reused" });
-    expect(line(w, "prereqs").message).toContain("is the deploy token");
+    expect(line(w, "prereqs").data.notes.join("; ")).toContain(
+      "is the deploy token",
+    );
   });
   it("a dedicated ANALYTICS_TOKEN is not flagged", async () => {
     const w = world();
@@ -238,7 +240,7 @@ describe("L5: Billing: Read is optional", () => {
     const w = world();
     w.deps.env.CLOUDFLARE_API_TOKEN = "dep";
     await run(HOSTS, w.deps, ROOT);
-    expect(line(w, "prereqs").message).toMatch(
+    expect(line(w, "prereqs").data.notes.join("; ")).toMatch(
       /Billing: Read \(optional, lets setup detect your plan\)/,
     );
     expect(issue(w, "deploy")).toMatchObject({

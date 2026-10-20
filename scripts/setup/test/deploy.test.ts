@@ -105,7 +105,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     const w = world();
     expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
     expect(statuses(w)).toEqual([
-      "prereqs:skipped",
+      "prereqs:ok",
       ...ALL.slice(1).map((s) => `${s}:${s === "email" ? "skipped" : "ok"}`),
     ]);
     expect(w.ops).toEqual([
@@ -191,7 +191,13 @@ describe("deploy, owner-token, selftest, agent-config", () => {
   it("a rerun runs deploy, healthcheck, selftest and agent-config; selftest uses the saved PAT file", async () => {
     const w = await installed();
     expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
-    const always = ["deploy", "healthcheck", "selftest", "agent-config"];
+    const always = [
+      "prereqs",
+      "deploy",
+      "healthcheck",
+      "selftest",
+      "agent-config",
+    ];
     expect(statuses(w)).toEqual(
       ALL.map((s) => `${s}:${always.includes(s) ? "ok" : "skipped"}`),
     );
@@ -364,7 +370,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     expect(statuses(w)).toEqual(
       ALL.map(
         (s) =>
-          `${s}:${["deploy", "healthcheck", "selftest", "agent-config"].includes(s) ? "ok" : "skipped"}`,
+          `${s}:${["prereqs", "deploy", "healthcheck", "selftest", "agent-config"].includes(s) ? "ok" : "skipped"}`,
       ),
     );
     expect(w.ops).toEqual(["build", "migrate open-artifacts", "deploy"]);

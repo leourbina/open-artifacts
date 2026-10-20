@@ -524,7 +524,11 @@ export async function run(
     human = ctx.data = ctx.human = undefined;
     try {
       if ((await step.check(state, ctx)) === "done") {
-        report({ ...take("skipped", "already done"), step: step.name });
+        report(
+          step.okWhenDone
+            ? { ...take("ok", step.okWhenDone), step: step.name }
+            : { ...take("skipped", "already done"), step: step.name },
+        );
         return undefined;
       }
       // Check-time notes explain the todo; apply reports its own.

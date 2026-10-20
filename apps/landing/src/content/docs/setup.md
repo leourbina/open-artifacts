@@ -124,7 +124,7 @@ Exit codes: `0` when every step is done, `2` when a step needs the user or a mis
 
 `oa:setup` is idempotent: each step checks first and skips work that's already done. The steps, in order:
 
-1. **`prereqs`:** checks Node 22 or later, pnpm, the Cloudflare login and account, and that both hostnames are in a zone on that account.
+1. **`prereqs`:** checks Node 22 or later, pnpm, the Cloudflare login and account, and that both hostnames are in a zone on that account. It reports `ok` (message "prerequisites ok"); the plan warnings are in `data.warnings`, other notes in `data.notes`, and token links in `data.tokens`. Nothing is added to the message. The optional analytics token link is a note only on the first run.
 2. **`resources`:** creates or reuses the D1 database, the R2 bucket, and the KV namespace, and writes `apps/server/wrangler.jsonc`.
 3. **`access`:** creates the Cloudflare Access for SaaS application and its sign-in policy.
 4. **`secrets`:** stores the Worker secrets. When `ANALYTICS_TOKEN` is set in the environment (a dedicated read-only token with Account Analytics: Read, never your deploy token), it stores it on every run. Otherwise, without `--json` or `--yes`, it offers to store one for the Usage page, with a link that pre-fills the token form.
@@ -140,7 +140,7 @@ The `prereqs` line's `data.warnings` holds one `{ code, plan, message }` per not
 
 {PLAN_WARNINGS_TABLE}
 
-On Workers Paid (`data.plan` `paid`), `data.warnings` is empty and the `prereqs` message is "Workers Paid detected". When `prereqs` stops because a hostname isn't in a zone, its `action_required` line carries only `data.missing`: no plan, no warnings, and no "Workers Paid detected".
+On Workers Paid (`data.plan` `paid`), `data.warnings` is empty and the `prereqs` line says so in `data.notes` ("Workers Paid detected"). When `prereqs` stops because a hostname isn't in a zone, its `action_required` line carries only `data.missing`: no plan, no warnings, and no "Workers Paid detected".
 
 ## Cloudflare Access permissions
 
