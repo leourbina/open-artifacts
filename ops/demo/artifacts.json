@@ -25,6 +25,11 @@
       "instance": "artifacts.leourbina.com",
       "id": "yZ7DrazjUcMg4JoX",
       "visibility": "public"
+    },
+    "dashboard": {
+      "instance": "artifacts.leourbina.com",
+      "id": "FevbVG2F9B3WApVu",
+      "visibility": "private"
     }
   }
 }
