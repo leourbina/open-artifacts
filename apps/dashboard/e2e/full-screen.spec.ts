@@ -71,3 +71,186 @@ test("phones: Full screen is in the ••• menu", async ({ page, context }) =
   ]);
   await expect(tab).toHaveURL(new RegExp(`/a/${ID}/full$`));
 });
+
+// Option A: the peek chip (spec-fullscreen-chip.md).
+const FULL = `/a/${ID}/full`;
+const TOP = "Exit full screen, back to Landing page";
+const EMBED = "Open Landing page in Open Artifacts (opens in new tab)";
+const width = (l: import("@playwright/test").Locator) =>
+  l.evaluate((e) => e.getBoundingClientRect().width);
+
+test.describe("full-screen chip", () => {
+  test("widened for 3 s on load, then a 32px circle; the name never changes", async ({
+    page,
+  }) => {
+    await page.goto(FULL);
+    const chip = page.getByRole("link", { name: TOP });
+    await expect(chip).toHaveAttribute("data-open", "true");
+    await expect.poll(() => width(chip)).toBeGreaterThan(100);
+    await expect(chip).toHaveAttribute("href", `/a/${ID}`);
+    await expect(chip).toHaveAttribute("data-open", "false", {
+      timeout: 4_000,
+    });
+    await expect.poll(() => width(chip)).toBe(32);
+    await expect(chip).toHaveAccessibleName(TOP);
+    expect(await chip.evaluate((e) => getComputedStyle(e).opacity)).toBe(
+      "0.72",
+    );
+  });
+
+  test("widens on hover, collapses 400 ms after the pointer leaves", async ({
+    page,
+  }) => {
+    await page.goto(FULL);
+    const chip = page.getByRole("link", { name: TOP });
+    await expect(chip).toHaveAttribute("data-open", "false", {
+      timeout: 4_000,
+    });
+    await chip.hover();
+    await expect(chip).toHaveAttribute("data-open", "true");
+    await expect.poll(() => width(chip)).toBeGreaterThan(100);
+    await page.mouse.move(10, 10);
+    await expect(chip).toHaveAttribute("data-open", "false");
+  });
+
+  test("the last Tab stop; keyboard focus widens it and shows the ring", async ({
+    page,
+  }) => {
+    await page.goto(FULL);
+    const chip = page.getByRole("link", { name: TOP });
+    await expect(chip).toHaveAttribute("data-open", "false", {
+      timeout: 4_000,
+    });
+    await page.keyboard.press("Shift+Tab");
+    await expect(chip).toBeFocused();
+    await expect(chip).toHaveAttribute("data-open", "true");
+    const css = await chip.evaluate((e) => {
+      const s = getComputedStyle(e);
+      return [s.outlineStyle, s.outlineColor, s.boxShadow];
+    });
+    expect(css).toEqual([
+      "solid",
+      "rgb(255, 255, 255)",
+      "rgb(35, 80, 208) 0px 0px 0px 5px",
+    ]);
+  });
+
+  test("Esc goes back to the viewer, in the same tab", async ({ page }) => {
+    await page.goto(FULL);
+    await expect(page.getByRole("link", { name: TOP })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page).toHaveURL(new RegExp(`/a/${ID}$`));
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  });
+
+  test("reduced motion: no transition, and the 3 s reveal still happens", async ({
+    page,
+  }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto(FULL);
+    const chip = page.getByRole("link", { name: TOP });
+    await expect(chip).toHaveAttribute("data-open", "true");
+    expect(
+      await chip.evaluate((e) => getComputedStyle(e).transitionDuration),
+    ).toBe("0s");
+    await expect(chip).toHaveAttribute("data-open", "false", {
+      timeout: 4_000,
+    });
+    expect(await width(chip)).toBe(32);
+  });
+
+  test("motion: 200ms cubic-bezier(.2,0,0,1)", async ({ page }) => {
+    await page.goto(FULL);
+    const chip = page.getByRole("link", { name: TOP });
+    const t = await chip.evaluate((e) => {
+      const s = getComputedStyle(e);
+      return [
+        s.transitionProperty,
+        s.transitionDuration,
+        s.transitionTimingFunction,
+      ];
+    });
+    expect(t).toEqual([
+      "max-width, padding, opacity",
+      "0.2s, 0.2s, 0.2s",
+      "cubic-bezier(0.2, 0, 0, 1), cubic-bezier(0.2, 0, 0, 1), cubic-bezier(0.2, 0, 0, 1)",
+    ]);
+  });
+
+  test("hidden when printed", async ({ page }) => {
+    await page.goto(FULL);
+    const chip = page.getByRole("link", { name: TOP });
+    await expect(chip).toBeVisible();
+    await page.emulateMedia({ media: "print" });
+    await expect(chip).toBeHidden();
+  });
+
+  test("embedded: new tab, collapsed from the start, no Esc", async ({
+    page,
+  }) => {
+    await page.route("**/__embed", (r) =>
+      r.fulfill({
+        contentType: "text/html",
+        body: `<iframe src="${FULL}" style="width:800px;height:500px;border:0"></iframe>`,
+      }),
+    );
+    await page.goto("/__embed");
+    const frame = page.frameLocator("iframe");
+    const chip = frame.getByRole("link", { name: EMBED });
+    await expect(chip).toHaveAttribute("data-open", "false");
+    await expect(chip).toHaveAttribute("target", "_blank");
+    await expect(chip).toHaveAttribute("rel", "noopener");
+    expect(await width(chip)).toBe(32);
+    await chip.focus();
+    await page.keyboard.press("Escape");
+    await expect(chip).toBeVisible();
+    expect(page.frames()[1]?.url()).toMatch(new RegExp(`${FULL}$`));
+    await chip.hover();
+    await expect(chip).toHaveAttribute("data-open", "true");
+    await expect(chip).toContainText("Open in Open Artifacts");
+  });
+
+  test("Full screen has the Maximize2 icon on the button and the menu item", async ({
+    page,
+  }) => {
+    await page.goto(`/a/${ID}`);
+    const icon = page
+      .getByRole("link", { name: "Full screen" })
+      .locator("svg.lucide-maximize-2");
+    await expect(icon).toBeVisible();
+    expect(await icon.boundingBox()).toMatchObject({ width: 14, height: 14 });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.getByRole("button", { name: "More actions" }).click();
+    await expect(
+      page
+        .getByRole("menuitem", { name: "Full screen" })
+        .locator("svg.lucide-maximize-2"),
+    ).toBeVisible();
+  });
+});
+
+test.describe("full-screen chip, coarse pointer", () => {
+  test.use({
+    hasTouch: true,
+    isMobile: true,
+    viewport: { width: 390, height: 844 },
+  });
+
+  test("the first tap widens without navigating; the second follows", async ({
+    page,
+  }) => {
+    await page.goto(FULL);
+    expect(
+      await page.evaluate(() => matchMedia("(pointer: coarse)").matches),
+    ).toBe(true);
+    const chip = page.getByRole("link", { name: TOP });
+    await expect(chip).toHaveAttribute("data-open", "false", {
+      timeout: 4_000,
+    });
+    await chip.tap();
+    await expect(chip).toHaveAttribute("data-open", "true");
+    await expect(page).toHaveURL(new RegExp(`${FULL}$`));
+    await chip.tap();
+    await expect(page).toHaveURL(new RegExp(`/a/${ID}$`));
+  });
+});

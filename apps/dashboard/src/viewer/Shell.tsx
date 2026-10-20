@@ -12,6 +12,7 @@ import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { NotFound } from "../pages/NotFound";
 import { createBridge } from "./bridge";
 import { Crumbs } from "./Crumbs";
+import { FullScreenEscape } from "./FullScreenEscape";
 import { SANDBOX, safeContentUrl } from "./frame";
 import { isPanelTab, type PanelTab, SidePanel } from "./panels/SidePanel";
 import { SlowNotice } from "./SlowNotice";
@@ -37,11 +38,6 @@ function ErrorPanel({ onRetry }: { onRetry?: () => void }) {
       </section>
     </div>
   );
-}
-
-/** Slot for the full-screen view's way back (#290): Design is picking it. */
-function FullScreenEscape(_: { artifact: ArtifactSummary }) {
-  return null;
 }
 
 function Viewer({
@@ -183,9 +179,7 @@ function Viewer({
   if (signedOut) return null;
   return (
     <div className="oa-viewer">
-      {chromeless ? (
-        <FullScreenEscape artifact={artifact} />
-      ) : (
+      {!chromeless && (
         <>
           <Crumbs title={artifact.title} />
           <TitleBar
@@ -241,6 +235,8 @@ function Viewer({
           />
         )}
       </div>
+      {/* After the frame, so it is the top document's only Tab stop. */}
+      {chromeless && <FullScreenEscape artifact={artifact} />}
     </div>
   );
 }

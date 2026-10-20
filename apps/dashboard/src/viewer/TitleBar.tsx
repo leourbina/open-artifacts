@@ -21,6 +21,7 @@ import {
 } from "@oa/ui/shadcn";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
+import { Maximize2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ApiClientError } from "../api/client";
 import {
@@ -111,6 +112,9 @@ function EditableTitle({ artifact }: { artifact: ArtifactSummary }) {
     </h1>
   );
 }
+
+/** Full screen's icon: lucide Maximize2 at 14px, 4px from the label. */
+const MAXIMIZE = <Maximize2 className="size-3.5" aria-hidden="true" />;
 
 export function TitleBar({
   artifact,
@@ -246,6 +250,7 @@ export function TitleBar({
           className={`${LINK_BTN} ${authed ? "max-[600px]:hidden" : ""}`}
         >
           <a href={full} target="_blank" rel="noopener noreferrer">
+            {MAXIMIZE}
             Full screen
           </a>
         </ShButton>
@@ -285,9 +290,10 @@ export function TitleBar({
               </Tooltip>
               <DropdownMenuContent align="end" className={TXT}>
                 <DropdownMenuItem
-                  className="min-[601px]:hidden"
+                  className="gap-1 min-[601px]:hidden"
                   onSelect={openFull}
                 >
+                  {MAXIMIZE}
                   Full screen
                 </DropdownMenuItem>
                 <DropdownMenuItem
