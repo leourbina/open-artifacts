@@ -256,6 +256,11 @@ describe("GET /upgrade.md", () => {
       headers: { "if-none-match": UPGRADE_ETAG },
     });
     expect(nm.status).toBe(304);
+    // A weak validator (Cloudflare compression) still revalidates.
+    const weak = await get(`${APP}/upgrade.md`, {
+      headers: { "if-none-match": `W/${UPGRADE_ETAG}` },
+    });
+    expect(weak.status).toBe(304);
     const head = await get(`${APP}/upgrade.md`, { method: "HEAD" });
     expect(head.status).toBe(200);
   });
