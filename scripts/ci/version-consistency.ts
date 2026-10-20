@@ -9,9 +9,11 @@ const read = (f: string) => readFileSync(join(dir, f), "utf8");
 
 const pkg = JSON.parse(read("package.json")).version;
 const manifest = JSON.parse(read(".release-please-manifest.json"))["."];
-const heading = read("CHANGELOG.md").match(
-  /^## \[?v?(\d+\.\d+\.\d+[^\]\s)]*)/m,
-)?.[1];
+// The first `## ` heading is the newest release: it must name the version.
+const first = read("CHANGELOG.md")
+  .split("\n")
+  .find((l) => l.startsWith("## "));
+const heading = first?.match(/^## \[?v?(\d+\.\d+\.\d+[^\]\s)]*)/)?.[1];
 
 const problems: string[] = [];
 if (pkg !== manifest)
@@ -20,7 +22,7 @@ if (pkg !== manifest)
   );
 if (heading !== pkg)
   problems.push(
-    `CHANGELOG.md top heading names ${heading ?? "no version"}, expected ${pkg}`,
+    `CHANGELOG.md first \`## \` heading ${first ? `names ${heading ?? "no version"}` : "is missing"}, expected ${pkg}`,
   );
 
 if (problems.length) {

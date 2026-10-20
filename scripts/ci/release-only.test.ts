@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -200,6 +200,43 @@ describe("release-only.ts", () => {
     r.write("src/index.ts", "export const onMain = 1;\n");
     const mainTip = r.commit("main moved");
     expect(r.check(head, mainTip).code).toBe(0);
+  });
+
+  it("version must be a semver string on both sides", () => {
+    for (const version of [5, null, "latest", "1.0", "", "v1.2.3", ["1.0.0"]]) {
+      const r = repo();
+      r.write("package.json", PKG({ version }, "0.5.0"));
+      const out = r.check(r.commit());
+      expect(out.code, JSON.stringify(version)).toBe(1);
+      expect(out.out).toContain("package.json");
+    }
+    // a non-semver base side fails too, even when the new side is fine
+    const r = repo();
+    r.write("package.json", PKG({ version: "latest" }));
+    const from = r.commit("odd base");
+    r.write("package.json", PKG({}, "0.5.0"));
+    expect(r.check(r.commit(), from).code).toBe(1);
+    // prerelease and build metadata are semver
+    const ok = repo();
+    ok.write("package.json", PKG({}, "1.0.0-rc.1+build.5"));
+    expect(ok.check(ok.commit()).code).toBe(0);
+  });
+
+  it("runs from outside the checkout (the CI copies it out of the base commit)", () => {
+    const r = repo();
+    r.write("package.json", PKG({}, "0.5.0"));
+    const head = r.commit();
+    const copy = join(
+      mkdtempSync(join(tmpdir(), "ro-copy-")),
+      "release-only.ts",
+    );
+    writeFileSync(copy, readFileSync(script));
+    const out = spawnSync(
+      "node",
+      ["--experimental-strip-types", "--no-warnings", copy, r.base, head],
+      { cwd: r.dir, encoding: "utf8" },
+    );
+    expect(out.stdout.trim()).toBe("release-only");
   });
 
   it("an unknown sha is a failure, never a pass", () => {

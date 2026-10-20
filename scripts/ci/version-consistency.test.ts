@@ -38,6 +38,19 @@ describe("version-consistency.ts", () => {
     expect(r.code).toBe(1);
     expect(r.err).toContain("expected 0.5.0");
   });
+  it("the first `## ` heading must name the version, even if a later one matches", () => {
+    const log = `# Changelog\n\n## Unreleased\n\n## [0.4.0](https://x) (2026-10-20)\n`;
+    const r = check("0.4.0", "0.4.0", log);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("first `## ` heading");
+  });
+  it("a `### ` heading above the first `## ` is not the release heading", () => {
+    const log = `# Changelog\n\n### Notes\n\n## [0.4.0] (2026-10-20)\n`;
+    expect(check("0.4.0", "0.4.0", log).code).toBe(0);
+  });
+  it("a CHANGELOG with no `## ` heading fails", () => {
+    expect(check("0.4.0", "0.4.0", "# Changelog\n").code).toBe(1);
+  });
   it("this repo is consistent", () => {
     const r = spawnSync(
       "node",

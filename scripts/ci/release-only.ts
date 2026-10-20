@@ -44,6 +44,10 @@ try {
 const show = (rev: string, path: string): string =>
   git(["show", `${rev}:${path}`]).toString("utf8");
 
+const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+const isSemver = (v: unknown): boolean =>
+  typeof v === "string" && SEMVER.test(v);
+
 /** package.json may change only its top-level "version". */
 function versionOnly(path: string): string | undefined {
   let a: Record<string, unknown>;
@@ -56,6 +60,8 @@ function versionOnly(path: string): string | undefined {
   }
   if (typeof a !== "object" || typeof b !== "object" || !a || !b)
     return "is not a JSON object";
+  if (!isSemver(a.version) || !isSemver(b.version))
+    return '"version" is not a semver string on both sides';
   delete a.version;
   delete b.version;
   return JSON.stringify(sortKeys(a)) === JSON.stringify(sortKeys(b))
