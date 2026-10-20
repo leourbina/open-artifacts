@@ -8,7 +8,7 @@ An HTML artifact can keep data with `window.openArtifacts`. Polls, trackers, and
 
 ## Ready and theme
 
-`openArtifacts.ready` is a promise that resolves once the viewer shell has connected; wait for it before your first call. In the raw view, with no shell, it resolves at once.
+`openArtifacts.ready` is a promise that resolves once the viewer shell has connected; wait for it before your first call. Outside the viewer, with no shell, it resolves at once.
 
 `openArtifacts.theme` is `"light"` or `"dark"`. It starts from the viewer's system setting and follows the shell's theme once it connects. `onTheme(callback)` calls back whenever it changes and returns a function that stops listening.
 
