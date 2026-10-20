@@ -83,6 +83,10 @@ export const ROUTE_POLICY: Readonly<Record<string, Policy>> = {
   "GET /auth/callback": { public: "sign-in callback" },
   "GET /auth/login/google": { public: "sign-in start (Google)" },
   "GET /auth/callback/google": { public: "sign-in callback (Google)" },
+  // Emailed codes: no session yet; the login guard (X-OA-Request, JSON,
+  // same-origin) and the pending code cookie carry the protection.
+  "POST /auth/code/request": { public: "code request; login guard, Turnstile" },
+  "POST /auth/code/verify": { public: "code verify; login guard" },
   "POST /auth/logout": { public: "sign-out (same-origin, CSRF)" },
   "GET /auth/dev-login": { public: "dev only; refused outside dev" },
   "GET /api/v1/me": { user: "the caller" },
