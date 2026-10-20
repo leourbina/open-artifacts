@@ -13,8 +13,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { realFs } from "../src/cf.ts";
 import { run } from "../src/index.ts";
-import { agentConfig } from "../src/steps/agent-config.ts";
 import { homeOf, hostSlug, patTokenFile } from "../src/secret-file.ts";
+import { agentConfig } from "../src/steps/agent-config.ts";
 import { ROOT } from "./fakes.ts";
 import { HOSTS, world } from "./world.ts";
 
