@@ -13,6 +13,9 @@ const migrations = await readD1Migrations(
  * (`pnpm test:cpu:strict`; see budget() in test/cpu-time.ts).
  */
 export default defineConfig({
+  // Test builds allow the /__test/* hooks (P2 T14; @oa/shared TEST_HOOKS_ALLOWED).
+  // Release builds never define it, so hooks can't be enabled by env alone.
+  define: { __OA_TEST_HOOKS_ALLOWED__: "true" },
   plugins: [
     cloudflareTest({
       wrangler: { configPath: "./wrangler.test.jsonc" },

@@ -22,6 +22,7 @@ import { SKILL_PATH, serveSkill } from "./mcp/skill.js";
 import { serveUpgrade, UPGRADE_PATH } from "./mcp/upgrade.js";
 import { type AppType, mountRoutes } from "./routes/index.js";
 import { publicHome, withInstanceMeta } from "./routes/shell.js";
+import { mountTestHooks, testHooksOn } from "./test-hooks/index.js";
 import { VERSION } from "./version.gen.js";
 
 export const ROBOTS = "User-agent: *\nDisallow: /";
@@ -34,7 +35,7 @@ export const methodNotAllowed = () =>
 // Paths owned by the Worker; never served by the SPA fallback.
 // (/a/*, /no-access and /search are SPA routes and fall through to ASSETS.)
 // /_oa/* (render bundles) is content-host only: a JSON 404 here.
-const WORKER_PREFIX = /^\/(api|auth|oauth|\.well-known|mcp|_oa)(\/|$)/;
+const WORKER_PREFIX = /^\/(api|auth|oauth|\.well-known|mcp|_oa|__test)(\/|$)/;
 
 // Decode, collapse slashes and resolve dot segments; null if malformed.
 function normalizedPath(url: string): string | null {
@@ -94,11 +95,16 @@ export function createApp(
       ok: true,
       plan: planOf(c.env.PLAN),
       version: VERSION,
+      // Only where hooks are on (the redline bundle); absent means off, so
+      // production's /healthz bytes are unchanged.
+      ...(testHooksOn(c.env) ? { testHooks: true } : {}),
       ...(installId ? { installId } : {}),
     });
   });
   app.get("/robots.txt", (c) => c.text(ROBOTS));
   // Public, outside SESSION_PATHS: no session read, no D1.
+  // /__test/* (P5 hooks): before any session read; 404 unless enabled.
+  mountTestHooks(app);
   app.get(SKILL_PATH, serveSkill);
   app.get(UPGRADE_PATH, serveUpgrade);
   // Public sign-in offering (#359 AuthProviders): config only, before the

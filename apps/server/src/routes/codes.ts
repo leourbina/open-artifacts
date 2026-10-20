@@ -27,6 +27,7 @@ import { ApiError, appOrigin, errorJson } from "../http/errors.js";
 import { type AppEnv, CSRF_HEADER, execCtx } from "../http/middleware.js";
 import { codeEligibility } from "../services/identity.js";
 import { getUserWithEpoch, insertUser } from "../services/users.js";
+import { forgetTestOtp } from "../test-hooks/index.js";
 import {
   b64urlDecode,
   b64urlEncode,
@@ -362,6 +363,7 @@ export function mountCodes(app: AppType): void {
       readOnly: guest,
     });
     res.headers.append("set-cookie", clearPending(c));
+    await forgetTestOtp(c.env, p.ek);
     res.headers.append("set-cookie", sessionCookie(sess, c.env, maxAgeS));
     res.headers.set("cache-control", "no-store");
     return res;

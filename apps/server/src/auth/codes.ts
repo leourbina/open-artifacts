@@ -13,6 +13,7 @@ import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
 import { codeEligibility } from "../services/identity.js";
 import { getSettings } from "../services/members.js";
+import { recordTestOtp } from "../test-hooks/index.js";
 import { b64urlDecode, hmacSign } from "../util/crypto.js";
 import { logAuth } from "./audit.js";
 import type { AuthConfig } from "./config.js";
@@ -350,6 +351,7 @@ export async function deliverCode(
       }),
     { kind: "code", now, caps: [] },
   );
+  if (sent) await recordTestOtp(env, ek, code);
   if (!sent) {
     await stmt(
       env.DB,
