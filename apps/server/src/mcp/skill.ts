@@ -5,12 +5,11 @@
 import { planOf } from "@oa/shared";
 import type { Context } from "hono";
 import type { Env } from "../env.js";
-import { appOrigin } from "../http/errors.js";
 import type { AppEnv } from "../http/middleware.js";
 import { VERSION } from "../version.gen.js";
 import { planText } from "./instructions.js";
 import { SKILL_HASH, SKILL_TEMPLATE } from "./skill.generated.js";
-import { hostSlug, skillName } from "./skill-common.js";
+import { hostSlug, skillName, skillOrigin } from "./skill-common.js";
 
 export const SKILL_PATH = "/skill.md";
 export const SKILL_DOC_URI = "openartifacts://docs/skill";
@@ -22,7 +21,7 @@ export const skillEnabled = (env: Pick<Env, "SKILL_MD">): boolean =>
   env.SKILL_MD?.trim().toLowerCase() !== "off";
 
 export const skillUrl = (env: SkillEnv): string | undefined =>
-  skillEnabled(env) ? appOrigin(env) + SKILL_PATH : undefined;
+  skillEnabled(env) ? skillOrigin(env.APP_HOST) + SKILL_PATH : undefined;
 
 const memo = new Map<string, Promise<string>>();
 
@@ -35,7 +34,7 @@ export function renderSkill(env: SkillEnv): Promise<string> {
     p = skillName(env.APP_HOST).then((name) => {
       const v: Record<string, string> = {
         ...planText(plan),
-        origin: appOrigin(env),
+        origin: skillOrigin(env.APP_HOST),
         host: env.APP_HOST,
         name,
         hostSlug: hostSlug(env.APP_HOST),

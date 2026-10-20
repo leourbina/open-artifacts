@@ -19,6 +19,7 @@ import {
   secretRules,
   secretSnippet,
   skillName,
+  skillOrigin,
 } from "../src/mcp/skill-common.js";
 import { renderSkillTemplate } from "../src/mcp/skill-template.js";
 import { TOOL_DEFS } from "../src/mcp/tool-defs.js";
@@ -243,6 +244,27 @@ describe("skill.md frontmatter (agentskills.io)", () => {
       if (c.hint) expect(setup).toContain(`Note: ${fill(c.hint)}.`);
     }
     expect(setup).not.toMatch(/oa_pat_/);
+  });
+
+  it("origin: https for a real host even on a dev Worker; http only for local hosts", async () => {
+    for (const h of [
+      "localhost",
+      "localhost:8787",
+      "app.localhost",
+      "app.localhost:8813",
+      "127.0.0.1:8787",
+      "[::1]:8787",
+    ])
+      expect(skillOrigin(h)).toBe(`http://${h}`);
+    for (const h of ["staging.open-artifacts.com", "localhost.example.com"])
+      expect(skillOrigin(h)).toBe(`https://${h}`);
+    const md = await renderSkill({
+      APP_HOST: "staging.open-artifacts.com",
+      ENVIRONMENT: "dev",
+      PLAN: "free",
+    });
+    expect(md).toContain("`https://staging.open-artifacts.com/mcp`");
+    expect(md).not.toContain("http://staging.open-artifacts.com");
   });
 
   it("skillName: slug rules, suffixes, cut with hash", async () => {
