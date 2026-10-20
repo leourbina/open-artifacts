@@ -36,7 +36,7 @@ Live data (html artifacts)
   - viewer: the signed-in viewer's email and name.
   - storage: private per-viewer key/value storage.
 - Undeclared calls fail with capability_denied. allowAnonymousWrites: true lets anonymous viewers of public artifacts write (rate-limited).
-- Limits: 1 MB per document, 50 MB per artifact, 100 writes per minute per viewer.
+- Limits: ${LIMITS.dataDocBytesFree / 1024} KB per document on Free-plan instances (${LIMITS.dataDocBytesPaid / 1024 / 1024} MB on Paid), 50 MB per artifact, 100 writes per minute per viewer.
 - The artifact_data_* tools read and write the same db collections; documents are JSON objects.
 
 window.openArtifacts (available inside published html)

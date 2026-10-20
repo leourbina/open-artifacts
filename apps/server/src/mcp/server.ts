@@ -19,6 +19,7 @@ import {
 } from "../http/errors.js";
 import { toRuntimeApiError } from "../runtime/do.js";
 import { cpuNudge } from "../services/usage.js";
+import { VERSION } from "../version.gen.js";
 import { INSTRUCTIONS, RUNTIME_DOC_URI } from "./instructions.js";
 import { registerArtifactTools } from "./tools/artifacts.js";
 import { registerDataTools } from "./tools/data.js";
@@ -89,7 +90,7 @@ export async function guard(
 
 export function createServer(ctx: McpContext): McpServer {
   const server = new McpServer(
-    { name: "open-artifacts", version: "1.0.0" },
+    { name: "open-artifacts", version: VERSION },
     { instructions: INSTRUCTIONS },
   );
   const agentNow = (): AgentRef | null => {

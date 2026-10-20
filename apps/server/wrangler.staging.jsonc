@@ -58,6 +58,8 @@
         }
       ],
       "triggers": { "crons": ["17 3 * * *"] },
+      // Workers Logs: keep every request (email_sent / email_failed lines).
+      "observability": { "enabled": true, "head_sampling_rate": 1 },
       // Secrets are NOT configured here. Deploys overwrite vars, so
       // ACCESS_CLIENT_ID lives here. It is a public OIDC client id (not a
       // secret), set by the ops-staging-access workflow on 2026-10-18.

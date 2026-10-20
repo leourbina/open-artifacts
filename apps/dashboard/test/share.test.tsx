@@ -367,3 +367,60 @@ describe("undo toast", () => {
     await screen.findByText("Too late");
   });
 });
+
+describe("one request per action (useSingleFlight)", () => {
+  const count = (method: string) => {
+    const hits: string[] = [];
+    server.events.on("request:start", ({ request }) => {
+      if (request.method === method) hits.push(request.url);
+    });
+    return hits;
+  };
+
+  it("two Save visibility clicks in one tick send one PATCH", async () => {
+    const bodies = patches();
+    mount(panel(OWNED));
+    const group = await screen.findByRole("radiogroup", { name: "Visibility" });
+    fireEvent.click(within(group).getByRole("radio", { name: "Team" }));
+    const save = screen.getByRole("button", { name: "Save visibility" });
+    act(() => {
+      fireEvent.click(save);
+      fireEvent.click(save);
+    });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Save visibility" }),
+      ).toBeNull(),
+    );
+    expect(bodies).toEqual([{ visibility: "team" }]);
+  });
+
+  it("two invite submits in one tick send one PUT", async () => {
+    const puts = count("PUT");
+    mount(panel(OWNED));
+    const email = await screen.findByRole("textbox", { name: "Email" });
+    fireEvent.change(email, { target: { value: "eve@example.com" } });
+    const form = email.closest("form") as HTMLFormElement;
+    act(() => {
+      fireEvent.submit(form);
+      fireEvent.submit(form);
+    });
+    await screen.findByText("Shared with eve@example.com");
+    expect(puts).toHaveLength(1);
+  });
+
+  it("two Remove clicks in one tick send one DELETE", async () => {
+    const dels = count("DELETE");
+    mount(panel(OWNED));
+    const remove = await screen.findByRole("button", {
+      name: /^Remove .+@/,
+    });
+    act(() => {
+      fireEvent.click(remove);
+      fireEvent.click(remove);
+    });
+    await waitFor(() => expect(dels).toHaveLength(1));
+    await waitFor(() => expect(remove).not.toBeInTheDocument());
+    expect(dels).toHaveLength(1);
+  });
+});
