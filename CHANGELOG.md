@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.16.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.15.0...v0.16.0) (2026-10-20)
+
+
+### Features
+
+* **runtime:** post oa:interacted once on first user interaction ([#341](https://github.com/open-artifacts-ai/open-artifacts/issues/341)) ([ab14aea](https://github.com/open-artifacts-ai/open-artifacts/commit/ab14aea8ca411b9f463e42b56ddb6f1cdc6b6b04))
+* **server:** artifact events socket (live version updates) ([#343](https://github.com/open-artifacts-ai/open-artifacts/issues/343)) ([4d26d34](https://github.com/open-artifacts-ai/open-artifacts/commit/4d26d3433a4a884a4e53062b8556af1c35a54d1b))
+
 ## [0.15.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.14.0...v0.15.0) (2026-10-20)
 
 
