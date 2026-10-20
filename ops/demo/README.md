@@ -14,11 +14,11 @@ Real-time demos for demo.open-artifacts.com, built only on `window.openArtifacts
 
 ## Identity
 
-Until the server provides an anonymous id (`anonId`), anonymous viewers get a random
-id per tab (the sandboxed frame has no persistent storage), so a reload counts as a
-new browser. Each artifact already prefers `viewer.get().anonId` or
-`openArtifacts.anonId`, and ignores writes stamped `updatedBy: "anon:<id>"` that do
-not belong to the doc's owner (the poll). Tic-tac-toe uses the id only for its seat labels.
+Signed-in viewers are keyed by a hash of their email. Anonymous viewers use the server's
+per-browser `anonId` (`viewer.anonId()`, or the `{ anonId }` that `viewer.get()` returns on
+servers before it), so a reload keeps the same id. Without one, they fall back to a random
+id per tab (the sandboxed frame has no persistent storage), and a reload counts as a new
+browser. Tic-tac-toe uses the id only for its seat labels.
 
 ## Seeds
 
