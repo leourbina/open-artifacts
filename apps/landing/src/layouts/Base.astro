@@ -4,6 +4,7 @@ import logo from "@oa/ui/brand/logo.svg";
 import logoDark from "@oa/ui/brand/logo-dark.svg";
 import tokensCss from "@oa/ui/tokens.css?raw";
 import "../styles/site.css";
+import rootPackage from "../../../../package.json";
 import Todo from "../components/Todo.astro";
 import { GATES, type GateId, UNRELEASED } from "../lib/release";
 
@@ -31,6 +32,7 @@ const ogImage = new URL("/og.png", Astro.site);
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="oa-version" content={rootPackage.version} />
     <title>{title}</title>
     {active.length > 0 && <meta name="oa-status" content={UNRELEASED} />}
     {active.map((id) => <Todo text={GATES[id].todo} />)}
