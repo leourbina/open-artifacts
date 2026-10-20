@@ -36,7 +36,7 @@ export function Versions({ artifact }: { artifact: ArtifactSummary }) {
 
   return (
     <div className="oa-versions">
-      <ol className="my-3 flex list-none flex-col gap-3 p-0">
+      <ol className="my-3 flex flex-col gap-3 p-0">
         {items.map((x, i) => (
           <li key={x.version} className="flex flex-col gap-2">
             {i > 0 && <Separator className="mb-1" />}

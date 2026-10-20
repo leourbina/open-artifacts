@@ -37,7 +37,7 @@ import { useOfferUndo } from "./useOfferUndo";
 const TITLE_MAX = 200;
 /** The page h1: Design's 20/600. */
 const H1 =
-  "m-0 min-w-0 truncate text-[length:var(--oa-text-xl)] leading-tight font-semibold";
+  "min-w-0 truncate text-[length:var(--oa-text-xl)] leading-tight font-semibold";
 const who = (u: UserRef) => u.name ?? u.email ?? "Unknown";
 
 function EditableTitle({ artifact }: { artifact: ArtifactSummary }) {
@@ -80,7 +80,7 @@ function EditableTitle({ artifact }: { artifact: ArtifactSummary }) {
         <button
           ref={button}
           type="button"
-          className="m-0 max-w-full cursor-text truncate border-0 bg-transparent p-0 [font:inherit] text-inherit underline-offset-[3px] hover:underline hover:decoration-dotted focus-visible:rounded-sm focus-visible:underline focus-visible:decoration-dotted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-solid focus-visible:outline-ring"
+          className="max-w-full cursor-text truncate border-0 bg-transparent p-0 [font:inherit] underline-offset-[3px] hover:underline hover:decoration-dotted focus-visible:rounded-sm focus-visible:underline focus-visible:decoration-dotted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-solid focus-visible:outline-ring"
           title="Rename"
           onClick={() => {
             done.current = false;
@@ -198,7 +198,7 @@ export function TitleBar({
   ];
 
   return (
-    <div className="oa-vt flex flex-wrap items-center gap-[10px] border-0 border-b border-solid border-border bg-card px-5 py-[10px] max-[600px]:px-4">
+    <div className="oa-vt flex flex-wrap items-center gap-[10px] border-0 border-b border-border bg-card px-5 py-[10px] max-[600px]:px-4">
       <div className="flex min-w-0 items-center gap-2 max-[600px]:flex-[1_1_100%]">
         {iconFormat && <FormatIcon format={iconFormat} />}
         {canEdit ? (
@@ -316,7 +316,7 @@ export function TitleBar({
           <ShButton
             asChild
             size="xs"
-            className={`${SM} text-primary-foreground no-underline hover:text-primary-foreground`}
+            className={`${SM} text-primary-foreground hover:text-primary-foreground`}
           >
             <a href={`${AUTH.login}?next=${encodeURIComponent(next)}`}>
               Sign in

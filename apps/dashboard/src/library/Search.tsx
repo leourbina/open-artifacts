@@ -44,7 +44,7 @@ export function SearchPage() {
       )}
       {r.isSuccess && items.length > 0 && (
         <p
-          className="m-0 text-[length:var(--oa-text-sm)] text-muted-foreground"
+          className="text-[length:var(--oa-text-sm)] text-muted-foreground"
           aria-live="polite"
         >
           {items.length}

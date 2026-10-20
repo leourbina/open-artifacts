@@ -204,7 +204,7 @@ const lastSeen = (iso: string | null) => {
 
 /** Who, role, last seen, action; at <= 600px, who and role, then the rest. */
 const ROW =
-  "grid min-h-[52px] grid-cols-[minmax(0,1fr)_112px_136px_72px] items-center gap-[10px] border-0 border-t border-solid border-border py-[var(--oa-space-2)] max-[600px]:grid-cols-[minmax(0,1fr)_112px]";
+  "grid min-h-[52px] grid-cols-[minmax(0,1fr)_112px_136px_72px] items-center gap-[10px] border-0 border-t border-border py-[var(--oa-space-2)] max-[600px]:grid-cols-[minmax(0,1fr)_112px]";
 
 function Row({ m, you }: { m: Member; you: boolean }) {
   const patch = usePatchMember();
@@ -303,7 +303,7 @@ export function Members() {
           Couldn't load members.
         </p>
       ) : (
-        <ul className="m-0 grid list-none p-0">
+        <ul className="grid p-0">
           {q.data?.map((m) => (
             <Row key={m.id} m={m} you={m.id === me?.id} />
           ))}

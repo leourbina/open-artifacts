@@ -9,7 +9,7 @@ import { MEASURE } from "./ui";
     shadow and the underline sits on it, so the scrolling strip clips
     neither; the focus ring is inset for the same reason. */
 const TAB =
-  "relative inline-flex h-[34px] flex-none items-center rounded-sm px-[var(--oa-space-3)] text-[length:var(--oa-text-sm)] font-medium whitespace-nowrap text-muted-foreground no-underline transition-colors after:absolute after:inset-x-0 after:bottom-0 after:h-[2px] after:bg-foreground after:opacity-0 hover:text-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-[-2px] focus-visible:outline-ring aria-[current=page]:text-foreground aria-[current=page]:after:opacity-100";
+  "relative inline-flex h-[34px] flex-none items-center rounded-sm px-[var(--oa-space-3)] text-[length:var(--oa-text-sm)] font-medium whitespace-nowrap text-muted-foreground transition-colors after:absolute after:inset-x-0 after:bottom-0 after:h-[2px] after:bg-foreground after:opacity-0 hover:text-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-[-2px] focus-visible:outline-ring aria-[current=page]:text-foreground aria-[current=page]:after:opacity-100";
 
 const TABS: { to: string; label: string; roles: Role[] }[] = [
   {
@@ -36,7 +36,7 @@ export function SettingsLayout() {
   return (
     // The 880px measure, centered in the shell gutter.
     <div className={MEASURE}>
-      <h1 className="m-0 text-[length:var(--oa-text-xl)] font-semibold">
+      <h1 className="text-[length:var(--oa-text-xl)] font-semibold">
         Settings
       </h1>
       <nav

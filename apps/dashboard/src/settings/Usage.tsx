@@ -64,7 +64,7 @@ const GRID = "grid grid-cols-2 gap-[var(--oa-space-4)] max-[600px]:grid-cols-1";
 const BIG =
   "text-[length:var(--oa-text-2xl)] font-semibold leading-[1.2] tracking-[-0.02em] tabular-nums";
 const LINK =
-  "inline-flex items-center gap-[var(--oa-space-1)] whitespace-nowrap rounded-sm font-medium text-foreground underline-offset-2 focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring";
+  "inline-flex items-center gap-[var(--oa-space-1)] whitespace-nowrap rounded-sm font-medium text-foreground underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring";
 
 /** A bar of `pct` (clamped) in `tone`; a styled div since <meter> can't be toned. */
 function Track({
@@ -141,7 +141,7 @@ function CpuCard({ metrics }: { metrics: Metric[] }) {
           <CardTitle>
             <h2
               id="oa-cpu-h"
-              className="m-0 text-[length:var(--oa-text-md)] font-semibold"
+              className="text-[length:var(--oa-text-md)] font-semibold"
             >
               CPU
             </h2>
@@ -161,7 +161,7 @@ function CpuCard({ metrics }: { metrics: Metric[] }) {
 
 const ROW = `flex min-w-0 flex-col ${GAP}`;
 const ROW_H =
-  "m-0 text-[length:var(--oa-text-xs)] font-medium text-[var(--oa-text-2)]";
+  "text-[length:var(--oa-text-xs)] font-medium text-[var(--oa-text-2)]";
 const SMALL =
   "text-[length:var(--oa-text-sm)] font-normal tracking-normal text-muted-foreground";
 
@@ -245,7 +245,7 @@ function PlanLine({ plan }: { plan: "free" | "paid" | undefined }) {
       </p>
     );
   return (
-    <p className="m-0 text-[length:var(--oa-text-sm)] text-[var(--oa-text-2)]">
+    <p className="text-[length:var(--oa-text-sm)] text-[var(--oa-text-2)]">
       Workers Free is sized for one person. Workers Paid ($5 a month) is sized
       for a team: it sends invite emails and gives each request up to 30 seconds
       of CPU.{" "}
@@ -333,31 +333,28 @@ function Meter({ metric }: { metric: Metric }) {
 }
 
 function Setup() {
-  const p = "m-0";
   return (
     <SettingsCard
       id="oa-setup-h"
       title="Connect Cloudflare analytics to see usage"
     >
-      <p className={p}>
+      <p>
         Open Artifacts reads today's numbers from Cloudflare's GraphQL Analytics
         API. It needs a read-only token with the Account Analytics permission,
         stored as the <code>ANALYTICS_TOKEN</code> Worker secret. Everything
         else works without it.
       </p>
-      <p className={p}>
+      <p>
         Run setup and paste the token when prompted (it asks for{" "}
         <code>ANALYTICS_TOKEN</code>):
       </p>
       <Code code="pnpm oa:setup" label="Copy setup command" />
-      <p className={p}>Or store it directly:</p>
+      <p>Or store it directly:</p>
       <Code
         code="wrangler secret put ANALYTICS_TOKEN"
         label="Copy wrangler command"
       />
-      <p className={p}>
-        Then reload this page. The token is never shown in the dashboard.
-      </p>
+      <p>Then reload this page. The token is never shown in the dashboard.</p>
     </SettingsCard>
   );
 }
@@ -398,7 +395,7 @@ export function Usage() {
     // The 880px measure of the other settings pages.
     <div className={`${MEASURE} ${STACK}`}>
       <div className="flex items-center gap-[var(--oa-space-3)]">
-        <h1 className="m-0 flex-none text-[length:var(--oa-text-xl)] font-semibold">
+        <h1 className="flex-none text-[length:var(--oa-text-xl)] font-semibold">
           Usage
         </h1>
         <Button

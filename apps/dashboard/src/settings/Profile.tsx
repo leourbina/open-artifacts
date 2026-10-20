@@ -91,14 +91,14 @@ function ProfileForm({ me }: { me: Me }) {
                 <p
                   id="oa-profile-name-err"
                   role="alert"
-                  className="m-0 text-sm text-destructive"
+                  className="text-sm text-destructive"
                 >
                   {problem}
                 </p>
               )}
               <p
                 id="oa-profile-name-help"
-                className="m-0 text-xs text-muted-foreground"
+                className="text-xs text-muted-foreground"
               >
                 Shown on invites and shared artifacts.
               </p>

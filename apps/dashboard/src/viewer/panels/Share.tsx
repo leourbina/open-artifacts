@@ -70,8 +70,8 @@ export const parseEmail = (raw: string) => {
 
 const TEXT = "text-[length:var(--oa-text-sm)]";
 const CONTROL = `h-[30px] ${TEXT}`;
-const H3 = "m-0 mb-[6px] text-[length:var(--oa-text-sm)] font-semibold";
-const MUTED = "m-0 text-muted-foreground";
+const H3 = "mb-[6px] text-[length:var(--oa-text-sm)] font-semibold";
+const MUTED = "text-muted-foreground";
 const PERSON = "flex items-center gap-[var(--oa-space-2)]";
 const NAME = "min-w-0 flex-1 truncate";
 
@@ -316,7 +316,7 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
 
       <section>
         {shared && (
-          <div className="mb-[var(--oa-space-4)] [&_p]:mt-0 [&_p]:mb-[var(--oa-space-2)]">
+          <div className="mb-[var(--oa-space-4)] [&_p]:mb-[var(--oa-space-2)]">
             <Banner
               tone="success"
               title={`Shared with ${shared.email}`}
@@ -345,7 +345,7 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
           </div>
         )}
         <h3 className={H3}>People</h3>
-        <ul className="m-0 flex list-none flex-col gap-[var(--oa-space-2)] p-0">
+        <ul className="flex flex-col gap-[var(--oa-space-2)] p-0">
           <li className={PERSON}>
             <Avatar name={artifact.owner.name} email={artifact.owner.email} />
             <span className={NAME} title={displayName(artifact.owner)}>

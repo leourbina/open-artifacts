@@ -70,7 +70,7 @@ export function SidePanel({
       ref={ref}
       tabIndex={-1}
       // Below 960px the panel covers the frame.
-      className="relative box-border flex w-[353px] flex-none flex-col overflow-hidden border-0 border-l border-solid border-l-[var(--oa-border)] bg-card outline-none max-[959.98px]:absolute max-[959.98px]:inset-0 max-[959.98px]:z-10 max-[959.98px]:w-auto max-[959.98px]:border-l-0"
+      className="relative flex w-[353px] flex-none flex-col overflow-hidden border-0 border-l border-l-[var(--oa-border)] bg-card outline-none max-[959.98px]:absolute max-[959.98px]:inset-0 max-[959.98px]:z-10 max-[959.98px]:w-auto max-[959.98px]:border-l-0"
       aria-label="Side panel"
       onKeyDown={(e) => {
         if (e.key === "Escape" && !e.defaultPrevented) onClose();
@@ -97,7 +97,7 @@ export function SidePanel({
           <Tabs value={tab} onValueChange={(t) => isPanelTab(t) && onTab(t)}>
             <TabsList
               variant="line"
-              className="h-auto w-full justify-start gap-1 border-0 border-b border-solid border-border p-0 pr-9"
+              className="h-auto w-full justify-start gap-1 border-0 border-b border-border p-0 pr-9"
             >
               {PANEL_TABS.map((t) => (
                 <TabsTrigger
