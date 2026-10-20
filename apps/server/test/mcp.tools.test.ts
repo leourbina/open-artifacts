@@ -353,7 +353,25 @@ describe("MCP artifact data tools", () => {
     id = (await publishMd(client, "# data")).id;
   });
 
-  it("artifact_data_set → artifact_data_get round trip (owner needs no capability)", async () => {
+  it("owner of an artifact without db → capability_denied (no owner bypass)", async () => {
+    const get = { id, collection: "votes", docId: "a" };
+    expect(
+      textOf(await tool(client, "artifact_data_set", { ...get, data: {} })),
+    ).toMatch(/^capability_denied/);
+    expect(textOf(await tool(client, "artifact_data_get", get))).toMatch(
+      /^capability_denied/,
+    );
+    sc(
+      await tool(client, "publish_artifact", {
+        id,
+        content: "# data",
+        format: "markdown",
+        capabilities: { db: true },
+      }),
+    );
+  });
+
+  it("artifact_data_set → artifact_data_get round trip", async () => {
     const set = sc<{ id: string; data: unknown; updatedBy: string }>(
       await tool(client, "artifact_data_set", {
         id,
@@ -429,7 +447,15 @@ describe("MCP artifact data tools", () => {
     const ec = await connect((await createPat(env, editor.userId, "e")).token);
     const get = { id, collection: "votes", docId: "a" };
     const set = { ...get, data: { x: 1 } };
-    // No db capability declared yet.
+    sc(
+      await tool(client, "publish_artifact", {
+        id,
+        content: "# data no db",
+        format: "markdown",
+        capabilities: { db: false },
+      }),
+    );
+    // No db capability declared.
     expect(textOf(await tool(vc, "artifact_data_get", get))).toMatch(
       /^capability_denied/,
     );

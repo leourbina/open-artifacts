@@ -1,4 +1,10 @@
-import type { AccessLevel, ListQuery, Member, Visibility } from "@oa/shared";
+import type {
+  AccessLevel,
+  CapReason,
+  ListQuery,
+  Member,
+  Visibility,
+} from "@oa/shared";
 import {
   and,
   eq,
@@ -28,7 +34,14 @@ import {
 /** Roles that see `team` artifacts (defined in policy.ts). */
 export { TEAM_ROLES };
 
-export type Caller = { kind: "user"; user: Member } | { kind: "anonymous" };
+export type Caller =
+  | {
+      kind: "user";
+      user: Member;
+      /** Guest or restricted cap (P2 authConfig, P3 restriction); absent = none. */
+      cap?: CapReason | null;
+    }
+  | { kind: "anonymous" };
 export type ArtifactRow = typeof artifacts.$inferSelect;
 
 // "manager" (hosted M1 contract) is never produced yet; P3 sets its semantics.
@@ -88,7 +101,7 @@ export async function accessLevel(
   const a = row.a;
   const level = decide({
     caller: user ? { id: user.id, orgRole: user.role } : null,
-    cap: null,
+    cap: c.kind === "user" ? (c.cap ?? null) : null,
     artifact: {
       spaceId: a.ownerId,
       spaceKind: "personal",
@@ -109,7 +122,7 @@ export async function accessLevel(
 /** The context `can` needs for one caller and artifact. */
 export function canCtx(c: Caller, a: ArtifactRow): CanCtx {
   return {
-    cap: null,
+    cap: c.kind === "user" ? (c.cap ?? null) : null,
     personal: true,
     anonymous: c.kind !== "user",
     allowAnonymousWrites: a.allowAnonymousWrites === 1,

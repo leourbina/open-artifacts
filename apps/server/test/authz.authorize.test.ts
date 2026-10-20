@@ -124,3 +124,41 @@ describe("sharing changes go through can, not ownerId", () => {
     expect(r.status).toBe(200);
   });
 });
+
+describe("MCP data store: can(level, data.*) and the db capability", () => {
+  it("a capped caller's write is refused; reads still work", async () => {
+    const { store } = await import("../src/mcp/tools/data.js");
+    const ownerId = (owner.caller as { user: Member }).user.id;
+    const dbId = newId();
+    const now = Date.now();
+    await getDb(env).insert(artifacts).values({
+      id: dbId,
+      ownerId,
+      title: "db",
+      format: "html",
+      visibility: "private",
+      capabilities: '{"db":true,"viewer":false,"storage":false}',
+      createdAt: now,
+      updatedAt: now,
+    });
+    const capped = {
+      ...(owner.caller as Caller & { kind: "user" }),
+      cap: "restricted" as const,
+    };
+    await notFound(store({ env, caller: capped }, dbId, "data.write"));
+    await expect(
+      store({ env, caller: capped }, dbId, "data.read"),
+    ).resolves.toBeDefined();
+    await expect(
+      store({ env, caller: owner.caller }, dbId, "data.write"),
+    ).resolves.toBeDefined();
+  });
+  it("the owner of a non-db artifact gets capability_denied", async () => {
+    const { store } = await import("../src/mcp/tools/data.js");
+    await expect(
+      store({ env, caller: owner.caller }, ids.nodb as string, "data.write"),
+    ).rejects.toSatisfy(
+      (e) => e instanceof ApiError && e.code === "capability_denied",
+    );
+  });
+});
