@@ -124,6 +124,21 @@ describe("skill.md drift", () => {
     expect(md.match(/\b17\b/g) ?? []).toHaveLength(1);
   });
 
+  it("has the public interactive artifacts section, after the sharing and live-data sections", async () => {
+    const md = await skill();
+    const at = md.indexOf("\n## Public interactive artifacts\n");
+    expect(at).toBeGreaterThan(md.indexOf("\n## Sharing and visibility\n"));
+    expect(at).toBeGreaterThan(md.indexOf("\n## Live data (html artifacts)\n"));
+    const section = md.slice(at).split("\n## ")[1] ?? "";
+    for (const phrase of [
+      "`allowAnonymousWrites: true`",
+      "`viewer.anonId()`",
+      "`no_shell`",
+      "no presence API",
+    ])
+      expect(section).toContain(phrase);
+  });
+
   it("every tool example passes its input schema", () => {
     for (const t of TOOL_DEFS) {
       const r = t.inputSchema.safeParse(t.example);
