@@ -6,19 +6,18 @@ import {
   type Visibility,
   viewerPath,
 } from "@oa/shared";
+import { Avatar, Banner, Checkbox, displayName, VisibilityBadge } from "@oa/ui";
 import {
-  Avatar,
-  Banner,
   Button,
-  Checkbox,
-  Dialog,
-  displayName,
   Input,
-  SegmentedControl,
   Select,
-  toast,
-  VisibilityBadge,
-} from "@oa/ui";
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  ToggleGroup,
+  ToggleGroupItem,
+} from "@oa/ui/shadcn";
 import { useState } from "react";
 import { ApiClientError } from "../../api/client";
 import {
@@ -27,9 +26,12 @@ import {
   usePutShare,
   useShares,
 } from "../../api/queries";
+import { useSingleFlight } from "../../api/useSingleFlight";
 import { emailEnabled } from "../../auth/emailEnabled";
 import { useMe } from "../../auth/useMe";
 import { CopyLink } from "../../layout/CopyLink";
+import { Modal } from "../../layout/Modal";
+import { toast } from "../../layout/toast";
 
 const VIS: { value: Visibility; label: string }[] = [
   { value: "private", label: "Private" },
@@ -66,6 +68,42 @@ export const parseEmail = (raw: string) => {
   return r.success ? r.data : null;
 };
 
+const TEXT = "text-[length:var(--oa-text-sm)]";
+const CONTROL = `h-[30px] ${TEXT}`;
+const H3 = "m-0 mb-[6px] text-[length:var(--oa-text-sm)] font-semibold";
+const MUTED = "m-0 text-muted-foreground";
+const PERSON = "flex items-center gap-[var(--oa-space-2)]";
+const NAME = "min-w-0 flex-1 truncate";
+
+function RoleSelect({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: ShareRole;
+  onChange: (r: ShareRole) => void;
+}) {
+  return (
+    <Select value={value} onValueChange={(v) => onChange(v as ShareRole)}>
+      <SelectTrigger
+        aria-label={label}
+        size="sm"
+        className={`w-[96px] flex-none ${TEXT}`}
+      >
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent position="popper">
+        {ROLES.map((r) => (
+          <SelectItem key={r.value} value={r.value} className={TEXT}>
+            {r.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
 export function Share({ artifact }: { artifact: ArtifactSummary }) {
   const { id } = artifact;
   const owner = artifact.access === "owner";
@@ -97,18 +135,25 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
 
   const save = (p: ArtifactPatch) =>
     patch.mutate(p, { onError: (e) => fail(e, "Couldn't save") });
+  // One request per action: a double click or Enter can't send two.
+  const visOnce = useSingleFlight();
+  const inviteOnce = useSingleFlight();
+  const removeOnce = useSingleFlight();
   const commitVisibility = (v: Visibility) =>
-    patch.mutate(
-      {
-        visibility: v,
-        ...(artifact.allowAnonymousWrites && { allowAnonymousWrites: false }),
-      },
-      {
-        onError: (e) => {
-          setPending(null);
-          fail(e, "Couldn't save");
+    visOnce((done) =>
+      patch.mutate(
+        {
+          visibility: v,
+          ...(artifact.allowAnonymousWrites && { allowAnonymousWrites: false }),
         },
-      },
+        {
+          onSettled: done,
+          onError: (e) => {
+            setPending(null);
+            fail(e, "Couldn't save");
+          },
+        },
+      ),
     );
   const setCap = (k: (typeof CAPS)[number][0], on: boolean) =>
     save({
@@ -121,22 +166,30 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
     const e = parseEmail(email);
     setInvalid(!e);
     if (!e) return;
-    put.mutate(
-      { email: e, role },
-      {
-        onSuccess: (r) => {
-          setEmail("");
-          setShared({ email: e, emailed: r.emailed });
+    inviteOnce((done) =>
+      put.mutate(
+        { email: e, role },
+        {
+          onSettled: done,
+          onSuccess: (r) => {
+            setEmail("");
+            setShared({ email: e, emailed: r.emailed });
+          },
+          onError: (x) => fail(x, "Couldn't share"),
         },
-        onError: (x) => fail(x, "Couldn't share"),
-      },
+      ),
     );
   };
   // location.origin is the app host, which is where viewerPath lives.
   const link = location.origin + viewerPath(id);
   const copy = () => {
     const failed = () =>
-      toast({ title: "Couldn't copy", description: link, tone: "danger" });
+      toast({
+        title: "Couldn't copy",
+        // One click selects the whole link, to copy by hand.
+        description: <span className="select-all">{link}</span>,
+        tone: "danger",
+      });
     if (!navigator.clipboard) return failed();
     navigator.clipboard
       .writeText(link)
@@ -144,25 +197,51 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
   };
 
   return (
-    <div className="oa-share">
+    <div className="oa-share flex flex-col gap-[var(--oa-space-4)]">
+      {/* #189/#193: toggle, helper text 8px below, then the action row 16px
+          after it. The accent marks the chosen visibility. */}
       <section>
-        <h3 id="oa-share-vis">Visibility</h3>
+        <h3 id="oa-share-vis" className={H3}>
+          Visibility
+        </h3>
         {owner ? (
-          <SegmentedControl
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            size="sm"
             aria-label="Visibility"
-            options={VIS}
             value={staged}
-            onChange={(v) => !patch.isPending && setPending(v)}
-          />
+            onValueChange={(v) =>
+              v && !patch.isPending && setPending(v as Visibility)
+            }
+          >
+            {VIS.map((o) => (
+              <ToggleGroupItem
+                key={o.value}
+                value={o.value}
+                className={`px-[var(--oa-space-3)] ${CONTROL}`}
+                // Radio semantics: arrowing to an option chooses it, as the
+                // radiogroup role promises (Radix only moves focus).
+                // TODO: drop once Design's ToggleGroup primitive selects on arrow.
+                onFocus={() => !patch.isPending && setPending(o.value)}
+              >
+                {o.label}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
         ) : (
           <VisibilityBadge visibility={artifact.visibility} />
         )}
-        <p className="oa-muted oa-vis-note">{NOTE[staged]}</p>
+        <p className={`oa-vis-note mt-[var(--oa-space-2)] ${MUTED}`}>
+          {NOTE[staged]}
+        </p>
         {owner && changed && (
-          <div className="oa-vis-actions">
+          <div className="mt-[var(--oa-space-4)] flex items-center gap-[var(--oa-space-2)]">
             <Button
-              variant="primary"
-              loading={patch.isPending}
+              size="sm"
+              className={CONTROL}
+              disabled={patch.isPending}
+              aria-busy={patch.isPending || undefined}
               onClick={() =>
                 staged === "public"
                   ? setConfirmPublic(true)
@@ -173,6 +252,8 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
             </Button>
             <Button
               variant="ghost"
+              size="sm"
+              className={CONTROL}
               disabled={patch.isPending}
               onClick={() => setPending(null)}
             >
@@ -184,9 +265,9 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
 
       {owner && (
         <section>
-          <h3>Add people</h3>
+          <h3 className={H3}>Add people</h3>
           <form
-            className="oa-invite"
+            className="flex flex-wrap items-center gap-[var(--oa-space-2)]"
             noValidate
             onSubmit={(e) => {
               e.preventDefault();
@@ -199,23 +280,33 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
               placeholder="name@example.com"
               value={email}
               aria-invalid={invalid}
+              className={`basis-full ${CONTROL} md:${TEXT}`}
               onChange={(e) => {
                 setEmail(e.target.value);
                 setInvalid(false);
               }}
             />
-            <Select
-              aria-label="Invite role"
-              options={ROLES}
-              value={role}
-              onChange={setRole}
-            />
-            <Button type="submit" loading={put.isPending}>
+            <RoleSelect label="Invite role" value={role} onChange={setRole} />
+            <Button
+              type="submit"
+              variant="outline"
+              size="sm"
+              className={CONTROL}
+              disabled={put.isPending}
+              aria-busy={put.isPending || undefined}
+            >
               Add
             </Button>
           </form>
-          {invalid && <p role="alert">Enter a valid email address.</p>}
-          <p className="oa-muted">
+          {invalid && (
+            <p
+              role="alert"
+              className="mt-[var(--oa-space-2)] mb-0 text-destructive"
+            >
+              Enter a valid email address.
+            </p>
+          )}
+          <p className={`mt-[var(--oa-space-3)] ${MUTED}`}>
             {sends
               ? "We'll email them a link. You can also copy it and send it yourself."
               : "No email is sent. Copy the link and share it yourself."}
@@ -225,13 +316,14 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
 
       <section>
         {shared && (
-          <div className="oa-shared">
+          <div className="mb-[var(--oa-space-4)] [&_p]:mt-0 [&_p]:mb-[var(--oa-space-2)]">
             <Banner
               tone="success"
               title={`Shared with ${shared.email}`}
               action={
                 <Button
                   variant="ghost"
+                  size="sm"
                   aria-label="Dismiss"
                   onClick={() => setShared(null)}
                 >
@@ -252,24 +344,25 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
             </Banner>
           </div>
         )}
-        <h3>People</h3>
-        <ul className="oa-people">
-          <li>
+        <h3 className={H3}>People</h3>
+        <ul className="m-0 flex list-none flex-col gap-[var(--oa-space-2)] p-0">
+          <li className={PERSON}>
             <Avatar name={artifact.owner.name} email={artifact.owner.email} />
-            <span title={displayName(artifact.owner)}>
+            <span className={NAME} title={displayName(artifact.owner)}>
               {displayName(artifact.owner)}
             </span>
-            <span className="oa-muted">Owner</span>
+            <span className="text-muted-foreground">Owner</span>
           </li>
           {(shares.data ?? []).map((s) => (
-            <li key={s.email}>
+            <li key={s.email} className={PERSON}>
               <Avatar name={null} email={s.email} />
-              <span title={s.email}>{s.email}</span>
+              <span className={NAME} title={s.email}>
+                {s.email}
+              </span>
               {owner ? (
                 <>
-                  <Select
-                    aria-label={`Role for ${s.email}`}
-                    options={ROLES}
+                  <RoleSelect
+                    label={`Role for ${s.email}`}
                     value={s.role}
                     onChange={(r) =>
                       put.mutate(
@@ -281,18 +374,22 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
                   <Button
                     size="sm"
                     variant="ghost"
+                    className="size-[30px] flex-none p-0"
                     aria-label={`Remove ${s.email}`}
                     onClick={() =>
-                      del.mutate(s.email, {
-                        onError: (x) => fail(x, "Couldn't remove"),
-                      })
+                      removeOnce((done) =>
+                        del.mutate(s.email, {
+                          onSettled: done,
+                          onError: (x) => fail(x, "Couldn't remove"),
+                        }),
+                      )
                     }
                   >
                     ×
                   </Button>
                 </>
               ) : (
-                <span className="oa-muted">{s.role}</span>
+                <span className="text-muted-foreground">{s.role}</span>
               )}
             </li>
           ))}
@@ -300,7 +397,7 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
       </section>
 
       <section>
-        <h3>Live data</h3>
+        <h3 className={H3}>Live data</h3>
         {CAPS.map(([k, label, hint]) => (
           <div className="oa-cap" key={k}>
             <Checkbox
@@ -330,11 +427,18 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
         </div>
       </section>
 
-      <Button onClick={copy}>Copy link</Button>
+      <Button
+        variant="outline"
+        size="sm"
+        className={`w-full ${CONTROL}`}
+        onClick={copy}
+      >
+        Copy link
+      </Button>
 
-      <Dialog
+      <Modal
         open={confirmPublic}
-        onOpenChange={setConfirmPublic}
+        onClose={() => setConfirmPublic(false)}
         title="Make this public?"
         description="Anyone with the link can view. It won't appear in search engines."
         footer={
@@ -349,7 +453,6 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
               Cancel
             </Button>
             <Button
-              variant="primary"
               onClick={() => {
                 setConfirmPublic(false);
                 commitVisibility("public");

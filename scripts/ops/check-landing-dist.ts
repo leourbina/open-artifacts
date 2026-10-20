@@ -1,5 +1,6 @@
 // Release gate: fail if the built landing site still contains TODO fallbacks
-// or unrendered {{ placeholders }}. Usage: node check-landing-dist.ts [distDir]
+// or unrendered {{ placeholders }}, or if a page doesn't declare UTF-8 first
+// in <head> (the hero's glyphs turn to mojibake otherwise). Usage: node check-landing-dist.ts [distDir]
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -16,6 +17,7 @@ const TEXT_EXT = new Set([
   ".css",
 ]);
 const TOKENS = ["TODO", "{{", "OA-UNRELEASED"];
+const CHARSET = /<head[^>]*>\s*<meta charset="utf-8"\s*\/?>/i;
 const MAX_LINES = 20;
 
 function* walk(dir: string): Generator<string> {
@@ -34,13 +36,13 @@ export function scan(
     if (!TEXT_EXT.has(extname(file).toLowerCase())) continue;
     const buf = readFileSync(file);
     if (buf.includes(0)) continue; // binary
-    buf
-      .toString("utf8")
-      .split("\n")
-      .forEach((text, i) => {
-        for (const token of TOKENS)
-          if (text.includes(token)) hits.push({ file, line: i + 1, token });
-      });
+    const body = buf.toString("utf8");
+    if (extname(file).toLowerCase() === ".html" && !CHARSET.test(body))
+      hits.push({ file, line: 1, token: "missing charset" });
+    body.split("\n").forEach((text, i) => {
+      for (const token of TOKENS)
+        if (text.includes(token)) hits.push({ file, line: i + 1, token });
+    });
   }
   return hits;
 }
@@ -64,7 +66,7 @@ function main(): number {
     console.log(`... and ${hits.length - MAX_LINES} more`);
   const files = new Set(hits.map((h) => h.file)).size;
   console.log(
-    `::error::Landing deploy skipped: ${hits.length} ${TOKENS.join(" / ")} hit(s) in ${files} file(s). The release is already created; fix the landing, then re-run this workflow via workflow_dispatch with the tag.`,
+    `::error::Landing deploy skipped: ${hits.length} ${TOKENS.join(" / ")} / missing charset hit(s) in ${files} file(s). The release is already created; fix the landing, then re-run this workflow via workflow_dispatch with the tag.`,
   );
   return 1;
 }
