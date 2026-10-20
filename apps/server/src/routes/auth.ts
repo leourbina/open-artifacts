@@ -1,4 +1,5 @@
 import { AUTH, MemberSchema, PAGES, RoleSchema } from "@oa/shared";
+import { authConfig } from "../auth/config.js";
 import {
   buildAuthorizeRedirect,
   clearOidcCookie,
@@ -8,6 +9,7 @@ import {
   pickStateCookie,
   safeNext,
 } from "../auth/oidc.js";
+import { accessProvider } from "../auth/providers/access.js";
 import {
   clearSessionCookie,
   sessionCookie,
@@ -63,6 +65,7 @@ export function mountAuth(app: AppType): void {
   app.get(AUTH.login, async (c) => {
     const { location, stateCookie, evict } = await buildAuthorizeRedirect(
       c.env,
+      accessProvider,
       c.req.query("next") ?? "/",
       {
         retry: c.req.query("retry") === "1",
@@ -73,6 +76,9 @@ export function mountAuth(app: AppType): void {
   });
 
   app.get(AUTH.callback, async (c) => {
+    // The Access callback exists only while Access sign-in is enabled.
+    if (!authConfig(c.env).providers.has("access"))
+      throw new ApiError("not_found", "Not found");
     // This attempt's state cookie is single-use: cleared on success and on
     // every failure. Other attempts' cookies (other tabs) are left alone.
     const picked = await pickStateCookie(
@@ -82,7 +88,11 @@ export function mountAuth(app: AppType): void {
     );
     const clear = picked ? [clearOidcCookie(c.env, picked.name)] : [];
     try {
-      const { email, name, next } = await handleCallback(c.env, c.req.raw);
+      const { email, name, next } = await handleCallback(
+        c.env,
+        accessProvider,
+        c.req.raw,
+      );
       const user = await upsertOnLogin(c.env, email, name);
       if (!user) {
         logOidcFail("no_access");
@@ -121,7 +131,10 @@ export function mountAuth(app: AppType): void {
       throw new ApiError("bad_request", "Invalid email");
     if (!role.success) throw new ApiError("bad_request", "Invalid role");
     const user = await upsertWithRole(c.env, email.data, role.data);
-    const sess = sessionCookie(await signSession(c.env, user.id), c.env);
+    const sess = sessionCookie(
+      await signSession(c.env, user.id, Date.now(), { provider: "dev" }),
+      c.env,
+    );
     return redirect(safeNext(c.env, c.req.query("next")), [sess]);
   });
 }

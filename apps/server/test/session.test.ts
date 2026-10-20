@@ -19,6 +19,9 @@ describe("session", () => {
     expect(await readSession(env, v, now + 1000)).toEqual({
       uid: UID,
       exp: now + WEEK,
+      iat: now,
+      p: "access",
+      e: 0,
     });
   });
   it("rejects expired", async () => {

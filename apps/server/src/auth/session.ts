@@ -1,4 +1,4 @@
-import { isId } from "@oa/shared";
+import { isId, type SessionPayload } from "@oa/shared";
 import type { Env } from "../env.js";
 import {
   b64urlDecode,
@@ -7,23 +7,63 @@ import {
   hmacVerify,
 } from "../util/crypto.js";
 import { utf8Decoder, utf8Encoder } from "../util/text.js";
+import { deriveKey } from "./keys.js";
+import { LEGACY_KEY_UNTIL } from "./oidc.js";
 
-export type Session = { uid: string; exp: number };
+/**
+ * The __Host-oa_session payload (#359 SessionPayload): uid, exp, iat (ms),
+ * p (how they signed in), t (verified tenant: Google hd, or the email domain
+ * of a domain-code session), e (users.session_epoch at issue). Signed with
+ * deriveKey("oa:session"). Cookies from before P2 ({ uid, exp }, raw
+ * SESSION_SECRET) read as p "access", e 0 until LEGACY_KEY_UNTIL.
+ */
+export type Session = SessionPayload;
+export type SessionProvider = Session["p"];
 
-const MAX_AGE_S = 7 * 86400;
+export const MAX_AGE_S = 7 * 86400;
 const MAX_COOKIE_LEN = 1024;
+const PROVIDERS: readonly SessionProvider[] = [
+  "access",
+  "google",
+  "code",
+  "dev",
+  "test",
+];
 
 export async function signSession(
   env: Env,
   uid: string,
   now = Date.now(),
+  opts: {
+    provider?: SessionProvider;
+    tenant?: string;
+    epoch?: number;
+    maxAgeS?: number;
+  } = {},
 ): Promise<string> {
   if (typeof env.SESSION_SECRET !== "string" || env.SESSION_SECRET.length < 32)
     throw new Error("SESSION_SECRET must be at least 32 characters");
   if (!isId(uid)) throw new Error("invalid uid");
-  const payload: Session = { uid, exp: now + MAX_AGE_S * 1000 };
+  const payload: Session = {
+    uid,
+    exp: now + (opts.maxAgeS ?? MAX_AGE_S) * 1000,
+    iat: now,
+    p: opts.provider ?? "access",
+    ...(opts.tenant ? { t: opts.tenant } : {}),
+    e: opts.epoch ?? 0,
+  };
   const p = b64urlEncode(utf8Encoder.encode(JSON.stringify(payload)));
-  return `${p}.${await hmacSign(env.SESSION_SECRET, p)}`;
+  return `${p}.${await hmacSign(await deriveKey(env, "oa:session"), p)}`;
+}
+
+async function verified(
+  env: Env,
+  p: string,
+  sig: string,
+  now: number,
+): Promise<boolean> {
+  if (await hmacVerify(await deriveKey(env, "oa:session"), p, sig)) return true;
+  return now < LEGACY_KEY_UNTIL && hmacVerify(env.SESSION_SECRET, p, sig);
 }
 
 export async function readSession(
@@ -36,14 +76,30 @@ export async function readSession(
     const parts = cookieValue.split(".");
     if (parts.length !== 2) return null;
     const [p, sig] = parts as [string, string];
-    if (!(await hmacVerify(env.SESSION_SECRET, p, sig))) return null;
+    if (!(await verified(env, p, sig, now))) return null;
     const raw = b64urlDecode(p);
     if (!raw) return null;
     const s = JSON.parse(utf8Decoder.decode(raw)) as Partial<Session> | null;
     if (!s || typeof s.uid !== "string" || !isId(s.uid)) return null;
     if (typeof s.exp !== "number" || !Number.isFinite(s.exp) || s.exp <= now)
       return null;
-    return { uid: s.uid, exp: s.exp };
+    const prov = s.p ?? "access";
+    if (!PROVIDERS.includes(prov)) return null;
+    if (s.t !== undefined && typeof s.t !== "string") return null;
+    const e = s.e ?? 0;
+    if (!Number.isSafeInteger(e) || e < 0) return null;
+    const iat =
+      typeof s.iat === "number" && Number.isFinite(s.iat)
+        ? s.iat
+        : s.exp - MAX_AGE_S * 1000;
+    return {
+      uid: s.uid,
+      exp: s.exp,
+      iat,
+      p: prov,
+      ...(s.t !== undefined ? { t: s.t } : {}),
+      e,
+    };
   } catch {
     return null;
   }
@@ -68,8 +124,9 @@ const attrs = (env: Pick<Env, "ENVIRONMENT">) =>
 export function sessionCookie(
   value: string,
   env: Pick<Env, "ENVIRONMENT">,
+  maxAgeS = MAX_AGE_S,
 ): string {
-  return `${sessionCookieName(env)}=${value}; ${attrs(env)}; Max-Age=${MAX_AGE_S}`;
+  return `${sessionCookieName(env)}=${value}; ${attrs(env)}; Max-Age=${maxAgeS}`;
 }
 
 export function clearSessionCookie(env: Pick<Env, "ENVIRONMENT">): string {
