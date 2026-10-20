@@ -1,0 +1,10 @@
+{
+  "title": "Live poll",
+  "visibility": "public",
+  "allowAnonymousWrites": true,
+  "capabilities": {
+    "db": true,
+    "viewer": true
+  },
+  "description": "One question a day. Vote, and every open window's bars move."
+}

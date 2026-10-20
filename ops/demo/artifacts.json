@@ -4,12 +4,12 @@
     "poll": {
       "instance": "artifacts.leourbina.com",
       "id": "DKfXiKC1qb7Knqrr",
-      "visibility": "private"
+      "visibility": "public"
     },
     "tictactoe": {
       "instance": "artifacts.leourbina.com",
       "id": "CkyAe3uSYRnYthKz",
-      "visibility": "private"
+      "visibility": "public"
     }
   }
 }
