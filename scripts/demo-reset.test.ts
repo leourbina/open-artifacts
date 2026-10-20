@@ -15,8 +15,8 @@ const job = w.jobs.reset;
 const steps: any[] = job.steps;
 
 describe("demo-reset.yml", () => {
-  it("runs daily at 04:00 UTC and on dispatch", () => {
-    expect(w.on.schedule).toEqual([{ cron: "0 4 * * *" }]);
+  it("runs daily at 23:59 UTC (clearing the finished day) and on dispatch", () => {
+    expect(w.on.schedule).toEqual([{ cron: "59 23 * * *" }]);
     expect(Object.keys(w.on)).toContain("workflow_dispatch");
   });
   it("serializes on the demo group, only when DEMO_ENABLED, from main", () => {

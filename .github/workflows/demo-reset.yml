@@ -1,9 +1,11 @@
 name: Demo reset
 # Nightly reset of the public demo (demo.open-artifacts.com). Off until the repository
 # variable DEMO_ENABLED is 'true'. Uses the demo's own PAT, never a PROD secret.
+# Runs at 23:59 UTC: the reset replaces all data, so it clears the finished day instead of
+# wiping the new day-keyed collections.
 on:
   schedule:
-    - cron: "0 4 * * *"
+    - cron: "59 23 * * *"
   workflow_dispatch:
 permissions:
   contents: read
