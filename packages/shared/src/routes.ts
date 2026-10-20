@@ -92,6 +92,19 @@ export const R = {
   /** GET -> DataDoc; PUT DataSetBody (raw JSON doc) -> DataDoc; PATCH DataPatchBody (merge) -> DataDoc; DELETE -> 204. A doc (after a merge too) is ≤ dataDocLimit(plan): 256 KB on Workers Free, 1 MB on Paid (env PLAN), counting the body's bytes as sent (whitespace included; a merge counts the merged doc serialized). Over it, 413 too_large with dataDocTooLargeMessage(plan), from Content-Length before the body is read when declared. */
   dataDoc: (id: string, col: string, doc: string) =>
     `${A}/${seg(id)}/data/${seg(col)}/${seg(doc)}`,
+  /**
+   * PUT DataResetBody -> DataResetResult. Owner only (404 otherwise, as for
+   * other owner routes; 403 capability_denied without "db"). Atomically
+   * replaces ALL of the artifact's data docs with the snapshot (collections
+   * absent from it are emptied; per-viewer storage is untouched), in one DO
+   * transaction: on any error the old data stays. Every doc gets updatedBy the
+   * caller and one updatedAt. Live subscribers are then reconnected, so each
+   * viewer gets db.resync and refetches. Body ≤ dataResetLimit(plan) (1 MB Free,
+   * 8 MB Paid; 413 too_large, from Content-Length before the body is read);
+   * ≤ LIMITS.dataResetCollections collections and dataResetDocLimit(plan)
+   * docs (500 Free, 5000 Paid; 400); each doc ≤ dataDocLimit(plan) serialized (413). Idempotent.
+   */
+  dataReset: (id: string) => `${A}/${seg(id)}/data`,
   /** GET Upgrade: websocket; frames are DataChange */
   dataSubscribe: (id: string, col: string) =>
     `${A}/${seg(id)}/data-subscribe?collection=${seg(col)}`,

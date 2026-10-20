@@ -474,6 +474,98 @@ export const DataPatchBodySchema = z
   .pipe(z.record(DataKeySchema, z.unknown()));
 export type DataPatchBody = z.infer<typeof DataPatchBodySchema>;
 
+/** Own string keys of a plain object, or null (JSON.parse'd "__proto__" stays an own key). */
+const ownObjectKeys = (raw: unknown): string[] | null =>
+  typeof raw === "object" && raw !== null && !Array.isArray(raw)
+    ? (Reflect.ownKeys(raw).filter((k) => typeof k === "string") as string[])
+    : null;
+
+/**
+ * PUT R.dataReset body: `{ collections: { [collection]: { [docId]: data } } }`,
+ * the artifact's whole data snapshot. Names follow DataNameSchema; each doc is
+ * a DataSetBody (any JSON, ≤ dataDocLimit(plan) serialized, checked by the
+ * server). At most LIMITS.dataResetCollections collections and `maxDocs`
+ * docs (dataResetDocLimit(plan)). Keys are checked on the raw object, so the parsed
+ * value is the input itself (z.record would silently drop a "__proto__" key):
+ * iterate it with Object.entries, never copy it by assignment.
+ */
+export const dataResetBodySchema = (maxDocs: number) =>
+  z
+    .unknown()
+    .superRefine((raw, ctx) => {
+      if (ownObjectKeys(raw)?.join() !== "collections") {
+        ctx.addIssue({
+          code: "custom",
+          message: "body must be { collections }",
+        });
+        return;
+      }
+      const cols = (raw as { collections: unknown }).collections;
+      const names = ownObjectKeys(cols);
+      if (!names) {
+        ctx.addIssue({
+          code: "custom",
+          message: "collections must be an object",
+          path: ["collections"],
+        });
+        return;
+      }
+      if (names.length > LIMITS.dataResetCollections)
+        ctx.addIssue({
+          code: "custom",
+          message: `more than ${LIMITS.dataResetCollections} collections`,
+          path: ["collections"],
+        });
+      let docs = 0;
+      for (const name of names) {
+        const path = ["collections", name];
+        if (!DataNameSchema.safeParse(name).success)
+          ctx.addIssue({ code: "custom", message: "invalid collection", path });
+        const ids = ownObjectKeys((cols as Record<string, unknown>)[name]);
+        if (!ids) {
+          ctx.addIssue({
+            code: "custom",
+            message: "collection must be an object",
+            path,
+          });
+          continue;
+        }
+        docs += ids.length;
+        for (const id of ids)
+          if (!DataNameSchema.safeParse(id).success)
+            ctx.addIssue({
+              code: "custom",
+              message: "invalid document id",
+              path: [...path, id],
+            });
+      }
+      if (docs > maxDocs)
+        ctx.addIssue({
+          code: "custom",
+          message: `more than ${maxDocs} documents`,
+          path: ["collections"],
+        });
+    })
+    .transform(
+      (raw) =>
+        raw as {
+          collections: Record<string, Record<string, DataSetBody>>;
+        },
+    );
+/** DataResetBody at the largest (Paid) doc count; the server applies its plan's. */
+export const DataResetBodySchema = dataResetBodySchema(
+  LIMITS.dataResetDocsPaid,
+);
+export type DataResetBody = z.infer<typeof DataResetBodySchema>;
+
+/** PUT R.dataReset response: what the artifact now holds. */
+export const DataResetResultSchema = z.object({
+  collections: z.number().int(),
+  docs: z.number().int(),
+  updatedAt: z.string(),
+});
+export type DataResetResult = z.infer<typeof DataResetResultSchema>;
+
 export const DataChangeSchema = z.object({
   type: z.literal("db.change"),
   collection: z.string(),
