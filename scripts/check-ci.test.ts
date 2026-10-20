@@ -515,6 +515,22 @@ describe("release-please", () => {
     const gate = wf("release-please.yml").jobs["deploy-landing"].steps;
     expect(JSON.stringify(gate)).toContain("steps.gate.outputs.present");
   });
+  it("release-please job queues back-to-back pushes; no other job is serialized behind it", () => {
+    const w = wf("release-please.yml");
+    expect(w.jobs["release-please"].concurrency).toEqual({
+      group: "release-please",
+      "cancel-in-progress": false,
+    });
+    expect(w.concurrency).toBeUndefined();
+    for (const [name, job] of Object.entries(w.jobs))
+      if (name !== "release-please")
+        expect(
+          // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
+          JSON.stringify((job as any).concurrency ?? {}),
+          name,
+        ).not.toContain('"release-please"');
+  });
+
   it("release-please opens its PR with the release App token, so CI runs on it", () => {
     // PRs and pushes made with GITHUB_TOKEN trigger no workflows; an App token's do.
     const steps = wf("release-please.yml").jobs["release-please"].steps;
