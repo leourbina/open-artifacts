@@ -87,6 +87,8 @@ describe("shares", () => {
   it("non-owners (incl. editor) get 404 on list/put/delete", async () => {
     const id = await pub();
     await put(id, owner, editor.email, "editor");
+    // The guest lost their last share above (deactivated); another share keeps them signed in.
+    await put(await pub(), owner, guest.email, "viewer");
     for (const u of [editor, member, guest]) {
       expect((await api(app, R.shares(id), u.cookie)).status).toBe(404);
       expect((await put(id, u, "z@x.com", "viewer")).status).toBe(404);
