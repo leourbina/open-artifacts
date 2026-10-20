@@ -22,6 +22,13 @@ import type { ArtifactRuntime } from "../../src/runtime/do.js";
 
 const BAR_MS = 2;
 /**
+ * The one row with its own bar: an owner-only data reset (R.dataReset) rewrites
+ * a whole snapshot (500 docs / 1 MB on Free) in one DO transaction. Rare (a
+ * nightly demo reset), so it gets most of the 10 ms instead of the 2 ms
+ * per-request bar; the Worker side stays under 2 ms.
+ */
+const RESET_DO_MS = 8;
+/**
  * The bar is in reference-machine ms (the dev laptop the rows in
  * docs/ops/cpu-budget.md came from). A slower runner (CI is about 3×) scales
  * it by its own `GET /api/v1/me` p95 versus REF_ME_MS. That's the same
@@ -40,14 +47,12 @@ const escapeHeavy = (bytes: number) =>
   `<p class="a\\b">${'"\\'.repeat(bytes / 2)}</p>`.slice(0, bytes);
 
 let c: Ctx;
-let bar = BAR_MS;
 let scale = 1;
 beforeAll(async () => {
   c = await setup();
   const me = routes().find((r) => r.name === "GET /api/v1/me");
   if (!me) throw new Error("no calibration scenario");
   scale = Math.min(MAX_SCALE, Math.max(1, (await p95Median(me)) / REF_ME_MS));
-  bar = BAR_MS * scale;
 }, 120_000);
 
 /** p95 of RUNS requests after warm-up, median of REPEATS runs. */
@@ -104,8 +109,22 @@ function routes(): Scenario[] {
     text: "budget word ".repeat((LIMITS.dataDocBytesFree - 64) / 12),
   });
   let dataId = "";
+  let resetId = "";
   let docN = 0;
   let writes = 0;
+  // A full-size Free data reset: 500 docs filling the 1 MB snapshot cap.
+  const snapshot = json({
+    collections: {
+      c: Object.fromEntries(
+        Array.from({ length: LIMITS.dataResetDocsFree }, (_, i) => [
+          `d${i}`,
+          { i, text: "budget word ".repeat(170) },
+        ]),
+      ),
+    },
+  });
+  if (snapshot.length > LIMITS.dataResetBytesFree)
+    throw new Error(`snapshot ${snapshot.length} B is over the cap`);
   const w = (name: string, prepare: Scenario["prepare"]): Scenario => ({
     name,
     budgetMs: BAR_MS,
@@ -199,6 +218,43 @@ function routes(): Scenario[] {
         },
       }),
     ),
+    ...(["worker", "do"] as const).map(
+      (bucket): Scenario => ({
+        name: `data reset 1 MB (${bucket})`,
+        budgetMs: bucket === "do" ? RESET_DO_MS : BAR_MS,
+        bucket,
+        prepare: async () => {
+          if (!resetId) {
+            const r = await ok(
+              await call(
+                env,
+                req(
+                  "/api/v1/artifacts",
+                  "POST",
+                  json({
+                    title: "reset",
+                    format: "html",
+                    content: "<p>live</p>",
+                    capabilities: { db: true },
+                  }),
+                ),
+              ),
+              "publish db",
+            );
+            resetId = ((await r.json()) as { id: string }).id;
+          }
+          const obj = env.ARTIFACT_RUNTIME.instance(resetId)
+            .obj as unknown as ArtifactRuntime;
+          const minute = Math.floor(writes++ / 90);
+          obj.now = () => Date.now() + minute * 60_000;
+          return step(
+            env,
+            req(`/api/v1/artifacts/${resetId}/data`, "PUT", snapshot),
+            "data reset",
+          );
+        },
+      }),
+    ),
     {
       name: "index alarm 64 KB html (do)",
       budgetMs: BAR_MS,
@@ -240,6 +296,8 @@ describe(`code CPU ≤ ${BAR_MS} ms per route (p95, median of ${REPEATS})`, () =
     "publish { uploadId } 250 KB html",
     "data doc write 256 KB (worker)",
     "data doc write 256 KB (do)",
+    "data reset 1 MB (worker)",
+    "data reset 1 MB (do)",
     "index alarm 64 KB html (do)",
   ];
   for (const name of names)
@@ -248,9 +306,10 @@ describe(`code CPU ≤ ${BAR_MS} ms per route (p95, median of ${REPEATS})`, () =
       if (!s) throw new Error(`no scenario ${name}`);
       const p95s: number[] = [];
       const median = await p95Median(s, p95s);
+      const limit = s.budgetMs * scale;
       await annotate(
-        `p95 ${median.toFixed(2)} ms, bar ${bar.toFixed(2)} (×${scale.toFixed(2)}) (runs: ${p95s.map((x) => x.toFixed(2)).join(", ")})`,
+        `p95 ${median.toFixed(2)} ms, bar ${limit.toFixed(2)} (×${scale.toFixed(2)}) (runs: ${p95s.map((x) => x.toFixed(2)).join(", ")})`,
       );
-      expect(median).toBeLessThanOrEqual(bar);
+      expect(median).toBeLessThanOrEqual(limit);
     }, 120_000);
 });

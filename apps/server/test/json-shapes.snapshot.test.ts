@@ -6,6 +6,7 @@
 import { env } from "cloudflare:workers";
 import {
   ArtifactSummarySchema,
+  DataResetResultSchema,
   newId,
   PageSchema,
   R,
@@ -168,6 +169,20 @@ describe("JSON shapes (byte snapshots)", () => {
     expect(
       JSON.stringify(PageSchema(ArtifactSummarySchema).parse(JSON.parse(list))),
     ).toBe(list);
+  });
+
+  it("data reset: result, equal to its schema's parse", async () => {
+    const r = await api(app, R.dataReset(ids[0] ?? ""), a.cookie, {
+      method: "PUT",
+      body: { collections: { c: { d: { n: 1 }, e: [2] }, f: {} } },
+    });
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toBe("application/json");
+    const body = await r.text();
+    expect(JSON.stringify(DataResetResultSchema.parse(JSON.parse(body)))).toBe(
+      body,
+    );
+    expect(norm(body)).toMatchSnapshot("data reset");
   });
 
   it("search: hits with snippets, pages", async () => {

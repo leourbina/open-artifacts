@@ -7,8 +7,11 @@ import {
   DataPatchBodySchema,
   type DataQueryInput,
   DataQuerySchema,
+  type DataResetResult,
   dataDocLimit,
   dataDocTooLargeMessage,
+  dataResetBodySchema,
+  dataResetDocLimit,
   ERROR_CODES,
   type ErrorCode,
   LIMITS,
@@ -756,6 +759,84 @@ export class ArtifactRuntime extends DurableObject<Env> {
       );
   }
 
+  /**
+   * Replaces ALL data docs with the snapshot in `body` (raw DataResetBody JSON,
+   * capped by the route), in one transaction: any error leaves the old data.
+   * Per-viewer storage is untouched. Counts as one write for `actor`'s per-minute
+   * rate, not toward DAILY_WRITES (an owner reset must not be locked out by
+   * viewers' writes). Afterwards every subscriber socket is closed (1012), so
+   * each live viewer reconnects and its shell emits db.resync.
+   */
+  replaceRaw(body: RawBody, actor: string): DataResetResult {
+    const a = actorOf(actor);
+    let raw: unknown;
+    try {
+      raw = JSON.parse(decodeBody(body));
+    } catch (e) {
+      if (e instanceof Error && ERR_RE.test(e.message)) throw e;
+      fail("bad_request", "invalid JSON");
+    }
+    const p = dataResetBodySchema(
+      dataResetDocLimit(planOf(this.env.PLAN)),
+    ).safeParse(raw);
+    if (!p.success)
+      fail(
+        "bad_request",
+        `invalid data reset: ${p.error.issues[0]?.message ?? "bad body"}`,
+      );
+    const by = publicActor(a);
+    const updatedAt = this.iso();
+    const rows: [string, string, string, number][] = [];
+    const cols = new Map<string, number>();
+    for (const [col, docs] of Object.entries(p.data.collections)) {
+      let total = 0;
+      for (const [id, data] of Object.entries(docs)) {
+        const { json, bytes } = serialize(data, this.docLimit);
+        const size = bytes + col.length + id.length + by.length + ROW_OVERHEAD;
+        rows.push([col, id, json, size]);
+        total += size;
+      }
+      cols.set(col, total);
+    }
+    const added = [...cols.values()].reduce((n, b) => n + b, 0);
+    this.countWrite(a);
+    this.ensureSchema();
+    this.ctx.storage.transactionSync(() => {
+      const removed = this.sql
+        .exec<{ n: number }>("select coalesce(sum(size), 0) as n from docs")
+        .one().n;
+      this.sql.exec("delete from docs");
+      // One statement for all rows (an exec per row costs ~10 µs of CPU each).
+      if (rows.length > 0)
+        this.sql.exec(
+          `insert into docs (collection, id, data, size, updated_at, updated_by)
+           select value ->> 0, value ->> 1, value ->> 2, value ->> 3, ?, ?
+           from json_each(?)`,
+          updatedAt,
+          by,
+          JSON.stringify(rows),
+        );
+      const { bytes } = this.sql
+        .exec<{ bytes: number }>(
+          "update totals set bytes = bytes - ? + ?, cols = ? where id = 1 returning bytes",
+          removed,
+          added,
+          JSON.stringify(Object.fromEntries(cols)),
+        )
+        .one();
+      if (bytes > LIMITS.artifactDataBytes)
+        fail("too_large", "artifact data exceeds 50 MB");
+    });
+    for (const ws of this.ctx.getWebSockets()) {
+      try {
+        ws.close(1012, "data reset");
+      } catch {
+        // already closed
+      }
+    }
+    return { collections: cols.size, docs: rows.length, updatedAt };
+  }
+
   storageGet(viewer: string, key: string): unknown | null {
     const v = actorOf(viewer, "viewer");
     const k = storageKey(key);
@@ -1249,6 +1330,7 @@ type RpcMethods =
   | "setRaw"
   | "updateRaw"
   | "storageSetRaw"
+  | "replaceRaw"
   | "closeSockets"
   | "scheduleIndex"
   | "pendingIndex"
