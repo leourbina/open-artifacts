@@ -1099,11 +1099,13 @@ describe("demo instance workflows", () => {
     "ops-demo-install.yml": [...CF, "DEMO_OA_ACCESS_TOKEN"],
     "ops-demo-ops-deploy.yml": [...CF, "DEMO_OA_TOKEN"],
     "demo-reset.yml": ["DEMO_OA_TOKEN"],
+    "demo-publish.yml": ["DEMO_OA_TOKEN"],
   };
   const GROUPS: Record<string, string> = {
     "ops-demo-install.yml": "demo-deploy",
     "ops-demo-ops-deploy.yml": "demo-ops-deploy",
     "demo-reset.yml": "demo-reset",
+    "demo-publish.yml": "demo-publish",
   };
   // secrets.X, secrets['X'] and secrets["X"]
   const SECRET_RE =
@@ -1281,6 +1283,31 @@ describe("demo instance workflows", () => {
       // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
       const without = runs.find((s: any) => !s.run.includes("--demo-url"));
       expect(String(without.if)).toContain("vars.DEMO_ENABLED != 'true'");
+    });
+  });
+
+  describe("checkouts in demo workflows", () => {
+    const checkouts = (
+      jobs: Record<
+        string,
+        { steps?: { uses?: string; with?: Record<string, unknown> }[] }
+      >,
+    ) =>
+      Object.values(jobs).flatMap((j) =>
+        (j.steps ?? []).filter((s) =>
+          String(s.uses ?? "").startsWith("actions/checkout"),
+        ),
+      );
+    it("never persist credentials", () => {
+      for (const f of demoFiles) {
+        const co = checkouts(wf(f).jobs);
+        expect(co.length, f).toBeGreaterThan(0);
+        for (const s of co)
+          expect(s.with?.["persist-credentials"], f).toBe(false);
+      }
+      const dd = checkouts({ d: wf("release-please.yml").jobs["deploy-demo"] });
+      expect(dd.length).toBeGreaterThan(0);
+      for (const s of dd) expect(s.with?.["persist-credentials"]).toBe(false);
     });
   });
 

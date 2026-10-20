@@ -1,8 +1,9 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { buildSeed } from "./demo/publish.js";
 import { parseSeed } from "./demo/reset.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -14,8 +15,8 @@ const job = w.jobs.reset;
 const steps: any[] = job.steps;
 
 describe("demo-reset.yml", () => {
-  it("runs daily at 04:00 UTC and on dispatch", () => {
-    expect(w.on.schedule).toEqual([{ cron: "0 4 * * *" }]);
+  it("runs daily at 23:59 UTC (clearing the finished day) and on dispatch", () => {
+    expect(w.on.schedule).toEqual([{ cron: "59 23 * * *" }]);
     expect(Object.keys(w.on)).toContain("workflow_dispatch");
   });
   it("serializes on the demo group, only when DEMO_ENABLED, from main", () => {
@@ -42,7 +43,7 @@ describe("demo-reset.yml", () => {
       .join("\n")
       .replace(/\s+/g, " ");
     expect(run).toContain(
-      'scripts/demo/reset.ts --base-url https://demo.open-artifacts.com --token-file "$RUNNER_TEMP/pat" ops/demo/seed.json --apply',
+      'scripts/demo/reset.ts --base-url https://demo.open-artifacts.com --token-file "$RUNNER_TEMP/pat" "$RUNNER_TEMP/seed.json" --apply',
     );
   });
   it("checks healthz after the reset", () => {
@@ -61,9 +62,40 @@ describe("demo-reset.yml", () => {
   });
 });
 
-describe("ops/demo/seed.json", () => {
-  it("parses with the real reset.ts parseSeed (placeholder: no artifacts yet)", () => {
-    const seed = parseSeed(read("ops/demo/seed.json"));
-    expect(seed).toEqual({});
+describe("demo-reset.yml checkout", () => {
+  it("does not persist credentials", () => {
+    const co = steps.filter((s) =>
+      String(s.uses ?? "").startsWith("actions/checkout"),
+    );
+    expect(co.length).toBeGreaterThan(0);
+    for (const s of co) expect(s.with?.["persist-credentials"]).toBe(false);
   });
+});
+
+describe("the reset seed has one source of truth", () => {
+  it("builds the seed from the per-slug seeds before resetting", () => {
+    const iBuild = steps.findIndex((s) =>
+      String(s.run ?? "").includes(
+        'scripts/demo/publish.ts --write-seed "$RUNNER_TEMP/seed.json"',
+      ),
+    );
+    const iReset = steps.findIndex((s) =>
+      String(s.run ?? "").includes("reset.ts"),
+    );
+    expect(iBuild).toBeGreaterThanOrEqual(0);
+    expect(iBuild).toBeLessThan(iReset);
+  });
+  it("has no committed ops/demo/seed.json and never references one", () => {
+    expect(existsSync(join(root, "ops/demo/seed.json"))).toBe(false);
+    expect(JSON.stringify(w)).not.toContain("ops/demo/seed.json");
+  });
+  // ops/demo arrives with Design's artifacts; until then there is nothing to build from.
+  it.skipIf(!existsSync(join(root, "ops/demo/publish.json")))(
+    "the generated seed parses with the real parseSeed",
+    () => {
+      expect(() =>
+        parseSeed(JSON.stringify(buildSeed(join(root, "ops/demo")))),
+      ).not.toThrow();
+    },
+  );
 });
