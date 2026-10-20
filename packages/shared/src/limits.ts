@@ -35,6 +35,22 @@ export const LIMITS = {
   /** /mcp request body cap on Workers Paid: a Paid data doc plus 64 KB. */
   mcpBodyBytesPaid: DATA_DOC_PAID + 64 * KB,
   artifactDataBytes: 50 * 1024 * 1024,
+  /**
+   * PUT R.dataReset body on Workers Free (the whole snapshot, as sent). The
+   * Worker only caps and forwards it; the DO parses and validates (no 10 ms cap there).
+   */
+  dataResetBytesFree: 1024 * KB,
+  /** PUT R.dataReset body on Workers Paid. */
+  dataResetBytesPaid: 8 * 1024 * KB,
+  /**
+   * Docs in one data reset snapshot (all collections together) on Workers
+   * Free: the DO's replace costs ~6 ms CPU at 500 docs / 1 MB (test:cpu).
+   */
+  dataResetDocsFree: 500,
+  /** Docs in one data reset snapshot on Workers Paid. */
+  dataResetDocsPaid: 5000,
+  /** Collections in one data reset snapshot. */
+  dataResetCollections: 100,
   viewerWritesPerMin: 100,
   anonWritesPerMinPerIp: 30,
   pathMaxChars: 512,
@@ -63,6 +79,18 @@ export const planOf = (v: unknown): Plan =>
 /** Max bytes of one data doc (or storage value) on `plan`. */
 export const dataDocLimit = (plan: Plan): number =>
   plan === "paid" ? LIMITS.dataDocBytesPaid : LIMITS.dataDocBytesFree;
+
+/** Max PUT R.dataReset body bytes on `plan`, checked before the body is read. */
+export const dataResetLimit = (plan: Plan): number =>
+  plan === "paid" ? LIMITS.dataResetBytesPaid : LIMITS.dataResetBytesFree;
+
+/** Max docs in one data reset snapshot on `plan`. */
+export const dataResetDocLimit = (plan: Plan): number =>
+  plan === "paid" ? LIMITS.dataResetDocsPaid : LIMITS.dataResetDocsFree;
+
+/** The 413 too_large message for a data reset body over dataResetLimit(plan). */
+export const dataResetTooLargeMessage = (plan: Plan): string =>
+  `A data reset snapshot is limited to ${dataResetLimit(plan) / 1024 / 1024} MB on this instance; Workers Paid allows ${LIMITS.dataResetBytesPaid / 1024 / 1024} MB.`;
 
 /** Max /mcp request body bytes on `plan`, checked before any parse. */
 export const mcpBodyLimit = (plan: Plan): number =>

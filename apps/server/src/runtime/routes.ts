@@ -5,6 +5,8 @@ import {
   DataQuerySchema,
   dataDocLimit,
   dataDocTooLargeMessage,
+  dataResetLimit,
+  dataResetTooLargeMessage,
   isId,
   METHOD_CAPABILITY,
   planOf,
@@ -23,6 +25,7 @@ import { ACTOR_HEADER, publicActor, runtimeCall, runtimeStub } from "./do.js";
 
 // Literals so Hono infers params; must equal R.data* / R.storage* in @oa/shared.
 const ART = "/api/v1/artifacts/:id";
+const DATA = `${ART}/data`;
 const COL = `${ART}/data/:col`;
 const QUERY = `${COL}/query`;
 const DOC = `${COL}/:doc`;
@@ -245,6 +248,32 @@ export function mountRuntime(app: AppType): void {
     const id = name(c.req.param("doc"), "document id");
     await runtimeCall(() => stub(c, g).delete(col, id, g.actor));
     return c.body(null, 204);
+  });
+
+  // Owner-only atomic replace of all data docs (R.dataReset). The body is capped
+  // here and forwarded unparsed: the DO parses, validates and replaces in one
+  // transaction, so a multi-MB snapshot costs the Worker no JSON CPU.
+  app.put(DATA, async (c) => {
+    const artifactId = c.req.param("id") ?? "";
+    if (!isId(artifactId)) throw new ApiError("not_found", "Not found");
+    const who = caller(c);
+    const a = await requireAccess(c.env, who, artifactId, "owner");
+    if (who.kind !== "user") throw new ApiError("not_found", "Not found");
+    if (!capsOf(a.capabilities).db)
+      throw new ApiError(
+        "capability_denied",
+        'This artifact did not declare the "db" capability',
+      );
+    const plan = planOf(c.env.PLAN);
+    const body = await readCapped(
+      c,
+      dataResetLimit(plan),
+      dataResetTooLargeMessage(plan),
+    );
+    const g = { artifactId, actor: `u:${who.user.id}` };
+    return c.json(
+      await runtimeCall(() => stub(c, g).replaceRaw(toBuffer(body), g.actor)),
+    );
   });
 
   // WebSocket feed of DataChange frames, served by the artifact's DO.

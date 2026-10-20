@@ -1,12 +1,4 @@
 import type { McpServer } from "@modelcontextprotocol/server";
-import {
-  ArtifactDataDeleteInputSchema,
-  ArtifactDataGetInputSchema,
-  ArtifactDataListInputSchema,
-  ArtifactDataQueryInputSchema,
-  ArtifactDataSetInputSchema,
-  ArtifactDataUpdateInputSchema,
-} from "@oa/shared";
 import { requireAccess } from "../../auth/authz.js";
 import { ApiError } from "../../http/errors.js";
 import {
@@ -15,7 +7,7 @@ import {
   runtimeStub,
 } from "../../runtime/do.js";
 import { guard, ok, type ToolEnv } from "../server.js";
-import { describeTool } from "../tool-defs.js";
+import { toolConfig } from "../tool-defs.js";
 
 /**
  * The artifact's runtime DO, after the access check, as on the REST runtime
@@ -44,10 +36,7 @@ export function registerDataTools(server: McpServer, t: ToolEnv): void {
 
   server.registerTool(
     "artifact_data_get",
-    {
-      description: describeTool("artifact_data_get"),
-      inputSchema: ArtifactDataGetInputSchema,
-    },
+    toolConfig("artifact_data_get"),
     (i) =>
       guard(async () => {
         const s = await store(t, i.id);
@@ -61,10 +50,7 @@ export function registerDataTools(server: McpServer, t: ToolEnv): void {
 
   server.registerTool(
     "artifact_data_list",
-    {
-      description: describeTool("artifact_data_list"),
-      inputSchema: ArtifactDataListInputSchema,
-    },
+    toolConfig("artifact_data_list"),
     (i) =>
       guard(async () => {
         const s = await store(t, i.id);
@@ -80,10 +66,7 @@ export function registerDataTools(server: McpServer, t: ToolEnv): void {
 
   server.registerTool(
     "artifact_data_query",
-    {
-      description: describeTool("artifact_data_query"),
-      inputSchema: ArtifactDataQueryInputSchema,
-    },
+    toolConfig("artifact_data_query"),
     (i) =>
       guard(async () => {
         const s = await store(t, i.id);
@@ -97,10 +80,7 @@ export function registerDataTools(server: McpServer, t: ToolEnv): void {
 
   server.registerTool(
     "artifact_data_set",
-    {
-      description: describeTool("artifact_data_set"),
-      inputSchema: ArtifactDataSetInputSchema,
-    },
+    toolConfig("artifact_data_set"),
     (i) =>
       guard(async () => {
         const s = await store(t, i.id);
@@ -113,10 +93,7 @@ export function registerDataTools(server: McpServer, t: ToolEnv): void {
 
   server.registerTool(
     "artifact_data_update",
-    {
-      description: describeTool("artifact_data_update"),
-      inputSchema: ArtifactDataUpdateInputSchema,
-    },
+    toolConfig("artifact_data_update"),
     (i) =>
       guard(async () => {
         const s = await store(t, i.id);
@@ -129,10 +106,7 @@ export function registerDataTools(server: McpServer, t: ToolEnv): void {
 
   server.registerTool(
     "artifact_data_delete",
-    {
-      description: describeTool("artifact_data_delete"),
-      inputSchema: ArtifactDataDeleteInputSchema,
-    },
+    toolConfig("artifact_data_delete"),
     (i) =>
       guard(async () => {
         const s = await store(t, i.id);

@@ -1,7 +1,7 @@
 [
   {
     "name": "publish_artifact",
-    "description": "Publish an artifact, or a new version when `id` is given. Pass `content` (one file, with `format`) or `files` (path → text, or { base64 } for binary, or { uploadId } from create_upload) plus `entry`. ≤128 KB inline (content, text and base64 together), else create_upload: call it, PUT the bytes to its url, then pass { uploadId } in `files`. Returns id, version and view URL."
+    "description": "Publish an artifact, or a new version when `id` is given. Pass `content` (one file, with `format`) or `files` (path → text, or { base64 } for binary, or { uploadId } from create_upload) plus `entry`. Inline content (content, text and base64 together) is limited to 128 KB; for more, call create_upload, PUT the bytes to its url, then pass { uploadId } in `files`. Returns id, version and view URL."
   },
   {
     "name": "create_upload",

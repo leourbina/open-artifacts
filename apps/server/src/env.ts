@@ -24,6 +24,8 @@ export interface Env {
    * detected plan.
    */
   PLAN?: string;
+  /** "off" (any case) makes /skill.md 404 and drops the skill resource; public otherwise. */
+  SKILL_MD?: string;
   // vars
   APP_HOST: string;
   CONTENT_HOST: string;
