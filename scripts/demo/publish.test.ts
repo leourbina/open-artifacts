@@ -2,6 +2,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -596,6 +597,36 @@ describe("buildSeed (the one source for the reset)", () => {
       slugs: { poll: {} },
     });
     expect(buildSeed(fx.dir)).toEqual({ [POLL]: { collections: {} } });
+  });
+  it("refuses a symlinked seed/ directory, in buildSeed and in publish", async () => {
+    const fx = fixture({ ids: { poll: POLL }, slugs: { poll: {} } });
+    const real = join(fx.dir, "seed-real");
+    const { renameSync } = await import("node:fs");
+    renameSync(join(fx.dir, "seed"), real);
+    symlinkSync(real, join(fx.dir, "seed"));
+    expect(() => buildSeed(fx.dir)).toThrow(/seed.*symlink/);
+    const r = await exec(fx, server(), { create: true });
+    expect(r.code).toBe(1);
+    expect(r.text).toMatch(/seed.*symlink/);
+  });
+  it("applies publish's checks: symlinked slug folder or manifest, invalid manifest", () => {
+    const other = fixture({ slugs: { other: {} } }).dir;
+    const a = fixture({ ids: { link: POLL }, slugs: { poll: {} } });
+    symlinkSync(join(other, "artifacts/other"), join(a.dir, "artifacts/link"));
+    writeFileSync(join(a.dir, "publish.json"), '{"approved":["link"]}');
+    expect(() => buildSeed(a.dir)).toThrow(/symlink/);
+    const b = fixture({ ids: { poll: POLL }, slugs: { poll: {} } });
+    rmSync(join(b.dir, "artifacts/poll/manifest.json"));
+    symlinkSync(
+      join(other, "artifacts/other/manifest.json"),
+      join(b.dir, "artifacts/poll/manifest.json"),
+    );
+    expect(() => buildSeed(b.dir)).toThrow(/symlink/);
+    const c = fixture({
+      ids: { poll: POLL },
+      slugs: { poll: { manifest: manifest({ visibility: "x" }) } },
+    });
+    expect(() => buildSeed(c.dir)).toThrow(/visibility/);
   });
   it("is empty when nothing is approved", () => {
     expect(buildSeed(fixture({ approved: null, slugs: {} }).dir)).toEqual({});

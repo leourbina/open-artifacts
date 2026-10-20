@@ -143,7 +143,10 @@ type SlugSeed = { collections: Record<string, Record<string, unknown>> };
 
 /** The slug's seed, or undefined when it has no docs to seed. */
 function readSeed(dir: string, slug: string): SlugSeed | undefined {
-  const p = join(dir, "seed", `${slug}.json`);
+  const sd = join(dir, "seed");
+  if (existsSync(sd) && lstatSync(sd).isSymbolicLink())
+    throw new Error("seed/ is a symlink; refusing");
+  const p = join(sd, `${slug}.json`);
   if (!existsSync(p)) return undefined;
   if (lstatSync(p).isSymbolicLink())
     throw new Error(`seed/${slug}.json is a symlink`);
@@ -176,8 +179,8 @@ export function buildSeed(dir: string): Record<string, SlugSeed> {
       continue;
     }
     // A db artifact with no seed is reset to empty, so anonymous writes do not pile up.
-    const m = readJson(join(dir, "artifacts", slug, "manifest.json"));
-    if (isObj(m) && isObj(m.capabilities) && m.capabilities.db === true)
+    const m = readManifest(dir, slug);
+    if (isObj(m.capabilities) && m.capabilities.db === true)
       out[id] = { collections: {} };
   }
   return out;
@@ -218,20 +221,8 @@ function settingsOf(m: Record<string, unknown>) {
 }
 type Settings = ReturnType<typeof settingsOf>;
 
-type Plan = {
-  slug: string;
-  manifest: Record<string, unknown>;
-  settings: Settings;
-  files: FileData[];
-  hash: string;
-};
-
-function plan(
-  dir: string,
-  slug: string,
-  ids: Record<string, string>,
-  approved: string[],
-): Plan {
+/** The slug's validated manifest; refuses symlinks on artifacts/, the slug folder and the manifest. */
+function readManifest(dir: string, slug: string): Record<string, unknown> {
   // lstat every component from ops/demo/artifacts down: no symlinks anywhere.
   const base = join(dir, "artifacts");
   const root = join(base, slug);
@@ -251,7 +242,25 @@ function plan(
   const manifest = readJson(mp);
   const errs = validateManifest(manifest);
   if (errs.length) throw new Error(`${slug}: ${errs.join("; ")}`);
-  const m = manifest as Record<string, unknown>;
+  return manifest as Record<string, unknown>;
+}
+
+type Plan = {
+  slug: string;
+  manifest: Record<string, unknown>;
+  settings: Settings;
+  files: FileData[];
+  hash: string;
+};
+
+function plan(
+  dir: string,
+  slug: string,
+  ids: Record<string, string>,
+  approved: string[],
+): Plan {
+  const root = join(dir, "artifacts", slug);
+  const m = readManifest(dir, slug);
   const files: FileData[] = [];
   for (const abs of listFiles(root)) {
     const path = relative(root, abs).split(sep).join("/");
@@ -355,6 +364,7 @@ export async function run(
   for (const slug of order(approved)) {
     try {
       plans.push(plan(o.demoDir, slug, ids, approved));
+      readSeed(o.demoDir, slug); // validate (and refuse symlinks) before any request
     } catch (e) {
       fail((e as Error).message);
     }
