@@ -14,6 +14,7 @@ import {
 import { renderUpgrade, UPGRADE_ETAG } from "../src/mcp/upgrade.js";
 import {
   RELEASES_API,
+  ROLLBACK_STEPS,
   renderUpgradeTemplate,
   UPGRADE_DOCS,
   UPGRADE_FLAGS,
@@ -136,7 +137,9 @@ describe("upgrade.md content", () => {
       "pnpm install --frozen-lockfile",
       `--upgrade --name ${WORKER} --check --json`,
       `--upgrade --name ${WORKER} --json`,
+      `"step":"healthcheck"`,
       `"step":"selftest"`,
+      "step 7 exits 2 instead",
       "same directory as step 7",
       `--rollback --name ${WORKER} --json`,
       "the upgrade was rolled back",
@@ -181,6 +184,18 @@ describe("upgrade.md content", () => {
     const md = await upgrade();
     expect(md).not.toContain("—");
     expect(md.replace(BANG_RULE, "")).not.toMatch(/\bClaude\b/);
+  });
+
+  it("the rollback trigger is rendered from ROLLBACK_STEPS", async () => {
+    const md = await upgrade();
+    expect([...ROLLBACK_STEPS]).toEqual(["healthcheck", "selftest"]);
+    const s8 = md.split("## 8. ")[1]?.split("\n## ")[0] ?? "";
+    for (const st of ROLLBACK_STEPS) {
+      expect(s8).toContain(`\`"step":"${st}"\``);
+      expect(s8).toContain(`\`${st}\``);
+    }
+    expect(s8).toContain("do not roll back");
+    expect(s8).toContain("run step 7 again");
   });
 
   it("origin is https for a real host, even on a dev Worker", async () => {

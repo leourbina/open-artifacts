@@ -39,6 +39,19 @@ export const REPO = "open-artifacts-ai/open-artifacts";
 export const RELEASES_API = `https://api.github.com/repos/${REPO}/releases?per_page=100`;
 export const UPGRADE_DOCS = "https://open-artifacts.com/docs/upgrade/";
 
+/**
+ * The oa:setup steps that run after the deploy (setup E3/E4): an exit 1 whose
+ * last error line names one of these means the new version is live and
+ * broken, so the skill rolls back. Any earlier step deployed nothing.
+ */
+export const ROLLBACK_STEPS = ["healthcheck", "selftest"] as const;
+
+const code = (s: string) => `\`${s}\``;
+const or = (xs: readonly string[]) =>
+  xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} or ${xs.at(-1)}`;
+const STEPS_JSON = or(ROLLBACK_STEPS.map((s) => code(`"step":"${s}"`)));
+const STEPS = or(ROLLBACK_STEPS.map(code));
+
 const T = (k: UpgradeToken) => `{{${k}}}`;
 
 const NAME = T("workerName");
@@ -71,7 +84,7 @@ Every \`oa:setup\` command below returns one of:
 
 - **0**: done; go on.
 - **2**: action required. Relay the \`message\` of the \`action_required\` line to the user verbatim, follow it, then run the same command again.
-- **1**: error. Stop and show the user the \`message\` of the \`error\` line. The one exception is a selftest failure in step 7: see step 8.
+- **1**: error. Stop and show the user the \`message\` of the \`error\` line. The one exception is a failure after the deploy in step 7: see step 8.
 
 ## 1. Installed version
 
@@ -160,9 +173,11 @@ Add \`--account-id <id>\` if the deploy token can reach more than one Cloudflare
 
 Never pass \`--allow-downgrade\` unless the user explicitly asks for a downgrade.
 
-## 8. Roll back on a failed selftest
+## 8. Roll back a failed deploy
 
-Roll back only when step 7 exits 1 and its last JSON line has \`"step":"selftest"\`: the failure came after the deploy. If it failed at any earlier step, nothing was deployed: do not roll back; show the user the \`message\` and stop.
+Roll back only when step 7 exits 1 and its last \`error\` line has ${STEPS_JSON}: those steps run after the deploy, so the new version is live and failing. If it failed at any earlier step, nothing was deployed: do not roll back; show the user the \`message\` and stop.
+
+If step 7 exits 2 instead, with an \`action_required\` line from ${STEPS} (for example, DNS not yet updated), do not roll back: relay the \`message\` verbatim, wait a few minutes, then run step 7 again.
 
 Run the rollback in the same directory as step 7: it reads \`.openartifacts/state.json\`, which the upgrade wrote there. From any other directory it exits 2 ("no previous version recorded"); relay that verbatim.
 
@@ -170,7 +185,7 @@ Run the rollback in the same directory as step 7: it reads \`.openartifacts/stat
 ${SETUP} --rollback --name ${NAME} --json
 \`\`\`
 
-Then tell the user the upgrade was rolled back, with the selftest \`message\`, and stop.
+Then tell the user the upgrade was rolled back, with the \`message\` of the failed step, and stop.
 
 ## 9. Report
 
