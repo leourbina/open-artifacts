@@ -51,7 +51,7 @@ describe("viewer shell", () => {
     const f = await frame();
     const sb = f.getAttribute("sandbox");
     expect(sb).toBe(
-      "allow-scripts allow-forms allow-popups allow-modals allow-downloads",
+      "allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads",
     );
     expect(sb).not.toContain("allow-same-origin");
     expect(sb).not.toContain("allow-top-navigation");

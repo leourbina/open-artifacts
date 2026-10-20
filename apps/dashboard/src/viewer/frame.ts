@@ -1,8 +1,11 @@
-import { withShellNonce } from "@oa/shared";
+import { ARTIFACT_SANDBOX_ATTR, withShellNonce } from "@oa/shared";
 
-/** Artifacts are untrusted: never add allow-same-origin or allow-top-navigation. */
-export const SANDBOX =
-  "allow-scripts allow-forms allow-popups allow-modals allow-downloads";
+/**
+ * Artifacts are untrusted. One token list, shared with the content host's CSP
+ * (the browser applies only their intersection): popups escape the sandbox so
+ * links out open as normal tabs; never allow-same-origin or top navigation.
+ */
+export const SANDBOX = ARTIFACT_SANDBOX_ATTR;
 
 /** Only http(s) URLs on another origin may be framed. */
 export const safeContentUrl = (u: string | null) => {
