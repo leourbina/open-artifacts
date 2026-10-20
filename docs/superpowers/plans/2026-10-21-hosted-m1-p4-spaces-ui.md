@@ -8,7 +8,7 @@
 
 **Tech Stack:** React 19, TanStack Router and Query, `@oa/ui` and `@oa/ui/shadcn`, zod, MSW (`@oa/shared/mocks`), vitest plus Testing Library, Playwright (mock config and `playwright.real.config.ts`).
 
-**Spec:** `docs/superpowers/specs/2026-10-20-hosted-open-artifacts-design.md` (PR #350), sections 4.1, 4.2, 4.3, 4.5. **Contract:** PR #359 at `ed1105c` (approved), `packages/shared/HOSTED_CONTRACT.md` (the authority for every shape below). Backend plans: P2 `docs/superpowers/plans/2026-10-21-hosted-m1-p2-signin.md`, P3 `docs/superpowers/plans/2026-10-21-hosted-m1-p3-rbac.md`. Roadmap: https://artifacts.leourbina.com/a/axtJ4ieni2LsKfTk (M1, P4).
+**Spec:** `docs/superpowers/specs/2026-10-20-hosted-open-artifacts-design.md` (PR #350), sections 4.1, 4.2, 4.3, 4.5. **Contract:** PR #359, merged to `main` (approved at `ed1105c`), `packages/shared/HOSTED_CONTRACT.md` (the authority for every shape below). Backend plans: P2 `docs/superpowers/plans/2026-10-21-hosted-m1-p2-signin.md`, P3 `docs/superpowers/plans/2026-10-21-hosted-m1-p3-rbac.md`. Roadmap: https://artifacts.leourbina.com/a/axtJ4ieni2LsKfTk (M1, P4).
 
 ## Global Constraints
 
@@ -21,7 +21,7 @@
 - A tier change never widens access: mapping and restricted-group controls render only when `features` includes `sync_google`; a `409 directory_sync_off` shows the server message. `sync_frozen` rows stay editable by hand; copy never says sync resumes on its own.
 - Public links can be off per space (`SpaceRef.publicLinks`); when off, "public" is never offered.
 - The personal space id equals the user id. Moves target shared spaces only; `spaceId` is set on create only.
-- Errors: no access is 404. The 11 hosted codes each have one owning task and one UI string (see "Error codes, tasks and copy"); `rate_limited` and `unauthorized` with `details.reason` belong to Task 14. The UI shows its own mapped copy (`errorCopy`, Task 2) and falls back to the server's `message`.
+- Errors: no access is 404. The 12 hosted codes (the contract's 11 plus `restrict_admin` from Backend's follow-up PR) each have one owning task and one UI string (see "Error codes, tasks and copy"); `rate_limited` and `unauthorized` with `details.reason` belong to Task 14. The UI shows its own mapped copy (`errorCopy`, Task 2) and falls back to the server's `message`.
 - Groups are keyed by `groupId` (Google's stable id) in every route the UI calls; emails and names are display only.
 - Restriction: `Member.restriction { manual, groups }` caps a member at viewer everywhere. Admins set or clear only the manual flag (`R.memberRestricted`); a group restriction is lifted only by removing the restricted group, and the UI never implies otherwise.
 - Every refused sign-in lands on `/sign-in?error=` (including `no_access`); the dashboard never sends a direct-mode visitor to `/no-access`. `?error=` is parsed with `SignInErrorSchema` and never echoed.
@@ -77,6 +77,7 @@ P4 adopts the contract exactly. What each area of the UI reads:
 | `turnstile_required` | 400 (`details.field: "turnstile"`) | code request without a token | 14 | "Complete the verification first." (shown at the Turnstile slot) |
 | `turnstile_failed` | 403 | code request with a rejected token | 14 | "Verification failed. Try again." |
 | `reauth_required` | 401 | directory routes for a stale owner | 17 | "For your security, sign in with Google again to manage the directory." |
+| `restrict_admin` | 400 | restricting an owner or admin (Backend follow-up PR) | 15 | "Owners and admins can't be restricted. Change their role first." |
 
 Other copy that needs Design: every `SignInError` and 401 reason string (Task 14), the read-only notice (Task 3), the sync banner (Task 4), the public-off note (Task 9), the frozen banner (Task 12), the transfer counts and dialog (Task 13), the restriction labels and confirmations (Task 15), the reset confirmation (Task 16), the directory status labels, callback errors, disconnect and held-sweep confirmations (Tasks 17, 18).
 
@@ -84,7 +85,7 @@ Other copy that needs Design: every `SignInError` and 401 reason string (Task 14
 
 | Task | Depends on | Blocked on Design | Parallel with |
 |---|---|---|---|
-| 1 Consume contract | PR #359 merged | none | Design work |
+| 1 Consume contract | none (PR #359 is merged) | none | Design work |
 | 2 Hooks and calls | 1 | none | 3, 4 |
 | 3 Actions from `can` | 1 | D10 (notice look only) | 2, 4 |
 | 4 Hosted chrome | 1 | D13 | 2, 3 |
@@ -152,7 +153,7 @@ Tests: `apps/dashboard/test/{safe-next,query-client,error-copy}.test.ts`; `apps/
 
 ### Task 1: Consume the contract (adapter, harness, mock switch)
 
-**Depends on:** PR #359 merged to `main`.
+**Depends on:** nothing; PR #359 is merged, so this task is unblocked. It imports the hosted schemas and `createHandlers({ hosted })` from `@oa/shared` on `main`. `restrict_admin` and the mock's public-off move rewrite arrive in Backend's follow-up PR; Task 15's `restrict_admin` test and Task 8's rewrite test use a handler override until it merges.
 
 **Files:**
 - Create: `apps/dashboard/src/api/contract.ts`
@@ -260,7 +261,7 @@ Expected: PASS, those four specs unedited.
   - `qk.spaces(q?)` = `["spaces", q ?? {}]`, `qk.space(id)` = `["spaces", id]`, `qk.spaceMembers(id)` = `["spaces", id, "members"]`, `qk.spaceMappings(id)` = `["spaces", id, "mappings"]`, `qk.directory` = `["directory"]`, `qk.restrictedGroups` = `["directory", "restricted"]`, `qk.directoryGroups(q)` = `["directory", "groups", q]`, `qk.memberTransfer(id)` = `["members", id, "transfer"]`; `useMembers(status?)` keyed `["members", status ?? "active"]` (so `["members"]` still invalidates every list).
   - Hooks: `useSpaces(q?: z.input<typeof SpacesQuerySchema>, enabled?)` (infinite), `useSpace(id, enabled?)`, `useCreateSpace()` (`SpaceCreateInput`), `usePatchSpace(id)`, `useDeleteSpace()`, `useSpaceMembers(id)` (infinite), `usePutSpaceMember(id)` (`{ userId, role }`), `useDeleteSpaceMember(id)`, `useAddSelfToSpace(id)` (`{ role }` → `R.spaceMemberSelf`), `useSpaceMappings(id)`, `usePutMapping(id)` (`{ groupId, role }`), `useDeleteMapping(id)` (`groupId`), `useRestrictedGroups()`, `usePutRestrictedGroup()` (`groupId`), `useDeleteRestrictedGroup()` (`groupId`), `useSetRestricted()` (`{ memberId, restricted: boolean }` → PUT or DELETE `R.memberRestricted`), `useDirectory(enabled?)`, `useDirectoryGroups(q)` (infinite; enabled at 2+ characters), `useDirectorySync()`, `useConfirmHeld()` (`groupId`), `useDisconnectDirectory()`, `useMoveArtifact(id)` (`mutateAsync(spaceId)`), `useTransferSummary(memberId)`, `useRunTransfer(memberId)` (one page per `mutateAsync(TransferInput)`), `useResetIdentity()` (`mutateAsync(memberId)`).
   - `api/auth.ts`: `useAuthProviders()` (`retry: false`, through `readAuthProviders`), `requestCode(input: CodeRequest): Promise<CodeRequested>`, `verifyCode(code: string): Promise<CodeVerified>`; both send `X-OA-Request: 1` and throw `ApiClientError` with `details`.
-  - `api/errorCopy.ts`: `errorCopy(e: unknown, fallback: string): string` (the table's string for the 11 hosted codes, else the `ApiClientError` message, else `fallback`).
+  - `api/errorCopy.ts`: `errorCopy(e: unknown, fallback: string): string` (the table's string for the 12 hosted codes, else the `ApiClientError` message, else `fallback`).
   - `auth/safeNext.ts`: `safeNext(raw: unknown): string` returns `raw` only when it is a string that starts with exactly one `/`, whose second character is neither `/` nor `\`, with no scheme and no control or whitespace characters (`/[\u0000-\u001f\u007f\s]/`); otherwise `"/"`.
   - `queryClient.ts`: `reportApiError` ignores a 401 whose `code === "reauth_required"` (the session is valid; only break-glass needs a fresh Google sign-in). `roleGated` also matches `R.directory` and everything under `/api/v1/directory/`, `R.spaceMappings`, and `/api/v1/audit`.
 
@@ -309,6 +310,7 @@ it.each([
   ["turnstile_required", "Complete the verification first."],
   ["turnstile_failed", "Verification failed. Try again."],
   ["reauth_required", "For your security, sign in with Google again to manage the directory."],
+  ["restrict_admin", "Owners and admins can't be restricted. Change their role first."],
 ])("%s", (code, copy) => {
   expect(errorCopy(new ApiClientError(code as ErrorCode, "server text", 400), "x")).toBe(copy);
 });
@@ -876,14 +878,23 @@ it("targets are shared, publishable and not the current space", async () => {
   expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Ops"]); // not My space, Engineering or Exec
 });
 
-it("moving a public artifact into a public-off space warns first (copy pending Backend)", async () => {
+it("moving a public artifact into a public-off space warns that it becomes team", async () => {
   mountHosted(`/a/${NOTES}`, true, withOps, [http.get(`*${R.artifact(NOTES)}`, () => HttpResponse.json(notes({ visibility: "public" })))]);
   fireEvent.click(await screen.findByRole("button", { name: "Move" }));
   await chooseOption("Move to", "Ops");
-  expect(screen.getByRole("note", { name: "Public links" })).toBeVisible();
-  // The warning's text is PENDING the manager's confirmation with Backend that a move rewrites
-  // the artifact to team. Until then the test asserts only that the note exists; Design writes
-  // the copy once Backend confirms (or the warning becomes a block if the move is refused).
+  expect(screen.getByRole("note", { name: "Public links" })).toHaveTextContent("Ops doesn't allow public links. The artifact becomes visible to the team instead."); // confirmed behaviour (P3 T10); wording per D4
+});
+
+it("after moving a public artifact into a public-off space, Share shows Team", async () => {
+  mountHosted(`/a/${NOTES}`, true, withOps, [
+    http.get(`*${R.artifact(NOTES)}`, () => HttpResponse.json(notes({ visibility: "public" }))),
+    http.post(`*${R.moveArtifact(NOTES)}`, () => HttpResponse.json(notes({ visibility: "team", space: { id: OPS.id, kind: "shared", name: "Ops", publicLinks: false } }))),
+  ]); // the follow-up mock does this rewrite itself; the override keeps the test independent of it
+  fireEvent.click(await screen.findByRole("button", { name: "Move" }));
+  await chooseOption("Move to", "Ops");
+  fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Move" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(screen.getByText("Team")).toBeVisible(); // the visibility badge from the response
 });
 
 it("after a move the panel shows the new space", async () => {
@@ -922,7 +933,7 @@ it("space_personal (defensive) shows its copy", async () => {
 Run: `pnpm --filter @oa/dashboard test -- spaces-move`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement per D3, D4.** The public-off note is a `role="note"` region labelled "Public links"; its text waits for Backend's confirmation.
+- [ ] **Step 3: Implement per D3, D4.** The public-off note is a `role="note"` region labelled "Public links". Backend confirmed (P3 T10, tested) that the move rewrites a public artifact to team in the same batch, so the note states that as fact; after the move the panel shows the response's visibility.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1641,7 +1652,7 @@ Expected: PASS: `signin-split` (unedited), `signin-hosted`, `m1-a11y`, `m2-a11y`
 - Test: `apps/dashboard/test/restricted.test.tsx`
 
 **Interfaces:**
-- Consumes: `useMembers()`, `Member.restriction`, `useSetRestricted`, `errorCopy`.
+- Consumes: `useMembers()`, `Member.restriction`, `useSetRestricted`, `errorCopy` (incl. `restrict_admin`). The Restrict control renders only on active members whose role is `member` (never owner, admin or guest).
 - Produces: `restrictionLabel(r: Restriction | null | undefined): string | null` → `null`; `"Restricted"` (manual only); `"Restricted via Contractors"` (groups, names joined with ", "); `"Restricted (by hand and via Contractors)"` (both).
 
 - [ ] **Step 1: Write the failing tests**
@@ -1695,6 +1706,21 @@ it("never offered on the owner, on guests, or without the spaces feature", async
   mountHosted("/settings/members");
   expect(within(await screen.findByRole("row", { name: /Ada Lovelace/ })).queryByRole("button", { name: "Restrict" })).toBeNull();
   expect(within(screen.getByRole("row", { name: /Bob Builder/ })).getByRole("button", { name: "Restrict" })).toBeVisible(); // control exists on others
+});
+
+it("a 400 restrict_admin (an admin promoted in another tab) shows the copy", async () => {
+  server.use(http.put(`*${R.memberRestricted("Bc4eFgHjKm5nPqRs")}`, () => HttpResponse.json({ error: { code: "restrict_admin", message: "server text" } }, { status: 400 })));
+  mountHosted("/settings/members");
+  fireEvent.click(within(await screen.findByRole("row", { name: /Bob Builder/ })).getByRole("button", { name: "Restrict" }));
+  fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Restrict" }));
+  expect(await screen.findByText("Owners and admins can't be restricted. Change their role first.")).toBeVisible(); // copy per D14
+  expect(screen.getByRole("row", { name: /Bob Builder/ })).not.toHaveTextContent("Restricted");
+});
+
+it("never offered on admins either", async () => {
+  mountHosted("/settings/members", true, undefined, [http.get("*/api/v1/members", () => HttpResponse.json([{ ...fixtures.members[1], role: "admin", status: "active", identities: [], restriction: null }]))]);
+  expect(await screen.findByRole("row", { name: /Bob Builder/ })).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Restrict" })).toBeNull();
 });
 
 it("self-hosted: no Restrict control on any row", async () => {
@@ -2143,7 +2169,7 @@ Expected: PASS.
 | 7 Broken tests: Task 8 fixtures, Task 9 roles, 11 and 12 labels, Task 19 seeded fixtures and real assertions, Task 2 files and order | 8, 9, 11, 12, 19, 2 |
 | 8 Restricted member: no Create, DropZone off, picker empty | 3, 7 |
 | Also: `z.input` for `SpacesQuery` and `SpaceCreate`; full `contract.ts` re-exports | 1, 2 |
-| Also: public-off move copy pending Backend | 8 (note asserted, text pending) |
+| Also: public-off move rewrite (confirmed by Backend, P3 T10) | 8 (warning text asserted; post-move Team asserted) |
 | Should: `?space=<personal>` refused on `/settings/spaces` | 10 |
 | Should: `useCurrentSpace` never looks up ids outside `me.spaces` | 5 |
 | Should: `/^\d{8}$/` after normalizing; 404 code-request copy | 14 (`isCompleteCode`, 404 test) |
@@ -2154,7 +2180,7 @@ Expected: PASS.
 ## Self-review
 
 - **Spec coverage:** 4.1 sign-in → 14 (Google, codes, Turnstile slot, every error, `/no-access` redirect), 16 (identity reset), 19 (real run with consent). 4.2 spaces and personal space → 5, 6; roles → 1, 11, 12; "All members" → 10; ownership (managers act, personal owners transfer) → 3, 8; personal private from admins → 6, 10, 13, 19; departed transfer → 13; visibility and public links per space → 9, 10; contractors and guests read-only including data writes → 3, 12, 15 (manual and group restriction), 18, 19. 4.3 step 3 (connect IdP, map groups) → 17, 11, in M1 for FinQore. 4.5 tier and frozen sync, never widens access → 11, 12, 18; Team copy from `instance.tier` → 12. Sync health → 4, 17. Out of scope: single-artifact transfer UI; audit log (M4).
-- **Contract fidelity:** every route, field and error code is PR #359's at `ed1105c` (groups by `groupId`, `Member.restriction`, `R.memberRestricted`, `R.spaceMemberSelf`, `public_links_off`, no `outsideSharing`); each of the 11 hosted error codes has an owning task and a tested UI string; mock values (ids, names, counts, code, masked email, site key, held sweep) are the mock store's. No mismatches.
+- **Contract fidelity:** every route, field and error code is PR #359's (merged; approved at `ed1105c`) (groups by `groupId`, `Member.restriction`, `R.memberRestricted`, `R.spaceMemberSelf`, `public_links_off`, no `outsideSharing`); each of the 12 hosted error codes (with Backend's follow-up `restrict_admin`) has an owning task and a tested UI string; mock values (ids, names, counts, code, masked email, site key, held sweep) are the mock store's. No mismatches.
 - **Review must-fixes:** SPA-owned sign-in; 8-digit codes through `normalizeCode`; verify `{ code }` plus cookie; 202 request and 401 reasons; all six `SignInError` values; `AuthProviders`; `Me.auth`, `instance.hosted`, `instance.signIn`; identity reset UI; every refusal on `/sign-in?error=` (the `/no-access` page redirects in direct mode); every space shape from the contract; directory connect, status and held in M1 (17, 18); Review Focus 1 consistent with Task 14; tests carry real assertions.
 - **Rulings:** `can` read directly (Task 3; fallback is the contract's own function); `can.dataWrite` drives data-write UI; `manager` access; 409 `directory_sync_off`; moves into personal spaces refused; `spaceId` create-only; sync-health banner; opt-in mocks.
 - **Boundary:** no task lists a file under `packages/shared` or `apps/server`.
