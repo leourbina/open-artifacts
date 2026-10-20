@@ -1,9 +1,9 @@
 import { ArtifactSummarySchema, R, viewerPath } from "@oa/shared";
-import { toast } from "@oa/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { ApiClientError, api } from "../api/client";
 import { qk } from "../api/queries";
+import { toast } from "../layout/toast";
 
 /** Returns a function that toasts an Undo for a just-deleted artifact. */
 export function useOfferUndo() {

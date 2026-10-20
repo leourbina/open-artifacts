@@ -1,8 +1,9 @@
-import { Button, toast } from "@oa/ui";
+import { Button } from "@oa/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { filesFromDrop, filterIgnored } from "./collect";
 import { UploadDialog } from "./UploadDialog";
 import "./upload.css";
+import { toast } from "../layout/toast";
 
 const hasFiles = (e: DragEvent) => e.dataTransfer?.types.includes("Files");
 

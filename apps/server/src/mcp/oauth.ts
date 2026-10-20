@@ -3,7 +3,7 @@ import {
   CimdFetchError,
   OAuthProvider,
 } from "@cloudflare/workers-oauth-provider";
-import { AUTH, type Member, type OAuthClient, R } from "@oa/shared";
+import { AUTH, MCP_PATH, type Member, type OAuthClient, R } from "@oa/shared";
 import type { Context } from "hono";
 import { requireUser, TEAM_ROLES } from "../auth/authz.js";
 import type { Env } from "../env.js";
@@ -217,6 +217,36 @@ async function tokenGate(req: Request, env: Env): Promise<Request | Response> {
   );
 }
 
+const NO_TOKEN_HINT =
+  "No token sent. Check that your MCP client actually sends the token (a client running as a background service may not see your shell's environment), or connect with OAuth instead.";
+
+/**
+ * The provider's 401 at /mcp when no bearer token parses has an empty body;
+ * clients then show only "HTTP 401". Adds an RFC 6750-style JSON body and keeps
+ * the provider's headers (the WWW-Authenticate OAuth discovery challenge) as is.
+ * Missing header → invalid_token; empty `Bearer` or a malformed header → invalid_request.
+ */
+function explainNoToken(req: Request, res: Response): Response {
+  const path = new URL(req.url).pathname;
+  if (path !== MCP_PATH && !path.startsWith(`${MCP_PATH}/`)) return res;
+  const auth = req.headers.get("authorization");
+  const empty = auth !== null && /^(bearer)?$/i.test(auth.trim());
+  const body =
+    auth === null || empty
+      ? {
+          error: auth === null ? "invalid_token" : "invalid_request",
+          error_description: NO_TOKEN_HINT,
+        }
+      : {
+          error: "invalid_request",
+          error_description:
+            "The Authorization header is malformed; send `Authorization: Bearer <token>`, or connect with OAuth instead.",
+        };
+  const headers = new Headers(res.headers);
+  headers.set("content-type", "application/json");
+  return new Response(JSON.stringify(body), { status: 401, headers });
+}
+
 /** Everything on the app host except PAT-authenticated /mcp. */
 export async function serveAppHost(
   req: Request,
@@ -232,6 +262,7 @@ export async function serveAppHost(
     req = gated;
   }
   const res = await oauthProvider(env, app).fetch(req, env, ctx);
+  if (res.status === 401 && res.body === null) return explainNoToken(req, res);
   if (req.method === "POST" && new URL(req.url).pathname === OAUTH.register)
     await trackRegisteredClient(env, res);
   return res;
