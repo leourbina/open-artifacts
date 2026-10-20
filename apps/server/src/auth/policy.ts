@@ -127,36 +127,59 @@ export function capOf(
 /** The decision table, first match wins, then the cap lowers the level to viewer. */
 export function decide(i: DecisionInput): AccessLevel | null {
   const level = uncapped(i);
-  return level && i.cap ? "viewer" : level;
+  return level && i.cap != null ? "viewer" : level;
 }
 
+const SPACE_ROLES: ReadonlySet<unknown> = new Set([
+  "viewer",
+  "editor",
+  "manager",
+]);
+/** A known space role, else null (fail closed on malformed input). */
+const known = <T extends string>(r: unknown, ok: ReadonlySet<unknown>) =>
+  ok.has(r) ? (r as T) : null;
+const SHARE_ROLES: ReadonlySet<unknown> = new Set(["viewer", "editor"]);
+
 function uncapped(i: DecisionInput): AccessLevel | null {
-  const { caller, artifact: a } = i;
-  const personal = a.spaceKind === "personal";
+  const { artifact: a } = i;
+  const capped = i.cap != null;
+  // Allowlists throughout: anything malformed falls to the narrower branch.
+  const caller =
+    i.caller && typeof i.caller.id === "string" && i.caller.id
+      ? i.caller
+      : null;
+  const member = caller !== null && TEAM_ROLES.includes(caller.orgRole);
+  const personal = a.spaceKind !== "shared";
+  const deleted = a.deleted !== false;
   const ownPersonal = personal && caller !== null && a.spaceId === caller.id;
   const allMembers =
-    caller && caller.orgRole !== "guest" && !i.cap
-      ? i.space.allMembersRole
+    member && !capped
+      ? known<SpaceRole>(i.space.allMembersRole, SPACE_ROLES)
       : null;
   const spaceRole =
-    personal || !caller ? null : maxRole(i.spaceRole, allMembers);
-  if (a.deleted) {
-    if (!i.allowDeleted) return null;
+    personal || !caller
+      ? null
+      : maxRole(known<SpaceRole>(i.spaceRole, SPACE_ROLES), allMembers);
+  const shareRole = caller
+    ? known<"viewer" | "editor">(i.shareRole, SHARE_ROLES)
+    : null;
+  if (deleted) {
+    // Trash is for those who can undelete: never capped callers.
+    if (i.allowDeleted !== true || capped) return null;
     if (ownPersonal) return "owner";
     if (spaceRole === "manager") return "manager";
     return null;
   }
   if (ownPersonal) return "owner";
   if (spaceRole === "manager") return "manager";
-  const best = maxRole(spaceRole, caller ? i.shareRole : null);
+  const best = maxRole(spaceRole, shareRole);
   if (best === "editor") return "editor";
   if (best === "viewer") return "viewer";
   // `team` means every member (shared spaces too), but never capped callers:
   // restricted members and capped guests see team artifacts only through a
   // space role or a share.
-  if (a.visibility === "team" && caller && caller.orgRole !== "guest" && !i.cap)
-    return "viewer";
-  if (a.visibility === "public" && (personal || i.space.publicLinks))
+  if (a.visibility === "team" && member && !capped) return "viewer";
+  if (a.visibility === "public" && (personal || i.space.publicLinks === true))
     return "viewer";
   return null;
 }
@@ -228,13 +251,15 @@ export function orgCan(
   action: OrgAction,
   opts: { spaceRole?: SpaceRole | null; cap?: CapReason | null } = {},
 ): boolean {
-  const admin = ORG_ADMINS.includes(m.role);
   const capped = opts.cap != null;
+  // Owners and admins can't be restricted (restrict_admin); a cap still
+  // removes every admin power as belt and braces.
+  const admin = ORG_ADMINS.includes(m.role) && !capped;
   switch (action) {
     case "space.members":
     case "space.rename":
     case "space.publicLinks":
-      return admin || opts.spaceRole === "manager";
+      return !capped && (admin || opts.spaceRole === "manager");
     case "space.publish":
       return (
         !capped &&
@@ -244,7 +269,7 @@ export function orgCan(
     case "artifact.create":
       return !capped;
     case "directory.manage":
-      return m.role === "owner";
+      return m.role === "owner" && !capped;
     case "tokens.create":
     case "mcp.connect":
       return m.role !== "guest" && !capped;
