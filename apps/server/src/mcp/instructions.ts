@@ -15,6 +15,8 @@ export type PlanText = {
   /** After "(<plan> plan": the Paid limit on Free, nothing on Paid. */
   dataDocNote: string;
   mcpBody: string;
+  /** What quota_exceeded means the instance hit. */
+  quota: string;
 };
 
 /** Bytes as "N KB", or "N MB" from 1 MB up (as dataDocTooLargeMessage). */
@@ -30,6 +32,8 @@ export const planText = (plan: Plan): PlanText => ({
       : `; Workers Paid allows ${sizeText(LIMITS.dataDocBytesPaid)}`,
   // KB, as mcpTooLargeMessage states it.
   mcpBody: `${mcpBodyLimit(plan) / 1024} KB`,
+  quota:
+    plan === "paid" ? "a daily Cloudflare limit" : "its daily free-plan limit",
 });
 
 const INLINE = `${LIMITS.inlineBytes / 1024} KB`;
@@ -57,7 +61,7 @@ export const SECTIONS = {
   },
   largeFiles: {
     title: "Large files",
-    body: () => `- Inline content (content, text files and base64 together) is limited to ${INLINE} per call (≤${INLINE} inline, else create_upload); over it, publish_artifact fails with too_large. For anything larger (up to ${FILE_MB} per file), upload each large file:
+    body: () => `- Inline content (content, text files and base64 together) is limited to ${INLINE} per call; over it, publish_artifact fails with too_large. For anything larger (up to ${FILE_MB} per file), upload each large file:
   1. create_upload { path, size, contentType, artifactId? } returns { uploadId, artifactId, url }. Omit artifactId for a new artifact and reuse the returned artifactId for every other file.
   2. PUT the raw bytes to url (valid 1 hour).
   3. publish_artifact { id: artifactId, title, entry, files: { "<path>": { "uploadId": "<uploadId>" }, ... } }; small files can stay inline next to uploaded ones.`,
@@ -122,7 +126,7 @@ Example: a live poll (publish with capabilities: { db: true, viewer: true })
     ) => `- Results with isError carry "<code>: <message>". not_found also means you lack access.
 - too_large: inline content over ${INLINE} (use create_upload), a data document over ${p.dataDoc}, or a request body over ${p.mcpBody}.
 - capability_denied: the artifact does not declare the capability; publish a new version with it in capabilities.
-- quota_exceeded means the instance hit its daily free-plan limit; retry after 00:00 UTC.
+- quota_exceeded means the instance hit ${p.quota}; retry after 00:00 UTC.
 - A result may carry an extra note that the instance hit its CPU limit; pass it on to the user once, since the fix (Workers Paid) is theirs.`,
   },
 } satisfies Record<string, Section>;

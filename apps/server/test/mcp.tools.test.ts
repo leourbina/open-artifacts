@@ -540,12 +540,15 @@ describe("tool manifest", () => {
     const kb = `${LIMITS.inlineBytes / 1024} KB`;
     const text = (n: string) =>
       TOOL_DEFS.find((t) => t.name === n)?.description ?? "";
-    expect(text("publish_artifact")).toContain(`≤${kb} inline`);
-    expect(text("publish_artifact")).toContain("else create_upload");
+    expect(text("publish_artifact")).toContain(
+      `is limited to ${kb}; for more, call create_upload`,
+    );
     expect(text("create_upload")).toContain(`over the ${kb} inline limit`);
     const ins = INSTRUCTIONS("free");
     expect(ins).toContain(`limited to ${kb} per call`);
-    expect(ins).toContain(`≤${kb} inline, else create_upload`);
+    expect(ins).toContain(
+      `limited to ${kb} per call; over it, publish_artifact fails with too_large`,
+    );
     // The old inline limit; the Free data-doc limit is also 256 KB, so drop
     // that one phrase first.
     const docFree = `${LIMITS.dataDocBytesFree / 1024} KB`;

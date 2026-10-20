@@ -5,7 +5,6 @@
 import { planOf } from "@oa/shared";
 import type { Context } from "hono";
 import type { Env } from "../env.js";
-import { appOrigin } from "../http/errors.js";
 import type { AppEnv } from "../http/middleware.js";
 import { VERSION } from "../version.gen.js";
 import { planText } from "./instructions.js";
@@ -22,20 +21,29 @@ export const skillEnabled = (env: Pick<Env, "SKILL_MD">): boolean =>
   env.SKILL_MD?.trim().toLowerCase() !== "off";
 
 export const skillUrl = (env: SkillEnv): string | undefined =>
-  skillEnabled(env) ? appOrigin(env) + SKILL_PATH : undefined;
+  skillEnabled(env) ? skillOrigin(env.APP_HOST) + SKILL_PATH : undefined;
+
+const LOCAL = /^(localhost|127\.0\.0\.1|.+\.localhost)$/i;
+
+/**
+ * The origin the skill states: https on APP_HOST, http only for localhost,
+ * 127.0.0.1 and *.localhost (any port). Never the request's scheme.
+ */
+export const skillOrigin = (host: string): string =>
+  `${LOCAL.test(host.replace(/:\d+$/, "")) ? "http" : "https"}://${host}`;
 
 const memo = new Map<string, Promise<string>>();
 
 /** The skill for this instance. */
 export function renderSkill(env: SkillEnv): Promise<string> {
   const plan = planOf(env.PLAN);
-  const key = `${env.ENVIRONMENT}|${env.APP_HOST}|${plan}`;
+  const key = `${env.APP_HOST}|${plan}`;
   let p = memo.get(key);
   if (!p) {
     p = skillName(env.APP_HOST).then((name) => {
       const v: Record<string, string> = {
         ...planText(plan),
-        origin: appOrigin(env),
+        origin: skillOrigin(env.APP_HOST),
         host: env.APP_HOST,
         name,
         hostSlug: hostSlug(env.APP_HOST),

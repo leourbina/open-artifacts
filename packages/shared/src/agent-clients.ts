@@ -74,16 +74,17 @@ export function agentClients(
       code: !t
         ? `claude mcp add --transport http ${NAME} ${sh(mcpUrl)}`
         : f
-          ? `claude mcp add --transport http ${NAME} ${sh(mcpUrl)} --header "Authorization: Bearer $(cat ${f})"`
+          ? // Single-quoted: stored as \${OA_TOKEN}, expanded at connect time.
+            `claude mcp add --transport http ${NAME} ${sh(mcpUrl)} --header 'Authorization: Bearer \${OA_TOKEN}'`
           : `read -rs OA_TOKEN
 claude mcp add --transport http ${NAME} ${sh(mcpUrl)} --header "Authorization: Bearer $OA_TOKEN"
 unset OA_TOKEN`,
       hint: f
-        ? `reads the token from ${f}; Claude Code stores the expanded header in its own config`
+        ? `start Claude Code with the token in OA_TOKEN: ${withEnv("claude")}`
         : "paste the token at the hidden prompt; Claude Code stores the expanded header in its own config",
       verify: t
         ? `\`claude mcp list\` shows ${NAME} as connected; in a session, \`/mcp\` lists its tools.`
-        : `In a session, run \`/mcp\`, pick ${NAME} and sign in in the browser; it then lists its tools.`,
+        : `In a session, run \`/mcp\`, pick ${NAME} and sign in through the browser; it then lists its tools.`,
       reload: "Start a new Claude Code session, or reconnect from `/mcp`.",
     });
     add({
@@ -96,7 +97,7 @@ unset OA_TOKEN`,
         : "export OA_TOKEN in the shell that starts codex",
       verify: t
         ? `\`codex mcp list\` shows ${NAME}.`
-        : `\`codex mcp login ${NAME}\` signs in in the browser; \`codex mcp list\` then shows it.`,
+        : `\`codex mcp login ${NAME}\` signs in through the browser; \`codex mcp list\` then shows it.`,
       reload: "Restart codex; it reads config.toml at start.",
     });
     add({
@@ -117,10 +118,9 @@ unset OA_TOKEN`,
         ? `launch Cursor from a shell with the token in OA_TOKEN: ${withEnv("cursor")}`
         : "export OA_TOKEN before launching Cursor",
       verify: t
-        ? `Cursor Settings → MCP shows ${NAME} enabled with its tools.`
-        : `Cursor Settings → MCP shows ${NAME}; sign in from there, then it lists its tools.`,
-      reload:
-        "Turn the server off and on in Cursor Settings → MCP, or restart Cursor.",
+        ? `Customize (sidebar) shows ${NAME} enabled with its tools.`
+        : `Find ${NAME} under Customize (sidebar); when Cursor asks you to sign in, finish it in the browser, and it then lists its tools.`,
+      reload: "Toggle the server off and on in Customize, or restart Cursor.",
     });
     add({
       agent: "OpenCode",
@@ -151,7 +151,7 @@ unset OA_TOKEN`,
         : "export OA_TOKEN before launching OpenCode; an unset OA_TOKEN becomes an empty string",
       verify: t
         ? `\`opencode mcp list\` shows ${NAME} as connected.`
-        : `\`opencode mcp auth ${NAME}\` signs in in the browser; \`opencode mcp list\` then shows it.`,
+        : `\`opencode mcp auth ${NAME}\` signs in through the browser; \`opencode mcp list\` then shows it.`,
       reload: "Restart opencode; it reads its config at start.",
     });
     add({
@@ -172,7 +172,7 @@ unset OA_TOKEN`,
         ? `have the client read ${TOKEN_PLACEHOLDER} from ${f} (its env-var or file substitution); never paste the value into a file`
         : `replace ${TOKEN_PLACEHOLDER} with your token; keep this file out of git`,
       verify:
-        "Ask the client to list the server's tools (tools/list): 17, including publish_artifact.",
+        "Ask the client to list the server's tools (tools/list); publish_artifact is among them.",
       reload: "Restart the client or reload its MCP servers.",
     });
   }

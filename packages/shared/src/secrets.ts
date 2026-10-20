@@ -50,15 +50,19 @@ export function secretFile(
   return `~/.open-artifacts/${ids.installName ?? DEFAULT_INSTALL_NAME}-${kind}-token`;
 }
 
-const base = (file: string) => file.slice(file.lastIndexOf("/") + 1);
+/** The file's basename without its trailing "-token" (Platform's NAME). */
+const nameOf = (file: string) =>
+  file.slice(file.lastIndexOf("/") + 1).replace(/-token$/, "");
 
 /**
  * Platform's hidden-input one-liner (verbatim but for the file name and the
  * prompt): saves the secret to ~/.open-artifacts/<basename of file> with
  * umask 077 (file 0600, dir 0700). The prompt reads `<label> (hidden, then Enter): `.
  */
-export const secretSnippet = (file: string, label: string): string =>
-  `bash -c 'set -e; umask 077; d="$HOME/.open-artifacts"; mkdir -p "$d"; read -rsp "${label} (hidden, then Enter): " T; echo; [ -n "$T" ] || { echo "nothing entered; not saved"; exit 1; }; printf "%s" "$T" > "$d/${base(file)}"; echo "saved to $d/${base(file)}"'`;
+export function secretSnippet(file: string, label: string): string {
+  const NAME = nameOf(file);
+  return `bash -c 'set -e; umask 077; d="$HOME/.open-artifacts"; mkdir -p "$d"; chmod 700 "$d"; read -rsp "${label} (hidden, then Enter): " T; echo; [ -n "$T" ] || { echo "nothing entered; not saved"; exit 1; }; rm -f "$d/${NAME}-token"; printf "%s" "$T" > "$d/${NAME}-token"; chmod 600 "$d/${NAME}-token"; echo "saved to $d/${NAME}-token"'`;
+}
 
 /**
  * The one rule that names a client: the `!` prefix runs a line in the user's

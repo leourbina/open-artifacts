@@ -23,6 +23,7 @@ export const SKILL_TOKENS = [
   "dataDoc",
   "dataDocNote",
   "mcpBody",
+  "quota",
   "version",
 ] as const;
 export type SkillToken = (typeof SKILL_TOKENS)[number];
@@ -46,14 +47,28 @@ function typeOf(s: Json): string {
   if (s.enum) return s.enum.map((v) => JSON.stringify(v)).join("|");
   if (s.const !== undefined) return JSON.stringify(s.const);
   const alt = s.anyOf ?? s.oneOf;
-  if (alt) return [...new Set(alt.map(typeOf))].join(" | ");
+  const types = alt
+    ? [...new Set(alt.map(typeOf))]
+    : Array.isArray(s.type)
+      ? s.type
+      : null;
+  if (types) {
+    // boolean | z.stringbool(): the string form only coerces REST query
+    // strings ("true"); over MCP it is a boolean.
+    if (
+      types.length === 2 &&
+      types.includes("boolean") &&
+      types.includes("string")
+    )
+      return "boolean";
+    return types.join(" | ");
+  }
   const ap = s.additionalProperties;
   if (s.type === "object" && typeof ap === "object")
     return `{ "<key>": ${typeOf(ap)} }`;
   if (s.type === "object" && s.properties)
     return `{ ${Object.keys(s.properties).join(", ")} }`;
-  if (Array.isArray(s.type)) return s.type.join(" | ");
-  return s.type ?? "any";
+  return typeof s.type === "string" ? s.type : "any";
 }
 
 /** One line: `name` type, `opt?` type = default, ... */
@@ -126,6 +141,7 @@ export function renderSkillTemplate(): string {
     dataDoc: T("dataDoc"),
     dataDocNote: T("dataDocNote"),
     mcpBody: T("mcpBody"),
+    quota: T("quota"),
   };
   return `---
 name: ${T("name")}
@@ -146,9 +162,9 @@ Open Artifacts hosts the pages, documents and code you publish, with versions, s
 ## Connect
 
 - MCP endpoint: \`${T("origin")}/mcp\` (Streamable HTTP).
-- OAuth (preferred): add \`${T("origin")}/mcp\` as a remote MCP server in your client. The client registers itself (dynamic client registration) and the user signs in in the browser.
+- OAuth (preferred): add \`${T("origin")}/mcp\` as a remote MCP server in your client. The client registers itself (dynamic client registration) and the user signs in through the browser.
 - Personal access token: the user creates one at ${T("origin")}/settings/agents and saves it with the line under Secrets. Send it as \`Authorization: Bearer <token>\`, read from \`${PAT_FILE}\` in the command or config, never pasted in.
-- Per-client setup is under Client setup below; after a change, reload the client and check that tools/list shows the 17 tools.
+- Per-client setup is under Client setup below; after a change, reload the client and check that tools/list shows the ${TOOL_DEFS.length} tools.
 - Only members can connect agents; guests cannot.
 - Without MCP support, call the endpoint with curl (JSON-RPC; \`tools/call\` takes \`{ "name": "<tool>", "arguments": { ... } }\`):
 
@@ -158,7 +174,7 @@ curl -s ${T("origin")}/mcp -H "Authorization: Bearer $(cat ${PAT_FILE})" -H 'con
 
 ## Secrets
 
-To save the access token, give the user this line:
+To save the user's personal access token, give them this line:
 
 \`\`\`sh
 ${secretSnippet(PAT_FILE, SECRET_LABELS.pat)}

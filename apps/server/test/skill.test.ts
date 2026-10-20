@@ -10,7 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createPat } from "../src/auth/pat.js";
 import { INSTRUCTIONS, sizeText } from "../src/mcp/instructions.js";
 import { SKILL_HASH, SKILL_TEMPLATE } from "../src/mcp/skill.generated.js";
-import { renderSkill, SKILL_DOC_URI } from "../src/mcp/skill.js";
+import { renderSkill, SKILL_DOC_URI, skillOrigin } from "../src/mcp/skill.js";
 import {
   hostSlug,
   SECRET_LABELS,
@@ -104,6 +104,23 @@ describe("skill.md drift", () => {
         Object.keys(t.inputSchema.properties ?? {}).sort(),
       );
     }
+  });
+
+  it("quota_exceeded is plan-aware; includeDeleted renders as boolean", async () => {
+    expect(await skill(E({ PLAN: "free" }))).toContain(
+      "hit its daily free-plan limit",
+    );
+    expect(await skill(E({ PLAN: "paid" }))).toContain(
+      "hit a daily Cloudflare limit",
+    );
+    const md = await skill();
+    expect(md).toContain("`includeDeleted?` boolean");
+    const list = TOOL_DEFS.find((t) => t.name === "list_artifacts");
+    expect(list?.inputSchema.safeParse({ includeDeleted: true }).success).toBe(
+      true,
+    );
+    expect(md).toContain(`tools/list shows the ${TOOL_DEFS.length} tools`);
+    expect(md.match(/\b17\b/g) ?? []).toHaveLength(1);
   });
 
   it("every tool example passes its input schema", () => {
@@ -226,6 +243,22 @@ describe("skill.md frontmatter (agentskills.io)", () => {
       if (c.hint) expect(setup).toContain(`Note: ${fill(c.hint)}.`);
     }
     expect(setup).not.toMatch(/oa_pat_/);
+  });
+
+  it("skillOrigin: https on APP_HOST except local hosts", async () => {
+    expect(skillOrigin("oa.example.com")).toBe("https://oa.example.com");
+    expect(skillOrigin("localhost:8812")).toBe("http://localhost:8812");
+    expect(skillOrigin("127.0.0.1:8787")).toBe("http://127.0.0.1:8787");
+    expect(skillOrigin("app.localhost")).toBe("http://app.localhost");
+    expect(skillOrigin("localhost.example.com")).toBe(
+      "https://localhost.example.com",
+    );
+    const md = await renderSkill({
+      APP_HOST: "oa.example.com",
+      ENVIRONMENT: "dev",
+      PLAN: "free",
+    });
+    expect(md).toContain("`https://oa.example.com/mcp`");
   });
 
   it("skillName: slug rules, suffixes, cut with hash", async () => {

@@ -24,10 +24,14 @@ describe("secrets", () => {
     expect(() => secretFile("pat")).toThrow();
   });
 
-  it("secretSnippet is Platform's line with the label prompt and file name", () => {
-    const f = secretFile("access", { installName: "acme" });
-    expect(secretSnippet(f, SECRET_LABELS.access)).toBe(
-      `bash -c 'set -e; umask 077; d="$HOME/.open-artifacts"; mkdir -p "$d"; read -rsp "Cloudflare Access token (hidden, then Enter): " T; echo; [ -n "$T" ] || { echo "nothing entered; not saved"; exit 1; }; printf "%s" "$T" > "$d/acme-access-token"; echo "saved to $d/acme-access-token"'`,
+  it("secretSnippet is Platform's template (scripts/setup/src/tokens.ts), pinned", () => {
+    expect(
+      secretSnippet(
+        "~/.open-artifacts/open-artifacts-staging-cloudflare-token",
+        "Cloudflare deploy token",
+      ),
+    ).toBe(
+      `bash -c 'set -e; umask 077; d="$HOME/.open-artifacts"; mkdir -p "$d"; chmod 700 "$d"; read -rsp "Cloudflare deploy token (hidden, then Enter): " T; echo; [ -n "$T" ] || { echo "nothing entered; not saved"; exit 1; }; rm -f "$d/open-artifacts-staging-cloudflare-token"; printf "%s" "$T" > "$d/open-artifacts-staging-cloudflare-token"; chmod 600 "$d/open-artifacts-staging-cloudflare-token"; echo "saved to $d/open-artifacts-staging-cloudflare-token"'`,
     );
   });
 
@@ -71,12 +75,22 @@ describe("agentClients", () => {
       (s) => s.variant === "token",
     );
     const by = (a: string) => tok.find((s) => s.agent === a);
-    expect(by("Claude Code")?.code).toContain(`$(cat ${FILE})`);
+    expect(by("Claude Code")?.code).toContain(
+      "--header 'Authorization: Bearer ${OA_TOKEN}'",
+    );
+    expect(by("Claude Code")?.hint).toContain(
+      `OA_TOKEN="$(cat ${FILE})" claude`,
+    );
     expect(by("OpenCode")?.code).toContain(`{file:${FILE}}`);
     expect(by("Codex CLI")?.hint).toContain(`OA_TOKEN="$(cat ${FILE})" codex`);
     expect(by("Cursor")?.hint).toContain(`$(cat ${FILE})`);
     expect(by("Generic")?.code).toContain(TOKEN_PLACEHOLDER);
-    for (const s of tok) expect(s.code).not.toContain("oa_pat_");
+    for (const s of tok) {
+      expect(s.code).not.toContain("oa_pat_");
+      // Stored configs and add commands never expand the token; only a
+      // launch-command note may.
+      expect(s.code, s.agent).not.toContain("$(cat");
+    }
   });
 
   it("without tokenFile, token variants read OA_TOKEN (the dashboard's form)", () => {
