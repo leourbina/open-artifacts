@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.6.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.5.0...v0.6.0) (2026-10-20)
+
+
+### Features
+
+* **dashboard:** Tailwind preflight on; drop the no-preflight workarounds ([#286](https://github.com/open-artifacts-ai/open-artifacts/issues/286)) ([48cc8f9](https://github.com/open-artifacts-ai/open-artifacts/commit/48cc8f91b025c883a44b7c2c255564b1c711136c))
+* **server:** daily latest-release check for admins ([#250](https://github.com/open-artifacts-ai/open-artifacts/issues/250)) ([397c23b](https://github.com/open-artifacts-ai/open-artifacts/commit/397c23bef6015e66de4ffcffed55ad8b445e6a89))
+* **server:** owner-only atomic data reset for an artifact ([#298](https://github.com/open-artifacts-ai/open-artifacts/issues/298)) ([7eef38a](https://github.com/open-artifacts-ai/open-artifacts/commit/7eef38ae6dd93cf4bf488edd62acf9fcbe1605f4))
+* **server:** per-instance /skill.md generated from the MCP tool defs ([#251](https://github.com/open-artifacts-ai/open-artifacts/issues/251)) ([e9e0efb](https://github.com/open-artifacts-ai/open-artifacts/commit/e9e0efbc370fb98c65812ef34f463babec53b7c5))
+* **setup:** skip a deploy when nothing changed ([#25](https://github.com/open-artifacts-ai/open-artifacts/issues/25)) ([#275](https://github.com/open-artifacts-ai/open-artifacts/issues/275)) ([2631b05](https://github.com/open-artifacts-ai/open-artifacts/commit/2631b05a35d9781d2f3eb792b8b77f3e9aaf33bd))
+
+
+### Bug Fixes
+
+* **runtime:** reject with no_shell outside the viewer ([#288](https://github.com/open-artifacts-ai/open-artifacts/issues/288)) ([#293](https://github.com/open-artifacts-ai/open-artifacts/issues/293)) ([16371a9](https://github.com/open-artifacts-ai/open-artifacts/commit/16371a991c3857da508f9f1a4a0592d7f3901ee0))
+
 ## [0.5.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.4.0...v0.5.0) (2026-10-20)
 
 
