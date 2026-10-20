@@ -1,0 +1,277 @@
+# Hosted M1 · P1: Hosting on Workers for Platforms (implementation plan)
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Run any number of isolated Open Artifacts installs as user Workers in one Workers for Platforms dispatch namespace, provisioned through one interface that also wraps today's self-hosted `oa:setup`, and hand-provision FinQore on it.
+
+**Architecture:** A new package `@oa/provision` defines `Provisioner` (create, upgrade, rollback, delete, export, import) with two implementations: `WfpProvisioner` (Cloudflare REST API only, no wrangler, no laptop state) and `SetupProvisioner` (adapter over `@oa/setup`). Two small platform Workers sit in front: `apps/dispatch` maps a hostname to an install ID and forwards the request untouched; `apps/scheduler` runs every install's nightly job through the dispatch namespace. The server code is unchanged in both modes.
+
+**Tech Stack:** TypeScript, Cloudflare Workers, Workers for Platforms, D1, R2, KV, Durable Objects, vitest (`@cloudflare/vitest-pool-workers` for the two Workers), pnpm workspace.
+
+**Spec:** `docs/superpowers/specs/2026-10-20-hosted-open-artifacts-design.md` (sections 3, 4.1, 4.4, 4.7, 4.8, 5). Roadmap: M1 "FinQore pilot".
+
+## Spec 4.8 open items, confirmed against Cloudflare docs (2026-10-20)
+
+| Item | Finding | Consequence |
+|---|---|---|
+| Cron Triggers in user Workers | **Not supported.** Cloudflare staff on workers-sdk#13840 (2026-05-11); Wrangler now warns that crons are ignored with `--dispatch-namespace`. No `/schedules` API for namespace scripts. | The central scheduler (Task 7) is required, not optional. |
+| Per-customer logs | Workers Logs per user Worker by setting `observability` in the upload metadata, queryable per script through the Workers Observability API. Logpush can cover the whole namespace via the dispatch Worker. | Task 3 sets `observability.enabled`, `logs.invocation_logs`, `head_sampling_rate: 1` on every upload. |
+| Live tail per customer | Tail Workers attach per user Worker (`tail_consumers` in upload metadata); a Tail Worker on the dispatch Worker gets two trace items, one for each Worker. | No Tail Worker in M1; Workers Logs is enough for one customer. Recorded in the runbook. |
+| D1 per account | 50,000 databases, 10 GB each (hard), **1 TB total per account** (raisable). | ~100 installs at the 10 GB cap before a raise; fine for M1. |
+| R2 per account | 1,000,000 buckets. | No constraint. |
+| **KV per account** | **1,000 namespaces** (Free and Paid). | **Caps hosted at ~1,000 installs** (one `OAUTH_KV` each). Not an M1 problem; flagged to the Manager for M2. |
+| Cloudflare API | 1,200 requests per 5 minutes per token. | Upgrade waves (M2) must budget calls; a create costs ~15. |
+| Unsupported in user Workers | `caches.default`, `request.cf`, gradual deployments. The server uses neither API (verified: no matches in `apps/server/src`). | Each upgrade goes to 100% at once. |
+
+Still unconfirmed (Task 1 spike, needs the subscription): `Fetcher.scheduled()` through a dispatch namespace binding, and whether `send_email`, `browser` and `ratelimit` bindings and static assets work on user Workers.
+
+## Global Constraints
+
+- Same product, same code: the user Worker is the normal `apps/server` build. No hosted-only branches in `apps/server/src`.
+- Isolation per install: own Worker, D1, R2, KV, Durable Objects and secrets. No table or bucket shared across installs holds customer data. Platform storage holds only install metadata.
+- Every resource is named by install ID (`names(id)`, Task 2).
+- Secrets are generated per install, sent to Cloudflare once, never stored, logged or printed. The owner PAT goes to a 0600 file only.
+- The control plane's (here: the CLI's) Cloudflare token is scoped to: Workers Scripts Edit, Workers for Platforms Edit, D1 Edit, Workers R2 Storage Edit, Workers KV Storage Edit. No zone or DNS permissions.
+- Upgrades never pass `--allow-downgrade`; the downgrade guard applies.
+- Free-plan-style CPU budgets still apply per request; the dispatch Worker adds under 1 ms CPU.
+- Tests run as `env -i PATH="$PATH" HOME="$HOME" pnpm exec vitest run`; never print env.
+- Copy: no em dashes in user-facing copy; say "any AI agent".
+- Human gates (ask the Manager, do not act): the Workers for Platforms subscription ($25/month); buying or adding the hosted app and content domains; any DNS record or Worker route on them; FinQore's go-live.
+
+## Review Focus
+
+1. **A hostname that isn't mapped** (typo, old install, uppercase, trailing dot, a port, a bare apex) must get a generic 404 and never reach another install. Pinned in Task 6.
+2. **A create that fails halfway** (D1 created, upload fails) must resume on rerun without duplicate resources and without regenerating secrets for an already-uploaded Worker. Pinned in Task 4.
+3. **An upgrade whose healthcheck fails** must roll that install back to its previous bundle and report it, leaving other installs alone. Pinned in Task 5.
+4. **Deleting the wrong install**: `delete` must require `--confirm <installId>` to match and must unmap hosts before touching resources. Pinned in Task 5.
+5. **One install's nightly job throwing or timing out** must not stop the others. Pinned in Task 7.
+
+---
+
+### Task 1: Spike and limits record (needs the subscription gate)
+
+**Files:**
+- Create: `docs/ops/hosted.md` (limits table above, spike results, runbook skeleton)
+- Create: `scripts/hosted/spike/` (throwaway; deleted at the end of the task)
+
+- [ ] **Step 1:** Ask the Manager to get the user's approval for the Workers for Platforms subscription. Stop until it's on.
+- [ ] **Step 2:** In a `oa-spike` namespace, upload a 20-line user Worker exporting `fetch` and `scheduled` (writes a timestamp to a KV binding), a dispatch Worker with a namespace binding, and call `env.DISPATCHER.get("spike").scheduled({ cron: "17 3 * * *" })`. Record whether the handler ran (KV timestamp).
+- [ ] **Step 3:** Upload the real `apps/server` bundle once to the spike namespace with all template bindings plus its static assets (Task 3's metadata, by hand). Record which bindings the API accepts: `send_email`, `browser`, `ratelimit`, `assets`, `durable_object_namespace` with `new_sqlite_classes` migration.
+- [ ] **Step 4:** Write the results into `docs/ops/hosted.md`. Rule on each failure in the doc: `scheduled()` unsupported means Task 7 uses the signed route in its fallback; a rejected binding is listed as excluded in Task 3's table with the user-visible effect.
+- [ ] **Step 5:** Delete the spike namespace and its resources; commit the doc.
+
+### Task 2: `@oa/provision` package: types, install IDs, names
+
+**Files:**
+- Create: `packages/provision/package.json`, `tsconfig.json`, `src/index.ts`, `src/types.ts`, `src/names.ts`
+- Test: `packages/provision/test/names.test.ts`
+
+**Interfaces:**
+- Produces:
+  - `type InstallId = string` matching `/^i[a-z0-9]{11}$/`; `newInstallId(): InstallId` (crypto random, base32 lowercase); `isInstallId(s: string): s is InstallId`.
+  - `names(id: InstallId): { script: string; d1: string; r2: string; kv: string }` → `oa-<id>`, `oa-<id>`, `oa-<id>`, `oa-<id>-oauth`.
+  - `hosts(slug: string, domains: { app: string; content: string }): { appHost: string; contentHost: string }`; `slug` matches `/^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/` and is not in `RESERVED_SLUGS` (`www`, `api`, `admin`, `app`, `mail`, `status`, `docs`, `staging`, `content`).
+  - `interface Provisioner { create(i: CreateInput): Promise<Install>; upgrade(id, to: Release): Promise<UpgradeResult>; rollback(id): Promise<UpgradeResult>; delete(id, confirm: string): Promise<void>; export(id, dest: string): Promise<never>; import(src: string, i: CreateInput): Promise<never> }`
+  - `CreateInput = { slug; ownerEmail; plan: "paid"; vars?: Record<string,string> }`; `Install = { id; slug; appHost; contentHost; version; patFile: string }`; `Release = { version: string; bundleKey: string }`; `UpgradeResult = { id; from: string; to: string; ok: boolean; rolledBack: boolean; reason?: string }`.
+  - `class NotInM1 extends Error` thrown by `export`/`import` in both implementations. (Ruling: the spec puts whole-install export in the interface; the roadmap schedules it for M2. The signatures land now so callers compile; the bodies come in M2.)
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+it("install ids are 12 chars, lowercase, i-prefixed", () => {
+  for (let n = 0; n < 200; n++) expect(isInstallId(newInstallId())).toBe(true);
+  expect(isInstallId("I0123456789a")).toBe(false);
+});
+it("names are derived only from the id", () => {
+  expect(names("iabc123def45")).toEqual({ script: "oa-iabc123def45", d1: "oa-iabc123def45", r2: "oa-iabc123def45", kv: "oa-iabc123def45-oauth" });
+});
+it("rejects reserved, uppercase, dotted and too-long slugs", () => {
+  for (const s of ["www", "Acme", "a.b", "-a", "a-", "x".repeat(33)])
+    expect(() => hosts(s, D)).toThrow(/slug/);
+  expect(hosts("finqore", D)).toEqual({ appHost: "finqore.app.test", contentHost: "finqore.content.test" });
+});
+```
+
+- [ ] **Step 2:** Run `env -i PATH="$PATH" HOME="$HOME" pnpm --filter @oa/provision exec vitest run`; expect FAIL (module missing).
+- [ ] **Step 3:** Implement `src/types.ts`, `src/names.ts`, export from `src/index.ts`; add the package to the root test run.
+- [ ] **Step 4:** Rerun; expect PASS.
+- [ ] **Step 5:** Commit `feat(provision): install ids, names and the Provisioner interface`.
+
+### Task 3: User Worker bundle and upload metadata
+
+**Files:**
+- Create: `packages/provision/src/bundle.ts`, `packages/provision/src/metadata.ts`
+- Modify: `apps/server/package.json` (script `build:bundle`: `wrangler deploy --dry-run --outdir dist-worker` with a rendered config)
+- Test: `packages/provision/test/metadata.test.ts`
+
+**Interfaces:**
+- Consumes: `names()`, `Install` (Task 2).
+- Produces:
+  - `buildBundle(root: string): Promise<{ modules: { name: string; type: "esm" | "wasm"; bytes: Uint8Array }[]; mainModule: string; assetsDir: string; version: string }>`
+  - `userWorkerMetadata(i: { id; appHost; contentHost; ownerEmail; vars }, r: { d1Id; kvId; version }, opts: { firstUpload: boolean }): UploadMetadata` — bindings mirror `apps/server/wrangler.template.jsonc` with values from `names(id)`; `observability: { enabled: true, logs: { enabled: true, invocation_logs: true, head_sampling_rate: 1 } }`; `tags: [id, "v" + version]`; `migrations` only when `firstUpload` (`new_sqlite_classes: ["ArtifactRuntime"]`, tag `v1`); no `routes`, no `triggers`.
+  - `opts.testHooks?: boolean` (default false): when true adds var `TEST_HOOKS="1"` (P5's contract); only `oa:hosted create --test-hooks` sets it, and `upgrade` keeps the install's saved value.
+  - `TEMPLATE_BINDINGS_EXCLUDED: Record<string, string>`: binding name → reason (filled from Task 1; `routes` and `crons` are always excluded).
+
+- [ ] **Step 1: Write the failing tests**
+  - `every template binding is mapped or explicitly excluded`: parse `apps/server/wrangler.template.jsonc`, collect binding names and var names; each must appear in `userWorkerMetadata(...).bindings` or in `TEMPLATE_BINDINGS_EXCLUDED`. This is the drift guard: a new server binding fails this test until hosted handles it.
+  - `vars carry the install's own hosts`: `APP_HOST`, `CONTENT_HOST`, `OWNER_EMAIL`, `WORKER_NAME === names(id).script`, `PLAN === "paid"`, `ENVIRONMENT === "production"`.
+  - `migrations only on the first upload`.
+  - `no secret names appear in bindings` (`SESSION_SECRET`, `CONTENT_SIGNING_KEY`, `ACCESS_CLIENT_SECRET`, `ANALYTICS_TOKEN`).
+- [ ] **Step 2:** Run; expect FAIL.
+- [ ] **Step 3:** Implement. `buildBundle` runs the dry-run build once per release, not per install.
+- [ ] **Step 4:** Rerun; expect PASS.
+- [ ] **Step 5:** Commit `feat(provision): user Worker bundle and upload metadata`.
+
+### Task 4: Cloudflare API client and `WfpProvisioner.create`
+
+**Files:**
+- Create: `packages/provision/src/cf.ts`, `packages/provision/src/wfp.ts`, `packages/provision/src/platform.ts`
+- Create: `apps/platform-db/migrations/0001_installs.sql` (platform D1 `oa-platform`)
+- Test: `packages/provision/test/wfp-create.test.ts`, `packages/provision/test/fake-cf.ts`
+
+**Interfaces:**
+- Consumes: Tasks 2 and 3.
+- Produces:
+  - `cfClient(o: { accountId: string; token: string; fetch?: typeof fetch }): Cf` with typed calls: `d1Create/d1Get/d1Query/d1Delete`, `r2Create/r2Delete`, `kvCreate/kvDelete/kvPut/kvGet/kvDeleteKey`, `nsScriptUpload(ns, script, metadata, modules)`, `nsScriptDelete(ns, script)`, `nsSecretPut(ns, script, name, value)`, `nsAssetsUpload(ns, script, dir)` (assets upload session, then completion JWT into metadata). Retries 429 and 5xx with backoff (3 tries); never includes request bodies in errors.
+  - Platform D1 table `installs(id TEXT PRIMARY KEY, slug TEXT UNIQUE, app_host TEXT UNIQUE, content_host TEXT UNIQUE, owner_email TEXT, d1_id TEXT, kv_id TEXT, version TEXT, previous_version TEXT, state TEXT CHECK(state IN ('creating','active','upgrading','deleting')), created_at INTEGER, updated_at INTEGER)`. No customer data.
+  - Platform KV `HOSTS`: key = lowercase host, value = install ID. Written last on create, removed first on delete.
+  - `new WfpProvisioner(o: { cf: Cf; namespace: string; platformDb: string; hostsKv: string; domains; releases: R2BucketName; patDir: string })`.
+- Create order, each step idempotent by checking first: insert `installs` row (`creating`) → D1 → R2 → KV → apply `apps/server/migrations/*.sql` in order via `d1Query`, recording applied names in a `d1_migrations` table the same way wrangler does → secrets (`SESSION_SECRET`, `CONTENT_SIGNING_KEY`: 48 random bytes base64url) only when the script doesn't exist yet → upload script with assets → `HOSTS` keys → `/healthz` until `{ ok: true }` (60 s) → mint owner PAT by SQL insert (reuse the `owner-token.ts` SQL and hashing; `newPat()` from `@oa/shared`) into `<patDir>/<appHost>-pat-token`, mode 0600, O_NOFOLLOW → MCP selftest (publish and read back a private Welcome artifact, as setup's `selftest.ts`) → row `active`.
+
+- [ ] **Step 1: Write the failing tests** (against `fake-cf.ts`, an in-memory Cloudflare with call log)
+  - `creates every resource named by install id and maps both hosts`.
+  - `secrets are 48-byte random, differ between two installs, and never appear in the call log's printable fields or thrown errors`.
+  - `resumes after an upload failure without duplicating resources or re-sending secrets`: fail `nsScriptUpload` once, rerun `create` with the same id; assert one D1, one R2, one KV, secret puts counted once.
+  - `hosts are written last`: the call log shows `kvPut(HOSTS)` after `nsScriptUpload`.
+  - `slug or host already taken fails before any Cloudflare call`.
+  - `the PAT file is 0600 and its content never appears in returned values`.
+- [ ] **Step 2:** Run; expect FAIL.
+- [ ] **Step 3:** Implement `cf.ts`, `platform.ts`, `wfp.ts#create`.
+- [ ] **Step 4:** Rerun; expect PASS.
+- [ ] **Step 5:** Commit `feat(provision): WfpProvisioner.create`.
+
+### Task 5: `upgrade`, `rollback`, `delete` (WfP)
+
+**Files:**
+- Modify: `packages/provision/src/wfp.ts`
+- Create: `packages/provision/src/releases.ts`
+- Test: `packages/provision/test/wfp-lifecycle.test.ts`
+
+**Interfaces:**
+- Produces:
+  - `publishRelease(cf, bucket, bundle): Promise<Release>`: stores the bundle (modules and assets) at `releases/<version>/` in the platform R2 bucket `oa-releases`; idempotent per version.
+  - `upgrade(id, to)`: refuses when `to.version` < installed (reuse `@oa/setup`'s semver compare from `version-guard.ts`; move it to `@oa/shared` if it isn't exported) → row `upgrading` → apply new D1 migrations → upload `to` with `keep_bindings` and `tags` updated → healthcheck and selftest → on failure call `rollback(id)` and return `{ ok: false, rolledBack: true, reason }` → row `active`, `previous_version` = old.
+  - `rollback(id)`: re-uploads `previous_version`'s bundle from `oa-releases`; never rolls back D1 migrations (they're forward-only, as today); swaps `version` and `previous_version`.
+  - `delete(id, confirm)`: throws unless `confirm === id`; row `deleting` → remove `HOSTS` keys → delete script → delete KV, R2 (emptied first), D1 → delete row. Idempotent.
+
+- [ ] **Step 1: Write the failing tests**
+  - `upgrade applies only new migrations and keeps bindings`.
+  - `a failed healthcheck after upgrade rolls back to the previous bundle and reports it`.
+  - `upgrade to an older version is refused`.
+  - `rollback with no previous version is a clear error, not a re-upload`.
+  - `delete requires confirm === id and unmaps hosts before anything else`: call log order.
+  - `delete is idempotent after a partial failure`.
+- [ ] **Step 2:** Run; expect FAIL.
+- [ ] **Step 3:** Implement.
+- [ ] **Step 4:** Rerun; expect PASS.
+- [ ] **Step 5:** Commit `feat(provision): upgrade, rollback and delete for hosted installs`.
+
+### Task 6: Dispatch Worker
+
+**Files:**
+- Create: `apps/dispatch/package.json`, `wrangler.jsonc`, `src/index.ts`, `vitest.config.ts`
+- Test: `apps/dispatch/test/dispatch.test.ts`
+
+**Interfaces:**
+- Consumes: `HOSTS` KV contract and `names(id).script` (Tasks 2, 4).
+- Produces: a Worker with bindings `DISPATCHER` (dispatch namespace) and `HOSTS` (KV). No routes in the repo config: routes `*.<app-domain>/*` and `*.<content-domain>/*` are added at the human DNS gate.
+
+Behavior: `host = new URL(req.url).hostname.toLowerCase().replace(/\.$/, "")` → `HOSTS.get(host, { cacheTtl: 60 })` → `isInstallId` → `DISPATCHER.get(names(id).script).fetch(req)` with the request unchanged. Any miss, invalid value or `DISPATCHER.get` error returns `new Response("Not found", { status: 404 })` with no other body or headers. It reads no other header, sets none, and never logs request headers or URLs beyond the host.
+
+- [ ] **Step 1: Write the failing tests** (vitest pool workers, fake `DISPATCHER` recording which script was called)
+  - `unmapped host → 404 with a generic body and nothing dispatched`.
+  - `uppercase, trailing dot and explicit port map to the same install`.
+  - `app and content hosts of one install dispatch to the same script`.
+  - `a HOSTS value that isn't an install id → 404` (no script name injection).
+  - `the request reaches the user Worker byte-for-byte` (method, URL, headers including `Cookie` and `Authorization`, body stream).
+  - `a throwing DISPATCHER.get → 404, not 500 with a stack`.
+- [ ] **Step 2:** Run; expect FAIL.
+- [ ] **Step 3:** Implement (under 60 lines).
+- [ ] **Step 4:** Rerun; expect PASS; also run `pnpm --filter @oa/dispatch exec wrangler deploy --dry-run` and check the bundle is under 50 KB.
+- [ ] **Step 5:** Commit `feat(dispatch): route hosted hostnames to install Workers`.
+
+### Task 7: Central scheduler
+
+**Files:**
+- Create: `apps/scheduler/package.json`, `wrangler.jsonc` (cron `17 3 * * *`; bindings `DISPATCHER`, `PLATFORM_DB`), `src/index.ts`
+- Test: `apps/scheduler/test/scheduler.test.ts`
+
+**Interfaces:**
+- Consumes: platform `installs` table (Task 4), `names()`.
+- Produces: `runNightly(env, now: number, o?: { concurrency?: number }): Promise<{ ok: string[]; failed: { id: string; reason: string }[] }>`; `scheduled` calls it and logs one line per failure.
+
+Primary path (if Task 1 confirms it): `DISPATCHER.get(names(id).script).scheduled({ cron: "17 3 * * *", scheduledTime: now })` for every `active` install, 10 at a time, 25 s timeout each. The server's existing `scheduled` handler runs unchanged.
+
+Fallback (only if Task 1 shows `scheduled()` isn't available through the namespace): a new server route `POST /__oa/nightly` accepting only a body `{ installHost, ts }` signed with Ed25519 by the scheduler (private key a scheduler secret; public key a server var `NIGHTLY_PUBKEY`), `ts` within 5 minutes, `installHost === APP_HOST`. That route is Backend-owned code; coordinate before building and add its cross-install replay case to P5.
+
+- [ ] **Step 1: Write the failing tests**
+  - `runs every active install and skips creating, upgrading and deleting ones`.
+  - `one install throwing or timing out doesn't stop the others; it's reported in failed`.
+  - `respects the concurrency limit` (max in flight observed ≤ 10).
+  - `zero installs is a no-op`.
+- [ ] **Step 2:** Run; expect FAIL.
+- [ ] **Step 3:** Implement.
+- [ ] **Step 4:** Rerun; expect PASS.
+- [ ] **Step 5:** Commit `feat(scheduler): nightly jobs for hosted installs`.
+
+### Task 8: `SetupProvisioner` and the `oa:hosted` CLI
+
+**Files:**
+- Create: `packages/provision/src/setup-adapter.ts`, `scripts/hosted/src/cli.ts`, `scripts/hosted/package.json`
+- Modify: root `package.json` (script `oa:hosted`)
+- Test: `packages/provision/test/setup-adapter.test.ts`, `scripts/hosted/test/cli.test.ts`
+
+**Interfaces:**
+- Consumes: `@oa/setup`'s `run(argv, deps, root)` and `rollbackCommand(argv, deps, root)`.
+- Produces:
+  - `new SetupProvisioner({ deps, root })`: `create` → `run(["--json","--yes","--solo","--name",…])`; `upgrade` → `run(["--upgrade","--json","--name",…])`; `rollback` → `rollbackCommand`; `delete` → throws `NotInM1` (self-hosters delete in their own dashboard; ruling: no destructive self-hosted path in M1); `export`/`import` → `NotInM1`. Maps setup's JSON lines to `Install`/`UpgradeResult`.
+  - CLI: `pnpm oa:hosted <create|upgrade|rollback|delete|status|publish-release> --env <staging|prod> [--install <id>] [--slug <s>] [--owner <email>] [--to <version>] [--confirm <id>] [--test-hooks]`. `--test-hooks` is refused with `--env prod`. Token from `~/.open-artifacts/hosted-<env>-cloudflare-token` (same file rules as setup's token files). Prints one JSON line per step; never prints secrets or the PAT. `--env prod` refuses a staging token file and vice versa (namespace names `oa-staging` and `oa-prod` are fixed per env).
+- [ ] **Step 1: Write the failing tests**
+  - `setup adapter maps a successful run to Install and a failed upgrade to ok:false`.
+  - `the CLI refuses prod with the staging token file`.
+  - `--test-hooks with --env prod exits 1 before any call`.
+  - `delete without --confirm, or with a different id, exits 1 before any call`.
+  - `no secret or PAT value appears in stdout` (run create against fake-cf, scan output for the generated values).
+- [ ] **Step 2–4:** Run (FAIL), implement, run (PASS).
+- [ ] **Step 5:** Commit `feat(hosted): oa:hosted CLI and the self-hosted provisioner adapter`.
+
+### Task 9: E2E in both modes in CI
+
+**Files:**
+- Modify: `apps/server/test/smoke/*.ts` and `apps/server/vitest.smoke.config.ts` (targets from `OA_SMOKE_TARGETS`, a JSON list of `{ name, url, contentUrl, patFile }`; the old `STAGING_URL` and `STAGING_OWNER_PAT` keep working as a one-item list)
+- Create: `.github/workflows/hosted-staging.yml`
+- Modify: `scripts/ci/check-ci.test.ts` (or the existing workflow invariant tests) for the new workflow
+
+Workflow: on push to main (paths `apps/server/**`, `packages/**`, `apps/dispatch/**`, `apps/scheduler/**`) and dispatch; concurrency `hosted-staging`; `permissions: contents: read`; builds once, `oa:hosted publish-release --env staging`, deploys `apps/dispatch` and `apps/scheduler` to staging, `oa:hosted upgrade` for the two staging installs `stg-a` and `stg-b` (created once by hand at the gate; they are also P5's red-line pair), writes their PAT files from secrets `HOSTED_STG_A_PAT`/`HOSTED_STG_B_PAT` with umask 077, then runs smoke against both. The existing `deploy-staging.yml` keeps running smoke against self-hosted staging, so both modes run on every main push.
+
+- [ ] **Step 1:** Write the failing tests: `smoke reads OA_SMOKE_TARGETS and runs every suite per target`; workflow invariants (`concurrency`, `permissions`, secrets only via files, no `echo` of secrets).
+- [ ] **Step 2–4:** Run (FAIL), implement, run (PASS).
+- [ ] **Step 5:** Commit `ci: run smoke against hosted and self-hosted staging`.
+
+### Task 10: FinQore, hand-provisioned (gated)
+
+**Files:**
+- Modify: `docs/ops/hosted.md` (runbook: create, check, upgrade, rollback, logs per install via the Observability API filtered by script name)
+
+- [ ] **Step 1:** Ask the Manager for: the hosted app and content domains (bought or chosen by the user, separate registrable domains, see P5), the DNS wildcard records and the dispatch Worker routes on them, and go-ahead to create `finqore`. Stop until all three are confirmed.
+- [ ] **Step 2:** `pnpm oa:hosted create --env prod --slug finqore --owner <FinQore admin email from the Manager>`; check `/healthz`, the Welcome artifact, a nightly run in the scheduler logs the next day.
+- [ ] **Step 3:** Record the install ID (not the PAT) in the runbook and the Platform status page; hand the PAT file to the user with the hidden-save convention, never in chat.
+- [ ] **Step 4:** Commit the runbook.
+
+---
+
+## Dependencies on other plans
+
+- P2 (Backend, direct sign-in) changes the server's sign-in config vars. Task 3's drift test will fail until those vars are mapped; that's intended.
+- P5 uses `stg-a`/`stg-b`, `oa:hosted`, and the PAT-file convention from this plan.
+- Task 7's fallback route, if needed, is Backend's.

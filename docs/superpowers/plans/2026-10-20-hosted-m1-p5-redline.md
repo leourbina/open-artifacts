@@ -1,0 +1,172 @@
+# Hosted M1 · P5: Red-line proof and import validation (implementation plan)
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Prove, on every release and against two real hosted installs, that nothing from tenant A works against tenant B, and block the release when it doesn't; and prove the migration skill imports a real Claude export into spaces correctly and idempotently.
+
+**Architecture:** A vitest suite in `tests/redline/` runs over HTTP against two staging installs (`stg-a`, `stg-b`, from P1) with identities obtained through Backend-owned test hooks that exist only on installs provisioned with them. A job in `release-please.yml` deploys the tagged build to both installs and runs the suite before `deploy-prod`, so a failure stops the release from reaching anyone. A separate harness in `tests/import/` checks an install after an agent ran the migration skill.
+
+**Tech Stack:** TypeScript, vitest (node), `@modelcontextprotocol/sdk` client, `ws`, GitHub Actions.
+
+**Spec:** `docs/superpowers/specs/2026-10-20-hosted-open-artifacts-design.md` (anti-goal; 4.1 sign-in; 4.2 guests; 4.6 import; 4.7). Depends on P1 (installs, `oa:hosted`), P2 (sign-in) and P3 (spaces) from Backend.
+
+## Global Constraints
+
+- The anti-goal: data leaking between customers, or one customer signing in to another's artifacts, is a failure even if everything else works.
+- The suite runs only against installs provisioned with test hooks (`stg-a`, `stg-b`); it refuses any target whose `/healthz` doesn't report `testHooks: true`.
+- Test hooks must not exist on any other install. The suite asserts that against prod (`/__test/*` → 404) on every run.
+- Every assertion is about B refusing A's credential: the expected result is a 401, 403 or 404 with no B data in the body, never "anything but 200".
+- Credentials (PATs, hook keys, session cookies) live in 0600 files or GitHub secrets, never in argv, logs or test names; failure messages print status and a body hash, not the body.
+- Real user exports never enter the repo, CI or a log. The import harness reads them from a local path the user gives.
+- Tests: `env -i PATH="$PATH" HOME="$HOME" pnpm exec vitest run`; never print env.
+- Human gates: a real claude.ai export from the user (they run the export; it stays on their machine); the security review is the Manager's, independent of this suite.
+
+## Review Focus
+
+1. **A check that passes because B is down**: every cross-tenant case first proves the same credential works against A (positive control), and B's `/healthz` is ok in `beforeAll`. Pinned in Task 2's harness.
+2. **A redirect counted as refusal**: fetches use `redirect: "manual"`; a 3xx to B's sign-in is a refusal only when it carries no session cookie and no B data. Pinned in Task 2.
+3. **Hooks leaking to prod**: the prod probe in Task 2 fails the run when any `/__test/*` route answers non-404.
+4. **A release that skips the suite** (the job skipped, cancelled or not required): `deploy-prod` and `deploy-demo` `needs: redline`, and the redline job has no `if:` that a release can satisfy while skipping it. Pinned in Task 7's workflow invariant test.
+5. **An import rerun that duplicates** (new artifacts or new versions on the second run): pinned in Task 8.
+
+---
+
+### Task 1: Test-hook contract with Backend
+
+**Files:**
+- Create: `docs/superpowers/specs/2026-10-20-redline-test-hooks.md` (the contract; Backend implements the server side under their plan)
+
+**Interfaces:**
+- Produces the contract both sides code against:
+  - Server var `TEST_HOOKS` (`"1"` or unset) and secret `TEST_HOOK_KEY` (≥ 32 chars). Only `oa:hosted create --test-hooks` sets them; P1's `userWorkerMetadata` gains `testHooks: boolean`, default false, and its drift test lists both names.
+  - `/healthz` adds `testHooks: boolean`.
+  - With hooks on, every request to `/__test/*` needs `Authorization: Bearer <TEST_HOOK_KEY>`; with hooks off, `/__test/*` is 404 before any auth.
+  - `POST /__test/session {email, role: "owner"|"admin"|"member"|"guest"}` → `{ cookie }` (a real `__Host-oa_session` for that user, created if missing).
+  - `POST /__test/otp/latest {email}` → `{ code }` (after P2: the last one-time code sent to that address on this install).
+  - `POST /__test/oauth-client` → `{ clientId, accessToken }` (a completed MCP OAuth grant for the owner, through the real provider).
+  - Sign-in binding: hooks on also let the install trust the test issuer `https://idp.<staging-domain>` (Task 3) in addition to Google, with the same `hd`/`tid` checks. The real check code path runs; only the issuer list differs.
+- [ ] **Step 1:** Write the contract doc, send it to Backend, and get their agreement in writing (a reply in the ledger). Changes go into the doc first.
+- [ ] **Step 2:** Commit `docs: red-line test-hook contract`.
+
+### Task 2: Suite harness
+
+**Files:**
+- Create: `tests/redline/package.json` (`@oa/redline`), `vitest.config.ts`, `src/targets.ts`, `src/http.ts`, `src/refused.ts`
+- Test: `tests/redline/test/harness.test.ts` (unit tests of the helpers against a local fake server)
+
+**Interfaces:**
+- Produces:
+  - `loadTargets(): { a: Target; b: Target; prod: { url: string } }` from `REDLINE_TARGETS` (JSON) with `Target = { name; app: string; content: string; patFile: string; hookKeyFile: string }`; reads secrets from the files.
+  - `hook(t: Target, path: string, body): Promise<unknown>`.
+  - `asA/asB` helpers that build `fetch` init with a credential and `redirect: "manual"`.
+  - `expectRefused(res: Response, b: Target): Promise<void>`: status in 401, 403, 404, or a 3xx without `set-cookie` whose `location` is B's own sign-in; body (when present) contains none of the marker strings seeded into B (Task 2 seeds a private artifact on each install whose title and content include `REDLINE-<install>-<random>`).
+  - `beforeAll` guard: both targets report `testHooks: true` and `ok: true`; prod's `/__test/session` is 404.
+- [ ] **Step 1: Write the failing tests**: `expectRefused rejects a 200`, `rejects a 302 that sets a cookie`, `rejects a 403 whose body contains B's marker`, `accepts a bare 401`; `loadTargets refuses a target without testHooks`.
+- [ ] **Step 2–4:** Run (FAIL), implement, run (PASS).
+- [ ] **Step 5:** Commit `test(redline): harness and refusal assertions`.
+
+### Task 3: Test identity provider (staging only)
+
+**Files:**
+- Create: `apps/test-idp/` (a Worker: OIDC discovery, JWKS, `/authorize` that issues an ID token for any `{email, hd, tid}` given in the query, `/token`)
+- Test: `apps/test-idp/test/idp.test.ts`
+
+Deployed only to the staging account at `idp.<staging-domain>`; its signing key is generated at deploy and never leaves the Worker. It exists so the suite can drive the install's real OIDC callback with a wrong `hd`/`tid`; Google can't mint those.
+
+- [ ] **Step 1:** Write the failing tests: discovery and JWKS shape; ID token claims echo the requested `email`, `hd`, `tid`, `aud`, `nonce`; tokens verify against the published JWKS.
+- [ ] **Step 2–4:** Run (FAIL), implement, run (PASS).
+- [ ] **Step 5:** Commit `feat(test-idp): staging-only OIDC issuer for red-line tests`.
+
+### Task 4: Credential cases (available now)
+
+**Files:**
+- Create: `tests/redline/test/credentials.test.ts`
+
+Each case: positive control on A, then the same credential on B through `expectRefused`.
+- [ ] **Step 1: Write the tests**
+  - `A's owner PAT at B: /api/v1/me, /api/v1/artifacts, /mcp (tools/list)`.
+  - `A's session cookie at B` (cookie value replayed on B's host; also with `Domain` stripped).
+  - `A's MCP OAuth access token at B /mcp`; `A's OAuth client_id in B's /authorize` (B must not know it: 400 or consent for an unknown client, never an auto-grant).
+  - `A's signed content URL path (/c/<exp>.<sig>/<A artifact>/v1/) at B's content host`, and `A's signature with B's artifact id`.
+  - `A's capture token (X-OA-Capture) at B's content host`.
+  - `A's signed upload URL at B`.
+  - `B's private artifact id fetched with A's credentials at A` (404: ids don't cross installs).
+- [ ] **Step 2:** Run against `stg-a`/`stg-b`; expect PASS. Any FAIL is a red-line bug: stop, file it with the Manager as a blocker, don't weaken the test.
+- [ ] **Step 3:** Commit `test(redline): tokens, sessions, OAuth and signed URLs don't cross installs`.
+
+### Task 5: Live data and transport cases (available now)
+
+**Files:**
+- Create: `tests/redline/test/live.test.ts`, `tests/redline/test/edge.test.ts`
+
+- [ ] **Step 1: Write the tests**
+  - `WebSocket data-subscribe and events at B with A's session or PAT` → upgrade refused (no 101).
+  - `WebSocket at B with Origin = A's app or content origin, using B's own valid session` → refused (Origin check).
+  - `data API (GET/PUT/PATCH/DELETE data/:col/:doc, POST query, PUT data reset, storage/:key) at B with A's PAT`.
+  - `anonymous writes`: a public artifact on B with anonymous writes allowed accepts an anonymous write, and A's PAT sent along doesn't change the actor to A's user (the stored doc has no A identity).
+  - Dispatch edge: `Host: <B app host>` sent to A's IP with SNI A (`curl --resolve`-style via `undici` `connect.servername`): served as B or refused, never A's data with B's host; `X-Forwarded-Host: <B>` on A is ignored; an absolute-form request line naming B sent to A; an unmapped host → generic 404.
+  - `content host never serves app routes and ignores cookies`: `/api/v1/me` on A's content host with A's session → not 200; a `Cookie` header on content requests doesn't change the response.
+  - `cross-site cookies`: assert the app and content domains are different registrable domains (compare against the Public Suffix List via `tldts`); fail the run otherwise.
+  - Scheduler: `/__oa/nightly` (only if P1 Task 7 took the fallback): a signature made for A's host replayed at B → refused; a 6-minute-old signature → refused.
+- [ ] **Step 2:** Run; expect PASS (same stop rule as Task 4).
+- [ ] **Step 3:** Commit `test(redline): live data, sockets and the dispatch edge`.
+
+### Task 6: Sign-in cases (after P2 lands)
+
+**Files:**
+- Create: `tests/redline/test/signin.test.ts`
+
+Installs are configured (by Backend's P2 settings) with `stg-a` bound to `hd=a.redline.test` and `stg-b` to `hd=b.redline.test`.
+- [ ] **Step 1: Write the tests** (drive the real OIDC flow through `apps/test-idp`)
+  - `an ID token with hd=a… at B's callback` → no session.
+  - `an ID token with B's email domain but hd=a…` → no session (domain from the token, not the email).
+  - `an ID token with no hd claim and a B-domain email` → no session.
+  - `an ID token minted for A's client (aud) replayed at B` → no session.
+  - `A's OIDC state/nonce replayed at B` → no session.
+  - One-time codes: `a code issued by A for x@b.redline.test, entered at B` → refused; `a code requested at B for an address not invited to B` → no code sent (hook shows none) and a generic response; `a guest of A who is invited to B gets read-only on B only` (guest can't publish via MCP or data API on B).
+- [ ] **Step 2:** Run; expect PASS (same stop rule).
+- [ ] **Step 3:** Commit `test(redline): sign-in and one-time codes are bound to their install`.
+
+### Task 7: Release gate
+
+**Files:**
+- Modify: `.github/workflows/release-please.yml` (new job `redline`; `deploy-prod.needs` and `deploy-demo.needs` add `redline`)
+- Create: `.github/workflows/redline-nightly.yml` (main, `0 5 * * *`, plus dispatch; opens or updates a `Red line failing` issue on failure)
+- Modify: the workflow invariant tests (`scripts/ci/*.test.ts`)
+
+Job `redline`: `needs: release-please`; `if: needs.release-please.outputs.release_created == 'true'` (the same condition as `deploy-prod`, so the two can't diverge); concurrency `hosted-staging` (shared with P1's workflow so they never deploy at once); checks out the tag; `oa:hosted publish-release` + `upgrade` for `stg-a` and `stg-b` to the tag; writes PAT and hook-key files from secrets with umask 077; runs `pnpm --filter @oa/redline test`; on failure runs the existing `release-cadence.ts blocker` with the failing case names.
+- [ ] **Step 1: Write the failing invariant tests**
+  - `deploy-prod and deploy-demo need redline`.
+  - `redline's if: equals deploy-prod's if:` (string compare after normalizing whitespace).
+  - `redline has no continue-on-error and no timeout under 20 minutes`.
+  - `secrets reach redline only through files written under umask 077`.
+- [ ] **Step 2–4:** Run (FAIL), implement, run (PASS).
+- [ ] **Step 5:** Commit `ci: the red-line suite gates every release`.
+
+### Task 8: Import validation harness
+
+**Files:**
+- Create: `tests/import/package.json` (`@oa/import-check`), `src/check.ts`, `fixtures/synthetic-export/` (a small, invented export with the real claude.ai layout: `conversations.json` with artifact-bearing messages, including duplicates, a re-edited artifact, an unsupported type and a very large one)
+- Test: `tests/import/test/check.test.ts`
+
+The migration skill itself is Backend's scope C and isn't on main yet. This task builds the checker and the synthetic fixture so the skill can be validated the day it lands.
+
+**Interfaces:**
+- Produces: `checkImport(o: { target: Target; exportDir: string; owner: string; spaceMap: Record<string, string>; before: Snapshot }): Promise<Report>` where `Report = { expected: number; imported: number; skipped: { ref: string; reason: string }[]; wrongSpace: string[]; wrongOwner: string[]; duplicates: string[]; extraVersions: string[] }`; `snapshot(target): Promise<Snapshot>` (artifact ids, versions, spaces, owners).
+- `expected` comes from parsing the export independently of the skill (artifact identity = the skill's documented idempotency key; ask Backend for it in Task 1's thread).
+- [ ] **Step 1: Write the failing tests** against a fake install: `a correct import reports zero problems`; `a second run with no new artifacts reports zero new artifacts and zero new versions`; `an artifact published to the wrong space or with the wrong owner is reported`; `skipped items must carry a reason`.
+- [ ] **Step 2–4:** Run (FAIL), implement, run (PASS).
+- [ ] **Step 5:** Commit `test(import): checker for agent-run imports into spaces`.
+
+### Task 9: Real-export validation (gated, after P3 and the skill)
+
+- [ ] **Step 1:** Ask the Manager to get the user to export their claude.ai data to a local folder and give the path. The export never leaves their machine.
+- [ ] **Step 2:** On `stg-a` (spaces from P3 created: `Engineering`, `Personal`), have an agent run the migration skill as the user, then run `checkImport` twice (after the first run and after a rerun).
+- [ ] **Step 3:** Record counts and problems (no titles or content) in `docs/ops/hosted.md` and on the status page; file each problem with Backend.
+- [ ] **Step 4:** Delete the imported artifacts from `stg-a` with the owner's PAT.
+
+---
+
+## Dependencies and order
+
+Tasks 1–5 and 7–8 can start once P1's `stg-a`/`stg-b` exist (P1 Task 9). Task 6 waits on P2; Task 9 on P3 and Backend's migration skill. Until Task 6 lands, the release gate runs Tasks 4–5 only, and the status page says so.
