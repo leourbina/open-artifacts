@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.16.0...v0.17.0) (2026-10-20)
+
+
+### Features
+
+* **runtime:** same-instance /a/ links navigate the viewer (oa:navigate) ([#345](https://github.com/open-artifacts-ai/open-artifacts/issues/345)) ([481a907](https://github.com/open-artifacts-ai/open-artifacts/commit/481a9072ab87caa3b9c69b53820ff4af6f156115))
+
 ## [0.16.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.15.0...v0.16.0) (2026-10-20)
 
 
