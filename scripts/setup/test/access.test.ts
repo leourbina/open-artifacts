@@ -357,10 +357,10 @@ describe("B16-2 review fixes", () => {
     expect(bearer(w, "/zones").at(-1)).toBe("t");
   });
 
-  it("the 403 message names OA_ACCESS_TOKEN", async () => {
+  it("#4: the fresh-install 403 message gives the token link and the save line", async () => {
     const w = world({ org: "forbidden" });
     expect(await run(HOSTS, w.deps, ROOT)).toBe(2);
-    expect(parsed(w).at(-1).message).toContain("OA_ACCESS_TOKEN");
+    expect(parsed(w).at(-1).message).toContain("--token-links --json");
   });
 
   it("the wrangler child env drops OA_ACCESS_TOKEN and WRANGLER_LOG*", async () => {

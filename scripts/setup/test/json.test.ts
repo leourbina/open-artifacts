@@ -56,7 +56,7 @@ describe("--json is non-interactive", () => {
     expect(w.creates).toEqual([]);
   });
 
-  it("an Access 403 points to OA_ACCESS_TOKEN without prompting", async () => {
+  it("an Access 403 points to the token save line without prompting", async () => {
     const w = world({ org: "forbidden" });
     expect(await run(JSON_ONLY, w.deps, ROOT)).toBe(2);
     expect(w.prompts).toEqual([]);
@@ -64,7 +64,7 @@ describe("--json is non-interactive", () => {
       step: "access",
       status: "action_required",
     });
-    expect(last(w).message).toContain("OA_ACCESS_TOKEN");
+    expect(last(w).message).toContain("saveCommand");
   });
 
   it("the optional ANALYTICS_TOKEN prompt is skipped", async () => {
@@ -246,11 +246,11 @@ describe("B16-4 review fixes", () => {
     expect(ok.prompts).toEqual([]);
   });
 
-  it("the non-interactive 403 message says to set OA_ACCESS_TOKEN", async () => {
+  it("the non-interactive 403 message says to save the token and rerun", async () => {
     const w = world({ org: "forbidden" });
     expect(await run(JSON_ONLY, w.deps, ROOT)).toBe(2);
     expect(last(w).message).toContain(
-      "run `pnpm -s oa:setup --token-links --json` to get the save line (`saveCommand`); the user runs it in their own terminal (in Claude Code, type `! ` then the line), and setup then reads ~/.open-artifacts/open-artifacts-access-token (or the OA_ACCESS_TOKEN env var)",
+      "save it with the line from `pnpm -s oa:setup --token-links --json` (saveCommand), then rerun.",
     );
   });
 });
