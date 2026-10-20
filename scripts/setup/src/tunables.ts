@@ -34,6 +34,9 @@ export const TUNABLES: Record<string, Tunable> = {
         ? undefined
         : "expected comma-separated https://host[:port] origins (port 1-65535; no paths, wildcards or spaces)",
   },
+  EMBED_ALLOW_SAME_SITE: {
+    check: (v) => (v === "1" ? undefined : 'expected "1" (or empty to clear)'),
+  },
   ANON_WRITES_PER_MIN: { check: int(1, 600) },
   DATA_DOC_BYTES: { check: int(1) },
   DATA_DAILY_WRITES: { check: int(1) },
