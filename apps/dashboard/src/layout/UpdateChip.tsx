@@ -85,11 +85,7 @@ export function UpdatePanel({
         Upgrade copies a prompt. Paste it into any AI agent to run the upgrade.
       </p>
       <BreakingNote update={update} />
-      <UpgradeActions
-        update={update}
-        describedBy="oa-chip-upgrade-help"
-        compact
-      />
+      <UpgradeActions update={update} describedBy="oa-chip-upgrade-help" />
       <a
         className={`${LINK} text-[12px]`}
         href="/settings/instance"

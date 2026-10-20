@@ -357,8 +357,9 @@ function Sidebar({ me, path }: { me: Me | null; path: string }) {
           </SidebarGroup>
         </nav>
       </SidebarContent>
+      {/* On phones the chip takes the nav rows' inset: 8px (content) + 8px (group). */}
       {shouldNudge(update) && (
-        <SidebarFooter className="in-data-[mobile=true]:px-2 in-data-[mobile=true]:pb-3">
+        <SidebarFooter className="in-data-[mobile=true]:px-4 in-data-[mobile=true]:pb-3">
           <UpdateChip
             update={update}
             onSettings={(e) => go(e, "/settings/instance")}

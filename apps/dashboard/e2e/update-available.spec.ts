@@ -135,6 +135,14 @@ for (const scheme of ["light", "dark"] as const) {
     expect(c.x).toBeGreaterThanOrEqual(sheet.x);
     expect(c.x + c.width).toBeLessThanOrEqual(sheet.x + sheet.width);
     expect(sheet.y + sheet.height - (c.y + c.height)).toBeLessThan(24);
+    // Same inset as the nav rows.
+    const row = await page
+      .locator("[data-mobile=true] a", { hasText: "Library" })
+      .boundingBox();
+    expect(Math.round(c.x)).toBe(Math.round(row?.x ?? -1));
+    expect(Math.round(c.x + c.width)).toBe(
+      Math.round((row?.x ?? 0) + (row?.width ?? 0)),
+    );
     await chip(page).click();
     const p = await box(page, "[data-slot=popover-content]");
     expect(Math.round(p.width)).toBe(Math.round(c.width));
@@ -145,3 +153,40 @@ for (const scheme of ["light", "dark"] as const) {
     });
   });
 }
+
+for (const w of [1280, 390])
+  test(`Version card ${w}: no empty room under the Upgrade row`, async ({
+    page,
+    context,
+  }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.setViewportSize({ width: w, height: 900 });
+    await page.goto("/settings/instance?mock=update");
+    const card = page.locator(
+      "section[aria-labelledby=oa-version] [data-slot=card]",
+    );
+    const status = page
+      .getByRole("region", { name: "Version" })
+      .getByRole("status");
+    const actions = page
+      .getByRole("region", { name: "Version" })
+      .getByRole("button", { name: "Upgrade" });
+    await expect(status).toBeAttached();
+    expect((await status.boundingBox())?.height).toBe(0);
+    // The settings card's padding, plus its 1px border.
+    const pad = (w > 600 ? 20 : 16) + 1;
+    const gap = async () => {
+      const c = await card.boundingBox();
+      const a = await actions.boundingBox();
+      return Math.round(
+        (c?.y ?? 0) + (c?.height ?? 0) - ((a?.y ?? 0) + (a?.height ?? 0)),
+      );
+    };
+    expect(await gap()).toBe(pad);
+    // Copied grows the card by the status line, then it collapses again.
+    await actions.click();
+    await expect(status).toHaveText("Copied, paste this into your agent");
+    expect(await gap()).toBeGreaterThan(pad);
+    await expect(status).toBeEmpty({ timeout: 6000 });
+    expect(await gap()).toBe(pad);
+  });

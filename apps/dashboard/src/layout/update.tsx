@@ -109,17 +109,15 @@ export function BreakingNote({ update }: { update: InstanceUpdate }) {
  * Upgrade (copies the prompt; the icon turns to a check for 2 s) and Release
  * notes, then the confirmation: a polite status region, always in the DOM,
  * whose text shows for 4 s. `describedBy` names the line saying Upgrade
- * copies a prompt. `compact` (the popover) gives the empty status no room,
- * without display:none, which would drop the live region.
+ * copies a prompt. Empty, the status takes no room (zero height, out of the
+ * flow) but stays mounted: display:none would drop the live region.
  */
 export function UpgradeActions({
   update,
   describedBy,
-  compact = false,
 }: {
   update: InstanceUpdate;
   describedBy: string;
-  compact?: boolean;
 }) {
   const [copiedAt, setCopiedAt] = useState<number | null>(null);
   const [icon, setIcon] = useState(false);
@@ -162,7 +160,7 @@ export function UpgradeActions({
       <div
         role="status"
         aria-live="polite"
-        className={`flex items-center gap-[6px] text-[length:var(--oa-text-xs)] text-[var(--oa-success-fg)] ${compact ? "empty:absolute empty:size-px empty:overflow-hidden" : "min-h-[18px]"}`}
+        className={`flex items-center gap-[6px] text-[length:var(--oa-text-xs)] text-[var(--oa-success-fg)] empty:absolute empty:h-0 empty:w-px empty:overflow-hidden`}
       >
         {copiedAt !== null && (
           <>
