@@ -235,7 +235,7 @@
     crypto.getRandomValues(b);
     return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
   }
-  /** A per-browser id when storage works, else per tab. Used only until anonId lands. */
+  /** A per-browser id when storage works, else per tab. Used when viewer.anonId() has no id. */
   function localId() {
     for (const store of ["localStorage", "sessionStorage"]) {
       try {
@@ -260,7 +260,10 @@
   async function identify() {
     let viewer = null;
     try { viewer = await OA.viewer.get(); } catch { viewer = null; }
-    const anon = (viewer && viewer.anonId) || (typeof OA.anonId === "string" ? OA.anonId : null);
+    let anon = null;
+    try {
+      if (OA.viewer && typeof OA.viewer.anonId === "function") anon = await OA.viewer.anonId();
+    } catch { anon = null; }
     if (viewer && viewer.email) return { id: `u-${await hash(viewer.email)}`, signedIn: true };
     if (anon) return { id: safeId(anon), signedIn: false };
     return { id: localId(), signedIn: false };
