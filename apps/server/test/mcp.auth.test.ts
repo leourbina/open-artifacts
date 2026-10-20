@@ -238,6 +238,62 @@ describe("MCP auth: OAuth", () => {
     expect(r.headers.get("x-robots-tag")).toBe("noindex, nofollow");
   });
 
+  describe("401s explain a missing or empty token", () => {
+    const META = `resource_metadata="${APP}/.well-known/oauth-protected-resource/mcp"`;
+    const HINT =
+      /^No token sent\. Check that your MCP client actually sends the token/;
+    const expect401 = async (
+      r: Response,
+      error: string,
+      description: RegExp,
+    ) => {
+      expect(r.status).toBe(401);
+      expect(r.headers.get("content-type")).toBe("application/json");
+      expect(r.headers.get("www-authenticate")).toContain(META);
+      expect(r.headers.get("www-authenticate")).toMatch(
+        /^Bearer realm="OAuth"/,
+      );
+      expect(r.headers.get("cache-control")).toBe("no-store");
+      const body = (await r.json()) as Record<string, string>;
+      expect(body.error).toBe(error);
+      expect(body.error_description).toMatch(description);
+      expect(body.error_description).not.toContain("\u2014");
+    };
+
+    it("missing → invalid_token, discovery challenge unchanged", async () => {
+      const r = await listTools();
+      // The challenge carries no error (RFC 6750 §3.1), so clients start OAuth.
+      expect(r.headers.get("www-authenticate")).not.toContain("error=");
+      await expect401(r, "invalid_token", HINT);
+    });
+
+    it("empty and whitespace-only bearer → invalid_request", async () => {
+      for (const auth of ["Bearer ", "Bearer   ", "bearer\t", "   "])
+        await expect401(await listTools(auth), "invalid_request", HINT);
+    });
+
+    it("malformed header → invalid_request", async () => {
+      await expect401(
+        await listTools("Basic abc"),
+        "invalid_request",
+        /malformed/,
+      );
+    });
+
+    it("an invalid OAuth token → JSON invalid_token", async () => {
+      await expect401(
+        await listTools("Bearer u:g:nope"),
+        "invalid_token",
+        /Invalid access token/,
+      );
+    });
+
+    it("a valid OAuth token is unaffected", async () => {
+      const { accessToken } = await oauthToken(`oauth-401-${tag}@x.com`);
+      expect((await listTools(`Bearer ${accessToken}`)).status).toBe(200);
+    });
+  });
+
   it("metadata endpoints are served with the security headers", async () => {
     for (const p of [
       "/.well-known/oauth-protected-resource/mcp",
