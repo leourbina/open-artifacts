@@ -6,6 +6,8 @@
 
 **Architecture:** Every shape comes from Backend's approved hosted contract (PR #359 at `ed1105c`, `packages/shared/HOSTED_CONTRACT.md`, `src/hosted/*.ts`), read through one dashboard adapter (`api/contract.ts`). Hosted UI is gated on `me.instance.features` (snake_case flags), sign-in on `GET AUTH.providers`, actions on the server-computed `artifact.can`. The SPA owns `/sign-in` (`SIGN_IN_PAGE`); the server is JSON only. This track edits only `apps/dashboard`; the mocks are Backend's, opt-in through `createHandlers({ hosted })`, so existing tests stay unchanged.
 
+**Status:** approved by the manager (re-checked items 1, 3 and 4 at `40bd266`); final pass applies Design's error copy and Backend #370.
+
 **Tech Stack:** React 19, TanStack Router and Query, `@oa/ui` and `@oa/ui/shadcn`, zod, MSW (`@oa/shared/mocks`), vitest plus Testing Library, Playwright (mock config and `playwright.real.config.ts`).
 
 **Spec:** `docs/superpowers/specs/2026-10-20-hosted-open-artifacts-design.md` (PR #350), sections 4.1, 4.2, 4.3, 4.5. **Contract:** PR #359, merged to `main` (approved at `ed1105c`), `packages/shared/HOSTED_CONTRACT.md` (the authority for every shape below). Backend plans: P2 `docs/superpowers/plans/2026-10-21-hosted-m1-p2-signin.md`, P3 `docs/superpowers/plans/2026-10-21-hosted-m1-p3-rbac.md`. Roadmap: https://artifacts.leourbina.com/a/axtJ4ieni2LsKfTk (M1, P4).
@@ -21,7 +23,7 @@
 - A tier change never widens access: mapping and restricted-group controls render only when `features` includes `sync_google`; a `409 directory_sync_off` shows the server message. `sync_frozen` rows stay editable by hand; copy never says sync resumes on its own.
 - Public links can be off per space (`SpaceRef.publicLinks`); when off, "public" is never offered.
 - The personal space id equals the user id. Moves target shared spaces only; `spaceId` is set on create only.
-- Errors: no access is 404. The 12 hosted codes (the contract's 11 plus `restrict_admin` from Backend's follow-up PR) each have one owning task and one UI string (see "Error codes, tasks and copy"); `rate_limited` and `unauthorized` with `details.reason` belong to Task 14. The UI shows its own mapped copy (`errorCopy`, Task 2) and falls back to the server's `message`.
+- Errors: no access is 404. The 12 hosted codes (the contract's 11 plus `restrict_admin` from Backend #370) each have one owning task and one UI string (see "Error codes, tasks and copy"); `rate_limited` and `unauthorized` with `details.reason` belong to Task 14. The UI shows its own mapped copy (`errorCopy`, Task 2) and falls back to the server's `message`.
 - Groups are keyed by `groupId` (Google's stable id) in every route the UI calls; emails and names are display only.
 - Restriction: `Member.restriction { manual, groups }` caps a member at viewer everywhere. Admins set or clear only the manual flag (`R.memberRestricted`); a group restriction is lifted only by removing the restricted group, and the UI never implies otherwise.
 - Every refused sign-in lands on `/sign-in?error=` (including `no_access`); the dashboard never sends a direct-mode visitor to `/no-access`. `?error=` is parsed with `SignInErrorSchema` and never echoed.
@@ -62,22 +64,22 @@ P4 adopts the contract exactly. What each area of the UI reads:
 
 ## Error codes, tasks and copy
 
-`api/errorCopy.ts` (Task 2) maps each code to the UI string below; any other error shows the server's `message`. **Every string in this table needs Design's sign-off** (they are proposals; Design may reword them, the code-to-task mapping is fixed).
+`api/errorCopy.ts` (Task 2) maps each code to the UI string below; any other error shows the server's `message`. **These are Design's final strings** (`p4-error-copy.md`, 2026-10-21), except `restrict_admin`, which Design hasn't written yet (proposal below). Off the Directory page, `directory_sync_off` also shows the link "Open directory settings".
 
 | Code | Status | Where it can happen | Task | UI copy (proposed) |
 |---|---|---|---|---|
-| `space_forbidden` | 403 | publish into a space; move into a space; any create by a capped caller | 7, 8 | "You can't publish to this space. Ask a space manager for editor access." |
-| `space_personal` | 400 | a personal space as a move target or a spaces-route target (the pickers never offer one; defensive) | 8, 10 | "Personal spaces can't be used here." |
-| `space_not_empty` | 409 | delete a space that still holds artifacts (trash counts) | 10 | "Move or delete this space's artifacts first, including the trash." |
-| `public_links_off` | 403 | make an artifact public in a space whose public links are off (Share, or a stale tab) | 9 | "Public links are turned off for this space." |
+| `space_forbidden` | 403 | publish into a space; move into a space; any create by a capped caller | 7, 8 | "You can't publish to this space. Ask a space manager to make you an editor." When `Me.auth.cap` is set: "Your account can only view, so you can't publish." |
+| `space_personal` | 400 | a personal space as a move target or a spaces-route target (the pickers never offer one; defensive) | 8, 10 | "Personal spaces can't be used here. Pick a shared space." |
+| `space_not_empty` | 409 | delete a space that still holds artifacts (trash counts) | 10 | "This space still has artifacts. Move or delete them first. Artifacts in the trash count too." |
+| `public_links_off` | 403 | make an artifact public in a space whose public links are off (Share, or a stale tab) | 9 | "Public links are off for this space. A space manager can turn them on." |
 | `use_move` | 400 | `spaceId` on publish to an existing artifact (the upload never sends one; defensive) | 7 | "This artifact already exists. Use Move to change its space." |
-| `invalid_successor` | 400 | transfer to a guest, a restricted member or an inactive member | 13 | "Choose an active member who isn't a guest or restricted." |
-| `member_active` | 409 | departed-person transfer on someone who is active again | 13 | "This person is active again, so their artifacts stay with them." |
-| `directory_sync_off` | 409 | mapping or restricted-group change while sync is off or frozen; Sync now while off | 11, 18; 17 | "Directory sync is off, so groups can't be changed here." (Sync now has its own: "Sync is off. Connect Google Workspace to sync.") |
-| `turnstile_required` | 400 (`details.field: "turnstile"`) | code request without a token | 14 | "Complete the verification first." (shown at the Turnstile slot) |
-| `turnstile_failed` | 403 | code request with a rejected token | 14 | "Verification failed. Try again." |
+| `invalid_successor` | 400 | transfer to a guest, a restricted member or an inactive member | 13 | "Pick an active member who isn't a guest or restricted." |
+| `member_active` | 409 | departed-person transfer on someone who is active again | 13 | "This person is active again, so their artifacts stay with them. Nothing was moved." |
+| `directory_sync_off` | 409 | mapping or restricted-group change while sync is off or frozen; Sync now while off | 11, 18; 17 | "Directory sync is off, so this isn't available right now." (Design: off the Directory page, add the link "Open directory settings") |
+| `turnstile_required` | 400 (`details.field: "turnstile"`) | code request without a token | 14 | "Finish the check above, then send the code again." (shown at the Turnstile slot) |
+| `turnstile_failed` | 403 | code request with a rejected token | 14 | "The check didn't go through. Try it again." |
 | `reauth_required` | 401 | directory routes for a stale owner | 17 | "For your security, sign in with Google again to manage the directory." |
-| `restrict_admin` | 400 | restricting an owner or admin (Backend follow-up PR) | 15 | "Owners and admins can't be restricted. Change their role first." |
+| `restrict_admin` | 400 | restricting an owner or admin (Backend #370; the UI never offers it, defensive) | 15 | "Owners and admins can't be restricted. Change their role first." (proposal; Design to confirm) |
 
 Other copy that needs Design: every `SignInError` and 401 reason string (Task 14), the read-only notice (Task 3), the sync banner (Task 4), the public-off note (Task 9), the frozen banner (Task 12), the transfer counts and dialog (Task 13), the restriction labels and confirmations (Task 15), the reset confirmation (Task 16), the directory status labels, callback errors, disconnect and held-sweep confirmations (Tasks 17, 18).
 
@@ -153,7 +155,7 @@ Tests: `apps/dashboard/test/{safe-next,query-client,error-copy}.test.ts`; `apps/
 
 ### Task 1: Consume the contract (adapter, harness, mock switch)
 
-**Depends on:** nothing; PR #359 is merged, so this task is unblocked. It imports the hosted schemas and `createHandlers({ hosted })` from `@oa/shared` on `main`. `restrict_admin` and the mock's public-off move rewrite arrive in Backend's follow-up PR; Task 15's `restrict_admin` test and Task 8's rewrite test use a handler override until it merges.
+**Depends on:** nothing; PR #359 is merged, so this task is unblocked. It imports the hosted schemas and `createHandlers({ hosted })` from `@oa/shared` on `main`. `restrict_admin` and the mock's public-off move rewrite arrive in Backend #370; Task 15's `restrict_admin` test and Task 8's rewrite test use a handler override until it merges.
 
 **Files:**
 - Create: `apps/dashboard/src/api/contract.ts`
@@ -167,7 +169,7 @@ Tests: `apps/dashboard/test/{safe-next,query-client,error-copy}.test.ts`; `apps/
   - `canOf(a: ArtifactSummary, feats: FeatureFlag[]): ArtifactCan` → `a.can ?? artifactCan(a.access, { personal: true, cap: null })`, then `move` and `transfer` forced false unless `feats` includes `spaces` (the fallback gives an owner `move: true`, and self-hosted must not show Move or Transfer).
   - `readAuthProviders(raw: unknown): AuthProviders` → parsed, else `{ mode: "access", providers: [{ id: "access", start: AUTH.login }] }`.
   - `harness.tsx`: `mountHosted(path: string, opts?: true | HostedMockOptions, me?: (m: Me) => Me, overrides?: HttpHandler[]): Router` (prepends `createHandlers({ hosted: opts })`, then `overrides` ahead of it, so a test's handler wins even for the first request; `me` rewrites the hosted `/me` body); `calls(method?: string): { path: string; search: URLSearchParams; body: unknown }[]` (records every request from the call on).
-  - `main.tsx`: mock-only `parseHostedParam(raw: string | null): HostedMockOptions | undefined` for `?hosted=`, comma tokens `1` (defaults), `access`, `email-only`, `turnstile`, `unhealthy`, `trial`, `team`, `business`, `frozen`, `sync-off`.
+  - `main.tsx`: mock-only `parseHostedParam(raw: string | null): HostedMockOptions | undefined` for `?hosted=`, comma tokens `1` (defaults), `access`, `email-only`, `turnstile`, `unhealthy`, `unhealthy=<state>` (sets `unhealthyState`), `trial`, `team`, `business`, `frozen`, `sync-off`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -206,6 +208,7 @@ test("hosted param tokens", () => {
   expect(parseHostedParam(null)).toBeUndefined();
   expect(parseHostedParam("1")).toEqual({});
   expect(parseHostedParam("team,frozen,unhealthy")).toEqual({ tier: "team", directory: "frozen", unhealthy: true });
+  expect(parseHostedParam("unhealthy=scope_missing")).toEqual({ unhealthy: true, unhealthyState: "scope_missing" });
   expect(parseHostedParam("access")).toEqual({ mode: "access" });
   expect(parseHostedParam("email-only,turnstile")).toEqual({ providers: ["email"], turnstile: true });
 });
@@ -261,7 +264,7 @@ Expected: PASS, those four specs unedited.
   - `qk.spaces(q?)` = `["spaces", q ?? {}]`, `qk.space(id)` = `["spaces", id]`, `qk.spaceMembers(id)` = `["spaces", id, "members"]`, `qk.spaceMappings(id)` = `["spaces", id, "mappings"]`, `qk.directory` = `["directory"]`, `qk.restrictedGroups` = `["directory", "restricted"]`, `qk.directoryGroups(q)` = `["directory", "groups", q]`, `qk.memberTransfer(id)` = `["members", id, "transfer"]`; `useMembers(status?)` keyed `["members", status ?? "active"]` (so `["members"]` still invalidates every list).
   - Hooks: `useSpaces(q?: z.input<typeof SpacesQuerySchema>, enabled?)` (infinite), `useSpace(id, enabled?)`, `useCreateSpace()` (`SpaceCreateInput`), `usePatchSpace(id)`, `useDeleteSpace()`, `useSpaceMembers(id)` (infinite), `usePutSpaceMember(id)` (`{ userId, role }`), `useDeleteSpaceMember(id)`, `useAddSelfToSpace(id)` (`{ role }` → `R.spaceMemberSelf`), `useSpaceMappings(id)`, `usePutMapping(id)` (`{ groupId, role }`), `useDeleteMapping(id)` (`groupId`), `useRestrictedGroups()`, `usePutRestrictedGroup()` (`groupId`), `useDeleteRestrictedGroup()` (`groupId`), `useSetRestricted()` (`{ memberId, restricted: boolean }` → PUT or DELETE `R.memberRestricted`), `useDirectory(enabled?)`, `useDirectoryGroups(q)` (infinite; enabled at 2+ characters), `useDirectorySync()`, `useConfirmHeld()` (`groupId`), `useDisconnectDirectory()`, `useMoveArtifact(id)` (`mutateAsync(spaceId)`), `useTransferSummary(memberId)`, `useRunTransfer(memberId)` (one page per `mutateAsync(TransferInput)`), `useResetIdentity()` (`mutateAsync(memberId)`).
   - `api/auth.ts`: `useAuthProviders()` (`retry: false`, through `readAuthProviders`), `requestCode(input: CodeRequest): Promise<CodeRequested>`, `verifyCode(code: string): Promise<CodeVerified>`; both send `X-OA-Request: 1` and throw `ApiClientError` with `details`.
-  - `api/errorCopy.ts`: `errorCopy(e: unknown, fallback: string): string` (the table's string for the 12 hosted codes, else the `ApiClientError` message, else `fallback`).
+  - `api/errorCopy.ts`: `errorCopy(e: unknown, fallback: string, ctx?: { cap?: CapReason | null }): string` (the table's string for the 12 hosted codes, the capped variant of `space_forbidden` when `ctx.cap` is set, else the `ApiClientError` message, else `fallback`); `directoryLink(e: unknown, onDirectoryPage: boolean): boolean` (true for `directory_sync_off` off the Directory page).
   - `auth/safeNext.ts`: `safeNext(raw: unknown): string` returns `raw` only when it is a string that starts with exactly one `/`, whose second character is neither `/` nor `\`, with no scheme and no control or whitespace characters (`/[\u0000-\u001f\u007f\s]/`); otherwise `"/"`.
   - `queryClient.ts`: `reportApiError` ignores a 401 whose `code === "reauth_required"` (the session is valid; only break-glass needs a fresh Google sign-in). `roleGated` also matches `R.directory` and everything under `/api/v1/directory/`, `R.spaceMappings`, and `/api/v1/audit`.
 
@@ -299,20 +302,28 @@ it.each([
 
 // error-copy.test.ts
 it.each([
-  ["space_forbidden", "You can't publish to this space. Ask a space manager for editor access."],
-  ["space_personal", "Personal spaces can't be used here."],
-  ["space_not_empty", "Move or delete this space's artifacts first, including the trash."],
-  ["public_links_off", "Public links are turned off for this space."],
+  ["space_forbidden", "You can't publish to this space. Ask a space manager to make you an editor."],
+  ["space_personal", "Personal spaces can't be used here. Pick a shared space."],
+  ["space_not_empty", "This space still has artifacts. Move or delete them first. Artifacts in the trash count too."],
+  ["public_links_off", "Public links are off for this space. A space manager can turn them on."],
   ["use_move", "This artifact already exists. Use Move to change its space."],
-  ["invalid_successor", "Choose an active member who isn't a guest or restricted."],
-  ["member_active", "This person is active again, so their artifacts stay with them."],
-  ["directory_sync_off", "Directory sync is off, so groups can't be changed here."],
-  ["turnstile_required", "Complete the verification first."],
-  ["turnstile_failed", "Verification failed. Try again."],
+  ["invalid_successor", "Pick an active member who isn't a guest or restricted."],
+  ["member_active", "This person is active again, so their artifacts stay with them. Nothing was moved."],
+  ["directory_sync_off", "Directory sync is off, so this isn't available right now."],
+  ["turnstile_required", "Finish the check above, then send the code again."],
+  ["turnstile_failed", "The check didn't go through. Try it again."],
   ["reauth_required", "For your security, sign in with Google again to manage the directory."],
   ["restrict_admin", "Owners and admins can't be restricted. Change their role first."],
 ])("%s", (code, copy) => {
   expect(errorCopy(new ApiClientError(code as ErrorCode, "server text", 400), "x")).toBe(copy);
+});
+it("space_forbidden for a capped account", () => {
+  expect(errorCopy(new ApiClientError("space_forbidden", "server text", 403), "x", { cap: "restricted" })).toBe("Your account can only view, so you can't publish.");
+});
+it("directoryLink only off the Directory page", () => {
+  const e = new ApiClientError("directory_sync_off", "server text", 409);
+  expect([directoryLink(e, false), directoryLink(e, true)]).toEqual([true, false]);
+  expect(directoryLink(new ApiClientError("not_found", "x", 404), false)).toBe(false);
 });
 it("other codes fall back to the server message, then the fallback", () => {
   expect(errorCopy(new ApiClientError("not_found", "Not found", 404), "x")).toBe("Not found");
@@ -367,7 +378,7 @@ it("a mapping 409 toasts the title and the mapped copy", async () => {
   const { result } = renderHook(() => usePutMapping("SpEngNpQrSt2uVwX"), { wrapper });
   await result.current.mutateAsync({ groupId: "gEng01", role: "manager" }).catch(() => {});
   expect(await screen.findByText("Couldn't change access.")).toBeVisible();
-  expect(screen.getByText("Directory sync is off, so groups can't be changed here.")).toBeVisible();
+  expect(screen.getByText("Directory sync is off, so this isn't available right now.")).toBeVisible();
 });
 
 it("directory group search waits for two characters", async () => {
@@ -565,28 +576,47 @@ Expected: PASS, including `share.test.tsx`, `versions.test.tsx`, `shell.test.tsx
 - Test: `apps/dashboard/test/hosted-chrome.test.tsx`
 
 **Interfaces:**
-- Consumes: `useHosted().directory`, `features`.
-- Produces: `<SyncBanner />` (renders when `directory.banner`; adds the tokens note when `directory.tokensUnverified`; links to `/settings/directory`).
+- Consumes: `useHosted().directory` (`{ mode, healthy, unhealthySince, banner, tokensUnverified, state, staleAt, heldSweeps }`; Backend #370 adds `state`, `staleAt`, `heldSweeps`, which are `null`, `null` and `0` for non-admins), `features`.
+- Produces: `<SyncBanner />`: renders when `directory.banner`; one line per `state` (copy below, Design to confirm), the `staleAt` sentence, the tokens note when `tokensUnverified`, the held-sweeps count when `heldSweeps > 0`; links to `/settings/directory`. Also renders, without `banner`, a held-sweeps-only notice for owners and admins when `heldSweeps > 0`.
+- Proposed per-state copy (needs Design): `backoff` "Google directory sync is failing and retrying."; `auth_failed` "Google directory access was lost. Reconnect Google Workspace."; `scope_missing` "Google directory access is missing a permission. Reconnect and allow every permission."; `customer_mismatch` "The connected Google Workspace doesn't match. Reconnect the right one."; `never` "The Google directory hasn't synced yet."; staleAt: "If sync doesn't recover by {date}, synced members lose access."; held: "{n} group changes are waiting for your confirmation."
 
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-it("owner sees the sync banner after an hour unhealthy", async () => {
-  mountHosted("/", { unhealthy: true });
+it.each([
+  ["backoff", "Google directory sync is failing and retrying."],
+  ["auth_failed", "Google directory access was lost. Reconnect Google Workspace."],
+  ["scope_missing", "Google directory access is missing a permission. Reconnect and allow every permission."],
+  ["customer_mismatch", "The connected Google Workspace doesn't match. Reconnect the right one."],
+])("owner sees the %s banner after an hour unhealthy", async (state, copy) => {
+  mountHosted("/", { unhealthy: true, unhealthyState: state });
   const b = await screen.findByRole("status", { name: "Directory sync" });
-  expect(b).toHaveTextContent("Google directory sync is failing"); // copy per D13
+  expect(b).toHaveTextContent(copy); // copy per D13
   expect(b).toHaveTextContent("Agent tokens aren't being re-verified");
+  expect(b).toHaveTextContent(/If sync doesn't recover by .+, synced members lose access\./);
   expect(within(b).getByRole("link", { name: "Open directory settings" })).toHaveAttribute("href", "/settings/directory");
 });
 
-it("members never see the sync banner", async () => {
-  mountHosted("/", { unhealthy: true }, (m) => ({ ...m, user: { ...m.user, role: "member" }, instance: { ...m.instance, directory: { ...m.instance.directory!, banner: false, tokensUnverified: false } } }));
-  await screen.findByRole("heading", { name: "Library" });
+it("the banner counts held sweeps", async () => {
+  mountHosted("/", { unhealthy: true, unhealthyState: "backoff" });
+  expect(await screen.findByRole("status", { name: "Directory sync" })).toHaveTextContent("1 group changes are waiting for your confirmation."); // mock holds gSales03
+});
+
+it("a healthy install with a held sweep shows only the held notice", async () => {
+  mountHosted("/");
+  expect(await screen.findByRole("status", { name: "Directory changes waiting" })).toHaveTextContent("1 group changes are waiting for your confirmation.");
   expect(screen.queryByRole("status", { name: "Directory sync" })).toBeNull();
 });
 
-it("healthy sync shows no banner", async () => {
-  mountHosted("/");
+it("members never see the sync banner or the held notice", async () => {
+  mountHosted("/", { unhealthy: true, unhealthyState: "auth_failed" }, (m) => ({ ...m, user: { ...m.user, role: "member" }, instance: { ...m.instance, directory: { ...m.instance.directory!, banner: false, tokensUnverified: false, state: null, staleAt: null, heldSweeps: 0 } } }));
+  expect(await screen.findByRole("heading", { name: "Library" })).toBeVisible();
+  expect(screen.queryByRole("status", { name: "Directory sync" })).toBeNull();
+  expect(screen.queryByRole("status", { name: "Directory changes waiting" })).toBeNull();
+});
+
+it("healthy sync with nothing held shows no banner", async () => {
+  mountHosted("/", true, (m) => ({ ...m, instance: { ...m.instance, directory: { ...m.instance.directory!, heldSweeps: 0 } } }));
   await screen.findByRole("heading", { name: "Library" });
   expect(screen.queryByRole("status", { name: "Directory sync" })).toBeNull();
 });
@@ -818,7 +848,7 @@ it("403 space_forbidden shows the server message in the dialog", async () => {
   mountHosted("/");
   await openUploadWith([new File(["# x"], "a.md")]);
   fireEvent.click(await screen.findByRole("button", { name: "Create" }));
-  expect(await within(screen.getByRole("dialog")).findByText("You can't publish to this space. Ask a space manager for editor access.")).toBeVisible();
+  expect(await within(screen.getByRole("dialog")).findByText("You can't publish to this space. Ask a space manager to make you an editor.")).toBeVisible();
 });
 ```
 
@@ -913,7 +943,7 @@ it("space_forbidden keeps the dialog open with the copy", async () => {
   fireEvent.click(await screen.findByRole("button", { name: "Move" }));
   await chooseOption("Move to", "Ops");
   fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Move" }));
-  expect(await within(screen.getByRole("dialog")).findByText("You can't publish to this space. Ask a space manager for editor access.")).toBeVisible();
+  expect(await within(screen.getByRole("dialog")).findByText("You can't publish to this space. Ask a space manager to make you an editor.")).toBeVisible();
 });
 
 it("space_personal (defensive) shows its copy", async () => {
@@ -922,7 +952,7 @@ it("space_personal (defensive) shows its copy", async () => {
   fireEvent.click(await screen.findByRole("button", { name: "Move" }));
   await chooseOption("Move to", "Ops");
   fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Move" }));
-  expect(await within(screen.getByRole("dialog")).findByText("Personal spaces can't be used here.")).toBeVisible();
+  expect(await within(screen.getByRole("dialog")).findByText("Personal spaces can't be used here. Pick a shared space.")).toBeVisible();
 });
 ```
 
@@ -977,14 +1007,14 @@ it("no space (self-hosted): Share panel unchanged", async () => {
   expect(screen.queryByText("Public links are turned off for this space.")).toBeNull();
 });
 
-it("a 403 public_links_off from a stale tab shows the copy and keeps the old visibility", async () => {
+it("a 403 public_links_off from a stale tab shows the error copy and keeps the old visibility", async () => {
   serve({ access: "manager", space: eng, can: full, visibility: "team" });
   server.use(http.patch(`*${R.artifact(arts[0].id)}`, () => HttpResponse.json({ error: { code: "public_links_off", message: "server text" } }, { status: 403 })));
   mount(`/a/${arts[0].id}`);
   await openShare();
   fireEvent.click(screen.getByRole("radio", { name: "Public" }));
   fireEvent.click(screen.getByRole("button", { name: "Save visibility" }));
-  expect(await screen.findByText("Public links are turned off for this space.")).toBeVisible();
+  expect(await screen.findByText("Public links are off for this space. A space manager can turn them on.")).toBeVisible();
   expect(screen.getByRole("radio", { name: "Team" })).toBeChecked();
 });
 
@@ -1088,7 +1118,7 @@ it("delete of a non-empty space shows the 409 message", async () => {
   mountHosted("/settings/spaces?space=SpEngNpQrSt2uVwX");
   fireEvent.click(await screen.findByRole("button", { name: "Delete space" }));
   fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete" }));
-  expect(await screen.findByRole("alert")).toHaveTextContent("Move or delete this space's artifacts first, including the trash.");
+  expect(await screen.findByRole("alert")).toHaveTextContent("This space still has artifacts. Move or delete them first. Artifacts in the trash count too.");
 });
 
 it("an admin with no role in Clients can add themselves, which is recorded", async () => {
@@ -1174,7 +1204,8 @@ it("a 409 directory_sync_off shows the message and restores the role", async () 
   server.use(http.put("*/api/v1/spaces/:id/mappings/:g", () => HttpResponse.json({ error: { code: "directory_sync_off", message: "server text" } }, { status: 409 })));
   mountHosted(ENG);
   await chooseOption("Role for eng@example.com", "Manager");
-  expect(await screen.findByText("Directory sync is off, so groups can't be changed here.")).toBeVisible();
+  expect(await screen.findByText("Directory sync is off, so this isn't available right now.")).toBeVisible();
+  expect(screen.getByRole("link", { name: "Open directory settings" })).toHaveAttribute("href", "/settings/directory");
   expect(screen.getByRole("combobox", { name: "Role for eng@example.com" })).toHaveTextContent("Editor"); // the mock maps eng@ as editor
 });
 
@@ -1357,7 +1388,7 @@ it("400 invalid_successor shows the copy", async () => {
   const d = await openFor("Carol Departed");
   await chooseOption("Give them to", "Bob Builder");
   fireEvent.click(within(d).getByRole("button", { name: "Transfer 3 artifacts" }));
-  expect(await within(d).findByText("Choose an active member who isn't a guest or restricted.")).toBeVisible();
+  expect(await within(d).findByText("Pick an active member who isn't a guest or restricted.")).toBeVisible();
 });
 
 it("409 member_active shows the copy", async () => {
@@ -1366,7 +1397,7 @@ it("409 member_active shows the copy", async () => {
   const d = await openFor("Carol Departed");
   await chooseOption("Give them to", "Bob Builder");
   fireEvent.click(within(d).getByRole("button", { name: "Transfer 3 artifacts" }));
-  expect(await within(d).findByText("This person is active again, so their artifacts stay with them.")).toBeVisible();
+  expect(await within(d).findByText("This person is active again, so their artifacts stay with them. Nothing was moved.")).toBeVisible();
 });
 // invite-link.spec.ts: hosted Members page (with Carol's row) keeps the invite link layout
 ```
@@ -1586,7 +1617,7 @@ it("turnstile_failed keeps the email and resets the widget", async () => {
   act(() => turnstileCallback("fail"));
   fireEvent.change(screen.getByRole("textbox", { name: "Work email" }), { target: { value: "bob@example.com" } });
   fireEvent.click(screen.getByRole("button", { name: "Email me a code" }));
-  expect(await screen.findByRole("alert")).toHaveTextContent("Verification failed. Try again.");
+  expect(await screen.findByRole("alert")).toHaveTextContent("The check didn't go through. Try it again.");
   expect(screen.getByRole("textbox", { name: "Work email" })).toHaveValue("bob@example.com");
   expect(turnstileReset).toHaveBeenCalledTimes(1);
 });
@@ -1597,7 +1628,7 @@ it("turnstile_required shows at the slot and sends nothing more", async () => {
   fireEvent.change(screen.getByRole("textbox", { name: "Work email" }), { target: { value: "bob@example.com" } });
   fireEvent.click(screen.getByRole("button", { name: "Email me a code" }));
   const slot = screen.getByTestId("turnstile").parentElement!;
-  expect(await within(slot).findByText("Complete the verification first.")).toBeVisible();
+  expect(await within(slot).findByText("Finish the check above, then send the code again.")).toBeVisible();
   expect(screen.queryByRole("textbox", { name: "8-digit code" })).toBeNull(); // still on the email step
 });
 
@@ -1717,9 +1748,13 @@ it("a 400 restrict_admin (an admin promoted in another tab) shows the copy", asy
   expect(screen.getByRole("row", { name: /Bob Builder/ })).not.toHaveTextContent("Restricted");
 });
 
-it("never offered on admins either", async () => {
-  mountHosted("/settings/members", true, undefined, [http.get("*/api/v1/members", () => HttpResponse.json([{ ...fixtures.members[1], role: "admin", status: "active", identities: [], restriction: null }]))]);
-  expect(await screen.findByRole("row", { name: /Bob Builder/ })).toBeVisible();
+it("owners and admins never show Restrict", async () => {
+  mountHosted("/settings/members", true, undefined, [http.get("*/api/v1/members", () => HttpResponse.json([
+    { ...fixtures.members[0], role: "owner", status: "active", identities: ["google"], restriction: null },
+    { ...fixtures.members[1], role: "admin", status: "active", identities: [], restriction: null },
+  ]))]);
+  expect(await screen.findByRole("row", { name: /Ada Lovelace/ })).toBeVisible();
+  expect(screen.getByRole("row", { name: /Bob Builder/ })).toBeVisible();
   expect(screen.queryByRole("button", { name: "Restrict" })).toBeNull();
 });
 
@@ -1871,6 +1906,11 @@ it.each([
   expect(await screen.findByRole("alert")).toHaveTextContent(copy); // copy per D12
 });
 
+it("the status header reads Me's directory state (scope_missing)", async () => {
+  mountHosted("/settings/directory", { unhealthy: true, unhealthyState: "scope_missing" });
+  expect(await screen.findByRole("heading", { level: 2, name: "Google directory access is missing a permission. Reconnect and allow every permission." })).toBeVisible(); // header from Me.instance.directory.state, copy per D12
+});
+
 it("unhealthy shows Retrying and the last error", async () => {
   mountHosted("/settings/directory", { unhealthy: true });
   const s = await screen.findByRole("status", { name: "Sync status" });
@@ -1885,11 +1925,12 @@ it("Sync now POSTs", async () => {
   await waitFor(() => expect(seen.at(-1)?.path).toBe("/api/v1/directory/sync"));
 });
 
-it("Sync now while sync is off shows its own copy", async () => {
+it("Sync now while sync is off shows the copy, with no link to the page you're on", async () => {
   server.use(http.post("*/api/v1/directory/sync", () => HttpResponse.json({ error: { code: "directory_sync_off", message: "server text" } }, { status: 409 })));
   mountHosted("/settings/directory");
   fireEvent.click(await screen.findByRole("button", { name: "Sync now" }));
-  expect(await screen.findByText("Sync is off. Connect Google Workspace to sync.")).toBeVisible(); // Sync now's own 409 copy, per D12
+  expect(await screen.findByText("Directory sync is off, so this isn't available right now.")).toBeVisible();
+  expect(screen.queryByRole("link", { name: "Open directory settings" })).toBeNull();
 });
 
 it("Disconnect warns that memberships freeze and nobody loses access", async () => {
@@ -1913,7 +1954,7 @@ it("reauth_required offers a fresh Google sign-in back to this page", async () =
 Run: `pnpm --filter @oa/dashboard test -- directory`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement per D12.** Shows `lastSuccessAt` ("Last synced …"), `staleAt` while unhealthy ("If sync doesn't recover by …, synced members lose access."; it is `lastSuccessAt` plus 7 days, after which synced users fail closed) and `customerMismatch`. Status labels by `SyncStatus.state`: `ok` "Healthy", `backoff` "Retrying", `auth_failed` "Google access lost", `customer_mismatch` "Wrong Google Workspace", `never` "Not synced yet". A `reauth_required` on any directory call shows the reauth link instead of the page.
+- [ ] **Step 3: Implement per D12.** Shows `lastSuccessAt` ("Last synced …"), `staleAt` while unhealthy ("If sync doesn't recover by …, synced members lose access."; it is `lastSuccessAt` plus 7 days, after which synced users fail closed) and `customerMismatch`. The status header comes from `Me.instance.directory` (`state`, `staleAt`, `heldSweeps`, Backend #370) with the Task 4 per-state copy; the detail below comes from `SyncStatus`. Status labels by `SyncStatus.state` (plus `scope_missing` "Google permission missing"): `ok` "Healthy", `backoff` "Retrying", `auth_failed` "Google access lost", `customer_mismatch` "Wrong Google Workspace", `never` "Not synced yet". A `reauth_required` on any directory call shows the reauth link instead of the page.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1981,7 +2022,7 @@ it("adding a restricted group while off shows the directory_sync_off copy", asyn
   mountHosted("/settings/directory");
   fireEvent.change(await screen.findByRole("combobox", { name: "Add a restricted group" }), { target: { value: "sa" } });
   fireEvent.click(await screen.findByRole("option", { name: /sales@example.com/ }));
-  expect(await screen.findByText("Directory sync is off, so groups can't be changed here.")).toBeVisible();
+  expect(await screen.findByText("Directory sync is off, so this isn't available right now.")).toBeVisible();
 });
 ```
 
@@ -2180,7 +2221,7 @@ Expected: PASS.
 ## Self-review
 
 - **Spec coverage:** 4.1 sign-in → 14 (Google, codes, Turnstile slot, every error, `/no-access` redirect), 16 (identity reset), 19 (real run with consent). 4.2 spaces and personal space → 5, 6; roles → 1, 11, 12; "All members" → 10; ownership (managers act, personal owners transfer) → 3, 8; personal private from admins → 6, 10, 13, 19; departed transfer → 13; visibility and public links per space → 9, 10; contractors and guests read-only including data writes → 3, 12, 15 (manual and group restriction), 18, 19. 4.3 step 3 (connect IdP, map groups) → 17, 11, in M1 for FinQore. 4.5 tier and frozen sync, never widens access → 11, 12, 18; Team copy from `instance.tier` → 12. Sync health → 4, 17. Out of scope: single-artifact transfer UI; audit log (M4).
-- **Contract fidelity:** every route, field and error code is PR #359's (merged; approved at `ed1105c`) (groups by `groupId`, `Member.restriction`, `R.memberRestricted`, `R.spaceMemberSelf`, `public_links_off`, no `outsideSharing`); each of the 12 hosted error codes (with Backend's follow-up `restrict_admin`) has an owning task and a tested UI string; mock values (ids, names, counts, code, masked email, site key, held sweep) are the mock store's. No mismatches.
+- **Contract fidelity:** every route, field and error code is PR #359's (merged; approved at `ed1105c`) (groups by `groupId`, `Member.restriction`, `R.memberRestricted`, `R.spaceMemberSelf`, `public_links_off`, no `outsideSharing`); each of the 12 hosted error codes (with Backend #370's `restrict_admin`) has an owning task and a tested UI string; mock values (ids, names, counts, code, masked email, site key, held sweep) are the mock store's. No mismatches.
 - **Review must-fixes:** SPA-owned sign-in; 8-digit codes through `normalizeCode`; verify `{ code }` plus cookie; 202 request and 401 reasons; all six `SignInError` values; `AuthProviders`; `Me.auth`, `instance.hosted`, `instance.signIn`; identity reset UI; every refusal on `/sign-in?error=` (the `/no-access` page redirects in direct mode); every space shape from the contract; directory connect, status and held in M1 (17, 18); Review Focus 1 consistent with Task 14; tests carry real assertions.
 - **Rulings:** `can` read directly (Task 3; fallback is the contract's own function); `can.dataWrite` drives data-write UI; `manager` access; 409 `directory_sync_off`; moves into personal spaces refused; `spaceId` create-only; sync-health banner; opt-in mocks.
 - **Boundary:** no task lists a file under `packages/shared` or `apps/server`.
