@@ -369,10 +369,4 @@ describe("usage per plan (#279)", () => {
         .textContent,
     ).toContain("182,400today");
   });
-
-  it("no plan (older server): treated as Free", async () => {
-    respond({ metrics: [{ key: "requests", used: 1, limit: 100000 }] });
-    mount("/settings/usage");
-    expect(await screen.findByText(PLAN_LINE)).toBeTruthy();
-  });
 });

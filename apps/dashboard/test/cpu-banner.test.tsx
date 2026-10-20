@@ -260,20 +260,5 @@ describe("CPU banner", () => {
       await waitFor(() => expect(screen.queryByText(PAID_TITLE)).toBeNull());
       expect(localStorage.getItem("oa.cpuBanner.dismissed")).toBe(DAY);
     });
-
-    it("an instance without a plan reads as Free", async () => {
-      server.use(
-        http.get(`*${R.me}`, () => {
-          const { plan: _, ...instance } = fixtures.me.instance as {
-            plan?: string;
-          } & typeof fixtures.me.instance;
-          return HttpResponse.json({ ...fixtures.me, instance });
-        }),
-      );
-      usage(4, DAY);
-      mount("/");
-      await banner();
-      expect(screen.getByRole("link", { name: /See plans/ })).toBeTruthy();
-    });
   });
 });

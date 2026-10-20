@@ -48,7 +48,7 @@ export function useCpuSignals(
       ? (data.metrics.find((m) => m.key === "cpu_limit_hits")?.used ?? null)
       : null;
   const recent = at !== null && now - at < RECENT_MS && utcDay(at) === today;
-  // From Me, so members know it too; an older server without it reads as Free.
+  // From Me, so members know it too.
   const paid = plan === "paid";
   return { admin, hits, recent, today, paid };
 }

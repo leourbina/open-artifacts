@@ -1,7 +1,7 @@
-import { type Me, R } from "@oa/shared";
+import { type Me, MeSchema, R } from "@oa/shared";
 import { useQuery } from "@tanstack/react-query";
 import { ApiClientError, api } from "../api/client";
-import { LenientMeSchema, qk } from "../api/queries";
+import { qk } from "../api/queries";
 
 export type MeState =
   | { status: "loading" }
@@ -13,7 +13,7 @@ export type MeState =
 export function useMe(): MeState {
   const q = useQuery({
     queryKey: qk.me,
-    queryFn: ({ signal }) => api.get(R.me, LenientMeSchema, signal),
+    queryFn: ({ signal }) => api.get(R.me, MeSchema, signal),
     staleTime: 60_000,
   });
   if (q.error instanceof ApiClientError && q.error.status === 401)
