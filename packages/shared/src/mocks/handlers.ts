@@ -11,7 +11,9 @@
  * - Auth: a request with no cookie and no Bearer gets 401 on every authed route (all mutations
  *   except signed-URL upload PUT, plus me/members/tokens/oauth-clients/settings/usage/list/search);
  *   public-artifact reads stay anonymous-OK, and so do data doc writes on a public artifact
- *   with allowAnonymousWrites (updatedBy "anon"), as on the server (B13).
+ *   with allowAnonymousWrites (updatedBy "anon"), as on the server (B13). An anonymous read
+ *   of a non-public artifact (GET, content-url, versions, data list/query/doc) gets 404.
+ *   `X-OA-Embed: 1` (or `?embed=1`) counts as anonymous even with a cookie or Bearer.
  * - quotaExceeded: every /api/v1 route answers 503 quota_exceeded.
  * - emailEnabled: sets Me.instance.emailEnabled (default false, from the fixtures).
  * - update: sets Me.instance.update (default null, from the fixtures).
@@ -99,10 +101,16 @@ const DEFAULT_ENTRY = {
   pdf: "document.pdf",
 } as const;
 
-/** Anonymous = no cookie and no Bearer token. */
+/**
+ * Anonymous = no cookie and no Bearer token, or the embed-mode hint
+ * (`X-OA-Embed: 1`, or `?embed=1` on the data-subscribe socket), which drops
+ * both, as on the server.
+ */
 const isAnon = (req: Request) =>
-  !req.headers.has("cookie") &&
-  !/^bearer\s/i.test(req.headers.get("authorization") ?? "");
+  req.headers.get("x-oa-embed") === "1" ||
+  new URL(req.url).searchParams.get("embed") === "1" ||
+  (!req.headers.has("cookie") &&
+    !/^bearer\s/i.test(req.headers.get("authorization") ?? ""));
 const hideEmail = (u: UserRef): UserRef => ({ ...u, email: null });
 const redactArt = (a: ArtifactSummary, req: Request): ArtifactSummary =>
   a.visibility === "public" && isAnon(req)
@@ -224,6 +232,8 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
     (ctx: Ctx) => {
       const a = artifacts.find((x) => x.id === ctx.params.id);
       if (!a || a.deletedAt !== null) return notFound();
+      // Anonymous callers see only public artifacts; anything else is 404.
+      if (a.visibility !== "public" && isAnon(ctx.request)) return notFound();
       if (need === "owner" && a.access !== "owner") return notFound();
       if (need === "write" && a.access === "viewer") return notFound();
       return fn(a, ctx);

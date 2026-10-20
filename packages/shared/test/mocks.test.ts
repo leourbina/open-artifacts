@@ -990,3 +990,57 @@ describe("anonymous callers on authed routes", () => {
     ).toBe(200);
   });
 });
+
+describe("anonymous reads of non-public artifacts (as on the server)", () => {
+  const anon = { "content-type": "application/json" };
+  const embed = { ...H, "x-oa-embed": "1" };
+  const priv = by((a) => a.visibility === "private" && a.access === "owner");
+  const team = by((a) => a.visibility === "team");
+  const reads = (id: string) => [
+    R.artifact(id),
+    R.contentUrl(id),
+    R.versions(id),
+    R.dataCollection(id, "votes"),
+    R.dataDoc(id, "votes", "x"),
+  ];
+
+  it("no cookie/Bearer, or X-OA-Embed: 1 with a cookie or Bearer -> 404 not_found", async () => {
+    fresh();
+    for (const headers of [
+      anon,
+      embed,
+      { ...anon, authorization: "Bearer x", "x-oa-embed": "1" },
+    ])
+      for (const a of [priv, team])
+        for (const path of reads(a.id)) {
+          const r = await call("GET", path, undefined, headers);
+          expect(r.status, `${path} ${JSON.stringify(headers)}`).toBe(404);
+          expect((await json(r)).error.code).toBe("not_found");
+        }
+  });
+
+  it("signed in (no hint) still reads them; public reads stay anonymous-OK", async () => {
+    fresh();
+    expect((await call("GET", R.artifact(priv.id))).status).toBe(200);
+    expect((await call("GET", R.contentUrl(priv.id))).status).toBe(200);
+    expect(
+      (await call("GET", R.dataCollection(poll.id, "votes"), undefined, embed))
+        .status,
+    ).toBe(200);
+    const r = await call("GET", R.artifact(pub.id), undefined, embed);
+    expect(r.status).toBe(200);
+    expect((await json(r)).owner.email).toBeNull();
+    expect(
+      (await call("GET", R.contentUrl(pub.id), undefined, anon)).status,
+    ).toBe(200);
+  });
+
+  it("X-OA-Embed: 1 and ?embed=1 make authed routes 401 even with a cookie", async () => {
+    fresh();
+    expect((await call("GET", R.me, undefined, embed)).status).toBe(401);
+    expect((await call("GET", `${R.me}?embed=1`)).status).toBe(401);
+    expect(
+      (await call("GET", R.me, undefined, { ...H, "x-oa-embed": "0" })).status,
+    ).toBe(200);
+  });
+});
