@@ -123,6 +123,10 @@ export async function decide(
     ctx.notes.push(
       `email off: Workers Paid not detected, so invites can't be sent. If the account is on Workers Paid (${DASH_PLANS}), rerun with --team --yes-paid`,
     );
+  if (team)
+    ctx.notes.push(
+      "team: every Access sign-in, viewers included, uses a Zero Trust seat. Free up to 50 users, then $7 per user per month for every user (see the self-hosting costs docs)",
+    );
   const browser =
     o.browserFlag ??
     (plan === "paid" || o.yesPaid
