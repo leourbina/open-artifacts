@@ -635,7 +635,7 @@ it("code normalizes spaces and dashes", () => {
 it("invalid_code keeps the email and clears the code", ...);
 it("rate_limited shows the wait from Retry-After and disables Resend", ...);
 it("verify success redirects to the return path", ...);         // via auth/redirect.tsx
-it("no copy contains an em dash", ...);                         // scan rendered text for "-"
+it("no copy contains an em dash", ...);                         // scan rendered text for "\u2014"
 // e2e/signin-hosted.spec.ts (mock, hosted): layout at 375 and 1280, light and dark; existing signin-split.spec.ts untouched
 ```
 
