@@ -143,6 +143,7 @@ body {
 .oa-cpu-link {
   color: var(--oa-text);
   font-weight: 500;
+  text-decoration: underline;
   text-underline-offset: 2px;
   white-space: nowrap;
 }

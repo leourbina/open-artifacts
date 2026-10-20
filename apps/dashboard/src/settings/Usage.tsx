@@ -229,7 +229,7 @@ function PlanLine({ plan }: { plan: "free" | "paid" | undefined }) {
   if (role !== "owner" && role !== "admin") return null;
   if (plan === "paid")
     return (
-      <p className="m-0 text-[length:var(--oa-text-sm)] text-[var(--oa-text-2)]">
+      <p className="text-[length:var(--oa-text-sm)] text-[var(--oa-text-2)]">
         This instance is on Workers Paid. There are no daily limits, and each
         request gets up to 30 seconds of CPU. Usage beyond what the plan
         includes is billed by Cloudflare.{" "}
