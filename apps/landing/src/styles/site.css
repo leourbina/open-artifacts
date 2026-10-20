@@ -295,7 +295,7 @@ code,
   list-style: none;
   counter-reset: step;
 }
-@media (min-width: 860px) {
+@media (min-width: 1024px) {
   .steps {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     align-items: stretch;
@@ -304,16 +304,11 @@ code,
   .steps p {
     margin-bottom: 12px;
   }
+  /* Chips sit at the bottom of each column at one height that fits the
+     setup phrase in full (three lines), so it is never cut off. */
   .steps .step-chip {
-    height: 36px;
+    min-height: calc(3lh + 12px);
     margin-top: auto;
-    white-space: nowrap;
-    overflow: hidden;
-  }
-  .step-chip .chip-t {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 }
 .steps li {
@@ -361,6 +356,12 @@ code,
 }
 .caret {
   color: var(--oa-text-muted);
+}
+.step-chip.mono {
+  align-items: flex-start;
+}
+.nowrap {
+  white-space: nowrap;
 }
 .mini-btn {
   flex: none;
