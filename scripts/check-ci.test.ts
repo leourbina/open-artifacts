@@ -952,3 +952,127 @@ describe("workflow jobs that use repo files have a checkout", () => {
     }
   }
 });
+
+describe("demo instance workflows", () => {
+  const dir = join(root, ".github/workflows");
+  // Only staging-scoped Cloudflare credentials and the demo's own secrets; never PROD.
+  const ALLOWED = new Set([
+    "CLOUDFLARE_API_TOKEN",
+    "CLOUDFLARE_ACCOUNT_ID",
+    "DEMO_OA_ACCESS_TOKEN",
+    "DEMO_OA_TOKEN",
+  ]);
+  const secretsIn = (v: unknown): string[] => {
+    const out: string[] = [];
+    const walk = (x: unknown) => {
+      if (typeof x === "string")
+        for (const m of x.matchAll(/secrets\.([A-Za-z0-9_]+)/g))
+          out.push(m[1] as string);
+      else if (x && typeof x === "object") Object.values(x).forEach(walk);
+    };
+    walk(v);
+    return out;
+  };
+  const demoFiles = readdirSync(dir).filter(
+    (n) => /demo/.test(n) && /\.ya?ml$/.test(n),
+  );
+
+  it("there is a demo install workflow, named without 'prod'", () => {
+    expect(demoFiles).toContain("ops-demo-install.yml");
+    for (const f of demoFiles) expect(f).not.toContain("prod");
+  });
+
+  for (const f of demoFiles) {
+    describe(f, () => {
+      const w = wf(f);
+      it("uses only staging-scoped and demo secrets", () => {
+        for (const s of secretsIn(w)) expect(ALLOWED.has(s), s).toBe(true);
+        expect(secretsIn(w)).not.toContain("PROD_CLOUDFLARE_API_TOKEN");
+      });
+      it("serializes on the demo concurrency group", () => {
+        const groups = [
+          w.concurrency?.group,
+          ...Object.values(w.jobs).map(
+            (j) =>
+              (j as { concurrency?: { group?: string } }).concurrency?.group,
+          ),
+        ].filter(Boolean);
+        expect(groups).toContain("demo");
+        for (const g of groups) expect(g).toBe("demo");
+      });
+      it("only runs from main", () => {
+        for (const [name, j] of Object.entries(w.jobs))
+          expect(String((j as { if?: string }).if ?? ""), name).toContain(
+            "github.ref == 'refs/heads/main'",
+          );
+      });
+    });
+  }
+
+  describe("ops-demo-install.yml", () => {
+    const w = wf("ops-demo-install.yml");
+    it("is dispatch only", () => {
+      expect(triggers(w)).toEqual(["workflow_dispatch"]);
+    });
+    it("runs the demo setup with the staging token, the demo access token and the exact flags", () => {
+      const step = w.jobs.install.steps.find((s: { run?: string }) =>
+        String(s.run ?? "").includes("oa:setup --ci --json"),
+      );
+      const run = String(step.run).replace(/\s+/g, " ");
+      for (const flag of [
+        "--name open-artifacts-demo",
+        "--app-host demo.open-artifacts.com",
+        "--content-host demo-content.open-artifacts.com",
+        "--owner-email me@leourbina.com",
+        "--solo",
+        "--no-email",
+        "--yes-paid",
+      ])
+        expect(run, flag).toContain(flag);
+      expect(run).not.toContain("--upgrade");
+      expect(step.env.CLOUDFLARE_API_TOKEN).toContain(
+        "secrets.CLOUDFLARE_API_TOKEN",
+      );
+      expect(step.env.CLOUDFLARE_ACCOUNT_ID).toContain(
+        "secrets.CLOUDFLARE_ACCOUNT_ID",
+      );
+      expect(step.env.OA_ACCESS_TOKEN).toContain(
+        "secrets.DEMO_OA_ACCESS_TOKEN",
+      );
+    });
+  });
+
+  describe("release-please.yml deploy-demo", () => {
+    const rp = wf("release-please.yml");
+    const job = rp.jobs["deploy-demo"];
+    it("runs in parallel with deploy-prod, only on a release and only when DEMO_ENABLED", () => {
+      expect([job.needs].flat()).toEqual(["release-please"]);
+      expect([rp.jobs["deploy-prod"].needs].flat()).not.toContain(
+        "deploy-demo",
+      );
+      expect(String(job.if)).toContain("vars.DEMO_ENABLED == 'true'");
+      expect(String(job.if)).toContain(
+        "needs.release-please.outputs.release_created == 'true'",
+      );
+      expect(String(job.if)).toContain("github.ref == 'refs/heads/main'");
+    });
+    it("upgrades the demo with the demo credentials and never touches PROD secrets", () => {
+      expect(job.concurrency.group).toBe("demo");
+      const s = JSON.stringify(job);
+      expect(s).toContain("oa:setup --ci --json");
+      expect(s).toContain("--upgrade");
+      expect(s).toContain("--name open-artifacts-demo");
+      expect(s).toContain("secrets.DEMO_OA_ACCESS_TOKEN");
+      expect(s).not.toContain("PROD_CLOUDFLARE_API_TOKEN");
+      expect(secretsIn(job).every((x) => ALLOWED.has(x))).toBe(true);
+    });
+    it("is independent of deploy-prod and deploy-landing", () => {
+      expect(JSON.stringify(rp.jobs["deploy-prod"])).not.toContain(
+        "deploy-demo",
+      );
+      expect(JSON.stringify(rp.jobs["deploy-landing"])).not.toContain(
+        "deploy-demo",
+      );
+    });
+  });
+});
