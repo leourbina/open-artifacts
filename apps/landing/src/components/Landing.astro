@@ -5,6 +5,7 @@ import AgentWiring from "./AgentWiring.astro";
 import ChatDemo from "./ChatDemo.astro";
 import FeatureStory from "./FeatureStory.astro";
 import Gallery from "./gallery/Gallery.astro";
+import Multiplayer from "./Multiplayer.astro";
 import Shot from "./Shot.astro";
 
 const prompt = "set up open-artifacts.com/llms.txt";
@@ -103,6 +104,15 @@ const plans = [
       link, its versions and who it's shared with.
     </p>
     <Gallery />
+  </section>
+
+  <section class="wrap multi-section" aria-labelledby="multi-h">
+    <h2 id="multi-h">Every live page is multiplayer</h2>
+    <p class="section-lede">
+      Everyone who opens a live page works on the same data. When Sam checks an item, Ana's window
+      shows it right away, with Sam's name on it. Try it in either window.
+    </p>
+    <Multiplayer />
   </section>
 
   <section class="band" aria-labelledby="steps-h">
