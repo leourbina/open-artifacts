@@ -3,6 +3,20 @@
 // link. No "Open raw" anywhere.
 import { expect, test } from "@playwright/test";
 
+// The artifact says hello (with the bridge's nonce), so the slow notice never
+// shows up and shifts the frame on a loaded machine.
+test.beforeEach(async ({ context }) => {
+  await context.route("https://content.example.com/**", (r) =>
+    r.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><script>
+        const nonce = new URLSearchParams(location.hash.slice(1)).get("oa");
+        parent.postMessage({ oa: 1, type: "hello", protocol: 1, kind: "html", nonce }, "*");
+      </script>`,
+    }),
+  );
+});
+
 const ID = "Cd5fGhJkLm6nPqRs"; // Landing page
 
 for (const width of [1280, 390])
@@ -75,22 +89,42 @@ test("phones: Full screen is in the ••• menu", async ({ page, context }) =
 // Option A: the peek chip (spec-fullscreen-chip.md).
 const FULL = `/a/${ID}/full`;
 const TOP = "Exit full screen, back to Landing page";
-const EMBED = "Open Landing page in Open Artifacts (opens in new tab)";
+// Real embeds are public-only (a framed shell runs anonymously).
+const PUBLIC_FULL = "/a/Gh9kLmNpQrAsTuVx/full"; // Team poll
+const EMBED = "Open Team poll in Open Artifacts (opens in new tab)";
 const width = (l: import("@playwright/test").Locator) =>
   l.evaluate((e) => e.getBoundingClientRect().width);
+type Page = import("@playwright/test").Page;
+/** Loads `url` on a fake clock, so the 3 s reveal is stepped, not waited for. */
+const gotoFaked = async (page: Page, url: string) => {
+  await page.clock.install();
+  // Not waiting for "load": the frame's content can hold it past the reveal.
+  await page.goto(url, { waitUntil: "commit" });
+  // Paused as soon as the chip mounts: the reveal fires only when stepped.
+  await page.locator(".oa-fsx").waitFor({ state: "attached" });
+  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 100);
+};
+/** Steps past the 3 s reveal and expects the chip collapsed. */
+const revealEnds = async (
+  page: Page,
+  chip: import("@playwright/test").Locator,
+) => {
+  await expect(chip).toBeVisible();
+  await page.clock.runFor(3_100);
+  await expect(chip).toHaveAttribute("data-open", "false");
+  await page.clock.resume();
+};
 
 test.describe("full-screen chip", () => {
   test("widened for 3 s on load, then a 32px circle; the name never changes", async ({
     page,
   }) => {
-    await page.goto(FULL);
+    await gotoFaked(page, FULL);
     const chip = page.getByRole("link", { name: TOP });
     await expect(chip).toHaveAttribute("data-open", "true");
     await expect.poll(() => width(chip)).toBeGreaterThan(100);
     await expect(chip).toHaveAttribute("href", `/a/${ID}`);
-    await expect(chip).toHaveAttribute("data-open", "false", {
-      timeout: 4_000,
-    });
+    await revealEnds(page, chip);
     await expect.poll(() => width(chip)).toBe(32);
     await expect(chip).toHaveAccessibleName(TOP);
     expect(await chip.evaluate((e) => getComputedStyle(e).opacity)).toBe(
@@ -101,11 +135,9 @@ test.describe("full-screen chip", () => {
   test("widens on hover, collapses 400 ms after the pointer leaves", async ({
     page,
   }) => {
-    await page.goto(FULL);
+    await gotoFaked(page, FULL);
     const chip = page.getByRole("link", { name: TOP });
-    await expect(chip).toHaveAttribute("data-open", "false", {
-      timeout: 4_000,
-    });
+    await revealEnds(page, chip);
     await chip.hover();
     await expect(chip).toHaveAttribute("data-open", "true");
     await expect.poll(() => width(chip)).toBeGreaterThan(100);
@@ -116,11 +148,9 @@ test.describe("full-screen chip", () => {
   test("the last Tab stop; keyboard focus widens it and shows the ring", async ({
     page,
   }) => {
-    await page.goto(FULL);
+    await gotoFaked(page, FULL);
     const chip = page.getByRole("link", { name: TOP });
-    await expect(chip).toHaveAttribute("data-open", "false", {
-      timeout: 4_000,
-    });
+    await revealEnds(page, chip);
     await page.keyboard.press("Shift+Tab");
     await expect(chip).toBeFocused();
     await expect(chip).toHaveAttribute("data-open", "true");
@@ -147,15 +177,13 @@ test.describe("full-screen chip", () => {
     page,
   }) => {
     await page.emulateMedia({ reducedMotion: "reduce" });
-    await page.goto(FULL);
+    await gotoFaked(page, FULL);
     const chip = page.getByRole("link", { name: TOP });
     await expect(chip).toHaveAttribute("data-open", "true");
     expect(
       await chip.evaluate((e) => getComputedStyle(e).transitionDuration),
     ).toBe("0s");
-    await expect(chip).toHaveAttribute("data-open", "false", {
-      timeout: 4_000,
-    });
+    await revealEnds(page, chip);
     expect(await width(chip)).toBe(32);
   });
 
@@ -191,7 +219,7 @@ test.describe("full-screen chip", () => {
     await page.route("**/__embed", (r) =>
       r.fulfill({
         contentType: "text/html",
-        body: `<iframe src="${FULL}" style="width:800px;height:500px;border:0"></iframe>`,
+        body: `<iframe src="${PUBLIC_FULL}" style="width:800px;height:500px;border:0"></iframe>`,
       }),
     );
     await page.goto("/__embed");
@@ -204,7 +232,7 @@ test.describe("full-screen chip", () => {
     await chip.focus();
     await page.keyboard.press("Escape");
     await expect(chip).toBeVisible();
-    expect(page.frames()[1]?.url()).toMatch(new RegExp(`${FULL}$`));
+    expect(page.frames()[1]?.url()).toMatch(new RegExp(`${PUBLIC_FULL}$`));
     await chip.hover();
     await expect(chip).toHaveAttribute("data-open", "true");
     await expect(chip).toContainText("Open in Open Artifacts");
@@ -239,14 +267,12 @@ test.describe("full-screen chip, coarse pointer", () => {
   test("the first tap widens without navigating; the second follows", async ({
     page,
   }) => {
-    await page.goto(FULL);
+    await gotoFaked(page, FULL);
     expect(
       await page.evaluate(() => matchMedia("(pointer: coarse)").matches),
     ).toBe(true);
     const chip = page.getByRole("link", { name: TOP });
-    await expect(chip).toHaveAttribute("data-open", "false", {
-      timeout: 4_000,
-    });
+    await revealEnds(page, chip);
     await chip.tap();
     await expect(chip).toHaveAttribute("data-open", "true");
     await expect(page).toHaveURL(new RegExp(`${FULL}$`));
