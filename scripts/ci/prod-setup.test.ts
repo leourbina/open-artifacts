@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { sandbox, script } from "./stubs.ts";
+import { root, sandbox, script } from "./stubs.ts";
 
 const FAKE = `oa_pat_${"A".repeat(32)}`;
 const ok = (step: string) => `{"step":"${step}","status":"ok"}`;
@@ -219,5 +219,75 @@ describe("prod-setup.sh demo modes", () => {
   });
   it("requires the DEMO_* values", () => {
     expect(run("demo-install", [ok("a")], {} as never).code).not.toBe(0);
+  });
+  describe("DEMO_PUBLIC_HOME", () => {
+    const ID = "AbCdEfGhJkMnPqRs";
+    it("demo-upgrade and demo-install pass --var PUBLIC_HOME=<id>", () => {
+      for (const m of ["demo-upgrade", "demo-install"]) {
+        const r = run(m, [ok("a")], { ...demoEnv, DEMO_PUBLIC_HOME: ID });
+        expect(r.code, m).toBe(0);
+        expect(r.calls[0], m).toContain(`--var PUBLIC_HOME=${ID}`);
+      }
+    });
+    it("passes no --var when unset or empty", () => {
+      for (const env of [demoEnv, { ...demoEnv, DEMO_PUBLIC_HOME: "" }]) {
+        const r = run("demo-upgrade", [ok("a")], env);
+        expect(r.code).toBe(0);
+        expect(r.calls[0]).not.toContain("--var");
+      }
+    });
+    it("rejects an invalid id with the error JSON and never calls pnpm", () => {
+      for (const bad of [
+        "x; rm -rf /",
+        "AbCdEfGh",
+        "AbCdEfGh JkMnPqR",
+        "AbCdEfGhJkMnPqR0",
+        `${ID}\n`,
+      ]) {
+        for (const m of ["demo-install", "demo-upgrade"]) {
+          const r = run(m, [ok("a")], { ...demoEnv, DEMO_PUBLIC_HOME: bad });
+          expect(r.code, `${m} ${JSON.stringify(bad)}`).toBe(1);
+          expect(r.out).toContain(
+            '{"step":"demo-vars","status":"error","message":"DEMO_PUBLIC_HOME is not an artifact id"}',
+          );
+          expect(r.calls).toEqual([]);
+        }
+      }
+    });
+    it("prod modes never pass PUBLIC_HOME, even when it is set", () => {
+      for (const m of ["install", "preflight", "upgrade", "cleanup"]) {
+        const r = install([ok("a")], 0, m, { DEMO_PUBLIC_HOME: ID });
+        expect(r.code, m).toBe(0);
+        expect(r.calls[0], m).not.toContain("--var");
+        expect(r.calls[0], m).not.toContain("PUBLIC_HOME");
+      }
+    });
+  });
+
+  describe("ops-demo-install.yml", () => {
+    const wf = readFileSync(
+      join(root, ".github/workflows/ops-demo-install.yml"),
+      "utf8",
+    );
+    it("never interpolates inputs.mode into a run: line", () => {
+      const lines = wf.split("\n");
+      let inRun = false;
+      let runIndent = 0;
+      for (const l of lines) {
+        const indent = l.length - l.trimStart().length;
+        const m = /^(\s*)(?:- )?run:/.exec(l);
+        if (m) {
+          inRun = true;
+          runIndent = indent;
+          expect(l).not.toMatch(/\$\{\{\s*inputs\./);
+        } else if (inRun && l.trim() && indent > runIndent) {
+          expect(l).not.toMatch(/\$\{\{\s*inputs\./);
+        } else if (l.trim()) inRun = false;
+      }
+      expect(wf).toMatch(/MODE: \$\{\{ inputs\.mode \}\}/);
+      expect(wf).toMatch(
+        /DEMO_PUBLIC_HOME: \$\{\{ vars\.DEMO_PUBLIC_HOME \}\}/,
+      );
+    });
   });
 });
