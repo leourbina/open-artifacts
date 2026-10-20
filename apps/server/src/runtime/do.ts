@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import {
   type DataChange,
   DataChangeSchema,
+  type DataCount,
   type DataDoc,
   DataNameSchema,
   DataPatchBodySchema,
@@ -525,6 +526,23 @@ export class ArtifactRuntime extends DurableObject<Env> {
       dataName(id, "id"),
     );
     return row ? toDoc(row) : null;
+  }
+
+  /**
+   * Docs in the collection. A covering scan of the primary key range
+   * (collection, id) (EXPLAIN QUERY PLAN: "SEARCH docs USING ... INDEX ...
+   * (collection=?)"); no doc bodies are read.
+   */
+  count(collection: string): DataCount {
+    const c = dataName(collection, "collection");
+    return {
+      count: this.sql
+        .exec<{ n: number }>(
+          "select count(*) as n from docs where collection = ?",
+          c,
+        )
+        .one().n,
+    };
   }
 
   /** Docs in (updated_at, id) order, keyset-paginated. */
@@ -1320,6 +1338,7 @@ export class ArtifactRuntime extends DurableObject<Env> {
 type RpcMethods =
   | "get"
   | "list"
+  | "count"
   | "query"
   | "set"
   | "update"

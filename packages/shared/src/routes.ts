@@ -86,6 +86,14 @@ export const R = {
   /** GET -> Page<DataDoc> */
   dataCollection: (id: string, col: string) =>
     `${A}/${seg(id)}/data/${seg(col)}`,
+  /**
+   * GET -> DataCount { count }: docs in the collection. Same access, "db"
+   * capability and anonymous-read rules as dataCollection. A sibling of
+   * /data (like data-subscribe) because any [A-Za-z0-9_-] segment under
+   * /data/:col is a doc id.
+   */
+  dataCount: (id: string, col: string) =>
+    `${A}/${seg(id)}/data-count/${seg(col)}`,
   /** POST DataQuery -> Page<DataDoc> */
   dataQuery: (id: string, col: string) =>
     `${A}/${seg(id)}/data/${seg(col)}/query`,

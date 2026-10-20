@@ -776,6 +776,16 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
       }),
     ),
     http.get(
+      `${A}/data-count/:col`,
+      withArt((a, { params }) => {
+        const bad = names(params.col);
+        if (bad) return bad;
+        return HttpResponse.json({
+          count: docs(a.id, params.col as string).size,
+        });
+      }),
+    ),
+    http.get(
       `${A}/data/:col/:doc`,
       withArt((a, { params }) => {
         const bad = names(params.col, params.doc);

@@ -30,6 +30,7 @@ const COL = `${ART}/data/:col`;
 const QUERY = `${COL}/query`;
 const DOC = `${COL}/:doc`;
 const SUBSCRIBE = `${ART}/data-subscribe`;
+const COUNT = `${ART}/data-count/:col`;
 const STORAGE = `${ART}/storage`;
 const KEY = `${STORAGE}/:key`;
 
@@ -192,6 +193,14 @@ export function mountRuntime(app: AppType): void {
     return c.json(
       await runtimeCall(() => stub(c, g).list(collection, cursor, n)),
     );
+  });
+
+  // Same gate as the list route (db.list: access, "db" capability, anonymous
+  // reads on public artifacts); one indexed COUNT(*) in the DO.
+  app.get(COUNT, async (c) => {
+    const g = await gate(c, "db.list", "read");
+    const col = name(c.req.param("col"), "collection");
+    return c.json(await runtimeCall(() => stub(c, g).count(col)));
   });
 
   // A read, but POST: the query is a JSON body.

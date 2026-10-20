@@ -6,6 +6,7 @@
 import { env } from "cloudflare:workers";
 import {
   ArtifactSummarySchema,
+  DataCountSchema,
   DataResetResultSchema,
   newId,
   PageSchema,
@@ -183,6 +184,12 @@ describe("JSON shapes (byte snapshots)", () => {
       body,
     );
     expect(norm(body)).toMatchSnapshot("data reset");
+  });
+
+  it("data count: equal to its schema's parse", async () => {
+    const body = await get(R.dataCount(ids[0] ?? "", "c"), b.cookie);
+    expect(JSON.stringify(DataCountSchema.parse(JSON.parse(body)))).toBe(body);
+    expect(norm(body)).toMatchSnapshot("data count");
   });
 
   it("search: hits with snippets, pages", async () => {
