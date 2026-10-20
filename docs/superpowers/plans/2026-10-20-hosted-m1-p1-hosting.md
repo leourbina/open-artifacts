@@ -48,7 +48,7 @@ All installs share one Cloudflare account, so some state is shared even though n
 | Shared thing | Risk | M1 handling |
 |---|---|---|
 | Email Sending quota and sender reputation | One install's sends exhaust or damage another's | Per-install daily cap var (`EMAIL_DAILY_CAP`), with the sum across installs kept under the account limit (checked by `oa:hosted create`); sender address `noreply@<slug>.mail.<app-domain>` per install (DNS at the gate), mapped into `EMAIL_FROM`; an alert at 80% of the account limit in the scheduler's nightly run |
-| Workers Logs | Invocation logs record request URLs, and signed content paths (`/c/<exp>.<sig>/…`) are bearer credentials, readable account-wide | `invocation_logs: false` on user Workers (server `console` logs never include URLs; Backend checks this); the Observability API token is a separate, read-only token held by Platform only; shortest retention available |
+| Workers Logs | Invocation logs record request URLs, and signed content paths (`/c/<exp>.<sig>/…`) are bearer credentials, readable account-wide | `invocation_logs: false` on user Workers (Backend's central logger redacts URLs, emails and tokens, with a lint test against raw `console.*`; that PR must merge before the first hosted install); the Observability API token is a separate, read-only token held by Platform only; shortest retention available |
 | `ANALYTICS_TOKEN` | An account analytics token would show every install's traffic | Stays in `TEMPLATE_BINDINGS_EXCLUDED`; the Usage page is off in hosted (a `FEATURES` flag) |
 | Browser Rendering | Noisy neighbour on thumbnails (low) | Accepted for M1; per-install concurrency cap in M2 |
 | Same-site tenants | `a.<app-domain>` and `b.<app-domain>` are same-site, so SameSite cookies flow between tenants | The app domain goes into the Public Suffix List private section before the second tenant (Task 10 gate; Backend files it too); P5 checks it |
@@ -264,7 +264,7 @@ Behavior: `host = new URL(req.url).hostname.toLowerCase().replace(/\.$/, "")` �
 - Modify: `apps/server/src/index.ts:50-66` (today any host that isn't `CONTENT_HOST` gets the app), and the `/healthz` route
 - Test: `apps/server/test/hosts.test.ts`
 
-- [ ] **Step 1: Write the failing tests**: `a request whose host is neither APP_HOST nor CONTENT_HOST gets a plain 404` (in dev, `localhost` and `content.localhost` keep working); `/healthz reports installId when INSTALL_ID is set, and omits it otherwise`.
+- [ ] **Step 1: Write the failing tests**: `a request whose host is neither APP_HOST nor CONTENT_HOST gets a plain 404` (in dev, `localhost` and `content.localhost` keep working); `/healthz reports installId when INSTALL_ID is set, and omits it otherwise`. `installId` is optional and the **last** key, because `/healthz` has exact-shape tests (the skeleton test and `smoke/healthz`); update both.
 - [ ] **Step 2–4:** Run (FAIL), implement, run (PASS); run the CPU tests.
 - [ ] **Step 5:** Commit `fix(server): answer only the configured app and content hosts`; send Backend the diff before the PR.
 
