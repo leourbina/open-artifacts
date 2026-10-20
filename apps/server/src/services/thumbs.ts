@@ -1,5 +1,9 @@
 import { LIMITS } from "@oa/shared";
-import { signContent } from "../content/signing.js";
+import {
+  CAPTURE_HEADER,
+  signCapture,
+  signContent,
+} from "../content/signing.js";
 import type { Env } from "../env.js";
 import { contentOrigin } from "../http/errors.js";
 import { decodeBase64 } from "../util/base64.js";
@@ -65,8 +69,8 @@ const isBudgetError = (e: unknown) =>
 /**
  * Per format, the page's own "rendered" signal: renderer pages set
  * <html data-oa-rendered> (packages/render boot), a pdf also needs its first
- * page's canvas; html is ready once loaded with the runtime installed (top
- * level is the runtime's raw view, which sends no hello).
+ * page's canvas; html is ready once loaded with the runtime installed (the
+ * capture renders top level, with no shell, so the runtime sends no hello).
  */
 const READY: Record<string, string> = {
   html: 'document.readyState === "complete" && "openArtifacts" in window',
@@ -162,6 +166,8 @@ export async function captureThumbnail(
 
   let bytes: Uint8Array | null;
   try {
+    // A plain frame URL (top level, it redirects) plus the capture header,
+    // the one top-level render the content host allows.
     const { prefix } = await signContent(
       env,
       id,
@@ -175,6 +181,7 @@ export async function captureThumbnail(
       o.totalMs ?? THUMB.totalMs,
       o.navigationMs ?? THUMB.navigationMs,
       READY[row.f] ?? null,
+      await signCapture(env, id, version, now, THUMB.urlTtlSec),
     );
   } catch (e) {
     const stopped = isBudgetError(e);
@@ -223,6 +230,39 @@ const SETTLE = `new Promise((r) => { const end = Date.now() + 2000; let n = -1, 
     if (Date.now() - at >= 500 || Date.now() >= end) return r(true); setTimeout(f, 100);
   })(); })`;
 
+type Capture = { scope: string; value: string };
+
+/**
+ * Fetch.continueRequest params for a paused document request. The capture
+ * header goes only on the page's main-frame document requests under the
+ * signed content prefix (`scope`, which ends in "/"): never on subresources
+ * (not intercepted), frames, or other origins, and never as a global extra
+ * header, so nothing but the content host sees it and page script can't read
+ * it. `headers` replaces the request's headers, so the originals are kept.
+ */
+export function captureContinue(
+  p: Record<string, unknown>,
+  target: string,
+  capture: Capture,
+): Record<string, unknown> {
+  const req = p.request as
+    | { url?: string; headers?: Record<string, string> }
+    | undefined;
+  const url = req?.url ?? "";
+  if (
+    p.frameId !== target ||
+    p.resourceType !== "Document" ||
+    !url.startsWith(capture.scope) ||
+    !capture.scope.endsWith("/")
+  )
+    return { requestId: p.requestId };
+  const headers = Object.entries(req?.headers ?? {})
+    .filter(([k]) => k.toLowerCase() !== CAPTURE_HEADER.toLowerCase())
+    .map(([name, value]) => ({ name, value: String(value) }));
+  headers.push({ name: CAPTURE_HEADER, value: capture.value });
+  return { requestId: p.requestId, headers };
+}
+
 /**
  * Opens one browser (cdp.ts), loads `url` with every top-level navigation
  * (and redirect) of the page pinned to its origin, and screenshots the
@@ -239,8 +279,14 @@ async function shoot(
   totalMs: number,
   navigationMs: number,
   ready: string | null,
+  /** The CAPTURE_HEADER value; sent only on main-frame documents under `url`'s prefix. */
+  captureValue: string,
 ): Promise<Uint8Array | null> {
   const origin = new URL(url).origin;
+  const capture: Capture = {
+    scope: url.slice(0, url.lastIndexOf("/") + 1),
+    value: captureValue,
+  };
   let cdp: Cdp | null = null;
   let done = false;
   const timers: ReturnType<typeof setTimeout>[] = [];
@@ -298,7 +344,7 @@ async function shoot(
           .catch(() => {});
       } else
         void c
-          .send("Fetch.continueRequest", { requestId: p.requestId }, s)
+          .send("Fetch.continueRequest", captureContinue(p, target, capture), s)
           .catch(() => {});
     });
     c.on("Page.javascriptDialogOpening", (_p, sid) => {
