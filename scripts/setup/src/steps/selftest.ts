@@ -1,8 +1,8 @@
 import { join } from "node:path";
 import { homeOf, patTokenFile } from "../secret-file.ts";
-import { tokenHash } from "./owner-token.ts";
 import type { Ctx, Step } from "../step.ts";
 import { workerBindings } from "../worker.ts";
+import { tokenHash } from "./owner-token.ts";
 
 const TITLE = "Welcome to Open Artifacts";
 const WELCOME = "scripts/setup/welcome.md";

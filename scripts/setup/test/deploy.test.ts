@@ -274,7 +274,10 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     const fs = w.deps.fs as unknown as { read: (p: string) => string | null };
     const real = fs.read;
     const reads: string[] = [];
-    fs.read = (p) => (reads.push(p), real(p));
+    fs.read = (p) => {
+      reads.push(p);
+      return real(p);
+    };
     const ci = [...HOSTS.filter((a) => a !== "--yes"), "--ci"];
     expect(await run(ci, w.deps, ROOT)).toBe(0);
     expect(reads).not.toContain(file);
