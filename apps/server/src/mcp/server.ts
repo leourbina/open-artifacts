@@ -21,6 +21,7 @@ import { toRuntimeApiError } from "../runtime/do.js";
 import { cpuNudge } from "../services/usage.js";
 import { VERSION } from "../version.gen.js";
 import { INSTRUCTIONS, RUNTIME_DOC_URI } from "./instructions.js";
+import { renderSkill, SKILL_DOC_URI, skillUrl } from "./skill.js";
 import { registerArtifactTools } from "./tools/artifacts.js";
 import { registerDataTools } from "./tools/data.js";
 
@@ -91,7 +92,7 @@ export async function guard(
 export function createServer(ctx: McpContext): McpServer {
   const server = new McpServer(
     { name: "open-artifacts", version: VERSION },
-    { instructions: INSTRUCTIONS },
+    { instructions: INSTRUCTIONS(planOf(ctx.env.PLAN), skillUrl(ctx.env)) },
   );
   const agentNow = (): AgentRef | null => {
     if (!ctx.agent || !ctx.clientVersion) return ctx.agent;
@@ -119,10 +120,34 @@ export function createServer(ctx: McpContext): McpServer {
     },
     async (uri) => ({
       contents: [
-        { uri: uri.href, mimeType: "text/markdown", text: INSTRUCTIONS },
+        {
+          uri: uri.href,
+          mimeType: "text/markdown",
+          text: INSTRUCTIONS(planOf(ctx.env.PLAN), skillUrl(ctx.env)),
+        },
       ],
     }),
   );
+  if (skillUrl(ctx.env))
+    server.registerResource(
+      "skill",
+      SKILL_DOC_URI,
+      {
+        title: "Open Artifacts skill",
+        description:
+          "This instance's Agent Skill (also at /skill.md): connecting, every tool with an example, limits, sharing, live data and errors.",
+        mimeType: "text/markdown",
+      },
+      async (uri) => ({
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: "text/markdown",
+            text: await renderSkill(ctx.env),
+          },
+        ],
+      }),
+    );
   return server;
 }
 

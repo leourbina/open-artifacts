@@ -144,7 +144,7 @@ function Connect({ mcpUrl }: { mcpUrl: string }) {
 /** Name, meta and actions on one line; at <= 600px the name takes its own
     ellipsized line and the meta and actions share the next. */
 const ROWS =
-  "m-0 grid list-none gap-[var(--oa-space-1)] p-0 max-[600px]:gap-[var(--oa-space-3)]";
+  "grid gap-[var(--oa-space-1)] p-0 max-[600px]:gap-[var(--oa-space-3)]";
 const ROW =
   "flex min-h-[34px] items-center gap-[var(--oa-space-3)] max-[600px]:min-h-0 max-[600px]:flex-wrap max-[600px]:gap-y-[var(--oa-space-2)]";
 const NAME =

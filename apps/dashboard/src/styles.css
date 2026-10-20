@@ -21,18 +21,8 @@ body {
     --oa-page-gutter: var(--oa-space-4);
   }
 }
-/* No preflight: the shadcn sidebar's links take its colors and its lists
-   have no markers, not the UA's. */
-[data-slot="sidebar"] a {
-  color: inherit;
-  text-decoration: none;
-}
-[data-slot="sidebar"] ul {
-  list-style: none;
-}
 .oa-edge {
   min-height: 100vh;
-  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -84,7 +74,6 @@ body {
   margin-top: 24px;
 }
 .oa-btn {
-  box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   height: 28px;
@@ -94,7 +83,6 @@ body {
   background: var(--oa-surface);
   color: var(--oa-text);
   font: 500 var(--oa-text-sm) / 1 var(--oa-font-sans);
-  text-decoration: none;
   cursor: pointer;
 }
 .oa-btn:focus-visible {
@@ -155,6 +143,7 @@ body {
 .oa-cpu-link {
   color: var(--oa-text);
   font-weight: 500;
+  text-decoration: underline;
   text-underline-offset: 2px;
   white-space: nowrap;
 }
@@ -244,7 +233,6 @@ body {
   height: 46px;
   border-radius: 8px;
   font-size: 15px;
-  text-decoration: none;
 }
 .oa-split-btn svg {
   width: 18px;
@@ -261,7 +249,6 @@ body {
   font-size: 13px;
   color: var(--oa-text-muted);
 }
-.oa-split-formbox .oa-banner,
 .oa-split-formbox [role="alert"] {
   margin-bottom: 16px;
 }

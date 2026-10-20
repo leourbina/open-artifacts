@@ -57,7 +57,7 @@ export function ArtifactCard(p: CardProps) {
           />
         )}
       </div>
-      <h3 className="m-0 text-[length:var(--oa-text-sm)] font-semibold max-[600px]:line-clamp-2">
+      <h3 className="text-[length:var(--oa-text-sm)] font-semibold max-[600px]:line-clamp-2">
         <AppLink className={TITLE_LINK} href={`/a/${a.id}`}>
           {a.title}
         </AppLink>
