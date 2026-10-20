@@ -8,7 +8,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: demo
+  group: demo-reset
   cancel-in-progress: false
 jobs:
   reset:

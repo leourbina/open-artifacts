@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { parseSeed } from "./demo/reset.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p: string) => readFileSync(join(root, p), "utf8");
@@ -18,7 +19,8 @@ describe("demo-reset.yml", () => {
     expect(Object.keys(w.on)).toContain("workflow_dispatch");
   });
   it("serializes on the demo group, only when DEMO_ENABLED, from main", () => {
-    expect(w.concurrency.group).toBe("demo");
+    expect(w.concurrency.group).toBe("demo-reset");
+    expect(w.concurrency["cancel-in-progress"]).toBe(false);
     expect(job.if).toContain("vars.DEMO_ENABLED == 'true'");
     expect(job.if).toContain("github.ref == 'refs/heads/main'");
   });
@@ -60,9 +62,8 @@ describe("demo-reset.yml", () => {
 });
 
 describe("ops/demo/seed.json", () => {
-  it("is a placeholder object with a version and no artifacts yet", () => {
-    const s = JSON.parse(read("ops/demo/seed.json"));
-    expect(s.version).toBe(1);
-    expect(Array.isArray(s.artifacts)).toBe(true);
+  it("parses with the real reset.ts parseSeed (placeholder: no artifacts yet)", () => {
+    const seed = parseSeed(read("ops/demo/seed.json"));
+    expect(seed).toEqual({});
   });
 });
