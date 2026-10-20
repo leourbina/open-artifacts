@@ -548,6 +548,7 @@ describe("anonymous id", () => {
   ) => {
     const b = createBridge({
       iframe,
+      url: URL_,
       artifact: art,
       version: 1,
       viewer,
