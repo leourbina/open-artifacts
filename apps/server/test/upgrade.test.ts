@@ -208,7 +208,11 @@ describe("upgrade.md content", () => {
     expect(s8).toContain(
       `\`${secretFile("pat", { hostSlug: "app-localhost" })}\``,
     );
-    expect(s8).toContain("Client setup in http://app.localhost/skill.md");
+    expect(s8).toContain("`data.tokenFile`, the new token is already saved");
+    expect(s8).toContain("line from Secrets in http://app.localhost/skill.md");
+    expect(s8).toContain(
+      "reload the client (see Client setup in http://app.localhost/skill.md)",
+    );
     expect(s8).toContain("Never print the token");
     // The DNS wait-and-rerun is the healthcheck case only.
     expect(s8).toMatch(/From `healthcheck` \(DNS[^\n]*run step 7 again/);

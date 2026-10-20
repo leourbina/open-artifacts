@@ -182,7 +182,7 @@ Roll back only when step 7 exits 1 and its last \`error\` line has ${STEPS_JSON}
 Exit code 2 is never a reason to roll back. Relay the \`message\` verbatim, then:
 
 - From \`healthcheck\` (DNS not yet updated): wait a few minutes, then run step 7 again.
-- From \`selftest\` with \`"tokenRejected": true\` in its \`data\`: the saved agent token was rejected. Run step 7 again with \`--new-owner-token\` added. Setup issues a new token; the user saves it to \`${PAT}\`, the same file as before, as described under Client setup in ${T("origin")}/skill.md. Never print the token.
+- From \`selftest\` with \`"tokenRejected": true\` in its \`data\`: the saved agent token was rejected. Run step 7 again with \`--new-owner-token\` added. Setup issues a new token. If setup reports \`data.tokenFile\`, the new token is already saved there (\`${PAT}\`). Otherwise the user saves it to that file with the line from Secrets in ${T("origin")}/skill.md. Then reload the client (see Client setup in ${T("origin")}/skill.md). Never print the token.
 - Anything else: follow the message, as in Exit codes.
 
 Run the rollback in the same directory as step 7: it reads \`.openartifacts/state.json\`, which the upgrade wrote there. From any other directory it exits 2 ("no previous version recorded"); relay that verbatim.
