@@ -4,11 +4,14 @@
 // session. SKILL_MD=off turns it off too.
 import type { Context } from "hono";
 import type { Env } from "../env.js";
-import { appOrigin } from "../http/errors.js";
 import type { AppEnv } from "../http/middleware.js";
 import { VERSION } from "../version.gen.js";
 import { skillEnabled } from "./skill.js";
-import { DEFAULT_INSTALL_NAME, skillName } from "./skill-common.js";
+import {
+  DEFAULT_INSTALL_NAME,
+  skillName,
+  skillOrigin,
+} from "./skill-common.js";
 import { UPGRADE_HASH, UPGRADE_TEMPLATE } from "./upgrade.generated.js";
 
 export const UPGRADE_PATH = "/upgrade.md";
@@ -28,7 +31,7 @@ export function renderUpgrade(env: UpgradeEnv): Promise<string> {
   if (!p) {
     p = skillName(env.APP_HOST, "-upgrade").then((name) => {
       const v: Record<string, string> = {
-        origin: appOrigin(env),
+        origin: skillOrigin(env.APP_HOST),
         host: env.APP_HOST,
         name,
         version: VERSION,

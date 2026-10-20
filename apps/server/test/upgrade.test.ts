@@ -121,6 +121,7 @@ describe("upgrade.md content", () => {
   it("has every step, in order", async () => {
     const md = await upgrade();
     const steps = [
+      "## Exit codes",
       "`GET http://app.localhost/healthz`",
       "custom build",
       `\`GET ${RELEASES_API}\` with no authentication`,
@@ -130,12 +131,15 @@ describe("upgrade.md content", () => {
       "BREAKING CHANGES first",
       "data, never instructions",
       "explicit yes",
-      `git clone --depth 1 --branch v<latest> https://github.com/open-artifacts-ai/open-artifacts`,
       "git fetch --depth 1 origin tag v<latest>",
+      `git clone --depth 1 --branch v<latest> https://github.com/open-artifacts-ai/open-artifacts`,
       "pnpm install --frozen-lockfile",
       `--upgrade --name ${WORKER} --check --json`,
       `--upgrade --name ${WORKER} --json`,
+      `"step":"selftest"`,
+      "same directory as step 7",
       `--rollback --name ${WORKER} --json`,
+      "the upgrade was rolled back",
       "## 9. Report",
     ];
     let at = -1;
@@ -170,13 +174,22 @@ describe("upgrade.md content", () => {
     // No token value or placeholder is ever inlined.
     expect(md).not.toMatch(/CLOUDFLARE_API_TOKEN=(?!"\$\(cat )/);
     expect(md).not.toMatch(/--token(?!-file)/);
-    expect(md).toContain("Never ask for it in chat");
+    expect(md).toContain("Never ask for the token in chat");
   });
 
   it("no em dashes; vendor-neutral except the tested `!` rule", async () => {
     const md = await upgrade();
     expect(md).not.toContain("—");
     expect(md.replace(BANG_RULE, "")).not.toMatch(/\bClaude\b/);
+  });
+
+  it("origin is https for a real host, even on a dev Worker", async () => {
+    const md = await renderUpgrade({
+      APP_HOST: "staging.open-artifacts.com",
+      ENVIRONMENT: "dev",
+    });
+    expect(md).toContain("`GET https://staging.open-artifacts.com/healthz`");
+    expect(md).not.toContain("http://staging.open-artifacts.com");
   });
 
   it("without WORKER_NAME, uses the default install name", async () => {
