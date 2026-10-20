@@ -17,10 +17,16 @@ describe.skipIf(!base)("staging smoke: skill.md", () => {
       version: string;
     };
     expect(md).toContain(`  version: "${version}"\n`);
-    expect(r.headers.get("etag")).toMatch(
+    // Cloudflare weakens the ETag when it compresses the response (W/"…").
+    const etag = r.headers.get("etag") ?? "";
+    expect(etag).toMatch(
       new RegExp(
-        `^"${version.replace(/[.+]/g, "\\$&")}-(free|paid)-[0-9a-f]{8}"$`,
+        `^(W/)?"${version.replace(/[.+]/g, "\\$&")}-(free|paid)-[0-9a-f]{8}"$`,
       ),
     );
+    const nm = await fetch(`${base}/skill.md`, {
+      headers: { "if-none-match": etag },
+    });
+    expect(nm.status).toBe(304);
   });
 });
