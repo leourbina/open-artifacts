@@ -1,0 +1,39 @@
+{
+  "$comment": "Vendored from https://opencode.ai/config.json: $defs.McpRemoteConfig plus McpOAuthConfig.",
+  "type": "object",
+  "properties": {
+    "type": { "type": "string", "enum": ["remote"] },
+    "url": { "type": "string" },
+    "enabled": { "type": "boolean" },
+    "headers": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "oauth": {
+      "anyOf": [
+        { "$ref": "#/$defs/McpOAuthConfig" },
+        { "type": "boolean", "enum": [false] }
+      ]
+    },
+    "timeout": {
+      "exclusiveMinimum": 0,
+      "type": "integer",
+      "maximum": 9007199254740991
+    }
+  },
+  "required": ["type", "url"],
+  "additionalProperties": false,
+  "$defs": {
+    "McpOAuthConfig": {
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string" },
+        "clientSecret": { "type": "string" },
+        "scope": { "type": "string" },
+        "callbackPort": { "minimum": 1, "maximum": 65535, "type": "integer" },
+        "redirectUri": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

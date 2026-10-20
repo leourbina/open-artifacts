@@ -3,6 +3,7 @@ import { newId } from "@oa/shared";
 import { describe, expect, it } from "vitest";
 import { createPat } from "../src/auth/pat.js";
 import { INSTRUCTIONS } from "../src/mcp/instructions.js";
+import { BANG_RULE } from "../src/mcp/skill-common.js";
 import { TOOL_DEFS } from "../src/mcp/tool-defs.js";
 import { login } from "./helpers.js";
 import { connect } from "./mcp-helpers.js";
@@ -15,9 +16,13 @@ describe("MCP surface is vendor-neutral", () => {
       expect(t.name).not.toMatch(VENDOR);
       expect(t.description).not.toMatch(VENDOR);
     }
-    expect(INSTRUCTIONS).not.toMatch(VENDOR);
-    // C4: subscribers are told to refetch after a reconnect.
-    expect(INSTRUCTIONS).toContain("refetch your data when resync is true");
+    for (const plan of ["free", "paid"] as const) {
+      expect(INSTRUCTIONS(plan, "https://x/skill.md")).not.toMatch(VENDOR);
+      // C4: subscribers are told to refetch after a reconnect.
+      expect(INSTRUCTIONS(plan)).toContain(
+        "refetch your data when resync is true",
+      );
+    }
   });
 
   it("everything the server sends: tools, schemas, instructions, resources", async () => {
@@ -34,7 +39,13 @@ describe("MCP surface is vendor-neutral", () => {
     for (const r of resources) {
       expect(JSON.stringify(r)).not.toMatch(VENDOR);
       const read = await c.readResource({ uri: r.uri });
-      expect(JSON.stringify(read)).not.toMatch(VENDOR);
+      // The skill names clients in two places, by user decision: the secrets
+      // rule (the client whose `!` prefix runs the hidden-input line) and the
+      // per-client "Client setup" section. Nothing else may.
+      const text = JSON.stringify(read)
+        .replace(BANG_RULE, "")
+        .replace(/\\n## Client setup\\n[\s\S]*?(?=\\n## )/, "");
+      expect(text).not.toMatch(VENDOR);
     }
     await c.close();
   });
