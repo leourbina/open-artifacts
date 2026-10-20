@@ -143,7 +143,20 @@ Start with the setup code reused as a library: one normal Worker per install, wi
 1. **Export and import of a whole install**, including Durable Object data (live data and runtime docs). Durable Object storage belongs to the Worker that defines it, so the move to a dispatch namespace is an export and import. Cancellation and backups need this anyway.
 2. **Provisioning behind one interface** (create, upgrade, roll back, delete, export, import an install), with today's per-Worker implementation first and room for a Workers for Platforms one.
 3. **Every resource named by install ID** (Worker, D1, R2, KV, hostnames), never by hand, so routing can be generated.
-4. **Verify Durable Objects support in Workers for Platforms** against current Cloudflare docs before the first paying customer, and record the result here.
+4. ~~Verify Durable Objects support in Workers for Platforms.~~ **Checked against the Cloudflare docs on 2026-10-20:**
+   - User Workers in a dispatch namespace support Durable Object bindings, alongside D1, R2 and KV, each attached per Worker for isolation.
+   - **Durable Object transfers across the dispatch-namespace boundary are not supported**: the source and target must both be inside, or both outside, a dispatch namespace. So requirement 1 (export and import) is the only migration path, and it is mandatory.
+
+**Workers for Platforms pricing (Cloudflare docs, Oct 2026):**
+
+| Item | Price |
+|---|---|
+| Base | $25 per month |
+| Requests | 20 million included, then $0.30 per million |
+| CPU | 60 million ms included, then $0.02 per million ms |
+| User Workers | 1,000 included, then $0.02 per Worker per month |
+
+That is about $25 per month at 1,000 customers and about $105 at 5,000, on top of the Durable Object, D1, R2 and KV usage we already pay. Cost is not a reason to delay the move; the reason is migration effort. Custom domains on the dispatch Worker use Cloudflare for SaaS custom hostnames: 100 free, then $0.10 each per month.
 
 ## 5. Left to the builder
 
