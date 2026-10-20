@@ -2,8 +2,22 @@
 # Production setup via @oa/setup. Never prints the owner token or ANALYTICS_TOKEN
 # (read by the setup secrets step from env, when set).
 # Usage: prod-setup.sh <install|preflight|upgrade|cleanup>
+#        prod-setup.sh <demo-install|demo-upgrade|demo-cleanup>   (the public demo; reads DEMO_*)
+# The demo modes run the same wrapper (oa_pat_ and ANALYTICS_TOKEN scan, status handling).
 set -uo pipefail
 
+case "${1:-}" in
+  demo-*)
+    # The demo must never target the production Worker or its hosts.
+    if [[ "${DEMO_NAME:-}" == "open-artifacts-prod" || "${DEMO_NAME:-}" == "${PROD_NAME:-@}" ||
+      "${DEMO_APP_HOST:-}" == "artifacts.leourbina.com" ]]; then
+      echo "demo setup refuses the production name or host" >&2
+      exit 2
+    fi
+    PROD_NAME="${DEMO_NAME:-}" PROD_APP_HOST="${DEMO_APP_HOST:-}"
+    PROD_CONTENT_HOST="${DEMO_CONTENT_HOST:-}" PROD_OWNER_EMAIL="${DEMO_OWNER_EMAIL:-}"
+    ;;
+esac
 : "${PROD_NAME:?}" "${PROD_APP_HOST:?}" "${PROD_CONTENT_HOST:?}" "${PROD_OWNER_EMAIL:?}"
 summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
 mode="${1:-}"
@@ -15,7 +29,10 @@ case "$mode" in
   preflight) mode_args=(--check --strict --upgrade --solo --browser --plan paid) ;; # read-only; fails if absent or drifted
   upgrade) mode_args=(--ci --upgrade --solo --browser --plan paid) ;;
   cleanup) mode_args=(--ci --revoke-ci-tokens) ;;
-  *) echo "usage: $0 <install|preflight|upgrade|cleanup>" >&2; exit 2 ;;
+  demo-install) mode_args=(--ci --json --solo --no-email --yes-paid) ;;
+  demo-upgrade) mode_args=(--ci --json --upgrade --solo --no-email --yes-paid) ;;
+  demo-cleanup) mode_args=(--ci --revoke-ci-tokens) ;;
+  *) echo "usage: $0 <install|preflight|upgrade|cleanup|demo-install|demo-upgrade|demo-cleanup>" >&2; exit 2 ;;
 esac
 
 run_setup() {

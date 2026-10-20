@@ -952,3 +952,204 @@ describe("workflow jobs that use repo files have a checkout", () => {
     }
   }
 });
+
+describe("demo instance workflows", () => {
+  const dir = join(root, ".github/workflows");
+  const CF = ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"];
+  // Per file: staging-scoped Cloudflare credentials plus that file's own demo secret; never PROD.
+  const ALLOWED: Record<string, string[]> = {
+    "ops-demo-install.yml": [...CF, "DEMO_OA_ACCESS_TOKEN"],
+    "ops-demo-ops-deploy.yml": [...CF, "DEMO_OA_TOKEN"],
+    "demo-reset.yml": ["DEMO_OA_TOKEN"],
+  };
+  const GROUPS: Record<string, string> = {
+    "ops-demo-install.yml": "demo-deploy",
+    "ops-demo-ops-deploy.yml": "demo-ops-deploy",
+    "demo-reset.yml": "demo-reset",
+  };
+  // secrets.X, secrets['X'] and secrets["X"]
+  const SECRET_RE =
+    /secrets(?:\.([A-Za-z0-9_]+)|\[\s*['"]([A-Za-z0-9_]+)['"]\s*\])/g;
+  const secretsIn = (v: unknown): string[] => {
+    const out: string[] = [];
+    const walk = (x: unknown) => {
+      if (typeof x === "string")
+        for (const m of x.matchAll(SECRET_RE))
+          out.push((m[1] ?? m[2]) as string);
+      else if (x && typeof x === "object") Object.values(x).forEach(walk);
+    };
+    walk(v);
+    return out;
+  };
+  const demoFiles = readdirSync(dir).filter(
+    (n) => /demo/.test(n) && /\.ya?ml$/.test(n),
+  );
+
+  it("there is a demo install workflow, named without 'prod'", () => {
+    expect(demoFiles).toContain("ops-demo-install.yml");
+    for (const f of demoFiles) expect(f).not.toContain("prod");
+  });
+
+  it("the secrets matcher sees every syntax", () => {
+    expect(
+      secretsIn("${{ secrets.A }} ${{ secrets['B'] }} ${{ secrets[\"C\"] }}"),
+    ).toEqual(["A", "B", "C"]);
+  });
+
+  for (const f of demoFiles) {
+    describe(f, () => {
+      const w = wf(f);
+      it("has an allowlist and a concurrency group", () => {
+        expect(ALLOWED[f], `add ${f} to ALLOWED`).toBeDefined();
+        expect(GROUPS[f], `add ${f} to GROUPS`).toBeDefined();
+      });
+      it("uses only its own staging-scoped and demo secrets", () => {
+        for (const s of secretsIn(w))
+          expect(ALLOWED[f]?.includes(s), s).toBe(true);
+      });
+      it("serializes on its own group, never cancelling a run", () => {
+        const confs = [
+          w.concurrency,
+          ...Object.values(w.jobs).map(
+            (j) => (j as { concurrency?: unknown }).concurrency,
+          ),
+        ].filter(Boolean) as { group: string; "cancel-in-progress": boolean }[];
+        expect(confs.length).toBeGreaterThan(0);
+        for (const c of confs) {
+          expect(c.group).toBe(GROUPS[f]);
+          expect(c["cancel-in-progress"]).toBe(false);
+        }
+      });
+      it("only runs from main", () => {
+        for (const [name, j] of Object.entries(w.jobs))
+          expect(String((j as { if?: string }).if ?? ""), name).toContain(
+            "github.ref == 'refs/heads/main'",
+          );
+      });
+    });
+  }
+
+  describe("ops-demo-install.yml", () => {
+    const w = wf("ops-demo-install.yml");
+    const steps = w.jobs.install.steps;
+    it("is dispatch only", () => {
+      expect(triggers(w)).toEqual(["workflow_dispatch"]);
+    });
+    it("runs the demo install through the leak-scanning wrapper with the right credentials", () => {
+      const step = steps.find((s: { run?: string }) =>
+        String(s.run ?? "").includes("prod-setup.sh demo-install"),
+      );
+      expect(step).toBeDefined();
+      expect(step.env.CLOUDFLARE_API_TOKEN).toContain(
+        "secrets.CLOUDFLARE_API_TOKEN",
+      );
+      expect(step.env.CLOUDFLARE_ACCOUNT_ID).toContain(
+        "secrets.CLOUDFLARE_ACCOUNT_ID",
+      );
+      expect(step.env.OA_ACCESS_TOKEN).toContain(
+        "secrets.DEMO_OA_ACCESS_TOKEN",
+      );
+      expect(w.env).toMatchObject({
+        DEMO_NAME: "open-artifacts-demo",
+        DEMO_APP_HOST: "demo.open-artifacts.com",
+        DEMO_CONTENT_HOST: "demo-content.open-artifacts.com",
+        DEMO_OWNER_EMAIL: "me@leourbina.com",
+      });
+    });
+    it("never calls oa:setup directly", () => {
+      expect(JSON.stringify(w)).not.toContain("pnpm -s oa:setup");
+    });
+    it("revokes setup-ci tokens even on failure", () => {
+      const last = steps[steps.length - 1];
+      expect(last.if).toBe("always()");
+      expect(last.run).toContain("prod-setup.sh demo-cleanup");
+    });
+  });
+
+  describe("release-please.yml deploy-demo", () => {
+    const rp = wf("release-please.yml");
+    const job = rp.jobs["deploy-demo"];
+    it("runs in parallel with deploy-prod, only on a release and only when DEMO_ENABLED", () => {
+      expect([job.needs].flat()).toEqual(["release-please"]);
+      expect([rp.jobs["deploy-prod"].needs].flat()).not.toContain(
+        "deploy-demo",
+      );
+      expect(String(job.if)).toContain("vars.DEMO_ENABLED == 'true'");
+      expect(String(job.if)).toContain(
+        "needs.release-please.outputs.release_created == 'true'",
+      );
+      expect(String(job.if)).toContain("github.ref == 'refs/heads/main'");
+    });
+    it("uses !cancelled(), not always(), in the job condition", () => {
+      expect(String(job.if)).toContain("!cancelled()");
+      expect(String(job.if)).not.toContain("always()");
+    });
+    it("has read-only contents permission", () => {
+      expect(job.permissions).toEqual({ contents: "read" });
+    });
+    it("has a pre-release guard and gates its steps on it", () => {
+      const g = job.steps.find((s: { id?: string }) => s.id === "guard");
+      expect(g.run).toContain("isPrerelease");
+      for (const s of job.steps)
+        if (s !== g)
+          expect(String(s.if), s.name ?? s.uses ?? s.run).toContain(
+            "steps.guard.outputs.deploy == 'true'",
+          );
+    });
+    it("upgrades through the wrapper with demo credentials and never PROD secrets", () => {
+      expect(job.concurrency).toEqual({
+        group: "demo-deploy",
+        "cancel-in-progress": false,
+      });
+      const s = JSON.stringify(job);
+      expect(s).toContain("prod-setup.sh demo-upgrade");
+      expect(s).toContain("prod-setup.sh demo-cleanup");
+      expect(s).not.toContain("pnpm -s oa:setup");
+      expect(s).toContain("secrets.DEMO_OA_ACCESS_TOKEN");
+      expect(s).not.toContain("PROD_CLOUDFLARE_API_TOKEN");
+      expect(
+        secretsIn(job).every((x) =>
+          ALLOWED["ops-demo-install.yml"]?.includes(x),
+        ),
+      ).toBe(true);
+    });
+    it("is independent of deploy-prod and deploy-landing", () => {
+      expect(JSON.stringify(rp.jobs["deploy-prod"])).not.toContain(
+        "deploy-demo",
+      );
+      expect(JSON.stringify(rp.jobs["deploy-landing"])).not.toContain(
+        "deploy-demo",
+      );
+    });
+    // TODO: once ci/release-cadence merges, assert verify-release `needs` deploy-demo.
+  });
+
+  describe("prod-setup.sh modes by workflow", () => {
+    const modesIn = (f: string) =>
+      [...JSON.stringify(wf(f)).matchAll(/prod-setup\.sh ([a-z-]+)/g)].map(
+        (m) => m[1] as string,
+      );
+    const demoJob = (f: string, job: string) =>
+      [
+        ...JSON.stringify(wf(f).jobs[job]).matchAll(
+          /prod-setup\.sh ([a-z-]+)/g,
+        ),
+      ].map((m) => m[1] as string);
+    it("demo workflows call only demo-* modes", () => {
+      for (const f of demoFiles)
+        for (const m of modesIn(f)) expect(m, f).toMatch(/^demo-/);
+      expect(
+        demoJob("release-please.yml", "deploy-demo").length,
+      ).toBeGreaterThan(0);
+      for (const m of demoJob("release-please.yml", "deploy-demo"))
+        expect(m).toMatch(/^demo-/);
+    });
+    it("deploy-prod and ops-prod-* call only prod modes", () => {
+      const prod = new Set(["install", "preflight", "upgrade", "cleanup"]);
+      for (const m of demoJob("release-please.yml", "deploy-prod"))
+        expect(prod.has(m), m).toBe(true);
+      for (const f of readdirSync(dir).filter((n) => /^ops-prod-/.test(n)))
+        for (const m of modesIn(f)) expect(prod.has(m), `${f} ${m}`).toBe(true);
+    });
+  });
+});
