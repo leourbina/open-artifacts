@@ -1,5 +1,5 @@
 import { AUTH, type Me } from "@oa/shared";
-import { Avatar, Button, Menu, Toaster } from "@oa/ui";
+import { Avatar, Button, Menu } from "@oa/ui";
 import {
   Sidebar as ShSidebar,
   SidebarBrand,
@@ -27,6 +27,7 @@ import { EdgePanel } from "../pages/Edge";
 import { CpuBanner } from "./CpuBanner";
 import { DisplayNamePrompt } from "./DisplayNamePrompt";
 import { QuotaBanner } from "./QuotaBanner";
+import { Toaster } from "./toast";
 
 const icon = (d: string) => (
   <svg
@@ -63,7 +64,17 @@ const publicRoute = (raw: string) => {
   return p === "/sign-in" || p === "/no-access" || p.startsWith("/a/");
 };
 
+/** The app's one Toaster sits beside every layout below. */
 export function AppLayout() {
+  return (
+    <>
+      <Layout />
+      <Toaster />
+    </>
+  );
+}
+
+function Layout() {
   const state = useMe();
   const redirect = useRedirect();
   const loc = useRouterState({ select: (s) => s.location });
@@ -90,13 +101,12 @@ export function AppLayout() {
     if (guestHome) void navigate({ to: "/shared" as string, replace: true });
   }, [guestHome, navigate]);
 
-  if (anonymous || guestHome) return <Toaster />;
+  if (anonymous || guestHome) return null;
   if (bareRoute(path))
     return (
       <main id="oa-main">
         <QuotaBanner />
         <Outlet />
-        <Toaster />
       </main>
     );
   if (state.status === "error")
@@ -109,7 +119,6 @@ export function AppLayout() {
             state.error.code === "quota_exceeded"
           }
         />
-        <Toaster />
       </main>
     );
   const me = state.status === "authed" ? state.me : null;
@@ -147,7 +156,6 @@ export function AppLayout() {
         </main>
       </div>
       {me && <DisplayNamePrompt key={me.user.id} me={me} />}
-      <Toaster />
     </SidebarProvider>
   );
 }

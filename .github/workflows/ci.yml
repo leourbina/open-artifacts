@@ -103,6 +103,9 @@ jobs:
       - name: UI real-browser checks (axe contrast, focus)
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: bash scripts/ci/e2e.sh ui
+      - name: Landing real-browser checks (no horizontal overflow)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: bash scripts/ci/e2e.sh landing
       - if: failure()
         uses: actions/upload-artifact@v4
         with:

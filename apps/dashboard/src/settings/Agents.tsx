@@ -4,7 +4,7 @@ import {
   TokenCreatedSchema,
   TokenCreateInputSchema,
 } from "@oa/shared";
-import { Button, Dialog, Input, toast } from "@oa/ui";
+import { Button, Dialog, Input } from "@oa/ui";
 import {
   Button as ShButton,
   Input as ShInput,
@@ -26,6 +26,7 @@ import {
   useTokens,
 } from "../api/queries";
 import { useMe } from "../auth/useMe";
+import { toast } from "../layout/toast";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { relativeTime } from "../library/time";
 import { snippets } from "./snippets";

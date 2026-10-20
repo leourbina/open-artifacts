@@ -2,11 +2,13 @@
 // The request's cost is JSON.parse of the body, worst for escape-heavy text:
 // LIMITS.inlineBytes (128 KB) bounds it, and a body past the inline-derived
 // cap is refused from its Content-Length, before it is read or parsed.
-// Runs serially via vitest.cpu.config.ts (median of 5).
+// Runs serially via vitest.cpu.config.ts (median of 5). Absolute times are
+// reports (budget(): asserted only under test:cpu:strict); the gates are the
+// cost over a tiny publish and the unread-body checks.
 import { LIMITS, R } from "@oa/shared";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
-import { medianMs } from "./cpu-time.js";
+import { budget, medianMs } from "./cpu-time.js";
 import { api, errOf, fetchAndWait, login } from "./helpers.js";
 
 const app = createApp();
@@ -82,7 +84,9 @@ describe("inline publish CPU", () => {
   };
 
   for (const kb of [250, 200])
-    it(`a ${kb} KB escape-heavy body is refused with 413 before it is read`, async () => {
+    it(`a ${kb} KB escape-heavy body is refused with 413 before it is read`, async ({
+      annotate,
+    }) => {
       const { send, state, size } = sender(escapeHeavy(kb * 1024));
       expect(size).toBeGreaterThan(2 * LIMITS.inlineBytes + 64 * 1024);
       const r = await send();
@@ -92,10 +96,13 @@ describe("inline publish CPU", () => {
       const ms = await medianMs(async () => {
         await (await send()).body?.cancel();
       });
-      expect(ms).toBeLessThan(2);
+      // The gate is pulls === 0 (the body is never read); the time is a report.
+      await budget(annotate, `${kb} KB escape-heavy 413`, ms, 2);
     });
 
-  it("250 KB of plain text fits the body cap: one cheap parse, then 413", async () => {
+  it("250 KB of plain text fits the body cap: one cheap parse, then 413", async ({
+    annotate,
+  }) => {
     const { send, state } = sender("a".repeat(250 * 1024));
     const r = await send();
     expect(r.status).toBe(413);
@@ -103,6 +110,6 @@ describe("inline publish CPU", () => {
     const ms = await medianMs(async () => {
       await (await send()).body?.cancel();
     });
-    expect(ms).toBeLessThan(5);
+    await budget(annotate, "250 KB plain-text 413", ms, 5);
   });
 });

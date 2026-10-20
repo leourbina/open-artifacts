@@ -1,6 +1,6 @@
 import { AUTH } from "@oa/shared";
-import { toast } from "@oa/ui";
 import { api } from "../api/client";
+import { toast } from "../layout/toast";
 import { useRedirect } from "./redirect";
 
 /** Forgets every "Not now" on the display-name dialog, so the next sign-in asks again. */
