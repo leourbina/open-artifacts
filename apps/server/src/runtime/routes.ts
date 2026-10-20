@@ -17,7 +17,7 @@ import {
 } from "@oa/shared";
 import type { Context } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { caller, requireAccess } from "../auth/authz.js";
+import { type Caller, caller, requireAccess } from "../auth/authz.js";
 import { cappedJson, readCapped } from "../http/body.js";
 import { ApiError, appOrigin } from "../http/errors.js";
 import type { AppEnv } from "../http/middleware.js";
@@ -144,7 +144,10 @@ async function gate(
 ): Promise<Gate> {
   const artifactId = c.req.param("id") ?? "";
   if (!isId(artifactId)) throw new ApiError("not_found", "Not found");
-  const who = caller(c);
+  // Embed mode (X-OA-Embed: 1) is downgrade-only: the call runs anonymously
+  // whatever cookie or token came with it (#295 does this app-wide).
+  const who: Caller =
+    c.req.header("x-oa-embed") === "1" ? { kind: "anonymous" } : caller(c);
   const a = await requireAccess(c.env, who, artifactId, "viewer");
   const cap = METHOD_CAPABILITY[method];
   if (!capsOf(a.capabilities)[cap])
@@ -220,9 +223,9 @@ const jsonText = (text: string) =>
 const stub = (c: C, g: Gate) => runtimeStub(c.env, g.artifactId);
 
 export function mountRuntime(app: AppType): void {
-  // viewer.get for an anonymous viewer: the public part of their anonId.
+  // viewer.anonId() for an anonymous viewer: their per-artifact public id.
   app.get(ANON_ID, async (c) => {
-    const g = await gate(c, "viewer.get", "anonId");
+    const g = await gate(c, "viewer.anonId", "anonId");
     if (!g.anon) throw new ApiError("unauthorized", "No anonymous id here");
     return withAnon(g, c.json({ anonId: g.anon.short }));
   });

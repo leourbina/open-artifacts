@@ -711,11 +711,13 @@ describe("anonymous id", () => {
     mkAnon(OPT_IN, VIEWER);
     call("db.set", { collection: "c", id: "d1", data: 1 }, "a");
     call("viewer.get", {}, "b");
+    call("viewer.anonId", {}, "c");
     await flush();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(headerOf(0)).toBeNull();
     expect(store.get(ANON_ID_KEY)).toBe(TOKEN);
     expect(resultOf("b")?.value).toEqual(VIEWER);
+    expect(resultOf("c")).toMatchObject({ ok: true, value: null });
   });
 
   it("no header on an artifact without allowAnonymousWrites", async () => {
@@ -724,26 +726,50 @@ describe("anonymous id", () => {
     mkAnon(ART);
     call("db.get", { collection: "c", id: "d1" }, "a");
     call("viewer.get", {}, "b");
+    call("viewer.anonId", {}, "c");
     await flush();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(headerOf(0)).toBeNull();
     expect(resultOf("b")?.value).toBeNull();
+    expect(resultOf("c")).toMatchObject({ ok: true, value: null });
   });
 
-  it("viewer.get gives the frame only the short id, never the token", async () => {
+  it("regression: viewer.get stays null for an anonymous viewer of an opt-in artifact", async () => {
+    vi.stubGlobal("localStorage", okStorage);
+    store.set(ANON_ID_KEY, TOKEN);
+    mkAnon(OPT_IN);
+    send({ oa: 1, type: "hello", protocol: 1, kind: "html" });
+    call("viewer.get", {}, "g");
+    await flush();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(resultOf("g")).toMatchObject({ ok: true, value: null });
+    expect(
+      post.mock.calls.find((c) => c[0].type === "welcome")?.[0].viewer,
+    ).toBeNull();
+  });
+
+  it("viewer.anonId gives the frame only the short id, never the token", async () => {
     vi.stubGlobal("localStorage", okStorage);
     store.set(ANON_ID_KEY, TOKEN);
     fetchMock.mockImplementation(async () => json({ anonId: "aaaaaaaa" }));
     mkAnon(OPT_IN);
     send({ oa: 1, type: "hello", protocol: 1, kind: "html" });
-    call("viewer.get", {}, "v");
+    call("viewer.anonId", {}, "v");
     await flush();
     expect(fetchMock.mock.calls[0]?.[0]).toBe(R.anonId("art1"));
     expect(headerOf(0)).toBe(TOKEN);
-    expect(resultOf("v")).toMatchObject({
-      ok: true,
-      value: { anonId: "aaaaaaaa" },
-    });
+    expect(resultOf("v")).toMatchObject({ ok: true, value: "aaaaaaaa" });
     expect(JSON.stringify(post.mock.calls)).not.toContain(TOKEN.slice(0, 22));
+  });
+
+  it("viewer.anonId needs the viewer capability", async () => {
+    mkAnon({
+      ...OPT_IN,
+      capabilities: { db: true, viewer: false, storage: false },
+    });
+    call("viewer.anonId", {}, "v");
+    await flush();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(resultOf("v")?.error.code).toBe("capability_denied");
   });
 });

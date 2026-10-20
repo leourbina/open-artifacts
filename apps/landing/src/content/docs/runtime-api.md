@@ -61,11 +61,13 @@ await votes.set(crypto.randomUUID(), { option: "Lisbon" });
 
 ## The viewer: `viewer`
 
-`viewer.get()` returns `{ email, name }` for a signed-in viewer. For an anonymous viewer it returns `{ anonId }` on an artifact that allows anonymous writes, and `null` otherwise.
+`viewer.get()` returns `{ email, name }`, or `null` for an anonymous viewer of a public artifact.
+
+`viewer.anonId()` returns an anonymous viewer's id on an artifact that allows anonymous writes, and `null` otherwise (signed-in viewers included).
 
 ### Anonymous ids
 
-On an artifact that allows anonymous writes, each anonymous browser gets an `anonId`, so a game or poll can tell two anonymous players apart. Their documents carry `updatedBy: "anon:<anonId>"`. Only documents written before anonymous ids existed still say `"anon"`.
+On an artifact that allows anonymous writes, each anonymous browser gets an id from `viewer.anonId()`, so a game or poll can tell two anonymous players apart. Their documents carry `updatedBy: "anon:<anonId>"`. Only documents written before anonymous ids existed still say `"anon"`.
 
 - It belongs to one browser on one device. Another browser or device gets a different id, and clearing site data resets it.
 - Each artifact sees a different id for the same browser, so ids can't be matched across artifacts.

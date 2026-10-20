@@ -53,7 +53,7 @@ const shortOf = async (key: CryptoKey, artifactId: string, id: string) =>
   (await sign(key, `short:${artifactId}:${id}`)).slice(0, ANON_ID_SHORT_LEN);
 
 export type AnonId = {
-  /** The per-artifact public id (updatedBy "anon:<short>", viewer.get). */
+  /** The per-artifact public id (updatedBy "anon:<short>", viewer.anonId()). */
   short: string;
   /** Set when a new token was minted; return it to the shell. Never log it. */
   issued: string | null;

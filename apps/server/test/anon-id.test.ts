@@ -254,6 +254,30 @@ describe("anonId issuance", () => {
     expect(keys).toEqual(["anonid:ip:192.0.2.9"]);
   });
 
+  it("embed mode (X-OA-Embed: 1) with a cookie runs anonymously and mints", async () => {
+    const id = await optIn();
+    const r = await api(app, R.anonId(id), owner.cookie, {
+      headers: { "x-oa-embed": "1", "cf-connecting-ip": uniqueIp() },
+    });
+    expect(r.status).toBe(200);
+    const token = r.headers.get(ANON_ID_HEADER) ?? "";
+    expect(token).toMatch(TOKEN_RE);
+    const { anonId } = AnonViewerSchema.parse(await r.json());
+    // The same browser's id outside embed mode.
+    expect((await shortOn(id, token)).short).toBe(anonId);
+    // A write with the cookie in embed mode is anonymous too.
+    const w = await api(app, R.dataDoc(id, "c", "e"), owner.cookie, {
+      method: "PUT",
+      body: 1,
+      headers: {
+        "x-oa-embed": "1",
+        "cf-connecting-ip": uniqueIp(),
+        [ANON_ID_HEADER]: token,
+      },
+    });
+    expect(await byOf(w)).toBe(`anon:${anonId}`);
+  });
+
   it("anonymous storage never mints", async () => {
     const id = await optIn();
     const s = await anon(R.storageKey(id, "k"), null);

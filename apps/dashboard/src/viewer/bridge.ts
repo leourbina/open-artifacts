@@ -96,8 +96,9 @@ export function createBridge(opts: BridgeOptions) {
   } = opts;
   const id = artifact.id; // the only artifact id any route is ever built from
   const viewer = artifact.capabilities.viewer ? opts.viewer : null;
-  // The anonId header rides only on anonymous calls to artifacts that allow
-  // anonymous writes; never signed in, never into the frame.
+  // The anonId header rides only on anonymous calls (viewer null for any
+  // reason: signed out, or embed mode) to artifacts that allow anonymous
+  // writes; never signed in, never into the frame.
   const anon = opts.viewer === null && artifact.allowAnonymousWrites === true;
   /** The first token-less call that mints (writes, anon-id); others wait so one id is minted. */
   let minting: Promise<void> | null = null;
@@ -305,10 +306,12 @@ export function createBridge(opts: BridgeOptions) {
         unsubscribe(p.collection);
         return null;
       case "viewer.get":
-        // Anonymous: only the public short id, never the signed token.
-        return (
-          viewer ?? (anon ? http.get(R.anonId(id), AnonViewerSchema) : null)
-        );
+        return viewer;
+      case "viewer.anonId":
+        // Only the per-artifact short id; the signed token stays here.
+        return anon
+          ? (await http.get(R.anonId(id), AnonViewerSchema)).anonId
+          : null;
       case "storage.get": {
         const e = await nullIfNotFound(
           http.get(R.storageKey(id, p.key), StorageEntrySchema),

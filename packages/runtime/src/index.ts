@@ -15,14 +15,7 @@ import {
 export { RuntimeError, type RuntimeErrorCode } from "./bridge.js";
 
 export type Theme = "light" | "dark";
-/**
- * A signed-in viewer, or `{ anonId }` for an anonymous viewer of an artifact
- * that allows anonymous writes (the same short id as their docs' updatedBy
- * "anon:<anonId>"; per browser, resettable, not an account).
- */
-export type Viewer =
-  | { email: string; name: string | null }
-  | { anonId: string };
+export type Viewer = { email: string; name: string | null };
 /**
  * A subscribe() delivery. `resync: true` (with empty docs/deleted) means the
  * live connection was re-established and changes may have been missed:
@@ -53,7 +46,17 @@ export interface Collection {
 export interface OpenArtifacts {
   /** Resolves on the shell's `welcome` (at once in the raw view). */
   ready: Promise<void>;
-  viewer: { get(): Promise<Viewer | null> };
+  viewer: {
+    /** The signed-in viewer, or null (anonymous viewers included). */
+    get(): Promise<Viewer | null>;
+    /**
+     * An anonymous viewer's per-artifact id (their docs' updatedBy
+     * "anon:<anonId>") on an artifact that allows anonymous writes; null
+     * otherwise, signed-in viewers included. Per browser, resettable, a label
+     * and not an account or a permission.
+     */
+    anonId(): Promise<string | null>;
+  };
   db: { collection(name: string): Collection };
   storage: {
     get(key: string): Promise<unknown>;
@@ -280,7 +283,10 @@ export function createRuntime(opts: RuntimeOptions = {}): OpenArtifacts {
 
   const api: OpenArtifacts = {
     ready,
-    viewer: { get: () => bridge.call("viewer.get", {}) },
+    viewer: {
+      get: () => bridge.call("viewer.get", {}),
+      anonId: () => bridge.call("viewer.anonId", {}),
+    },
     db: { collection },
     storage: {
       get: (key) => bridge.call("storage.get", { key }),

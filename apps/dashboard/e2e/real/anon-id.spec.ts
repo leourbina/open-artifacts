@@ -7,7 +7,8 @@ import {
   uniq,
 } from "./fixtures";
 
-// An anonymous vote: viewer.get() gives { anonId } and the vote's updatedBy is
+// An anonymous vote: viewer.get() stays null, viewer.anonId() gives the id,
+// and the vote's updatedBy is
 // "anon:<anonId>", the same before and after a reload (one browser, one id).
 const VOTE_PAGE = `<!doctype html>
 <p id="me">loading</p><p id="by">none</p><button id="vote">Vote</button>
@@ -15,8 +16,8 @@ const VOTE_PAGE = `<!doctype html>
 const oa = window.openArtifacts;
 const votes = () => oa.db.collection("votes");
 oa.ready
-  .then(() => oa.viewer.get())
-  .then((v) => { document.getElementById("me").textContent = v && v.anonId ? v.anonId : "none"; })
+  .then(() => Promise.all([oa.viewer.get(), oa.viewer.anonId()]))
+  .then(([v, id]) => { document.getElementById("me").textContent = v === null && id ? id : "bad:" + JSON.stringify([v, id]); })
   .catch((e) => { document.getElementById("me").textContent = "error:" + e.message; });
 document.getElementById("vote").onclick = () =>
   votes().set("v-" + Math.random().toString(36).slice(2), { option: "Tabs" })
