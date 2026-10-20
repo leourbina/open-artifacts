@@ -147,32 +147,7 @@ function PlanLine() {
   );
 }
 
-/** A daily metric on Workers Paid with limit 0: no daily cap, so a count and no bar. */
-function Uncapped({ metric }: { metric: Metric }) {
-  const { name, what } = LABELS[metric.key];
-  return (
-    <section className="oa-card oa-meter" data-tone="normal" aria-label={name}>
-      <div className="oa-meter-head">
-        <h2>{name}</h2>
-        <Badge tone="neutral">No daily cap</Badge>
-      </div>
-      <div className="oa-meter-value">
-        <b>{fmt(Math.max(metric.used, 0))}</b>
-        <span>today</span>
-      </div>
-      <div className="oa-meter-foot">
-        <span>{what}</span>
-      </div>
-    </section>
-  );
-}
-
-/** On Workers Paid a limit of 0 means no daily cap; on Free it stays an over-limit meter. */
-const uncapped = (plan: UsageData["plan"], m: Metric) =>
-  plan === "paid" && !(m.limit > 0);
-
-function Meter({ metric, plan }: { metric: Metric; plan: UsageData["plan"] }) {
-  if (uncapped(plan, metric)) return <Uncapped metric={metric} />;
+function Meter({ metric }: { metric: Metric }) {
   const { name, what } = LABELS[metric.key];
   const used = Math.max(metric.used, 0);
   const pct = percent(used, metric.limit);
@@ -275,7 +250,7 @@ function Setup() {
 }
 
 /** D4 banners: one per metric at or past the danger threshold, or the empty state. */
-function alerts(metrics: Metric[], plan: UsageData["plan"]) {
+function alerts(metrics: Metric[]) {
   if (metrics.every((m) => !(m.used > 0)))
     return (
       <Banner tone="info" title="No usage recorded yet today.">
@@ -283,10 +258,7 @@ function alerts(metrics: Metric[], plan: UsageData["plan"]) {
       </Banner>
     );
   return metrics
-    .filter(
-      (m) =>
-        !uncapped(plan, m) && toneOf(percent(m.used, m.limit)) === "danger",
-    )
+    .filter((m) => toneOf(percent(m.used, m.limit)) === "danger")
     .map((m) => {
       const pct = percent(m.used, m.limit);
       const name = LABELS[m.key].name;
@@ -340,10 +312,7 @@ export function Usage() {
         <Setup />
       ) : (
         <>
-          {alerts(
-            q.data.metrics.filter((m) => !CPU_KEYS.has(m.key)),
-            q.data.plan,
-          )}
+          {alerts(q.data.metrics.filter((m) => !CPU_KEYS.has(m.key)))}
           <p className="oa-seen">
             Today, {q.data.date}. Resets at 00:00 UTC. Cloudflare's numbers are
             cached for 5 minutes.
@@ -352,7 +321,7 @@ export function Usage() {
             {q.data.metrics
               .filter((m) => !CPU_KEYS.has(m.key))
               .map((m) => (
-                <Meter key={m.key} metric={m} plan={q.data.plan} />
+                <Meter key={m.key} metric={m} />
               ))}
           </div>
           <CpuCard metrics={q.data.metrics} />

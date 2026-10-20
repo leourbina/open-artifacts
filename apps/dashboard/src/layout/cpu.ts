@@ -37,9 +37,8 @@ export function useCpuSignals(role: Role | null | undefined) {
   const now = Date.now();
   const today = utcDay(now);
   const data = admin ? usage.data : undefined;
-  // The banner is about the Free 10 ms cap; Workers Paid has no hits to nudge on.
   const hits =
-    data?.available && data.plan === "free" && data.date === today
+    data?.available && data.date === today
       ? (data.metrics.find((m) => m.key === "cpu_limit_hits")?.used ?? null)
       : null;
   const recent = at !== null && now - at < RECENT_MS && utcDay(at) === today;

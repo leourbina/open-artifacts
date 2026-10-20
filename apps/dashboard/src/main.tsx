@@ -128,12 +128,7 @@ async function startMocks() {
   };
   await setupWorker(
     ...extra,
-    // ?mock=paid: usage reports Workers Paid (no daily caps).
-    ...createHandlers({
-      quotaExceeded,
-      emailEnabled,
-      plan: params.get("mock") === "paid" ? "paid" : "free",
-    }),
+    ...createHandlers({ quotaExceeded, emailEnabled }),
   ).start({
     onUnhandledRequest: "bypass",
   });

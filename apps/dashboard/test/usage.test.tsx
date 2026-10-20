@@ -14,15 +14,12 @@ type Key =
   | "do_requests"
   | "cpu_limit_hits"
   | "cpu_p99_ms";
-const usage = (
-  metrics: { key: Key; used: number; limit: number }[],
-  plan: "free" | "paid" = "free",
-) =>
+const usage = (metrics: { key: Key; used: number; limit: number }[]) =>
   server.use(
     http.get(`*${R.usage}`, () =>
       HttpResponse.json({
         available: true,
-        plan,
+        plan: "free",
         date: "2026-10-18",
         metrics,
       }),
@@ -126,24 +123,6 @@ describe("usage", () => {
       "normal",
     );
     expect(document.body.textContent).not.toMatch(/NaN|Infinity/);
-  });
-
-  it("Workers Paid, limit 0 is no daily cap: count only, no bar, no alert", async () => {
-    usage(
-      [
-        { key: "requests", used: 5000, limit: 0 },
-        { key: "d1_reads", used: 0, limit: 0 },
-      ],
-      "paid",
-    );
-    mount("/settings/usage");
-    const card = await screen.findByRole("region", { name: "Worker requests" });
-    expect(card.getAttribute("data-tone")).toBe("normal");
-    expect(card.textContent).toContain("5,000");
-    expect(card.textContent).toContain("No daily cap");
-    expect(screen.queryByRole("meter")).toBeNull();
-    expect(screen.queryByText(/today's limit/)).toBeNull();
-    expect(document.body.textContent).not.toMatch(/NaN|Infinity|left/);
   });
 
   it("clamps over-limit percentage and bar", async () => {
