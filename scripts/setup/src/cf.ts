@@ -1,14 +1,23 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
+  chmodSync,
   closeSync,
   constants,
   fstatSync,
+  lstatSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
+  readdirSync,
   readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
 
@@ -26,6 +35,22 @@ export type Fs = {
    * descriptor that was checked: null when it does not exist.
    */
   readToken?: (path: string) => TokenFile | null;
+  /**
+   * A secret file: its directory 0700 (refused if a symlink or not yours), the
+   * data written to a 0600 temp file beside it and renamed over it, so a
+   * failure keeps the old file.
+   */
+  writeSecret?: (path: string, data: string) => void;
+  /** A hash of every file under `base`/`rels` (names relative to `base`, and contents); undefined when none exists. */
+  hashTree?: (
+    base: string,
+    rels: string[],
+    include?: (rel: string) => boolean,
+  ) => string | undefined;
+  /** A new empty temp directory. */
+  tempDir?: () => string;
+  /** Removes a file or directory tree (best effort). */
+  removeTree?: (path: string) => void;
 };
 export type TokenFile = {
   text: string;
@@ -44,6 +69,12 @@ export type Deps = {
   env: Record<string, string | undefined>;
   fs?: Fs;
   sleep?: (ms: number) => Promise<void>;
+  /** Test seam: how long the health checks keep retrying a host that doesn't resolve (default 5 minutes). */
+  dnsWaitMs?: number;
+  /** Test seam: Date.now (the DNS wait is wall-clock time). */
+  now?: () => number;
+  /** Test seam: process.platform (picks the DNS cache flush hint). */
+  platform?: string;
   /** Test seam: process.exit. */
   exit?: (code: number) => void;
   /** Env for wrangler children beyond the process env: a deploy token read from a file. */
@@ -64,7 +95,64 @@ export const realFs: Fs = {
     mkdirSync(dirname(p), { recursive: true });
     writeFileSync(p, d);
   },
+  hashTree: (base, rels, include) => {
+    const h = createHash("sha256");
+    let any = false;
+    const walk = (rel: string) => {
+      const p = join(base, rel);
+      let st: ReturnType<typeof statSync>;
+      try {
+        st = statSync(p);
+      } catch {
+        return;
+      }
+      if (st.isDirectory()) {
+        for (const n of readdirSync(p).sort())
+          if (n !== "node_modules") walk(join(rel, n));
+      } else if (st.isFile() && (include?.(rel) ?? true)) {
+        any = true;
+        h.update(`${rel}\0`).update(readFileSync(p)).update("\0");
+      }
+    };
+    for (const r of rels) walk(r);
+    return any ? h.digest("hex") : undefined;
+  },
+  tempDir: () => mkdtempSync(join(tmpdir(), "oa-bundle-")),
+  removeTree: (p) => rmSync(p, { recursive: true, force: true }),
   // POSIX only: Windows is supported through WSL.
+  writeSecret: (p, d) => {
+    const dir = dirname(p);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    // Never trust a symlinked or foreign directory with a token.
+    const st = lstatSync(dir);
+    if (st.isSymbolicLink() || !st.isDirectory())
+      throw new Error(`${dir} is not a plain directory`);
+    if (process.getuid && st.uid !== process.getuid())
+      throw new Error(`${dir} is not owned by you`);
+    chmodSync(dir, 0o700);
+    // Write beside the target, then rename over it: a failure keeps the old file.
+    const tmp = join(dir, `.${basename(p)}.${process.pid}.tmp`);
+    rmSync(tmp, { force: true });
+    const fd = openSync(
+      tmp,
+      constants.O_WRONLY |
+        constants.O_CREAT |
+        constants.O_EXCL |
+        constants.O_NOFOLLOW,
+      0o600,
+    );
+    try {
+      try {
+        writeFileSync(fd, d);
+      } finally {
+        closeSync(fd);
+      }
+      renameSync(tmp, p);
+    } catch (e) {
+      rmSync(tmp, { force: true });
+      throw e;
+    }
+  },
   readToken: (p) => {
     let fd: number | undefined;
     try {

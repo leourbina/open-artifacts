@@ -19,7 +19,7 @@ import {
 import { prereqs } from "./steps/prereqs.ts";
 import { resources } from "./steps/resources.ts";
 import { secrets } from "./steps/secrets.ts";
-import { selftest } from "./steps/selftest.ts";
+import { healthcheck, selftest } from "./steps/selftest.ts";
 import { withTokenFiles } from "./token-files.ts";
 import { isTokenCommand, tokenCommand } from "./token-page.ts";
 
@@ -30,6 +30,7 @@ export const STEPS: Step[] = [
   secrets,
   email,
   deploy,
+  healthcheck,
   ownerToken,
   selftest,
   agentConfig,
@@ -97,6 +98,7 @@ async function resolve(
       "allow-downgrade": { type: "boolean", default: false },
       strict: { type: "boolean", default: false },
       "new-owner-token": { type: "boolean", default: false },
+      "print-token": { type: "boolean", default: false },
       json: { type: "boolean", default: false },
       ci: { type: "boolean", default: false },
       "revoke-ci-tokens": { type: "boolean", default: false },
@@ -222,6 +224,7 @@ async function resolve(
     check: v.check,
     strict: v.strict,
     newOwnerToken: v["new-owner-token"],
+    printToken: v["print-token"],
     allowDowngrade: v["allow-downgrade"],
     // Decided in prereqs: flag, then the plan (Paid only), then saved state.
     browser: false,
@@ -289,7 +292,9 @@ async function checkOnly(
         step: step.name,
         status: r,
         message: notes ? `${r}: ${notes}` : r,
-        ...(step.name === "deploy" && ctx.data ? { data: ctx.data } : {}),
+        ...((step.name === "deploy" || step.name === "prereqs") && ctx.data
+          ? { data: ctx.data }
+          : {}),
       });
     } catch (e) {
       ctx.notes.length = 0;
@@ -319,7 +324,11 @@ async function checkOnly(
 
 export const HELP = `Usage: pnpm oa:setup [options]
   --name <n>  --app-host <h>  --content-host <h>  --owner-email <e>  --account-id <id>
-  --yes  --upgrade  --check [--strict]  --json  --ci [--revoke-ci-tokens]  --new-owner-token
+  --yes  --upgrade  --check [--strict]  --json  --ci [--revoke-ci-tokens]  --new-owner-token  --print-token
+  --print-token  Also report the minted owner token as data.token (and in human output).
+                Without it setup saves the token to ~/.open-artifacts/<app-host>-pat-token
+                (0600) and reports only data.tokenFile. Not used with --ci, whose token
+                is revoked at the end of the run.
   --allow-downgrade  Deploy a checkout older than the deployed version (from /healthz
                 version, else saved state). Without it setup stops with action_required
                 before the D1 migrations. D1 is not rolled back. --check reports
@@ -498,7 +507,7 @@ export async function run(
       report({
         step: "revoke-ci-tokens",
         status: "error",
-        message: `could not revoke setup-ci tokens: ${(e as Error).message}; revoke tokens labelled setup-ci in Settings → Tokens`,
+        message: `could not revoke setup-ci tokens: ${(e as Error).message}; revoke tokens labelled setup-ci in Settings → Agents`,
       });
       return 1;
     }
@@ -512,37 +521,55 @@ export async function run(
         if (deployed.sources[k] === "flag") state[k] = deployed.live[k];
     writeState(fs, root, state);
   };
-  const runSteps = async (): Promise<number> => {
-    for (const step of steps) {
-      human = ctx.data = ctx.human = undefined;
-      try {
-        if ((await step.check(state, ctx)) === "done") {
-          report({ ...take("skipped", "already done"), step: step.name });
-          continue;
-        }
-        // Check-time notes explain the todo; apply reports its own.
-        ctx.notes.length = 0;
-        const r = await step.apply(state, ctx);
-        if (r) {
-          refused = true;
-          ctx.notes.length = 0;
-          report({ step: step.name, ...r });
-          return 2;
-        }
-        report({ ...take("ok", "done"), step: step.name });
-      } catch (e) {
+  /** Runs one step and reports it; the exit code when it stopped the run. */
+  const runStep = async (step: Step): Promise<number | undefined> => {
+    human = ctx.data = ctx.human = undefined;
+    ctx.skipped = false;
+    try {
+      if ((await step.check(state, ctx)) === "done") {
+        report(
+          step.okWhenDone
+            ? { ...take("ok", step.okWhenDone), step: step.name }
+            : { ...take("skipped", "already done"), step: step.name },
+        );
+        return undefined;
+      }
+      // Check-time notes explain the todo; apply reports its own.
+      ctx.notes.length = 0;
+      const r = await step.apply(state, ctx);
+      if (r) {
         refused = true;
         ctx.notes.length = 0;
-        const message = (e as Error).message;
-        if (e instanceof NeedInput) {
-          report({ step: step.name, status: "action_required", message });
-          return 2;
-        }
-        report({ step: step.name, status: "error", message });
-        return (e as { exitCode?: number }).exitCode ?? 1;
-      } finally {
-        persist();
+        report({ step: step.name, ...r });
+        return 2;
       }
+      report({
+        ...take(ctx.skipped ? "skipped" : "ok", "done"),
+        step: step.name,
+      });
+      return undefined;
+    } catch (e) {
+      refused = true;
+      ctx.notes.length = 0;
+      const message = (e as Error).message;
+      if (e instanceof NeedInput) {
+        report({ step: step.name, status: "action_required", message });
+        return 2;
+      }
+      report({ step: step.name, status: "error", message });
+      return (e as { exitCode?: number }).exitCode ?? 1;
+    } finally {
+      persist();
+    }
+  };
+  const runSteps = async (): Promise<number> => {
+    for (const [i, step] of steps.entries()) {
+      const code = await runStep(step);
+      if (code === undefined) continue;
+      // E.g. agent-config still prints after a failed selftest.
+      for (const later of steps.slice(i + 1))
+        if (later.runAfterFailureOf?.includes(step.name)) await runStep(later);
+      return code;
     }
     writeState(fs, root, state);
     if (json) {
@@ -588,7 +615,7 @@ export async function run(
           report({
             step: "revoke-ci-token",
             status: "error",
-            message: `could not revoke CI owner token ${id}; action_required: revoke it in Settings → Tokens`,
+            message: `could not revoke CI owner token ${id}; action_required: revoke it in Settings → Agents`,
             data: { tokenId: id },
           });
           revokeFailed = true;

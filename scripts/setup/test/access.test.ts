@@ -53,7 +53,7 @@ describe("access + secrets", () => {
       ...SECRETS.map((s) => `put ${s}`),
     ]);
     expect(statuses(w)).toEqual([
-      "prereqs:skipped",
+      "prereqs:ok",
       "resources:ok",
       "access:ok",
       "secrets:ok",
@@ -91,11 +91,15 @@ describe("access + secrets", () => {
     w.lines.length = 0;
     w.ops.length = 0;
     expect(await run(HOSTS, w.deps, ROOT, B16_2)).toBe(0);
-    expect(statuses(w).every((s) => s.endsWith(":skipped"))).toBe(true);
+    expect(
+      statuses(w).every((s) => s.endsWith(":skipped") || s === "prereqs:ok"),
+    ).toBe(true);
     w.policies[0].include = [{ email: { email: "x@example.com" } }];
     w.lines.length = 0;
     expect(await run([...HOSTS, "--upgrade"], w.deps, ROOT, B16_2)).toBe(0);
-    expect(statuses(w).every((s) => s.endsWith(":skipped"))).toBe(true);
+    expect(
+      statuses(w).every((s) => s.endsWith(":skipped") || s === "prereqs:ok"),
+    ).toBe(true);
     expect(w.ops).toEqual([]);
   });
 
@@ -206,7 +210,7 @@ describe("access + secrets", () => {
       ),
     ).toBe(0);
     expect(statuses(w)).toEqual([
-      "prereqs:skipped",
+      "prereqs:ok",
       "resources:skipped",
       "access:skipped",
       "secrets:skipped",

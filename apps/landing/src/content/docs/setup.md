@@ -25,14 +25,20 @@ The agent follows the steps below. The only thing you do yourself is approve the
    ```sh
    REPO={REPO_URL}
    TAG=$(curl -fsSL {LATEST_RELEASE_API} | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
-   git clone --depth 1 --branch "$TAG" "$REPO" open-artifacts
-   cd open-artifacts
+   git clone --depth 1 --branch "$TAG" "$REPO" ~/open-artifacts
+   cd ~/open-artifacts
    ```
 
+   Clone outside any existing git repository (the command uses `~/open-artifacts`), and tell the user the path: upgrades run from there.
+
    If `TAG` comes back empty or `curl` fails, stop and tell the user: "Open Artifacts has no stable release yet; check back later."
-3. **Install dependencies:** `pnpm install`.
-4. **Ask the user to log in to Cloudflare.** Ask them to run `npx wrangler login` and approve access in the browser. On a remote machine or in a container, use `npx wrangler login --device` instead. This is the one step a person has to do.
-5. **Run setup.** First ask the user: "Just you, or a team?" Don't guess. Pass `--solo` for just them, or `--team` for a team, which also sets up invite email on Workers Paid (detected, or confirmed with `--yes-paid`). Use the user's hostnames and email:
+3. **Install dependencies:** `pnpm install`. pnpm may print "Ignored build scripts: esbuild, workerd". That's expected, so don't run `pnpm approve-builds`.
+4. **Check the Cloudflare login, then ask the user to log in if needed.** First run `npx wrangler whoami --json` with at least a 3-minute timeout (it can refresh a login). If it lists accounts, skip the login. Otherwise ask them to run `npx wrangler login` and approve access in the browser. On a remote machine or in a container, use `npx wrangler login --device` instead. This is the one step a person has to do.
+5. **Run setup.** First ask the user: "Just you, or a team?" Don't guess. Pass `--solo` for just them, or `--team` for a team.
+   - **Team:** in the same message, ask whether the account is on Workers Paid, and pass `--yes-paid` if so (invite email needs it). Tell them up front that they'll create a Cloudflare Access token and onboard the sending domain `mail.<app-host>`.
+   - **One hostname:** if they gave only one, it's `--app-host`. Propose `<first-label>-content.<zone>` as `--content-host` (for `artifacts.example.com`, that's `artifacts-content.example.com`) and the email from `wrangler whoami` as `--owner-email`, and confirm both.
+
+   Then run it with the user's hostnames and email:
 
    ```sh
    pnpm -s oa:setup --json --app-host artifacts.example.com --content-host artifacts-content.example.com --owner-email you@example.com --name open-artifacts --solo
@@ -42,7 +48,7 @@ The agent follows the steps below. The only thing you do yourself is approve the
 
    - **0:** every step is done. Go on to step 6.
    - **2:** the last line is `action_required`. If its `message` asks you to pass a flag, such as `--account-id` when the login can reach several accounts, add that flag and run again; ask the user for the value if you don't know it. Otherwise relay the `message` to the user verbatim, with `data.url` if it has one, wait until they say it's done, and run the same command again. Setup saves its progress in `.openartifacts/state.json` and picks up where it stopped.
-   - **1:** the last line is `error`. Show the user its `message` and stop.
+   - **1:** the last line is `error`. Show the user its `message` and stop. If the message names DNS, wait 2 minutes and rerun.
 
    If the `access` step asks for an Access API token, the user creates one at its `data.url`. Save it with this line in your own terminal (in Claude Code, type `! ` then the line). Never paste a token into the chat. If `read` fails, the shell can't hide input, so use a real terminal.
 
@@ -69,8 +75,8 @@ The agent follows the steps below. The only thing you do yourself is approve the
    - **A team on a plan that isn't `paid`:** invite email stays off, except on an `unknown` plan where an earlier run saved `email: true`; then it stays on. Otherwise, if the user confirms the account is on Workers Paid, run again with `--team --yes-paid`.
 
    **Invite email (teams only).** The `email` step checks the sending domain, `mail.<app-host>` unless you pass `--email-domain`. When it returns `action_required`, give the user its `message`, the dashboard link in `data.dashboard`, and the DNS records in `data.records`, verbatim. Wait until they've onboarded the domain in the dashboard, then run setup again; the records can take 5 to 15 minutes to appear. If the domain already has mail records from another provider, setup asks first: relay that `action_required` message, and pass `--yes-email-domain` only if the user agrees. Otherwise pick another `--email-domain`.
-6. **Connect yourself.** The `owner-token` line's `data.token` is the owner's personal access token (`oa_pat_…`). It's shown only once, by the run that mints it, so keep it. The `agent-config` line's `data.url` is the MCP URL, and its `data.snippets` holds MCP configs for `claudeCode`, `codex`, `cursor`, `opencode`, and a generic `json`. They don't contain the token: most read it from the `OA_TOKEN` environment variable, and `json` has a `<YOUR_TOKEN>` placeholder to replace, in a file kept out of git. Add the one for *this* agent to your MCP config, and make the token available as `OA_TOKEN` to its client. If you've lost the token, run setup again with `--new-owner-token`, which mints a new one and revokes the old one. Connect agents shows each client's config format.
-7. **Open the Welcome page.** Setup publishes a Welcome artifact to test the connection. Give the user its link, `data.welcomeUrl` on the `selftest` and `agent-config` lines, so they can sign in and see it. Only a run that mints the owner token publishes it; if there's no `welcomeUrl`, give the user `https://<app-host>/` instead. When setup finishes, its last line is `{"step": "state", "status": "ok", "message": "final"}` with `data.plan` (the plan setup detected), `data.planVar` (the `PLAN` var the Worker serves), `data.team`, `data.email`, and `data.emailDomain`. Tell the user whether invite emails are on: with `email: true`, invites are sent from `noreply@<emailDomain>`; otherwise they share invite links themselves.
+6. **Connect yourself.** Setup saves your agent token to `~/.open-artifacts/<host-slug>-pat-token` (mode 0600), where `<host-slug>` is the app host lowercased with every run of other characters turned into `-` (`artifacts.example.com` becomes `artifacts-example-com`). The `owner-token` line's `data.tokenFile` is its absolute path. Don't read or print the file; point your client config at it. Never ask for or paste a token in chat. The `agent-config` line's `data.url` is the MCP URL, and its `data.snippets` holds a config for `claudeCode`, `cursor`, `opencode`, `codex` and a generic `json`. Claude Code, Cursor and OpenCode sign in with OAuth: the snippet is only the MCP URL (`claude mcp add --transport http <name> <url>`, then `/mcp`; for OpenCode, `opencode mcp auth <name>`), with no token or header. Use a token only for a client without OAuth: OpenCode's `opencodeToken` snippet reads the file by absolute path (`{file:<abs file>}`), Codex is launched as `OA_TOKEN="$(cat <abs file>)" codex` (don't edit shell profiles), and `json` has a `<YOUR_TOKEN>` placeholder for the user to fill in themselves, in a file kept out of git. If the file is lost, run setup again with `--new-owner-token`: it saves a new token to the file first and revokes the old one only after that. If the revoke fails, setup stops with `action_required` and the file stays; rerun setup to retry it, or revoke the old token in the dashboard (Settings → Agents). Connect agents shows each client's config format.
+7. **Open the Welcome page.** Setup publishes a Welcome artifact to test the connection. Give the user its link, `data.welcomeUrl` on the `selftest` and `agent-config` lines, so they can sign in and see it. A rerun tests with the saved agent token file, so it publishes (updates) the Welcome page too, only when its text changed, and unless that file is missing (a note) or its token is rejected (`action_required`, `data.tokenRejected`). When setup finishes, its last line is `{"step": "state", "status": "ok", "message": "final"}` with `data.plan` (the plan setup detected), `data.planVar` (the `PLAN` var the Worker serves), `data.team`, `data.email`, and `data.emailDomain`. Tell the user whether invite emails are on: with `email: true`, invites are sent from `noreply@<emailDomain>`; otherwise they share invite links themselves.
 
 ## Setup flags
 
@@ -84,13 +90,14 @@ Setup takes each value from its flag first, then from `.openartifacts/state.json
 | `--owner-email` | The owner's email. That person becomes the owner and gets the owner token. |
 | `--account-id` | The Cloudflare account to use. Defaults to `CLOUDFLARE_ACCOUNT_ID`, or the only account the login can reach. |
 | `--yes` | Never prompt. Missing values are errors, and the optional `ANALYTICS_TOKEN` is skipped unless it is set in the environment. Optional with `--json`. |
-| `--upgrade` | Upgrade an existing install: only `deploy` and `selftest` do work. See [Upgrade](/docs/upgrade/). |
+| `--upgrade` | Upgrade an existing install: only `deploy`, `healthcheck`, `selftest` and `agent-config` do work. See [Upgrade](/docs/upgrade/). |
 | `--new-owner-token` | Mint a new owner token, and revoke the one setup minted before. |
 | `--allow-downgrade` | Deploy a checkout older than the deployed version (from `/healthz`, else saved state). Without it setup stops with `action_required` before the D1 migrations. D1 is not rolled back. `--check` reports `{repoVersion, liveVersion, downgrade}` on the deploy line. |
+| `--print-token` | Also report the minted owner token as `data.token` (and print it in human output). Without it the token is only in its 0600 file, `data.tokenFile`. For a CI job or anyone who needs the value; not used with `--ci`, whose token is revoked at the end of the run. |
 | `--check` | Read-only. Runs each step's check without doing the work, and reports it as `done` or `todo`. Without saved state, it rebuilds the state from Cloudflare by `--name` and reports it on a last `state` line. It changes nothing on Cloudflare and writes no files. |
 | `--strict` | Only with `--check`: exit `2` when any step is `todo`, for example to gate CI. |
 | `--json` | Print one JSON object per line instead of text, and never prompt: a missing value is an `action_required` line naming the flag to pass. The optional `ANALYTICS_TOKEN` is skipped unless it is set in the environment. |
-| `--ci` | CI mode: implies `--json`; the owner token is used only for selftest, never printed, and revoked at the end of the run (also on SIGTERM or SIGINT). Requires `--name`; not with `--new-owner-token`. It keeps no `state.json`, so it reuses the welcome artifact by title instead of tracking its id. A SIGKILL or out-of-memory kill can leave a `setup-ci` token live; it is never printed. Find it by the label `setup-ci` in Settings → Tokens. The next `--ci` run revokes it before minting, or run `--ci --revoke-ci-tokens` as an `if: always()` cleanup step. |
+| `--ci` | CI mode: implies `--json`; the owner token is used only for selftest, never printed, and revoked at the end of the run (also on SIGTERM or SIGINT). Requires `--name`; not with `--new-owner-token`. It keeps no `state.json`, so it reuses the welcome artifact by title instead of tracking its id. A SIGKILL or out-of-memory kill can leave a `setup-ci` token live; it is never printed. Find it by the label `setup-ci` in Settings → Agents. The next `--ci` run revokes it before minting, or run `--ci --revoke-ci-tokens` as an `if: always()` cleanup step. |
 | `--revoke-ci-tokens` | Only with `--ci`: revoke every live `setup-ci` token of the owner and exit. Needs `--name` and the owner email, not the hosts. |
 | `--browser` | Turn on server-side thumbnails (the `BROWSER` binding and `SERVER_THUMBNAILS`) even when setup doesn't read the plan as Workers Paid. Thumbnails need Workers Paid, so setup warns (`browser-free`) on free or unknown, unless Paid is confirmed with `--yes-paid`. Without either flag, thumbnails are on when the plan reads `paid` or you pass `--yes-paid` (add `--no-browser` to keep them off), off on `free`, and follow the saved choice when the plan is `unknown`. |
 | `--no-browser` | Turn server-side thumbnails off. A deploy never removes a live `BROWSER` binding without this flag. `--check` and `--json` report `browser: true` or `false`. |
@@ -123,14 +130,15 @@ Exit codes: `0` when every step is done, `2` when a step needs the user or a mis
 
 `oa:setup` is idempotent: each step checks first and skips work that's already done. The steps, in order:
 
-1. **`prereqs`:** checks Node 22 or later, pnpm, the Cloudflare login and account, and that both hostnames are in a zone on that account.
+1. **`prereqs`:** checks Node 22 or later, pnpm, the Cloudflare login and account, and that both hostnames are in a zone on that account. It reports `ok` (message "prerequisites ok"); the plan warnings are in `data.warnings`, other notes in `data.notes`, and token links in `data.tokens`. Nothing is added to the message. The optional analytics token link is a note only on the first run.
 2. **`resources`:** creates or reuses the D1 database, the R2 bucket, and the KV namespace, and writes `apps/server/wrangler.jsonc`.
 3. **`access`:** creates the Cloudflare Access for SaaS application and its sign-in policy.
 4. **`secrets`:** stores the Worker secrets. When `ANALYTICS_TOKEN` is set in the environment (a dedicated read-only token with Account Analytics: Read, never your deploy token), it stores it on every run. Otherwise, without `--json` or `--yes`, it offers to store one for the Usage page, with a link that pre-fills the token form.
-5. **`deploy`:** builds the server, applies database migrations, and deploys the Worker.
-6. **`owner-token`:** mints a personal access token for the owner, unless setup already minted one that's still valid.
-7. **`selftest`:** checks `/healthz` and the OIDC discovery document. When this run minted a token, it also publishes the Welcome artifact over MCP and checks that its content is served.
-8. **`agent-config`:** prints the MCP URL and config snippets.
+5. **`deploy`:** builds the server, applies database migrations, and deploys the Worker. If the live version is the one setup last deployed and a dry-run build of the Worker (its .js and .wasm output, built twice to check it is deterministic) plus the rendered config, wrangler version and repo version hash the same as last time (`state.deployHash`), it skips `wrangler deploy` and the line is `skipped` ("already deployed <version>"); migrations still run. An unknown hash (a failed dry run, a non-deterministic build) never skips, and a rollback clears the hash.
+6. **`healthcheck`:** before any token is minted, checks `/healthz` (and that its `plan` matches the `PLAN` var setup rendered), the OIDC discovery document and, for email, the `EMAIL` binding. It retries for about a minute while certificates and the deploy propagate, and for up to 5 minutes while the app or content host doesn't resolve. After about a minute it asks public DNS (over DoH; A, AAAA and CNAME all count): a live record means your machine's DNS cache has a stale miss (`action_required`, with the flush command for your OS); if the record isn't live it keeps waiting, then fails naming the missing record. If DoH can't answer, it says so and to wait 2 minutes and rerun. Under `--ci` there is no extra wait and no DoH: about a minute, then an error with the cause code.
+7. **`owner-token`:** mints a personal access token for the owner, unless setup already minted one that's still valid, and saves it to `~/.open-artifacts/<app-host>-pat-token` (mode 0600) without printing it.
+8. **`selftest`:** publishes the Welcome artifact over MCP with this run's token (or, on a rerun, the saved token file) and checks that its content is served. The page is published only when its text changed since the last publish. A missing file is a note, not a failure; a saved token the server rejects (401 or 403) is `action_required` (exit 2) with `data.tokenRejected: true`: rerun with `--new-owner-token` and update the client.
+9. **`agent-config`:** prints the MCP URL and config snippets. It always runs, even when `healthcheck` or `selftest` fails (then with the OAuth snippets only; the token-file fallbacks appear once the token exists).
 
 ## Plan warnings
 
@@ -138,7 +146,7 @@ The `prereqs` line's `data.warnings` holds one `{ code, plan, message }` per not
 
 {PLAN_WARNINGS_TABLE}
 
-On Workers Paid (`data.plan` `paid`), `data.warnings` is empty and the `prereqs` message is "Workers Paid detected". When `prereqs` stops because a hostname isn't in a zone, its `action_required` line carries only `data.missing`: no plan, no warnings, and no "Workers Paid detected".
+On Workers Paid (`data.plan` `paid`), `data.warnings` is empty and the `prereqs` line says so in `data.notes` ("Workers Paid detected"). When `prereqs` stops because a hostname isn't in a zone, its `action_required` line carries only `data.missing`: no plan, no warnings, and no "Workers Paid detected".
 
 ## Cloudflare Access permissions
 

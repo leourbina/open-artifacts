@@ -221,9 +221,10 @@ describe("--check is read-only", () => {
       "secrets:done",
       "email:done",
       "deploy:todo",
+      "healthcheck:todo",
       "owner-token:todo",
       "selftest:todo",
-      "agent-config:done",
+      "agent-config:todo",
       "state:ok",
     ]);
     expect(line(w, "state").data).toEqual({

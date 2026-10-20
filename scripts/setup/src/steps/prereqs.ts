@@ -184,6 +184,7 @@ const issueNote = (i: TokenIssue) => {
 /** A pure verification: `done` (skipped) when every prerequisite holds. */
 export const prereqs: Step = {
   name: "prereqs",
+  okWhenDone: "prerequisites ok",
   async check(state, ctx) {
     const major = Number(process.versions.node.split(".")[0]);
     if (major < 22)
@@ -229,14 +230,24 @@ export const prereqs: Step = {
             ? "Workers Paid (--plan paid)"
             : "Workers Paid (saved plan)",
       );
-    ctx.notes.push(...warns.map((w) => w.message));
     const { missing, zones } = await missingHosts(ctx, id);
     const issues = await tokenIssues(state, ctx, { a: id, zones });
-    ctx.notes.push(...issues.map(issueNote));
+    // The optional analytics token's link is a note only on the first run (no saved state);
+    // data.tokens always lists it.
+    ctx.notes.push(
+      ...issues
+        .filter(
+          (i) => i.id !== "analytics" || i.status !== "missing" || ctx.noState,
+        )
+        .map(issueNote),
+    );
+    // Nothing goes into the message: warnings and notes are data.
+    const notes = ctx.notes.splice(0);
     ctx.data = {
       plan,
       planVar: ctx.opts.planVar,
       warnings: warns,
+      ...(notes.length ? { notes } : {}),
       ...(issues.length ? { tokens: issues } : {}),
     };
     missingFor.set(ctx, missing);

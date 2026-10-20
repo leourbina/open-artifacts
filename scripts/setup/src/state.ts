@@ -18,12 +18,18 @@ export type State = {
   deployedVersion?: string;
   /** The Worker version id the last deploy serves (what --rollback reports as `from`). */
   workerVersion?: string;
+  /** Hash of the rendered config, repo version and built bundle of the last deploy; an identical rerun skips `wrangler deploy`. */
+  deployHash?: string;
   /** The version id the last deploy replaced: the target of --rollback. Unset on a first install. */
   previousWorkerVersion?: string;
   /** The setup-minted owner token row; the token itself is never stored. */
   ownerTokenId?: string;
+  /** The new token's id while revoking the earlier setup tokens is still pending (retried by owner-token). */
+  pendingRevokeTokenId?: string;
   /** The selftest's private welcome artifact, updated in place on later runs. */
   welcomeArtifactId?: string;
+  /** Hash of the Welcome text last published, so an unchanged page is not published again. */
+  welcomeHash?: string;
   /** The user declined the optional ANALYTICS_TOKEN; don't ask again. */
   analyticsSkipped?: boolean;
   /** Browser Run binding on/off; absent means on. Set by --no-browser, kept across --upgrade. */

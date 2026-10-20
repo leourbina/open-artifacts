@@ -30,6 +30,7 @@ const ALL = [
   "secrets",
   "email",
   "deploy",
+  "healthcheck",
   "owner-token",
   "selftest",
   "agent-config",
@@ -39,13 +40,19 @@ const WELCOME = readFileSync(
   "utf8",
 );
 const line = (w: W, step: string) => parsed(w).find((j) => j.step === step);
-const patOf = (w: W): string => line(w, "owner-token").data.token;
+/** The PAT as saved to its 0600 file (the owner-token line carries only the path). */
+const patOf = (w: W): string => {
+  const file = line(w, "owner-token").data.tokenFile as string;
+  return (w.files.get(file) ?? "").trim();
+};
 
-/** The PAT is only in owner-token's line: never state, files, argv, prompts, agent-config or other steps. */
+/** The PAT is only in its token file: never in a line, state, other files, argv or prompts. */
 function patContained(w: W, pat: string) {
   expect(isPat(pat)).toBe(true);
-  const others = w.lines.filter((l) => !/^(\{"step":"|. )owner-token/.test(l));
-  const hay = [...others, ...w.files.values(), ...w.argv, ...w.prompts];
+  const file = [...w.files.keys()].find((k) => k.endsWith("-pat-token")) ?? "";
+  expect(w.secretWrites).toContain(file);
+  const others = [...w.files].filter(([k]) => k !== file).map(([, v]) => v);
+  const hay = [...w.lines, ...others, ...w.argv, ...w.prompts];
   expect(hay.join("\n")).not.toContain(pat);
   expect(w.sqls.join("\n")).toContain(
     createHash("sha256").update(pat).digest("hex"),
@@ -98,7 +105,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     const w = world();
     expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
     expect(statuses(w)).toEqual([
-      "prereqs:skipped",
+      "prereqs:ok",
       ...ALL.slice(1).map((s) => `${s}:${s === "email" ? "skipped" : "ok"}`),
     ]);
     expect(w.ops).toEqual([
@@ -161,21 +168,19 @@ describe("deploy, owner-token, selftest, agent-config", () => {
       expect(s).not.toContain(pat);
     }
     expect(JSON.stringify(cfg)).not.toContain(pat);
-    expect(cfg.snippets.claudeCode).toMatch(
-      /^read -rs OA_TOKEN\nclaude mcp add --transport http open-artifacts https:\/\/app\.example\.com\/mcp --header "Authorization: Bearer \$OA_TOKEN"\nunset OA_TOKEN$/,
+    // #2: OAuth clients get only the URL; no token or header in any command.
+    expect(cfg.snippets.claudeCode).toBe(
+      "claude mcp add --transport http open-artifacts https://app.example.com/mcp",
     );
     expect(cfg.snippets.codex).toContain("[mcp_servers.open-artifacts]");
     expect(JSON.parse(cfg.snippets.cursor)).toEqual({
-      mcpServers: {
-        "open-artifacts": {
-          url: "https://app.example.com/mcp",
-          headers: { Authorization: "Bearer ${env:OA_TOKEN}" },
-        },
-      },
+      mcpServers: { "open-artifacts": { url: "https://app.example.com/mcp" } },
     });
-    expect(
-      JSON.parse(cfg.snippets.opencode).mcp["open-artifacts"],
-    ).toMatchObject({ type: "remote", url: "https://app.example.com/mcp" });
+    expect(JSON.parse(cfg.snippets.opencode).mcp["open-artifacts"]).toEqual({
+      type: "remote",
+      url: "https://app.example.com/mcp",
+      enabled: true,
+    });
     expect(JSON.parse(cfg.snippets.json).mcpServers["open-artifacts"]).toEqual({
       type: "http",
       url: "https://app.example.com/mcp",
@@ -183,27 +188,154 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     });
   });
 
-  it("a rerun skips all but deploy and selftest; selftest skips MCP without a fresh token", async () => {
+  it("a rerun runs deploy, healthcheck, selftest and agent-config; selftest uses the saved PAT file", async () => {
     const w = await installed();
     expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    const always = [
+      "prereqs",
+      "deploy",
+      "healthcheck",
+      "selftest",
+      "agent-config",
+    ];
     expect(statuses(w)).toEqual(
-      ALL.map(
-        (s) => `${s}:${s === "deploy" || s === "selftest" ? "ok" : "skipped"}`,
-      ),
+      ALL.map((s) => `${s}:${always.includes(s) ? "ok" : "skipped"}`),
     );
     expect(w.ops).toEqual(["build", "migrate open-artifacts", "deploy"]);
     expect(w.db.tokens).toHaveLength(1);
     expect(w.hits).toEqual([
-      "GET /healthz", // the version guard (prereqs), then selftest's
+      "GET /healthz", // the version guard (prereqs), then healthcheck's
       "GET /healthz",
       "GET /cdn-cgi/access/sso/oidc/cid-new/.well-known/openid-configuration",
+      "mcp initialize",
+      "mcp notifications/initialized",
+      "mcp tools/list",
+      "GET content-url",
+      "GET content no auth",
+      "GET content no auth",
     ]);
+    expect(line(w, "selftest").data).toMatchObject({
+      mcp: "ok",
+      welcomeUrl: "https://app.example.com/a/art1",
+    });
+    // The Welcome text is unchanged, so it is not published again.
+    expect(w.mcpCalls).toEqual([]);
+    expect(line(w, "selftest").message).toContain("Welcome page unchanged");
+    const cfg = line(w, "agent-config");
+    expect(cfg.data.snippets.claudeCode).not.toContain("--header");
+    expect(w.lines.join("\n")).not.toMatch(/oa_pat_/);
+  });
+
+  it("#6: an --upgrade without the PAT file skips the MCP check with a note", async () => {
+    const w = await installed();
+    for (const k of [...w.files.keys()])
+      if (k.endsWith("-pat-token")) w.files.delete(k);
+    expect(await run([...HOSTS, "--upgrade"], w.deps, ROOT)).toBe(0);
     expect(line(w, "selftest").message).toMatch(
       /MCP check skipped.*--new-owner-token/,
     );
     expect(line(w, "selftest").data).toEqual({ mcp: "skipped" });
+    expect(w.hits.some((h) => h.startsWith("mcp"))).toBe(false);
+  });
+
+  it("#6: a saved PAT rejected with 401 or 403 is action_required (exit 2) with tokenRejected", async () => {
+    for (const status of [401, 403]) {
+      const w = await installed();
+      for (const k of w.files.keys())
+        if (k.endsWith("-pat-token"))
+          w.files.set(k, `oa_pat_${"1".repeat(32)}\n`);
+      const real = w.deps.fetch;
+      w.deps.fetch = async (u, init) =>
+        String(u).endsWith("/mcp") && status === 403
+          ? new Response("{}", { status: 403 })
+          : real(u, init);
+      expect(await run(HOSTS, w.deps, ROOT)).toBe(2);
+      const l = line(w, "selftest");
+      expect(l.status).toBe("action_required");
+      expect(l.message).toContain("saved agent token was rejected");
+      expect(l.message).toContain("--new-owner-token");
+      expect(l.data).toMatchObject({ tokenRejected: true });
+      // exit 2 still prints agent-config
+      expect(line(w, "agent-config")).toMatchObject({ status: "ok" });
+    }
+  });
+
+  it("#6: a 5xx from MCP on a saved PAT stays an error (exit 1)", async () => {
+    const w = await installed();
+    const real = w.deps.fetch;
+    w.deps.fetch = async (u, init) =>
+      String(u).endsWith("/mcp")
+        ? new Response("{}", { status: 503 })
+        : real(u, init);
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(1);
+    expect(line(w, "selftest").status).toBe("error");
+    expect(line(w, "selftest").data?.tokenRejected).toBeUndefined();
+  });
+
+  it("--ci never reads the PAT file", async () => {
+    const w = world({ env: { HOME: "/home/test" } });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    const file =
+      [...w.files.keys()].find((k) => k.endsWith("-pat-token")) ?? "";
+    const fs = w.deps.fs as unknown as { read: (p: string) => string | null };
+    const real = fs.read;
+    const reads: string[] = [];
+    fs.read = (p) => {
+      reads.push(p);
+      return real(p);
+    };
+    const ci = [...HOSTS.filter((a) => a !== "--yes"), "--ci"];
+    expect(await run(ci, w.deps, ROOT)).toBe(0);
+    expect(reads).not.toContain(file);
+  });
+
+  it("#6: Welcome is published again only when its text changed", async () => {
+    const w = await installed();
+    const WELCOME =
+      [...w.files.keys()].find((k) => k.endsWith("welcome.md")) ?? "";
+    expect(w.state().welcomeHash).toMatch(/^[0-9a-f]{64}$/);
+    w.files.set(WELCOME, `${w.files.get(WELCOME)}\nMore.\n`);
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    expect(w.mcpCalls).toHaveLength(1);
+    expect(w.mcpCalls[0].arguments.id).toBe("art1");
+    const hash = w.state().welcomeHash;
+    w.mcpCalls.length = 0;
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    expect(w.mcpCalls).toEqual([]);
+    expect(w.state().welcomeHash).toBe(hash);
+  });
+
+  it("#6: an unchanged Welcome page that was deleted is published again", async () => {
+    const w = await installed();
+    w.deleted.push("art1");
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    expect(w.mcpCalls.map((c) => c.arguments.id)).toEqual(["art1", undefined]);
+    expect(w.state().welcomeArtifactId).toBe("art2");
+  });
+
+  it("#6: a failing health check mints nothing, and agent-config still prints the OAuth snippets", async () => {
+    const w = world({ healthzDown: true });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(1);
+    expect(line(w, "healthcheck")).toMatchObject({ status: "error" });
+    expect(line(w, "owner-token")).toBeUndefined();
+    expect(w.db.tokens).toHaveLength(0);
+    expect(w.secretWrites).toEqual([]);
     const cfg = line(w, "agent-config");
-    expect(cfg.data.snippets.claudeCode).toContain("$OA_TOKEN");
+    expect(cfg.status).toBe("ok");
+    expect(cfg.data.snippets.claudeCode).toBe(
+      "claude mcp add --transport http open-artifacts https://app.example.com/mcp",
+    );
+    expect(cfg.data.snippets).not.toHaveProperty("opencodeToken");
+    expect(cfg.data.tokenNote).toMatch(/fallback snippets appear once/);
+  });
+
+  it("#21: agent-config still prints when the selftest fails, and the run exits 1", async () => {
+    const w = world({ noPublishTool: true });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(1);
+    expect(line(w, "selftest")).toMatchObject({ status: "error" });
+    const cfg = line(w, "agent-config");
+    expect(cfg).toMatchObject({ status: "ok" });
+    expect(cfg.data.url).toBe("https://app.example.com/mcp");
     expect(w.lines.join("\n")).not.toMatch(/oa_pat_/);
   });
 
@@ -221,9 +353,9 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     expect(w.sqls.at(-2)).toMatch(
       /UPDATE tokens SET revoked_at = \d+ WHERE user_id/,
     );
-    expect(w.hits).toContain("mcp tools/call");
-    // M5: the welcome artifact is updated in place, not duplicated.
-    expect(w.mcpCalls[0].arguments.id).toBe("art1");
+    // M5: the unchanged welcome artifact is neither duplicated nor published again.
+    expect(w.mcpCalls).toEqual([]);
+    expect(w.state().welcomeArtifactId).toBe("art1");
     patContained(w, patOf(w));
     w.lines.length = 0;
     w.db.tokens[1].revoked_at = 1;
@@ -232,21 +364,23 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     expect(w.db.tokens).toHaveLength(3);
   });
 
-  it("--upgrade runs only deploy and selftest; --new-owner-token adds a token", async () => {
+  it("--upgrade runs only the always-steps; --new-owner-token adds a token", async () => {
     const w = await installed();
     expect(await run([...HOSTS, "--upgrade"], w.deps, ROOT)).toBe(0);
     expect(statuses(w)).toEqual(
       ALL.map(
-        (s) => `${s}:${s === "deploy" || s === "selftest" ? "ok" : "skipped"}`,
+        (s) =>
+          `${s}:${["prereqs", "deploy", "healthcheck", "selftest", "agent-config"].includes(s) ? "ok" : "skipped"}`,
       ),
     );
     expect(w.ops).toEqual(["build", "migrate open-artifacts", "deploy"]);
-    expect(w.sqls).toHaveLength(2); // the first run's mint and demote commands only
+    expect(w.sqls).toHaveLength(3); // the first run's mint, revoke and demote commands only
     w.lines.length = 0;
     const argv = [...HOSTS, "--upgrade", "--new-owner-token"];
     expect(await run(argv, w.deps, ROOT)).toBe(0);
     expect(statuses(w).slice(5)).toEqual([
       "deploy:ok",
+      "healthcheck:ok",
       "owner-token:ok",
       "selftest:ok",
       "agent-config:ok",
@@ -370,11 +504,11 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     expect(w.sleeps).toEqual([1000, 2000, 4000]);
     const down = world({ healthFails: 1000 });
     expect(await run(HOSTS, down.deps, ROOT)).toBe(1);
-    expect(line(down, "selftest").message).toContain("/healthz");
+    expect(line(down, "healthcheck").message).toContain("/healthz");
     const total = down.sleeps.reduce((a, b) => a + b, 0);
     expect(total).toBeGreaterThanOrEqual(55_000);
     expect(total).toBeLessThanOrEqual(65_000);
-    patContained(down, patOf(down));
+    expect(down.db.tokens).toHaveLength(0); // #6: nothing minted before the health check passes
   });
 
   it("selftest errors when tools/list lacks publish_artifact", async () => {
@@ -384,23 +518,25 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     expect(w.mcpCalls).toEqual([]);
   });
 
-  it("human output shows the token once in owner-token, plus agent-config snippets", async () => {
+  it("human output names the token file in owner-token, never the token, plus agent-config snippets", async () => {
     const w = world();
     const human = HOSTS.filter((a) => a !== "--json");
     expect(await run(human, w.deps, ROOT)).toBe(0);
     const tokenId = JSON.parse(w.files.get(STATE) ?? "").ownerTokenId;
     const own = w.lines.find((l) => l.startsWith("✓ owner-token")) ?? "";
-    const pat = own.match(/oa_pat_\w+/)?.[0] ?? "";
-    expect(own.split(pat)).toHaveLength(2);
+    expect(own).not.toMatch(/oa_pat_/);
+    const file =
+      [...w.files.keys()].find((k) => k.endsWith("-pat-token")) ?? "";
+    const pat = (w.files.get(file) ?? "").trim();
     expect(own).toContain(tokenId);
+    expect(own).toContain("-pat-token");
     const cfg = w.lines.find((l) => l.startsWith("✓ agent-config")) ?? "";
     expect(cfg).toContain("claude mcp add --transport http");
-    expect(cfg).toContain("read -rs OA_TOKEN");
-    expect(cfg).toContain("owner-token step");
+    expect(cfg).toContain("claude mcp add --transport http");
+    expect(cfg).toContain(`${file}`);
+    expect(cfg).not.toMatch(/--header|Bearer \$\(cat/);
     expect(cfg).not.toContain(pat);
     expect(cfg).toContain("bearer_token_env_var");
-    for (const l of w.lines.filter((x) => !x.startsWith("✓ owner-token")))
-      expect(l).not.toContain(pat);
     patContained(w, pat);
   });
 
@@ -409,7 +545,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
     await run(HOSTS, w.deps, ROOT);
     await run(HOSTS, w.deps, ROOT);
     await run([...HOSTS, "--upgrade", "--new-owner-token"], w.deps, ROOT);
-    expect(w.lines.length).toBe(30); // + a final state line per run
+    expect(w.lines.length).toBe(33); // + a final state line per run
     for (const l of w.lines)
       expect(Object.keys(JSON.parse(l))).toEqual(
         expect.arrayContaining(["step", "status", "message"]),
@@ -533,14 +669,19 @@ describe("B16-6 owner token hardening", () => {
     expect(w.sqls).toHaveLength(1);
   });
 
-  it("a revoke failure after the insert is uncertain and demotes nobody", async () => {
+  it("#22: a revoke failure after the file is saved is action_required, keeps file and state, and still demotes", async () => {
     const w = seeded({ failOn: /^UPDATE tokens SET revoked_at/ });
     w.db.users.push({ id: "u0", email: "old@example.com", role: "owner" });
     expect(await run(HOSTS, w.deps, ROOT)).toBe(2);
-    expect(line(w, "owner-token").message).toContain("state uncertain");
-    expect(w.state().ownerTokenId).toBeUndefined();
-    expect(role(w, "u0")).toBe("owner");
-    expect(w.sqls).toHaveLength(1);
+    const l = line(w, "owner-token");
+    expect(l.status).toBe("action_required");
+    expect(l.message).toMatch(
+      /the new token is saved to \/.*pat-token, but the old token couldn't be revoked; rerun setup, or revoke it in the dashboard \(Settings → Agents\)/,
+    );
+    expect(w.state().ownerTokenId).toBeTruthy();
+    expect(w.state().pendingRevokeTokenId).toBe(w.state().ownerTokenId);
+    expect(w.secretWrites).toHaveLength(1);
+    expect(role(w, "u0")).toBe("admin");
   });
 
   it("reports the revoked count only when above zero", async () => {
@@ -575,18 +716,18 @@ describe("B16-6 owner token hardening", () => {
     expect(line(w, "owner-token").message).not.toMatch(/demoted/);
   });
 
-  it("sends the mint command (upsert, capped insert, revoke, verify), then the demote command", async () => {
+  it("sends the mint command (upsert, capped insert, verify), then revoke and demote after the file is saved", async () => {
     const w = seeded();
     await run(HOSTS, w.deps, ROOT);
-    expect(w.sqls).toHaveLength(2);
+    expect(w.sqls).toHaveLength(3);
     expect(w.sqls[0]).not.toContain("SET role = 'admin'");
     const all = w.sqls.join("; ");
     const at = (re: RegExp) => all.search(re);
     const order = [
       /ON CONFLICT\(email\)/,
       /\) < 50/,
-      /SET revoked_at/,
       /SELECT id FROM tokens WHERE id/,
+      /SET revoked_at/,
       /SET role = 'admin'/,
     ].map(at);
     expect(order.every((i) => i >= 0)).toBe(true);

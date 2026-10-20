@@ -54,7 +54,7 @@ describe("team/solo and the email step", () => {
     });
     expect(line(w.lines, "email")).toMatchObject({ status: "skipped" });
     expect(line(w.lines, "selftest").status).toBe("ok");
-    expect(line(w.lines, "selftest").message).toContain("EMAIL binding");
+    expect(line(w.lines, "healthcheck").message).toContain("EMAIL binding");
   });
 
   it("reads DNS by DoH when the token cannot read DNS records", async () => {
@@ -134,8 +134,8 @@ describe("team/solo and the email step", () => {
     const w = world();
     expect(await run([...BASE, "--team"], w.deps, ROOT)).toBe(0);
     const l = line(w.lines, "prereqs");
-    expect(l.message).toContain("invites can't be sent");
-    expect(l.message).toContain("--yes-paid");
+    expect(l.data.notes.join("; ")).toContain("invites can't be sent");
+    expect(l.data.notes.join("; ")).toContain("--yes-paid");
     expect(cfg(w)).not.toHaveProperty("send_email");
     expect(w.state()).toMatchObject({ team: true, email: false });
   });
@@ -179,11 +179,11 @@ describe("team/solo and the email step", () => {
     expect(w.state()).toMatchObject({ team: true, email: true });
   });
 
-  it("selftest fails when the deployed Worker lacks the EMAIL binding", async () => {
+  it("healthcheck fails when the deployed Worker lacks the EMAIL binding", async () => {
     const w = world({ dns: onboarded(D), dropSendEmail: true });
     expect(await run(TEAM, w.deps, ROOT)).toBe(1);
-    const l = parse(w.lines).at(-1);
-    expect(l).toMatchObject({ step: "selftest", status: "error" });
+    const l = parse(w.lines).find((j) => j.step === "healthcheck");
+    expect(l).toMatchObject({ step: "healthcheck", status: "error" });
     expect(l.message).toContain("EMAIL");
   });
 
@@ -283,7 +283,9 @@ describe("plan detection (prereqs)", () => {
     const w = world({ subscriptions: PAID, dns: onboarded(D) });
     expect(await run([...BASE, "--team"], w.deps, ROOT)).toBe(0);
     expect(pre(w).data).toMatchObject({ plan: "paid", warnings: [] });
-    expect(pre(w).message).toMatch(/^Workers Paid detected(; |$)/);
+    expect(pre(w).data.notes.join("; ")).toMatch(
+      /^Workers Paid detected(; |$)/,
+    );
     expect(cfg(w).send_email).toEqual([{ name: "EMAIL" }]);
   });
 
@@ -292,14 +294,16 @@ describe("plan detection (prereqs)", () => {
       const w = world({ subscriptions: subscriptions as never });
       expect(await run([...HOSTS, "--yes-paid"], w.deps, ROOT)).toBe(0);
       expect(pre(w).data.warnings).toEqual([]);
-      expect(pre(w).message).toContain("Workers Paid confirmed (--yes-paid)");
+      expect(pre(w).data.notes.join("; ")).toContain(
+        "Workers Paid confirmed (--yes-paid)",
+      );
     }
   });
 
   it("#7: --yes-paid on a detected paid plan adds no confirmation note", async () => {
     const w = world({ subscriptions: PAID });
     await run([...HOSTS, "--yes-paid"], w.deps, ROOT);
-    expect(pre(w).message).not.toContain("confirmed");
+    expect(pre(w).data.notes.join("; ")).not.toContain("confirmed");
   });
 
   it("#20: --yes-paid turns thumbnails on unless --no-browser", async () => {
@@ -319,8 +323,12 @@ describe("plan detection (prereqs)", () => {
     const w = world({ subscriptions: [{ rate_plan: { id: "free" } }] });
     expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
     expect(planOf(w)).toEqual({ plan: "free", codes: FREE_CODES });
-    expect(pre(w).message).toContain("small amount of processing time");
-    expect(pre(w).message).toContain("sign-ins can be saved each day");
+    const warned = pre(w)
+      .data.warnings.map((x: { message: string }) => x.message)
+      .join(" ");
+    expect(warned).toContain("small amount of processing time");
+    expect(pre(w).message).toBe("prerequisites ok"); // #18: nothing concatenated into the message
+    expect(warned).toContain("sign-ins can be saved each day");
     expect(w.state()).toMatchObject({ plan: "free", team: false });
   });
 
@@ -350,7 +358,7 @@ describe("plan detection (prereqs)", () => {
     const free = [{ rate_plan: { id: "free" } }];
     const w = world({ subscriptions: free });
     expect(await run([...BASE, "--team"], w.deps, ROOT)).toBe(0);
-    expect(pre(w).message).toContain("invites can't be sent");
+    expect(pre(w).data.notes.join("; ")).toContain("invites can't be sent");
     expect(w.state()).toMatchObject({ team: true, email: false });
     const y = world({ subscriptions: free, dns: onboarded(D) });
     expect(await run([...BASE, "--team", "--yes-paid"], y.deps, ROOT)).toBe(0);

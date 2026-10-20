@@ -126,7 +126,9 @@ describe("M2: required permissions come from the calls setup makes", () => {
     [/^GET \/accounts\/[^/]+\/d1\/database$/, "d1:read"],
   ];
   const WRANGLER: [RegExp, string[]][] = [
-    [/^(whoami|auth token)\b/, []],
+    [/^(whoami|auth token|--version)\b/, []],
+    // a dry-run build uploads nothing and needs no permission
+    [/^deploy --dry-run\b/, []],
     [/^d1 (create|execute|migrations apply)\b/, ["d1:edit"]],
     [/^kv namespace create\b/, ["workers_kv_storage:edit"]],
     [/^r2 bucket create\b/, ["workers_r2:edit"]],
@@ -212,7 +214,9 @@ describe("M2: required permissions come from the calls setup makes", () => {
     w.deps.env.ANALYTICS_TOKEN = "an";
     await run(HOSTS, w.deps, ROOT);
     expect(issue(w, "analytics")).toMatchObject({ status: "reused" });
-    expect(line(w, "prereqs").message).toContain("is the deploy token");
+    expect(line(w, "prereqs").data.notes.join("; ")).toContain(
+      "is the deploy token",
+    );
   });
   it("a dedicated ANALYTICS_TOKEN is not flagged", async () => {
     const w = world();
@@ -238,7 +242,7 @@ describe("L5: Billing: Read is optional", () => {
     const w = world();
     w.deps.env.CLOUDFLARE_API_TOKEN = "dep";
     await run(HOSTS, w.deps, ROOT);
-    expect(line(w, "prereqs").message).toMatch(
+    expect(line(w, "prereqs").data.notes.join("; ")).toMatch(
       /Billing: Read \(optional, lets setup detect your plan\)/,
     );
     expect(issue(w, "deploy")).toMatchObject({

@@ -11,34 +11,21 @@ Every instance serves one MCP server at `https://<your-app-host>/mcp` over Strea
 
 Setup's `agent-config` step prints each snippet below with your URL filled in, and the dashboard's **Settings → Agents** page shows them too. The examples use `artifacts.example.com` and the default server name, `open-artifacts`; setup names the server after its `--name` flag.
 
-The snippets never contain the token itself; a token typed into a command or committed in a config file can leak through shell history or git. Codex CLI, Cursor, and OpenCode read it from the `OA_TOKEN` environment variable when they start, so export it, without echoing, in the shell that launches the client: `read -rs OA_TOKEN; export OA_TOKEN`. The setup run that mints the owner token shows it once, in the `owner-token` step.
+Claude Code, Cursor, and OpenCode use OAuth, so their snippets are only the URL: no token, no header. A token is for a client without OAuth. Setup saves the owner's token to `~/.open-artifacts/<host-slug>-pat-token` (mode 0600; the host slug is the app host lowercased, with every run of other characters turned into `-`). The token variants below read that file; replace `<token file>` with its absolute path. Never paste a token into a command, a config file, or a chat.
 
 ## Steps
 
-1. **Pick the auth method.** Use OAuth if this agent's client supports MCP OAuth. Otherwise ask the user to create a personal access token in the dashboard under **Settings → Agents**. Don't run setup with `--new-owner-token` for this: it revokes the token the first agent uses.
+1. **Pick the auth method.** Use OAuth if this agent's client supports MCP OAuth. Otherwise point the client at the token file setup saved, or ask the user to create a personal access token in the dashboard under **Settings → Agents**. Don't run setup with `--new-owner-token` for this: it revokes the token the first agent uses.
 2. **Add the server** to this agent's MCP config, using the snippet for its client from the Connect agents doc. Name the server after setup's `--name`, which defaults to `open-artifacts`.
 3. **Check the connection** by calling `list_artifacts`.
 
 ## Claude Code
 
 ```sh
-read -rs OA_TOKEN
-claude mcp add --transport http open-artifacts https://artifacts.example.com/mcp \
-  --header "Authorization: Bearer $OA_TOKEN"
-unset OA_TOKEN
+claude mcp add --transport http open-artifacts https://artifacts.example.com/mcp
 ```
 
-`read -rs` takes the pasted token without showing it, so it stays out of the screen and shell history; the double quotes let the shell fill in `$OA_TOKEN`, and `unset` clears it afterwards.
-
-## Codex CLI
-
-In `~/.codex/config.toml`:
-
-```toml
-[mcp_servers.open-artifacts]
-url = "https://artifacts.example.com/mcp"
-bearer_token_env_var = "OA_TOKEN"
-```
+Then run `/mcp` in Claude Code and sign in.
 
 ## Cursor
 
@@ -48,12 +35,13 @@ In `.cursor/mcp.json` in the project, or `~/.cursor/mcp.json` for every project:
 {
   "mcpServers": {
     "open-artifacts": {
-      "url": "https://artifacts.example.com/mcp",
-      "headers": { "Authorization": "Bearer ${env:OA_TOKEN}" }
+      "url": "https://artifacts.example.com/mcp"
     }
   }
 }
 ```
+
+Cursor opens a sign-in when it connects.
 
 ## OpenCode
 
@@ -66,17 +54,50 @@ In `opencode.json`:
     "open-artifacts": {
       "type": "remote",
       "url": "https://artifacts.example.com/mcp",
-      "enabled": true,
-      "oauth": false,
-      "headers": { "Authorization": "Bearer {env:OA_TOKEN}" }
+      "enabled": true
     }
   }
 }
 ```
 
+Then run `opencode mcp auth open-artifacts` and sign in.
+
+## Without OAuth
+
+**OpenCode with the token file.** In `opencode.json`, OpenCode reads the file itself:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "open-artifacts": {
+      "type": "remote",
+      "url": "https://artifacts.example.com/mcp",
+      "enabled": true,
+      "oauth": false,
+      "headers": {
+        "Authorization": "Bearer {file:<token file>}"
+      }
+    }
+  }
+}
+```
+
+## Codex CLI
+
+Codex reads the token from the environment only. In `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.open-artifacts]
+url = "https://artifacts.example.com/mcp"
+bearer_token_env_var = "OA_TOKEN"
+```
+
+Launch it as `OA_TOKEN="$(cat <token file>)" codex`. Don't edit shell profiles.
+
 ## Other clients
 
-Give the client the URL `https://artifacts.example.com/mcp`. If it supports OAuth, that's all it needs. Otherwise add the header `Authorization: Bearer <YOUR_TOKEN>`. Many clients accept this JSON, which setup prints as `json`. Replace `<YOUR_TOKEN>` with the token, and keep the file out of git:
+Give the client the URL `https://artifacts.example.com/mcp`. If it supports OAuth, that's all it needs. Otherwise add the header `Authorization: Bearer <YOUR_TOKEN>`. Many clients accept this JSON, which setup prints as `json`. Replace `<YOUR_TOKEN>` with the contents of the token file yourself, and keep the file out of git:
 
 ```json
 {

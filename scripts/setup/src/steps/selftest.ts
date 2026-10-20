@@ -1,13 +1,112 @@
 import { join } from "node:path";
-import type { Ctx, Step } from "../step.ts";
+import { homeOf, patTokenFile } from "../secret-file.ts";
+import { type Ctx, NeedInput, type Step } from "../step.ts";
 import { workerBindings } from "../worker.ts";
+import { tokenHash } from "./owner-token.ts";
 
 const TITLE = "Welcome to Open Artifacts";
 const WELCOME = "scripts/setup/welcome.md";
 /** Backoff in seconds between attempts: ~60s in all, for DNS/cert/deploy propagation. */
 const DELAYS = [1, 2, 4, 8, 15, 15, 15];
+/** A host that doesn't resolve is retried this long (a fresh record can take minutes). */
+const DNS_WAIT_MS = 5 * 60_000;
+/** After this long without resolving, ask public DNS whether the record is live. */
+const DNS_PROBE_MS = 60_000;
+const DOH_TIMEOUT_MS = 5000;
+const DNS_CODES = new Set(["ENOTFOUND", "EAI_AGAIN"]);
 
-/** Fetches until 200, retrying failures with bounded backoff. */
+/** undici hides the reason (ENOTFOUND, ECONNREFUSED, ...) in `cause.code`. */
+const causeCode = (e: unknown): string | undefined => {
+  const c = (e as { cause?: { code?: unknown } })?.cause?.code;
+  return typeof c === "string" ? c : undefined;
+};
+
+/** Is `host` one of this install's own hostnames (app, content or a subdomain of it)? */
+const ownHost = (ctx: Ctx, host: string) =>
+  [ctx.opts.appHost, ctx.opts.contentHost].some(
+    (h) => host === h || host.endsWith(`.${h}`),
+  );
+
+type Public = "live" | "missing" | "unknown";
+const DOH_LIVE = new Set([1, 28, 5]); // A, AAAA, CNAME
+
+/** One DoH question: live (an A, AAAA or CNAME answer), missing (NODATA or NXDOMAIN) or unknown (SERVFAIL, bad body, timeout). */
+async function ask(
+  ctx: Ctx,
+  host: string,
+  type: "A" | "AAAA",
+): Promise<Public> {
+  try {
+    const res = await ctx.deps.fetch(
+      `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(host)}&type=${type}`,
+      {
+        headers: { accept: "application/dns-json" },
+        signal: AbortSignal.timeout(DOH_TIMEOUT_MS),
+      },
+    );
+    if (!res.ok) return "unknown";
+    const body = (await res.json()) as {
+      Status?: unknown;
+      Answer?: { type?: unknown }[];
+    };
+    if (body.Status !== 0 && body.Status !== 3) return "unknown";
+    // NXDOMAIN is missing, even with a dangling CNAME in the Answer.
+    if (body.Status === 3) return "missing";
+    const live =
+      Array.isArray(body.Answer) &&
+      body.Answer.some((a) => DOH_LIVE.has(a?.type as number));
+    return live ? "live" : "missing";
+  } catch {
+    return "unknown";
+  }
+}
+
+/** Does public DNS have a record for `host`? Either family counts. */
+async function publicState(ctx: Ctx, host: string): Promise<Public> {
+  const a = await ask(ctx, host, "A");
+  if (a === "live") return "live";
+  const aaaa = await ask(ctx, host, "AAAA");
+  if (aaaa === "live") return "live";
+  return a === "unknown" || aaaa === "unknown" ? "unknown" : "missing";
+}
+
+function flushHint(ctx: Ctx): string {
+  const p = ctx.deps.platform ?? process.platform;
+  if (p === "darwin")
+    return "Wait a few minutes or run `sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder` (macOS)";
+  if (p === "linux")
+    return "Wait a few minutes or run `sudo resolvectl flush-caches` (systemd-resolved)";
+  if (p === "win32")
+    return "Wait a few minutes or run `ipconfig /flushdns` (Windows)";
+  return "Flush your OS DNS cache or wait a few minutes";
+}
+
+const stale = (ctx: Ctx, host: string) =>
+  new NeedInput(
+    `Your machine's DNS cache has a stale miss for ${host}; the record is live. ${flushHint(ctx)}, then rerun.`,
+  );
+
+/** The wait is over: say whose fault it is. */
+async function dnsFailure(
+  ctx: Ctx,
+  host: string,
+  code: string,
+): Promise<never> {
+  const state = await publicState(ctx, host);
+  if (state === "live") throw stale(ctx, host);
+  throw new Error(
+    state === "missing"
+      ? `DNS: ${host} has no public A, AAAA or CNAME record (${code}); add the missing record, then rerun`
+      : `DNS: ${host} does not resolve (${code}) and public DNS could not be checked; wait 2 minutes and rerun`,
+  );
+}
+
+/**
+ * Fetches until 200, retrying failures with bounded backoff. A host of this
+ * install that doesn't resolve gets up to 5 minutes (wall clock) unless --ci
+ * (no stale local cache there): after 1 minute public DNS is asked, and a live
+ * record stops the wait at once.
+ */
 async function until200(
   ctx: Ctx,
   label: string,
@@ -18,9 +117,15 @@ async function until200(
 ) {
   const sleep =
     ctx.deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const now = ctx.deps.now ?? Date.now;
+  const host = new URL(url).hostname;
+  const dnsWait = ctx.deps.dnsWaitMs ?? DNS_WAIT_MS;
+  let dnsSince: number | undefined;
+  let probed = false;
   for (let i = 0; ; i++) {
     let last: string;
     let wrong = false;
+    let dns: string | undefined;
     try {
       const res = await ctx.deps.fetch(url, init);
       if (res.status === 200) {
@@ -30,13 +135,34 @@ async function until200(
         wrong = true;
       } else last = `HTTP ${res.status}`;
     } catch (e) {
-      last = (e as Error).message;
+      const code = causeCode(e);
+      const isDns = code !== undefined && DNS_CODES.has(code);
+      last = !code
+        ? (e as Error).message
+        : isDns
+          ? `${(e as Error).message} (${code} ${(e as { cause?: { hostname?: string } }).cause?.hostname ?? host})`
+          : `${(e as Error).message} (${code})`;
+      if (isDns && !ctx.opts.ci && ownHost(ctx, host)) dns = code;
     }
-    const delay = DELAYS[i];
-    if (delay === undefined && wrong)
-      throw new Error(`${label}: ${shown} answered 200 but ${last}`);
-    if (delay === undefined)
-      throw new Error(`${label}: ${shown} not 200 after ~60s (last: ${last})`);
+    let delay = DELAYS[i];
+    if (dns) {
+      dnsSince ??= now();
+      const elapsed = now() - dnsSince;
+      if (elapsed >= DNS_PROBE_MS && !probed) {
+        probed = true;
+        if ((await publicState(ctx, host)) === "live") throw stale(ctx, host);
+      }
+      delay ??= 15;
+      if (elapsed + delay * 1000 > dnsWait) return dnsFailure(ctx, host, dns);
+    } else {
+      dnsSince = undefined;
+      if (delay === undefined && wrong)
+        throw new Error(`${label}: ${shown} answered 200 but ${last}`);
+      if (delay === undefined)
+        throw new Error(
+          `${label}: ${shown} not 200 after ~60s (last: ${last})`,
+        );
+    }
     await sleep(delay * 1000);
   }
 }
@@ -57,7 +183,7 @@ async function rpcResult(res: Response, id: number, method: string) {
 }
 
 /** tools/list, then publish (or update) the welcome page; returns its id. */
-async function mcp(ctx: Ctx, token: string, prev?: string) {
+async function mcp(ctx: Ctx, token: string, prev?: string, prevHash?: string) {
   const url = `https://${ctx.opts.appHost}/mcp`;
   const headers: Record<string, string> = {
     authorization: `Bearer ${token}`,
@@ -96,6 +222,10 @@ async function mcp(ctx: Ctx, token: string, prev?: string) {
     throw new Error("MCP tools/list has no publish_artifact");
   const content = ctx.fs.read(join(ctx.root, WELCOME));
   if (content === null) throw new Error(`missing ${WELCOME}`);
+  // The page is published only when its text changed since the last publish.
+  const hash = tokenHash(`${TITLE}\n${content}`);
+  if (prev && prevHash === hash)
+    return { id: prev, url: undefined, hash, unchanged: true };
   const publish = (id?: string) =>
     post("tools/call", {
       name: "publish_artifact",
@@ -134,15 +264,28 @@ async function mcp(ctx: Ctx, token: string, prev?: string) {
   if (r?.isError || typeof out !== "string")
     throw new Error(`MCP publish_artifact: ${text(r)}`);
   const view = r?.structuredContent?.url;
-  return { id: out, url: typeof view === "string" ? view : undefined };
+  return {
+    id: out,
+    url: typeof view === "string" ? view : undefined,
+    hash,
+    unchanged: false,
+  };
 }
 
 /** The private artifact's signed content URL must serve the welcome text; returns the redacted URL. */
-async function content(ctx: Ctx, token: string, id: string): Promise<string> {
+async function content(
+  ctx: Ctx,
+  token: string,
+  id: string,
+  once = false,
+): Promise<string> {
   const api = `https://${ctx.opts.appHost}/api/v1/artifacts/${encodeURIComponent(id)}/content-url`;
-  const res = await until200(ctx, "content-url", api, {
-    headers: { authorization: `Bearer ${token}` },
-  });
+  const init = { headers: { authorization: `Bearer ${token}` } };
+  // One try for an unchanged page: a deleted one answers 404 and is published again.
+  const res = once
+    ? await ctx.deps.fetch(api, init)
+    : await until200(ctx, "content-url", api, init);
+  if (!res.ok) throw new Error(`content-url: HTTP ${res.status}`);
   const { url } = (await res.json()) as { url?: string };
   if (typeof url !== "string") throw new Error("content-url: no url");
   // The signed URL is a bearer capability: report only its origin.
@@ -183,8 +326,9 @@ function viewUrl(ctx: Ctx, raw?: string): string | undefined {
   return undefined;
 }
 
-export const selftest: Step = {
-  name: "selftest",
+/** Healthz (with the PLAN check), OIDC discovery and the EMAIL binding: needs no token, so it runs before owner-token. */
+export const healthcheck: Step = {
+  name: "healthcheck",
   always: true,
   check: async () => "todo",
   async apply(state, ctx) {
@@ -215,22 +359,72 @@ export const selftest: Step = {
         );
       ctx.notes.push("EMAIL binding deployed");
     }
-    if (!ctx.pat) {
+    ctx.notes.push("healthz and OIDC discovery ok");
+    return undefined;
+  },
+};
+
+/** The PAT saved by owner-token on an earlier run, when it still looks like one. */
+function savedPat(ctx: Ctx): string | undefined {
+  const file = patTokenFile(homeOf(ctx.deps.env), ctx.opts.appHost);
+  const text = ctx.fs.read(file)?.trim();
+  return text && /^oa_pat_\S+$/.test(text) ? text : undefined;
+}
+
+/** After owner-token: the MCP connection and the Welcome publish, with this run's PAT or the saved one. */
+export const selftest: Step = {
+  name: "selftest",
+  always: true,
+  check: async () => "todo",
+  async apply(state, ctx) {
+    const fromFile = !ctx.pat && !ctx.opts.ci;
+    const token = ctx.pat ?? (fromFile ? savedPat(ctx) : undefined);
+    if (!token) {
       ctx.notes.push(
-        "healthz and OIDC discovery ok; MCP check skipped: no token minted this run (rerun with --new-owner-token to test it)",
+        "MCP check skipped: no saved token (rerun with --new-owner-token to test it)",
       );
       ctx.data = { mcp: "skipped" };
       return undefined;
     }
-    const { id: artifactId, url: welcomeUrl } = await mcp(
-      ctx,
-      ctx.pat,
-      state.welcomeArtifactId,
-    );
-    ctx.welcomeUrl = viewUrl(ctx, welcomeUrl);
+    let welcome: Awaited<ReturnType<typeof mcp>>;
+    let shown: string;
+    try {
+      welcome = await mcp(
+        ctx,
+        token,
+        state.welcomeArtifactId,
+        state.welcomeHash,
+      );
+      try {
+        shown = await content(ctx, token, welcome.id, welcome.unchanged);
+      } catch (e) {
+        if (!welcome.unchanged) throw e;
+        // The unchanged page is gone (deleted?): publish it again.
+        welcome = await mcp(ctx, token, state.welcomeArtifactId, undefined);
+        shown = await content(ctx, token, welcome.id);
+      }
+    } catch (e) {
+      if (!fromFile || !/HTTP 40[13]\b/.test((e as Error).message)) throw e;
+      return {
+        status: "action_required",
+        message:
+          "your saved agent token was rejected; rerun with --new-owner-token to rotate it, then update your client",
+        data: { mcp: "skipped", tokenRejected: true },
+      };
+    }
+    const artifactId = welcome.id;
+    ctx.welcomeUrl = welcome.unchanged
+      ? `https://${ctx.opts.appHost}/a/${encodeURIComponent(artifactId)}`
+      : viewUrl(ctx, welcome.url);
     state.welcomeArtifactId = artifactId;
-    const shown = await content(ctx, ctx.pat, artifactId);
-    ctx.notes.push(`healthz, OIDC discovery, MCP publish, content ok`);
+    state.welcomeHash = welcome.hash;
+    ctx.notes.push(
+      welcome.unchanged
+        ? "Welcome page unchanged; MCP and content ok"
+        : fromFile
+          ? "MCP publish and content ok (with the saved agent token)"
+          : "MCP publish and content ok",
+    );
     ctx.data = {
       mcp: "ok",
       artifactId,

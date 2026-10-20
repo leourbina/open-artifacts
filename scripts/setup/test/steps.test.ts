@@ -12,7 +12,7 @@ import { filler, HOSTS, STAGING, world } from "./world.ts";
 const statuses = (lines: string[]) =>
   lines.map((l) => JSON.parse(l)).map((j) => `${j.step}:${j.status}`);
 const CONFIG = join(ROOT, "apps/server/wrangler.jsonc");
-const ALL_SKIPPED = ["prereqs:skipped", "resources:skipped"];
+const ALL_SKIPPED = ["prereqs:ok", "resources:skipped"];
 const STAGING_ARGS = [...HOSTS, "--name", "open-artifacts-staging"];
 const TEMPLATE = readFileSync(
   join(import.meta.dirname, "../../../apps/server/wrangler.template.jsonc"),
@@ -29,7 +29,7 @@ describe("prereqs + resources", () => {
       "kv namespace create open-artifacts-oauth",
     ]);
     expect(statuses(w.lines).slice(0, 2)).toEqual([
-      "prereqs:skipped",
+      "prereqs:ok",
       "resources:ok",
     ]);
     expect(JSON.parse(w.files.get(STATE) ?? "")).toMatchObject({

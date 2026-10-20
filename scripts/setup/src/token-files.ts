@@ -1,6 +1,6 @@
-import { homedir } from "node:os";
 import { parseArgs } from "node:util";
 import { type Deps, realFs } from "./cf.ts";
+import { homeOf } from "./secret-file.ts";
 import type { State } from "./state.ts";
 import { NeedInput } from "./step.ts";
 
@@ -30,7 +30,7 @@ export function withTokenFiles(argv: string[], deps: Deps, state: State): Deps {
     },
   });
   const fs = deps.fs ?? realFs;
-  const home = deps.env.HOME ?? homedir();
+  const home = homeOf(deps.env);
   const install =
     (v.name as string | undefined) ?? state.name ?? "open-artifacts";
   // A path with no "/" may be a token pasted by mistake: never echo it.

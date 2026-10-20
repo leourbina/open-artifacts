@@ -106,7 +106,7 @@ describe("--plan and the rendered PLAN var", () => {
     ).toBe(0);
     expect(planOf(w)).toBe("paid");
     const pre = line(w, "prereqs");
-    expect(pre.message).toContain("Workers Paid (saved plan)");
+    expect(pre.data.notes.join("; ")).toContain("Workers Paid (saved plan)");
     expect(pre.message).not.toContain("--yes-paid");
   });
 });
@@ -118,7 +118,7 @@ describe("#7: the paid note names its source", () => {
       0,
     );
     const pre = line(w, "prereqs");
-    expect(pre.message).toContain("Workers Paid (--plan paid)");
+    expect(pre.data.notes.join("; ")).toContain("Workers Paid (--plan paid)");
     expect(pre.message).not.toContain("--yes-paid");
     expect(pre.data.warnings).toEqual([]);
   });
@@ -130,7 +130,7 @@ describe("#7: the paid note names its source", () => {
     w.lines.length = 0;
     expect(await run([...BASE, "--solo", "--upgrade"], w.deps, ROOT)).toBe(0);
     const pre = line(w, "prereqs");
-    expect(pre.message).toContain("Workers Paid (saved plan)");
+    expect(pre.data.notes.join("; ")).toContain("Workers Paid (saved plan)");
     expect(pre.message).not.toContain("--yes-paid");
     expect(pre.data.warnings).toEqual([]);
   });
@@ -142,7 +142,7 @@ describe("#7: the paid note names its source", () => {
       w.deps,
       ROOT,
     );
-    expect(line(w, "prereqs").message).toContain("--yes-paid");
+    expect(line(w, "prereqs").data.notes.join("; ")).toContain("--yes-paid");
   });
 });
 
@@ -202,7 +202,7 @@ describe("selftest checks /healthz plan", () => {
   it("fails with a clear message on a mismatch", async () => {
     const w = world({ subscriptions: PAID, healthPlan: "free" });
     expect(await run([...BASE, "--solo"], w.deps, ROOT)).toBe(1);
-    const l = line(w, "selftest");
+    const l = line(w, "healthcheck");
     expect(l.status).toBe("error");
     expect(l.message).toContain("PLAN");
     expect(l.message).toContain("paid");

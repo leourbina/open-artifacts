@@ -47,6 +47,8 @@ export type Opts = {
   /** False under --yes or --json: never prompt. */
   interactive: boolean;
   json: boolean;
+  /** --print-token: report the minted token in data.token (otherwise only data.tokenFile). */
+  printToken: boolean;
   /** CI mode: implies --json; the owner token lives in memory only and is revoked at the end. */
   ci: boolean;
   /** With --ci: revoke every live setup-ci token of the owner and exit. */
@@ -66,6 +68,8 @@ export type Ctx = {
   /** `data` for the current step's line; `human` replaces it in human output. */
   data?: unknown;
   human?: string;
+  /** Set by a step's apply: it had nothing to do, so its line is `skipped`, not `ok`. */
+  skipped?: boolean;
   /** The PAT minted this run, in memory only. */
   pat?: string;
   /** Under --ci: the minted token's row id, revoked at the end of the run. */
@@ -95,6 +99,10 @@ export type Step = {
   name: string;
   /** Runs on every setup (deploy, selftest): its todo is not drift, --strict ignores it. */
   always?: boolean;
+  /** A step that only verifies: reports `ok` with this message (not `skipped`) when its check is done. */
+  okWhenDone?: string;
+  /** Still runs (and prints) when one of these steps failed; the run keeps the failure's exit code. */
+  runAfterFailureOf?: string[];
   check: (state: State, ctx: Ctx) => Promise<"done" | "todo">;
   apply: (state: State, ctx: Ctx) => Promise<ActionRequired | undefined>;
 };

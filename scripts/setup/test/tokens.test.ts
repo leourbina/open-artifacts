@@ -132,7 +132,9 @@ describe("prereqs token report", () => {
         zones: [{ id: "z", name: "example.com" }],
       }),
     );
-    expect(pre.message).toContain(a.url);
+    // first run (no saved state): the optional token's link is also a note, never in the message
+    expect(pre.data.notes.join("; ")).toContain(a.url);
+    expect(pre.message).toBe("prerequisites ok");
   });
   it("a token that gets 403 on a probe lacks that permission", async () => {
     const w = world({ org: "forbidden" });
@@ -342,4 +344,56 @@ it("state file is untouched by token commands", async () => {
   const c = core({ files: { [STATE]: '{"name":"oa"}' } });
   await run(["--token-links", "--json"], c.deps, ROOT);
   expect(c.files.get(STATE)).toBe('{"name":"oa"}');
+});
+
+describe("#18/#19: the prereqs report", () => {
+  const prereqs = (w: ReturnType<typeof world>) => line(w, "prereqs");
+  it("#18: status ok, a fixed message, warnings only in data.warnings, notes in data.notes", async () => {
+    const w = world({ subscriptions: [{ rate_plan: { id: "free" } }] });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    const l = prereqs(w);
+    expect(l.status).toBe("ok");
+    expect(l.message).toBe("prerequisites ok");
+    expect(l.data.warnings.length).toBeGreaterThan(0);
+    expect(l.data.notes ?? []).not.toEqual(
+      expect.arrayContaining(
+        l.data.warnings.map((x: { message: string }) => x.message),
+      ),
+    );
+  });
+  it("#18: a rerun is also ok, never skipped", async () => {
+    const w = world();
+    await run(HOSTS, w.deps, ROOT);
+    w.lines.length = 0;
+    await run(HOSTS, w.deps, ROOT);
+    expect(prereqs(w).status).toBe("ok");
+  });
+  it("#19: the optional analytics link is a note only on the first run; data.tokens always has it", async () => {
+    const w = world();
+    await run(HOSTS, w.deps, ROOT);
+    const first = prereqs(w);
+    const url = first.data.tokens.find(
+      (t: { id: string }) => t.id === "analytics",
+    ).url;
+    expect(first.data.notes.join("; ")).toContain(url);
+    w.lines.length = 0;
+    await run(HOSTS, w.deps, ROOT);
+    const again = prereqs(w);
+    expect((again.data.notes ?? []).join("; ")).not.toContain(url);
+    expect(
+      again.data.tokens.find((t: { id: string }) => t.id === "analytics").url,
+    ).toBe(url);
+    expect(again.message).toBe("prerequisites ok");
+  });
+  it("#18: --check prints prereqs data (warnings, notes, tokens)", async () => {
+    const w = world({ subscriptions: [{ rate_plan: { id: "free" } }] });
+    await run(HOSTS, w.deps, ROOT);
+    w.lines.length = 0;
+    const check = [...HOSTS.filter((a) => a !== "--yes"), "--check"];
+    await run(check, w.deps, ROOT);
+    const l = prereqs(w);
+    expect(l.data.warnings.length).toBeGreaterThan(0);
+    expect(l.data.tokens.length).toBeGreaterThan(0);
+    expect(l.message).toBe("done");
+  });
 });

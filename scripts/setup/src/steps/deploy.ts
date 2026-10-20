@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { State } from "../state.ts";
 import type { Ctx, Step } from "../step.ts";
@@ -128,6 +129,39 @@ function planGuard(
   return undefined;
 }
 
+/**
+ * Hash of what `wrangler deploy` would upload: a dry-run build of the Worker
+ * (so @oa/shared, dependencies and the lockfile are all in it) plus the
+ * rendered config, the wrangler version and the repo version. Built twice: a
+ * non-deterministic bundle, a failed dry run or any missing piece gives
+ * undefined, and an unknown hash never skips a deploy.
+ */
+async function deployHash(ctx: Ctx): Promise<string | undefined> {
+  const fs = ctx.fs;
+  const config = fs.read(join(ctx.root, CONFIG));
+  if (config === null || !fs.hashTree || !fs.tempDir) return undefined;
+  const bundle = async () => {
+    const dir = fs.tempDir?.() as string;
+    try {
+      await ctx.wrangler(["deploy", "--dry-run", "--outdir", dir]);
+      // Only the code: source maps embed the outdir and README.md a timestamp.
+      return fs.hashTree?.(dir, ["."], (rel) => /\.(m?js|wasm)$/.test(rel));
+    } finally {
+      fs.removeTree?.(dir);
+    }
+  };
+  try {
+    const wrangler = (await ctx.wrangler(["--version"])).trim();
+    const first = await bundle();
+    if (!first || !wrangler || (await bundle()) !== first) return undefined;
+    return createHash("sha256")
+      .update(`${config}\0${wrangler}\0${repoVersion(ctx)}\0${first}`)
+      .digest("hex");
+  } catch {
+    return undefined;
+  }
+}
+
 export const deploy: Step = {
   name: "deploy",
   always: true,
@@ -195,6 +229,24 @@ export const deploy: Step = {
     const d1 = names(ctx.opts.name).d1;
     await ctx.wrangler(["d1", "migrations", "apply", d1, "--remote"]);
     const replaced = await readVersion(ctx, state);
+    // An identical deploy is a no-op: same rendered config, repo version and built bundle as the
+    // live version. An unknown hash (no bundle to read, no live version) never skips.
+    const hash = await deployHash(ctx);
+    if (
+      hash &&
+      state.deployHash === hash &&
+      replaced &&
+      replaced === state.workerVersion
+    ) {
+      ctx.notes.push(`already deployed ${state.deployedVersion}`);
+      ctx.skipped = true;
+      ctx.data = {
+        deployedVersion: state.deployedVersion,
+        deploySkipped: true,
+        ...ver,
+      };
+      return undefined;
+    }
     const out = await ctx.wrangler(["deploy"]);
     state.previousWorkerVersion = replaced;
     state.workerVersion = out.match(/Current Version ID:\s*(\S+)/)?.[1];
@@ -203,6 +255,7 @@ export const deploy: Step = {
         "warning: could not read the new version id from wrangler's output; --rollback will refuse until the next deploy",
       );
     state.deployedVersion = repoVersion(ctx);
+    state.deployHash = hash;
     state.planVar = ctx.opts.planVar;
     ctx.notes.push(`deployed ${state.deployedVersion}`);
     ctx.data = { deployedVersion: state.deployedVersion, ...ver };

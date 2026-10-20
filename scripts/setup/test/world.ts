@@ -124,6 +124,12 @@ type World = {
   workerVersion?: string;
   /** `wrangler deploy` fails with this stderr. */
   deployFails?: string;
+  /** A stable `wrangler deploy --dry-run` build with this content (a different value is a different bundle). Unset: every build differs, so the deploy is never skipped. */
+  stableBundle?: string;
+  /** Each dry run also writes a varying source map and README (like real wrangler); they must not matter. */
+  noisyDryRun?: boolean;
+  /** `wrangler deploy --dry-run` fails. */
+  dryRunFails?: boolean;
   /** `wrangler rollback` fails with this stderr. */
   rollbackFails?: string;
   /** /healthz reports this `version` (absent: an install without it). */
@@ -224,6 +230,9 @@ export function world(w: World = {}) {
   const versions: string[] = w.workerVersion ? [w.workerVersion] : [];
   let deployCount = 0;
   let published = 0;
+  let dryRuns = 0;
+  /** The content of the last publish (kept when a test clears mcpCalls). */
+  let lastPublished = "";
   const pubs: { id: string; title: string }[] = [];
   const deleted = [...(w.deletedArtifacts ?? [])];
   /** Every mutation, in order. `values` holds every secret value seen. */
@@ -451,6 +460,19 @@ export function world(w: World = {}) {
           return { code: 1, stdout: "", stderr: w.rollbackFails };
         ops.push(`rollback ${rollback[1]}`);
         versions.unshift(rollback[1]);
+      } else if (a === "--version") {
+        stdout = " ⛅️ wrangler 4.151.1\n";
+      } else if (a.startsWith("deploy --dry-run --outdir ")) {
+        if (w.dryRunFails)
+          return { code: 1, stdout: "", stderr: "dry run failed" };
+        const out = a.slice("deploy --dry-run --outdir ".length);
+        const body = w.stableBundle ?? `unstable#${++dryRuns}`;
+        c.files.set(`${out}/index.js`, body);
+        if (w.noisyDryRun) {
+          c.files.set(`${out}/index.js.map`, `{"sourceRoot":"${out}"}`);
+          c.files.set(`${out}/README.md`, `built ${++dryRuns}`);
+        }
+        stdout = `--dry-run: exiting now.\n`;
       } else if (a === "deploy") {
         if (w.deployFails)
           return { code: 1, stdout: "", stderr: w.deployFails };
@@ -546,6 +568,7 @@ export function world(w: World = {}) {
             if (w.publishError) return err(w.publishError);
             if (prev && deleted.includes(prev))
               return err("not_found: Artifact not found");
+            lastPublished = body.params.arguments.content ?? "";
             const id = prev ?? `art${++published}`;
             if (!pubs.some((x) => x.id === id))
               pubs.push({ id, title: body.params.arguments.title });
@@ -567,6 +590,8 @@ export function world(w: World = {}) {
         );
         if (cu) {
           hits.push("GET content-url");
+          if (deleted.includes(cu[1]))
+            return new Response("{}", { status: 404 });
           const tok = auth?.replace(/^Bearer /, "") ?? "";
           if (tok) bearers.add(tok);
           if (
@@ -582,7 +607,7 @@ export function world(w: World = {}) {
       }
       if (u.host === "a.b.usercontent.example.com") {
         hits.push(`GET content ${auth ? "with auth" : "no auth"}`);
-        const last = mcpCalls.at(-1)?.arguments?.content ?? "";
+        const last = lastPublished;
         if (w.contentStatus)
           return new Response("denied", { status: w.contentStatus });
         if (w.contentBody !== undefined) return new Response(w.contentBody);

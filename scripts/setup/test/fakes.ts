@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { Deps, Exec } from "../src/cf.ts";
 
@@ -37,11 +38,44 @@ export function core(o: Core = {}) {
   const prompts: string[] = [];
   const answers = [...(o.answers ?? [])];
   const sleeps: number[] = [];
+  let clock = 0;
+  let tempCount = 0;
+  /** Paths written through writeSecret (0600 files). */
+  const secretWrites: string[] = [];
   const deps: Deps = {
     env: o.env ?? {},
     fs: {
       read: (p) => files.get(p) ?? null,
       write: (p, d) => void files.set(p, d),
+      hashTree: (base, rels, include) => {
+        const hit = [...files.keys()]
+          .filter((k) => include?.(k.slice(base.length + 1)) ?? true)
+          .filter((k) =>
+            rels.some((r) => {
+              const p = r === "." ? base : `${base}/${r}`;
+              return k === p || k.startsWith(`${p}/`);
+            }),
+          )
+          .sort();
+        return hit.length
+          ? createHash("sha256")
+              .update(
+                hit
+                  .map((k) => `${k.slice(base.length)}\0${files.get(k)}`)
+                  .join("\0"),
+              )
+              .digest("hex")
+          : undefined;
+      },
+      tempDir: () => `/tmp/oa-bundle-${++tempCount}`,
+      removeTree: (p) => {
+        for (const k of [...files.keys()])
+          if (k === p || k.startsWith(`${p}/`)) files.delete(k);
+      },
+      writeSecret: (p, d) => {
+        files.set(p, d);
+        secretWrites.push(p);
+      },
       readToken: (p) =>
         files.has(p)
           ? {
@@ -60,8 +94,13 @@ export function core(o: Core = {}) {
     exec:
       o.exec ?? (async () => ({ code: 0, stdout: o.stdout ?? "", stderr: "" })),
     fetch: o.fetch ?? (async () => envelope(null, 500)),
-    sleep: async (ms) => void sleeps.push(ms),
+    // The fake clock advances only by sleeping, so waits are deterministic.
+    now: () => clock,
+    sleep: async (ms) => {
+      sleeps.push(ms);
+      clock += ms;
+    },
   };
   const state = () => JSON.parse(files.get(STATE) ?? "{}");
-  return { deps, files, lines, prompts, state, sleeps };
+  return { deps, files, lines, prompts, state, sleeps, secretWrites };
 }

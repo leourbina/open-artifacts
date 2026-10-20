@@ -86,8 +86,9 @@ describe("welcome link", () => {
     expect(w.files.get(STATE)).not.toContain("/a/art1");
     w.lines.length = 0;
     expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
-    expect(by("selftest").data.welcomeUrl).toBeUndefined();
-    expect(by("agent-config").data.welcomeUrl).toBeUndefined();
+    // #6: a rerun tests MCP with the saved PAT file, so it reports the link again
+    expect(by("selftest").data.welcomeUrl).toBe(url);
+    expect(w.files.get(STATE)).not.toContain("/a/art1");
     const h = world();
     expect(
       await run(
