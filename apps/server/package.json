@@ -8,7 +8,7 @@
     "build": "pnpm run version:emit && node --experimental-strip-types scripts/emit-tool-manifest.ts &&node --experimental-strip-types scripts/emit-consent-template.ts && node --experimental-strip-types scripts/emit-email-templates.ts && pnpm --filter @oa/dashboard run --if-present build && pnpm --filter @oa/render build --if-present && pnpm --filter @oa/runtime build --if-present && node scripts/assemble-assets.mjs && node scripts/check-worker-size.mjs",
     "dev": "echo \"@oa/server dev: placeholder\"",
     "test": "pnpm run version:emit && vitest run --exclude \"test/smoke/**\" --passWithNoTests",
-    "test:cpu": "pnpm run version:emit && vitest run -c vitest.cpu.config.ts",
+    "test:cpu": "pnpm run version:emit && vitest run -c vitest.cpu.config.ts && vitest run -c vitest.codecpu.config.ts",
     "test:cpu:strict": "CPU_STRICT=1 pnpm run test:cpu",
     "bench": "pnpm run version:emit && vitest run -c vitest.bench.config.ts",
     "smoke": "pnpm --filter @oa/shared build && vitest run -c vitest.smoke.config.ts --passWithNoTests",
