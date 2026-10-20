@@ -222,7 +222,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
       revoked_at: expect.any(Number),
     });
     expect(w.db.tokens[1].revoked_at).toBeUndefined();
-    expect(w.sqls.at(-1)).toMatch(
+    expect(w.sqls.at(-2)).toMatch(
       /UPDATE tokens SET revoked_at = \d+ WHERE user_id/,
     );
     expect(w.hits).toContain("mcp tools/call");
@@ -245,7 +245,7 @@ describe("deploy, owner-token, selftest, agent-config", () => {
       ),
     );
     expect(w.ops).toEqual(["build", "migrate open-artifacts", "deploy"]);
-    expect(w.sqls).toHaveLength(2); // the first run's mint and demote commands only
+    expect(w.sqls).toHaveLength(3); // the first run's mint, revoke and demote commands only
     w.lines.length = 0;
     const argv = [...HOSTS, "--upgrade", "--new-owner-token"];
     expect(await run(argv, w.deps, ROOT)).toBe(0);
@@ -539,16 +539,19 @@ describe("B16-6 owner token hardening", () => {
     expect(w.sqls).toHaveLength(1);
   });
 
-  it("a revoke failure after the file is saved keeps the new token, demotes nobody and says so", async () => {
+  it("#22: a revoke failure after the file is saved is action_required, keeps file and state, and still demotes", async () => {
     const w = seeded({ failOn: /^UPDATE tokens SET revoked_at/ });
     w.db.users.push({ id: "u0", email: "old@example.com", role: "owner" });
-    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
-    expect(line(w, "owner-token").message).toContain(
-      "could not revoke the previous token",
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(2);
+    const l = line(w, "owner-token");
+    expect(l.status).toBe("action_required");
+    expect(l.message).toMatch(
+      /the new token is saved to \/.*pat-token, but the old token couldn't be revoked; rerun setup, or revoke it in the dashboard \(Settings → Agents\)/,
     );
     expect(w.state().ownerTokenId).toBeTruthy();
+    expect(w.state().pendingRevokeTokenId).toBe(w.state().ownerTokenId);
     expect(w.secretWrites).toHaveLength(1);
-    expect(role(w, "u0")).toBe("owner");
+    expect(role(w, "u0")).toBe("admin");
   });
 
   it("reports the revoked count only when above zero", async () => {
@@ -586,7 +589,7 @@ describe("B16-6 owner token hardening", () => {
   it("sends the mint command (upsert, capped insert, verify), then revoke and demote after the file is saved", async () => {
     const w = seeded();
     await run(HOSTS, w.deps, ROOT);
-    expect(w.sqls).toHaveLength(2);
+    expect(w.sqls).toHaveLength(3);
     expect(w.sqls[0]).not.toContain("SET role = 'admin'");
     const all = w.sqls.join("; ");
     const at = (re: RegExp) => all.search(re);

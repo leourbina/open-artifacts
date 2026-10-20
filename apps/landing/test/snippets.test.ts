@@ -48,20 +48,20 @@ describe("connect-agents matches scripts/setup agent-config", () => {
     section(title).match(new RegExp(`\`\`\`${lang}\\n([\\s\\S]*?)\`\`\``))?.[1];
 
   it("Claude Code", () => {
-    const sh = block("Claude Code", "sh")
-      ?.replace(/ \\\n\s*/g, " ")
-      .trim();
-    expect(sh).toBe(s.claudeCode);
+    expect(block("Claude Code", "sh")?.trim()).toBe(s.claudeCode);
   });
   it("Codex CLI", () => {
     expect(block("Codex CLI", "toml")?.trim()).toBe(s.codex);
   });
-  it("Cursor, OpenCode and generic JSON", () => {
+  it("Cursor, OpenCode (OAuth and token file) and generic JSON", () => {
     for (const [title, want] of [
-      ["Cursor", JSON.parse(s.cursor)],
-      ["OpenCode", JSON.parse(s.opencode)],
-      ["Other clients", JSON.parse(s.json)],
+      ["Cursor", s.cursor],
+      ["OpenCode", s.opencode],
+      ["Without OAuth", s.opencodeToken],
+      ["Other clients", s.json],
     ] as const)
-      expect(JSON.parse(block(title, "json") ?? "null"), title).toEqual(want);
+      expect(JSON.parse(block(title, "json") ?? "null"), title).toEqual(
+        JSON.parse(want ?? "null"),
+      );
   });
 });

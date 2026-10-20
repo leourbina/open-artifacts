@@ -165,7 +165,7 @@ describe("#2: agent-config needs no token", () => {
   });
 });
 
-describe("#22: rotation keeps the old token valid until the new file is saved", () => {
+describe("#2: rotation keeps the old token valid until the new file is saved", () => {
   const first = async (w: W) => {
     expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
     w.lines.length = 0;
@@ -219,32 +219,100 @@ describe("#22: rotation keeps the old token valid until the new file is saved", 
     expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
     expect(w.files.has(FILE)).toBe(true);
   });
+
+  it("#2: a revoke failure is action_required; the rerun retries it, revokes and clears pendingRevokeTokenId", async () => {
+    const w = world({ env: { HOME } });
+    await first(w);
+    const oldId = w.state().ownerTokenId;
+    const real = w.deps.exec;
+    let failing = true;
+    w.deps.exec = async (cmd, args, opts) =>
+      failing && args.join(" ").includes("SET revoked_at")
+        ? { code: 1, stdout: "", stderr: "D1 down" }
+        : real(cmd, args, opts);
+    expect(await run([...HOSTS, "--new-owner-token"], w.deps, ROOT)).toBe(2);
+    const st = w.state();
+    expect(st.pendingRevokeTokenId).toBe(st.ownerTokenId);
+    expect(w.db.tokens.find((t) => t.id === oldId)?.revoked_at).toBeUndefined();
+    failing = false;
+    w.lines.length = 0;
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    expect(w.db.tokens.find((t) => t.id === oldId)?.revoked_at).toBeTruthy();
+    expect(w.state().pendingRevokeTokenId).toBeUndefined();
+    expect(line(w, "owner-token").message).toContain(
+      "revoked the previous owner token",
+    );
+  });
+  it("#2: a failed write whose cleanup revoke also fails names the orphaned id and the dashboard", async () => {
+    const w = world({ env: { HOME } });
+    await first(w);
+    const fs = w.deps.fs as unknown as { writeSecret: () => void };
+    fs.writeSecret = () => {
+      throw new Error("ENOSPC");
+    };
+    const real = w.deps.exec;
+    w.deps.exec = async (cmd, args, opts) =>
+      args.join(" ").includes("SET revoked_at")
+        ? { code: 1, stdout: "", stderr: "D1 down" }
+        : real(cmd, args, opts);
+    expect(await run([...HOSTS, "--new-owner-token"], w.deps, ROOT)).toBe(1);
+    const l = line(w, "owner-token");
+    const orphan = w.db.tokens.at(-1)?.id as string;
+    expect(l.message).toContain(orphan);
+    expect(l.message).toContain("Settings → Agents");
+    expect(w.lines.join("\n")).not.toMatch(/oa_pat_/);
+  });
+  it("#2: --upgrade with a live row and no file adds the note", async () => {
+    const w = world({ env: { HOME } });
+    await first(w);
+    w.files.delete(FILE);
+    expect(await run([...HOSTS, "--upgrade"], w.deps, ROOT)).toBe(0);
+    expect(line(w, "owner-token").message).toContain(
+      `no token file at ${FILE}; pass --new-owner-token if a client needs one`,
+    );
+  });
 });
 
-describe("#22/#23: setup.md tells agents the chat rule and gives no env or profile advice", () => {
-  const md = readFileSync(
-    join(
-      import.meta.dirname,
-      "../../../apps/landing/src/content/docs/setup.md",
-    ),
+const docs = (f: string) =>
+  readFileSync(
+    join(import.meta.dirname, `../../../apps/landing/src/content/docs/${f}`),
     "utf8",
   );
+
+describe("#23: setup.md says never to ask for or paste a token in chat", () => {
+  const md = docs("setup.md");
   it("has the chat rule and names the slugged file", () => {
     expect(md).toContain("Never ask for or paste a token in chat.");
     expect(md).toContain("~/.open-artifacts/<host-slug>-pat-token");
     expect(md).toMatch(/every run of other characters/);
   });
-  it("has no OA_TOKEN export or shell-profile guidance", () => {
-    expect(md).not.toMatch(/export OA_TOKEN/);
-    expect(md).not.toMatch(
-      /exported from the file|start .* from a shell that/i,
+});
+
+describe("#22: the docs have no OA_TOKEN export or shell-profile guidance", () => {
+  for (const f of ["setup.md", "connect-agents.md"])
+    it(f, () => {
+      const md = docs(f);
+      expect(md).not.toMatch(
+        /export OA_TOKEN|read -rs OA_TOKEN|unset OA_TOKEN/,
+      );
+      expect(md).not.toMatch(
+        /exported from the file|start .* from a shell that/i,
+      );
+      expect(md).not.toMatch(/\.zshrc|\.bashrc|\.profile|export .*>>/);
+      expect(md).not.toMatch(/\{env:OA_TOKEN\}|\$\{env:OA_TOKEN\}/);
+    });
+  it("connect-agents.md puts OAuth first and reads the PAT file for the token variant", () => {
+    const md = docs("connect-agents.md");
+    expect(md).toContain(
+      "claude mcp add --transport http open-artifacts https://artifacts.example.com/mcp",
     );
-    expect(md).not.toMatch(/\.zshrc|\.bashrc|\.profile|export .*>>/);
+    expect(md).toContain("{file:<token file>}");
+    expect(md).toContain('OA_TOKEN="$(cat <token file>)" codex');
   });
 });
 
 describe("realFs.writeSecret", () => {
-  it("#23: refuses a symlinked ~/.open-artifacts", () => {
+  it("#2: refuses a symlinked ~/.open-artifacts", () => {
     const d = mkdtempSync(join(tmpdir(), "oa-pat-"));
     const real = join(d, "real");
     mkdirSync(real);

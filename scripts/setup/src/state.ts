@@ -22,6 +22,8 @@ export type State = {
   previousWorkerVersion?: string;
   /** The setup-minted owner token row; the token itself is never stored. */
   ownerTokenId?: string;
+  /** The new token's id while revoking the earlier setup tokens is still pending (retried by owner-token). */
+  pendingRevokeTokenId?: string;
   /** The selftest's private welcome artifact, updated in place on later runs. */
   welcomeArtifactId?: string;
   /** The user declined the optional ANALYTICS_TOKEN; don't ask again. */

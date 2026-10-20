@@ -1,7 +1,7 @@
 import { createHash, randomInt } from "node:crypto";
 import { homeOf, patTokenFile } from "../secret-file.ts";
-import { writeState } from "../state.ts";
-import type { Ctx, Step } from "../step.ts";
+import { type State, writeState } from "../state.ts";
+import { type Ctx, NeedInput, type Step } from "../step.ts";
 import { names } from "./resources.ts";
 import { jsonArray } from "./secrets.ts";
 
@@ -117,12 +117,44 @@ const live = (ctx: Ctx, id: string) =>
 const tokenFileOf = (ctx: Ctx) =>
   patTokenFile(homeOf(ctx.deps.env), ctx.opts.appHost);
 
+const DASHBOARD = "Settings → Agents";
+
+/** A revoke that failed after the new file was saved is retried here, on the next run. */
+async function retryPendingRevoke(state: State, ctx: Ctx) {
+  const id = state.pendingRevokeTokenId;
+  if (!id || ctx.opts.ci) return;
+  if (ctx.opts.check) {
+    ctx.notes.push("revoking the previous token is still pending");
+    return;
+  }
+  try {
+    await d1Raw(ctx, `${revokePriorSql(ctx.opts.ownerEmail, id, Date.now())};`);
+  } catch {
+    throw new NeedInput(
+      `the previous owner token couldn't be revoked; rerun setup, or revoke it in the dashboard (${DASHBOARD})`,
+    );
+  }
+  state.pendingRevokeTokenId = undefined;
+  ctx.notes.push("revoked the previous owner token (retried)");
+}
+
 export const ownerToken: Step = {
   name: "owner-token",
   async check(state, ctx) {
+    await retryPendingRevoke(state, ctx);
     if (ctx.opts.newOwnerToken) return "todo";
     if (ctx.opts.upgrade) {
       ctx.notes.push("kept (--upgrade); pass --new-owner-token to mint one");
+      const file = tokenFileOf(ctx);
+      if (
+        !ctx.opts.ci &&
+        state.ownerTokenId &&
+        ctx.fs.read(file) === null &&
+        (await live(ctx, state.ownerTokenId))
+      )
+        ctx.notes.push(
+          `no token file at ${file}; pass --new-owner-token if a client needs one`,
+        );
       return "done";
     }
     if (ctx.opts.ci) return "todo";
@@ -200,10 +232,15 @@ export const ownerToken: Step = {
       } catch (e) {
         ctx.pat = undefined;
         // Retire the unusable new row; the old token stays valid.
-        await revokeToken(ctx, id).catch(() => {});
+        let orphan = "";
+        try {
+          await revokeToken(ctx, id);
+        } catch {
+          orphan = `; the new token row ${id} couldn't be retired either: revoke it in the dashboard (${DASHBOARD})`;
+        }
         untrack();
         throw new Error(
-          `could not save the new owner token to ${tokenFile} (${(e as Error).message}); the previous token is unchanged; fix that and rerun with --new-owner-token`,
+          `could not save the new owner token to ${tokenFile} (${(e as Error).message}); the previous token is unchanged; fix that and rerun with --new-owner-token${orphan}`,
         );
       }
     }
@@ -214,24 +251,35 @@ export const ownerToken: Step = {
     );
     const stale = ci ? (res[1]?.meta?.changes ?? 0) : 0;
     if (stale > 0) ctx.notes.push(`revoked ${stale} stale setup-ci tokens`);
+    // Two commands, so one failing doesn't skip the other. The file and state are kept either way.
+    let failed: string | undefined;
     try {
       const out = await d1Raw(
         ctx,
-        `${[
-          revokePriorSql(email, id, Date.now(), label),
-          ...demoteStatements(email),
-        ].join("; ")};`,
+        `${revokePriorSql(email, id, Date.now(), label)};`,
       );
       const revoked = out[0]?.meta?.changes ?? 0;
       if (revoked > 0)
         ctx.notes.push(`revoked ${revoked} prior ${label} tokens`);
-      for (const o of (out[1]?.results ?? []) as { email?: string }[])
+      state.pendingRevokeTokenId = undefined;
+    } catch {
+      failed = `the new token is saved to ${tokenFile ?? "memory"}, but the old token couldn't be revoked; rerun setup, or revoke it in the dashboard (${DASHBOARD})`;
+      if (!ci) state.pendingRevokeTokenId = id;
+    }
+    try {
+      const dem = await d1Raw(ctx, `${demoteStatements(email).join("; ")};`);
+      for (const o of (dem[0]?.results ?? []) as { email?: string }[])
         ctx.notes.push(`previous owner ${o.email} demoted to admin`);
     } catch {
-      ctx.notes.push(
-        "could not revoke the previous token or demote the previous owner; rerun with --new-owner-token",
-      );
+      failed ??= `the new token is saved to ${tokenFile ?? "memory"}, but the previous owner couldn't be demoted; rerun with --new-owner-token`;
     }
+    if (failed && !ci)
+      return {
+        status: "action_required",
+        message: failed,
+        data: { tokenId: id, tokenFile },
+      };
+    if (failed) ctx.notes.push(failed);
     if (ci) {
       ctx.data = { tokenId: id };
       return undefined;

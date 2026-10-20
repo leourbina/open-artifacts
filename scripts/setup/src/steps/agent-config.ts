@@ -2,51 +2,6 @@ import { homeOf, patTokenFile } from "../secret-file.ts";
 import type { Step } from "../step.ts";
 
 const PLACEHOLDER = "<YOUR_TOKEN>";
-const cursorHeaders = { Authorization: "Bearer ${env:OA_TOKEN}" };
-
-/**
- * MCP client snippets for a streamable-HTTP server with a bearer header.
- * Never embeds a token. Env interpolation, per official docs:
- * Cursor `${env:NAME}` (https://cursor.com/docs/context/mcp),
- * OpenCode `{env:NAME}` (https://opencode.ai/docs/config/),
- * Codex `bearer_token_env_var` (https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
- */
-export function snippets(name: string, url: string) {
-  const pretty = (v: unknown) => JSON.stringify(v, null, 2);
-  const opencodeHeaders = { Authorization: "Bearer {env:OA_TOKEN}" };
-  const headers = { Authorization: `Bearer ${PLACEHOLDER}` };
-  return {
-    claudeCode: `read -rs OA_TOKEN\nclaude mcp add --transport http ${name} ${url} --header "Authorization: Bearer $OA_TOKEN"\nunset OA_TOKEN`,
-    codex: `[mcp_servers.${name}]\nurl = "${url}"\nbearer_token_env_var = "OA_TOKEN"`,
-    cursor: pretty({
-      mcpServers: { [name]: { url, headers: cursorHeaders } },
-    }),
-    opencode: pretty({
-      $schema: "https://opencode.ai/config.json",
-      mcp: {
-        [name]: {
-          type: "remote",
-          url,
-          enabled: true,
-          oauth: false,
-          headers: opencodeHeaders,
-        },
-      },
-    }),
-    json: pretty({ mcpServers: { [name]: { type: "http", url, headers } } }),
-  };
-}
-
-/** One-line notes shown above a block. */
-export const NOTES: Record<string, string> = {
-  claudeCode:
-    "paste the token at the hidden prompt; Claude Code stores the expanded header in its own config",
-  codex: "export OA_TOKEN in the shell that starts codex",
-  cursor: "export OA_TOKEN before launching Cursor",
-  opencode:
-    "export OA_TOKEN before launching OpenCode; an unset OA_TOKEN becomes an empty string",
-  json: `replace ${PLACEHOLDER} with your token; keep this file out of git`,
-};
 
 type Snippet = {
   title: string;
@@ -136,6 +91,19 @@ export function fileSnippets(
   };
   return out;
 }
+
+/** The snippet texts alone; the Connect agents doc shows exactly these (tokenFile `<token file>`). */
+export const snippets = (
+  name: string,
+  url: string,
+  tokenFile = "<token file>",
+): Record<string, string> =>
+  Object.fromEntries(
+    Object.entries(fileSnippets(name, url, tokenFile)).map(([k, v]) => [
+      k,
+      v.text,
+    ]),
+  );
 
 export const agentConfig: Step = {
   name: "agent-config",
