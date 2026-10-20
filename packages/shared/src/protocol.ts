@@ -118,6 +118,17 @@ export const ArtifactToShellSchema = z.union([
    * auto-swaps versions, and nothing security-relevant may depend on it.
    */
   z.strictObject({ oa: z.literal(1), nonce, type: z.literal("interacted") }),
+  /**
+   * A click on a same-instance viewer link (NAVIGATE_PATH_RE on the welcome's
+   * appOrigin). Artifact content can forge this, so the shell must validate
+   * `url` strictly (its own origin, NAVIGATE_PATH_RE path only) before opening it.
+   */
+  z.strictObject({
+    oa: z.literal(1),
+    nonce,
+    type: z.literal("navigate"),
+    url: z.string().max(2048),
+  }),
 ]);
 export type ArtifactToShell = z.infer<typeof ArtifactToShellSchema>;
 
@@ -131,6 +142,8 @@ export const ShellToArtifactSchema = z.union([
       .strictObject({ email: z.string(), name: z.string().nullable() })
       .nullable(),
     theme: Theme,
+    /** The app's origin; the runtime routes clicks on its /a/ links via `navigate`. */
+    appOrigin: z.string().max(200).optional(),
   }),
   z.strictObject({
     oa: z.literal(1),
