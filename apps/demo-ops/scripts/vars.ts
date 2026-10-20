@@ -7,7 +7,7 @@ import { isId } from "@oa/shared";
 
 export const MAPPING = {
   poll: "POLL_ID",
-  canvas: "CANVAS_ID",
+  pixels: "CANVAS_ID",
   map: "MAP_ID",
   tictactoe: "TICTACTOE_ID",
   chess: "CHESS_ID",

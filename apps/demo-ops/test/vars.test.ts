@@ -7,7 +7,7 @@ describe("deployVars", () => {
   it("maps ids.json slugs to the id vars", () => {
     expect(MAPPING).toEqual({
       poll: "POLL_ID",
-      canvas: "CANVAS_ID",
+      pixels: "CANVAS_ID",
       map: "MAP_ID",
       tictactoe: "TICTACTOE_ID",
       chess: "CHESS_ID",
@@ -15,7 +15,7 @@ describe("deployVars", () => {
     });
     const text = JSON.stringify({
       poll: ID("P"),
-      canvas: ID("C"),
+      pixels: ID("C"),
       map: ID("M"),
       tictactoe: ID("T"),
       chess: ID("H"),
@@ -49,7 +49,7 @@ describe("deployVars", () => {
     const v = deployVars(
       JSON.stringify({
         poll: "../x",
-        canvas: "l0O0l0O0l0O0l0O0", // base58 excludes 0, O, I, l
+        pixels: "l0O0l0O0l0O0l0O0", // base58 excludes 0, O, I, l
         map: 7,
         tictactoe: `${ID("T")} --var X:1`,
         chess: ID("H"),
