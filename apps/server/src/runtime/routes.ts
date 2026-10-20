@@ -331,7 +331,7 @@ export function mountRuntime(app: AppType): void {
       dataResetLimit(plan),
       dataResetTooLargeMessage(plan),
     );
-    const g = { artifactId, actor: `u:${who.user.id}` };
+    const g: Gate = { artifactId, actor: `u:${who.user.id}`, anon: null };
     return c.json(
       await runtimeCall(() => stub(c, g).replaceRaw(toBuffer(body), g.actor)),
     );
