@@ -36,7 +36,7 @@ Open Artifacts is a self-hosted place where any AI agent can publish pages, docu
 
 1. Ask the user whether they already have an Open Artifacts instance.
 2. If they do, ask for its URL (for example \`https://artifacts.example.com\`). Fetch \`<url>/skill.md\` and install it as a skill in your agent's skills directory, under the \`name\` in its frontmatter (it looks like \`open-artifacts-<host>\`). Then follow that skill from here on.
-3. If they do not, follow ${SITE}/llms.txt to install an instance for them. Pick the install name first (default \`${DEFAULT_INSTALL_NAME}\`) and pass \`--name <name>\` to setup. When it is running, do step 2 with the new instance URL.
+3. If they do not, install Open Artifacts on their Cloudflare account by following ${SITE}/llms.txt (don't copy or host that file). Pick the install name first (default \`${DEFAULT_INSTALL_NAME}\`) and pass \`--name <name>\` to setup. When it is running, do step 2 with the new instance URL.
 4. Keep this skill: it is how you reach a second instance, or reinstall one.
 
 ## Secrets
