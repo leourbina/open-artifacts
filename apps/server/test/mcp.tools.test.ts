@@ -163,7 +163,7 @@ describe("MCP tools over PAT", () => {
     expect(got.content).toBeUndefined();
     expect(got.downloadUrl).toMatch(
       new RegExp(
-        `^http://content\\.localhost/c/\\d+\\.[\\w-]+/${pub.id}/v1/a\\.png$`,
+        `^http://content\\.localhost/c/\\d+\\.[\\w-]+/${pub.id}/v1/a\\.png\\?dl=1$`,
       ),
     );
   });
@@ -281,6 +281,49 @@ describe("MCP tools over PAT", () => {
     sc(await tool(client, "delete_artifact", { id: pub.id }));
     const gone = await tool(client, "get_artifact", { id: pub.id });
     expect(textOf(gone)).toMatch(/^not_found/);
+  });
+
+  it("no tool result or description carries a raw view URL (#292)", async () => {
+    const out: unknown[] = [];
+    const run = async (name: string, args: Record<string, unknown>) => {
+      const r = await tool(client, name, args);
+      expect(r.isError, textOf(r)).toBeFalsy();
+      out.push(r);
+      return r.structuredContent as Record<string, unknown>;
+    };
+    const png = btoa(String.fromCharCode(137, 80, 78, 71, 13, 10, 26, 10, 0));
+    const pub = await run("publish_artifact", {
+      title: `raw ${tag}`,
+      entry: "index.html",
+      files: { "index.html": "<p>hi</p>", "a.png": { base64: png } },
+    });
+    const id = pub.id as string;
+    await run("get_artifact", { id });
+    await run("get_artifact", { id, path: "a.png" });
+    await run("get_artifact", { id, includeContent: false });
+    await run("list_artifacts", {});
+    await run("list_versions", { id });
+    await run("set_visibility", { id, visibility: "public" });
+    await run("get_artifact", { id, path: "a.png" });
+    await run("get_artifact", { id, includeContent: false });
+    await run("share_artifact", {
+      id,
+      email: `raw-${tag}@x.com`,
+      role: "viewer",
+    });
+    await run("unshare_artifact", { id, email: `raw-${tag}@x.com` });
+    await run("restore_version", { id, version: 1 });
+    const { tools } = await client.listTools();
+    expect(tools.find((t) => t.name === "get_artifact")?.description).toContain(
+      "Download URLs expire after 10 minutes; call get_artifact again for a fresh one.",
+    );
+    const text = JSON.stringify({ out, tools, INSTRUCTIONS });
+    expect(text).not.toMatch(/raw view|open raw|__view|rawUrl/i);
+    // Every content-host URL handed out is an explicit (signed) download.
+    const urls = text.match(/http:\/\/content\.localhost[^"\s\\]*/g) ?? [];
+    expect(urls.length).toBeGreaterThan(0);
+    for (const u of urls)
+      expect(u).toMatch(/^http:\/\/content\.localhost\/c\/[^/]+\/.+\?dl=1$/);
   });
 
   it("create_upload returns a signed upload URL", async () => {

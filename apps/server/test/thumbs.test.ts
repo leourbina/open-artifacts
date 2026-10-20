@@ -9,6 +9,7 @@ import {
 } from "@oa/shared";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
+import { CAPTURE_HEADER, verifyCapture } from "../src/content/signing.js";
 import type { Env } from "../src/env.js";
 import { contentOrigin } from "../src/http/errors.js";
 import {
@@ -24,6 +25,7 @@ import {
   restoreVersion,
 } from "../src/services/artifacts.js";
 import {
+  captureContinue,
   captureThumbnail,
   THUMB,
   type ThumbResult,
@@ -429,6 +431,14 @@ describe("captureThumbnail", () => {
       expect(u.pathname).toMatch(
         new RegExp(`^/c/\\d+\\.[A-Za-z0-9_-]{43}/${id}/v1/__view$`),
       );
+      // The capture header rides the navigation's continueRequest only.
+      const cont = f.calls.filter((x) => x.method === "Fetch.continueRequest");
+      const hdrs = cont[0]?.params.headers as
+        | { name: string; value: string }[]
+        | undefined;
+      const cap = hdrs?.find((h) => h.name === CAPTURE_HEADER)?.value;
+      expect(await verifyCapture(env as Env, cap, id, 1, clock)).toBe(true);
+      expect(f.methods).not.toContain("Network.setExtraHTTPHeaders");
       expect(u.search).toBe("");
       // Short-lived: well under the viewer's LIMITS.signedUrlTtlSec.
       const exp = Number(/\/c\/(\d+)\./.exec(u.pathname)?.[1]);
@@ -812,6 +822,60 @@ describe("captureThumbnail", () => {
       "deferred",
     );
     expect(f.launched).toBe(1);
+  });
+});
+
+describe("capture header (#292)", () => {
+  const scope = "http://content.localhost/c/1.sig/AAAA/v1/";
+  const cap = { scope, value: "9.mac" };
+  const paused = (
+    url: string,
+    o: { frameId?: string; type?: string } = {},
+  ) => ({
+    requestId: "r1",
+    frameId: o.frameId ?? "T1",
+    resourceType: o.type ?? "Document",
+    request: { url, headers: { Accept: "text/html", "X-OA-Capture": "x" } },
+  });
+
+  it("goes only on main-frame documents under the signed prefix, originals kept", () => {
+    const ok = captureContinue(paused(`${scope}__view`), "T1", cap);
+    expect(ok.headers).toEqual([
+      { name: "Accept", value: "text/html" },
+      { name: CAPTURE_HEADER, value: "9.mac" },
+    ]);
+    // Nested entry redirect / in-artifact navigation under the same prefix.
+    expect(
+      captureContinue(paused(`${scope}sub/index.html`), "T1", cap).headers,
+    ).toBeDefined();
+    for (const p of [
+      paused(`${scope}a.js`, { type: "Script" }), // subresource
+      paused(`${scope}__view`, { frameId: "F2" }), // a frame
+      paused("https://evil.example/c/1.sig/AAAA/v1/__view"), // other origin
+      paused("http://content.localhost.evil.example/c/1.sig/AAAA/v1/"),
+      paused("http://content.localhost/c/1.sig/BBBB/v1/__view"), // other artifact
+      paused("http://content.localhost/c/1.sig/AAAA/v12/__view"), // other version
+    ])
+      expect(captureContinue(p, "T1", cap)).toEqual({ requestId: "r1" });
+  });
+
+  it("a capture never sends it to a frame's document or off the prefix", async () => {
+    const id = await pub("html", "x");
+    const f = fake({
+      requests: (u) => [
+        { url: u, nav: true, main: true },
+        {
+          url: `${new URL(u).origin}/p/${id}/v1/x.html`,
+          nav: true,
+          main: true,
+        },
+        { url: `${u.replace("__view", "frame.html")}`, nav: true, main: false },
+      ],
+    });
+    await capture(id, 1, f);
+    const cont = f.calls.filter((x) => x.method === "Fetch.continueRequest");
+    expect(cont.map((x) => !!x.params.headers)).toEqual([true, false, false]);
+    expect(f.methods).not.toContain("Network.setExtraHTTPHeaders");
   });
 });
 

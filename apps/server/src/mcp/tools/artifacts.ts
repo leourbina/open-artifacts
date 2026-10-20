@@ -4,7 +4,7 @@ import {
   type GetArtifactResult,
   viewerPath,
 } from "@oa/shared";
-import { publicPrefix, signContent } from "../../content/signing.js";
+import { signDownload } from "../../content/signing.js";
 import type { Env } from "../../env.js";
 import { ApiError, appOrigin, contentOrigin } from "../../http/errors.js";
 import {
@@ -35,19 +35,18 @@ const viewUrl = (env: Env, id: string) => appOrigin(env) + viewerPath(id);
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 const more = (cursor: string | null) => (cursor ? " (more: pass cursor)" : "");
 
-/** Content-host URL for one file: public prefix, else a signed 10-minute prefix. */
+/**
+ * Content-host download URL for one file, signed for 10 minutes: an explicit
+ * download (attachment), so a browser that opens it saves the file rather
+ * than rendering it.
+ */
 async function downloadUrl(
   env: Env,
   a: ArtifactSummary,
   v: number,
   path: string,
 ): Promise<string> {
-  const prefix =
-    a.visibility === "public"
-      ? publicPrefix(a.id, v)
-      : (await signContent(env, a.id, v)).prefix;
-  const p = path.split("/").map(encodeURIComponent).join("/");
-  return `${contentOrigin(env)}${prefix}${p}`;
+  return `${contentOrigin(env)}${(await signDownload(env, a.id, v, path)).path}`;
 }
 
 export function registerArtifactTools(server: McpServer, t: ToolEnv): void {
