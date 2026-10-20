@@ -374,9 +374,11 @@ export const HELP = `Usage: pnpm oa:setup [options]
   --var NAME=value  Keep a tunable Worker var across deploys (repeatable; NAME= clears).
                 Names: PUBLIC_HOME (artifact id), EMBED_ORIGINS (https://host[:port],...),
                 ANON_WRITES_PER_MIN (1-600), DATA_DOC_BYTES, DATA_DAILY_WRITES (> 0).
-                Order: the flag, saved state (state.vars), the live Worker's value
-                (so a dashboard-set value survives --upgrade; noted "kept live"),
-                then the template default. --check/--json report data.vars.
+                Precedence: the flag, then saved state (state.vars), then the live
+                Worker's value, then the template default. So a value set with --var or
+                saved in state wins over a dashboard edit; the dashboard value is kept
+                (noted "kept live") only when setup has none. Invalid saved or live
+                values are ignored with a note. --check/--json report data.vars.
   --token-links [--json]  Print each Cloudflare token setup needs (deploy, access,
                 analytics) with its permissions and a link that pre-fills the
                 dashboard form; account and zone come from --account-id/--app-host

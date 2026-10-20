@@ -3,7 +3,12 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { HELP, run } from "../src/index.ts";
 import { applyTunables, renderConfig } from "../src/steps/resources.ts";
-import { parseVarFlags, resolveVars, TUNABLES } from "../src/tunables.ts";
+import {
+  normalizeVar,
+  parseVarFlags,
+  resolveVars,
+  TUNABLES,
+} from "../src/tunables.ts";
 import { ROOT, STATE } from "./fakes.ts";
 import { HOSTS, world } from "./world.ts";
 
@@ -145,6 +150,84 @@ describe("resolveVars precedence", () => {
     });
     expect(r.values.PUBLIC_HOME).toBe("");
     expect(r.values).not.toHaveProperty("PLAN");
+  });
+});
+
+describe("EMBED_ORIGINS normalization", () => {
+  it("lowercases hosts, drops :443, dedupes, keeps order", () => {
+    expect(
+      parseVarFlags([
+        "EMBED_ORIGINS=https://A.Example.com:443,https://b.test:8443,https://a.example.com",
+      ]).EMBED_ORIGINS,
+    ).toBe("https://a.example.com,https://b.test:8443");
+    expect(normalizeVar("EMBED_ORIGINS", "https://x.test:0443")).toBe(
+      "https://x.test",
+    );
+    expect(normalizeVar("PUBLIC_HOME", "AbC")).toBe("AbC");
+  });
+
+  it("ports must be 1 to 65535", () => {
+    for (const bad of ["0", "65536", "99999"])
+      expect(err("EMBED_ORIGINS", `https://a.test:${bad}`), bad).toMatch(
+        /EMBED_ORIGINS/,
+      );
+    expect(err("EMBED_ORIGINS", "https://a.test:65535")).toBeUndefined();
+    expect(err("EMBED_ORIGINS", "https://a.test:1")).toBeUndefined();
+  });
+
+  it("saved and live values render normalized too", () => {
+    const r = resolveVars({
+      flags: {},
+      state: { EMBED_ORIGINS: "https://A.test:443,https://a.test" },
+      live: {},
+    });
+    expect(r.values.EMBED_ORIGINS).toBe("https://a.test");
+  });
+});
+
+describe("saved values are re-validated", () => {
+  it("drops an invalid saved value and falls back to live, then nothing", () => {
+    const r = resolveVars({
+      flags: {},
+      state: { ANON_WRITES_PER_MIN: "9999", DATA_DOC_BYTES: "x" },
+      live: { ANON_WRITES_PER_MIN: "60" },
+    });
+    expect(r.values).toEqual({ ANON_WRITES_PER_MIN: "60" });
+    expect(r.ignoredSaved.sort()).toEqual([
+      "ANON_WRITES_PER_MIN",
+      "DATA_DOC_BYTES",
+    ]);
+    expect(r.kept).toEqual(["ANON_WRITES_PER_MIN=60"]);
+  });
+
+  it("setup notes 'ignored invalid saved NAME'", async () => {
+    const w = world();
+    await run(HOSTS, w.deps, ROOT);
+    const st = w.state();
+    st.vars = { ANON_WRITES_PER_MIN: "0" };
+    w.files.set(STATE, JSON.stringify(st));
+    w.lines.length = 0;
+    expect(await run([...HOSTS, "--upgrade"], w.deps, ROOT)).toBe(0);
+    expect(line(w, "deploy").message).toContain(
+      "ignored invalid saved ANON_WRITES_PER_MIN",
+    );
+    expect(cfgVars(w).ANON_WRITES_PER_MIN ?? "").toBe("");
+  });
+});
+
+describe("unreadable live vars", () => {
+  it("warns naming the allowlisted vars not in state or flags", async () => {
+    const w2 = world({ settingsFail: true });
+    const code = await run(
+      [...HOSTS, "--plan", "free", "--var", "ANON_WRITES_PER_MIN=5"],
+      w2.deps,
+      ROOT,
+    );
+    const msg = (line(w2, "deploy") ?? {}).message ?? w2.lines.join("\n");
+    expect(msg).toContain("could not read live vars; dashboard-set");
+    expect(msg).toContain("PUBLIC_HOME");
+    expect(msg).not.toMatch(/dashboard-set[^;]*ANON_WRITES_PER_MIN/);
+    expect(code).toBeDefined();
   });
 });
 

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { State } from "../state.ts";
 import type { Ctx, Step } from "../step.ts";
-import { resolveVars } from "../tunables.ts";
+import { resolveVars, TUNABLES } from "../tunables.ts";
 import { repoVersion } from "../version-guard.ts";
 import { currentVersion, deployedVars, workerBindings } from "../worker.ts";
 import {
@@ -101,7 +101,7 @@ async function readVersion(ctx: Ctx, state: State) {
  */
 function settleVars(state: State, ctx: Ctx, live: Live) {
   const bindings = live === "unreadable" ? [] : (live ?? []);
-  const { values, kept, ignored } = resolveVars({
+  const { values, kept, ignored, ignoredSaved } = resolveVars({
     flags: ctx.opts.varFlags,
     state: state.vars ?? {},
     live: Object.fromEntries(
@@ -112,7 +112,18 @@ function settleVars(state: State, ctx: Ctx, live: Live) {
   });
   ctx.tunables = values;
   for (const k of kept) ctx.notes.push(`kept live ${k}`);
+  for (const k of ignoredSaved) ctx.notes.push(`ignored invalid saved ${k}`);
   for (const k of ignored) ctx.notes.push(`ignored invalid live ${k}`);
+  if (live === "unreadable") {
+    const at = Object.keys(TUNABLES).filter(
+      (k) =>
+        state.vars?.[k] === undefined && ctx.opts.varFlags[k] === undefined,
+    );
+    if (at.length)
+      ctx.notes.push(
+        `could not read live vars; dashboard-set ${at.join(", ")} may be overwritten`,
+      );
+  }
   if (!ctx.opts.check) {
     const file = join(ctx.root, CONFIG);
     const text = ctx.fs.read(file);

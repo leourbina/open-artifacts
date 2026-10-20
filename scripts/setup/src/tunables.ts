@@ -6,7 +6,13 @@ type Tunable = {
 };
 
 const ORIGIN =
-  /^https:\/\/([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]*[a-z0-9])?(:\d{1,5})?$/i;
+  /^https:\/\/((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)(?::(\d{1,5}))?$/i;
+const portOk = (p?: string) =>
+  p === undefined || (Number(p) >= 1 && Number(p) <= 65535);
+const originOk = (o: string) => {
+  const m = ORIGIN.exec(o);
+  return Boolean(m) && portOk(m?.[2]);
+};
 const int =
   (min: number, max = Number.MAX_SAFE_INTEGER) =>
   (v: string) => {
@@ -24,14 +30,29 @@ export const TUNABLES: Record<string, Tunable> = {
   },
   EMBED_ORIGINS: {
     check: (v) =>
-      v === "" || v.split(",").every((o) => ORIGIN.test(o))
+      v === "" || v.split(",").every(originOk)
         ? undefined
-        : "expected comma-separated https://host[:port] origins (no paths, wildcards or spaces)",
+        : "expected comma-separated https://host[:port] origins (port 1-65535; no paths, wildcards or spaces)",
   },
   ANON_WRITES_PER_MIN: { check: int(1, 600) },
   DATA_DOC_BYTES: { check: int(1) },
   DATA_DAILY_WRITES: { check: int(1) },
 };
+
+/** The canonical form of a valid value: EMBED_ORIGINS gets lowercase hosts, no :443, no duplicates. */
+export function normalizeVar(name: string, value: string): string {
+  if (name !== "EMBED_ORIGINS" || value === "") return value;
+  const seen = new Set<string>();
+  for (const o of value.split(",")) {
+    const m = ORIGIN.exec(o);
+    if (!m) return value;
+    const port = m[2] === undefined ? "" : String(Number(m[2]));
+    seen.add(
+      `https://${(m[1] as string).toLowerCase()}${port && port !== "443" ? `:${port}` : ""}`,
+    );
+  }
+  return [...seen].join(",");
+}
 
 /** `--var NAME=value` (repeatable; the last one for a name wins; `NAME=` clears). Throws on an unknown name or invalid value. */
 export function parseVarFlags(
@@ -54,7 +75,7 @@ export function parseVarFlags(
     const why = value === "" ? undefined : t.check(value);
     if (why)
       throw new Error(`invalid --var ${name}=${JSON.stringify(value)}: ${why}`);
-    out[name] = value;
+    out[name] = normalizeVar(name, value);
   }
   return out;
 }
@@ -63,27 +84,38 @@ export function parseVarFlags(
  * The vars to render: the flag, then saved state, then the live Worker's value,
  * else the template default. An empty flag or saved value clears. `kept` lists
  * the values that came only from the live Worker (set in the dashboard);
- * `ignored` lists live values that failed validation and were dropped.
+ * `ignored` / `ignoredSaved` list live / saved values that failed validation and were dropped.
  */
 export function resolveVars(o: {
   flags: Record<string, string>;
   state: Record<string, string>;
   live: Record<string, string | undefined>;
-}): { values: Record<string, string>; kept: string[]; ignored: string[] } {
+}): {
+  values: Record<string, string>;
+  kept: string[];
+  ignored: string[];
+  ignoredSaved: string[];
+} {
   const values: Record<string, string> = {};
   const kept: string[] = [];
   const ignored: string[] = [];
+  const ignoredSaved: string[] = [];
   for (const name of Object.keys(TUNABLES)) {
     let live = o.live[name]?.trim() || undefined;
     if (live && TUNABLES[name]?.check(live)) {
       ignored.push(name);
       live = undefined;
     }
-    const v = o.flags[name] ?? o.state[name] ?? live;
+    let saved: string | undefined = o.state[name];
+    if (saved && TUNABLES[name]?.check(saved)) {
+      ignoredSaved.push(name);
+      saved = undefined;
+    }
+    const v = o.flags[name] ?? saved ?? live;
     if (v === undefined) continue;
-    values[name] = v;
-    if (o.flags[name] === undefined && o.state[name] === undefined && live)
+    values[name] = normalizeVar(name, v);
+    if (o.flags[name] === undefined && saved === undefined && live)
       kept.push(`${name}=${live}`);
   }
-  return { values, kept, ignored };
+  return { values, kept, ignored, ignoredSaved };
 }
