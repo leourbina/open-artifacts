@@ -15,6 +15,11 @@
       "instance": "artifacts.leourbina.com",
       "id": "VP4aqRwupYFrv8xx",
       "visibility": "private"
+    },
+    "chess": {
+      "instance": "artifacts.leourbina.com",
+      "id": "gUhMi1YnZE2ydXLs",
+      "visibility": "public"
     }
   }
 }
