@@ -71,6 +71,9 @@ export function withCap<M extends Member>(m: M, cap: CapReason | null): M {
 /** The one way to build a Caller: carries the member's cap. */
 export function callerOf(m: Member | null | undefined): Caller {
   if (!m) return { kind: "anonymous" };
+  // Fail closed: a member that didn't come through getUser (a response-only
+  // toMember) has no known cap and must never become a caller.
+  if (!(CAP in m)) throw new Error("member without cap");
   return { kind: "user", user: m, cap: (m as CappedMember)[CAP] ?? null };
 }
 

@@ -223,3 +223,21 @@ describe("the cap travels with the member (M1)", () => {
     await notFound(patch(env, capped, ids.art as string, { title: "nope" }));
   });
 });
+
+describe("callerOf fails closed", () => {
+  it("a member without a cap (toMember) throws", async () => {
+    const { callerOf } = await import("../src/auth/authz.js");
+    const { toMember } = await import("../src/services/users.js");
+    const row = {
+      id: "u1",
+      email: "u1@x.com",
+      name: null,
+      displayName: null,
+      role: "member",
+      lastSeenAt: null,
+    };
+    expect(() => callerOf(toMember(row as never))).toThrow(
+      "member without cap",
+    );
+  });
+});
