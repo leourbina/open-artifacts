@@ -50,7 +50,7 @@ The agent follows the steps below. The only thing you do yourself is approve the
    - **2:** the last line is `action_required`. If its `message` asks you to pass a flag, such as `--account-id` when the login can reach several accounts, add that flag and run again; ask the user for the value if you don't know it. Otherwise relay the `message` to the user verbatim, with `data.url` if it has one, wait until they say it's done, and run the same command again. Setup saves its progress in `.openartifacts/state.json` and picks up where it stopped.
    - **1:** the last line is `error`. Show the user its `message` and stop. If the message names DNS, wait 2 minutes and rerun.
 
-   If the `access` step asks for an Access API token, the user creates one at its `data.url`. Save it with this line in your own terminal (in Claude Code, type `! ` then the line). Never paste a token into the chat. If `read` fails, the shell can't hide input, so use a real terminal.
+   If the `access` step asks for an Access API token, the user creates one at its `data.url`. Save it with this line in your own terminal (in Claude Code, type `! ` then the line). Never paste a token into the chat. The line works in bash and zsh. Setup never deletes the file; remove it when you no longer need it. If `read` fails, the shell can't hide input, so use a real terminal.
 
    ```sh
    bash -c 'set -e; umask 077; d="$HOME/.open-artifacts"; mkdir -p "$d"; chmod 700 "$d"; read -rsp "Cloudflare Access token (hidden, then Enter): " T; echo; [ -n "$T" ] || { echo "nothing entered; not saved"; exit 1; }; rm -f "$d/open-artifacts-access-token"; printf "%s" "$T" > "$d/open-artifacts-access-token"; chmod 600 "$d/open-artifacts-access-token"; echo "saved to $d/open-artifacts-access-token"'

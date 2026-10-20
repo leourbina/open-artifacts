@@ -412,12 +412,12 @@ describe("B16-5 review fixes", () => {
     expect(w.ops).not.toContain("put ACCESS_CLIENT_SECRET");
   });
 
-  it("fresh install without OA_TEAM_DOMAIN names Organizations Read and OA_TEAM_DOMAIN", async () => {
+  it("#4: fresh install without OA_TEAM_DOMAIN names Organizations Read and drops the OA_TEAM_DOMAIN alternative", async () => {
     const w = world({ org: "forbidden" });
     expect(await run(HOSTS, w.deps, ROOT)).toBe(2);
     const msg = ar(w, "access");
-    expect(msg).toContain("Organizations Read");
-    expect(msg).toContain("OA_TEAM_DOMAIN");
+    expect(msg).toContain("Organizations: Read");
+    expect(msg).not.toContain("OA_TEAM_DOMAIN");
   });
 
   it("empty apps under --upgrade stays action_required even with OA_TEAM_DOMAIN", async () => {

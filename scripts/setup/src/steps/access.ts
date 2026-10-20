@@ -247,7 +247,7 @@ async function lookupWithToken(ctx: Ctx, accountId: string) {
     ? `${saveFlow(ctx)}, or rerun interactively and paste it (kept in memory only)`
     : saveFlow(ctx);
   const url = accessUrl(ctx, accountId);
-  const create = `Create one (${accessLabels(ctx)}) at ${url}, then ${how}`;
+  const create = `Create one (${accessLabels(ctx)}) at ${url}, then ${how}; then rerun`;
   const lower = `${create[0].toLowerCase()}${create.slice(1)}`;
   const deny = (e: unknown) => {
     const x = e as { teamDomain?: boolean; noApps?: boolean };
@@ -257,8 +257,15 @@ async function lookupWithToken(ctx: Ctx, accountId: string) {
         : x.noApps
           ? ctx.opts.upgrade
             ? `This token cannot read the Access organization and sees no Access app named ${ctx.opts.name} (a token without Access scopes sees none). ${create}.`
-            : `This token cannot read the Access organization and sees no Access app named ${ctx.opts.name}. A fresh install needs a token with Access: Organizations Read, or OA_TEAM_DOMAIN=<team>.cloudflareaccess.com. ${create}.`
-          : `This token cannot read Access. ${create}. (OA_TEAM_DOMAIN can stand in for Organizations Read.)`,
+            : // A fresh install has no app to verify OA_TEAM_DOMAIN against, so don't offer it.
+              `A fresh install needs a Cloudflare Access token (${accessToken(
+                ctx,
+              )
+                .permissions.map((p) => p.label)
+                .join(
+                  ", ",
+                )}). Create it at ${url}, save it with the line from \`pnpm -s oa:setup --token-links --json\` (saveCommand), then rerun.`
+          : `This token cannot read Access. ${create}.${ctx.noState ? "" : " (OA_TEAM_DOMAIN can stand in for Organizations Read.)"}`,
       { url },
     );
   };
