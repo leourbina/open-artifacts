@@ -1,0 +1,40 @@
+name: Demo reset
+# Nightly reset of the public demo (demo.open-artifacts.com). Off until the repository
+# variable DEMO_ENABLED is 'true'. Uses the demo's own PAT, never a PROD secret.
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: demo
+  cancel-in-progress: false
+jobs:
+  reset:
+    if: ${{ github.ref == 'refs/heads/main' && vars.DEMO_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Write the PAT file
+        env:
+          DEMO_OA_TOKEN: ${{ secrets.DEMO_OA_TOKEN }}
+        run: |
+          umask 077
+          printf '%s' "$DEMO_OA_TOKEN" > "$RUNNER_TEMP/pat"
+      - name: Reset the demo from the seed
+        run: >-
+          node --experimental-strip-types scripts/demo/reset.ts
+          --base-url https://demo.open-artifacts.com
+          --token-file "$RUNNER_TEMP/pat" ops/demo/seed.json --apply
+      - name: Check healthz
+        run: curl -fsS --retry 5 --retry-delay 5 --retry-all-errors https://demo.open-artifacts.com/healthz
+      - name: Remove the PAT file
+        if: always()
+        run: rm -f "$RUNNER_TEMP/pat"
