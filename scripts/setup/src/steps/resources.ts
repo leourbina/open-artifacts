@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import type { State } from "../state.ts";
 import type { Ctx, Step } from "../step.ts";
+import { resolveVars } from "../tunables.ts";
 
 const TEMPLATE = "apps/server/wrangler.template.jsonc";
 const CONFIG = "apps/server/wrangler.jsonc";
@@ -54,6 +55,32 @@ export const stripComments = (text: string) =>
     (_, str) => str ?? "",
   );
 
+/**
+ * Sets the tunable vars in rendered config text: drops any line for those
+ * names (never the last var, so no trailing comma), then inserts each non-empty
+ * one after the `"vars": {` line. Empty values are simply not rendered.
+ */
+export function applyTunables(
+  text: string,
+  tunables: Record<string, string>,
+): string {
+  const names = Object.keys(tunables);
+  if (!names.length) return text;
+  return text
+    .split("\n")
+    .filter((l) => !names.some((k) => l.trim().startsWith(`"${k}":`)))
+    .join("\n")
+    .replace(/^(\s*"vars":\s*\{)$/m, (open) =>
+      names
+        .filter((k) => tunables[k] !== "")
+        .reduce(
+          (acc, k) =>
+            `${acc}\n    ${JSON.stringify(k)}: ${JSON.stringify(tunables[k])},`,
+          open,
+        ),
+    );
+}
+
 /** Fills `{{KEY}}` with JSON-escaped values, then asserts the result is valid production config. */
 export function renderConfig(
   template: string,
@@ -61,6 +88,7 @@ export function renderConfig(
   browser = true,
   email = false,
   plan: "free" | "paid" = "free",
+  tunables: Record<string, string> = {},
 ): string {
   // The template stays strict JSON (e2e fixtures JSON.parse it), so the
   // browser and email lines are matched by their keys and dropped when off.
@@ -78,12 +106,13 @@ export function renderConfig(
         throw new Error(`no value for template placeholder {{${k}}}`);
       return JSON.stringify(val).slice(1, -1);
     });
-  JSON.parse(stripComments(text));
+  const out = applyTunables(text, tunables);
+  JSON.parse(stripComments(out));
   if (!text.includes(`"PLAN": "${plan}"`))
     throw new Error(`rendered config must contain "PLAN": "${plan}"`);
   if (!text.includes('"ENVIRONMENT": "production"'))
     throw new Error('rendered config must contain "ENVIRONMENT": "production"');
-  return text;
+  return out;
 }
 
 const configVars = (s: State, ctx: Ctx) => ({
@@ -118,6 +147,12 @@ export function renderedConfig(state: State, ctx: Ctx): string {
     ctx.opts.browser,
     ctx.opts.email,
     ctx.opts.planVar,
+    ctx.tunables ??
+      resolveVars({
+        flags: ctx.opts.varFlags,
+        state: state.vars ?? {},
+        live: {},
+      }).values,
   );
 }
 

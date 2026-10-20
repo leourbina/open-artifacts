@@ -1,0 +1,307 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { HELP, run } from "../src/index.ts";
+import { renderConfig } from "../src/steps/resources.ts";
+import { parseVarFlags, resolveVars, TUNABLES } from "../src/tunables.ts";
+import { ROOT, STATE } from "./fakes.ts";
+import { HOSTS, world } from "./world.ts";
+
+const CONFIG = join(ROOT, "apps/server/wrangler.jsonc");
+const TEMPLATE = readFileSync(
+  join(import.meta.dirname, "../../../apps/server/wrangler.template.jsonc"),
+  "utf8",
+);
+const ID = "3mQ7vK2xN8pRtYw5";
+type W = ReturnType<typeof world>;
+const cfgVars = (w: W) => JSON.parse(w.files.get(CONFIG) ?? "").vars;
+const line = (w: W, s: string) =>
+  w.lines.map((l) => JSON.parse(l)).find((j) => j.step === s);
+const err = (name: string, value: string) => {
+  try {
+    parseVarFlags([`${name}=${value}`]);
+  } catch (e) {
+    return (e as Error).message;
+  }
+};
+
+describe("validators", () => {
+  it("the allowlist is exactly the five tunables", () => {
+    expect(Object.keys(TUNABLES).sort()).toEqual([
+      "ANON_WRITES_PER_MIN",
+      "DATA_DAILY_WRITES",
+      "DATA_DOC_BYTES",
+      "EMBED_ORIGINS",
+      "PUBLIC_HOME",
+    ]);
+  });
+
+  it("PUBLIC_HOME: an artifact id, or empty to clear", () => {
+    expect(err("PUBLIC_HOME", ID)).toBeUndefined();
+    expect(err("PUBLIC_HOME", "")).toBeUndefined();
+    expect(err("PUBLIC_HOME", "short")).toMatch(/PUBLIC_HOME/);
+    expect(err("PUBLIC_HOME", `${ID}0`)).toMatch(/PUBLIC_HOME/);
+  });
+
+  it("EMBED_ORIGINS: https origins only, no paths or wildcards", () => {
+    expect(err("EMBED_ORIGINS", "https://a.example.com")).toBeUndefined();
+    expect(
+      err("EMBED_ORIGINS", "https://a.example.com,https://b.test:8443"),
+    ).toBeUndefined();
+    expect(err("EMBED_ORIGINS", "")).toBeUndefined();
+    for (const bad of [
+      "http://a.example.com",
+      "https://a.example.com/",
+      "https://a.example.com/x",
+      "https://*.example.com",
+      "a.example.com",
+      "https://a.example.com,",
+      "https://a.example.com, https://b.test",
+      "https://a.example.com?x=1",
+      "https://user@a.example.com",
+    ])
+      expect(err("EMBED_ORIGINS", bad), bad).toMatch(/EMBED_ORIGINS/);
+  });
+
+  it("ANON_WRITES_PER_MIN: an integer 1 to 600", () => {
+    for (const ok of ["1", "120", "600"])
+      expect(err("ANON_WRITES_PER_MIN", ok)).toBeUndefined();
+    for (const bad of ["0", "601", "-1", "1.5", "abc", " 5", "1e2"])
+      expect(err("ANON_WRITES_PER_MIN", bad), bad).toMatch(
+        /ANON_WRITES_PER_MIN/,
+      );
+  });
+
+  it("DATA_DOC_BYTES and DATA_DAILY_WRITES: positive integers", () => {
+    for (const n of ["DATA_DOC_BYTES", "DATA_DAILY_WRITES"]) {
+      expect(err(n, "262144")).toBeUndefined();
+      for (const bad of ["0", "-3", "1.5", "x", "01x"])
+        expect(err(n, bad), `${n}=${bad}`).toMatch(new RegExp(n));
+    }
+  });
+
+  it("every var can be cleared with an empty value", () => {
+    for (const n of Object.keys(TUNABLES))
+      expect(err(n, ""), n).toBeUndefined();
+  });
+
+  it("an unknown name or a missing = is rejected, naming the allowed vars", () => {
+    expect(err("PLAN", "paid")).toMatch(/unknown.*PLAN.*PUBLIC_HOME/s);
+    expect(() => parseVarFlags(["PUBLIC_HOME"])).toThrow(/NAME=value/);
+    expect(() => parseVarFlags(["=x"])).toThrow();
+  });
+
+  it("parses repeated flags; the last one for a name wins; values may hold =", () => {
+    expect(
+      parseVarFlags(["ANON_WRITES_PER_MIN=5", "ANON_WRITES_PER_MIN=7"]),
+    ).toEqual({ ANON_WRITES_PER_MIN: "7" });
+    expect(parseVarFlags(undefined)).toEqual({});
+  });
+});
+
+describe("resolveVars precedence", () => {
+  const live = {
+    PUBLIC_HOME: ID,
+    ANON_WRITES_PER_MIN: "50",
+    DATA_DOC_BYTES: "1000",
+  };
+  it("flag, then state, then live, then nothing", () => {
+    const r = resolveVars({
+      flags: { PUBLIC_HOME: "" },
+      state: { ANON_WRITES_PER_MIN: "120" },
+      live,
+    });
+    expect(r.values).toEqual({
+      PUBLIC_HOME: "",
+      ANON_WRITES_PER_MIN: "120",
+      DATA_DOC_BYTES: "1000",
+    });
+  });
+
+  it("notes only the values kept from the live Worker", () => {
+    const r = resolveVars({
+      flags: { PUBLIC_HOME: "" },
+      state: { ANON_WRITES_PER_MIN: "120" },
+      live,
+    });
+    expect(r.kept).toEqual(["DATA_DOC_BYTES=1000"]);
+  });
+
+  it("an empty flag clears even a live and a saved value", () => {
+    const r = resolveVars({
+      flags: { PUBLIC_HOME: "" },
+      state: { PUBLIC_HOME: "abc" },
+      live,
+    });
+    expect(r.values.PUBLIC_HOME).toBe("");
+    expect(r.kept).not.toContain(`PUBLIC_HOME=${ID}`);
+  });
+
+  it("a saved empty value beats live; names outside the allowlist are ignored", () => {
+    const r = resolveVars({
+      flags: {},
+      state: { PUBLIC_HOME: "" },
+      live: { ...live, PLAN: "paid" },
+    });
+    expect(r.values.PUBLIC_HOME).toBe("");
+    expect(r.values).not.toHaveProperty("PLAN");
+  });
+});
+
+describe("renderConfig tunables", () => {
+  const vars = {
+    WORKER_NAME: "w",
+    APP_HOST: "a.example.com",
+    CONTENT_HOST: "c.example.com",
+    OWNER_EMAIL: "o@example.com",
+    D1_NAME: "d",
+    D1_ID: "d1",
+    R2_BUCKET: "r",
+    KV_ID: "k",
+    CF_ACCOUNT_ID: "acc",
+    ACCESS_TEAM_DOMAIN: "t",
+    ACCESS_CLIENT_ID: "c",
+  };
+  it("renders set values into vars as strings, as strict JSON", () => {
+    const text = renderConfig(TEMPLATE, vars, true, false, "free", {
+      PUBLIC_HOME: ID,
+      ANON_WRITES_PER_MIN: "120",
+    });
+    const v = JSON.parse(text).vars;
+    expect(v.PUBLIC_HOME).toBe(ID);
+    expect(v.ANON_WRITES_PER_MIN).toBe("120");
+    expect(v.ENVIRONMENT).toBe("production");
+  });
+
+  it("an empty value is not rendered, and no tunables leaves the template as is", () => {
+    const empty = JSON.parse(
+      renderConfig(TEMPLATE, vars, true, false, "free", { PUBLIC_HOME: "" }),
+    ).vars;
+    expect(empty.PUBLIC_HOME ?? "").toBe("");
+    expect(renderConfig(TEMPLATE, vars)).toBe(
+      renderConfig(TEMPLATE, vars, true, false, "free", {}),
+    );
+  });
+
+  it("replaces a template default instead of duplicating the key", () => {
+    const t = TEMPLATE.replace(
+      '"SERVER_THUMBNAILS": "on",',
+      '"SERVER_THUMBNAILS": "on",\n    "PUBLIC_HOME": "",',
+    );
+    const text = renderConfig(t, vars, true, false, "free", {
+      PUBLIC_HOME: ID,
+    });
+    expect(text.match(/"PUBLIC_HOME"/g)).toHaveLength(1);
+    expect(JSON.parse(text).vars.PUBLIC_HOME).toBe(ID);
+  });
+});
+
+describe("setup --var", () => {
+  it("--help documents --var", () => {
+    expect(HELP).toContain("--var");
+  });
+
+  it("renders the flag into the config, saves it in state.vars and reports it", async () => {
+    const w = world();
+    const code = await run(
+      [
+        ...HOSTS,
+        "--var",
+        `PUBLIC_HOME=${ID}`,
+        "--var",
+        "ANON_WRITES_PER_MIN=120",
+      ],
+      w.deps,
+      ROOT,
+    );
+    expect(code).toBe(0);
+    expect(cfgVars(w)).toMatchObject({
+      PUBLIC_HOME: ID,
+      ANON_WRITES_PER_MIN: "120",
+    });
+    expect(w.state().vars).toEqual({
+      PUBLIC_HOME: ID,
+      ANON_WRITES_PER_MIN: "120",
+    });
+    expect(line(w, "deploy").data.vars).toEqual({
+      PUBLIC_HOME: ID,
+      ANON_WRITES_PER_MIN: "120",
+    });
+  });
+
+  it("a later run without the flag keeps the saved value", async () => {
+    const w = world();
+    await run([...HOSTS, "--var", "ANON_WRITES_PER_MIN=120"], w.deps, ROOT);
+    expect(await run([...HOSTS, "--upgrade"], w.deps, ROOT)).toBe(0);
+    expect(cfgVars(w).ANON_WRITES_PER_MIN).toBe("120");
+  });
+
+  it("keeps a live (dashboard-set) value missing from state, with a note", async () => {
+    const w = world({
+      workerBindings: [{ type: "plain_text", name: "PUBLIC_HOME", text: ID }],
+    });
+    expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+    expect(cfgVars(w).PUBLIC_HOME).toBe(ID);
+    expect(line(w, "deploy").message).toContain(`kept live PUBLIC_HOME=${ID}`);
+    expect(w.state().vars).toEqual({ PUBLIC_HOME: ID });
+  });
+
+  it("the flag beats the live value, with no kept note", async () => {
+    const w = world({
+      workerBindings: [
+        { type: "plain_text", name: "ANON_WRITES_PER_MIN", text: "50" },
+      ],
+    });
+    await run([...HOSTS, "--var", "ANON_WRITES_PER_MIN=120"], w.deps, ROOT);
+    expect(cfgVars(w).ANON_WRITES_PER_MIN).toBe("120");
+    expect(line(w, "deploy").message).not.toContain("kept live");
+  });
+
+  it("--var NAME= clears a live value", async () => {
+    const w = world({
+      workerBindings: [{ type: "plain_text", name: "PUBLIC_HOME", text: ID }],
+    });
+    const code = await run([...HOSTS, "--var", "PUBLIC_HOME="], w.deps, ROOT);
+    expect(code).toBe(0);
+    expect(cfgVars(w).PUBLIC_HOME ?? "").toBe("");
+    expect(line(w, "deploy").data.vars).toBeUndefined();
+    expect(w.state().vars).toBeUndefined();
+  });
+
+  it("--var NAME= clears a saved value, and it stays cleared", async () => {
+    const w = world();
+    await run([...HOSTS, "--var", "ANON_WRITES_PER_MIN=120"], w.deps, ROOT);
+    const code = await run(
+      [...HOSTS, "--var", "ANON_WRITES_PER_MIN="],
+      w.deps,
+      ROOT,
+    );
+    expect(code).toBe(0);
+    expect(cfgVars(w).ANON_WRITES_PER_MIN ?? "").toBe("");
+    expect(w.state().vars).toBeUndefined();
+    expect(await run([...HOSTS, "--upgrade"], w.deps, ROOT)).toBe(0);
+    expect(cfgVars(w).ANON_WRITES_PER_MIN ?? "").toBe("");
+  });
+
+  it("an unknown name or invalid value exits 1 before anything runs", async () => {
+    for (const bad of [
+      "PLAN=paid",
+      "PUBLIC_HOME=nope",
+      "ANON_WRITES_PER_MIN=0",
+    ]) {
+      const w = world();
+      expect(await run([...HOSTS, "--var", bad], w.deps, ROOT)).toBe(1);
+      expect(w.lines.join("\n")).toContain(bad.split("=")[0]);
+      expect(w.ops).toEqual([]);
+      expect(w.files.has(STATE)).toBe(false);
+    }
+  });
+
+  it("--check reports the effective vars on the deploy line", async () => {
+    const w = world();
+    await run([...HOSTS, "--var", "ANON_WRITES_PER_MIN=120"], w.deps, ROOT);
+    w.lines.length = 0;
+    await run([...HOSTS, "--check", "--json"], w.deps, ROOT);
+    expect(line(w, "deploy").data.vars).toEqual({ ANON_WRITES_PER_MIN: "120" });
+  });
+});

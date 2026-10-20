@@ -44,6 +44,8 @@ export type Opts = {
   planFlag?: "free" | "paid";
   /** The PLAN var rendered into the Worker config, decided by prereqs; saved to state only after a successful deploy. */
   planVar: "free" | "paid";
+  /** --var NAME=value flags, validated. */
+  varFlags: Record<string, string>;
   /** False under --yes or --json: never prompt. */
   interactive: boolean;
   json: boolean;
@@ -76,6 +78,8 @@ export type Ctx = {
   ciTokenId?: string;
   /** The welcome artifact's view URL, when selftest published it this run. */
   welcomeUrl?: string;
+  /** The tunable vars to render (flag, state, live), settled by the deploy step. */
+  tunables?: Record<string, string>;
   /** Where appHost, contentHost and ownerEmail came from (upgrade by name only). */
   sources?: Sources;
   /** Set by prereqs: this checkout against the deployed version. */

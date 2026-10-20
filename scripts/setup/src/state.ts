@@ -36,6 +36,8 @@ export type State = {
   browser?: boolean;
   /** Workers plan read by prereqs: free, paid, or unknown (unreadable). */
   plan?: "free" | "paid" | "unknown";
+  /** Tunable Worker vars (PUBLIC_HOME, ...) last deployed; kept across --upgrade. */
+  vars?: Record<string, string>;
   /** The PLAN var last rendered into the Worker config (what /healthz reports). */
   planVar?: "free" | "paid";
   /** "Just you, or a team?": team turns the email step on. Absent means solo. */
