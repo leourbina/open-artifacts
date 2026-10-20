@@ -206,6 +206,37 @@ describe("decide: decision table rows", () => {
       "viewer",
     );
   });
+  it("restricted member: no team artifact outside their spaces", () => {
+    const team = { ...base.artifact, visibility: "team" as const };
+    expect(decide(with_({ cap: "restricted", artifact: team }))).toBeNull();
+    expect(
+      decide(
+        with_({
+          cap: "restricted",
+          artifact: personal("u_other", { visibility: "team" }),
+        }),
+      ),
+    ).toBeNull();
+  });
+  it("restricted member: viewer through their own space role or a share", () => {
+    const team = { ...base.artifact, visibility: "team" as const };
+    expect(
+      decide(with_({ cap: "restricted", artifact: team, spaceRole: "editor" })),
+    ).toBe("viewer");
+    expect(
+      decide(with_({ cap: "restricted", artifact: team, shareRole: "editor" })),
+    ).toBe("viewer");
+  });
+  it("team keeps today's meaning in shared spaces: every uncapped member", () => {
+    expect(
+      decide(
+        with_({
+          caller: { id: ME, orgRole: "member" },
+          artifact: { ...base.artifact, visibility: "team" },
+        }),
+      ),
+    ).toBe("viewer");
+  });
   it("cap never grants access", () => {
     expect(decide(with_({ cap: "guest" }))).toBeNull();
   });
@@ -242,6 +273,11 @@ describe("can", () => {
   ];
   it.each(table)("%s", (action, ...expected) => {
     expect(LEVELS.map((l) => can(l, action, ctx))).toEqual(expected);
+  });
+  it("visibility (widening): editor no, manager yes, owner yes", () => {
+    expect(can("editor", "visibility", ctx)).toBe(false);
+    expect(can("manager", "visibility", ctx)).toBe(true);
+    expect(can("owner", "visibility", { ...ctx, personal: true })).toBe(true);
   });
   it("transfer: personal owner only, never a manager", () => {
     expect(can("owner", "transfer", { ...ctx, personal: true })).toBe(true);

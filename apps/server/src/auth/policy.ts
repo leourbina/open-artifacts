@@ -151,7 +151,10 @@ function uncapped(i: DecisionInput): AccessLevel | null {
   const best = maxRole(spaceRole, caller ? i.shareRole : null);
   if (best === "editor") return "editor";
   if (best === "viewer") return "viewer";
-  if (a.visibility === "team" && caller && caller.orgRole !== "guest")
+  // `team` means every member (shared spaces too), but never capped callers:
+  // restricted members and capped guests see team artifacts only through a
+  // space role or a share.
+  if (a.visibility === "team" && caller && caller.orgRole !== "guest" && !i.cap)
     return "viewer";
   if (a.visibility === "public" && (personal || i.space.publicLinks))
     return "viewer";
