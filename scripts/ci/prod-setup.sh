@@ -38,6 +38,20 @@ case "$mode" in
   *) echo "usage: $0 <install|preflight|upgrade|cleanup|demo-install|demo-upgrade|demo-cleanup>" >&2; exit 2 ;;
 esac
 
+# Demo only: PUBLIC_HOME is the gallery artifact shown to signed-out visitors. Same rule as
+# isId in packages/shared/src/ids.ts (16 base58 chars). Setup keeps it across later upgrades.
+case "$mode" in
+  demo-install | demo-upgrade)
+    if [[ -n "${DEMO_PUBLIC_HOME:-}" ]]; then
+      if [[ ! "$DEMO_PUBLIC_HOME" =~ ^[1-9A-HJ-NP-Za-km-z]{16}$ ]]; then
+        echo '{"step":"demo-vars","status":"error","message":"DEMO_PUBLIC_HOME is not an artifact id"}'
+        exit 1
+      fi
+      mode_args+=(--var "PUBLIC_HOME=$DEMO_PUBLIC_HOME")
+    fi
+    ;;
+esac
+
 run_setup() {
   if pnpm -s oa:setup "${mode_args[@]}" --name "$PROD_NAME" --app-host "$PROD_APP_HOST" \
     --content-host "$PROD_CONTENT_HOST" --owner-email "$PROD_OWNER_EMAIL" 2>&1; then
