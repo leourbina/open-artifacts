@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.20.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.19.0...v0.20.0) (2026-10-21)
+
+
+### Features
+
+* **server:** authorize(action) over the decision table (P3 T3) ([#367](https://github.com/open-artifacts-ai/open-artifacts/issues/367)) ([92c35cc](https://github.com/open-artifacts-ai/open-artifacts/commit/92c35ccc108c555feee8d8fb06d9e39d6745ffc9))
+
+
+### Bug Fixes
+
+* **provision:** reserve auth, broker, login and sso slugs ([#397](https://github.com/open-artifacts-ai/open-artifacts/issues/397)) ([77707da](https://github.com/open-artifacts-ai/open-artifacts/commit/77707da5d4b7069b78b45c93881b9358b1491125))
+
 ## [0.19.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.18.0...v0.19.0) (2026-10-20)
 
 
