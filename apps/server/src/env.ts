@@ -82,7 +82,11 @@ export interface Env {
   GOOGLE_CLIENT_ID?: string;
   /** Hosted broker origin (https); set, it selects the broker transport. */
   AUTH_BROKER_URL?: string;
-  /** Hosted install id (broker registry key, rate-limit keys). */
+  /**
+   * Hosted install id (broker registry key, rate-limit keys). Opaque, not a
+   * secret; /healthz echoes the trimmed value as `installId`, absent when
+   * unset or empty. It proves routing, not authenticity: never an auth signal.
+   */
   INSTALL_ID?: string;
   TURNSTILE_SITE_KEY?: string;
   /** Code emails per UTC day (1..10000, default 200). */

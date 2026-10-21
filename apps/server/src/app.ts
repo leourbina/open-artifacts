@@ -81,9 +81,20 @@ export function createApp(
   app.onError((e) => toErrorResponse(e));
   app.notFound(() => toErrorResponse(new ApiError("not_found", "Not found")));
 
-  app.get("/healthz", (c) =>
-    c.json({ ok: true, plan: planOf(c.env.PLAN), version: VERSION }),
-  );
+  // installId last: exact-shape tests pin the key order. It is the trimmed
+  // INSTALL_ID (the same value authConfig uses for keys), and absent (not
+  // null) when unset or empty after trimming, so self-host output is
+  // unchanged. It proves routing, never authenticity: the control plane must
+  // not treat it as an authorization signal.
+  app.get("/healthz", (c) => {
+    const installId = c.env.INSTALL_ID?.trim();
+    return c.json({
+      ok: true,
+      plan: planOf(c.env.PLAN),
+      version: VERSION,
+      ...(installId ? { installId } : {}),
+    });
+  });
   app.get("/robots.txt", (c) => c.text(ROBOTS));
   // Public, outside SESSION_PATHS: no session read, no D1.
   app.get(SKILL_PATH, serveSkill);
