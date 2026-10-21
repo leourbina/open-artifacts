@@ -137,19 +137,17 @@ describe("prod-setup.sh", () => {
       expect(r.calls[1]).not.toContain("--check");
       expect(r.calls[2]).toContain("--ci --revoke-ci-tokens");
     });
-    it("install, preflight and upgrade pass --solo --browser --plan paid; cleanup does not", () => {
+    it("install, preflight and upgrade pass --team --yes-paid --email-domain mail.leourbina.com --browser --plan paid; cleanup does not", () => {
       // Prod is Workers Paid, but stateless CI reads the plan as unknown and
-      // --json never guesses team: both are explicit. No email flags yet.
+      // --json never guesses team: team, email and the plan are explicit.
       const r = sequence(false);
-      for (const c of r.calls.slice(0, 2))
-        expect(c).toContain("--solo --browser --plan paid");
-      expect(install([ok("a")]).calls[0]).toContain(
-        "--solo --browser --plan paid",
-      );
-      expect(r.calls[2]).not.toContain("--solo");
+      const SWITCH =
+        "--team --yes-paid --email-domain mail.leourbina.com --browser --plan paid";
+      for (const c of r.calls.slice(0, 2)) expect(c).toContain(SWITCH);
+      expect(install([ok("a")]).calls[0]).toContain(SWITCH);
+      expect(r.calls[2]).not.toContain("--team");
       expect(r.calls[2]).not.toContain("--browser");
-      for (const c of r.calls)
-        expect(c).not.toMatch(/--team|email-domain|yes-paid/);
+      for (const c of r.calls) expect(c).not.toContain("--solo");
     });
   });
 });
