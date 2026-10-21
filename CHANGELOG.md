@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.22.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.21.0...v0.22.0) (2026-10-21)
+
+
+### Features
+
+* **db:** identities, login_codes, users.session_epoch and status (0008, P2 T3) ([#368](https://github.com/open-artifacts-ai/open-artifacts/issues/368)) ([4eccd8e](https://github.com/open-artifacts-ai/open-artifacts/commit/4eccd8e3730972604ba2dd3bf418dd546be00a4a))
+* **provision:** env-prefixed names and the foreign-resource guard ([#402](https://github.com/open-artifacts-ai/open-artifacts/issues/402)) ([c1ef1fe](https://github.com/open-artifacts-ai/open-artifacts/commit/c1ef1fe85d17325f2040b16930f8fd393f12d9e1))
+
 ## [0.21.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.20.0...v0.21.0) (2026-10-21)
 
 
