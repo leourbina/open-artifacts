@@ -871,13 +871,13 @@ describe("prod and staging tokens never cross", () => {
       }
       const sh = readFileSync(join(root, "scripts/ci/prod-setup.sh"), "utf8");
       expect(sh).toContain(
-        "upgrade) mode_args=(--ci --upgrade \"${EMAIL_SWITCH[@]}\" --browser --plan paid)",
+        'upgrade) mode_args=(--ci --upgrade "${EMAIL_SWITCH[@]}" --browser --plan paid)',
       );
       expect(sh).toContain(
-        "install) mode_args=(--ci \"${EMAIL_SWITCH[@]}\" --browser --plan paid)",
+        'install) mode_args=(--ci "${EMAIL_SWITCH[@]}" --browser --plan paid)',
       );
       expect(sh).toContain(
-        "preflight) mode_args=(--check --strict --upgrade \"${EMAIL_SWITCH[@]}\" --browser --plan paid)",
+        'preflight) mode_args=(--check --strict --upgrade "${EMAIL_SWITCH[@]}" --browser --plan paid)',
       );
       expect(sh).toContain(
         "EMAIL_SWITCH=(--team --yes-paid --email-domain mail.leourbina.com)",
