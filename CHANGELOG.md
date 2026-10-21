@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.23.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.22.0...v0.23.0) (2026-10-21)
+
+
+### Features
+
+* **dashboard:** hosted P4 permissions from can (Task 3) ([#382](https://github.com/open-artifacts-ai/open-artifacts/issues/382)) ([a8ea6fb](https://github.com/open-artifacts-ai/open-artifacts/commit/a8ea6fbec5b46790bc5cd33f723d14f1e90a7a2a))
+* **dashboard:** restrict_admin and code_unavailable error copy ([#399](https://github.com/open-artifacts-ai/open-artifacts/issues/399)) ([2d3a7cb](https://github.com/open-artifacts-ai/open-artifacts/commit/2d3a7cbfde02947fedf1f1d6297c7f0b6d8031b2))
+* **library:** space filter in the URL and query (P4 Task 5) ([#416](https://github.com/open-artifacts-ai/open-artifacts/issues/416)) ([88b202c](https://github.com/open-artifacts-ai/open-artifacts/commit/88b202c8199490020bc3acd5491103d4179b409c))
+* **ops:** prod setup switches to team email (mail.leourbina.com) ([#409](https://github.com/open-artifacts-ai/open-artifacts/issues/409)) ([58dd2ac](https://github.com/open-artifacts-ai/open-artifacts/commit/58dd2ac9daf53a2a0dec505f2ef0a5844dfedc2c))
+* **server:** report installId on /healthz for hosted installs (P1 6b) ([#410](https://github.com/open-artifacts-ai/open-artifacts/issues/410)) ([b993fee](https://github.com/open-artifacts-ai/open-artifacts/commit/b993feeeb13cb7eb85ec7689f853d2ddc2a68f86))
+* **server:** RL_AUTH ratelimit binding for direct sign-in ([#385](https://github.com/open-artifacts-ai/open-artifacts/issues/385)) ([0ea22ce](https://github.com/open-artifacts-ai/open-artifacts/commit/0ea22ce82ea8a4e20ffd6c7f7286f8fee03f4b84))
+* **spaces:** spaces schema, personal space per user (P3 T1) ([#408](https://github.com/open-artifacts-ai/open-artifacts/issues/408)) ([b67aa9b](https://github.com/open-artifacts-ai/open-artifacts/commit/b67aa9b31155974f5ca953ea0d86368d658fa869))
+
+
+### Bug Fixes
+
+* **demo:** heartbeat seats, adopted writes and visible errors in the real-time demos ([#413](https://github.com/open-artifacts-ai/open-artifacts/issues/413)) ([63d8061](https://github.com/open-artifacts-ai/open-artifacts/commit/63d8061fedc472f1d3a30e17feb7bc71e114c080))
+* **setup:** run the full MCP selftest on CI upgrades ([#171](https://github.com/open-artifacts-ai/open-artifacts/issues/171)) ([#403](https://github.com/open-artifacts-ai/open-artifacts/issues/403)) ([f4e9862](https://github.com/open-artifacts-ai/open-artifacts/commit/f4e986249b14155a62b7124a707d7e3d1ea9d17a))
+
 ## [0.22.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.21.0...v0.22.0) (2026-10-21)
 
 
