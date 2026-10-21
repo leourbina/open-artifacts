@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.21.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.20.0...v0.21.0) (2026-10-21)
+
+
+### Features
+
+* **provision:** user Worker bundle and upload metadata ([#391](https://github.com/open-artifacts-ai/open-artifacts/issues/391)) ([b78cb5c](https://github.com/open-artifacts-ai/open-artifacts/commit/b78cb5c81eee2b82958e867580c9a361288e743e))
+* **server:** enforce route and tool policy before handlers (P3 T5) ([#374](https://github.com/open-artifacts-ai/open-artifacts/issues/374)) ([19c5de9](https://github.com/open-artifacts-ai/open-artifacts/commit/19c5de95a4d7c57b2ac3cd4f74830df986affb71))
+* **viewer:** live version updates (option B: safe swap, otherwise the chip) ([#349](https://github.com/open-artifacts-ai/open-artifacts/issues/349)) ([00c9d44](https://github.com/open-artifacts-ai/open-artifacts/commit/00c9d44ff69a8bab05726ad9b3493163160a87da))
+
 ## [0.20.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.19.0...v0.20.0) (2026-10-21)
 
 
