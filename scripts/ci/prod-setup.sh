@@ -22,12 +22,15 @@ esac
 summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
 mode="${1:-}"
 # Prod is Workers Paid, but stateless CI reads the plan as unknown and --json
-# never guesses team or the PLAN var: thumbnails (--browser), solo and
-# --plan paid are explicit. Email for prod comes later, in its own change.
+# never guesses team or the PLAN var: thumbnails (--browser), team, the sending
+# domain and --plan paid are explicit. mail.leourbina.com is onboarded for
+# Email Sending (MX, SPF, DKIM and DMARC in DNS); the first deploy after this
+# lands adds the EMAIL binding and EMAIL_FROM.
+EMAIL_SWITCH=(--team --yes-paid --email-domain mail.leourbina.com)
 case "$mode" in
-  install) mode_args=(--ci --solo --browser --plan paid) ;;
-  preflight) mode_args=(--check --strict --upgrade --solo --browser --plan paid) ;; # read-only; fails if absent or drifted
-  upgrade) mode_args=(--ci --upgrade --solo --browser --plan paid) ;;
+  install) mode_args=(--ci "${EMAIL_SWITCH[@]}" --browser --plan paid) ;;
+  preflight) mode_args=(--check --strict --upgrade "${EMAIL_SWITCH[@]}" --browser --plan paid) ;; # read-only; fails if absent or drifted
+  upgrade) mode_args=(--ci --upgrade "${EMAIL_SWITCH[@]}" --browser --plan paid) ;;
   cleanup) mode_args=(--ci --revoke-ci-tokens) ;;
   demo-install) mode_args=(--ci --json --solo --no-email --yes-paid) ;;
   demo-upgrade) mode_args=(--ci --json --upgrade --solo --no-email --yes-paid) ;;
