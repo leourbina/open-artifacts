@@ -7,7 +7,7 @@ import {
   viewerPath,
 } from "@oa/shared";
 import { and, asc, eq } from "drizzle-orm";
-import { requireAccess } from "../auth/authz.js";
+import { callerOf, requireAccess } from "../auth/authz.js";
 import { getDb } from "../db/client.js";
 import { normEmail } from "../db/email.js";
 import { shares } from "../db/schema.js";
@@ -32,7 +32,7 @@ const toShare = (r: {
 });
 
 const ownerOnly = (env: Env, user: Member, id: string) =>
-  requireAccess(env, { kind: "user", user }, id, "owner");
+  requireAccess(env, callerOf(user), id, "owner");
 
 export async function listShares(
   env: Env,

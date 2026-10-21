@@ -21,9 +21,11 @@ import {
   accessLevel,
   type Caller,
   caller,
+  canCtx,
   requireAccess,
   TEAM_ROLES,
 } from "../auth/authz.js";
+import { can, type PolicyAction } from "../auth/policy.js";
 import { cappedJson, readCapped } from "../http/body.js";
 import { ApiError, appOrigin } from "../http/errors.js";
 import type { AppEnv } from "../http/middleware.js";
@@ -71,7 +73,8 @@ type C = Context<AppEnv>;
 type Gate = { artifactId: string; actor: string; anon: AnonId | null };
 
 const NO_CAPS: Capabilities = { db: false, viewer: false, storage: false };
-function capsOf(json: string): Capabilities {
+/** Declared capabilities; malformed JSON means none (capability_denied, never 500). */
+export function capsOf(json: string): Capabilities {
   try {
     const r = CapabilitiesSchema.safeParse(JSON.parse(json));
     return r.success ? r.data : NO_CAPS;
@@ -166,6 +169,15 @@ async function anonLimit(c: C, key: string, what: string): Promise<void> {
  *   "anon:{short}", and the DO still rate limits by "ip:{key}". Reads never
  *   touch it; signed-in callers and other artifacts never get one.
  */
+/** gate() kinds as policy actions (1:1). Signed-in callers never get an anonId. */
+const GATE_ACTION = {
+  read: "data.read",
+  write: "data.write",
+  storage: "storage",
+  subscribe: "subscribe",
+  anonId: "anonId",
+} as const satisfies Record<string, PolicyAction>;
+
 async function gate(
   c: C,
   method: RuntimeMethod,
@@ -177,21 +189,31 @@ async function gate(
   // whatever cookie or token came with it (#295 does this app-wide).
   const who: Caller =
     c.req.header("x-oa-embed") === "1" ? { kind: "anonymous" } : caller(c);
-  const a = await requireAccess(c.env, who, artifactId, "viewer");
+  const r = await accessLevel(c.env, who, artifactId);
+  if (!r) throw new ApiError("not_found", "Not found");
+  const a = r.artifact;
+  // Each gate kind is one policy action; checked after the anonymous 401s
+  // below so their messages keep their order.
+  const allowed = () => can(r.level, GATE_ACTION[kind], canCtx(who, a));
   const cap = METHOD_CAPABILITY[method];
   if (!capsOf(a.capabilities)[cap])
     throw new ApiError(
       "capability_denied",
       `This artifact did not declare the "${cap}" capability`,
     );
-  if (who.kind === "user")
+  if (who.kind === "user") {
+    // Signed-in callers asking for an anonId get the route's own 401 below.
+    if (kind !== "anonId" && !allowed())
+      throw new ApiError("not_found", "Not found");
     return { artifactId, actor: `u:${who.user.id}`, anon: null };
+  }
   if (kind === "read") return { artifactId, actor: "", anon: null };
   const optIn = a.allowAnonymousWrites === 1;
   if (kind === "storage" || (kind === "write" && !optIn))
     throw new ApiError("unauthorized", "Sign in to save changes");
   if (kind === "anonId" && !optIn)
     throw new ApiError("unauthorized", "No anonymous id here");
+  if (!allowed()) throw new ApiError("not_found", "Not found");
   const anonId = async (): Promise<AnonId> => {
     const r = await resolveAnonId(
       c.env,

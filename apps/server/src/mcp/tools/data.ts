@@ -1,30 +1,38 @@
 import type { McpServer } from "@modelcontextprotocol/server";
-import { requireAccess } from "../../auth/authz.js";
+import { authorize, canCtx } from "../../auth/authz.js";
+import { can } from "../../auth/policy.js";
 import { ApiError } from "../../http/errors.js";
 import {
   type RuntimeStub,
   runtimeCall,
   runtimeStub,
 } from "../../runtime/do.js";
+import { capsOf } from "../../runtime/routes.js";
 import { guard, ok, type ToolEnv } from "../server.js";
 import { toolConfig } from "../tool-defs.js";
 
 /**
- * The artifact's runtime DO, after the access check, as on the REST runtime
- * routes (spec §6.7): viewer+ reads and writes (else 404). The owner may use
- * the store whether or not the artifact declares `db` (B14); anyone else needs
- * the capability (403 capability_denied, since access is already proven).
+ * The artifact's runtime DO after the access check, as on the REST runtime
+ * routes (spec §6.7): `can(level, "data.read" | "data.write")` (else 404),
+ * then the `db` capability (403 capability_denied, since access is already
+ * proven), except for the uncapped personal owner, so an agent can seed data
+ * before declaring db (B14, narrowed: `can(level, "data.seed")`). Capped
+ * callers can't write.
  */
-async function store(t: ToolEnv, id: string): Promise<RuntimeStub> {
-  const a = await requireAccess(t.env, t.caller, id, "viewer");
-  if (a.ownerId !== t.user.id) {
-    const caps = JSON.parse(a.capabilities) as { db?: boolean };
-    if (caps.db !== true)
-      throw new ApiError(
-        "capability_denied",
-        "This artifact does not declare the db capability",
-      );
-  }
+export async function store(
+  t: Pick<ToolEnv, "env" | "caller">,
+  id: string,
+  action: "data.read" | "data.write",
+): Promise<RuntimeStub> {
+  const { level, artifact: a } = await authorize(t.env, t.caller, id, action);
+  if (
+    !capsOf(a.capabilities).db &&
+    !can(level, "data.seed", canCtx(t.caller, a))
+  )
+    throw new ApiError(
+      "capability_denied",
+      "This artifact does not declare the db capability",
+    );
   return runtimeStub(t.env, id);
 }
 
@@ -39,7 +47,7 @@ export function registerDataTools(server: McpServer, t: ToolEnv): void {
     toolConfig("artifact_data_get"),
     (i) =>
       guard(async () => {
-        const s = await store(t, i.id);
+        const s = await store(t, i.id, "data.read");
         const doc = await runtimeCall(() => s.get(i.collection, i.docId));
         return ok(
           `${doc ? "Found" : "No"} document "${i.docId}" in ${where(i.id, i.collection)}`,
@@ -53,7 +61,7 @@ export function registerDataTools(server: McpServer, t: ToolEnv): void {
     toolConfig("artifact_data_list"),
     (i) =>
       guard(async () => {
-        const s = await store(t, i.id);
+        const s = await store(t, i.id, "data.read");
         const page = await runtimeCall(() =>
           s.list(i.collection, i.cursor, i.limit),
         );
@@ -69,7 +77,7 @@ export function registerDataTools(server: McpServer, t: ToolEnv): void {
     toolConfig("artifact_data_query"),
     (i) =>
       guard(async () => {
-        const s = await store(t, i.id);
+        const s = await store(t, i.id, "data.read");
         const page = await runtimeCall(() => s.query(i.collection, i.query));
         return ok(
           `${page.items.length} matching documents in ${where(i.id, i.collection)}${page.nextCursor ? " (more: pass cursor)" : ""}`,
@@ -83,7 +91,7 @@ export function registerDataTools(server: McpServer, t: ToolEnv): void {
     toolConfig("artifact_data_set"),
     (i) =>
       guard(async () => {
-        const s = await store(t, i.id);
+        const s = await store(t, i.id, "data.write");
         const doc = await runtimeCall(() =>
           s.set(i.collection, i.docId, i.data, actor),
         );
@@ -96,7 +104,7 @@ export function registerDataTools(server: McpServer, t: ToolEnv): void {
     toolConfig("artifact_data_update"),
     (i) =>
       guard(async () => {
-        const s = await store(t, i.id);
+        const s = await store(t, i.id, "data.write");
         const doc = await runtimeCall(() =>
           s.update(i.collection, i.docId, i.patch, actor),
         );
@@ -109,7 +117,7 @@ export function registerDataTools(server: McpServer, t: ToolEnv): void {
     toolConfig("artifact_data_delete"),
     (i) =>
       guard(async () => {
-        const s = await store(t, i.id);
+        const s = await store(t, i.id, "data.write");
         await runtimeCall(() => s.delete(i.collection, i.docId, actor));
         return ok(`Deleted "${i.docId}" from ${where(i.id, i.collection)}`, {
           id: i.id,

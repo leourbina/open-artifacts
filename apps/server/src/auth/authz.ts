@@ -1,4 +1,11 @@
-import type { AccessLevel, ListQuery, Member } from "@oa/shared";
+import {
+  type AccessLevel,
+  type CapReason,
+  type ListQuery,
+  type Member,
+  type Visibility,
+  VisibilitySchema,
+} from "@oa/shared";
 import {
   and,
   eq,
@@ -17,12 +24,25 @@ import { artifacts, shares } from "../db/schema.js";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
 import type { AppEnv } from "../http/middleware.js";
-import { TEAM_ROLES } from "./policy.js";
+import {
+  type CanCtx,
+  can,
+  decide,
+  type PolicyAction,
+  TEAM_ROLES,
+} from "./policy.js";
 
 /** Roles that see `team` artifacts (defined in policy.ts). */
 export { TEAM_ROLES };
 
-export type Caller = { kind: "user"; user: Member } | { kind: "anonymous" };
+export type Caller =
+  | {
+      kind: "user";
+      user: Member;
+      /** Guest or restricted cap (P2 authConfig, P3 restriction); absent = none. */
+      cap?: CapReason | null;
+    }
+  | { kind: "anonymous" };
 export type ArtifactRow = typeof artifacts.$inferSelect;
 
 // "manager" (hosted M1 contract) is never produced yet; P3 sets its semantics.
@@ -33,9 +53,32 @@ const RANK: Record<AccessLevel, number> = {
   owner: 3,
 };
 
+/**
+ * The caller's cap travels on the Member object itself, under a symbol key:
+ * copies (`{ ...user }`) keep it, JSON and zod output never show it. Whoever
+ * loads a user for a request (session, PAT, OAuth, MCP) sets it with
+ * `withCap`; every Caller is built by `callerOf`, never a literal.
+ */
+export const CAP: unique symbol = Symbol("oa.cap");
+export type CappedMember = Member & { [CAP]?: CapReason | null };
+
+/** Marks `m` with its cap (null = uncapped) and returns it. */
+export function withCap<M extends Member>(m: M, cap: CapReason | null): M {
+  (m as CappedMember)[CAP] = cap;
+  return m;
+}
+
+/** The one way to build a Caller: carries the member's cap. */
+export function callerOf(m: Member | null | undefined): Caller {
+  if (!m) return { kind: "anonymous" };
+  // Fail closed: a member that didn't come through getUser (a response-only
+  // toMember) has no known cap and must never become a caller.
+  if (!(CAP in m)) throw new Error("member without cap");
+  return { kind: "user", user: m, cap: (m as CappedMember)[CAP] ?? null };
+}
+
 export function caller(c: Context<AppEnv>): Caller {
-  const user = c.var.user;
-  return user ? { kind: "user", user } : { kind: "anonymous" };
+  return callerOf(c.var.user);
 }
 
 /** The signed-in user, or 401. */
@@ -48,10 +91,12 @@ export function requireUser(c: Context<AppEnv>): Member {
 const callerEmail = (u: Member) => normEmail(u.email);
 
 /**
- * Spec §6.5 rev 2, in order: deleted → null (unless the creator and
- * `allowDeleted`, for undelete); creator → owner; share for the caller's email →
- * share.role; team + owner/admin/member → viewer; public → viewer; else null.
- * Admins get no implicit access to private artifacts.
+ * Spec §6.5 rev 2 as P3's decision table (policy.ts `decide`). Until spaces
+ * exist (P3 T1) every artifact is in its creator's personal space, which
+ * reproduces today's rules exactly: deleted → null (unless the creator and
+ * `allowDeleted`, for undelete); creator → owner; share for the caller's
+ * email → share.role; team + owner/admin/member → viewer; public → viewer;
+ * else null. Admins get no implicit access to private artifacts.
  */
 export async function accessLevel(
   env: Env,
@@ -78,15 +123,61 @@ export async function accessLevel(
   const row = rows[0];
   if (!row) return null;
   const a = row.a;
-  const isCreator = user !== null && a.ownerId === user.id;
-  if (a.deletedAt != null && !(isCreator && opts.allowDeleted)) return null;
-  if (isCreator) return { level: "owner", artifact: a };
-  if (row.shareRole === "viewer" || row.shareRole === "editor")
-    return { level: row.shareRole, artifact: a };
-  if (a.visibility === "team" && user && TEAM_ROLES.includes(user.role))
-    return { level: "viewer", artifact: a };
-  if (a.visibility === "public") return { level: "viewer", artifact: a };
-  return null;
+  const level = decide({
+    caller: user ? { id: user.id, orgRole: user.role } : null,
+    cap: capOfCaller(c),
+    artifact: {
+      spaceId: a.ownerId,
+      spaceKind: "personal",
+      visibility: visibilityOf(a.visibility),
+      deleted: a.deletedAt != null,
+    },
+    space: { publicLinks: true, allMembersRole: null },
+    spaceRole: null,
+    shareRole:
+      row.shareRole === "viewer" || row.shareRole === "editor"
+        ? row.shareRole
+        : null,
+    allowDeleted: opts.allowDeleted === true,
+  });
+  return level ? { level, artifact: a } : null;
+}
+
+/** The caller's cap: the one source both decide() and can() read. */
+export const capOfCaller = (c: Caller): CapReason | null =>
+  c.kind === "user" ? (c.cap ?? null) : null;
+
+const VISIBILITIES: ReadonlySet<string> = new Set(VisibilitySchema.options);
+/** A stored visibility, or "private" when the row holds anything else (fail closed). */
+const visibilityOf = (v: string): Visibility =>
+  VISIBILITIES.has(v) ? (v as Visibility) : "private";
+
+/** The context `can` needs for one caller and artifact. */
+export function canCtx(c: Caller, a: ArtifactRow): CanCtx {
+  return {
+    cap: capOfCaller(c),
+    personal: true,
+    anonymous: c.kind !== "user",
+    allowAnonymousWrites: a.allowAnonymousWrites === 1,
+  };
+}
+
+/**
+ * The artifact and the caller's level if they may take `action`; otherwise
+ * 404 (never 403). The one check for owner-or-manager actions: never compare
+ * levels for those, ask `can` (a manager fails requireAccess("owner")).
+ */
+export async function authorize(
+  env: Env,
+  c: Caller,
+  artifactId: string,
+  action: PolicyAction,
+  opts: { allowDeleted?: boolean } = {},
+): Promise<{ level: AccessLevel; artifact: ArtifactRow }> {
+  const r = await accessLevel(env, c, artifactId, opts);
+  if (!r || !can(r.level, action, canCtx(c, r.artifact)))
+    throw new ApiError("not_found", "Not found");
+  return r;
 }
 
 /**

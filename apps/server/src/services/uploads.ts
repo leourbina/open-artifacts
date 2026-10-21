@@ -9,7 +9,7 @@ import {
   type UploadCreated,
   type UploadCreateInput,
 } from "@oa/shared";
-import { requireAccess } from "../auth/authz.js";
+import { callerOf, requireAccess } from "../auth/authz.js";
 import type { Env } from "../env.js";
 import { ApiError, appOrigin } from "../http/errors.js";
 import { hmacSign, hmacVerify } from "../util/crypto.js";
@@ -84,8 +84,7 @@ export async function createUpload(
       .prepare("select 1 from artifacts where id = ?")
       .bind(artifactId)
       .first();
-    if (exists)
-      await requireAccess(env, { kind: "user", user }, artifactId, "editor");
+    if (exists) await requireAccess(env, callerOf(user), artifactId, "editor");
     else {
       const r = await db
         .prepare(

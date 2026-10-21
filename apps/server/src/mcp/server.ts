@@ -9,7 +9,7 @@ import {
   QUOTA_MESSAGE,
 } from "@oa/shared";
 import { createMcpHandler } from "agents/mcp/server";
-import type { Caller } from "../auth/authz.js";
+import { type Caller, callerOf } from "../auth/authz.js";
 import type { Env } from "../env.js";
 import {
   ApiError,
@@ -107,7 +107,7 @@ export function createServer(ctx: McpContext): McpServer {
   };
   const t: ToolEnv = {
     ...ctx,
-    caller: { kind: "user", user: ctx.user },
+    caller: callerOf(ctx.user),
     agentNow,
   };
   registerArtifactTools(server, t);

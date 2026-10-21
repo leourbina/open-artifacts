@@ -10,7 +10,7 @@ import {
   R,
 } from "@oa/shared";
 import type { Context } from "hono";
-import { caller, requireAccess, requireUser } from "../auth/authz.js";
+import { caller, callerOf, requireAccess, requireUser } from "../auth/authz.js";
 import { publicPrefix, signContent } from "../content/signing.js";
 import { readCapped } from "../http/body.js";
 import { ApiError, contentOrigin } from "../http/errors.js";
@@ -131,7 +131,7 @@ export function mountArtifacts(app: AppType): void {
     const q = ListQuerySchema.safeParse(c.req.query());
     if (!q.success)
       throw new ApiError("bad_request", "Invalid query", q.error.issues);
-    return c.json(await list(c.env, { kind: "user", user }, q.data));
+    return c.json(await list(c.env, callerOf(user), q.data));
   });
 
   app.get(ARTIFACT, async (c) =>
@@ -253,7 +253,7 @@ export function mountArtifacts(app: AppType): void {
     const buf = await readCapped(c, LIMITS.extractedTextBytes);
     await putExtractedText(
       c.env,
-      { kind: "user", user },
+      callerOf(user),
       id,
       v,
       utf8Decoder.decode(buf),
