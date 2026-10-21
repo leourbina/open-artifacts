@@ -1,5 +1,5 @@
 // M1 fixes without a reviewer test: document.title, quota at /me, Full screen, session expiry, paging.
-import { AUTH, QUOTA_MESSAGE, type VersionInfo } from "@oa/shared";
+import { AUTH, MeSchema, QUOTA_MESSAGE, R, type VersionInfo } from "@oa/shared";
 import { fixtures } from "@oa/shared/mocks";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
@@ -13,6 +13,8 @@ import {
 } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { describe, expect, it, vi } from "vitest";
+import { api } from "../src/api/client";
+import { qk } from "../src/api/queries";
 import { makeQueryClient, QUOTA_KEY } from "../src/api/queryClient";
 import { RedirectProvider } from "../src/auth/redirect";
 import { createAppRouter } from "../src/router";
@@ -32,10 +34,10 @@ installHarness();
 const id = (t: string) =>
   (arts.find((a) => a.title === t) as { id: string }).id;
 
-const mount = (path: string) => {
+const mount = (path: string, client = makeQueryClient()) => {
   const redirect = vi.fn();
   render(
-    <QueryClientProvider client={makeQueryClient()}>
+    <QueryClientProvider client={client}>
       <RedirectProvider value={redirect}>
         <RouterProvider
           router={createAppRouter(
@@ -49,32 +51,41 @@ const mount = (path: string) => {
 };
 const err = (code: string, status: number) => () =>
   HttpResponse.json({ error: { code, message: code } }, { status });
+/** Mounts with /me already fetched, so the title never races the instance name. */
+const mountSignedIn = async (path: string) => {
+  const client = makeQueryClient();
+  await client.fetchQuery({
+    queryKey: qk.me,
+    queryFn: () => api.get(R.me, MeSchema),
+  });
+  return mount(path, client);
+};
 const titled = (t: string) =>
   waitFor(() => expect(document.title).toBe(`${t} · Acme Artifacts`));
 
 describe("M1 document.title per route", () => {
   it("library", async () => {
-    mount("/");
+    await mountSignedIn("/");
     await titled("Library");
   });
 
   it("search", async () => {
-    mount("/search?q=notes");
+    await mountSignedIn("/search?q=notes");
     await titled("Search");
   });
 
   it("not found", async () => {
-    mount("/nope");
+    await mountSignedIn("/nope");
     await titled("Not found");
   });
 
   it("viewer uses the artifact title once loaded", async () => {
-    mount(`/a/${id("Landing page")}`);
+    await mountSignedIn(`/a/${id("Landing page")}`);
     await titled("Landing page");
   });
 
   it("diff names the comparison", async () => {
-    mount(`/a/${id("Landing page")}/diff/1/2`);
+    await mountSignedIn(`/a/${id("Landing page")}/diff/1/2`);
     await titled("Landing page v1 → v2");
   });
 
