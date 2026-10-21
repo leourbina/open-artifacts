@@ -37,6 +37,7 @@ export function ownerStatements(
   now: number,
   label = "setup",
   cleanStale = false,
+  mode: "install" | "upgrade" = "install",
 ) {
   const name = email.split("@")[0] || email;
   const e = lit(email);
@@ -47,13 +48,32 @@ export function ownerStatements(
         revokeCiSql(email, now),
       ]
     : [];
-  const [upsert, ...rest] = [
-    `INSERT INTO users (id, email, name, role, created_at) VALUES (${lit(base58(16))}, ${e}, ${lit(name)}, 'owner', ${now}) ON CONFLICT(email) DO UPDATE SET role = 'owner'`,
+  // --upgrade never moves ownership: a mistyped --owner-email must not demote
+  // the real owner during a routine release. The caller checks these first.
+  const upsert =
+    mode === "upgrade"
+      ? `INSERT INTO users (id, email, name, role, created_at) VALUES (${lit(base58(16))}, ${e}, ${lit(name)}, 'owner', ${now}) ON CONFLICT(email) DO NOTHING`
+      : `INSERT INTO users (id, email, name, role, created_at) VALUES (${lit(base58(16))}, ${e}, ${lit(name)}, 'owner', ${now}) ON CONFLICT(email) DO UPDATE SET role = 'owner'`;
+  const [upsertOrInsert, ...rest] = [
+    upsert,
     `INSERT INTO tokens (id, user_id, label, token_hash, created_at) SELECT ${lit(tokenId)}, id, ${lit(label)}, ${lit(hash)}, ${now} FROM users WHERE email = ${e} AND (SELECT count(*) FROM tokens WHERE user_id = users.id AND revoked_at IS NULL) < ${MAX_ACTIVE}`,
     `SELECT id FROM tokens WHERE id = ${lit(tokenId)} AND revoked_at IS NULL`,
   ];
-  return [upsert, ...stale, ...rest] as string[];
+  return [upsertOrInsert, ...stale, ...rest] as string[];
 }
+
+/**
+ * --upgrade's read-only pre-check, before any write: who else owns the
+ * install, and does the configured owner's row exist. Returns statement
+ * results in that order.
+ */
+export const ownerUpgradeCheckSql = (email: string) => {
+  const e = lit(email);
+  return [
+    `SELECT email FROM users WHERE role = 'owner' AND email <> ${e}`,
+    `SELECT id FROM users WHERE email = ${e}`,
+  ].join("; ");
+};
 
 /** Revokes the owner's other live tokens with this label, once the new row exists. */
 export const revokePriorSql = (
@@ -197,18 +217,49 @@ export const ownerToken: Step = {
     };
     const email = ctx.opts.ownerEmail;
     const label = ci ? "setup-ci" : "setup";
+    // --upgrade: read-only ownership check, before any write. Never demote and
+    // never set role='owner' here, so a mistyped owner email can't move
+    // ownership during a routine release.
+    if (ctx.opts.upgrade) {
+      let pre: D1Result[];
+      try {
+        pre = await d1Raw(ctx, `${ownerUpgradeCheckSql(email)};`);
+      } catch {
+        untrack();
+        return uncertain();
+      }
+      if ((pre[0]?.results ?? []).length) {
+        untrack();
+        throw new Error(
+          "setup --upgrade won't change ownership: this install already has a different owner. Check the owner email, or transfer ownership on purpose with a non-upgrade run using --new-owner-token",
+        );
+      }
+      if (!(pre[1]?.results ?? []).length) {
+        untrack();
+        throw new Error(
+          "setup --upgrade won't change ownership: the configured owner has no user row in this install. Check the owner email, or run setup without --upgrade to create the owner",
+        );
+      }
+    }
     let res: D1Result[];
     try {
       res = await d1Raw(
         ctx,
-        ownerSql(email, id, tokenHash(token), Date.now(), label, ci),
+        ownerSql(
+          email,
+          id,
+          tokenHash(token),
+          Date.now(),
+          label,
+          ci,
+          ctx.opts.upgrade ? "upgrade" : "install",
+        ),
       );
     } catch {
       return uncertain();
     }
-    const o = ci ? 1 : 0; // --ci has one extra statement (stale cleanup) before the insert
-    if (res.length < 3 + o) return uncertain();
-    const [insert, verify] = [res[1 + o], res[2 + o]];
+    if (res.length < 3) return uncertain();
+    const [insert, verify] = [res[res.length - 2], res[res.length - 1]];
     if (!insert?.meta?.changes) {
       untrack();
       return {
@@ -218,7 +269,7 @@ export const ownerToken: Step = {
     }
     if (!verify?.results?.length)
       throw new Error(
-        `token row ${id} missing after the insert; is ${email} in users? rerun setup`,
+        `token row ${id} missing after the insert; is the owner in users? rerun setup`,
       );
     ctx.pat = token;
     // The new token goes to its file BEFORE the old one is revoked, so a failed
@@ -268,12 +319,19 @@ export const ownerToken: Step = {
       failed = `the new token is saved to ${tokenFile ?? "memory"}, but the old token couldn't be revoked; rerun setup, or revoke it in the dashboard (${DASHBOARD})`;
       if (!ci) state.pendingRevokeTokenId = id;
     }
-    try {
-      const dem = await d1Raw(ctx, `${demoteStatements(email).join("; ")};`);
-      for (const o of (dem[0]?.results ?? []) as { email?: string }[])
-        ctx.notes.push(`previous owner ${o.email} demoted to admin`);
-    } catch {
-      failed ??= `the new token is saved to ${tokenFile ?? "memory"}, but the previous owner couldn't be demoted; rerun with --new-owner-token`;
+    // --upgrade never demotes (see the pre-check above).
+    if (!ctx.opts.upgrade) {
+      try {
+        const dem = await d1Raw(ctx, `${demoteStatements(email).join("; ")};`);
+        const demoted = dem[0]?.results ?? [];
+        // A count, not the emails: CI logs may be public.
+        if (demoted.length)
+          ctx.notes.push(
+            `demoted ${demoted.length} previous owner${demoted.length === 1 ? "" : "s"} to admin`,
+          );
+      } catch {
+        failed ??= `the new token is saved to ${tokenFile ?? "memory"}, but the previous owner couldn't be demoted; rerun with --new-owner-token`;
+      }
     }
     if (failed && !ci)
       return {

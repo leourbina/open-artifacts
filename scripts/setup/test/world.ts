@@ -74,6 +74,12 @@ type World = {
   healthPlanFirst?: (string | undefined)[];
   /** /healthz reports this plan instead of the deployed PLAN var. */
   healthPlan?: string;
+  /** Artifacts already on the install (welcome lookup tests). */
+  existingArtifacts?: { id: string; title: string }[];
+  /** The content get_artifact answers with (defaults to the last publish). */
+  welcomeContent?: string;
+  /** tools/list omits search_artifacts. */
+  noSearchTool?: boolean;
   /** tools/list omits publish_artifact. */
   noPublishTool?: boolean;
   /** The token INSERT fails, or silently writes nothing. */
@@ -239,7 +245,9 @@ export function world(w: World = {}) {
   let dryRuns = 0;
   /** The content of the last publish (kept when a test clears mcpCalls). */
   let lastPublished = "";
-  const pubs: { id: string; title: string }[] = [];
+  const pubs: { id: string; title: string }[] = [
+    ...(w.existingArtifacts ?? []),
+  ];
   const deleted = [...(w.deletedArtifacts ?? [])];
   /** Every mutation, in order. `values` holds every secret value seen. */
   const ops: string[] = [];
@@ -324,13 +332,18 @@ export function world(w: World = {}) {
         )
       ) {
         const email = unq(m[2]).toLowerCase();
-        const user = db.users.find((x) => x.email === email) ?? {
-          id: m[1],
-          email,
-          role: "owner",
-        };
-        if (!db.users.includes(user)) db.users.push(user);
-        user.role = "owner";
+        const existing = db.users.find((x) => x.email === email);
+        // ON CONFLICT(email) DO NOTHING (--upgrade) leaves the row untouched.
+        if (st.includes("ON CONFLICT(email) DO NOTHING")) {
+          if (!existing) db.users.push({ id: m[1], email, role: "owner" });
+        } else {
+          const user = existing ?? { id: m[1], email, role: "owner" };
+          if (!db.users.includes(user)) db.users.push(user);
+          user.role = "owner";
+        }
+      } else if (is(/^SELECT id FROM users WHERE email = '((?:[^']|'')*)'$/)) {
+        const email = unq(m[1]).toLowerCase();
+        results = db.users.filter((u) => u.email === email);
       } else if (
         is(
           /^UPDATE tokens SET revoked_at = (\d+) WHERE user_id = \(SELECT id FROM users WHERE email = '((?:[^']|'')*)'\) AND label = 'setup-ci' AND revoked_at IS NULL$/,
@@ -558,19 +571,52 @@ export function world(w: World = {}) {
               tools: [
                 ...(w.noPublishTool ? [] : [{ name: "publish_artifact" }]),
                 { name: "get_artifact" },
+                ...(w.noSearchTool ? [] : [{ name: "search_artifacts" }]),
                 { name: "list_artifacts" },
               ],
             });
           if (body.method === "tools/call") {
             mcpCalls.push(body.params);
-            if (body.params.name === "list_artifacts")
-              return reply(
-                { structuredContent: { items: pubs, nextCursor: null } },
-                true,
-              );
             const prev = body.params.arguments.id;
             const err = (text: string) =>
               reply({ isError: true, content: [{ type: "text", text }] }, true);
+            if (body.params.name === "list_artifacts") {
+              const from = Number(body.params.arguments.cursor ?? 0);
+              const limit = Number(body.params.arguments.limit ?? 25);
+              const items = pubs.slice(from, from + limit);
+              const next =
+                from + limit < pubs.length ? `${from + limit}` : null;
+              return reply(
+                { structuredContent: { items, nextCursor: next } },
+                true,
+              );
+            }
+            if (body.params.name === "search_artifacts") {
+              const q = String(body.params.arguments.q ?? "").toLowerCase();
+              const items = pubs.filter((x) =>
+                x.title.toLowerCase().includes(q),
+              );
+              return reply(
+                { structuredContent: { items, nextCursor: null } },
+                true,
+              );
+            }
+            if (body.params.name === "get_artifact") {
+              const a = pubs.find((x) => x.id === prev);
+              if (!a || deleted.includes(a.id))
+                return err("not_found: Artifact not found");
+              return reply(
+                {
+                  structuredContent: {
+                    id: a.id,
+                    title: a.title,
+                    version: 1,
+                    content: w.welcomeContent ?? lastPublished,
+                  },
+                },
+                true,
+              );
+            }
             if (w.publishError) return err(w.publishError);
             if (prev && deleted.includes(prev))
               return err("not_found: Artifact not found");
@@ -592,7 +638,7 @@ export function world(w: World = {}) {
           }
         }
         const cu = u.pathname.match(
-          /^\/api\/v1\/artifacts\/(\w+)\/content-url$/,
+          /^\/api\/v1\/artifacts\/([\w-]+)\/content-url$/,
         );
         if (cu) {
           hits.push("GET content-url");
