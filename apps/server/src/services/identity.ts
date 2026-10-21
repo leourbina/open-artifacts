@@ -1,6 +1,7 @@
 import { inDomains, normalizeEmail } from "@oa/auth-core";
 import type { Member, Role } from "@oa/shared";
 import type { AuthConfig } from "../auth/config.js";
+import { isGuestRole, promotedRole } from "../auth/policy.js";
 import type { VerifiedIdentity } from "../auth/providers/types.js";
 import { stmt } from "../db/stmt.js";
 import type { Env } from "../env.js";
@@ -50,11 +51,7 @@ async function touch(
 ): Promise<Member> {
   const owner = normalizeEmail(env.OWNER_EMAIL ?? "");
   const role =
-    owner && row.email === owner
-      ? "owner"
-      : row.role === "guest"
-        ? "member"
-        : row.role;
+    owner && row.email === owner ? "owner" : promotedRole(row.role as Role);
   const out = await stmt(
     env.DB,
     `update users set last_seen_at = ?1, name = coalesce(?2, name), role = ?3 where id = ?4
@@ -188,7 +185,7 @@ export async function codeEligibility(
       : { kind: "none" };
   }
   if (row)
-    return row.role === "guest"
+    return isGuestRole(row.role)
       ? { kind: "guest", userId: row.id }
       : { kind: "none" };
   const shared = await stmt(env.DB, SHARED).bind(email).first();
