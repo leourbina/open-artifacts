@@ -18,7 +18,18 @@ describe("provision names", () => {
     });
   });
   it("rejects reserved, uppercase, dotted and too-long slugs", () => {
-    for (const s of ["www", "Acme", "a.b", "-a", "a-", "x".repeat(33)])
+    for (const s of [
+      "www",
+      "auth",
+      "broker",
+      "login",
+      "sso",
+      "Acme",
+      "a.b",
+      "-a",
+      "a-",
+      "x".repeat(33),
+    ])
       expect(() => hosts(s, D)).toThrow(/slug/);
     expect(hosts("finqore", D)).toEqual({
       appHost: "finqore.app.test",
