@@ -11,6 +11,7 @@ import {
 } from "react";
 import { ApiClientError } from "../api/client";
 import { useArtifact, useVersionInfo } from "../api/queries";
+import { useCan } from "../auth/permissions";
 import { useLoginRedirect } from "../auth/redirect";
 import { useMe } from "../auth/useMe";
 import { isEmbed } from "../embed";
@@ -25,6 +26,7 @@ import { frameLoad, SANDBOX, safeContentUrl } from "./frame";
 import { FullLive, GoneBanner, LiveAnnouncer, TitleLive } from "./LiveChip";
 import { createNavigator } from "./navigate";
 import { isPanelTab, type PanelTab, SidePanel } from "./panels/SidePanel";
+import { ReadOnlyNotice } from "./ReadOnlyNotice";
 import { RenavNotice } from "./RenavNotice";
 import { SlowNotice } from "./SlowNotice";
 import { TitleBar } from "./TitleBar";
@@ -176,6 +178,8 @@ function Viewer({
   // that frame is another navigation and brings a dismissed notice back.
   const caps = artifact.capabilities;
   const live = caps.db || caps.viewer || caps.storage;
+  const can = useCan(artifact);
+  const readOnly = (caps.db || caps.storage) && !can.dataWrite;
   const renavigated = useRef(false);
   const [renav, setRenav] = useState(false);
   const onRenavigated = useCallback(() => {
@@ -322,6 +326,7 @@ function Viewer({
         ) : null}
         {url && (
           <div className="oa-vmain">
+            {readOnly && !chromeless && <ReadOnlyNotice />}
             {renav && (
               <RenavNotice
                 onReload={reload}

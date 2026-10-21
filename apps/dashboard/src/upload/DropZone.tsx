@@ -32,7 +32,7 @@ export function DropZone({
   allowed,
   button = false,
 }: {
-  /** Whether this user may publish here (signed in, not a guest). */
+  /** Whether this user may publish here (signed in, not a guest, not capped). */
   allowed: boolean;
   button?: boolean;
 }) {

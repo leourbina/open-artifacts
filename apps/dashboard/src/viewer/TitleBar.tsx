@@ -31,6 +31,7 @@ import {
   useVersionInfo,
   useVersions,
 } from "../api/queries";
+import { accessLabel, useCan } from "../auth/permissions";
 import { toast } from "../layout/toast";
 import { VersionsDot } from "./LiveChip";
 import { fullPath } from "./paths";
@@ -149,8 +150,10 @@ export function TitleBar({
   const del = useDeleteArtifact(artifact.id);
   const offerUndo = useOfferUndo();
   const [confirm, setConfirm] = useState(false);
-  const isOwner = authed && artifact.access === "owner";
-  const canEdit = authed && artifact.access !== "viewer";
+  const can = useCan(artifact);
+  const canShare = authed && (can.share || can.setVisibility);
+  const canDelete = authed && can.delete;
+  const canEdit = authed && can.edit;
   const go = (to: string) => void navigate({ to: to as string });
 
   const info = useVersionInfo(artifact.id, version, authed).data;
@@ -207,7 +210,7 @@ export function TitleBar({
           },
         ]
       : []),
-    ...(isOwner
+    ...(canDelete
       ? [
           "separator" as const,
           { label: "Delete", danger: true, onSelect: () => setConfirm(true) },
@@ -225,6 +228,11 @@ export function TitleBar({
           <h1 className={H1}>{artifact.title}</h1>
         )}
         <VisibilityBadge visibility={artifact.visibility} />
+        {artifact.space && (
+          <span className="text-[length:var(--oa-text-sm)] text-muted-foreground">
+            {accessLabel(artifact.access)}
+          </span>
+        )}
       </div>
       <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2 max-[600px]:flex-[1_1_100%]">
         {authed && (
@@ -300,7 +308,7 @@ export function TitleBar({
             {newer && !gone && <VersionsDot />}
           </ShButton>
         )}
-        {isOwner && (
+        {canShare && (
           <ShButton size="xs" className={SM} disabled={gone} onClick={onShare}>
             Share
           </ShButton>
