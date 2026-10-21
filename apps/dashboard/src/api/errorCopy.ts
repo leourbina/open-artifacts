@@ -18,6 +18,8 @@ const COPY: Partial<Record<ErrorCode, string>> = {
     "Directory sync is off, so this isn't available right now.",
   turnstile_required: "Finish the check above, then send the code again.",
   turnstile_failed: "The check didn't go through. Try it again.",
+  restrict_admin:
+    "Owners and admins can't be restricted. Make them a member first.",
   reauth_required:
     "For your security, sign in with Google again to manage the directory.",
 };
