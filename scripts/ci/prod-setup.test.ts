@@ -153,13 +153,19 @@ describe("prod-setup.sh", () => {
 });
 
 describe("prod-setup.sh demo modes", () => {
-  const demoEnv = {
+  // Record<string, string>: the demo run may add DEMO_PUBLIC_HOME (and a bad value for it).
+  const demoEnv: Record<string, string> = {
     DEMO_NAME: "open-artifacts-demo",
     DEMO_APP_HOST: "demo.example.com",
     DEMO_CONTENT_HOST: "demo-content.example.com",
     DEMO_OWNER_EMAIL: "o@example.com",
   };
-  const run = (mode: string, lines: string[], env = demoEnv, exit = 0) => {
+  const run = (
+    mode: string,
+    lines: string[],
+    env: Record<string, string> = demoEnv,
+    exit = 0,
+  ) => {
     const body = `cat <<'EOF_FIXTURE'\n${lines.join("\n")}\nEOF_FIXTURE\nexit ${exit}`;
     const sb = sandbox({ pnpm: body });
     const r = sb.run(["bash", script("prod-setup.sh"), mode], {
@@ -207,13 +213,14 @@ describe("prod-setup.sh demo modes", () => {
     ).not.toBe(0);
   });
   it("refuses the production Worker name or host without running setup", () => {
-    for (const bad of [
+    const bad: Record<string, string>[] = [
       { DEMO_NAME: "open-artifacts-prod" },
       { DEMO_APP_HOST: "artifacts.leourbina.com" },
       { DEMO_NAME: "custom-prod", PROD_NAME: "custom-prod" },
-    ]) {
-      const r = run("demo-install", [ok("a")], { ...demoEnv, ...bad });
-      expect(r.code, JSON.stringify(bad)).toBe(2);
+    ];
+    for (const b of bad) {
+      const r = run("demo-install", [ok("a")], { ...demoEnv, ...b });
+      expect(r.code, JSON.stringify(b)).toBe(2);
       expect(r.calls).toEqual([]);
     }
   });
