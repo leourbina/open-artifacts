@@ -1,8 +1,11 @@
 import type { ErrorCode } from "@oa/shared";
 import { ApiClientError } from "./client";
 
+/** P2 T7 adds it to ERROR_CODES; keyed by string until then. */
+type CopyCode = ErrorCode | "code_unavailable";
+
 /** The UI's own copy for the hosted error codes (Design's final strings, 2026-10-21). */
-const COPY: Partial<Record<ErrorCode, string>> = {
+const COPY: Partial<Record<CopyCode, string>> = {
   space_forbidden:
     "You can't publish to this space. Ask a space manager to make you an editor.",
   space_personal: "Personal spaces can't be used here. Pick a shared space.",
@@ -19,13 +22,18 @@ const COPY: Partial<Record<ErrorCode, string>> = {
   turnstile_required: "Finish the check above, then send the code again.",
   turnstile_failed: "The check didn't go through. Try it again.",
   restrict_admin:
-    "Owners and admins can't be restricted. Change their role first.",
+    "Owners and admins can't be restricted. Make them a member first.",
+  code_unavailable:
+    "Sign-in by email code isn't available right now. Ask your admin for help.",
   reauth_required:
     "For your security, sign in with Google again to manage the directory.",
 };
 
 /** Asking a space manager can't help a guest or restricted member. */
 const CAPPED_FORBIDDEN = "Your account can only view, so you can't publish.";
+/** With Google sign-in on, point at it. */
+const CODE_UNAVAILABLE_GOOGLE =
+  "Sign-in by email code isn't available right now. Use Continue with Google, or ask your admin.";
 
 export const DIRECTORY_SETTINGS = "/settings/directory";
 
@@ -35,12 +43,14 @@ export type ErrorContext = {
   capped?: boolean;
   /** The error shows on the Directory page itself. */
   onDirectoryPage?: boolean;
+  /** Google sign-in is on (AUTH.providers lists google). */
+  googleOn?: boolean;
 };
 
 /**
  * What to tell the person about `e`: the mapped copy for a hosted code, else
  * the server's message, else `fallback`. `capped` picks the capped wording of
- * `space_forbidden`.
+ * `space_forbidden`; `googleOn` the Google wording of `code_unavailable`.
  */
 export const errorCopy = (
   e: unknown,
@@ -48,8 +58,11 @@ export const errorCopy = (
   ctx?: ErrorContext,
 ): string => {
   if (!(e instanceof ApiClientError)) return fallback;
-  if (e.code === "space_forbidden" && ctx?.capped) return CAPPED_FORBIDDEN;
-  return (e.code !== "cpu_limit" && COPY[e.code]) || e.message || fallback;
+  const code = e.code as CopyCode | "cpu_limit";
+  if (code === "space_forbidden" && ctx?.capped) return CAPPED_FORBIDDEN;
+  if (code === "code_unavailable" && ctx?.googleOn)
+    return CODE_UNAVAILABLE_GOOGLE;
+  return (code !== "cpu_limit" && COPY[code]) || e.message || fallback;
 };
 
 /** A link to show with the copy: off the Directory page, `directory_sync_off` points there. */
