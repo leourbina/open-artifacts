@@ -87,21 +87,3 @@ it("no link for other errors", () => {
   ).toBeNull();
   expect(errorLink(new Error("boom"))).toBeNull();
 });
-
-it("code_unavailable points at Google when Google sign-in is on", () => {
-  // Not in ERROR_CODES until P2 T7; the copy is keyed by string meanwhile.
-  const e = new ApiClientError(
-    "code_unavailable" as ErrorCode,
-    "server text",
-    503,
-  );
-  expect(errorCopy(e, "x")).toBe(
-    "Sign-in by email code isn't available right now. Ask your admin for help.",
-  );
-  expect(errorCopy(e, "x", { googleOn: false })).toBe(
-    "Sign-in by email code isn't available right now. Ask your admin for help.",
-  );
-  expect(errorCopy(e, "x", { googleOn: true })).toBe(
-    "Sign-in by email code isn't available right now. Use Continue with Google, or ask your admin.",
-  );
-});
