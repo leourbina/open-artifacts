@@ -1,0 +1,16 @@
+// Hosted auth broker (P2 T11): one Worker on auth.<hosted domain>, deployed by
+// Platform. It holds the multi-tenant Google client secret and nothing else
+// secret; the registry (written by P1 provisioning) holds public keys only.
+// Placeholders are filled at deploy time.
+{
+  "name": "oa-auth-broker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-01",
+  "kv_namespaces": [
+    { "binding": "BROKER_REGISTRY", "id": "{{BROKER_REGISTRY_ID}}" }
+  ],
+  "vars": {
+    "GOOGLE_CLIENT_ID": "{{GOOGLE_CLIENT_ID}}"
+  }
+  // Secrets: GOOGLE_CLIENT_SECRET, BROKER_STATE_KEY (32+ random bytes).
+}
