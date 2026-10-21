@@ -404,7 +404,12 @@ describe("Me sign-in fields", () => {
   });
 
   it("direct: auth for a session and a PAT, signIn, features, hosted", async () => {
-    const e = direct({ HOSTED: "1", FEATURES: "spaces" });
+    const e = direct({
+      HOSTED: "1",
+      FEATURES: "spaces",
+      AUTH_BROKER_URL: "https://auth.h.test",
+      BROKER_SIGNING_KEY: TEST_BROKER_KEY,
+    });
     const { cookie, userId } = await login(uniq("me"));
     const m = await me(e, cookie);
     expect(m.auth).toMatchObject({

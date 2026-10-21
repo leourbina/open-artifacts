@@ -52,8 +52,21 @@ export async function keyId(x: string): Promise<string> {
   return b64.enc(new Uint8Array(d)).slice(0, 16);
 }
 
-/** Signs the exact request body bytes; base64url signature (X-OA-Sig). */
-export async function signRedeem(pkcs8: string, body: string): Promise<string> {
+/**
+ * The exact bytes an install signs for a redeem, so a signature can never be
+ * transplanted to another route or key id: the method, path, the kid the
+ * broker will look up, then the body. Both sides build it from what they send.
+ */
+export function redeemTranscript(kid: string, body: string): string {
+  return `oa-redeem-v1\nPOST\n/google/redeem\n${kid}\n${body}`;
+}
+
+/** Signs the redeem transcript; base64url signature (X-OA-Sig). */
+export async function signRedeem(
+  pkcs8: string,
+  kid: string,
+  body: string,
+): Promise<string> {
   const k = await crypto.subtle.importKey(
     "pkcs8",
     bytesOf(pkcs8, "private key"),
@@ -62,13 +75,16 @@ export async function signRedeem(pkcs8: string, body: string): Promise<string> {
     ["sign"],
   );
   return b64.enc(
-    new Uint8Array(await crypto.subtle.sign(ED, k, enc.encode(body))),
+    new Uint8Array(
+      await crypto.subtle.sign(ED, k, enc.encode(redeemTranscript(kid, body))),
+    ),
   );
 }
 
-/** Verifies `sig` over `body` with the raw public key `x`; false on any error. */
+/** Verifies `sig` over the transcript for `kid`/`body`; false on any error. */
 export async function verifyRedeem(
   x: string,
+  kid: string,
   body: string,
   sig: string,
 ): Promise<boolean> {
@@ -77,8 +93,32 @@ export async function verifyRedeem(
     const s = b64.dec(sig);
     if (!raw || raw.length !== 32 || !s || s.length !== 64) return false;
     const k = await crypto.subtle.importKey("raw", raw, ED, false, ["verify"]);
-    return await crypto.subtle.verify(ED, k, s, enc.encode(body));
+    return await crypto.subtle.verify(
+      ED,
+      k,
+      s,
+      enc.encode(redeemTranscript(kid, body)),
+    );
   } catch {
     return false;
   }
+}
+
+/**
+ * The nonce Google sees on the broker transport. Every hosted install shares
+ * one Google client and redirect URI, so the nonce forwarded to Google is
+ * derived from the install and the install's own (client) nonce: a token
+ * minted through install A can never satisfy install B's nonce check even if
+ * the attacker chose B's client nonce when starting A's flow. The install
+ * keeps its client nonce in its state cookie and recomputes this at redeem.
+ */
+export async function brokerNonce(
+  installId: string,
+  clientNonce: string,
+): Promise<string> {
+  const d = await crypto.subtle.digest(
+    "SHA-256",
+    enc.encode(`oa-broker-v1|${installId}|${clientNonce}`),
+  );
+  return b64.enc(new Uint8Array(d));
 }

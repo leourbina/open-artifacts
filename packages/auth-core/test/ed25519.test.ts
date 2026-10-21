@@ -1,7 +1,9 @@
 import { describe, expect, test } from "vitest";
 import {
+  brokerNonce,
   keyId,
   publicFromPkcs8,
+  redeemTranscript,
   signRedeem,
   verifyRedeem,
 } from "../src/ed25519.js";
@@ -33,12 +35,21 @@ describe("ed25519 request signing", () => {
     expect((await keyId(x)).length).toBe(16);
   });
 
-  test("a signature verifies over exactly the signed body", async () => {
+  test("a signature verifies over exactly the signed transcript", async () => {
     const body = '{"install":"a","code":"c","verifier":"v","ts":1}';
-    const sig = await signRedeem(pkcs8, body);
-    expect(await verifyRedeem(x, body, sig)).toBe(true);
-    expect(await verifyRedeem(x, body.replace('"a"', '"b"'), sig)).toBe(false);
-    expect(await verifyRedeem(x, `${body} `, sig)).toBe(false);
+    const kid = await keyId(x);
+    const sig = await signRedeem(pkcs8, kid, body);
+    expect(await verifyRedeem(x, kid, body, sig)).toBe(true);
+    expect(await verifyRedeem(x, kid, body.replace('"a"', '"b"'), sig)).toBe(
+      false,
+    );
+    expect(await verifyRedeem(x, kid, `${body} `, sig)).toBe(false);
+    // The kid is part of the transcript: the same body can't be replayed
+    // under another kid, nor the signature transplanted to another path.
+    expect(await verifyRedeem(x, "another-kid-0000", body, sig)).toBe(false);
+    expect(redeemTranscript(kid, body)).toBe(
+      `oa-redeem-v1\nPOST\n/google/redeem\n${kid}\n${body}`,
+    );
   });
 
   test("another key's signature and garbage are refused", async () => {
@@ -47,12 +58,29 @@ describe("ed25519 request signing", () => {
       Buffer.alloc(32, 7),
     ]).toString("base64url");
     const body = "{}";
-    expect(await verifyRedeem(x, body, await signRedeem(other, body))).toBe(
-      false,
+    const kid = await keyId(x);
+    expect(
+      await verifyRedeem(x, kid, body, await signRedeem(other, kid, body)),
+    ).toBe(false);
+    expect(await verifyRedeem(x, kid, body, "not-a-sig")).toBe(false);
+    expect(
+      await verifyRedeem("bad", kid, body, await signRedeem(pkcs8, kid, body)),
+    ).toBe(false);
+  });
+
+  test("the broker nonce is install-bound and differs per install", async () => {
+    const a = await brokerNonce("inst-a", "client-nonce");
+    const b = await brokerNonce("inst-b", "client-nonce");
+    expect(a).not.toBe(b);
+    expect(a).not.toBe("client-nonce");
+    expect(a).toBe(
+      Buffer.from(
+        await crypto.subtle.digest(
+          "SHA-256",
+          new TextEncoder().encode("oa-broker-v1|inst-a|client-nonce"),
+        ),
+      ).toString("base64url"),
     );
-    expect(await verifyRedeem(x, body, "not-a-sig")).toBe(false);
-    expect(await verifyRedeem("bad", body, await signRedeem(pkcs8, body))).toBe(
-      false,
-    );
+    expect(await brokerNonce("inst-a", "client-nonce")).toBe(a);
   });
 });

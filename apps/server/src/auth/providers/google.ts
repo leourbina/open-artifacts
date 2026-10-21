@@ -1,4 +1,5 @@
 import {
+  brokerNonce,
   GOOGLE_AUTHORIZE_URL,
   GOOGLE_TOKEN_URL,
   GoogleTokenError,
@@ -77,12 +78,13 @@ async function exchange(
       verifier: a.verifier,
       ts: Date.now(),
     });
+    const kid = await kidOf(t.signingKey);
     const req = new Request(`${t.url}/google/redeem`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-oa-kid": await kidOf(t.signingKey),
-        "x-oa-sig": await signRedeem(t.signingKey, body),
+        "x-oa-kid": kid,
+        "x-oa-sig": await signRedeem(t.signingKey, kid, body),
       },
       body,
       redirect: "manual",
@@ -150,10 +152,18 @@ export const googleProvider: OidcProvider = {
       return fail("token_fetch");
     }
     try {
+      // On the broker transport Google saw the install-derived nonce, not the
+      // client nonce this flow generated. Recompute it with this install's id:
+      // a token minted through another install (even with this flow's client
+      // nonce) can't satisfy it.
+      const expectNonce =
+        g.transport.kind === "broker"
+          ? await brokerNonce(g.transport.installId, a.nonce)
+          : a.nonce;
       const id = await verifyGoogleIdToken(
         { clientId: g.clientId, domains: g.domains },
         idToken,
-        a.nonce,
+        expectNonce,
       );
       return {
         provider: "google",

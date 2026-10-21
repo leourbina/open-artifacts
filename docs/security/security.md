@@ -36,4 +36,17 @@ Direct sign-in replaces Cloudflare Access with Google (one multi-tenant client) 
 | Test hooks in production | Hooks require a build flag release builds never set, plus `TEST_HOOKS=1` and a 32+ character key. Otherwise every path is a 404. | Operator error on a staging install. |
 | Stale sessions | Sessions carry the user's epoch (a role change or link reset ends them) and their tenant. | Suspension in the Workspace takes effect with P3's directory sync. |
 
+### Broker transport hardening
+
+Every hosted install shares one Google client and one redirect URI, so the broker binds each flow to the install that started it:
+
+- **Nonce binding.** Google's `nonce` is `base64url(SHA-256("oa-broker-v1|" + installId + "|" + clientNonce))`, not the install's client nonce. The install keeps its client nonce in its state cookie and recomputes the derived value with its own `INSTALL_ID` before accepting Google's ID token. A token minted through install A can therefore never redeem at install B, even if the attacker chose B's client nonce when starting A's flow.
+- **Broker state.** `bstate` is HMAC-signed over `{ install, client state, H(client nonce || code_challenge), exp }` and expires in 10 minutes. It names the only origin the callback may redirect to.
+- **Fixed redirect URI.** `redirect_uri` comes from the broker's `BROKER_ORIGIN` var, never from the request `Host` header.
+- **Redeem signing.** The install signs `oa-redeem-v1\nPOST\n/google/redeem\n<kid>\n<body>` with its Ed25519 key; the broker checks the key id (derived from the public key), the signature, and `|now - ts| ≤ 60 s` before the exchange. Google codes are single-use, so a captured redeem is not replayable after exchange; an optional `jti` cache is not implemented.
+- **Rate limits.** The broker's `RL_BROKER_IP` and `RL_BROKER_INSTALL` bindings are charged on `/google/authorize` and `/google/redeem`; if either binding is missing the broker fails closed (503), and a denial is 429.
+- **Revocation lag (60 s).** Registry entries are cached in the broker for 60 seconds. Disabling an install, removing a key, or rotating a key takes effect within 60 seconds, not instantly; treat a compromised install's broker access as live for that window and rotate the Google client secret if the broker itself is suspect.
+- **Follow-up.** Alert on an abnormal redeem volume (per install and globally); the broker does not yet emit a per-install redeem counter.
+
+
 The cross-tenant catalog (`apps/server/test/xt/signin-negative.ts`) runs locally in CI and live against two staging installs before every release (`pnpm --filter @oa/server xt:live`, which sets `XT_LIVE=1`). The live run refuses origins outside the staging allowlist (https, exactly one label under `open-artifacts-staging.app` or `open-artifacts-staging.page`) and requires `/healthz` `testHooks: true` and distinct `installId`s on both installs before it reads any credential file. Both installs run with `TEST_DOMAIN=xt-guest.example`, the only domain the catalog uses. Credential files must be regular files, owned by the runner, mode 0600 or stricter, and not symlinks. Broker and tenant cases: #423.

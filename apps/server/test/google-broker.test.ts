@@ -1,13 +1,15 @@
 import { env } from "cloudflare:workers";
-import { keyId, publicFromPkcs8 } from "@oa/auth-core";
+import { brokerNonce, keyId, publicFromPkcs8, signRedeem } from "@oa/auth-core";
 import { AUTH, SIGN_IN_PAGE } from "@oa/shared";
 import { generateKeyPair } from "jose";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import broker, { type Env as BrokerEnv } from "../../auth-broker/src/index.js";
 import { clearRegistryCache } from "../../auth-broker/src/registry.js";
 import { createApp } from "../src/app.js";
+import { googleProvider } from "../src/auth/providers/google.js";
 import { readSession, sessionCookieName } from "../src/auth/session.js";
 import type { Env } from "../src/env.js";
+import { b64urlEncode } from "../src/util/crypto.js";
 import { CID, direct, TEST_BROKER_KEY, uniq } from "./auth-helpers.js";
 import { type FakeGoogle, fakeGoogle } from "./fixtures/fake-google.js";
 
@@ -20,15 +22,25 @@ const BROKER = "https://auth.hosted.test";
 const SESSION = sessionCookieName(env);
 const ctx = { waitUntil() {}, passThroughOnException() {} } as never;
 
+/** A permissive RL stub for the broker's own rate-limit bindings. */
+const brokerRl = () => ({
+  limit: async () => ({ success: true }),
+});
 const brokerEnv = {
   BROKER_REGISTRY: env.OAUTH_KV,
   GOOGLE_CLIENT_ID: CID,
   GOOGLE_CLIENT_SECRET: "broker-secret",
+  BROKER_ORIGIN: BROKER,
   BROKER_STATE_KEY: "s".repeat(40),
-} as BrokerEnv;
+  RL_BROKER_IP: brokerRl(),
+  RL_BROKER_INSTALL: brokerRl(),
+} as unknown as BrokerEnv;
 
 /** The install's env, with BROKER bound to `handler` (the real broker by default). */
-const installEnv = (handler?: (req: Request) => Promise<Response>) =>
+const installEnv = (
+  handler?: (req: Request) => Promise<Response>,
+  over: Partial<Env> = {},
+) =>
   direct({
     AUTH_BROKER_URL: BROKER,
     BROKER_SIGNING_KEY: TEST_BROKER_KEY,
@@ -36,6 +48,7 @@ const installEnv = (handler?: (req: Request) => Promise<Response>) =>
       fetch: (req: Request) =>
         handler ? handler(req) : broker.fetch(req as never, brokerEnv),
     } as unknown as Fetcher,
+    ...over,
   });
 
 let g: FakeGoogle;
@@ -43,13 +56,23 @@ beforeEach(async () => {
   g = await fakeGoogle();
   clearRegistryCache();
   const x = await publicFromPkcs8(TEST_BROKER_KEY);
+  const key = { kid: await keyId(x), x };
   await env.OAUTH_KV.put(
     "install:inst-a",
     JSON.stringify({
       installId: "inst-a",
       origin: "https://app.localhost",
-      keys: [{ kid: await keyId(x), x }],
+      keys: [key],
       domains: ["a.com"],
+    }),
+  );
+  await env.OAUTH_KV.put(
+    "install:inst-b",
+    JSON.stringify({
+      installId: "inst-b",
+      origin: "https://app.localhost",
+      keys: [key],
+      domains: ["b.com"],
     }),
   );
 });
@@ -80,11 +103,21 @@ async function begin(e: Env) {
   return {
     cookie,
     installState: toBroker.searchParams.get("state") as string,
+    /** The install's own nonce (kept in its state cookie). */
+    clientNonce: toBroker.searchParams.get("nonce") as string,
     bstate: gq.get("state") as string,
+    /** The install-derived nonce Google sees. */
     nonce: gq.get("nonce") as string,
     challenge: gq.get("code_challenge") as string,
   };
 }
+
+const challengeFor = async (verifier: string) =>
+  b64urlEncode(
+    new Uint8Array(
+      await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)),
+    ),
+  );
 
 describe("Google through the broker", () => {
   it("round trip: install → broker → Google → broker → install, session p=google t=a.com", async () => {
@@ -143,6 +176,75 @@ describe("Google through the broker", () => {
     expect(await callbackWith(e, b)).toBe(
       `${SIGN_IN_PAGE}?error=tenant&next=%2Fa%2Fx`,
     );
+  });
+
+  it("a token minted through install A with B's client nonce is refused at B (accepted at A)", async () => {
+    const eB = installEnv(undefined, { INSTALL_ID: "inst-b" });
+    const bB = await begin(eB);
+
+    // The attacker controls install A and starts a flow at the broker with
+    // B's client nonce. Google now sees H(A || nonceB), not nonceB itself.
+    const verifier = "attacker-verifier";
+    const challenge = await challengeFor(verifier);
+    const auth = await broker.fetch(
+      new Request(
+        `${BROKER}/google/authorize?install=inst-a&state=x&nonce=${bB.clientNonce}&code_challenge=${challenge}`,
+      ) as never,
+      brokerEnv,
+    );
+    const gq = new URL(loc(auth)).searchParams;
+    expect(gq.get("nonce")).toBe(await brokerNonce("inst-a", bB.clientNonce));
+    const code = g.issueCode(
+      { nonce: gq.get("nonce"), email: uniq("eve"), sub: uniq("eve-sub") },
+      challenge,
+    );
+    const body = JSON.stringify({
+      install: "inst-a",
+      code,
+      verifier,
+      ts: Date.now(),
+    });
+    const kid = await keyId(await publicFromPkcs8(TEST_BROKER_KEY));
+    const redeemed = await broker.fetch(
+      new Request(`${BROKER}/google/redeem`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-oa-kid": kid,
+          "x-oa-sig": await signRedeem(TEST_BROKER_KEY, kid, body),
+        },
+        body,
+      }) as never,
+      brokerEnv,
+    );
+    expect(redeemed.status).toBe(200);
+    const token = ((await redeemed.json()) as { id_token: string }).id_token;
+
+    // Accepted at A: its transport expects H(A || nonceB).
+    const eA = installEnv(async () => Response.json({ id_token: token }), {
+      INSTALL_ID: "inst-a",
+    });
+    await expect(
+      googleProvider.redeem(eA, {
+        code: "any",
+        verifier: "any",
+        nonce: bB.clientNonce,
+      }),
+    ).resolves.toMatchObject({ provider: "google" });
+
+    // Refused at B: B expects H(B || nonceB), so the token can't be replayed.
+    const eBLie = installEnv(async () => Response.json({ id_token: token }), {
+      INSTALL_ID: "inst-b",
+    });
+    expect(
+      loc(
+        await get(
+          eBLie,
+          `${AUTH.callbackGoogle}?code=any&state=${bB.installState}`,
+          bB.cookie,
+        ),
+      ),
+    ).toBe(`${SIGN_IN_PAGE}?error=failed&next=%2Fa%2Fx`);
   });
 
   it("a valid token minted for another flow's nonce is refused", async () => {

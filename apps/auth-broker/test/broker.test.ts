@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import {
+  brokerNonce,
   GOOGLE_AUTHORIZE_URL,
   GOOGLE_TOKEN_URL,
   keyId,
@@ -7,10 +8,34 @@ import {
   signRedeem,
 } from "@oa/auth-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import broker from "../src/index.js";
+import broker, { type Env } from "../src/index.js";
 import { clearRegistryCache } from "../src/registry.js";
 
 const BROKER = "https://auth.hosted.test";
+/** S256 output shape: 43 base64url chars. */
+const CH = "A".repeat(43);
+const OTHER_CH = "B".repeat(43);
+
+/** RL stub: `max` per key with no clock; `keys` records every charge. */
+const limiter = (max = 10_000) => {
+  const keys: string[] = [];
+  return {
+    keys,
+    limit: async ({ key }: { key: string }) => {
+      keys.push(key);
+      return { success: keys.length <= max };
+    },
+  };
+};
+let ipLimit: ReturnType<typeof limiter>;
+let installLimit: ReturnType<typeof limiter>;
+const E = (over: Partial<Env> = {}) =>
+  ({
+    ...env,
+    RL_BROKER_IP: ipLimit,
+    RL_BROKER_INSTALL: installLimit,
+    ...over,
+  }) as Env;
 const pk = (fill: number) =>
   Buffer.concat([
     Buffer.from("302e020100300506032b657004220420", "hex"),
@@ -42,14 +67,16 @@ async function entryFor(
 const put = (e: Entry) =>
   env.BROKER_REGISTRY.put(`install:${e.installId}`, JSON.stringify(e));
 
-const call = (path: string, init?: RequestInit) =>
-  broker.fetch(new Request(`${BROKER}${path}`, init) as never, env);
+const call = (path: string, init?: RequestInit, e: Env = E()) =>
+  broker.fetch(new Request(`${BROKER}${path}`, init) as never, e);
 
 let tokenCalls: URLSearchParams[] = [];
 let tokenReply: () => Response = () =>
   Response.json({ id_token: "raw.google.token" });
 beforeEach(async () => {
   clearRegistryCache();
+  ipLimit = limiter();
+  installLimit = limiter();
   tokenCalls = [];
   tokenReply = () => Response.json({ id_token: "raw.google.token" });
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
@@ -72,7 +99,7 @@ afterEach(() => vi.restoreAllMocks());
 async function redeem(
   key: string,
   body: Record<string, unknown>,
-  o: { kid?: string; tamper?: boolean } = {},
+  o: { kid?: string; tamper?: boolean; ip?: string; e?: Env } = {},
 ) {
   const text = JSON.stringify({
     install: "inst-a",
@@ -81,22 +108,28 @@ async function redeem(
     ts: Date.now(),
     ...body,
   });
-  const sig = await signRedeem(key, text);
-  return call("/google/redeem", {
-    method: "POST",
-    headers: {
-      "x-oa-kid": o.kid ?? (await keyId(await publicFromPkcs8(key))),
-      "x-oa-sig": sig,
-      "content-type": "application/json",
+  const kid = o.kid ?? (await keyId(await publicFromPkcs8(key)));
+  const sig = await signRedeem(key, kid, text);
+  return call(
+    "/google/redeem",
+    {
+      method: "POST",
+      headers: {
+        "x-oa-kid": kid,
+        "x-oa-sig": sig,
+        "content-type": "application/json",
+        ...(o.ip ? { "cf-connecting-ip": o.ip } : {}),
+      },
+      body: o.tamper ? text.replace('"c"', '"d"') : text,
     },
-    body: o.tamper ? text.replace('"c"', '"d"') : text,
-  });
+    o.e,
+  );
 }
 
 describe("authorize", () => {
-  it("sends the user to Google with the install's nonce and challenge and a signed broker state", async () => {
+  it("sends the user to Google with the install-derived nonce, the challenge and a signed broker state", async () => {
     const r = await call(
-      "/google/authorize?install=inst-a&state=s1&nonce=n1&code_challenge=ch1",
+      `/google/authorize?install=inst-a&state=s1&nonce=n1&code_challenge=${CH}`,
     );
     expect(r.status).toBe(302);
     const u = new URL(r.headers.get("location") ?? "");
@@ -104,29 +137,70 @@ describe("authorize", () => {
     expect(Object.fromEntries(u.searchParams)).toMatchObject({
       client_id: env.GOOGLE_CLIENT_ID,
       redirect_uri: `${BROKER}/google/callback`,
-      nonce: "n1",
-      code_challenge: "ch1",
+      nonce: await brokerNonce("inst-a", "n1"),
+      code_challenge: CH,
       code_challenge_method: "S256",
       prompt: "select_account",
       hd: "a.com",
     });
+    expect(u.searchParams.get("nonce")).not.toBe("n1");
     expect(u.searchParams.get("state")).not.toBe("s1");
   });
 
-  it("unknown or disabled installs and missing params are 404", async () => {
+  it("redirect_uri comes from BROKER_ORIGIN, never from the request Host", async () => {
+    const r = await broker.fetch(
+      new Request(
+        `https://evil.test/google/authorize?install=inst-a&state=s&nonce=n&code_challenge=${CH}`,
+      ) as never,
+      E(),
+    );
+    expect(
+      new URL(r.headers.get("location") ?? "").searchParams.get("redirect_uri"),
+    ).toBe(`${BROKER}/google/callback`);
+  });
+
+  it("the broker state binds H(client nonce || challenge) and lives at most 10 minutes", async () => {
+    const r = await call(
+      `/google/authorize?install=inst-a&state=s1&nonce=n1&code_challenge=${CH}`,
+    );
+    const bstate =
+      new URL(r.headers.get("location") ?? "").searchParams.get("state") ?? "";
+    const payload = JSON.parse(
+      Buffer.from(bstate.split(".")[0] as string, "base64url").toString(),
+    ) as { h: string; exp: number };
+    const digest = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(`n1|${CH}`),
+    );
+    expect(payload.h).toBe(Buffer.from(digest).toString("base64url"));
+    const ttl = payload.exp - Date.now();
+    expect(ttl).toBeLessThanOrEqual(10 * 60_000);
+    expect(ttl).toBeGreaterThan(9 * 60_000);
+  });
+
+  it("unknown or disabled installs, missing params and malformed challenges are 404", async () => {
     for (const q of [
-      "install=nope&state=s&nonce=n&code_challenge=c",
-      "install=inst-off&state=s&nonce=n&code_challenge=c",
-      "install=inst-a&state=s&nonce=n",
+      ["nope", "s", "n", CH],
+      ["inst-off", "s", "n", CH],
+      ["inst-a", "s", "n", ""],
+      ["inst-a", "s", "n", "ch1"],
+      ["inst-a", "s", "n", OTHER_CH.slice(0, 42)],
+      ["inst-a", "s", "n", `${OTHER_CH}!`],
     ])
-      expect((await call(`/google/authorize?${q}`)).status).toBe(404);
+      expect(
+        (
+          await call(
+            `/google/authorize?install=${q[0]}&state=${q[1]}&nonce=${q[2]}&code_challenge=${q[3]}`,
+          )
+        ).status,
+      ).toBe(404);
   });
 });
 
 describe("callback", () => {
   const bstate = async (install = "inst-a") => {
     const r = await call(
-      `/google/authorize?install=${install}&state=s1&nonce=n&code_challenge=c`,
+      `/google/authorize?install=${install}&state=s1&nonce=n&code_challenge=${CH}`,
     );
     return (
       new URL(r.headers.get("location") ?? "").searchParams.get("state") ?? ""
@@ -264,5 +338,68 @@ describe("redeem", () => {
       env.GOOGLE_CLIENT_SECRET,
     ])
       expect(all).not.toContain(s);
+  });
+
+  it("redeem charges the IP and install buckets, before any Google call", async () => {
+    await redeem(KEY_A, {}, { ip: "203.0.113.9" });
+    expect(ipLimit.keys).toEqual(["ip:203.0.113.9"]);
+    expect(installLimit.keys).toEqual(["install:inst-a"]);
+  });
+
+  it("a deny in either bucket is 429 and no Google call", async () => {
+    const deniedIp = await redeem(
+      KEY_A,
+      {},
+      { e: E({ RL_BROKER_IP: limiter(0) }) },
+    );
+    const deniedInstall = await redeem(
+      KEY_A,
+      {},
+      { e: E({ RL_BROKER_INSTALL: limiter(0) }) },
+    );
+    for (const r of [deniedIp, deniedInstall]) {
+      expect(r.status).toBe(429);
+      expect(await r.json()).toEqual({ error: "rate_limited" });
+    }
+    expect(tokenCalls).toHaveLength(0);
+  });
+
+  it("unbound rate-limit bindings fail closed (503)", async () => {
+    const e = E({ RL_BROKER_IP: undefined, RL_BROKER_INSTALL: undefined });
+    const auth = await call(
+      `/google/authorize?install=inst-a&state=s&nonce=n&code_challenge=${CH}`,
+      {},
+      e,
+    );
+    expect(auth.status).toBe(503);
+    const red = await redeem(KEY_A, {}, { e });
+    expect(red.status).toBe(503);
+    expect(tokenCalls).toHaveLength(0);
+  });
+});
+
+describe("rate limits", () => {
+  it("authorize charges the IP and install buckets", async () => {
+    const r = await call(
+      `/google/authorize?install=inst-a&state=s&nonce=n&code_challenge=${CH}`,
+      { headers: { "cf-connecting-ip": "203.0.113.9" } },
+    );
+    expect(r.status).toBe(302);
+    expect(ipLimit.keys).toEqual(["ip:203.0.113.9"]);
+    expect(installLimit.keys).toEqual(["install:inst-a"]);
+  });
+
+  it("a deny in either bucket is 429", async () => {
+    for (const e of [
+      E({ RL_BROKER_IP: limiter(0) }),
+      E({ RL_BROKER_INSTALL: limiter(0) }),
+    ]) {
+      const r = await call(
+        `/google/authorize?install=inst-a&state=s&nonce=n&code_challenge=${CH}`,
+        {},
+        e,
+      );
+      expect(r.status).toBe(429);
+    }
   });
 });
