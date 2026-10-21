@@ -43,7 +43,7 @@
   - Every use is audited and emails the owner.
 - **Reconcile:** hourly, and also at sign-in (that user only), on mapping changes and on "Sync now". Add Directory `users.watch` if the Reports lag measured on FinQore exceeds 15 min.
 - **Content URL revocation lives in D1.** The content host's existing artifact statement joins `users.status` (for user-bound tokens) and `spaces.public_links`. No KV deny list.
-- **The broker does the directory token exchange and refresh.** The install keeps only the AES-GCM-encrypted refresh token.
+- **The broker does the directory token exchange and refresh on hosted installs.** The install keeps only the AES-GCM-encrypted refresh token. **Self-hosted installs may use a direct transport** with their own Google app (decided by the manager and the user); `HOSTED=1` refuses it.
 - **`DIRECTORY_TOKEN_KEY` comes from Platform (P1) provisioning.** It is not a user step.
 - **Token cap during unhealthy sync (decided):** the 24 h cap is browser sessions only; PATs and MCP OAuth grants are exempt but covered by the 7-day stale rule; the owner banner adds "agent tokens not re-verified".
 - **`team` in shared spaces keeps today's meaning** (every uncapped member). The protection is who can widen: only managers and personal owners may set visibility; org owners and admins only by self-adding as manager (audited).
@@ -581,12 +581,19 @@ it("content host does one D1 statement per request", async () => { expect(statem
 - [ ] **Step 2: Run.** Expected: 4 failed. **Step 3: Implement.** **Step 4: Run** `pnpm -F @oa/server test content-host && pnpm -F @oa/server test:cpu`. Expected: passes, within the existing CPU budgets.
 - [ ] **Step 5: Commit** `feat(server): content host re-checks user status and public links in D1 (P3)`.
 
-### Task 12: Directory connection through the broker
+### Task 12: Directory connection (broker or direct transport)
 
-**Files:** Create `directory/broker.ts`, `directory/crypto.ts`, `routes/directory.ts`; Modify `env.ts` (`DIRECTORY_TOKEN_KEY`, `DIRECTORY_TOKEN_KEY_VERSION`, `BROKER_URL`, install assertion key from P2); Test `apps/server/test/directory.connect.test.ts`
+**Files:** Create `directory/transport.ts`, `directory/broker.ts`, `directory/direct.ts`, `directory/crypto.ts`, `routes/directory.ts`; Modify `env.ts` (`DIRECTORY_TOKEN_KEY`, `DIRECTORY_TOKEN_KEY_VERSION`, `BROKER_URL`, install assertion key from P2, optional `GOOGLE_DIRECTORY_CLIENT_ID` and `GOOGLE_DIRECTORY_CLIENT_SECRET`); Test `apps/server/test/directory.connect.test.ts`, `apps/server/test/directory.transport.test.ts`
 
 **Interfaces:**
-- Flow:
+- **Transport (decided by the manager and the user; mirrors P2's `GoogleTransport`):**
+  - `directoryTransport(env): { kind: "broker"; brokerUrl: string } | { kind: "direct"; clientId: string; secret: string } | { kind: "none"; problem: string }`, resolved once from env.
+  - `broker`: hosted. Required when `HOSTED=1`; the install never holds a Google client secret.
+  - `direct`: self-hosted without our broker. The install uses its own Google app's `GOOGLE_DIRECTORY_CLIENT_ID` and `GOOGLE_DIRECTORY_CLIENT_SECRET` (their app, so the secret in their env is fine) and does the code exchange and refresh itself.
+  - `HOSTED=1` with the direct variables set (or without a broker) resolves to `none` with a problem string ("hosted installs use the broker for directory sync"): fail closed, no directory. `R.directoryConnect` then answers 404, and `SyncStatus` shows `mode: "off"` with the problem for owners.
+  - Both kinds implement one interface: `beginConsent(state, pkce): URL`, `completeConsent(callback): Promise<ConsentResult>` (`{ refreshToken, grantedScopes, sub, hd }`), `accessToken(sealedRefresh): Promise<string>`. Everything after `completeConsent` (sealing, checks, binding, sync) is shared code.
+  - Both keep the same AES-GCM sealed refresh token (`DIRECTORY_TOKEN_KEY`; hosted from P1 provisioning, self-host from the setup script), and both run the same callback checks below and fail closed on a mismatch.
+- Flow (broker; direct is the same with the install doing steps 2 and 3 against Google itself):
   1. `GET /directory/connect` (org owner) redirects to `BROKER_URL/google/directory/start` with `install_id`, `state` and PKCE.
   2. The broker holds the Google client secret. It requests the scopes `openid email https://www.googleapis.com/auth/admin.directory.user.readonly https://www.googleapis.com/auth/admin.directory.group.readonly https://www.googleapis.com/auth/admin.directory.domain.readonly https://www.googleapis.com/auth/admin.reports.audit.readonly` with `access_type=offline`, `prompt=consent` and `hd` set to the install's domain.
   3. The broker exchanges the code and redirects back to `GET /directory/callback`. That callback receives a short-lived signed assertion (install id, `state`, the refresh token encrypted to the install, granted scopes, `sub`, `hd`).
@@ -597,8 +604,9 @@ it("content host does one D1 statement per request", async () => { expect(statem
   - `domains.list(customerId)` contains the install domain.
 - On success it records the `DirectoryBinding` (`provider`, `customerId`, `domain`, `connectedBy`, `connectedAt`), then runs the **initial binding**: a full `users.list` creates or links `identities('google', id)` (setting `directory_bound = 1`, a column P3 adds to P2's table in the spaces migration) and user rows, with email matching allowed only in this one pass, and sets `restricted` per `restricted_groups`.
 - `crypto.ts`: `seal(token): string` and `open(sealed): string`. Both use AES-GCM with `DIRECTORY_TOKEN_KEY`, AD `install_id + ":" + key_version`, and a 96-bit random IV.
-- `broker.ts`: `accessToken(env): Promise<string>` POSTs the sealed refresh token's plaintext to the broker `/google/directory/token`, authenticated with the install assertion. The install never sees the client secret.
-- Self-hosted: the same `TokenSource` interface with the self-hoster's own Google client, or their own service account; the secrets are theirs.
+- `broker.ts`: `accessToken(sealedRefresh): Promise<string>` POSTs the unsealed refresh token to the broker `/google/directory/token`, authenticated with the install assertion. The install never sees the client secret.
+- `direct.ts`: `beginConsent` builds Google's authorization URL with the install's own client id and the same scopes and `hd`; `completeConsent` exchanges the code at Google's token endpoint with the install's client secret; `accessToken` refreshes there directly.
+- **Setup contract for Platform:** the self-host setup asks for `GOOGLE_DIRECTORY_CLIENT_ID` and `GOOGLE_DIRECTORY_CLIENT_SECRET` as optional prompts (skip = no directory sync), stores the secret with `wrangler secret put`, and generates `DIRECTORY_TOKEN_KEY` when either is set. Hosted provisioning never sets them.
 
 - [ ] **Step 1: Failing tests**
 
@@ -607,19 +615,23 @@ it("callback refuses a delegated admin → ?error=not_super_admin", async () => 
 it("callback refuses hd mismatch and domains.list without the domain → ?error=domain_mismatch", async () => { /* 302 x2 */ });
 it("callback refuses missing scopes → ?error=scopes; accepts openid email plus the four → ?connected=1", async () => { /* 302; 302 */ });
 it("refresh token at rest is AES-GCM with AD install:version; wrong AD fails", async () => { /* throws */ });
-it("install env has no GOOGLE client secret binding", () => expect(Object.keys(env)).not.toContain("GOOGLE_DIRECTORY_CLIENT_SECRET"));
+it("hosted env has no GOOGLE client secret binding", () => expect(Object.keys(hostedEnv)).not.toContain("GOOGLE_DIRECTORY_CLIENT_SECRET"));
+// directory.transport.test.ts
+it("direct: code exchange and refresh against the fake Google; the refresh token is sealed", async () => { /* token endpoint called with client id/secret; stored ciphertext */ });
+it("HOSTED=1 with direct config resolves to none: connect 404, SyncStatus mode off with the problem", async () => { /* 404; problem */ });
+it.each(["broker", "direct"])("%s: the same callback checks (super admin, customer, domain, scopes) fail closed", async (kind) => { /* each ?error= */ });
 it("initial binding links existing users by email once, later passes never match by email", async () => { /* see Task 14 */ });
 ```
 
-- [ ] **Step 2: Run.** Expected: 6 failed. **Step 3: Implement** against a fake broker and fake Google (`fetchMock`). **Step 4: Run** `pnpm -F @oa/server test directory.connect`. Expected: passes.
-- [ ] **Step 5: Commit** `feat(server): directory connection via the broker (P3)`.
+- [ ] **Step 2: Run.** Expected: 9 failed. **Step 3: Implement** against a fake broker and fake Google (`fetchMock`). **Step 4: Run** `pnpm -F @oa/server test directory.connect directory.transport`. Expected: passes.
+- [ ] **Step 5: Commit** `feat(server): directory connection, broker or direct transport (P3)`.
 
 ### Task 13: `DirectorySync`: polling, reconcile, health
 
 **Files:** Create `directory/google.ts`, `directory/sync-do.ts`; Modify `cron.ts`, `env.ts`, `wrangler.*.jsonc` (`RL_DIRECTORY` for `GET /directory/groups`); Test `apps/server/test/directory.sync.test.ts`, `directory.cpu.test.ts`, fixtures `test/fixtures/google/*.json`
 
 **Interfaces:**
-- `google.ts`, every call scoped to the stored `customerId`:
+- `google.ts` takes its access token from the resolved transport (`broker` or `direct`; Task 12), so polling, reconcile and health are identical in both modes. Every call is scoped to the stored `customerId`:
   - `listUsers(ts, customerId, { query?, showDeleted?, pageToken? })`, with `fields=nextPageToken,users(id,primaryEmail,suspended,isAdmin,customerId)` and `maxResults=500`.
   - `listMembers(ts, groupKey, pageToken?)` returns direct members including `type=GROUP`; nesting is resolved locally through `directory_groups.parent_ids`.
   - `userGroups(ts, userKey)`.
