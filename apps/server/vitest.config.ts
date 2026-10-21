@@ -24,6 +24,8 @@ export default defineConfig({
       "test/**/*.cpu.test.ts",
       "test/code-cpu/**",
       "test/node/**",
+      // Node-only xt helpers (fs); run by vitest.xt.config.ts.
+      "test/xt/*.node.test.ts",
       "**/node_modules/**",
     ],
     setupFiles: ["./test/setup.ts"],

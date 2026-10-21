@@ -28,9 +28,36 @@ export type NegativeCase = {
 };
 
 class Refusal extends Error {}
-function expectStatus(r: Response, ok: number[], what: string): void {
+
+/** A short, non-reversible fingerprint of a response body. */
+async function bodyHash(r: Response): Promise<string> {
+  const text = await r
+    .clone()
+    .text()
+    .catch(() => "");
+  const d = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(text),
+  );
+  return [...new Uint8Array(d)]
+    .slice(0, 6)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/**
+ * Failure messages carry the status and a body hash only (P5 rule): never a
+ * key, code, cookie or body, so a failing release run can't leak them.
+ */
+async function expectStatus(
+  r: Response,
+  ok: number[],
+  what: string,
+): Promise<void> {
   if (!ok.includes(r.status))
-    throw new Refusal(`${what}: expected ${ok.join("/")}, got ${r.status}`);
+    throw new Refusal(
+      `${what}: expected ${ok.join("/")}, got ${r.status} (body sha256 ${await bodyHash(r)})`,
+    );
 }
 
 const unique = (local: string) =>
@@ -73,7 +100,7 @@ async function sessionOn(
   email = unique(role),
 ) {
   const r = await hook(to, TEST_HOOKS.session, { email, role });
-  expectStatus(r, [200], `session hook on ${to.origin}`);
+  await expectStatus(r, [200], `session hook on ${to.origin}`);
   const { cookie } = (await r.json()) as { cookie: string };
   return { email, cookie: `${to.sessionCookie}=${cookie}` };
 }
@@ -90,7 +117,7 @@ async function requestCode(to: Install, email: string): Promise<string> {
     },
     headers: json,
   });
-  expectStatus(r, [202], `code request on ${to.origin}`);
+  await expectStatus(r, [202], `code request on ${to.origin}`);
   const set = r.headers
     .getSetCookie()
     .find((c) => c.startsWith(`${to.codeCookie}=`));
@@ -103,12 +130,12 @@ export const SIGNIN_NEGATIVE_CASES: NegativeCase[] = [
     name: "A's session cookie is refused at B",
     async run(a, b) {
       const { cookie } = await sessionOn(a, "member");
-      expectStatus(
+      await expectStatus(
         await send(a, R.me, { headers: { cookie } }),
         [200],
         "A /me",
       );
-      expectStatus(
+      await expectStatus(
         await send(b, R.me, { headers: { cookie } }),
         [401],
         "B /me with A's cookie",
@@ -122,7 +149,7 @@ export const SIGNIN_NEGATIVE_CASES: NegativeCase[] = [
       await sessionOn(b, "guest", email);
       const pendingA = await requestCode(a, email);
       const otp = await hook(a, TEST_HOOKS.otpLatest, { email });
-      expectStatus(otp, [200], "A otp hook");
+      await expectStatus(otp, [200], "A otp hook");
       const { code } = (await otp.json()) as { code: string };
       const r = await send(b, AUTH.codeVerify, {
         method: "POST",
@@ -132,7 +159,7 @@ export const SIGNIN_NEGATIVE_CASES: NegativeCase[] = [
           cookie: pendingA.replace(a.codeCookie, b.codeCookie),
         },
       });
-      expectStatus(r, [401], "B verify with A's code and pending cookie");
+      await expectStatus(r, [401], "B verify with A's code and pending cookie");
       if (
         r.headers
           .getSetCookie()
@@ -154,7 +181,7 @@ export const SIGNIN_NEGATIVE_CASES: NegativeCase[] = [
           cookie: pendingA.replace(a.codeCookie, b.codeCookie),
         },
       });
-      expectStatus(r, [401], "B verify with A's pending cookie");
+      await expectStatus(r, [401], "B verify with A's pending cookie");
       const body = (await r.json()) as {
         error: { details?: { reason?: string } };
       };
@@ -189,15 +216,15 @@ export const SIGNIN_NEGATIVE_CASES: NegativeCase[] = [
         body: { label: "xt" },
         headers: { ...json, cookie },
       });
-      expectStatus(t, [201], "A creates a PAT");
+      await expectStatus(t, [201], "A creates a PAT");
       const { token } = (await t.json()) as { token: string };
       const bearer = { authorization: `Bearer ${token}` };
-      expectStatus(
+      await expectStatus(
         await send(b, R.me, { headers: bearer }),
         [401],
         "B /me with A's PAT",
       );
-      expectStatus(
+      await expectStatus(
         await send(b, "/mcp", {
           method: "POST",
           body: { jsonrpc: "2.0", id: 1, method: "tools/list" },
@@ -213,9 +240,9 @@ export const SIGNIN_NEGATIVE_CASES: NegativeCase[] = [
     liveOnly: true,
     async run(a, b) {
       const r = await hook(a, TEST_HOOKS.oauthClient);
-      expectStatus(r, [200], "A oauth-client hook");
+      await expectStatus(r, [200], "A oauth-client hook");
       const { accessToken } = (await r.json()) as { accessToken: string };
-      expectStatus(
+      await expectStatus(
         await send(b, "/mcp", {
           method: "POST",
           body: { jsonrpc: "2.0", id: 1, method: "tools/list" },

@@ -52,6 +52,21 @@ describe("sign-in negative catalog (local)", () => {
     t(c.name, () => c.run(A, B));
   }
 
+  it("a failing case's message holds no key, code or cookie", async () => {
+    const leak =
+      SIGNIN_NEGATIVE_CASES[0] as (typeof SIGNIN_NEGATIVE_CASES)[number];
+    let msg = "";
+    try {
+      await leak.run(A, A);
+    } catch (e) {
+      msg = String(e instanceof Error ? `${e.message}\n${e.stack}` : e);
+    }
+    expect(msg).toMatch(/got 200 \(body sha256 [0-9a-f]{12}\)/);
+    for (const secret of [A.hookKey, "oa_session=", "Bearer"])
+      expect(msg).not.toContain(secret);
+    expect(msg).not.toMatch(/\b\d{8}\b/);
+  });
+
   // The catalog must fail when B is really A (same secret): it can catch a leak.
   it.each(SIGNIN_NEGATIVE_CASES.filter((c) => !c.liveOnly).slice(0, 2))(
     "catches a broken install: $name",
