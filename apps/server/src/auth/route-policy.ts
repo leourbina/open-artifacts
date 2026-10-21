@@ -272,8 +272,13 @@ export async function enforce(
   }
   if (who.kind !== "user")
     throw new ApiError("unauthorized", "Sign in required");
-  if ("org" in p && !orgCan(who.user, p.org, { cap: capOfCaller(who) }))
+  if ("org" in p && !orgCan(who.user, p.org, { cap: capOfCaller(who) })) {
+    // #359: any create by a capped caller (guests under direct sign-in, P3's
+    // restricted members) is 403 space_forbidden, never 404.
+    if (p.org === "artifact.create" && capOfCaller(who))
+      throw new ApiError("space_forbidden", "Guests can't publish here");
     throw notFound();
+  }
 }
 
 /**

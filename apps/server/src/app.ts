@@ -13,6 +13,7 @@ import { ApiError, errorJson, toErrorResponse } from "./http/errors.js";
 import {
   type AppEnv,
   csrf,
+  readOnlyCap,
   sameOrigin,
   securityHeaders,
   session,
@@ -118,6 +119,8 @@ export function createApp(
   for (const p of SESSION_PATHS) app.use(p, mw(unlessSigned(session())));
   // Cookie-authenticated mutations need X-OA-Request: 1 (PATs exempt).
   app.use("/api/v1/*", mw(unlessSigned(csrf())));
+  // Capped callers (guests under direct sign-in) are read-only (P2 T9).
+  app.use("/api/v1/*", mw(unlessSigned(readOnlyCap())));
   app.use(AUTH.logout, mw(sameOrigin()), mw(csrf()));
 
   mount(app);

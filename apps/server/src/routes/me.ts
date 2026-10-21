@@ -7,7 +7,7 @@ import {
   R,
 } from "@oa/shared";
 import type { Context } from "hono";
-import { requireUser } from "../auth/authz.js";
+import { caller, capOfCaller, requireUser } from "../auth/authz.js";
 import {
   instanceFeatures,
   instanceSignIn,
@@ -46,7 +46,7 @@ async function toMe(
   // Hosted M1 (#359): optional, appended last, only on hosted or
   // direct-sign-in installs, so Access-only installs keep today's shape.
   if (!showsSignInFields(c.env)) return me;
-  const cap = c.var.capReason;
+  const cap = capOfCaller(caller(c));
   const exp = c.var.sessionExp;
   me.instance.hosted = c.env.HOSTED === "1";
   me.instance.signIn = instanceSignIn(c.env);

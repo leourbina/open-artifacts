@@ -526,6 +526,17 @@ describe("MCP auth: fix round 1", () => {
     ).toBeTruthy();
   });
 
+  it("a guest's PAT verifies but is refused at /mcp (members only)", async () => {
+    const g = await login(`pat-guest-${tag}@x.com`, "guest");
+    const { token } = await createPat(env, g.userId, "g");
+    expect(await verifyPat(env, token)).not.toBeNull();
+    const r = await listTools(`Bearer ${token}`);
+    expect(r.status).toBe(401);
+    expect(
+      ((await r.json()) as { error: { message: string } }).error.message,
+    ).toBe("Only members can connect agents");
+  });
+
   it("demotion to guest revokes the user's OAuth grants and PATs", async () => {
     const { member, accessToken } = await oauthToken(`oauth-dem-${tag}@x.com`);
     const { token } = await createPat(env, member.userId, "p");

@@ -3,12 +3,13 @@ import {
   ARTIFACT_SANDBOX_ATTR,
   AUTH,
   type AuthMethod,
-  type CapReason,
   type Member,
+  R,
   SIGN_IN_PAGE,
 } from "@oa/shared";
 import type { Context, MiddlewareHandler } from "hono";
 import { getCookie } from "hono/cookie";
+import { callerOf, capOfCaller, withCap } from "../auth/authz.js";
 import { authConfig } from "../auth/config.js";
 import { verifyPat } from "../auth/pat.js";
 import { isGuestRole } from "../auth/policy.js";
@@ -34,12 +35,6 @@ export type AppVariables = {
   authMethod: AuthMethod | null;
   /** Session expiry (ms) for a cookie session; null otherwise. */
   sessionExp: number | null;
-  /**
-   * Why the caller is capped at viewer (Me.auth.cap), or null: "guest" for a
-   * guest while the guest cap is on, and for any code session outside the
-   * verified domains. P3 adds "restricted".
-   */
-  capReason: CapReason | null;
 };
 export type AppEnv = { Bindings: Env; Variables: AppVariables };
 
@@ -179,9 +174,6 @@ export function sessionStillValid(
  * `X-OA-Embed: 1` or `?embed=1` (isEmbedRequest) forces anonymous.
  */
 /** A guest while the guest cap is on, however they authenticated (session or PAT). */
-const guestCapped = (env: Env, user: Member): boolean =>
-  isGuestRole(user.role) && authConfig(env).guestsReadOnly;
-
 export const session = (): MiddlewareHandler<AppEnv> => async (c, next) => {
   await resolveSession(c);
   await next();
@@ -196,7 +188,6 @@ export async function resolveSession(c: Context<AppEnv>): Promise<void> {
   c.set("tokenId", null);
   c.set("authMethod", null);
   c.set("sessionExp", null);
-  c.set("capReason", null);
   // Embed mode: anonymous regardless of cookie or Bearer (a downgrade only).
   if (isEmbedRequest(c.req.raw)) return;
   const bearer = BEARER.exec(c.req.header("authorization") ?? "");
@@ -214,22 +205,46 @@ export async function resolveSession(c: Context<AppEnv>): Promise<void> {
       c.set("tokenLabel", pat.label);
       c.set("tokenId", pat.tokenId);
       c.set("authMethod", "pat");
-      if (guestCapped(c.env, user)) c.set("capReason", "guest");
     }
   } else {
     const s = await readSession(c.env, getCookie(c, sessionCookieName(c.env)));
     const row = s ? await getUserWithEpoch(c.env, s.uid) : null;
     if (s && row && sessionStillValid(c.env, s, row.sessionEpoch)) {
-      c.set("user", row.user);
+      // The cap travels on the member itself (authz CAP, set once by getUser
+      // from authConfig.guestsReadOnly and P3's restriction); a code session
+      // outside the verified domains is capped on top, whatever the env says.
+      if (s.p === "code" && s.t === undefined)
+        c.set("user", withCap(row.user, "guest"));
+      else c.set("user", row.user);
       c.set("authMethod", s.p);
       c.set("sessionExp", s.exp);
-      if ((s.p === "code" && s.t === undefined) || guestCapped(c.env, row.user))
-        c.set("capReason", "guest");
     }
   }
 }
 
 export const CSRF_HEADER = "X-OA-Request";
+
+/**
+ * A capped caller (CapReason on the member: a guest while the guest cap is on,
+ * any code session outside the verified domains, a P3 restricted member) is
+ * read-only on the whole API, as defence in depth behind P3's can():
+ * every mutation is refused here, before any route, so no write path can be
+ * missed (artifacts, versions, shares, data, storage, uploads, tokens). The
+ * only write left is their own display name (PATCH R.me). Creating an
+ * artifact is 403 space_forbidden (#359); everything else 404 (never 403).
+ */
+export const readOnlyCap = (): MiddlewareHandler<AppEnv> => async (c, next) => {
+  const m = c.req.method;
+  if (m !== "GET" && m !== "HEAD" && capOfCaller(callerOf(c.var.user))) {
+    if (m === "PATCH" && c.req.path === R.me) return next();
+    if (m === "POST" && c.req.path === R.artifacts)
+      return toErrorResponse(
+        new ApiError("space_forbidden", "Guests can't publish here"),
+      );
+    return toErrorResponse(new ApiError("not_found", "Not found"));
+  }
+  await next();
+};
 
 /**
  * Mutating requests (anything but GET/HEAD) that authenticate by session cookie
