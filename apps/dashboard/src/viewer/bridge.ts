@@ -49,6 +49,8 @@ export interface BridgeOptions {
   onRenavigated?: () => void;
   /** The artifact asked to open `url` (unvalidated: see navigate.ts). */
   onNavigate?: (url: string) => void;
+  /** The viewer first touched the artifact since this load (runtime `interacted`). */
+  onInteracted?: () => void;
 }
 
 const BACKOFF_BASE_MS = 1_000;
@@ -108,6 +110,7 @@ export function createBridge(opts: BridgeOptions) {
     onResize,
     onHello,
     onAccessLost,
+    onInteracted,
   } = opts;
   const id = artifact.id; // the only artifact id any route is ever built from
   // Framed, the artifact never learns who is viewing, whatever the caller passed.
@@ -436,6 +439,9 @@ export function createBridge(opts: BridgeOptions) {
       case "resize":
         if (Number.isFinite(m.height) && m.height >= 0 && m.height <= 100_000)
           onResize?.(m.height);
+        break;
+      case "interacted":
+        onInteracted?.();
         break;
     }
   };
