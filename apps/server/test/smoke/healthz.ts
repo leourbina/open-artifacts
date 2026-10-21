@@ -11,10 +11,19 @@ describe.skipIf(!base)("staging smoke", () => {
     const r = await fetch(`${base}/healthz`);
     expect(r.status).toBe(200);
     // Staging runs PLAN=paid (wrangler.staging.jsonc); /healthz reports it.
-    expect(await r.json()).toEqual({
+    // Hosted installs also report an opaque installId; self-host omits it.
+    const body = (await r.json()) as {
+      ok: boolean;
+      plan: string;
+      version: string;
+      installId?: string;
+    };
+    const { installId, ...rest } = body;
+    expect(rest).toEqual({
       ok: true,
       plan: "paid",
       version: expect.stringMatching(SEMVER),
     });
+    if (installId !== undefined) expect(installId).toMatch(/^\S+$/);
   });
 });
