@@ -11,6 +11,7 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useRef } from "react";
 import { useMe } from "../auth/useMe";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
+import { useCurrentSpace } from "../spaces/useCurrentSpace";
 import { DropZone } from "../upload/DropZone";
 import { AppLink } from "./AppLink";
 import { ArtifactCard } from "./ArtifactCard";
@@ -86,14 +87,21 @@ export function Library({ scope }: { scope: Scope }) {
   const s = useSearch({ strict: false }) as {
     format?: Format;
     agent?: string;
+    space?: string;
     view?: View;
   };
   const view: View = s.view ?? storedView() ?? "grid";
   const go = (to: string, search: object) =>
     void navigate({ to, search } as never);
   const set = (patch: object) => go(PATH[scope], { ...s, ...patch });
+  const { space } = useCurrentSpace();
 
-  const q = useLibraryQuery({ scope, format: s.format, agent: s.agent });
+  const q = useLibraryQuery({
+    scope,
+    format: s.format,
+    agent: s.agent,
+    space: space?.id,
+  });
   const items = uniqueItems(q.data?.pages);
   // Remember agents seen so far so others stay selectable while one is filtered.
   const seenAgents = useRef(new Set<string>());
