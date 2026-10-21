@@ -59,6 +59,7 @@ const library = (path: string, scope: Scope) =>
       return {
         ...(format.success && { format: format.data }),
         ...(str(s.agent) && { agent: str(s.agent) }),
+        ...(str(s.space) && { space: str(s.space) }),
         ...(view && { view }),
       };
     },
@@ -96,6 +97,7 @@ const search = createRoute({
   path: "/search",
   validateSearch: (s: Record<string, unknown>) => ({
     q: s.q == null ? "" : String(s.q),
+    ...(str(s.space) && { space: str(s.space) }),
   }),
   component: SearchPage,
 });
