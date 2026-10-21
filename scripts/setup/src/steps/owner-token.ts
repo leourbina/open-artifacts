@@ -143,6 +143,8 @@ export const ownerToken: Step = {
   async check(state, ctx) {
     await retryPendingRevoke(state, ctx);
     if (ctx.opts.newOwnerToken) return "todo";
+    // --ci --upgrade still mints the in-memory setup-ci token so selftest runs the full MCP check (revoked at the end).
+    if (ctx.opts.upgrade && ctx.opts.ci) return "todo";
     if (ctx.opts.upgrade) {
       ctx.notes.push("kept (--upgrade); pass --new-owner-token to mint one");
       const file = tokenFileOf(ctx);

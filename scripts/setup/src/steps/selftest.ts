@@ -379,6 +379,11 @@ export const selftest: Step = {
   async apply(state, ctx) {
     const fromFile = !ctx.pat && !ctx.opts.ci;
     const token = ctx.pat ?? (fromFile ? savedPat(ctx) : undefined);
+    // --ci always mints a token for this step (also with --upgrade): never pass without the MCP check.
+    if (!token && ctx.opts.ci)
+      throw new Error(
+        "selftest: no CI token was minted, so the MCP check could not run",
+      );
     if (!token) {
       ctx.notes.push(
         "MCP check skipped: no saved token (rerun with --new-owner-token to test it)",
