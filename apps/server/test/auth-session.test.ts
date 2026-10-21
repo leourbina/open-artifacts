@@ -3,7 +3,6 @@ import { AUTH } from "@oa/shared";
 import type { Hono } from "hono";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
-import { mw } from "../src/auth/route-policy.js";
 import { deriveKey } from "../src/auth/keys.js";
 import {
   buildAuthorizeRedirect,
@@ -13,6 +12,7 @@ import {
   stateCookieName,
 } from "../src/auth/oidc.js";
 import type { OidcProvider } from "../src/auth/providers/types.js";
+import { mw } from "../src/auth/route-policy.js";
 import {
   readSession,
   sessionCookie,
