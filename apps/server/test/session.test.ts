@@ -15,7 +15,10 @@ const WEEK = 7 * 86400 * 1000;
 
 describe("session", () => {
   it("round-trips", async () => {
-    const v = await signSession(env, UID, now);
+    const v = await signSession(env, UID, now, {
+      provider: "access",
+      epoch: 0,
+    });
     expect(await readSession(env, v, now + 1000)).toEqual({
       uid: UID,
       exp: now + WEEK,
@@ -25,11 +28,17 @@ describe("session", () => {
     });
   });
   it("rejects expired", async () => {
-    const v = await signSession(env, UID, now);
+    const v = await signSession(env, UID, now, {
+      provider: "access",
+      epoch: 0,
+    });
     expect(await readSession(env, v, now + WEEK)).toBeNull();
   });
   it("rejects tampered payload", async () => {
-    const v = await signSession(env, UID, now);
+    const v = await signSession(env, UID, now, {
+      provider: "access",
+      epoch: 0,
+    });
     const [p, s] = v.split(".");
     const bad = `${p?.slice(0, -1)}${p?.endsWith("A") ? "B" : "A"}.${s}`;
     expect(await readSession(env, bad, now)).toBeNull();
@@ -39,6 +48,7 @@ describe("session", () => {
       { SESSION_SECRET: "other-secret-0123456789abcdefghijkl" } as Env,
       UID,
       now,
+      { provider: "access", epoch: 0 },
     );
     expect(await readSession(env, v, now)).toBeNull();
   });
@@ -68,12 +78,20 @@ describe("session", () => {
   });
   it("signSession rejects a missing secret and a bad uid", async () => {
     await expect(
-      signSession({ SESSION_SECRET: "" } as Env, UID, now),
+      signSession({ SESSION_SECRET: "" } as Env, UID, now, {
+        provider: "access",
+        epoch: 0,
+      }),
     ).rejects.toThrow();
-    await expect(signSession(env, "not-an-id", now)).rejects.toThrow();
+    await expect(
+      signSession(env, "not-an-id", now, { provider: "access", epoch: 0 }),
+    ).rejects.toThrow();
   });
   it("readSession never throws on bad secret", async () => {
-    const v = await signSession(env, UID, now);
+    const v = await signSession(env, UID, now, {
+      provider: "access",
+      epoch: 0,
+    });
     expect(await readSession({ SESSION_SECRET: "" } as Env, v, now)).toBeNull();
     expect(await readSession({} as Env, v, now)).toBeNull();
   });

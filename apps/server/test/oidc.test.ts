@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { newId } from "@oa/shared";
+import { newId, PAGES } from "@oa/shared";
 import { Hono } from "hono";
 import { exportJWK, generateKeyPair, type JWTPayload, SignJWT } from "jose";
 import {
@@ -19,6 +19,7 @@ import { readSession, sessionCookieName } from "../src/auth/session.js";
 import type { Env } from "../src/env.js";
 import { FAVICON_TAGS } from "../src/http/head.js";
 import { type AppVariables, session } from "../src/http/middleware.js";
+import { patchMember } from "../src/services/members.js";
 import { b64urlEncode } from "../src/util/crypto.js";
 import { login } from "./helpers.js";
 
@@ -893,5 +894,60 @@ describe("state cookie hardening (size cap, cookie tossing)", () => {
     const c = oidcSet(r) ?? "";
     expect(c).toMatch(/^oa_oidc_[A-Za-z0-9_-]{10}=/);
     expect(c).toMatch(/; Path=\/auth(;|$)/);
+  });
+});
+
+describe("session epoch on the Access callback (#369)", () => {
+  const epochOf = (email: string) =>
+    env.DB.prepare("select id, session_epoch e from users where email = ?")
+      .bind(email)
+      .first<{ id: string; e: number }>();
+  const sessOf = (r: Response) => readSession(env, cookieVal(r, SESSION));
+
+  it("a reactivated guest gets a live session at the new epoch", async () => {
+    const email = `rein-${newId().slice(0, 6)}@x.com`;
+    await login(email, "guest");
+    // The last share going deactivates (status removed, epoch + 1); a new
+    // share reactivates. Sign-in must use the bumped epoch, not 0.
+    await env.DB.prepare(
+      "update users set status = 'removed', session_epoch = session_epoch + 1 where email = ?",
+    )
+      .bind(email)
+      .run();
+    await env.DB.prepare("update users set status = 'active' where email = ?")
+      .bind(email)
+      .run();
+    const b = await begin({ email });
+    const r = await callback(b, b.oidc);
+    expect(r.status).toBe(302);
+    const row = await epochOf(email);
+    const s = await sessOf(r);
+    expect(s?.uid).toBe(row?.id);
+    expect(s?.e).toBe(row?.e);
+  });
+
+  it("a role change (epoch bump) does not lock the user out", async () => {
+    const email = `role-${newId().slice(0, 6)}@x.com`;
+    const { userId } = await login(email, "member");
+    const first = await begin({ email });
+    expect((await callback(first, first.oidc)).status).toBe(302);
+    await patchMember(env, userId, { role: "admin" });
+    const second = await begin({ email });
+    const r = await callback(second, second.oidc);
+    expect(r.status).toBe(302);
+    expect((await sessOf(r))?.e).toBe((await epochOf(email))?.e);
+  });
+
+  it("a non-active user lands on noAccess with no session", async () => {
+    const email = `sus-${newId().slice(0, 6)}@x.com`;
+    const { userId } = await login(email, "member");
+    await env.DB.prepare("update users set status = 'suspended' where id = ?")
+      .bind(userId)
+      .run();
+    const b = await begin({ email });
+    const r = await callback(b, b.oidc);
+    expect(r.status).toBe(302);
+    expect(r.headers.get("location")).toBe(PAGES.noAccess);
+    expect(cookieVal(r, SESSION)).toBeUndefined();
   });
 });

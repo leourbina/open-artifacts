@@ -34,11 +34,17 @@ export async function signSession(
   uid: string,
   now = Date.now(),
   opts: {
-    provider?: SessionProvider;
+    /** Required: a session that does not name its provider can't be audited. */
+    provider: SessionProvider;
+    /**
+     * Required: the user's session_epoch at sign-in (users.session_epoch).
+     * A default of 0 silently produced dead cookies after any epoch bump
+     * (deactivation, role change, sync) and looped Access users on 401.
+     */
+    epoch: number;
     tenant?: string;
-    epoch?: number;
     maxAgeS?: number;
-  } = {},
+  },
 ): Promise<string> {
   if (!isId(uid)) throw new Error("invalid uid");
   const { key } = await cookieKeys(env, "oa:session", now);
@@ -46,9 +52,9 @@ export async function signSession(
     uid,
     exp: now + (opts.maxAgeS ?? MAX_AGE_S) * 1000,
     iat: now,
-    p: opts.provider ?? "access",
+    p: opts.provider,
     ...(opts.tenant ? { t: opts.tenant } : {}),
-    e: opts.epoch ?? 0,
+    e: opts.epoch,
   };
   const p = b64urlEncode(utf8Encoder.encode(JSON.stringify(payload)));
   return `${p}.${await hmacSign(key, p)}`;

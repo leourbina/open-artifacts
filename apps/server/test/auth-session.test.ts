@@ -3,7 +3,7 @@ import { AUTH } from "@oa/shared";
 import type { Hono } from "hono";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
-import { deriveKey } from "../src/auth/keys.js";
+import { deriveKey, secretProblems } from "../src/auth/keys.js";
 import {
   buildAuthorizeRedirect,
   handleCallback,
@@ -73,7 +73,10 @@ const who = async (value: string, e: Env = env) =>
 
 describe("session payload", () => {
   it("signSession keeps positional now and writes iat, p, e", async () => {
-    const v = await signSession(env, UID, now);
+    const v = await signSession(env, UID, now, {
+      provider: "access",
+      epoch: 0,
+    });
     expect(await readSession(env, v, now + 1)).toEqual({
       uid: UID,
       exp: now + WEEK,
@@ -101,10 +104,9 @@ describe("session payload", () => {
   });
 
   it("is signed with the derived key, not the raw secret", async () => {
-    const [p, sig] = (await signSession(env, UID, now)).split(".") as [
-      string,
-      string,
-    ];
+    const [p, sig] = (
+      await signSession(env, UID, now, { provider: "access", epoch: 0 })
+    ).split(".") as [string, string];
     expect(await hmacVerify(await deriveKey(env, "oa:session"), p, sig)).toBe(
       true,
     );
@@ -154,7 +156,10 @@ describe("session middleware", () => {
 
   it("sets authMethod and sessionExp from the cookie", async () => {
     const { userId } = await login("t2-who@a.com");
-    const v = await signSession(env, userId, Date.now(), { provider: "dev" });
+    const v = await signSession(env, userId, Date.now(), {
+      provider: "dev",
+      epoch: 0,
+    });
     const r = await who(v);
     expect(r.user).toBe(userId);
     expect(r.method).toBe("dev");
@@ -163,7 +168,10 @@ describe("session middleware", () => {
 
   it("an epoch bump ends the session", async () => {
     const { userId } = await login("t2-bump@a.com");
-    const v = await signSession(env, userId);
+    const v = await signSession(env, userId, Date.now(), {
+      provider: "access",
+      epoch: 0,
+    });
     expect((await who(v)).user).toBe(userId);
     await setEpoch(userId, 1);
     expect(await who(v)).toEqual({ user: null, method: null, exp: null });
@@ -172,8 +180,14 @@ describe("session middleware", () => {
   it("N2: an epoch-1 session for an epoch-1 user is accepted; epoch 0 is not", async () => {
     const { userId } = await login("t2-n2@a.com");
     await setEpoch(userId, 1);
-    const ok = await signSession(env, userId, Date.now(), { epoch: 1 });
-    const stale = await signSession(env, userId, Date.now(), { epoch: 0 });
+    const ok = await signSession(env, userId, Date.now(), {
+      provider: "access",
+      epoch: 1,
+    });
+    const stale = await signSession(env, userId, Date.now(), {
+      provider: "access",
+      epoch: 0,
+    });
     expect((await who(ok)).user).toBe(userId);
     expect((await who(stale)).user).toBeNull();
   });
@@ -182,6 +196,7 @@ describe("session middleware", () => {
     const { userId } = await login("t2-tenant@a.com");
     const v = await signSession(env, userId, Date.now(), {
       provider: "google",
+      epoch: 0,
       tenant: "a.com",
     });
     expect((await who(v, direct())).user).toBe(userId);
@@ -192,6 +207,7 @@ describe("session middleware", () => {
     const { userId } = await login("t2-n4@a.com");
     const v = await signSession(env, userId, Date.now(), {
       provider: "code",
+      epoch: 0,
       tenant: "a.com",
     });
     expect((await who(v, trial())).user).toBe(userId);
@@ -202,15 +218,19 @@ describe("session middleware", () => {
 describe("SESSION_SECRET shorter than 32 characters", () => {
   const short = { ...env, SESSION_SECRET: "s".repeat(20) } as Env;
 
-  it("still signs in and keeps sessions working, on the raw secret (no 500)", async () => {
+  it("still signs in on the DERIVED key (no raw fallback, no 500)", async () => {
     const { userId } = await login("t2-short@a.com");
-    const v = await signSession(short, userId);
+    const v = await signSession(short, userId, Date.now(), {
+      provider: "access",
+      epoch: 0,
+    });
     const [p, sig] = v.split(".") as [string, string];
-    expect(await hmacVerify(short.SESSION_SECRET, p, sig)).toBe(true);
+    // HKDF accepts any length; the raw secret no longer signs anything.
+    expect(await hmacVerify(short.SESSION_SECRET, p, sig)).toBe(false);
     expect((await who(v, short)).user).toBe(userId);
   });
 
-  it("a session from before the upgrade (raw secret) still reads", async () => {
+  it("a pre-upgrade cookie signed with the short raw secret is refused", async () => {
     const { userId } = await login("t2-short-old@a.com");
     const p = b64urlEncode(
       new TextEncoder().encode(
@@ -218,10 +238,10 @@ describe("SESSION_SECRET shorter than 32 characters", () => {
       ),
     );
     const old = `${p}.${await hmacSign(short.SESSION_SECRET, p)}`;
-    expect((await who(old, short)).user).toBe(userId);
+    expect((await who(old, short)).user).toBeNull();
   });
 
-  it("state cookies work on the raw secret too", async () => {
+  it("state cookies use the derived key too", async () => {
     const id = "access" as const;
     const r = await buildAuthorizeRedirect(
       short,
@@ -264,15 +284,16 @@ describe("SESSION_SECRET shorter than 32 characters", () => {
     ).resolves.toMatchObject({ next: "/n" });
   });
 
-  it("/healthz reports the problem; a healthy install's /healthz is unchanged", async () => {
+  it("the weak secret is not advertised on public /healthz (setup/admins only)", async () => {
     const app = createApp();
     const h = (e: Env) =>
       app.fetch(new Request("http://app.localhost/healthz"), e, ctx);
-    expect(await (await h(short)).json()).toMatchObject({
-      ok: true,
-      problems: ["SESSION_SECRET shorter than 32 characters; rotate it"],
-    });
-    expect(await (await h(env)).json()).not.toHaveProperty("problems");
+    expect(await (await h(short)).json()).not.toHaveProperty("problems");
+    // The problem text still exists for setup and the admin surface.
+    expect(secretProblems(short)).toEqual([
+      "SESSION_SECRET shorter than 32 characters; rotate it",
+    ]);
+    expect(secretProblems(env)).toEqual([]);
   });
 });
 

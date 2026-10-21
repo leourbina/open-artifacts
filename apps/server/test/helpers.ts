@@ -29,8 +29,23 @@ export async function login(
       role,
       createdAt: Date.now(),
     });
+  // The real epoch, like a real sign-in: a hand-signed e:0 cookie would hide
+  // epoch bugs (the #369 Access regression).
+  const row = await env.DB.prepare(
+    "select session_epoch e from users where id = ?",
+  )
+    .bind(userId)
+    .first<{ e: number }>();
   return {
-    cookie: `${sessionCookieName(env)}=${await signSession(env, userId)}`,
+    cookie: `${sessionCookieName(env)}=${await signSession(
+      env,
+      userId,
+      Date.now(),
+      {
+        provider: "access",
+        epoch: row?.e ?? 0,
+      },
+    )}`,
     userId,
   };
 }

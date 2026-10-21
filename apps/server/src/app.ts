@@ -1,7 +1,6 @@
 import { AUTH, planOf } from "@oa/shared";
 import { type Context, Hono, type MiddlewareHandler } from "hono";
 import { getCookie } from "hono/cookie";
-import { secretProblems } from "./auth/keys.js";
 import {
   enforcePolicy,
   mw,
@@ -24,11 +23,6 @@ import { publicHome, withInstanceMeta } from "./routes/shell.js";
 import { VERSION } from "./version.gen.js";
 
 export const ROBOTS = "User-agent: *\nDisallow: /";
-
-const problemsOf = (env: Parameters<typeof secretProblems>[0]) => {
-  const problems = secretProblems(env);
-  return problems.length ? { problems } : {};
-};
 
 export const methodNotAllowed = () =>
   errorJson(405, "bad_request", "Method not allowed", undefined, {
@@ -98,9 +92,6 @@ export function createApp(
       ok: true,
       plan: planOf(c.env.PLAN),
       version: VERSION,
-      // Install problems setup must surface (never secret values); absent
-      // when there are none, so a healthy install's bytes are unchanged.
-      ...problemsOf(c.env),
       ...(installId ? { installId } : {}),
     });
   });
