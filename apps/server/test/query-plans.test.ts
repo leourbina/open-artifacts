@@ -127,7 +127,7 @@ const queries: Record<string, { q: () => Q; plan: RegExp }> = {
      order by a.updated_at limit ?`,
       params: [1, 50],
     }),
-    // Unchanged by #248: walks a live partial index (live rows only). 0010's
+    // Unchanged by #248: walks a live partial index (live rows only). 0009's
     // narrower artifacts_space_live_idx reads the same live rows and SQLite
     // now prefers it; either is a live-only scan, never the table.
     plan: s(`SCAN a USING INDEX (artifacts_space_live_idx|${OWNER})`),

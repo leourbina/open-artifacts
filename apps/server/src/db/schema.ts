@@ -196,7 +196,7 @@ export const artifacts = sqliteTable(
     /**
      * The space this artifact belongs to (P3). Never null in practice: the
      * artifacts_space_required trigger aborts an insert without one, and the
-     * 0010 backfill set it to owner_id for every pre-spaces row. Nullable here
+     * 0009 backfill set it to owner_id for every pre-spaces row. Nullable here
      * because ADD COLUMN cannot add NOT NULL without a default (0008's rule).
      */
     spaceId: text("space_id").references(() => spaces.id),

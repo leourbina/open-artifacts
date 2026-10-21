@@ -80,8 +80,6 @@ export const ROUTE_POLICY: Readonly<Record<string, Policy>> = {
   "GET /auth/callback": { public: "sign-in callback" },
   "POST /auth/logout": { public: "sign-out (same-origin, CSRF)" },
   "GET /auth/dev-login": { public: "dev only; refused outside dev" },
-  // #387: verifies its own Ed25519 signature; no user policy.
-  "POST /__oa/nightly": { public: "signed nightly trigger (Ed25519)" },
   "GET /api/v1/me": { user: "the caller" },
   "PATCH /api/v1/me": { user: "the caller" },
   "GET /api/v1/members": { org: "members.manage" },
@@ -155,9 +153,6 @@ export const ROUTE_POLICY: Readonly<Record<string, Policy>> = {
   "GET /*": { public: "SPA and assets" },
   "HEAD /*": { public: "SPA and assets" },
 };
-
-/** Policy entries whose route lands in another PR (coverage test exemption). */
-export const PENDING_ROUTES: readonly string[] = ["POST /__oa/nightly"];
 
 /** Content host routes: the handlers verify signed tokens or public visibility. */
 export const CONTENT_POLICY: Readonly<Record<string, Policy>> = {
