@@ -1,9 +1,13 @@
 import "@testing-library/jest-dom/vitest";
 import { toast } from "@oa/ui/shadcn";
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
 import { afterEach } from "vitest";
 
 afterEach(cleanup);
+
+// waitFor and findBy poll for state; 1 s (the default) is too short on a
+// loaded CI runner. Tests that need a tighter bound pass their own timeout.
+configure({ asyncUtilTimeout: 5_000 });
 
 // jsdom has no matchMedia; the shadcn sidebar asks for the phone breakpoint.
 if (!window.matchMedia)
