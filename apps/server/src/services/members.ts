@@ -16,6 +16,7 @@ import {
   reservedArtifacts,
   settings,
   shares,
+  spaces,
   tokens,
   uploads,
   users,
@@ -148,14 +149,21 @@ export async function removeMember(
   const to = owner.id;
   await db.batch([
     // Split live/deleted: owner_id is only indexed by the two partial indexes (#248).
+    // space_id moves with owner_id (P3 T1): the artifacts now live in the
+    // instance owner's personal space. (With the spaces flag on, T6 keeps the
+    // row and the personal space instead of deleting them.)
     db
       .update(artifacts)
-      .set({ ownerId: to })
+      .set({ ownerId: to, spaceId: to })
       .where(and(eq(artifacts.ownerId, id), isNull(artifacts.deletedAt))),
     db
       .update(artifacts)
-      .set({ ownerId: to })
+      .set({ ownerId: to, spaceId: to })
       .where(and(eq(artifacts.ownerId, id), isNotNull(artifacts.deletedAt))),
+    db
+      .update(spaces)
+      .set({ ownerUserId: to })
+      .where(and(eq(spaces.id, id), eq(spaces.kind, "personal"))),
     db
       .update(versions)
       .set({ createdBy: to })

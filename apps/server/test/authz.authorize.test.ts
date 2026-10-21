@@ -45,6 +45,7 @@ beforeAll(async () => {
     await getDb(env).insert(artifacts).values({
       id: ids[name],
       ownerId,
+      spaceId: ownerId,
       title: name,
       format: "html",
       visibility,
@@ -134,6 +135,7 @@ describe("MCP data store: can(level, data.*) and the db capability", () => {
     await getDb(env).insert(artifacts).values({
       id: dbId,
       ownerId,
+      spaceId: ownerId,
       title: "db",
       format: "html",
       visibility: "private",
@@ -181,6 +183,7 @@ describe("gatherer fails closed and caps", () => {
     await getDb(env).insert(artifacts).values({
       id: gone,
       ownerId,
+      spaceId: ownerId,
       title: "gone",
       format: "html",
       visibility: "private",

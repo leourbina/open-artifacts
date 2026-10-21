@@ -64,6 +64,20 @@
       "when": 1792536445143,
       "tag": "0008_direct_signin",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1792594201036,
+      "tag": "0009_nightly_runs",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1792594694169,
+      "tag": "0010_spaces",
+      "breakpoints": true
     }
   ]
 }

@@ -113,6 +113,7 @@ beforeAll(async () => {
     await db.insert(artifacts).values({
       id: ids[name],
       ownerId: creatorId,
+      spaceId: creatorId,
       title: name,
       format: "html",
       visibility,
@@ -305,6 +306,7 @@ describe("revocation", () => {
     await db.insert(artifacts).values({
       id,
       ownerId: creatorId,
+      spaceId: creatorId,
       title: "t",
       format: "html",
       createdAt: 1,

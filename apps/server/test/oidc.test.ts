@@ -406,8 +406,8 @@ describe("GET /auth/callback", () => {
     const now = Date.now();
     await env.DB.batch([
       env.DB.prepare(
-        "insert into artifacts (id, owner_id, title, format, created_at, updated_at) values (?, ?, 't', 'html', ?, ?)",
-      ).bind(aid, userId, now, now),
+        "insert into artifacts (id, owner_id, space_id, title, format, created_at, updated_at) values (?, ?, ?, 't', 'html', ?, ?)",
+      ).bind(aid, userId, userId, now, now),
       env.DB.prepare(
         "insert into shares (artifact_id, email, role, created_by, created_at) values (?, 'guest@x.com', 'viewer', ?, ?)",
       ).bind(aid, userId, now),

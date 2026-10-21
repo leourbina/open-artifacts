@@ -2,6 +2,8 @@ import {
   FORMATS,
   RoleSchema,
   ShareRoleSchema,
+  SpaceKindSchema,
+  SpaceRoleSchema,
   VisibilitySchema,
 } from "@oa/shared";
 import { sql } from "drizzle-orm";
@@ -44,8 +46,144 @@ export const users = sqliteTable(
     sessionEpoch: integer("session_epoch").notNull().default(0),
     /** MemberStatus (@oa/shared): active | suspended | removed. P3's sync sets it; sign-in refuses non-active. */
     status: text("status").notNull().default("active"),
+    /**
+     * A restriction cap (P3), from an admin's manual flag or from a restricted
+     * Google group (sync keeps it, manual never lifts the group one). No CHECK:
+     * 0008's precedent, an ADD COLUMN check needs a table rebuild.
+     */
+    restrictedManual: integer("restricted_manual").notNull().default(0),
+    restrictedSync: integer("restricted_sync").notNull().default(0),
   },
   () => [check("users_role_check", inList("role", RoleSchema.options))],
+);
+
+// P3: every artifact lives in a space. A personal space's id is its owner's
+// user id (one row per user, created by the users_personal_space trigger), so
+// today's installs map 1:1 with no access change. No FK on owner_user_id:
+// removing a member keeps the space row (it may hold artifacts) and re-points
+// it at the instance owner.
+export const spaces = sqliteTable(
+  "spaces",
+  {
+    id: text("id").primaryKey(),
+    kind: text("kind").notNull(),
+    name: text("name").notNull(),
+    ownerUserId: text("owner_user_id"),
+    /** The role every member gets in this shared space; null = none (P3 T9). */
+    allMembersRole: text("all_members_role"),
+    /** "Public links off": no /p/ content and no new public artifacts (P3 T9). */
+    publicLinks: integer("public_links").notNull().default(1),
+    createdAt: integer("created_at").notNull(),
+    deletedAt: integer("deleted_at"),
+  },
+  (t) => [
+    check("spaces_kind_check", inList("kind", SpaceKindSchema.options)),
+    check(
+      "spaces_all_members_role_check",
+      sql`${t.allMembersRole} is null or ${t.allMembersRole} in ('viewer', 'editor', 'manager')`,
+    ),
+    check("spaces_public_links_check", sql`${t.publicLinks} in (0, 1)`),
+  ],
+);
+
+// Manual and sync roles are separate rows so a sync pass never overwrites an
+// admin's manual grant; the effective role is the max over all sources.
+export const spaceMembers = sqliteTable(
+  "space_members",
+  {
+    spaceId: text("space_id")
+      .notNull()
+      .references(() => spaces.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    role: text("role").notNull(),
+    source: text("source").notNull(),
+    createdAt: integer("created_at").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.spaceId, t.userId, t.source] }),
+    // "Which shared spaces am I in?" (list scope=spaces): a scan otherwise.
+    index("space_members_user_idx").on(t.userId),
+    check("space_members_role_check", inList("role", SpaceRoleSchema.options)),
+    check("space_members_source_check", inList("source", ["manual", "sync"])),
+  ],
+);
+
+// A Google group mapped to a space role (P3 T9/T14). Keyed by the immutable
+// group id, never the email.
+export const groupMappings = sqliteTable(
+  "group_mappings",
+  {
+    spaceId: text("space_id")
+      .notNull()
+      .references(() => spaces.id, { onDelete: "cascade" }),
+    groupId: text("group_id").notNull(),
+    groupEmail: text("group_email").notNull(),
+    role: text("role").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.spaceId, t.groupId] }),
+    check("group_mappings_role_check", inList("role", SpaceRoleSchema.options)),
+  ],
+);
+
+// Groups whose members are capped at viewer on every surface (P3 T14).
+export const restrictedGroups = sqliteTable("restricted_groups", {
+  groupId: text("group_id").primaryKey(),
+  groupEmail: text("group_email").notNull(),
+});
+
+// Raw directory rows from the last successful read: a parent_ids list resolves
+// nesting locally, and gen tags a sweep's generation (P3 T13/T14).
+export const directoryGroups = sqliteTable(
+  "directory_groups",
+  {
+    groupId: text("group_id").primaryKey(),
+    email: text("email").notNull(),
+    parentIds: text("parent_ids").notNull().default("[]"),
+    gen: integer("gen").notNull().default(0),
+  },
+  (t) => [
+    check("directory_groups_parent_ids_check", sql`json_valid(${t.parentIds})`),
+  ],
+);
+
+export const directoryMembers = sqliteTable(
+  "directory_members",
+  {
+    groupId: text("group_id")
+      .notNull()
+      .references(() => directoryGroups.groupId, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    gen: integer("gen").notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.groupId, t.userId] })],
+);
+
+// One row per directory key (cursor, customerId, health timestamps); a single
+// PK read on the auth path (P3 T13).
+export const directoryState = sqliteTable("directory_state", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+});
+
+export const auditEvents = sqliteTable(
+  "audit_events",
+  {
+    id: text("id").primaryKey(),
+    at: integer("at").notNull(),
+    actorKind: text("actor_kind").notNull(),
+    actorId: text("actor_id"),
+    action: text("action").notNull(),
+    targetType: text("target_type").notNull(),
+    targetId: text("target_id"),
+    spaceId: text("space_id"),
+    detail: text("detail").notNull().default("{}"),
+  },
+  (t) => [index("audit_events_at_idx").on(t.at)],
 );
 
 export const artifacts = sqliteTable(
@@ -55,6 +193,13 @@ export const artifacts = sqliteTable(
     ownerId: text("owner_id")
       .notNull()
       .references(() => users.id),
+    /**
+     * The space this artifact belongs to (P3). Never null in practice: the
+     * artifacts_space_required trigger aborts an insert without one, and the
+     * 0010 backfill set it to owner_id for every pre-spaces row. Nullable here
+     * because ADD COLUMN cannot add NOT NULL without a default (0008's rule).
+     */
+    spaceId: text("space_id").references(() => spaces.id),
     title: text("title").notNull(),
     description: text("description"),
     format: text("format").notNull(),
@@ -94,6 +239,10 @@ export const artifacts = sqliteTable(
       .where(sql`${t.deletedAt} is null`),
     index("artifacts_owner_updated_live_idx")
       .on(t.ownerId, t.updatedAt)
+      .where(sql`${t.deletedAt} is null`),
+    // A space's live artifacts (list scope=space, public-links-off, closeSpace).
+    index("artifacts_space_live_idx")
+      .on(t.spaceId)
       .where(sql`${t.deletedAt} is null`),
     check(
       "artifacts_allow_anon_check",
@@ -226,6 +375,12 @@ export const identities = sqliteTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     createdAt: integer("created_at").notNull(),
+    /**
+     * 1 once the directory's user id is linked (P3 T12/T14). A synced user is
+     * one with a bound Google identity while a directory is connected; the
+     * staleness rule keys off it (P3 T18). No CHECK, as for users.status.
+     */
+    directoryBound: integer("directory_bound").notNull().default(0),
   },
   (t) => [
     primaryKey({ columns: [t.provider, t.subject] }),

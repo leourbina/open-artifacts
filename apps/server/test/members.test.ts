@@ -181,6 +181,7 @@ describe("members API", () => {
     await db.insert(artifacts).values({
       id: aid,
       ownerId: v.userId,
+      spaceId: v.userId,
       title: "t",
       format: "html",
       createdAt: now,

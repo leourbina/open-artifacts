@@ -28,7 +28,7 @@ it("inserts a user and artifact; email unique is case-insensitive", async () => 
     .bind(NOW)
     .run();
   await DB.prepare(
-    "INSERT INTO artifacts (id,owner_id,title,format,visibility,created_at,updated_at) VALUES ('a1','u1','T','html','private',?,?)",
+    "INSERT INTO artifacts (id,owner_id,space_id,title,format,visibility,created_at,updated_at) VALUES ('a1','u1','u1','T','html','private',?,?)",
   )
     .bind(NOW, NOW)
     .run();
@@ -60,10 +60,10 @@ it("check constraints reject bad values", async () => {
     "INSERT INTO users (id,email,name,role,created_at) VALUES ('u3','c@x.com','C','god',1)",
   );
   await bad(
-    "INSERT INTO artifacts (id,owner_id,title,format,visibility,created_at,updated_at) VALUES ('a2','u1','T','exe','private',1,1)",
+    "INSERT INTO artifacts (id,owner_id,space_id,title,format,visibility,created_at,updated_at) VALUES ('a2','u1','u1','T','exe','private',1,1)",
   );
   await bad(
-    "INSERT INTO artifacts (id,owner_id,title,format,visibility,created_at,updated_at) VALUES ('a3','u1','T','html','secret',1,1)",
+    "INSERT INTO artifacts (id,owner_id,space_id,title,format,visibility,created_at,updated_at) VALUES ('a3','u1','u1','T','html','secret',1,1)",
   );
   await bad(
     "INSERT INTO shares (artifact_id,email,role,created_by,created_at) VALUES ('a1','z@x.com','owner','u1',1)",
@@ -89,7 +89,7 @@ it("seeds settings and supports FTS", async () => {
 
 it("deleting an artifact cascades to versions and shares", async () => {
   await DB.prepare(
-    "INSERT INTO artifacts (id,owner_id,title,format,visibility,created_at,updated_at) VALUES ('ac','u1','T','html','private',1,1)",
+    "INSERT INTO artifacts (id,owner_id,space_id,title,format,visibility,created_at,updated_at) VALUES ('ac','u1','u1','T','html','private',1,1)",
   ).run();
   await DB.prepare(
     "INSERT INTO versions (artifact_id,version,entry,created_by,created_at) VALUES ('ac',1,'index.html','u1',1)",
@@ -110,7 +110,7 @@ it("checks on flags and json columns", async () => {
   const bad = (sql: string) =>
     expect(DB.prepare(sql).run()).rejects.toThrow(/CHECK/);
   const base =
-    "INSERT INTO artifacts (id,owner_id,title,format,visibility,created_at,updated_at,%C) VALUES ('ax','u1','T','html','private',1,1,%V)";
+    "INSERT INTO artifacts (id,owner_id,space_id,title,format,visibility,created_at,updated_at,%C) VALUES ('ax','u1','u1','T','html','private',1,1,%V)";
   await bad(base.replace("%C", "allow_anonymous_writes").replace("%V", "2"));
   await bad(base.replace("%C", "has_thumbnail").replace("%V", "-1"));
   await bad(base.replace("%C", "capabilities").replace("%V", "'{nope'"));

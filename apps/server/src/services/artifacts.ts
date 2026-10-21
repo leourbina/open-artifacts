@@ -213,12 +213,15 @@ export async function publish(
     stmts.push(
       db
         .prepare(
-          `insert into artifacts (id, owner_id, title, description, format, visibility,
+          `insert into artifacts (id, owner_id, space_id, title, description, format, visibility,
              current_version, capabilities, allow_anonymous_writes, created_at, updated_at)
-           select ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ? where 1${guard}`,
+           select ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ? where 1${guard}`,
         )
         .bind(
           id,
+          user.id,
+          // Every artifact lives in a space (P3 T1): the creator's personal
+          // space today; T10 reads input.spaceId for a shared space.
           user.id,
           input.title,
           input.description ?? null,
