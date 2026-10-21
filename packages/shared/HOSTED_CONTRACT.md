@@ -67,7 +67,7 @@ every flag that is on.
 | `RestrictionSchema` | `{ manual, groups: GroupRef[] }` (Member.restriction): restricted if either applies; frozen group restrictions stay in force |
 | `TierSchema` | `trial \| team \| business` (null = self-hosted) |
 | `DirectoryModeSchema` | `off \| google \| frozen` |
-| `InstanceDirectorySchema` | `{ mode, healthy, unhealthySince, banner, tokensUnverified, state, staleAt, heldSweeps }`. `banner`: unhealthy ≥ 1 h (owner/admin only). `tokensUnverified`: true while unhealthy, since PATs and MCP grants aren't capped at 24 h. `state` (`SyncState`) and `staleAt` (lastSuccessAt + 7 d): owner/admin only, null for others; `heldSweeps`: held sweeps waiting, 0 for non-admins |
+| `InstanceDirectorySchema` | `{ mode, healthy, unhealthySince, banner, tokensUnverified, state, staleAt, heldSweeps }`. `banner`: unhealthy ≥ 1 h (owner/admin only). `tokensUnverified`: true while unhealthy, since PATs and MCP grants aren't capped at 24 h. `state` (`SyncState`) and `staleAt` (lastSuccessAt + 7 d, informational only - no access effect): owner/admin only, null for others; `heldSweeps`: held sweeps waiting, 0 for non-admins |
 | `SyncStateSchema` | `ok \| backoff \| auth_failed \| customer_mismatch \| scope_missing \| never`. `scope_missing`: a granted scope was revoked (Admin SDK 403 insufficientPermissions); fix copy "reconnect and grant all scopes" |
 | `InstanceSignInSchema` | `{ mode: access \| direct, providers: (access \| google \| email)[] }` |
 | `AuthMethodSchema` | `access \| google \| code \| pat \| oauth \| dev \| test` |
@@ -117,7 +117,7 @@ every flag that is on.
 | `GET R.spaces` | `SpacesQuery` → `Page<Space>` | signed in (org admins also see every shared space, `myRole: null`) |
 | `POST R.spaces` | `SpaceCreate` → 201 `Space` | org owner, admin |
 | `GET R.space(id)` | → `Space` | member, org admin |
-| `PATCH R.space(id)` | `SpacePatch` → `Space` | `name`, `publicLinks`: space manager or org admin (`publicLinks` audited `space.public_links`; off rewrites public artifacts to team and closes sockets). `allMembersRole`: org admin |
+| `PATCH R.space(id)` | `SpacePatch` → `Space` | `name`, `publicLinks`: space manager or org admin (`publicLinks` audited `space.public_links`; off blocks new public links only - existing links and sockets keep working, nothing is rewritten). `allMembersRole`: org admin |
 | `DELETE R.space(id)` | 204; 409 `space_not_empty` | org owner, admin |
 | `GET R.spaceMembers(id)` | → `Page<SpaceMember>` | member, org admin |
 | `PUT R.spaceMember(id, userId)` | `SpaceMemberPut` → `SpaceMember` | space manager, org admin |

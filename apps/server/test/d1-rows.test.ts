@@ -41,8 +41,9 @@ it("publish, new version and index alarm write the #248 row counts", async () =>
   });
   expect(r.status).toBe(201);
   const { id } = (await r.json()) as { id: string };
-  // artifacts insert 4 (table, pk, 2 live partials) + bump 3 + versions 2 + FTS seed 1.
-  expect(rows.n).toBe(10);
+  // artifacts insert 5 (table, pk, 3 live partials incl. artifacts_space_live_idx)
+  // + bump 3 + versions 2 + FTS seed 1.
+  expect(rows.n).toBe(11);
 
   rows.n = 0;
   await indexVersionOrThrow(counted, id, 1);

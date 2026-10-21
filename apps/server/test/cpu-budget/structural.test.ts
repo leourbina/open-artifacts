@@ -272,12 +272,12 @@ describe("cron purge", () => {
     for (let i = 0; i < 55; i++) {
       const id = (
         await env.DB.prepare(
-          `insert into artifacts (id, owner_id, title, format, visibility, current_version,
+          `insert into artifacts (id, owner_id, space_id, title, format, visibility, current_version,
              capabilities, allow_anonymous_writes, created_at, updated_at, deleted_at)
-           values (lower(hex(randomblob(8))), ?, 't', 'markdown', 'private', 0, '{}', 0, ?, ?, ?)
+           values (lower(hex(randomblob(8))), ?, ?, 't', 'markdown', 'private', 0, '{}', 0, ?, ?, ?)
            returning id`,
         )
-          .bind(u.userId, old, old, old)
+          .bind(u.userId, u.userId, old, old, old)
           .first<{ id: string }>()
       )?.id as string;
       ids.push(id);

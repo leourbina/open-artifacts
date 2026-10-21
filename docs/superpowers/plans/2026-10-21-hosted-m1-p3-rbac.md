@@ -36,16 +36,16 @@
   - A wrong customer or domain fails closed.
   - Once sync has been unhealthy for over 1 h, browser sessions older than 24 h are refused and a banner appears. PATs and MCP OAuth grants are exempt from that cap; the banner says "agent tokens not re-verified" (`tokensUnverified: true`).
   - Owners get an email at 24 h.
-  - Synced users whose last successful directory read is over 7 days old are denied on every surface, PATs and MCP OAuth grants included (Task 18).
+  - There is **no stale cutoff** (user decision, 2026-10-21 PM): while sync is unhealthy, synced people keep last-sync access indefinitely, PATs and MCP OAuth grants included. `staleAt` is informational only (Task 18).
 - **Break-glass for a stale org owner:**
   - It needs a fresh Google sign-in (`hd` verified, within 10 min).
   - It opens only the directory status, connect and sync routes.
   - Every use is audited and emails the owner.
 - **Reconcile:** hourly, and also at sign-in (that user only), on mapping changes and on "Sync now". Add Directory `users.watch` if the Reports lag measured on FinQore exceeds 15 min.
-- **Content URL revocation lives in D1.** The content host's existing artifact statement joins `users.status` (for user-bound tokens) and `spaces.public_links`. No KV deny list.
+- **Content URL revocation lives in D1.** The content host's existing artifact statement joins `users.status` (for user-bound tokens). No KV deny list. The space's public-links toggle is not part of it: it only blocks new public links, so an existing `/p/` link keeps working.
 - **The broker does the directory token exchange and refresh on hosted installs.** The install keeps only the AES-GCM-encrypted refresh token. **Self-hosted installs may use a direct transport** with their own Google app (decided by the manager and the user); `HOSTED=1` refuses it.
 - **`DIRECTORY_TOKEN_KEY` comes from Platform (P1) provisioning.** It is not a user step.
-- **Token cap during unhealthy sync (decided):** the 24 h cap is browser sessions only; PATs and MCP OAuth grants are exempt but covered by the 7-day stale rule; the owner banner adds "agent tokens not re-verified".
+- **Token cap during unhealthy sync (decided):** the 24 h cap is browser sessions only; PATs and MCP OAuth grants are exempt, and there is no stale cutoff for them either (last-sync access is kept); the owner banner adds "agent tokens not re-verified".
 - **`team` in shared spaces keeps today's meaning** (every uncapped member). The protection is who can widen: only managers and personal owners may set visibility; org owners and admins only by self-adding as manager (audited).
 - **Owners and admins can't be restricted** (`restrict_admin`); sync skips them in restricted groups. A cap also drops every admin power in `orgCan` as belt and braces.
 - **Fail closed on malformed inputs:** `decide` allowlists roles, kinds and flags; capped callers never see trash.
@@ -60,7 +60,7 @@
 ## Review Focus
 
 1. **Recycled email** (old Bob deleted, new Bob gets the address). Expect new Bob to get a new user row, an empty personal space, and none of old Bob's shares or memberships. Tested in Tasks 14 and 16.
-2. **Space toggled to "public links off"** while anonymous viewers hold sockets and `/p/` URLs. Expect `/p/` to return 404 at once, the artifacts to become `team`, and anonymous sockets to close. Tested in Tasks 9 and 11.
+2. **Space toggled to "public links off"** while anonymous viewers hold sockets and `/p/` URLs. Expect the existing `/p/` URLs and sockets to keep working, and only a NEW public link to be refused with 403 `public_links_off`; the toggle never rewrites an artifact or revokes a link. (A move of a public artifact into that space still rewrites it to `team` and closes its sockets.) Tested in Tasks 9 and 11.
 3. **The rollout window between Task 1 and Task 9.** Expect a new user or artifact created on a build with only Tasks 1 to 5 to have a personal space and `space_id`, with no FK failure. Tested in Task 1.
 4. **A contractor in a restricted group who also gets `allMembersRole` editor or an editor share.** Expect viewer, no publish, no live-data writes, and no creation, even in their personal space. Tested in Tasks 2 and 16.
 5. **A delegated (non-super) admin connects the directory.** Expect the connection refused, because partial listings look complete. Tested in Task 12.
@@ -136,7 +136,7 @@ Each surface's gate is enforced by `enforcePolicy` middleware (Task 5) before th
 | MCP tools, all 17 plus `list_spaces` | `TOOL_POLICY`, checked against `tool-manifest.json` | next call (user row read per call; grants revoked) |
 | REST data API, storage, data reset, anon id | runtime `gate()` kinds mapped 1:1 to actions | next request |
 | Content host `/c/` signed (frame and `?dl=1`) | minted after `content.mint`; token carries `uid`; the serve statement joins `users.status` and staleness | next request |
-| Content host `/p/` public | the serve statement requires `visibility = public` and `spaces.public_links = 1` | next request |
+| Content host `/p/` public | the serve statement requires `visibility = public` (the public-links toggle only blocks new links, so it is not part of this check) | next request |
 | data-subscribe WS | `subscribe` + presence `touch(authzAt)` awaited in the DO accept path | under 1 s |
 | events WS | `events` + same presence path; publisher names from policy | under 1 s |
 | Spaces, directory, audit, members, settings, usage, tokens, OAuth consent | `orgCan` entries | next request |
@@ -192,7 +192,7 @@ Each surface's gate is enforced by `enforcePolicy` middleware (Task 5) before th
 **Interfaces:**
 - Consumes: P2's `0008` (`identities(provider, subject, user_id)`, `login_codes`, and `users.status` `active|suspended|removed`, which P3 does not re-add but owns changing); P2's `insertUserStmts` is the only app insert path, and the personal space still comes from P3's trigger.
 - Tables (all `IF NOT EXISTS`):
-  - `spaces(id pk, kind 'personal'|'shared', name, owner_user_id null, all_members_role null, public_links int default 1, created_at, deleted_at)`. No `outside_sharing` column: it is dropped from both the schema and the contract until M4 (decided).
+  - `spaces(id pk, kind 'personal'|'shared', name, owner_user_id null, all_members_role null, public_links int default 0, created_at, deleted_at)`. No `outside_sharing` column: it is dropped from both the schema and the contract until M4 (decided).
   - `space_members(space_id, user_id, role, source 'manual'|'sync', created_at, pk(space_id, user_id, source))`, with an index on `(user_id)`.
   - `group_mappings(space_id, group_id, group_email, role, pk(space_id, group_id))`.
   - `restricted_groups(group_id pk, group_email)`, keyed by Google `groupId`, never the email.
@@ -324,7 +324,7 @@ it("MCP data tools: creator without db capability gets capability_denied", async
 - Branches, each with `deleted_at is null` (one per scope):
   - **mine:** `space_id = caller.id`.
   - **shared:** the share subquery.
-  - **team:** `visibility in (team, public)` for non-guests; public only where `public_links = 1`.
+  - **team:** `visibility in (team, public)` for non-guests; public regardless of the space's public-links toggle (it only blocks new public links).
   - **spaces:** `space_id in (select sm.space_id from space_members sm join spaces s on s.id = sm.space_id and s.kind = 'shared' where sm.user_id = ?)`, OR `space_id in (select id from spaces where kind = 'shared' and all_members_role is not null)` (the second omitted for guests and capped users).
   - **space:** one shared space (`loadSpace` first).
 
@@ -465,25 +465,22 @@ it("export streams NDJSON with one line per event", async () => { /* lines.lengt
 **Interfaces:**
 - Routes and shapes exactly as in PR #359: `R.spaces` (`SpacesQuery` → `Page<Space>`), `R.space(id)`, `R.spaceMembers(id)` (`Page<SpaceMember>`), `R.spaceMember(id, userId)`, `R.spaceMappings(id)`, `R.spaceMapping(id, groupId)`, and the instance-wide `R.restrictedGroups` / `R.restrictedGroup(groupId)` (keyed by `groupId`; groups appear as `GroupRef { groupId, email, name }` everywhere). `PUT R.restrictedGroup` is 409 `directory_sync_off` when sync is off or frozen; `DELETE` works in any mode and lifts a frozen restriction. The manual flag `PUT/DELETE R.memberRestricted(id)` (→ `Member` with `restriction`; org owner or admin; any mode; audited `restricted.set` / `restricted.remove`) covers Team, manual and frozen installs and never lifts a group restriction. Any restriction change calls `revokeUserLive`. Owners and admins can never be restricted: `R.memberRestricted` on an owner or admin target is 400 `restrict_admin` (contract #370), and `orgCan` also drops every admin power under a cap as belt and braces. Mapping changes and restricted-group adds while sync is off or frozen are 409 `directory_sync_off`. Personal spaces on any of these routes are 400 `space_personal`; deleting a non-empty space is 409 `space_not_empty`.
 - `PATCH R.space(id)`: `SPACE_MANAGER_FIELDS` (`name`, `publicLinks`) for space managers and org admins; `allMembersRole` for org admins. Every `publicLinks` change writes `space.public_links`.
-- **Public links off:**
-  - One batch: `update artifacts set visibility = 'team' where space_id = ? and visibility = 'public' and deleted_at is null`, the space update and the audit row.
-  - Then the job `closeSpace(spaceId)` closes every socket (anonymous ones included) on each artifact in the space, 50 per alarm, paged by `artifacts_space_live_idx`.
+- **Public links off (user decision, 2026-10-21 PM): it only blocks NEW links.**
+  - One batch: the space update and the audit row. Nothing else: no artifact is rewritten to `team` and no socket is closed. Existing `/p/` links and their anonymous sockets keep working (the serving check never consults `public_links`).
   - New `public` on that space (PATCH or publish) is 403 `public_links_off`, enforced on the visibility route itself (pinned from the #367 review).
+  - The move rule is separate (T10): a public artifact moved into a no-public-links space is rewritten to `team` in the move batch and its sockets close.
 - **Lowering `allMembersRole`, removing a mapping, or removing a member:** the job `revokeUsers(userIds)` runs in pages of 50, with no cap.
 - Admin self-add (`POST R.spaceMemberSelf(id)`, `SpaceMemberPut` → 201 `SpaceMember`, org admin): shared spaces only (else 400 `space_personal`); writes `space.admin_self_add` and emails the space managers.
 
 - [ ] **Step 1: Failing tests**
 
 ```ts
-it("public links off rewrites public artifacts to team in the same batch", async () => {
+it("public links off leaves existing public artifacts and /p/ links working (no rewrite, no revocation)", async () => {
+  const before = await openAnonSockets(sixtyArtifactsInSpace);  // over the old 50 cap
   await patchSpace(admin, sid, { publicLinks: false });
-  expect((await row(env, pubArt)).visibility).toBe("team");
-  expect((await fetchP(pubArt)).status).toBe(404);
-});
-it("public links off closes anonymous sockets on every artifact in the space", async () => {
-  const anon = await openAnonSockets(sixtyArtifactsInSpace);  // over the old 50 cap
-  await patchSpace(admin, sid, { publicLinks: false }); await drainJobs(env);
-  for (const ws of anon) expect(await ws.closed).toMatchObject({ code: 4403 });
+  expect((await row(env, pubArt)).visibility).toBe("public");
+  expect((await fetchP(pubArt)).status).toBe(200);
+  for (const ws of before) expect(await ws.closed).toBe(false);
 });
 it("PATCH visibility=public, or publish with visibility public, on a no-public-links space → 403 public_links_off", async () => { /* 403 x2 */ });
 it("per-user restricted flag caps a member and audits restricted.set", async () => { /* viewer; audit */ });
@@ -564,22 +561,22 @@ from artifacts a join spaces s on s.id = a.space_id where a.id = ?1
 ```
 
 - Serving rules:
-  - `/p/`: needs `visibility = 'public'` and `public_links = 1`.
+  - `/p/`: needs `visibility = 'public'` (the space's public-links toggle is not checked: it only blocks new links).
   - `/c/` with a `uid`: needs `viewer_status = 'active'` and the user not stale (Task 18's condition in the same statement).
   - Anything else returns 404.
-- No KV. The `/p/` `public_links = 1` check is unconditional (it closes review finding 2); the `uid` status and staleness check runs when `FEATURES` has `content_revocation` (hosted sets it), as reworded in #359's flag table.
+- No KV. The `uid` status and staleness check runs when `FEATURES` has `content_revocation` (hosted sets it), as reworded in #359's flag table. The public-links toggle is deliberately absent here: turning it off never revokes an existing link.
 
 - [ ] **Step 1: Failing tests**
 
 ```ts
 it("signed token for a user suspended after minting → 404 on the next file", async () => { /* 404 */ });
-it("/p/ on a space with public links off → 404 even if a row is still public", async () => { /* forced row */ });
+it("/p/ on a space with public links off still serves an existing public row (the toggle blocks new links only)", async () => { /* forced row: 200 */ });
 it("two-part tokens still verify for public and capture", async () => { /* 200 */ });
 it("content host does one D1 statement per request", async () => { expect(statements).toBe(1); });
 ```
 
 - [ ] **Step 2: Run.** Expected: 4 failed. **Step 3: Implement.** **Step 4: Run** `pnpm -F @oa/server test content-host && pnpm -F @oa/server test:cpu`. Expected: passes, within the existing CPU budgets.
-- [ ] **Step 5: Commit** `feat(server): content host re-checks user status and public links in D1 (P3)`.
+- [ ] **Step 5: Commit** `feat(server): content host re-checks user status in D1 (P3)`.
 
 ### Task 12: Directory connection (broker or direct transport)
 
@@ -796,7 +793,7 @@ describe.each(SURFACES)("$name", (s) => {
 **Interfaces:**
 - A **synced user** has an `identities(provider = 'google', subject)` row whose subject is bound to the connected directory (the binding from Task 12's initial pass and Task 14's `applyUser`, recorded as `identities.directory_bound = 1`; there is no `users.directory_id`), while a directory is connected (any tier, frozen included). `LIMITS.directoryStaleMs = 7 * 86_400_000`.
 - `getUser` keeps one statement and adds `and not (synced and (state = 'customer_mismatch' or last_success_at < now - directoryStaleMs))`. The content `load()` statement adds the same condition.
-- Session cap: if `unhealthy_since < now - 1h` and the cookie session's `iat < now - 24h` (P2's session payload carries `iat`, `p` (provider), `t` and `e`), the session resolves to null. PATs and MCP OAuth grants are exempt from this 24 h cap (decided). The 7-day stale rule below covers them like sessions, because `getUser` is the one resolver for cookie, PAT and OAuth callers. While unhealthy, `Me.instance.directory.health` (owners) carries `tokensUnverified: true` and the banner adds "agent tokens not re-verified".
+- Session cap: if `unhealthy_since < now - 1h` and the cookie session's `iat < now - 24h` (P2's session payload carries `iat`, `p` (provider), `t` and `e`), the session resolves to null. PATs and MCP OAuth grants are exempt from this 24 h cap (decided). No stale cutoff applies to them: while unhealthy everyone keeps last-sync access; `staleAt` is informational. While unhealthy, `Me.instance.directory.health` (owners) carries `tokensUnverified: true` and the banner adds "agent tokens not re-verified".
 - On the first alarm past stale, `DirectorySync` runs `revokeUserLive` over all synced users (50 per alarm) and writes the audit row `directory.stale`. If that fails, sockets still re-gate at their 10 min rotation.
 - **Break-glass:** a stale or `customer_mismatch` org owner gets a restricted resolution only when all of these hold (otherwise 401 `reauth_required` on those routes):
   - The session's `p = 'google'`, with `hd` verified by P2.
@@ -809,7 +806,7 @@ describe.each(SURFACES)("$name", (s) => {
 - [ ] **Step 1: Failing tests**
 
 ```ts
-it("7 days + 1 min since success: synced member denied on every SURFACES entry", async () => { /* all deny */ });
+it("7 days + 1 min since success: staleAt is reported but access is unchanged (no stale cutoff)", async () => { /* access 200, staleAt set */ });
 it("stale: open sockets close 4403 and /c/ returns 404", async () => { /* 4403; 404 */ });
 it("6 d 23 h: allowed", async () => { /* allow */ });
 it("manual member and OTP guest unaffected", async () => { /* allow */ });
@@ -882,7 +879,7 @@ P3 implements the server side of PR #359's spaces, artifacts and directory secti
   - An hourly reconcile with full listings.
   - A per-user group refresh at sign-in.
 - **Pagination:** one page per alarm, with immediate re-arm while paging. Sweeps use generation numbers and run only after the last page.
-- **Failure:** fail static, with the exceptions in "Decided": suspensions and deletions always apply; a wrong customer fails closed; after 1 h unhealthy, a banner and the 24 h session cap; an email at 24 h; synced users denied after 7 days stale.
+- **Failure:** fail static, with the exceptions in "Decided": suspensions and deletions always apply; a wrong customer fails closed; after 1 h unhealthy, a banner and the 24 h session cap; an email at 24 h; no stale cutoff (synced people keep last-sync access).
 - **Token storage:** the broker exchanges and refreshes; the install holds only the sealed refresh token (key from P1).
 - **Revocation path:**
   1. Detection: within 2 min for suspend and delete; within Reports lag or the hourly reconcile for group changes.
@@ -928,7 +925,7 @@ Rollback: never downgrade; once a shared space exists, fix forward.
 | Finding | Where |
 |---|---|
 | 1 Recycled email | T6 (P2 admission seam), T12 initial binding, T14 identity-only matching and deletion treatment, T16 `recycledEmailUser` |
-| 2 Public links off and `/p/` | T9 rewrite and close; T11 content statement |
+| 2 Public links off and `/p/` | T9 refuses new links only (no rewrite, no socket close); T10 move rewrites+closes; T11 content statement ignores the toggle |
 | 3 Rollout window | T1 create path, trigger, flag-off move |
 | 4 Migration numbers | T1 takes the next free number at rebase (not hardcoded), `IF NOT EXISTS` |
 | 5 Ad-hoc `ownerId` | T3 removals, T4 SQL level, T5 AST lint |

@@ -5,7 +5,6 @@ import { createApp } from "../src/app.js";
 import { createPat } from "../src/auth/pat.js";
 import {
   CONTENT_POLICY,
-  PENDING_ROUTES,
   type Policy,
   ROUTE_POLICY,
   TOOL_POLICY,
@@ -29,17 +28,12 @@ const answering = (routes: readonly Route[]) => [
 const app = createApp();
 
 describe("policy coverage", () => {
-  it("the nightly trigger is public (it verifies its own signature)", () => {
-    expect(ROUTE_POLICY["POST /__oa/nightly"]).toHaveProperty("public");
-  });
   it("every mounted app route has a policy, and every policy a route", () => {
     const keys = answering(app.routes as Route[]);
     expect(keys.filter((k) => !(k in ROUTE_POLICY))).toEqual([]);
-    expect(
-      Object.keys(ROUTE_POLICY).filter(
-        (k) => !keys.includes(k) && !PENDING_ROUTES.includes(k),
-      ),
-    ).toEqual([]);
+    expect(Object.keys(ROUTE_POLICY).filter((k) => !keys.includes(k))).toEqual(
+      [],
+    );
   });
   it("every content-host route has a policy, and every policy a route", () => {
     const keys = answering(contentApp.routes as Route[]);
