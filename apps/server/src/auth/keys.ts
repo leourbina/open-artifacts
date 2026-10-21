@@ -58,3 +58,57 @@ export function deriveKey(
   }
   return k;
 }
+
+/** Shorter secrets can't key HKDF safely; cookies fall back to the raw secret. */
+export const MIN_SECRET_LENGTH = 32;
+
+/**
+ * Until then, cookies signed with the raw SESSION_SECRET (state and session,
+ * from before the per-purpose keys) are still accepted. A follow-up removes
+ * it; an install that upgrades after this date signs everyone out once.
+ */
+export const LEGACY_KEY_UNTIL = Date.UTC(2026, 11, 1);
+
+export const SHORT_SECRET_PROBLEM =
+  "SESSION_SECRET shorter than 32 characters; rotate it";
+
+/** Install-level problems for /healthz and setup (never secret values). */
+export function secretProblems(env: Pick<Env, "SESSION_SECRET">): string[] {
+  const s = env.SESSION_SECRET;
+  return typeof s === "string" && s.length > 0 && s.length < MIN_SECRET_LENGTH
+    ? [SHORT_SECRET_PROBLEM]
+    : [];
+}
+
+let warned = false;
+
+/**
+ * Keys for a cookie that predates the per-purpose keys (session, OIDC
+ * state): `key` signs and verifies, `legacy` (if not null) also verifies.
+ * - SESSION_SECRET of 32+ chars: the derived key; the raw secret also
+ *   verifies until LEGACY_KEY_UNTIL.
+ * - Shorter (older or hand-set installs): the raw secret only, as before P2,
+ *   reported by secretProblems. Never an error, so such an install keeps
+ *   signing people in.
+ * - Missing or empty: throws (the install is misconfigured).
+ */
+export async function cookieKeys(
+  env: Pick<Env, "SESSION_SECRET">,
+  label: "oa:session" | "oa:oidc-state",
+  now = Date.now(),
+): Promise<{ key: string; legacy: string | null }> {
+  const s = env.SESSION_SECRET;
+  if (typeof s !== "string" || s.length === 0)
+    throw new Error("SESSION_SECRET is not set");
+  if (s.length < MIN_SECRET_LENGTH) {
+    if (!warned) {
+      warned = true;
+      console.warn(JSON.stringify({ evt: "session_secret_short" }));
+    }
+    return { key: s, legacy: null };
+  }
+  return {
+    key: await deriveKey(env, label),
+    legacy: now < LEGACY_KEY_UNTIL ? s : null,
+  };
+}

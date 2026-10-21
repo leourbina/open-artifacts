@@ -7,8 +7,7 @@ import {
   hmacVerify,
 } from "../util/crypto.js";
 import { utf8Decoder, utf8Encoder } from "../util/text.js";
-import { deriveKey } from "./keys.js";
-import { LEGACY_KEY_UNTIL } from "./oidc.js";
+import { cookieKeys } from "./keys.js";
 
 /**
  * The __Host-oa_session payload (#359 SessionPayload): uid, exp, iat (ms),
@@ -41,9 +40,8 @@ export async function signSession(
     maxAgeS?: number;
   } = {},
 ): Promise<string> {
-  if (typeof env.SESSION_SECRET !== "string" || env.SESSION_SECRET.length < 32)
-    throw new Error("SESSION_SECRET must be at least 32 characters");
   if (!isId(uid)) throw new Error("invalid uid");
+  const { key } = await cookieKeys(env, "oa:session", now);
   const payload: Session = {
     uid,
     exp: now + (opts.maxAgeS ?? MAX_AGE_S) * 1000,
@@ -53,7 +51,7 @@ export async function signSession(
     e: opts.epoch ?? 0,
   };
   const p = b64urlEncode(utf8Encoder.encode(JSON.stringify(payload)));
-  return `${p}.${await hmacSign(await deriveKey(env, "oa:session"), p)}`;
+  return `${p}.${await hmacSign(key, p)}`;
 }
 
 async function verified(
@@ -62,8 +60,9 @@ async function verified(
   sig: string,
   now: number,
 ): Promise<boolean> {
-  if (await hmacVerify(await deriveKey(env, "oa:session"), p, sig)) return true;
-  return now < LEGACY_KEY_UNTIL && hmacVerify(env.SESSION_SECRET, p, sig);
+  const { key, legacy } = await cookieKeys(env, "oa:session", now);
+  if (await hmacVerify(key, p, sig)) return true;
+  return legacy !== null && hmacVerify(legacy, p, sig);
 }
 
 export async function readSession(

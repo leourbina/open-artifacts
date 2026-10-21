@@ -199,6 +199,83 @@ describe("session middleware", () => {
   });
 });
 
+describe("SESSION_SECRET shorter than 32 characters", () => {
+  const short = { ...env, SESSION_SECRET: "s".repeat(20) } as Env;
+
+  it("still signs in and keeps sessions working, on the raw secret (no 500)", async () => {
+    const { userId } = await login("t2-short@a.com");
+    const v = await signSession(short, userId);
+    const [p, sig] = v.split(".") as [string, string];
+    expect(await hmacVerify(short.SESSION_SECRET, p, sig)).toBe(true);
+    expect((await who(v, short)).user).toBe(userId);
+  });
+
+  it("a session from before the upgrade (raw secret) still reads", async () => {
+    const { userId } = await login("t2-short-old@a.com");
+    const p = b64urlEncode(
+      new TextEncoder().encode(
+        JSON.stringify({ uid: userId, exp: Date.now() + 60_000 }),
+      ),
+    );
+    const old = `${p}.${await hmacSign(short.SESSION_SECRET, p)}`;
+    expect((await who(old, short)).user).toBe(userId);
+  });
+
+  it("state cookies work on the raw secret too", async () => {
+    const id = "access" as const;
+    const r = await buildAuthorizeRedirect(
+      short,
+      {
+        id,
+        callbackPath: "/cb",
+        authorizeUrl: (_e, a) => `https://idp.test/?state=${a.state}`,
+        redeem: async () => ({
+          provider: id,
+          subject: "s",
+          email: "x@a.com",
+          name: null,
+          tenant: null,
+        }),
+      },
+      "/n",
+    );
+    const state = new URL(r.location).searchParams.get("state") as string;
+    const value = r.stateCookie.split(";")[0]?.split("=").slice(1).join("=");
+    const cookie = `${await stateCookieName(short, state)}=${value}`;
+    await expect(
+      handleCallback(
+        short,
+        {
+          id,
+          callbackPath: "/cb",
+          authorizeUrl: () => "",
+          redeem: async () => ({
+            provider: id,
+            subject: "s",
+            email: "x@a.com",
+            name: null,
+            tenant: null,
+          }),
+        },
+        new Request(`http://app.localhost/cb?state=${state}&code=c`, {
+          headers: { cookie },
+        }),
+      ),
+    ).resolves.toMatchObject({ next: "/n" });
+  });
+
+  it("/healthz reports the problem; a healthy install's /healthz is unchanged", async () => {
+    const app = createApp();
+    const h = (e: Env) =>
+      app.fetch(new Request("http://app.localhost/healthz"), e, ctx);
+    expect(await (await h(short)).json()).toMatchObject({
+      ok: true,
+      problems: ["SESSION_SECRET shorter than 32 characters; rotate it"],
+    });
+    expect(await (await h(env)).json()).not.toHaveProperty("problems");
+  });
+});
+
 describe("provider interface and state", () => {
   const redeem = vi.fn(async () => ({
     provider: "access" as const,

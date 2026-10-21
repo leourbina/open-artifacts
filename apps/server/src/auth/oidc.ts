@@ -7,7 +7,7 @@ import {
   hmacVerify,
 } from "../util/crypto.js";
 import type { ProviderId } from "./config.js";
-import { deriveKey } from "./keys.js";
+import { cookieKeys, LEGACY_KEY_UNTIL } from "./keys.js";
 import type { OidcProvider, VerifiedIdentity } from "./providers/types.js";
 
 export { accessIssuer } from "./providers/access.js";
@@ -62,11 +62,8 @@ const MAX_SCANNED = 16;
 const RETRY_MARK = "r1.";
 const MAX_NEXT_LEN = 2048;
 const MAX_COOKIE_LEN = 4096;
-/**
- * Until then, cookies signed with the raw SESSION_SECRET (state and session,
- * from before the per-purpose keys) are still accepted. A follow-up removes it.
- */
-export const LEGACY_KEY_UNTIL = Date.UTC(2026, 11, 1);
+
+export { LEGACY_KEY_UNTIL };
 
 type OidcState = {
   state: string;
@@ -83,11 +80,7 @@ type StateKeys = { key: string; legacy: string | null };
 
 /** The state-cookie key, plus the legacy raw secret while it is still accepted. */
 async function stateKeys(env: Env): Promise<StateKeys> {
-  const secret = requireSecret(env);
-  return {
-    key: await deriveKey(env, "oa:oidc-state"),
-    legacy: Date.now() < LEGACY_KEY_UNTIL ? secret : null,
-  };
+  return cookieKeys(env, "oa:oidc-state");
 }
 
 const unsafePrefix = (p: string) =>
@@ -111,13 +104,6 @@ export function safeNext(env: Env, next: string | undefined | null): string {
   } catch {
     return "/";
   }
-}
-
-function requireSecret(env: Env): string {
-  const s = env.SESSION_SECRET;
-  if (typeof s !== "string" || s.length < 32)
-    throw new Error("SESSION_SECRET must be at least 32 characters");
-  return s;
 }
 
 const randomB64 = (n: number) =>

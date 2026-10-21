@@ -66,9 +66,10 @@ describe("session", () => {
       `${sessionCookieName(env)}=v; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800`,
     );
   });
-  it("signSession rejects short secret and bad uid", async () => {
-    const short = { SESSION_SECRET: "short" } as Env;
-    await expect(signSession(short, UID, now)).rejects.toThrow();
+  it("signSession rejects a missing secret and a bad uid", async () => {
+    await expect(
+      signSession({ SESSION_SECRET: "" } as Env, UID, now),
+    ).rejects.toThrow();
     await expect(signSession(env, "not-an-id", now)).rejects.toThrow();
   });
   it("readSession never throws on bad secret", async () => {

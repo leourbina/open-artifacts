@@ -2,7 +2,7 @@ import { AUTH } from "@oa/shared";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { Env } from "../../env.js";
 import { ApiError, appOrigin } from "../../http/errors.js";
-import { deriveKey } from "../keys.js";
+import { cookieKeys } from "../keys.js";
 import { fail, safeEqual, tag } from "../oidc.js";
 import type { OidcProvider, VerifiedIdentity } from "./types.js";
 
@@ -150,7 +150,9 @@ export const accessProvider: OidcProvider = {
     if (
       typeof claims.nonce !== "string" ||
       !(await safeEqual(
-        await deriveKey(env, "oa:oidc-state"),
+        (
+          await cookieKeys(env, "oa:oidc-state")
+        ).key,
         claims.nonce,
         a.nonce,
       ))
