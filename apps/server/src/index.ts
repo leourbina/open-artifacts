@@ -21,7 +21,8 @@ export { ArtifactRuntime } from "./runtime/do.js";
 const normHost = (h: string) =>
   h.toLowerCase().replace(/:\d+$/, "").replace(/\.$/, "");
 
-const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+// URL.hostname keeps the brackets for IPv6: "[::1]", never "::1".
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 /**
  * True for a host this Worker must not answer. It answers APP_HOST and
@@ -30,13 +31,17 @@ const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
  * keeps another install's hostname from reaching this one.
  *
  * Self-host unchanged: with APP_HOST unset (older or custom configs) the
- * Worker keeps answering any non-content host. Dev (ENVIRONMENT=dev) also
- * answers localhost/127.0.0.1, so `wrangler dev` and the dev dashboard keep
+ * Worker keeps answering any non-content host, unless HOSTED=1 (then a
+ * missing APP_HOST fails closed). Dev (ENVIRONMENT=dev) also answers
+ * localhost/127.0.0.1/[::1], so `wrangler dev` and the dev dashboard keep
  * working. X-Forwarded-Host is never consulted (URL.hostname only).
  */
 function isForeignHost(env: Env, hostname: string): boolean {
   const appHost = normHost(env.APP_HOST ?? "");
-  if (!appHost) return false;
+  // Hosted installs must name their host: a missing APP_HOST is a
+  // misconfiguration, so fail closed (under WfP the wildcard route would
+  // otherwise send every host to this Worker). Self-host keeps any-host.
+  if (!appHost) return env.HOSTED === "1";
   const host = normHost(hostname);
   if (host === appHost) return false;
   return !(env.ENVIRONMENT === "dev" && LOCAL_HOSTS.has(host));

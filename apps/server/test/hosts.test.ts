@@ -85,4 +85,62 @@ describe("the Worker answers only its own hosts", () => {
         ).status,
       ).toBe(200);
   });
+
+  it("hosted with no APP_HOST fails closed", async () => {
+    for (const host of ["app.localhost", "anything.example", "localhost"])
+      expect(
+        (
+          await get(`http://${host}/healthz`, {
+            APP_HOST: undefined,
+            HOSTED: "1",
+          })
+        ).status,
+      ).toBe(404);
+  });
+
+  it("refuses foreign hosts on every pre-auth surface", async () => {
+    const foreign = "https://other-install.example";
+    const cases: [string, RequestInit][] = [
+      [
+        `${foreign}/mcp`,
+        { method: "POST", headers: { authorization: "Bearer oa_pat_x" } },
+      ],
+      [`${foreign}/.well-known/oauth-authorization-server`, {}],
+      [`${foreign}/oauth/token`, { method: "POST" }],
+      [`${foreign}/oauth/register`, { method: "POST" }],
+      [
+        `${foreign}/api/v1/artifacts/x/data/topics`,
+        {
+          headers: {
+            connection: "Upgrade",
+            upgrade: "websocket",
+            "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
+            "sec-websocket-version": "13",
+          },
+        },
+      ],
+    ];
+    for (const [url, init] of cases) {
+      const r = await get(url, {}, init);
+      expect(r.status).toBe(404);
+      expect(await r.text()).toBe("Not found");
+    }
+  });
+
+  it("another install's content host is foreign too", async () => {
+    const r = await get("http://content.other-install.example/healthz");
+    expect(r.status).toBe(404);
+    expect(await r.text()).toBe("Not found");
+  });
+
+  it("dev answers [::1]; production does not", async () => {
+    expect((await get("http://[::1]:8787/healthz")).status).toBe(200);
+    expect(
+      (
+        await get("http://[::1]:8787/healthz", {
+          ENVIRONMENT: "production",
+        })
+      ).status,
+    ).toBe(404);
+  });
 });
