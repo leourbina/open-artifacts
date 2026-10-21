@@ -12,6 +12,7 @@ import {
   primaryKey,
   sqliteTable,
   text,
+  uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 
 const inList = (col: string, values: readonly string[]) =>
@@ -39,6 +40,10 @@ export const users = sqliteTable(
     role: text("role").notNull(),
     createdAt: integer("created_at").notNull(),
     lastSeenAt: integer("last_seen_at"),
+    /** Bumped to end every session of the user (role change, link reset, P3 sync). */
+    sessionEpoch: integer("session_epoch").notNull().default(0),
+    /** MemberStatus (@oa/shared): active | suspended | removed. P3's sync sets it; sign-in refuses non-active. */
+    status: text("status").notNull().default("active"),
   },
   () => [check("users_role_check", inList("role", RoleSchema.options))],
 );
@@ -206,3 +211,40 @@ export const counters = sqliteTable("counters", {
   n: integer("n").notNull(),
   day: text("day").notNull(),
 });
+
+// The only link between a person and an IdP account (P2). For Google,
+// subject = the OIDC `sub` = the Directory API user id, so P3's sync and
+// sign-in meet on one row. Access sign-in stays email-keyed (no rows).
+export const identities = sqliteTable(
+  "identities",
+  {
+    provider: text("provider").notNull(),
+    subject: text("subject").notNull(),
+    /** The verified tenant (Google hd) at link time. */
+    tenant: text("tenant").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: integer("created_at").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.provider, t.subject] }),
+    uniqueIndex("identities_user_provider").on(t.userId, t.provider),
+  ],
+);
+
+// Emailed one-time sign-in codes (P2), one row per request so a stranger's
+// request can't replace a victim's pending code. No plaintext: email_key and
+// code_hash are HMACs under deriveKey("oa:login-codes").
+export const loginCodes = sqliteTable(
+  "login_codes",
+  {
+    emailKey: text("email_key").notNull(),
+    requestId: text("request_id").notNull(),
+    codeHash: text("code_hash").notNull(),
+    expiresAt: integer("expires_at").notNull(),
+    attempts: integer("attempts").notNull().default(0),
+    createdAt: integer("created_at").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.emailKey, t.requestId] })],
+);
