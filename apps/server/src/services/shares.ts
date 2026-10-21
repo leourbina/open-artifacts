@@ -7,7 +7,7 @@ import {
   viewerPath,
 } from "@oa/shared";
 import { and, asc, eq } from "drizzle-orm";
-import { requireAccess } from "../auth/authz.js";
+import { authorize, callerOf } from "../auth/authz.js";
 import { getDb } from "../db/client.js";
 import { normEmail } from "../db/email.js";
 import { shares } from "../db/schema.js";
@@ -16,6 +16,8 @@ import { emailEnabled, sendEmail } from "../email/send.js";
 import { senderName, shareEmail } from "../email/templates.js";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
+import { logInfo, logWarn } from "../log.js";
+import { revokeAllGrants } from "../mcp/oauth-api.js";
 import { closeRuntimeSockets } from "../runtime/revoke.js";
 import { getSettings } from "./members.js";
 
@@ -31,8 +33,12 @@ const toShare = (r: {
   createdAt: new Date(r.createdAt).toISOString(),
 });
 
-const ownerOnly = (env: Env, user: Member, id: string) =>
-  requireAccess(env, { kind: "user", user }, id, "owner");
+const ownerOnly = (
+  env: Env,
+  user: Member,
+  id: string,
+  action: "share" | "unshare" = "share",
+) => authorize(env, callerOf(user), id, action).then((r) => r.artifact);
 
 export async function listShares(
   env: Env,
@@ -50,6 +56,8 @@ export async function listShares(
 }
 
 const IS_USER = "select 1 as x from users where email = ? limit 1";
+const REACTIVATE_GUEST =
+  "update users set status = 'active' where email = ? and role = 'guest' and status = 'removed'";
 
 /**
  * Upsert (owner-only). Sharing only ever adds access; see accessLevel.
@@ -86,6 +94,10 @@ export async function putShare(
     );
   // An update keeps the original created_at, so this is a new share.
   const created = row.createdAt === now;
+  // A guest deactivated when their last share went comes back on a new one
+  // (same row: their history and name are intact). After the insert, so a
+  // concurrent cleanup either sees this share or is undone here.
+  if (created) await stmt(env.DB, REACTIVATE_GUEST).bind(email).run();
   return {
     ...toShare(row),
     emailed: created && (await emailShare(env, user, artifact, email, s.role)),
@@ -139,7 +151,7 @@ export async function deleteShare(
   email: string,
   ctx?: Pick<ExecutionContext, "waitUntil">,
 ): Promise<void> {
-  await ownerOnly(env, user, id);
+  await ownerOnly(env, user, id, "unshare");
   const e = normEmail(email);
   if (!e) throw new ApiError("not_found", "Not found");
   const out = await getDb(env)
@@ -148,4 +160,48 @@ export async function deleteShare(
     .returning({ e: shares.email });
   if (out.length === 0) throw new ApiError("not_found", "Not found");
   await closeRuntimeSockets(env, [id], "share revoked", ctx);
+  // Best effort: the share is already gone, and that is what the caller asked.
+  // The deleted share's sockets were closed above; with no share left there
+  // are no other share-opened sockets to close (team ones: removeMember's ceiling).
+  const log = { artifactId: id, actorId: user.id };
+  await removeGuestIfUnshared(env, e, log).catch((err) =>
+    logWarn("guest_cleanup_failed", err, {
+      ...log,
+      reason: err instanceof ApiError ? err.code : "error",
+    }),
+  );
+}
+
+// Every statement re-checks "still a guest, still no share" itself, so the
+// batch is atomic against a concurrent promotion or putShare.
+const UNSHARED_GUEST =
+  "email = ?1 AND role = 'guest' AND NOT EXISTS (SELECT 1 FROM shares WHERE email = ?1)";
+const DEACTIVATE_GUEST = `UPDATE users SET status = 'removed', session_epoch = session_epoch + 1
+   WHERE ${UNSHARED_GUEST} AND status = 'active' RETURNING id`;
+const DELETE_GUEST_TOKENS = `DELETE FROM tokens WHERE user_id IN
+   (SELECT id FROM users WHERE ${UNSHARED_GUEST} AND status = 'removed')`;
+
+/**
+ * A guest exists only through shares: once the last share to their address
+ * goes, the guest is deactivated (status 'removed', sessions ended, PATs and
+ * OAuth grants revoked). The row stays, so the versions they authored and
+ * their display name are kept; a new share reactivates it (putShare).
+ *
+ * Follow-up: purge's cascading share deletes, and a guest whose only shares
+ * are on trashed artifacts, should run this same cleanup.
+ */
+export async function removeGuestIfUnshared(
+  env: Env,
+  email: string,
+  log: { artifactId: string; actorId: string },
+): Promise<void> {
+  const [deactivated] = await env.DB.batch<{ id: string }>([
+    stmt(env.DB, DEACTIVATE_GUEST).bind(email),
+    stmt(env.DB, DELETE_GUEST_TOKENS).bind(email),
+  ]);
+  const id = deactivated?.results[0]?.id;
+  if (!id) return;
+  // OAuth grants live in KV, outside the batch.
+  await revokeAllGrants(env, id);
+  logInfo("guest_removed", log);
 }

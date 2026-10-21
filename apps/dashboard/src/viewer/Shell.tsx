@@ -1,8 +1,8 @@
 import { type ArtifactSummary, type Me, viewerPath } from "@oa/shared";
 import { Button } from "@oa/ui";
-import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
+  type ReactNode,
   type SyntheticEvent,
   useCallback,
   useEffect,
@@ -10,7 +10,8 @@ import {
   useState,
 } from "react";
 import { ApiClientError } from "../api/client";
-import { qk, useArtifact, useVersionInfo } from "../api/queries";
+import { useArtifact, useVersionInfo } from "../api/queries";
+import { useCan } from "../auth/permissions";
 import { useLoginRedirect } from "../auth/redirect";
 import { useMe } from "../auth/useMe";
 import { isEmbed } from "../embed";
@@ -22,13 +23,16 @@ import { createBridge } from "./bridge";
 import { Crumbs } from "./Crumbs";
 import { FullScreenEscape } from "./FullScreenEscape";
 import { frameLoad, SANDBOX, safeContentUrl } from "./frame";
+import { FullLive, GoneBanner, LiveAnnouncer, TitleLive } from "./LiveChip";
 import { createNavigator } from "./navigate";
 import { isPanelTab, type PanelTab, SidePanel } from "./panels/SidePanel";
+import { ReadOnlyNotice } from "./ReadOnlyNotice";
 import { RenavNotice } from "./RenavNotice";
 import { SlowNotice } from "./SlowNotice";
 import { TitleBar } from "./TitleBar";
 import { useArtifactSideEffects } from "./useArtifactSideEffects";
 import { useContentUrl } from "./useContentUrl";
+import { type FrameState, type Gone, useLiveVersions } from "./useLiveVersions";
 import { useTheme } from "./useTheme";
 import "./viewer.css";
 import { fullPath } from "./paths";
@@ -64,8 +68,30 @@ function Viewer({
   role,
   plan,
   chromeless,
+  slot,
+  newer = false,
+  gone = null,
+  onFrame,
+  onReady,
+  onTouched,
+  onAccessLost,
+  onUndelete,
 }: {
   chromeless: boolean;
+  /** The live-version chip (title bar) or pill (/full); only on the shown layer. */
+  slot?: ReactNode;
+  newer?: boolean;
+  gone?: Gone | null;
+  /** Registers this frame's state (hello, touched) for the safe-swap rule. */
+  onFrame?: (s: FrameState) => void;
+  /** The artifact loaded (or failed to): a preloaded layer can be shown. */
+  onReady?: () => void;
+  /** The viewer touched the frame (runtime `interacted`, or focus inside it). */
+  onTouched?: () => void;
+  /** A data socket closed with 4403: the shell re-checks access. */
+  onAccessLost?: () => void;
+  /** The owner's Restore of an artifact deleted while open. */
+  onUndelete?: () => Promise<void>;
   role: Me["user"]["role"] | undefined;
   plan: Me["instance"]["plan"] | undefined;
   artifact: ArtifactSummary;
@@ -74,7 +100,7 @@ function Viewer({
   authed: boolean;
   viewer: { email: string; name: string | null } | null;
 }) {
-  const content = useContentUrl(artifact.id, version);
+  const content = useContentUrl(artifact.id, version, gone !== null);
   const url = safeContentUrl(content.url);
   const signedOut =
     content.error instanceof ApiClientError && content.error.status === 401;
@@ -111,7 +137,6 @@ function Viewer({
   formatRef.current = vformat;
   const latest = useRef({ artifact, viewer, theme });
   latest.current = { artifact, viewer, theme };
-  const qc = useQueryClient();
   const fx = useArtifactSideEffects(
     artifact,
     version,
@@ -124,6 +149,20 @@ function Viewer({
   // once dismissed. Reloading remounts the frame (and so the bridge) with a fresh
   // URL; one reload per frame load, so a double click counts once.
   const cpu = useCpuSignals(role, plan);
+  // Since this frame's last intentional load: did the runtime say hello, has
+  // the viewer touched it. Read by the safe-swap rule.
+  const fs = useRef<FrameState>({ hello: false, touched: false });
+  const cbs = useRef({ onReady, onTouched, onAccessLost });
+  cbs.current = { onReady, onTouched, onAccessLost };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: once, on mount
+  useEffect(() => {
+    onFrame?.(fs.current);
+  }, []);
+  const touch = useCallback(() => {
+    if (fs.current.touched) return;
+    fs.current.touched = true;
+    cbs.current.onTouched?.();
+  }, []);
   const helloSeen = useRef(false);
   const slowTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const dismissed = useRef(false);
@@ -139,17 +178,22 @@ function Viewer({
   // that frame is another navigation and brings a dismissed notice back.
   const caps = artifact.capabilities;
   const live = caps.db || caps.viewer || caps.storage;
+  const can = useCan(artifact);
+  const readOnly = (caps.db || caps.storage) && !can.dataWrite;
   const renavigated = useRef(false);
   const [renav, setRenav] = useState(false);
   const onRenavigated = useCallback(() => {
     renavigated.current = true;
+    // The viewer followed a link inside the artifact.
+    touch();
     // No bridge, so no hello: the slow notice would be wrong.
     clearTimeout(slowTimer.current);
     setSlow(false);
     setRenav(live);
-  }, [live]);
+  }, [live, touch]);
   const onHello = useCallback(() => {
     helloSeen.current = true;
+    fs.current.hello = true;
     clearTimeout(slowTimer.current);
     setSlow(false);
   }, []);
@@ -165,6 +209,7 @@ function Viewer({
         return;
       }
       contentLoaded();
+      cbs.current.onReady?.();
       reloading.current = false;
       clearTimeout(slowTimer.current);
       if (helloSeen.current || dismissed.current) return;
@@ -179,6 +224,8 @@ function Viewer({
     if (reloading.current) return;
     reloading.current = true;
     helloSeen.current = false;
+    fs.current.hello = false;
+    fs.current.touched = false;
     clearTimeout(slowTimer.current);
     setSlow(false);
     renavigated.current = false;
@@ -196,7 +243,7 @@ function Viewer({
   // Reload) gets a fresh bridge, which loads the frame with a fresh nonce.
   const src = frame.src ?? url;
   useEffect(() => {
-    if (!el || !src) return;
+    if (!el || !src || gone) return;
     const b = createBridge({
       iframe: el,
       url: src,
@@ -209,18 +256,35 @@ function Viewer({
       },
       onPdfText: (t) => fxRef.current.onPdfText(t),
       onThumb: (b) => fxRef.current.onThumb(b),
-      // The refetch 404s if access is gone, which the shell then handles.
-      onAccessLost: () =>
-        void qc.invalidateQueries({ queryKey: qk.artifact(artifact.id) }),
+      // The shell re-checks access: still readable, or the gone state.
+      onAccessLost: () => cbs.current.onAccessLost?.(),
       onRenavigated,
       onNavigate: onArtifactNavigate,
+      onInteracted: touch,
     });
     bridge.current = b;
     return () => {
       b.dispose();
       bridge.current = null;
     };
-  }, [el, src, version, qc, artifact.id, onHello, onRenavigated]);
+  }, [el, src, version, onHello, onRenavigated, touch, gone]);
+
+  // Focus moved into the frame (a window blur with the frame active): touched.
+  useEffect(() => {
+    if (!el) return;
+    const onBlur = () =>
+      setTimeout(() => {
+        if (document.activeElement === el) touch();
+      }, 0);
+    window.addEventListener("blur", onBlur);
+    return () => window.removeEventListener("blur", onBlur);
+  }, [el, touch]);
+
+  // A preload that can't load the artifact still swaps in, to show why.
+  const failed = !url && Boolean(content.current || content.error);
+  useEffect(() => {
+    if (failed) cbs.current.onReady?.();
+  }, [failed]);
 
   useEffect(() => bridge.current?.setTheme(theme), [theme]);
 
@@ -241,7 +305,19 @@ function Viewer({
             onShare={() => setPanel(true, "share")}
             panelOpen={panelOpen}
             onPanel={() => setPanel(!panelOpen)}
+            live={slot}
+            newer={newer}
+            gone={gone !== null}
           />
+          {gone && (
+            <GoneBanner
+              gone={gone}
+              owner={artifact.access === "owner"}
+              onRestore={onUndelete ?? (async () => {})}
+              authed={authed}
+              next={viewerPath(artifact.id)}
+            />
+          )}
         </>
       )}
       <div className="oa-vbody">
@@ -250,6 +326,7 @@ function Viewer({
         ) : null}
         {url && (
           <div className="oa-vmain">
+            {readOnly && !chromeless && <ReadOnlyNotice />}
             {renav && (
               <RenavNotice
                 onReload={reload}
@@ -293,14 +370,32 @@ function Viewer({
         )}
       </div>
       {/* After the frame, so it is the top document's only Tab stop. */}
-      {chromeless && <FullScreenEscape artifact={artifact} />}
+      {chromeless && (
+        <FullScreenEscape
+          artifact={artifact}
+          live={slot}
+          gone={gone !== null}
+        />
+      )}
     </div>
   );
 }
 
 /** The artifact viewer; `chromeless` is the full-screen view (#290): the frame
     and bridge only, with the same access and loading states. */
-export function Shell({
+export function Shell(props: { id: string; v?: number; chromeless?: boolean }) {
+  // A new id starts over: its own events socket and live state.
+  return <ArtifactShell key={props.id} {...props} />;
+}
+
+/** A menu, dialog or the side panel is open (the safe swap waits for it). */
+const chromeOpen = (panelOpen: boolean) =>
+  panelOpen ||
+  document.querySelector(
+    '[role="menu"],[role="dialog"],[role="alertdialog"]',
+  ) !== null;
+
+function ArtifactShell({
   id,
   v,
   chromeless = false,
@@ -311,12 +406,41 @@ export function Shell({
 }) {
   const q = useArtifact(id);
   const me = useMe();
-  // Without an explicit version, pin the one seen first so a background bump never reloads.
-  const pinned = useRef<{ id: string; v: number } | null>(null);
-  if (v === undefined && q.data && pinned.current?.id !== id)
-    pinned.current = { id, v: q.data.currentVersion };
+  const navigate = useNavigate();
+  const search = useSearch({ strict: false }) as { panel?: string };
+  const panelOpen = useRef(false);
+  panelOpen.current = search.panel === "open";
+  const embed = isEmbed();
+  // Deleted or made private while open: keep what's on screen (never blank it).
+  const last = useRef<ArtifactSummary | undefined>(undefined);
+  if (q.data) last.current = q.data;
+  const data = q.data ?? last.current;
+
+  // Each layer's frame state, by version; the shown one decides a swap.
+  const frames = useRef(new Map<number, FrameState>());
+  const shownRef = useRef<number | undefined>(undefined);
+  const live = useLiveVersions({
+    id,
+    data,
+    explicit: v,
+    chromeless,
+    embed,
+    frame: () =>
+      frames.current.get(shownRef.current ?? -1) ?? {
+        hello: false,
+        touched: true,
+      },
+    chromeOpen: () => chromeOpen(panelOpen.current),
+  });
 
   const status = q.error instanceof ApiClientError ? q.error.status : null;
+  // A 404 or 403 after the artifact was on screen is the gone state, not a
+  // new page: confirm it (the access check), and keep the copy meanwhile.
+  const lost = (status === 404 || status === 403) && last.current !== undefined;
+  const check = live.check;
+  useEffect(() => {
+    if (lost) void check();
+  }, [lost, check]);
   const authed = me.status === "authed";
   // Signed out mid-visit (a 401 anywhere): only a public artifact stays viewable.
   const wasAuthed = useRef(false);
@@ -324,41 +448,102 @@ export function Shell({
   const expired =
     wasAuthed.current &&
     me.status === "anonymous" &&
-    q.data?.visibility !== "public";
+    data?.visibility !== "public";
   const toLogin =
     expired ||
     status === 401 ||
-    (status === 404 && (me.status === "anonymous" || me.status === "error"));
+    (status === 404 &&
+      !lost &&
+      (me.status === "anonymous" || me.status === "error"));
   useLoginRedirect(toLogin, chromeless ? fullPath(id) : viewerPath(id, v));
   // A private artifact's title is shown only to a signed-in viewer.
   useDocumentTitle(
-    q.data && (authed || q.data.visibility !== "private") ? q.data.title : null,
+    data && (authed || data.visibility !== "private") ? data.title : null,
   );
 
   // Framed, never a sign-in redirect (useLoginRedirect is inert there).
-  if (isEmbed() && (toLogin || status === 404 || status === 403))
+  if (isEmbed() && !lost && (toLogin || status === 404 || status === 403))
     return <NotPublic id={id} />;
   if (toLogin) return null;
-  if (status === 404 && authed) return <NotFound />;
-  if (q.error && !q.data)
-    return <ErrorPanel onRetry={() => void q.refetch()} />;
-  if (!q.data || me.status === "loading")
+  if (status === 404 && authed && !lost) return <NotFound />;
+  if (q.error && !data) return <ErrorPanel onRetry={() => void q.refetch()} />;
+  if (!data || me.status === "loading")
     return <div className="oa-viewer" aria-busy="true" />;
-  const version = v ?? pinned.current?.v ?? q.data.currentVersion;
-  return (
-    <Viewer
-      // New id/version remounts everything, so a new document never inherits the old bridge.
-      key={`${q.data.id}:${version}`}
-      artifact={q.data}
-      version={version}
-      explicitVersion={v !== undefined}
-      chromeless={chromeless}
-      authed={authed}
-      role={authed ? me.me.user.role : undefined}
-      plan={authed ? me.me.instance.plan : undefined}
-      viewer={
-        authed ? { email: me.me.user.email, name: me.me.user.name } : null
-      }
+  const version = v ?? live.shown ?? data.currentVersion;
+  shownRef.current = version;
+  const preload = live.preload?.version;
+  const newer = live.latest > (v ?? preload ?? version);
+  const layers = [
+    ...(live.leaving !== null && live.leaving !== version
+      ? [live.leaving]
+      : []),
+    version,
+    ...(preload !== undefined && preload !== version ? [preload] : []),
+  ];
+  const slot = chromeless ? (
+    <FullLive
+      id={id}
+      title={data.title}
+      embed={embed}
+      held={live.held}
+      swapped={live.swapped}
+      onView={live.view}
+      onExpire={live.clearSwapped}
     />
+  ) : (
+    <TitleLive
+      held={live.held}
+      swapped={live.swapped}
+      current={v !== undefined && live.latest > v ? live.latest : null}
+      onView={live.view}
+      onUndo={() => {
+        const prev = live.swapped?.prev;
+        if (prev !== undefined) void navigate({ to: viewerPath(id, prev) });
+      }}
+      onCurrent={() => void navigate({ to: viewerPath(id) })}
+      onExpire={live.clearSwapped}
+    />
+  );
+  return (
+    <div className="oa-vstack">
+      {layers.map((n) => {
+        const shown = n === version;
+        return (
+          <div
+            // New id/version remounts everything, so a new document never inherits the old bridge.
+            key={`${data.id}:${n}`}
+            className="oa-vlayer"
+            data-preload={n === preload}
+            data-arrived={shown && live.leaving !== null}
+            inert={!shown}
+            aria-hidden={shown ? undefined : true}
+          >
+            <Viewer
+              artifact={data}
+              version={n}
+              explicitVersion={v !== undefined}
+              chromeless={chromeless}
+              authed={authed}
+              role={authed ? me.me.user.role : undefined}
+              plan={authed ? me.me.instance.plan : undefined}
+              viewer={
+                authed
+                  ? { email: me.me.user.email, name: me.me.user.name }
+                  : null
+              }
+              slot={shown ? slot : undefined}
+              newer={shown && newer}
+              gone={live.gone}
+              onFrame={(s) => frames.current.set(n, s)}
+              onReady={() => live.ready(n)}
+              onTouched={shown ? live.touched : undefined}
+              onAccessLost={live.check}
+              onUndelete={live.undelete}
+            />
+          </div>
+        );
+      })}
+      <LiveAnnouncer text={live.announcement} />
+    </div>
   );
 }

@@ -1,5 +1,6 @@
 import { R, SettingsPatchSchema } from "@oa/shared";
-import { requireUser, TEAM_ROLES } from "../auth/authz.js";
+import { requireUser } from "../auth/authz.js";
+import { orgCan } from "../auth/policy.js";
 import { jsonBody } from "../http/body.js";
 import { ApiError } from "../http/errors.js";
 import { getSettings, patchSettings } from "../services/members.js";
@@ -29,7 +30,7 @@ export function mountSettings(app: AppType): void {
   // Any member (owner/admin/member); guests get 404, anonymous 401.
   app.get(R.settings, async (c) => {
     const user = requireUser(c);
-    if (!TEAM_ROLES.includes(user.role))
+    if (!orgCan(user, "settings.read"))
       throw new ApiError("not_found", "Not found");
     return c.json(await getSettings(c.env));
   });

@@ -39,7 +39,9 @@ export type PolicyAction =
   | "data.reset"
   | "move"
   | "transfer"
-  | "anonId";
+  | "anonId"
+  /** MCP data tools on an artifact without the db capability (B14, narrowed). */
+  | "data.seed";
 
 export type OrgAction =
   | "space.create"
@@ -58,6 +60,7 @@ export type OrgAction =
   | "directory.manage"
   | "audit.read"
   | "members.manage"
+  | "settings.read"
   | "settings.manage"
   | "usage.read"
   | "tokens.create"
@@ -92,6 +95,9 @@ export type CanCtx = {
 
 /** Roles that see `team` artifacts. Guests never do. */
 export const TEAM_ROLES: readonly Role[] = ["owner", "admin", "member"];
+
+/** A member, admin or owner (not a guest). */
+export const isTeamRole = (role: Role): boolean => TEAM_ROLES.includes(role);
 
 const SPACE_RANK: Record<SpaceRole, number> = {
   viewer: 1,
@@ -237,6 +243,10 @@ export function can(
       return level === "viewer" ? ctx.firstThumbnail === true : true;
     case "transfer":
       return full && level === "owner" && ctx.personal;
+    case "data.seed":
+      // Agents may seed data before declaring db: the uncapped personal
+      // owner only; managers, editors and capped callers need the capability.
+      return !capped && !ctx.anonymous && level === "owner";
   }
   if (EDIT.has(action)) return !capped && level !== "viewer";
   if (FULL.has(action)) return full;
@@ -263,19 +273,41 @@ export function orgCan(
     case "space.publish":
       return (
         !capped &&
-        m.role !== "guest" &&
+        TEAM_ROLES.includes(m.role) &&
         (opts.spaceRole === "editor" || opts.spaceRole === "manager")
       );
     case "artifact.create":
       return !capped;
+    case "settings.read":
+      return TEAM_ROLES.includes(m.role);
     case "directory.manage":
       return m.role === "owner" && !capped;
     case "tokens.create":
     case "mcp.connect":
-      return m.role !== "guest" && !capped;
+      return TEAM_ROLES.includes(m.role) && !capped;
     default:
       return admin;
   }
+}
+
+/**
+ * Whether an artifact may be served without a signed token (/p/ and public
+ * downloads): public, live, and in a personal space or a shared space that
+ * allows public links. Unknown kinds count as shared (fail closed). Until
+ * spaces exist (P3 T1) every artifact is personal.
+ */
+export function isPubliclyServable(a: {
+  visibility: string;
+  deleted: boolean;
+  spaceKind?: SpaceKind;
+  publicLinks?: boolean;
+}): boolean {
+  const personal = a.spaceKind === undefined || a.spaceKind === "personal";
+  return (
+    a.visibility === "public" &&
+    a.deleted === false &&
+    (personal || a.publicLinks === true)
+  );
 }
 
 /**

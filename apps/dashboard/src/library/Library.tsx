@@ -102,6 +102,9 @@ export function Library({ scope }: { scope: Scope }) {
   const agents = [...seenAgents.current].sort();
   const guest = me.status === "authed" && me.me.user.role === "guest";
   const meId = me.status === "authed" ? me.me.user.id : undefined;
+  // Guests and restricted (capped) members can't create anywhere.
+  const canCreate =
+    me.status === "authed" && !guest && (me.me.auth?.cap ?? null) === null;
 
   const sentinel = useSentinel(q);
 
@@ -182,7 +185,7 @@ export function Library({ scope }: { scope: Scope }) {
       <div className={BAR}>
         <h1 className={H1}>Library</h1>
         <span className="flex-1" />
-        <DropZone button allowed={me.status === "authed" && !guest} />
+        <DropZone button allowed={canCreate} />
       </div>
       {/* One tree whether or not /me has loaded: the results never remount
           when the tabs appear (a remount detaches every card mid-use). */}

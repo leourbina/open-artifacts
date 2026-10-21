@@ -105,6 +105,7 @@ describe("purgeDeleted", () => {
       "fulfilled",
       "fulfilled", // C3: reindexStale
       "fulfilled", // sweepEmailCounters
+      "fulfilled", // sweepLoginCodes (P2)
       "fulfilled", // checkLatestRelease (B3)
     ]);
     expect(

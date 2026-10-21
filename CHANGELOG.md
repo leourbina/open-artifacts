@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.22.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.21.0...v0.22.0) (2026-10-21)
+
+
+### Features
+
+* **db:** identities, login_codes, users.session_epoch and status (0008, P2 T3) ([#368](https://github.com/open-artifacts-ai/open-artifacts/issues/368)) ([4eccd8e](https://github.com/open-artifacts-ai/open-artifacts/commit/4eccd8e3730972604ba2dd3bf418dd546be00a4a))
+* **provision:** env-prefixed names and the foreign-resource guard ([#402](https://github.com/open-artifacts-ai/open-artifacts/issues/402)) ([c1ef1fe](https://github.com/open-artifacts-ai/open-artifacts/commit/c1ef1fe85d17325f2040b16930f8fd393f12d9e1))
+
+## [0.21.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.20.0...v0.21.0) (2026-10-21)
+
+
+### Features
+
+* **provision:** user Worker bundle and upload metadata ([#391](https://github.com/open-artifacts-ai/open-artifacts/issues/391)) ([b78cb5c](https://github.com/open-artifacts-ai/open-artifacts/commit/b78cb5c81eee2b82958e867580c9a361288e743e))
+* **server:** enforce route and tool policy before handlers (P3 T5) ([#374](https://github.com/open-artifacts-ai/open-artifacts/issues/374)) ([19c5de9](https://github.com/open-artifacts-ai/open-artifacts/commit/19c5de95a4d7c57b2ac3cd4f74830df986affb71))
+* **viewer:** live version updates (option B: safe swap, otherwise the chip) ([#349](https://github.com/open-artifacts-ai/open-artifacts/issues/349)) ([00c9d44](https://github.com/open-artifacts-ai/open-artifacts/commit/00c9d44ff69a8bab05726ad9b3493163160a87da))
+
+## [0.20.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.19.0...v0.20.0) (2026-10-21)
+
+
+### Features
+
+* **server:** authorize(action) over the decision table (P3 T3) ([#367](https://github.com/open-artifacts-ai/open-artifacts/issues/367)) ([92c35cc](https://github.com/open-artifacts-ai/open-artifacts/commit/92c35ccc108c555feee8d8fb06d9e39d6745ffc9))
+
+
+### Bug Fixes
+
+* **provision:** reserve auth, broker, login and sso slugs ([#397](https://github.com/open-artifacts-ai/open-artifacts/issues/397)) ([77707da](https://github.com/open-artifacts-ai/open-artifacts/commit/77707da5d4b7069b78b45c93881b9358b1491125))
+
+## [0.19.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.18.0...v0.19.0) (2026-10-20)
+
+
+### Features
+
+* **auth:** direct sign-in config contract, domain parsing, HKDF keys (P2 T1) ([#366](https://github.com/open-artifacts-ai/open-artifacts/issues/366)) ([c7adf42](https://github.com/open-artifacts-ai/open-artifacts/commit/c7adf42ad2d9f1f16fa534d48450f202cefd7a20))
+* **dashboard:** hosted P4 foundation (contract adapter, safeNext, error copy, reauth) ([#376](https://github.com/open-artifacts-ai/open-artifacts/issues/376)) ([e3b872e](https://github.com/open-artifacts-ai/open-artifacts/commit/e3b872e6e66b88eb7db0fdf9c856bbf297625984))
+* **server:** central access decision table (P3 T2) ([#365](https://github.com/open-artifacts-ai/open-artifacts/issues/365)) ([7502394](https://github.com/open-artifacts-ai/open-artifacts/commit/750239415e28669e25646c6657703bf6380c2b58))
+* **shared:** export HostedMockOptions from the mocks entry ([#377](https://github.com/open-artifacts-ai/open-artifacts/issues/377)) ([ef319cc](https://github.com/open-artifacts-ai/open-artifacts/commit/ef319cca72951c3445db880d7ef248ff623635b8))
+
+
+### Bug Fixes
+
+* **shared:** hosted contract follow-ups (move into publicLinks-off space, restrict_admin) ([#370](https://github.com/open-artifacts-ai/open-artifacts/issues/370)) ([d615aa4](https://github.com/open-artifacts-ai/open-artifacts/commit/d615aa46b0f20f97aca0065ebd9aa86891405b7e))
+
 ## [0.18.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.17.1...v0.18.0) (2026-10-20)
 
 

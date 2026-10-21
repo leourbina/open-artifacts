@@ -6,6 +6,7 @@ import {
 } from "@oa/shared";
 import type { Context } from "hono";
 import { requireUser } from "../auth/authz.js";
+import { orgCan } from "../auth/policy.js";
 import { jsonBody } from "../http/body.js";
 import { ApiError } from "../http/errors.js";
 import { type AppEnv, execCtx } from "../http/middleware.js";
@@ -20,7 +21,7 @@ import type { AppType } from "./index.js";
 /** Owner/admin only: 401 anonymous, 404 for everyone else (route hidden). */
 export function requireManager(c: Context<AppEnv>): Member {
   const user = requireUser(c);
-  if (user.role !== "owner" && user.role !== "admin")
+  if (!orgCan(user, "members.manage"))
     throw new ApiError("not_found", "Not found");
   return user;
 }

@@ -2,7 +2,8 @@ import { type ArtifactSummary, viewerPath } from "@oa/shared";
 import { brand } from "@oa/ui/brand";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { ArrowUpRight } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
+import { FullGone } from "./LiveChip";
 
 /** Widened on load this long, then it collapses (top level only). */
 export const REVEAL_MS = 3_000;
@@ -28,8 +29,18 @@ const focusVisible = (el: Element) => {
 };
 
 /** The full-screen view's way back (#290, option A): a peek chip in the
-    bottom-right corner. Embedded, it opens the viewer in a new tab instead. */
-export function FullScreenEscape({ artifact }: { artifact: ArtifactSummary }) {
+    bottom-right corner. Embedded, it opens the viewer in a new tab instead.
+    `live` (the new-version pill) sits 8px to its left and precedes it in tab
+    order; `gone` turns the chip into "No longer available". */
+export function FullScreenEscape({
+  artifact,
+  live,
+  gone = false,
+}: {
+  artifact: ArtifactSummary;
+  live?: ReactNode;
+  gone?: boolean;
+}) {
   const [inFrame] = useState(embedded);
   const [open, setOpen] = useState(!inFrame);
   const held = useRef({ hover: false, focus: false });
@@ -64,53 +75,62 @@ export function FullScreenEscape({ artifact }: { artifact: ArtifactSummary }) {
   }, [inFrame, navigate, to]);
 
   return (
-    <Link
-      to={to}
-      {...(inFrame ? { target: "_blank", rel: "noopener" } : {})}
-      className="oa-fsx"
-      data-open={open}
-      aria-label={
-        inFrame
-          ? `Open ${artifact.title} in Open Artifacts (opens in new tab)`
-          : `Exit full screen, back to ${artifact.title}`
-      }
-      onPointerEnter={(e) => {
-        if (e.pointerType === "touch") return;
-        held.current.hover = true;
-        widen();
-      }}
-      onPointerLeave={(e) => {
-        if (e.pointerType === "touch") return;
-        held.current.hover = false;
-        collapseIn(LINGER_MS);
-      }}
-      onFocus={(e) => {
-        if (!focusVisible(e.currentTarget)) return;
-        held.current.focus = true;
-        widen();
-      }}
-      onBlur={() => {
-        held.current.focus = false;
-        collapseIn(LINGER_MS);
-      }}
-      onClick={(e) => {
-        if (open || !coarse()) return;
-        e.preventDefault();
-        widen();
-        collapseIn(TAP_MS);
-      }}
-    >
-      <img
-        src={brand.markDark}
-        alt=""
-        aria-hidden="true"
-        width={18}
-        height={18}
-      />
-      <span className="oa-fsx-label">
-        {inFrame ? "Open in Open Artifacts" : "Exit full screen"}
-      </span>
-      {inFrame && <ArrowUpRight className="oa-fsx-arrow" aria-hidden="true" />}
-    </Link>
+    <div className="oa-fsbar">
+      {live}
+      {gone ? (
+        <FullGone id={artifact.id} embed={inFrame} />
+      ) : (
+        <Link
+          to={to}
+          {...(inFrame ? { target: "_blank", rel: "noopener" } : {})}
+          className="oa-fsx"
+          data-open={open}
+          aria-label={
+            inFrame
+              ? `Open ${artifact.title} in Open Artifacts (opens in new tab)`
+              : `Exit full screen, back to ${artifact.title}`
+          }
+          onPointerEnter={(e) => {
+            if (e.pointerType === "touch") return;
+            held.current.hover = true;
+            widen();
+          }}
+          onPointerLeave={(e) => {
+            if (e.pointerType === "touch") return;
+            held.current.hover = false;
+            collapseIn(LINGER_MS);
+          }}
+          onFocus={(e) => {
+            if (!focusVisible(e.currentTarget)) return;
+            held.current.focus = true;
+            widen();
+          }}
+          onBlur={() => {
+            held.current.focus = false;
+            collapseIn(LINGER_MS);
+          }}
+          onClick={(e) => {
+            if (open || !coarse()) return;
+            e.preventDefault();
+            widen();
+            collapseIn(TAP_MS);
+          }}
+        >
+          <img
+            src={brand.markDark}
+            alt=""
+            aria-hidden="true"
+            width={18}
+            height={18}
+          />
+          <span className="oa-fsx-label">
+            {inFrame ? "Open in Open Artifacts" : "Exit full screen"}
+          </span>
+          {inFrame && (
+            <ArrowUpRight className="oa-fsx-arrow" aria-hidden="true" />
+          )}
+        </Link>
+      )}
+    </div>
   );
 }

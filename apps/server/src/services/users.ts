@@ -1,5 +1,6 @@
 import { type Member, newId, type Role, type UserRef } from "@oa/shared";
 import { eq } from "drizzle-orm";
+import { withCap } from "../auth/authz.js";
 import { getDb } from "../db/client.js";
 import { normEmail } from "../db/email.js";
 import { shares, users } from "../db/schema.js";
@@ -103,6 +104,9 @@ export async function upsertOnLogin(
     await db.select().from(users).where(eq(users.email, e)).limit(1)
   )[0];
   if (existing) {
+    // Deactivated (a guest whose last share went, or P3's sync): no sign-in.
+    // A new share reactivates a guest (putShare).
+    if (existing.status !== "active") return null;
     const set: Partial<UserRow> = { lastSeenAt: Date.now() };
     if (name !== null) set.name = name;
     const [row] = await db
@@ -135,9 +139,13 @@ export async function upsertWithRole(
 }
 
 const USER_BY_ID =
-  "select id, email, name, display_name as displayName, role, last_seen_at as lastSeenAt from users where id = ? limit 1";
+  "select id, email, name, display_name as displayName, role, last_seen_at as lastSeenAt from users where id = ? and status = 'active' limit 1";
 
-/** Every authenticated request: one prepared D1 statement, no ORM mapping. */
+/**
+ * Every authenticated request: one prepared D1 statement, no ORM mapping.
+ * A deactivated user (status not 'active') resolves to null, so their session
+ * cookie, PATs and OAuth tokens all stop working.
+ */
 export async function getUser(env: Env, id: string): Promise<Member | null> {
   const row = await stmt(env.DB, USER_BY_ID)
     .bind(id)
@@ -147,7 +155,10 @@ export async function getUser(env: Env, id: string): Promise<Member | null> {
         "id" | "email" | "name" | "displayName" | "role" | "lastSeenAt"
       >
     >();
-  return row ? toMember(row) : null;
+  // Every request's user comes through here (session, PAT, OAuth), so the cap
+  // is set once. Sources: P2's authConfig.guestsReadOnly and P3's restriction
+  // (users.restricted_*, 0009); until those land nobody is capped.
+  return row ? withCap(toMember(row), null) : null;
 }
 
 export type Profile = {

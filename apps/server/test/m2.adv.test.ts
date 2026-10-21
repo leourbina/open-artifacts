@@ -572,7 +572,7 @@ describe("M2 whole-track adversarial", () => {
       docId: "a",
       data: { a: 2 },
     });
-    // owner, no db capability: REST 403; MCP keeps the owner exemption (B14 brief)
+    // owner, no db capability: REST 403; MCP lets the uncapped owner seed (B14, narrowed)
     const id2 = await create(owner.cookie, {});
     const rest2 = await w(
       req(R.dataDoc(id2, "c", "a"), {

@@ -31,6 +31,8 @@ export const makeQueryClient = () => {
   return client;
 };
 
+const MAPPINGS = /^\/api\/v1\/spaces\/[^/]+\/mappings(\/|$)/;
+
 /** Admin-only endpoints: they answer 404 once the caller is no longer an admin. */
 const roleGated = (e: ApiClientError) => {
   const p = e.path?.split("?")[0] ?? "";
@@ -38,7 +40,12 @@ const roleGated = (e: ApiClientError) => {
     p === R.members ||
     p.startsWith(`${R.members}/`) ||
     p === R.usage ||
-    (p === R.settings && e.method === "PATCH")
+    (p === R.settings && e.method === "PATCH") ||
+    p === R.directory ||
+    p.startsWith(`${R.directory}/`) ||
+    MAPPINGS.test(p) ||
+    p === R.audit ||
+    p.startsWith(`${R.audit}/`)
   );
 };
 
@@ -47,6 +54,8 @@ const roleGated = (e: ApiClientError) => {
  * a role-gated endpoint. A 401 anywhere means the session is
  * gone: `/me` is marked failed with it, so `useMe` turns anonymous and the
  * sign-in redirects run without refetching a `/me` that may still be cached.
+ * Except `reauth_required`: the session is valid, only the directory's
+ * break-glass routes want a fresh Google sign-in.
  */
 export const reportApiError = (client: QueryClient, error: unknown) => {
   if (!(error instanceof ApiClientError)) return;
@@ -54,7 +63,7 @@ export const reportApiError = (client: QueryClient, error: unknown) => {
   // A demoted admin's role-gated calls 404: refresh /me so Gate and the nav follow.
   if (error.status === 404 && roleGated(error))
     void client.invalidateQueries({ queryKey: qk.me, exact: true });
-  if (error.status !== 401) return;
+  if (error.status !== 401 || error.code === "reauth_required") return;
   const me = client.getQueryCache().find({ queryKey: qk.me, exact: true });
   if (!me || me.state.error === error) return;
   // An in-flight /me must not land afterwards and undo this.

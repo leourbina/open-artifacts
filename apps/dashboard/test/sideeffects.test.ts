@@ -46,6 +46,16 @@ const blob = (size: number) => new Blob([new Uint8Array(size)]);
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 describe("thumbnails", () => {
+  it("requests a thumbnail for a space manager", () => {
+    const { fx, requestThumbnail } = setup(art({ access: "manager" }));
+    fx.onHello();
+    expect(requestThumbnail).toHaveBeenCalledTimes(1);
+  });
+  it("never requests one for a viewer", () => {
+    const { fx, requestThumbnail } = setup(art({ access: "viewer" }));
+    fx.onHello();
+    expect(requestThumbnail).not.toHaveBeenCalled();
+  });
   it("requests once after hello for an editor without a thumbnail", () => {
     const { fx, requestThumbnail } = setup(art());
     fx.onHello();

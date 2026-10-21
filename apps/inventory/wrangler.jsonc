@@ -1,5 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
+  // Deploys use --name <platformNames(env).inventory> (oa-s-inventory / oa-p-inventory).
   "name": "oa-inventory",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",

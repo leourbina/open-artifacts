@@ -63,6 +63,8 @@ export default defineConfig({
           environment: "jsdom",
           include: ["test/**/*.test.tsx"],
           setupFiles: ["test/setup.ts"],
+          // Above test/setup.ts's 5 s asyncUtilTimeout, so a stuck wait reports its own failure.
+          testTimeout: 15_000,
         },
       },
     ],

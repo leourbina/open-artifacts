@@ -1,4 +1,6 @@
+import { AUTH, R } from "@oa/shared";
 import {
+  ACCESS_TEAM_DOMAIN,
   APP,
   artifactFrame,
   expect,
@@ -9,6 +11,19 @@ import {
 } from "./fixtures";
 
 const BOB = "bob@x.com";
+
+/** Shares `id` with `email` through the API, as the owner. */
+async function shareViaApi(pat: string, id: string, email: string) {
+  const res = await fetch(`${APP}${R.shares(id)}`, {
+    method: "PUT",
+    headers: {
+      authorization: `Bearer ${pat}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ email, role: "viewer" }),
+  });
+  expect(res.ok, await res.text()).toBe(true);
+}
 
 test("owner shares with Bob as viewer; Bob sees it in Shared; revoked, Bob gets a 404", async ({
   page,
@@ -51,6 +66,14 @@ test("owner shares with Bob as viewer; Bob sees it in Shared; revoked, Bob gets 
     artifactFrame(bob).getByRole("heading", { name: "The plan" }),
   ).toBeVisible();
 
+  // A second share keeps Bob an active guest: only a last revoke signs a guest out.
+  const other = await publishViaApi(member.pat, {
+    title: `Other ${uniq()}`,
+    format: "markdown",
+    content: "# Still shared",
+  });
+  await shareViaApi(member.pat, other.id, BOB);
+
   await remove.click();
   await expect(remove).toHaveCount(0);
 
@@ -76,4 +99,57 @@ test("owner shares with Bob as viewer; Bob sees it in Shared; revoked, Bob gets 
   ).toBeVisible();
   await expect(bob.locator("iframe")).toHaveCount(0);
   await bobCtx.close();
+});
+
+test("revoking a guest's last share signs them out", async ({
+  page,
+  member,
+  browser,
+}) => {
+  const guest = `guest-${uniq()}@e2e.test`;
+  const title = `Only ${uniq()}`;
+  const { id } = await publishViaApi(member.pat, {
+    title,
+    format: "markdown",
+    content: "# The only one",
+  });
+  await shareViaApi(member.pat, id, guest);
+
+  const ctx = await browser.newContext({ baseURL: APP });
+  const g = await ctx.newPage();
+  await loginAs(g, guest, "guest");
+  await g.goto("/shared");
+  await expect(g.getByRole("link", { name: title, exact: true })).toBeVisible();
+
+  await page.goto(`/a/${id}`);
+  await page.getByRole("button", { name: "Share", exact: true }).click();
+  const remove = page.getByRole("button", { name: `Remove ${guest}` });
+  await remove.click();
+  await expect(remove).toHaveCount(0);
+
+  // The guest is deactivated with their last share: the session is gone.
+  const shared = await g.request.get(`${APP}${R.artifacts}?scope=shared`, {
+    headers: { "X-OA-Request": "1" },
+  });
+  expect(shared.status()).toBe(401);
+
+  // The SPA sends a signed-out visitor to sign in (a full-page redirect to the
+  // IdP via AUTH.login), coming back to the same page afterwards.
+  // Each on its own page: the IdP host is unreachable here, so a page ends on
+  // the browser's error page and a later goto on it would race that.
+  for (const path of ["/shared", `/a/${id}`]) {
+    const p = await ctx.newPage();
+    const login = p.waitForRequest((r) =>
+      r.url().startsWith(`${APP}${AUTH.login}?`),
+    );
+    const idp = p.waitForRequest(
+      (r) => new URL(r.url()).host === ACCESS_TEAM_DOMAIN,
+    );
+    await p.goto(path, { waitUntil: "commit" });
+    expect(new URL((await login).url()).searchParams.get("next")).toBe(path);
+    expect(new URL((await idp).url()).pathname).toMatch(/\/authorization$/);
+    await expect(p.locator("iframe")).toHaveCount(0);
+    await p.close();
+  }
+  await ctx.close();
 });

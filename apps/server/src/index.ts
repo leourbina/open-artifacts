@@ -1,6 +1,7 @@
 import { MCP_PATH } from "@oa/shared";
 import { app } from "./app.js";
 import { verifyPat } from "./auth/pat.js";
+import { orgCan } from "./auth/policy.js";
 import { contentApp } from "./content/app.js";
 import { scheduled } from "./cron.js";
 import type { Env } from "./env.js";
@@ -33,7 +34,7 @@ async function mcpWithPat(
   const user = pat ? await getUser(env, pat.userId) : null;
   if (!pat || !user) return mcpUnauthorized(env);
   // Guests can't connect agents (they only see what's shared with them).
-  if (user.role === "guest")
+  if (!orgCan(user, "mcp.connect"))
     return mcpUnauthorized(env, "Only members can connect agents");
   const capped = await capMcpBody(req, env);
   if (capped instanceof Response) return capped;

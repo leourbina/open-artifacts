@@ -7,7 +7,8 @@ import {
   TokenCreateInputSchema,
 } from "@oa/shared";
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
-import { requireUser, TEAM_ROLES } from "../auth/authz.js";
+import { requireUser } from "../auth/authz.js";
+import { orgCan } from "../auth/policy.js";
 import { getDb } from "../db/client.js";
 import { tokens } from "../db/schema.js";
 import { jsonBody } from "../http/body.js";
@@ -42,7 +43,7 @@ export function mountTokens(app: AppType): void {
 
   app.post(R.tokens, async (c) => {
     const user = requireUser(c);
-    if (c.var.tokenId || !TEAM_ROLES.includes(user.role))
+    if (c.var.tokenId || !orgCan(user, "tokens.create"))
       throw new ApiError("not_found", "Not found");
     const { label } = await jsonBody(c, TokenCreateInputSchema);
     // Session-only: a PAT cannot mint PATs.
