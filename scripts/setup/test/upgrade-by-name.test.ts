@@ -255,7 +255,8 @@ describe("--upgrade --name edge cases", () => {
     const argv = ["--name", "open-artifacts", "--ci", "--upgrade"];
     expect(await run(argv, w.deps, ROOT)).toBe(0);
     expect(w.files.has(STATE)).toBe(false);
-    expect(parse(w).at(-1).data.sources.appHost).toBe("worker");
+    expect(line(w, "state").data.sources.appHost).toBe("worker");
+    expect(parse(w).at(-1)).toMatchObject({ step: "revoke-ci-token" });
   });
 });
 
