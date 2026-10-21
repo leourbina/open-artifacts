@@ -1180,9 +1180,17 @@ describe("demo instance workflows", () => {
     });
     it("runs the demo install through the leak-scanning wrapper with the right credentials", () => {
       const step = steps.find((s: { run?: string }) =>
-        String(s.run ?? "").includes("prod-setup.sh demo-install"),
+        String(s.run ?? "").includes('prod-setup.sh "demo-$MODE"'),
       );
       expect(step).toBeDefined();
+      // MODE comes only from the dispatch choice and is checked before use.
+      expect(step.env.MODE).toBe("${{ inputs.mode }}");
+      expect(step.run).toContain('case "$MODE" in install | upgrade) ;;');
+      expect(w.on.workflow_dispatch.inputs.mode.options).toEqual([
+        "install",
+        "upgrade",
+      ]);
+      expect(step.env.DEMO_PUBLIC_HOME).toBe("${{ vars.DEMO_PUBLIC_HOME }}");
       expect(step.env.CLOUDFLARE_API_TOKEN).toContain(
         "secrets.CLOUDFLARE_API_TOKEN",
       );
