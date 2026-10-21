@@ -76,6 +76,8 @@ jobs:
   # Stable releases only; independent of deploy-landing. Never runs from a bare push to main.
   deploy-prod:
     needs: [release-please]
+    outputs:
+      installed: ${{ steps.preflight.outputs.installed }}
     if: ${{ always() && github.ref == 'refs/heads/main' && (needs.release-please.outputs.release_created == 'true' || (github.event_name == 'workflow_dispatch' && inputs.tag != '')) }}
     runs-on: ubuntu-latest
     concurrency:
@@ -118,7 +120,8 @@ jobs:
           cache: pnpm
       - if: steps.guard.outputs.deploy == 'true'
         run: pnpm install --frozen-lockfile
-      - name: Preflight (read-only; fails if not installed or drifted)
+      - id: preflight
+        name: Preflight (read-only; skips if not installed, fails if drifted or partial)
         if: steps.guard.outputs.deploy == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.PROD_CLOUDFLARE_API_TOKEN }}
@@ -126,7 +129,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: bash scripts/ci/prod-setup.sh preflight
       - name: Upgrade prod (deploy + selftest, CI token)
-        if: steps.guard.outputs.deploy == 'true'
+        if: steps.guard.outputs.deploy == 'true' && steps.preflight.outputs.installed == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.PROD_CLOUDFLARE_API_TOKEN }}
           OA_ACCESS_TOKEN: ${{ secrets.PROD_CLOUDFLARE_API_TOKEN }}
@@ -134,7 +137,7 @@ jobs:
           ANALYTICS_TOKEN: ${{ secrets.ANALYTICS_TOKEN }}
         run: bash scripts/ci/prod-setup.sh upgrade
       - name: Revoke leaked setup-ci tokens
-        if: always() && steps.guard.outputs.deploy == 'true'
+        if: always() && steps.guard.outputs.deploy == 'true' && steps.preflight.outputs.installed != 'false'
         timeout-minutes: 3
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.PROD_CLOUDFLARE_API_TOKEN }}
@@ -213,6 +216,8 @@ jobs:
     env:
       TAG: ${{ needs.release-please.outputs.tag_name }}
       GH_TOKEN: ${{ github.token }}
+      # deploy-prod skipped itself because prod is not installed: do not verify prod.
+      SKIP_PROD: ${{ needs.deploy-prod.outputs.installed == 'false' && '--skip-prod' || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -222,7 +227,7 @@ jobs:
           node-version-file: .nvmrc
       - name: Verify the release is live
         if: ${{ vars.DEMO_ENABLED != 'true' }}
-        run: node --experimental-strip-types scripts/ci/verify-release.ts --tag "$TAG" --repo "$GITHUB_REPOSITORY"
+        run: node --experimental-strip-types scripts/ci/verify-release.ts --tag "$TAG" --repo "$GITHUB_REPOSITORY" $SKIP_PROD
       - name: Verify the release is live (with the demo)
         if: ${{ vars.DEMO_ENABLED == 'true' }}
-        run: node --experimental-strip-types scripts/ci/verify-release.ts --tag "$TAG" --repo "$GITHUB_REPOSITORY" --demo-url https://demo.open-artifacts.com
+        run: node --experimental-strip-types scripts/ci/verify-release.ts --tag "$TAG" --repo "$GITHUB_REPOSITORY" --demo-url https://demo.open-artifacts.com $SKIP_PROD
