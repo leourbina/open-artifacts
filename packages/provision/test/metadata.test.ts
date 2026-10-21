@@ -8,11 +8,13 @@ import {
   HOSTED_ADDED,
   type InstallMetaInput,
   KNOWN_SECRETS,
+  loadTemplate,
   names,
   parseTemplate,
   type ResourceMetaInput,
   scriptSubdomainSettings,
   TEMPLATE_BINDINGS_EXCLUDED,
+  type Template,
   userWorkerMetadata,
 } from "../src/index.js";
 
@@ -122,7 +124,7 @@ describe("userWorkerMetadata", () => {
     });
     expect(by("FILES")).toMatchObject({
       type: "r2_bucket",
-      bucket_name: names("iabcdefghjk2").r2,
+      bucket_name: names("iabcdefghjk2", "staging").r2,
     });
     expect(by("OAUTH_KV")).toMatchObject({
       type: "kv_namespace",
@@ -243,7 +245,9 @@ describe("userWorkerMetadata", () => {
     expect(text(m.bindings, "APP_HOST")).toBe("a.app.test");
     expect(text(m.bindings, "CONTENT_HOST")).toBe("a.content.test");
     expect(text(m.bindings, "OWNER_EMAIL")).toBe("o@x.test");
-    expect(text(m.bindings, "WORKER_NAME")).toBe(names("iabcdefghjk2").script);
+    expect(text(m.bindings, "WORKER_NAME")).toBe(
+      names("iabcdefghjk2", "staging").script,
+    );
     expect(text(m.bindings, "PLAN")).toBe("paid");
     expect(text(m.bindings, "ENVIRONMENT")).toBe("production");
   });
@@ -729,5 +733,42 @@ describe("buildBundle", () => {
     await expect(buildBundle(root, async () => {})).rejects.toThrow(
       /no index.js/,
     );
+  });
+});
+
+describe("env-prefixed names in metadata", () => {
+  it("staging and prod emit their own prefixes", () => {
+    const st = userWorkerMetadata(inst(), res({ env: "staging" }));
+    const pr = userWorkerMetadata(inst(), res({ env: "prod" }));
+    expect(text(st.bindings, "WORKER_NAME")).toBe("oa-s-iabcdefghjk2");
+    expect(text(pr.bindings, "WORKER_NAME")).toBe("oa-p-iabcdefghjk2");
+    const bucket = (m: typeof st) =>
+      (m.bindings.find((b) => b.type === "r2_bucket") as Binding).bucket_name;
+    expect(bucket(st)).toBe("oa-s-iabcdefghjk2");
+    expect(bucket(pr)).toBe("oa-p-iabcdefghjk2");
+  });
+  it("a forged env cannot produce a foreign name", () => {
+    for (const env of ["dev", "", "oa-s-", undefined, "Prod"])
+      expect(() =>
+        userWorkerMetadata(inst(), res({ env: env as never })),
+      ).toThrow();
+  });
+  it("a foreign name from the template is refused", () => {
+    const base = loadTemplate();
+    const forge = (mut: (t: Template) => void) => {
+      const tpl = structuredClone(base);
+      mut(tpl);
+      return () => userWorkerMetadata(inst(), res({ template: tpl }));
+    };
+    expect(forge((t) => (t.vars.WORKER_NAME = "open-artifacts"))).toThrow(
+      /ForeignResource|refusing/,
+    );
+    expect(
+      forge((t) => (t.d1_databases[0].database_name = "open-artifacts")),
+    ).toThrow(/refusing/);
+    expect(
+      forge((t) => (t.r2_buckets[0].bucket_name = "terrazul-api")),
+    ).toThrow(/refusing/);
+    expect(forge(() => {})).not.toThrow();
   });
 });

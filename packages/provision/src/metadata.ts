@@ -5,7 +5,7 @@
 // dispatch-namespace endpoint; only the target URL differs (not decided here).
 import { readFileSync } from "node:fs";
 import { normalizeVar, TUNABLES } from "@oa/shared";
-import { isInstallId, names } from "./names.js";
+import { assertOwnResource, isInstallId, names } from "./names.js";
 import type { InstallId } from "./types.js";
 
 /** Remove // and /* *\/ comments and trailing commas, leaving strings intact. */
@@ -266,7 +266,8 @@ export function userWorkerMetadata(
 ): UploadMetadata {
   checkInputs(i, r);
   const t = r.template ?? loadTemplate();
-  const n = names(i.id);
+  const n = names(i.id, r.env);
+  for (const v of [n.script, n.d1, n.r2, n.kv]) assertOwnResource(v, r.env);
   for (const k of ["d1_databases", "r2_buckets", "kv_namespaces"])
     if ((t[k] ?? []).length > 1)
       throw new Error(
@@ -330,6 +331,18 @@ export function userWorkerMetadata(
     if (Object.hasOwn(TEMPLATE_BINDINGS_EXCLUDED, k)) continue;
     plain[k] = render(v, `var ${k}`);
   }
+  // Every resource name the template emits, rendered, must be this env's own.
+  assertOwnResource(plain.WORKER_NAME ?? n.script, r.env);
+  for (const [k, field, key] of [
+    ["d1_databases", "database_name", "d1"],
+    ["r2_buckets", "bucket_name", "r2"],
+    ["kv_namespaces", "title", "kv"],
+  ] as const)
+    for (const e of (t[k] ?? []) as Record<string, string>[])
+      assertOwnResource(
+        e[field] === undefined ? n[key] : render(e[field], `${k}.${field}`),
+        r.env,
+      );
   Object.assign(plain, {
     PLAN: "paid",
     ENVIRONMENT: "production",
