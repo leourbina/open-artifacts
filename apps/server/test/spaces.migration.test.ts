@@ -81,7 +81,10 @@ describe("migration spaces", () => {
       /CREATE TRIGGER IF NOT EXISTS `users_personal_space`/,
     );
     expect(SPACES_MIGRATION).toMatch(
-      /CREATE TRIGGER IF NOT EXISTS `artifacts_space_required`/,
+      /CREATE TRIGGER IF NOT EXISTS `artifacts_space_default`/,
+    );
+    expect(SPACES_MIGRATION).toMatch(
+      /CREATE TRIGGER IF NOT EXISTS `artifacts_space_not_null`/,
     );
     expect(SPACES_MIGRATION).toMatch(
       /CREATE INDEX IF NOT EXISTS `artifacts_space_live_idx` ON `artifacts` \(`space_id`\) WHERE/,
@@ -99,9 +102,10 @@ describe("migration spaces", () => {
       "created_at",
       "deleted_at",
     ]);
+    // Fail closed for new spaces; the backfill and the trigger set 1 explicitly.
     expect(
       (await cols("spaces")).find((c) => c.name === "public_links"),
-    ).toMatchObject({ nn: 1, d: "1" });
+    ).toMatchObject({ nn: 1, d: "0" });
     const pk = async (t: string) =>
       (await cols(t)).filter((c) => c.pk > 0).map((c) => c.name);
     expect(await pk("space_members")).toEqual([
@@ -110,6 +114,7 @@ describe("migration spaces", () => {
       "source",
     ]);
     expect(await pk("group_mappings")).toEqual(["space_id", "group_id"]);
+    expect(await pk("org_group_mappings")).toEqual(["group_id"]);
     expect(await pk("restricted_groups")).toEqual(["group_id"]);
     expect(await pk("directory_groups")).toEqual(["group_id"]);
     expect(await pk("directory_members")).toEqual(["group_id", "user_id"]);
@@ -159,14 +164,22 @@ describe("migration spaces", () => {
       `s4-bad-${tag}`,
     );
     const { userId } = await login(`s4-ck-${tag}@a.com`);
+    // Role/source checks need a shared space: a personal one refuses members
+    // first (the trigger, tested separately below).
+    const shared = `s4-shared-${tag}`;
+    await env.DB.prepare(
+      "insert into spaces (id, kind, name, created_at) values (?, 'shared', 'x', 1)",
+    )
+      .bind(shared)
+      .run();
     await bad(
       "insert into space_members (space_id, user_id, role, source, created_at) values (?, ?, 'owner', 'manual', 1)",
-      userId,
+      shared,
       userId,
     );
     await bad(
       "insert into space_members (space_id, user_id, role, source, created_at) values (?, ?, 'viewer', 'google', 1)",
-      userId,
+      shared,
       userId,
     );
     // A CHECK on an UPDATE fires per matched row, so this must be the real id.
@@ -235,10 +248,60 @@ describe("migration spaces", () => {
     expect((await spaceRow(second)).name).toBe("Chosen");
   });
 
-  it("an artifact insert without space_id aborts", async () => {
+  it("old code inserting without space_id gets the owner's personal space (rollback-safe)", async () => {
+    const id = `s4-nosp-${tag}`;
+    await insertArtifact(id, owner.id, null);
+    expect(await artifactSpace(id)).toBe(owner.id);
+    // New code never writes NULL, and the guard refuses it on update.
     await expect(
-      insertArtifact(`s4-nosp-${tag}`, owner.id, null),
-    ).rejects.toThrow("space_id required");
+      env.DB.prepare("update artifacts set space_id = null where id = ?")
+        .bind(id)
+        .run(),
+    ).rejects.toThrow("space_id cannot be null");
+  });
+
+  it("a personal space refuses members, group mappings and allMembersRole", async () => {
+    const { userId } = await login(`s4-pers-${tag}@a.com`);
+    await expect(
+      env.DB.prepare(
+        "insert into space_members (space_id, user_id, role, source, created_at) values (?, ?, 'viewer', 'manual', 1)",
+      )
+        .bind(userId, owner.id)
+        .run(),
+    ).rejects.toThrow("personal spaces have no members");
+    await expect(
+      env.DB.prepare(
+        "insert into group_mappings (space_id, group_id, group_email, role) values (?, 'g1', 'g1@x.com', 'viewer')",
+      )
+        .bind(userId)
+        .run(),
+    ).rejects.toThrow("personal spaces have no group mappings");
+    await expect(
+      env.DB.prepare(
+        "update spaces set all_members_role = 'viewer' where id = ?",
+      )
+        .bind(userId)
+        .run(),
+    ).rejects.toThrow(/CHECK/);
+  });
+
+  it("org_group_mappings holds the Every-space target and checks its role", async () => {
+    const id = `s4-org-${tag}`;
+    await env.DB.prepare(
+      "insert into org_group_mappings (group_id, group_email, role) values (?, 'every@x.com', 'editor')",
+    )
+      .bind(id)
+      .run();
+    expect(
+      await one("select role from org_group_mappings where group_id = ?", id),
+    ).toEqual({ role: "editor" });
+    await expect(
+      env.DB.prepare(
+        "insert into org_group_mappings (group_id, group_email, role) values (?, 'bad@x.com', 'owner')",
+      )
+        .bind(`${id}-bad`)
+        .run(),
+    ).rejects.toThrow(/CHECK/);
   });
 
   it("space_id must name a space", async () => {
@@ -257,7 +320,8 @@ describe("migration spaces", () => {
       id,
     );
     expect(row).toEqual({ owner_id: owner.id, space_id: owner.id });
-    // The personal space row survives (it may hold artifacts) and is re-pointed.
-    expect(await spaceRow(userId)).toMatchObject({ owner_user_id: owner.id });
+    // The personal space's id IS the removed user's id and it is now empty:
+    // it is deleted, never re-pointed at the instance owner.
+    expect(await spaceRow(userId)).toBeNull();
   });
 });

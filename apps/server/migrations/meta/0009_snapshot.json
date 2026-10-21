@@ -650,35 +650,6 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
-    "nightly_runs": {
-      "name": "nightly_runs",
-      "columns": {
-        "day": {
-          "name": "day",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "nonce": {
-          "name": "nonce",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {
-        "nightly_runs_day_nonce_pk": {
-          "columns": ["day", "nonce"],
-          "name": "nightly_runs_day_nonce_pk"
-        }
-      },
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
     "reserved_artifacts": {
       "name": "reserved_artifacts",
       "columns": {
@@ -976,7 +947,7 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": 1
+          "default": 0
         },
         "created_at": {
           "name": "created_at",
@@ -1009,6 +980,10 @@
         "spaces_public_links_check": {
           "name": "spaces_public_links_check",
           "value": "\"spaces\".\"public_links\" in (0, 1)"
+        },
+        "spaces_personal_no_all_members_check": {
+          "name": "spaces_personal_no_all_members_check",
+          "value": "\"kind\" = 'shared' or \"all_members_role\" is null"
         }
       }
     },
@@ -1406,6 +1381,42 @@
         "versions_format_check": {
           "name": "versions_format_check",
           "value": "\"format\" in ('html', 'markdown', 'code', 'pdf')"
+        }
+      }
+    },
+    "org_group_mappings": {
+      "name": "org_group_mappings",
+      "columns": {
+        "group_id": {
+          "name": "group_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "group_email": {
+          "name": "group_email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "role": {
+          "name": "role",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "org_group_mappings_role_check": {
+          "name": "org_group_mappings_role_check",
+          "value": "\"role\" in ('viewer', 'editor', 'manager')"
         }
       }
     }

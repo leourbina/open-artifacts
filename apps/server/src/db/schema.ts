@@ -58,10 +58,12 @@ export const users = sqliteTable(
 );
 
 // P3: every artifact lives in a space. A personal space's id is its owner's
-// user id (one row per user, created by the users_personal_space trigger), so
-// today's installs map 1:1 with no access change. No FK on owner_user_id:
-// removing a member keeps the space row (it may hold artifacts) and re-points
-// it at the instance owner.
+// user id - the id IS the ownership, the single source of truth (one row per
+// user, created by the users_personal_space trigger), so today's installs map
+// 1:1 with no access change. No FK on owner_user_id; removing a member deletes
+// the space when it is empty, else re-points it at the instance owner. A
+// personal space never has members, group mappings or all_members_role
+// (migration triggers + a CHECK).
 export const spaces = sqliteTable(
   "spaces",
   {
@@ -71,8 +73,14 @@ export const spaces = sqliteTable(
     ownerUserId: text("owner_user_id"),
     /** The role every member gets in this shared space; null = none (P3 T9). */
     allMembersRole: text("all_members_role"),
-    /** "Public links off": no /p/ content and no new public artifacts (P3 T9). */
-    publicLinks: integer("public_links").notNull().default(1),
+    /**
+     * Public links toggle (P3 T9): when 0 it refuses NEW public links only.
+     * Existing public artifacts keep working (the toggle never revokes), and
+     * moving a public artifact into this space rewrites it to team.
+     * New rows default to 0 (fail closed); the 0009 backfill sets 1 on the
+     * personal spaces that predate the toggle.
+     */
+    publicLinks: integer("public_links").notNull().default(0),
     createdAt: integer("created_at").notNull(),
     deletedAt: integer("deleted_at"),
   },
@@ -83,6 +91,11 @@ export const spaces = sqliteTable(
       sql`${t.allMembersRole} is null or ${t.allMembersRole} in ('viewer', 'editor', 'manager')`,
     ),
     check("spaces_public_links_check", sql`${t.publicLinks} in (0, 1)`),
+    // Personal spaces are one owner's: no all-members role.
+    check(
+      "spaces_personal_no_all_members_check",
+      sql`${t.kind} = 'shared' or ${t.allMembersRole} is null`,
+    ),
   ],
 );
 
@@ -125,6 +138,23 @@ export const groupMappings = sqliteTable(
   (t) => [
     primaryKey({ columns: [t.spaceId, t.groupId] }),
     check("group_mappings_role_check", inList("role", SpaceRoleSchema.options)),
+  ],
+);
+
+// "Every space" group mapping (Q5): applies to every shared space, including
+// spaces created later, and never to a personal space. Keyed by group id.
+export const orgGroupMappings = sqliteTable(
+  "org_group_mappings",
+  {
+    groupId: text("group_id").primaryKey(),
+    groupEmail: text("group_email").notNull(),
+    role: text("role").notNull(),
+  },
+  (t) => [
+    check(
+      "org_group_mappings_role_check",
+      inList("role", SpaceRoleSchema.options),
+    ),
   ],
 );
 
@@ -195,9 +225,10 @@ export const artifacts = sqliteTable(
       .references(() => users.id),
     /**
      * The space this artifact belongs to (P3). Never null in practice: the
-     * artifacts_space_required trigger aborts an insert without one, and the
-     * 0009 backfill set it to owner_id for every pre-spaces row. Nullable here
-     * because ADD COLUMN cannot add NOT NULL without a default (0008's rule).
+     * artifacts_space_default AFTER INSERT trigger fills it with owner_id for
+     * old code that does not write it (rollback-safe), the BEFORE UPDATE guard
+     * refuses NULL, and the backfill set it for every pre-spaces row. Nullable
+     * here because ADD COLUMN cannot add NOT NULL without a default (0008).
      */
     spaceId: text("space_id").references(() => spaces.id),
     title: text("title").notNull(),

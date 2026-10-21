@@ -151,7 +151,7 @@ export async function removeMember(
     // Split live/deleted: owner_id is only indexed by the two partial indexes (#248).
     // space_id moves with owner_id (P3 T1): the artifacts now live in the
     // instance owner's personal space. (With the spaces flag on, T6 keeps the
-    // row and the personal space instead of deleting them.)
+    // row instead of deleting it, and the spaces stay put.)
     db
       .update(artifacts)
       .set({ ownerId: to, spaceId: to })
@@ -160,9 +160,12 @@ export async function removeMember(
       .update(artifacts)
       .set({ ownerId: to, spaceId: to })
       .where(and(eq(artifacts.ownerId, id), isNotNull(artifacts.deletedAt))),
+    // The personal space's id IS its owner's user id, so re-pointing it would
+    // leave a row named after the removed user and owned by the instance owner.
+    // It is empty by now (the artifacts above moved), so drop it; ownership is
+    // the id, never owner_user_id.
     db
-      .update(spaces)
-      .set({ ownerUserId: to })
+      .delete(spaces)
       .where(and(eq(spaces.id, id), eq(spaces.kind, "personal"))),
     db
       .update(versions)
