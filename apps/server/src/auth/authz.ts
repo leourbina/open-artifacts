@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   type AccessLevel,
   type CapReason,
@@ -28,6 +29,7 @@ import {
   type CanCtx,
   can,
   decide,
+  isTeamRole,
   type PolicyAction,
   TEAM_ROLES,
 } from "./policy.js";
@@ -104,6 +106,39 @@ export async function accessLevel(
   artifactId: string,
   opts: { allowDeleted?: boolean } = {},
 ): Promise<{ level: AccessLevel; artifact: ArtifactRow } | null> {
+  // The policy gate (route-policy.ts) already loaded this row for this
+  // request: reuse it once instead of a second D1 statement.
+  const cache = prefetched.getStore();
+  const key = accessKey(c, artifactId, opts);
+  if (cache?.has(key)) {
+    const hit = cache.get(key) ?? null;
+    cache.delete(key);
+    return hit;
+  }
+  return loadAccess(env, c, artifactId, opts);
+}
+
+type Access = { level: AccessLevel; artifact: ArtifactRow };
+const prefetched = new AsyncLocalStorage<Map<string, Access | null>>();
+const accessKey = (c: Caller, id: string, opts: { allowDeleted?: boolean }) =>
+  `${c.kind === "user" ? `u:${c.user.id}:${c.cap ?? ""}` : "anon"}|${id}|${opts.allowDeleted ? 1 : 0}`;
+
+/**
+ * Runs `fn` with a per-request access cache. Within it, `authorize(...,
+ * { prefetch: true })` seeds the cache so the handler's own access check (same
+ * caller, artifact and allowDeleted) costs no second D1 statement; each seeded
+ * entry is used once.
+ */
+export function withAccessCache<T>(fn: () => Promise<T>): Promise<T> {
+  return prefetched.run(new Map(), fn);
+}
+
+async function loadAccess(
+  env: Env,
+  c: Caller,
+  artifactId: string,
+  opts: { allowDeleted?: boolean },
+): Promise<Access | null> {
   const db = getDb(env);
   const user = c.kind === "user" ? c.user : null;
   const email = user ? callerEmail(user) : null;
@@ -122,8 +157,19 @@ export async function accessLevel(
     .limit(1);
   const row = rows[0];
   if (!row) return null;
-  const a = row.a;
-  const level = decide({
+  const level = rowLevel(c, row.a, row.shareRole, opts);
+  return level ? { level, artifact: row.a } : null;
+}
+
+/** The caller's level on an already-loaded row (lists and search use it too). */
+export function rowLevel(
+  c: Caller,
+  a: ArtifactRow,
+  shareRole: string | null,
+  opts: { allowDeleted?: boolean } = {},
+): AccessLevel | null {
+  const user = c.kind === "user" ? c.user : null;
+  return decide({
     caller: user ? { id: user.id, orgRole: user.role } : null,
     cap: capOfCaller(c),
     artifact: {
@@ -135,12 +181,22 @@ export async function accessLevel(
     space: { publicLinks: true, allMembersRole: null },
     spaceRole: null,
     shareRole:
-      row.shareRole === "viewer" || row.shareRole === "editor"
-        ? row.shareRole
-        : null,
+      shareRole === "viewer" || shareRole === "editor" ? shareRole : null,
     allowDeleted: opts.allowDeleted === true,
   });
-  return level ? { level, artifact: a } : null;
+}
+
+/**
+ * A viewer's first-thumbnail right (can "thumbnail.write" with
+ * firstThumbnail): through a share, or team access on a team artifact.
+ */
+export function firstThumbnailEligible(
+  c: Caller,
+  a: ArtifactRow,
+  shared: boolean,
+): boolean {
+  if (c.kind !== "user") return false;
+  return shared || (a.visibility === "team" && isTeamRole(c.user.role));
 }
 
 /** The caller's cap: the one source both decide() and can() read. */
@@ -172,10 +228,19 @@ export async function authorize(
   c: Caller,
   artifactId: string,
   action: PolicyAction,
-  opts: { allowDeleted?: boolean } = {},
+  opts: {
+    allowDeleted?: boolean;
+    prefetch?: boolean;
+    /** The policy gate's floor for viewer thumbnails (never widens anything else). */
+    ctx?: { firstThumbnail?: boolean };
+  } = {},
 ): Promise<{ level: AccessLevel; artifact: ArtifactRow }> {
-  const r = await accessLevel(env, c, artifactId, opts);
-  if (!r || !can(r.level, action, canCtx(c, r.artifact)))
+  let r: Access | null;
+  if (opts.prefetch) {
+    r = await loadAccess(env, c, artifactId, opts);
+    prefetched.getStore()?.set(accessKey(c, artifactId, opts), r);
+  } else r = await accessLevel(env, c, artifactId, opts);
+  if (!r || !can(r.level, action, { ...canCtx(c, r.artifact), ...opts.ctx }))
     throw new ApiError("not_found", "Not found");
   return r;
 }
@@ -224,9 +289,11 @@ export function listFilterSql(
   const sharedWithMe = email
     ? and(ne(artifacts.ownerId, user.id), sharedIds(email))
     : undefined;
-  const team = TEAM_ROLES.includes(user.role)
-    ? inArray(artifacts.visibility, ["team", "public"])
-    : undefined;
+  // Capped callers see team artifacts only through a share (decide()).
+  const team =
+    TEAM_ROLES.includes(user.role) && capOfCaller(c) == null
+      ? inArray(artifacts.visibility, ["team", "public"])
+      : undefined;
   const parts =
     scope === "mine"
       ? [mine]
@@ -241,7 +308,8 @@ export function listFilterSql(
   // branch on its partial index (MULTI-INDEX OR) rather than walking all live
   // rows; there are no non-partial owner/visibility indexes (#248).
   const branches = present.map((p) => and(isNull(artifacts.deletedAt), p));
-  if (includeDeleted)
+  // Trash is for callers who can undelete: never capped ones.
+  if (includeDeleted && capOfCaller(c) == null)
     branches.push(
       and(
         isNotNull(artifacts.deletedAt),

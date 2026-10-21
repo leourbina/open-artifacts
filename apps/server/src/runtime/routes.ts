@@ -14,18 +14,19 @@ import {
   RUNTIME_PARAMS,
   type RuntimeMethod,
   StorageKeyNameSchema,
+  type Visibility,
 } from "@oa/shared";
 import type { Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import {
   accessLevel,
+  authorize,
   type Caller,
   caller,
   canCtx,
   requireAccess,
-  TEAM_ROLES,
 } from "../auth/authz.js";
-import { can, type PolicyAction } from "../auth/policy.js";
+import { can, namedEvents, type PolicyAction } from "../auth/policy.js";
 import { cappedJson, readCapped } from "../http/body.js";
 import { ApiError, appOrigin } from "../http/errors.js";
 import type { AppEnv } from "../http/middleware.js";
@@ -373,7 +374,12 @@ export function mountRuntime(app: AppType): void {
     const artifactId = c.req.param("id") ?? "";
     if (!isId(artifactId)) throw new ApiError("not_found", "Not found");
     const who = caller(c);
-    const a = await requireAccess(c.env, who, artifactId, "owner");
+    const { artifact: a } = await authorize(
+      c.env,
+      who,
+      artifactId,
+      "data.reset",
+    );
     if (who.kind !== "user") throw new ApiError("not_found", "Not found");
     if (!capsOf(a.capabilities).db)
       throw new ApiError(
@@ -428,10 +434,11 @@ export function mountRuntime(app: AppType): void {
       // Publisher names: team members, and anyone whose access is more than
       // a public link (owner, editor, or a viewer share/team access on a
       // non-public artifact). Guests reading a public link get `{ kind }`.
-      named =
-        TEAM_ROLES.includes(who.user.role) ||
-        r.level !== "viewer" ||
-        r.artifact.visibility !== "public";
+      named = namedEvents(
+        who.user,
+        r.level,
+        r.artifact.visibility as Visibility,
+      );
     } else {
       const key = anonIpKey(c.req.header("cf-connecting-ip") ?? "");
       if (!key)

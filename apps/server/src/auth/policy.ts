@@ -60,6 +60,7 @@ export type OrgAction =
   | "directory.manage"
   | "audit.read"
   | "members.manage"
+  | "settings.read"
   | "settings.manage"
   | "usage.read"
   | "tokens.create"
@@ -94,6 +95,9 @@ export type CanCtx = {
 
 /** Roles that see `team` artifacts. Guests never do. */
 export const TEAM_ROLES: readonly Role[] = ["owner", "admin", "member"];
+
+/** A member, admin or owner (not a guest). */
+export const isTeamRole = (role: Role): boolean => TEAM_ROLES.includes(role);
 
 const SPACE_RANK: Record<SpaceRole, number> = {
   viewer: 1,
@@ -274,6 +278,8 @@ export function orgCan(
       );
     case "artifact.create":
       return !capped;
+    case "settings.read":
+      return TEAM_ROLES.includes(m.role);
     case "directory.manage":
       return m.role === "owner" && !capped;
     case "tokens.create":
@@ -282,6 +288,26 @@ export function orgCan(
     default:
       return admin;
   }
+}
+
+/**
+ * Whether an artifact may be served without a signed token (/p/ and public
+ * downloads): public, live, and in a personal space or a shared space that
+ * allows public links. Unknown kinds count as shared (fail closed). Until
+ * spaces exist (P3 T1) every artifact is personal.
+ */
+export function isPubliclyServable(a: {
+  visibility: string;
+  deleted: boolean;
+  spaceKind?: SpaceKind;
+  publicLinks?: boolean;
+}): boolean {
+  const personal = a.spaceKind === undefined || a.spaceKind === "personal";
+  return (
+    a.visibility === "public" &&
+    a.deleted === false &&
+    (personal || a.publicLinks === true)
+  );
 }
 
 /**

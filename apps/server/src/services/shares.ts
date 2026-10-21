@@ -7,7 +7,7 @@ import {
   viewerPath,
 } from "@oa/shared";
 import { and, asc, eq } from "drizzle-orm";
-import { callerOf, requireAccess } from "../auth/authz.js";
+import { authorize, callerOf } from "../auth/authz.js";
 import { getDb } from "../db/client.js";
 import { normEmail } from "../db/email.js";
 import { shares } from "../db/schema.js";
@@ -31,8 +31,12 @@ const toShare = (r: {
   createdAt: new Date(r.createdAt).toISOString(),
 });
 
-const ownerOnly = (env: Env, user: Member, id: string) =>
-  requireAccess(env, callerOf(user), id, "owner");
+const ownerOnly = (
+  env: Env,
+  user: Member,
+  id: string,
+  action: "share" | "unshare" = "share",
+) => authorize(env, callerOf(user), id, action).then((r) => r.artifact);
 
 export async function listShares(
   env: Env,
@@ -139,7 +143,7 @@ export async function deleteShare(
   email: string,
   ctx?: Pick<ExecutionContext, "waitUntil">,
 ): Promise<void> {
-  await ownerOnly(env, user, id);
+  await ownerOnly(env, user, id, "unshare");
   const e = normEmail(email);
   if (!e) throw new ApiError("not_found", "Not found");
   const out = await getDb(env)

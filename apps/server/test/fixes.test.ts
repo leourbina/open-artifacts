@@ -197,10 +197,16 @@ describe("route composition and SPA paths", () => {
   const callApp = (a: ReturnType<typeof createApp>, path: string) =>
     a.request(`${APP}${path}`, {}, { ...(env as object), ASSETS } as never);
   it("routes mounted via hook are not shadowed by the fallback", async () => {
-    const a = createApp((x) => {
-      x.get("/api/v1/ping", (c) => c.json({ pong: 1 }));
-      x.get("/dashboard/ping", (c) => c.text("mounted"));
-    });
+    const a = createApp(
+      (x) => {
+        x.get("/api/v1/ping", (c) => c.json({ pong: 1 }));
+        x.get("/dashboard/ping", (c) => c.text("mounted"));
+      },
+      {
+        "GET /api/v1/ping": { public: "test" },
+        "GET /dashboard/ping": { public: "test" },
+      },
+    );
     assetCalls = [];
     expect(await (await callApp(a, "/api/v1/ping")).json()).toEqual({
       pong: 1,

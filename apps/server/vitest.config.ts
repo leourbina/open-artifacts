@@ -20,6 +20,7 @@ export default defineConfig({
     exclude: [
       "test/**/*.cpu.test.ts",
       "test/code-cpu/**",
+      "test/node/**",
       "**/node_modules/**",
     ],
     setupFiles: ["./test/setup.ts"],
