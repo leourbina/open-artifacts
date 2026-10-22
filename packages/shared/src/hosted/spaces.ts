@@ -12,6 +12,14 @@ import {
   SpaceRoleSchema,
 } from "./core.js";
 
+/**
+ * Space.can. manageMappings: list and change this space's group mappings.
+ * True for org admins, and for the space's managers while
+ * Settings.spaceManagerMappings is on. Always false for personal spaces.
+ */
+export const SpaceCanSchema = z.object({ manageMappings: z.boolean() });
+export type SpaceCan = z.infer<typeof SpaceCanSchema>;
+
 export const SpaceSchema = SpaceRefSchema.extend({
   /** Personal spaces only. */
   owner: UserRefSchema.nullable(),
@@ -23,6 +31,8 @@ export const SpaceSchema = SpaceRefSchema.extend({
   /** Live artifacts. */
   artifactCount: z.number().int(),
   createdAt: z.string(),
+  /** What the caller may do in this space (optional: older servers omit it). */
+  can: SpaceCanSchema.optional(),
 });
 export type Space = z.infer<typeof SpaceSchema>;
 
@@ -86,7 +96,15 @@ export type SpaceMember = z.infer<typeof SpaceMemberSchema>;
 export const SpaceMemberPutSchema = z.strictObject({ role: SpaceRoleSchema });
 export type SpaceMemberPut = z.infer<typeof SpaceMemberPutSchema>;
 
-/** GET R.spaceMappings(id) -> GroupMapping[] (bounded; org admin). */
+/** Roles a space manager (not an org admin) may map a group to; manager is 403 space_forbidden. */
+export const SPACE_MANAGER_MAPPING_ROLES = ["viewer", "editor"] as const;
+
+/**
+ * GET R.spaceMappings(id) -> GroupMapping[] (bounded). Org admin or a space
+ * manager (whatever Settings.spaceManagerMappings says). Personal: 400
+ * space_personal. Per-space rows only: Every-space rows are R.orgMappings.
+ * Pending server implementation (P3 T9/T14).
+ */
 export const GroupMappingSchema = GroupRefSchema.extend({
   role: SpaceRoleSchema,
   memberCount: z.number().int().nullable(),
@@ -94,9 +112,31 @@ export const GroupMappingSchema = GroupRefSchema.extend({
 });
 export type GroupMapping = z.infer<typeof GroupMappingSchema>;
 
-/** PUT R.spaceMapping(id, group) -> GroupMapping; 409 directory_sync_off when sync is off or frozen. */
+/**
+ * PUT R.spaceMapping(id, group) -> GroupMapping; DELETE -> 204. Org admin: any
+ * role. Space manager: only rows that are and stay viewer|editor
+ * (SPACE_MANAGER_MAPPING_ROLES). Checks in order: personal 400
+ * space_personal; no role 404; PUT while Settings.spaceManagerMappings is off
+ * 403 directory_mapping_off (DELETE is always allowed: removing access);
+ * a manager role (PUT body, or the existing row on PUT or DELETE) 403
+ * space_forbidden; sync off or frozen 409 directory_sync_off. Manager access
+ * is pending server implementation (P3 T9/T14).
+ */
 export const GroupMappingPutSchema = z.strictObject({ role: SpaceRoleSchema });
 export type GroupMappingPut = z.infer<typeof GroupMappingPutSchema>;
+
+/*
+ * "Every space" mappings reuse GroupMapping / GroupMappingPut (pending server
+ * implementation, P3 T9/T14). GET R.orgMappings?cursor&limit ->
+ * Page<GroupMapping> (org admin). PUT R.orgMapping(groupId) GroupMappingPut ->
+ * GroupMapping (upsert); DELETE -> 204; org admin only; 409
+ * directory_sync_off when sync is off or frozen; audited mapping.set /
+ * mapping.remove with spaceId null. One row per group, NEVER expanded into
+ * per-space rows: a member's effective role in a shared space is the
+ * read-time max of the per-space rows and the org mappings of their groups
+ * (SpaceMember.syncRole, groups). Applies to every shared space, including
+ * ones created later, and never to a personal space.
+ */
 
 /**
  * GET R.restrictedGroups -> RestrictedGroup[] (org admin). Restricted members

@@ -145,6 +145,7 @@ export const AuditActionSchema = z.enum([
   "directory.sweep.confirmed",
   "directory.break_glass",
   "features.change",
+  "settings.space_manager_mappings",
 ]);
 export type AuditAction = z.infer<typeof AuditActionSchema>;
 
