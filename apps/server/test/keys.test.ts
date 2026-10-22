@@ -19,6 +19,7 @@ describe("deriveKey", () => {
       "oa:oidc-state",
       "oa:code-cookie",
       "oa:login-codes",
+      "oa:code-email",
     ]);
   });
 

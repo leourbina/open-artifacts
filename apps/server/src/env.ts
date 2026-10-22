@@ -8,6 +8,8 @@ export interface Env {
   ASSETS: Fetcher;
   /** Anonymous-write limiter (per IP); unbound in the test pool. */
   RL_ANON?: RateLimit;
+  /** Sign-in code limiter, keyed `${installKey}:${ip}`; unbound in the test pool. */
+  RL_AUTH?: RateLimit;
   /** Browser Run, for server-side thumbnails (services/thumbs.ts); optional. */
   BROWSER?: Fetcher;
   /** Optional Email Service send binding; invite/share emails are off without it. */

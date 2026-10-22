@@ -12,6 +12,7 @@ export const KEY_LABELS = [
   "oa:oidc-state",
   "oa:code-cookie",
   "oa:login-codes",
+  "oa:code-email",
 ] as const;
 export type KeyLabel = (typeof KEY_LABELS)[number];
 
