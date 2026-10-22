@@ -1,3 +1,4 @@
+import { normalizeEmail } from "@oa/auth-core";
 import {
   type Format,
   LIMITS,
@@ -7,9 +8,13 @@ import {
 } from "@oa/shared";
 import { and, eq, type SQL, sql } from "drizzle-orm";
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
-import { type Caller, listFilterSql, requireAccess } from "../auth/authz.js";
+import {
+  authorize,
+  type Caller,
+  listFilterSql,
+  rowLevel,
+} from "../auth/authz.js";
 import { getDb } from "../db/client.js";
-import { normEmail } from "../db/email.js";
 import { artifacts, shares, users } from "../db/schema.js";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
@@ -413,7 +418,7 @@ export async function putExtractedText(
   v: number,
   text: string,
 ): Promise<void> {
-  const a = await requireAccess(env, caller, id, "viewer");
+  const { artifact: a } = await authorize(env, caller, id, "version.text");
   if (v > a.currentVersion) throw new ApiError("not_found", "Not found");
   if (a.format !== "pdf" || v !== a.currentVersion) return;
   const body = stripMarks(text)
@@ -499,7 +504,7 @@ export function searchQuery(
   offset: number,
   limit: number,
 ) {
-  const email = normEmail(caller.user.email);
+  const email = normalizeEmail(caller.user.email);
   return getDb(env)
     .select({
       a: artifacts,
@@ -544,36 +549,36 @@ export async function search(
   const m = sanitizeQuery(q);
   if (!m) throw bad("q has no searchable words", "q");
   const offset = cursor === undefined ? 0 : decodeOffset(cursor);
-  const me = caller.user.id;
   const rows = await searchQuery(env, caller, m, offset, limit);
   const page = rows.slice(0, limit);
   const next = offset + limit;
   return {
     // Built in SearchHitSchema's key order (summary fields, then snippet);
     // validated by the tests, not per hit in production.
-    items: page.map(
-      (r): SearchHit => ({
-        ...toSummary(
-          env,
-          r.a,
-          redact(
-            {
-              id: r.a.ownerId,
-              email: r.ownerEmail,
-              name: r.ownerName,
-              displayName: r.ownerDisplayName,
-            },
-            caller,
+    // Rows the policy denies are dropped (belt and braces with listFilterSql).
+    items: page.flatMap((r): SearchHit[] => {
+      const level = rowLevel(caller, r.a, r.shareRole);
+      if (!level) return [];
+      return [
+        {
+          ...toSummary(
+            env,
+            r.a,
+            redact(
+              {
+                id: r.a.ownerId,
+                email: r.ownerEmail,
+                name: r.ownerName,
+                displayName: r.ownerDisplayName,
+              },
+              caller,
+            ),
+            level,
           ),
-          r.a.ownerId === me
-            ? "owner"
-            : r.shareRole === "editor" || r.shareRole === "viewer"
-              ? r.shareRole
-              : "viewer",
-        ),
-        snippet: pickSnippet(r.sb ?? "", r.sd ?? "", r.st ?? ""),
-      }),
-    ),
+          snippet: pickSnippet(r.sb ?? "", r.sd ?? "", r.st ?? ""),
+        },
+      ];
+    }),
     nextCursor:
       rows.length > limit && next <= MAX_OFFSET ? encodeOffset(next) : null,
   };

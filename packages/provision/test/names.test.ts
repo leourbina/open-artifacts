@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { hosts, isInstallId, names, newInstallId } from "../src/index.js";
+import {
+  assertOwnResource,
+  ENV_PREFIX,
+  ForeignResource,
+  hosts,
+  isInstallId,
+  names,
+  newInstallId,
+  platformNames,
+} from "../src/index.js";
 
 const D = { app: "app.test", content: "content.test" };
 
@@ -9,21 +18,94 @@ describe("provision names", () => {
       expect(isInstallId(newInstallId())).toBe(true);
     expect(isInstallId("I0123456789a")).toBe(false);
   });
-  it("names are derived only from the id", () => {
-    expect(names("iabc123def45")).toEqual({
-      script: "oa-iabc123def45",
-      d1: "oa-iabc123def45",
-      r2: "oa-iabc123def45",
-      kv: "oa-iabc123def45-oauth",
+  it("names are derived only from the id and env", () => {
+    expect(names("iabc123def45", "staging")).toEqual({
+      script: "oa-s-iabc123def45",
+      d1: "oa-s-iabc123def45",
+      r2: "oa-s-iabc123def45",
+      kv: "oa-s-iabc123def45-oauth",
+    });
+    expect(names("iabc123def45", "prod")).toEqual({
+      script: "oa-p-iabc123def45",
+      d1: "oa-p-iabc123def45",
+      r2: "oa-p-iabc123def45",
+      kv: "oa-p-iabc123def45-oauth",
     });
   });
+  it("platformNames per env", () => {
+    expect(platformNames("staging")).toEqual({
+      db: "oa-s-platform",
+      releases: "oa-s-releases",
+      registry: "oa-s-broker-registry",
+      scheduler: "oa-s-scheduler",
+      inventory: "oa-s-inventory",
+      broker: "oa-s-auth-broker",
+      dispatch: "oa-s-dispatch",
+      turnstile: "oa-s-turnstile",
+    });
+    expect(platformNames("prod").turnstile).toBe("oa-p-turnstile");
+    expect(platformNames("prod").db).toBe("oa-p-platform");
+    for (const env of ["staging", "prod"] as const) {
+      const other = env === "staging" ? "prod" : "staging";
+      for (const v of Object.values(platformNames(env))) {
+        expect(() => assertOwnResource(v, env)).not.toThrow();
+        expect(() => assertOwnResource(v, other)).toThrow(ForeignResource);
+      }
+    }
+  });
+  it("assertOwnResource refuses foreign and near-miss names", () => {
+    expect(ENV_PREFIX).toEqual({ staging: "oa-s-", prod: "oa-p-" });
+    for (const n of [
+      "oa-p-x",
+      "open-artifacts",
+      "open-artifacts-staging",
+      "open-artifacts-demo",
+      "terrazul-api",
+      "leourbina",
+      "oa-",
+      "",
+      "oa-s",
+      "oa-sx-abc",
+      " oa-s-abc",
+      "OA-S-abc",
+    ])
+      expect(() => assertOwnResource(n, "staging")).toThrow(ForeignResource);
+    expect(() => assertOwnResource("oa-s-x", "prod")).toThrow(ForeignResource);
+    expect(new ForeignResource("x").name).toBe("ForeignResource");
+    expect(() => assertOwnResource("oa-s-x", "staging")).not.toThrow();
+  });
+  it("every generated name passes for its own env", () => {
+    for (let n = 0; n < 200; n++) {
+      const id = newInstallId();
+      for (const env of ["staging", "prod"] as const)
+        for (const v of Object.values(names(id, env)))
+          expect(() => assertOwnResource(v, env)).not.toThrow();
+    }
+  });
   it("rejects reserved, uppercase, dotted and too-long slugs", () => {
-    for (const s of ["www", "Acme", "a.b", "-a", "a-", "x".repeat(33)])
+    for (const s of [
+      "www",
+      "auth",
+      "broker",
+      "login",
+      "sso",
+      "Acme",
+      "a.b",
+      "-a",
+      "a-",
+      "x".repeat(33),
+    ])
       expect(() => hosts(s, D)).toThrow(/slug/);
     expect(hosts("finqore", D)).toEqual({
       appHost: "finqore.app.test",
       contentHost: "finqore.content.test",
     });
+  });
+  it("refuses punycode and IDNA-reserved slugs (H-T4b L4)", () => {
+    for (const s of ["xn--80ak6aa92e", "xn--a", "ab--c", "a1--", "zz--zz"])
+      expect(() => hosts(s, D)).toThrow(/slug/);
+    for (const s of ["a-b", "abc--d", "a--b", "x-n--a", "finqore"])
+      expect(() => hosts(s, D)).not.toThrow();
   });
   it("refuses equal or nested app and content domains", () => {
     expect(() => hosts("a", { app: "x.test", content: "x.test" })).toThrow(

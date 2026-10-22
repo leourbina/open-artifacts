@@ -10,7 +10,8 @@ import {
   R,
 } from "@oa/shared";
 import type { Context } from "hono";
-import { caller, requireAccess, requireUser } from "../auth/authz.js";
+import { authorize, caller, callerOf, requireUser } from "../auth/authz.js";
+import { isPubliclyServable } from "../auth/policy.js";
 import { publicPrefix, signContent } from "../content/signing.js";
 import { readCapped } from "../http/body.js";
 import { ApiError, contentOrigin } from "../http/errors.js";
@@ -131,7 +132,7 @@ export function mountArtifacts(app: AppType): void {
     const q = ListQuerySchema.safeParse(c.req.query());
     if (!q.success)
       throw new ApiError("bad_request", "Invalid query", q.error.issues);
-    return c.json(await list(c.env, { kind: "user", user }, q.data));
+    return c.json(await list(c.env, callerOf(user), q.data));
   });
 
   app.get(ARTIFACT, async (c) =>
@@ -168,7 +169,12 @@ export function mountArtifacts(app: AppType): void {
   // Viewer+. Defaults to the current version; ?v= must exist (else 404).
   app.get(`${ARTIFACT}/content-url`, async (c) => {
     const id = idParam(c);
-    const a = await requireAccess(c.env, caller(c), id, "viewer");
+    const { artifact: a } = await authorize(
+      c.env,
+      caller(c),
+      id,
+      "content.mint",
+    );
     const q = c.req.query("v");
     if (q !== undefined && !VERSION_NUM.test(q)) throw notFound();
     const v = q === undefined ? a.currentVersion : Number(q);
@@ -179,7 +185,14 @@ export function mountArtifacts(app: AppType): void {
       .first();
     if (!exists) throw notFound();
     const origin = contentOrigin(c.env);
-    if (a.visibility === "public")
+    // Unsigned only when the artifact may be served publicly (the same rule
+    // as the content host's /p/); otherwise a signed, expiring URL.
+    if (
+      isPubliclyServable({
+        visibility: a.visibility,
+        deleted: a.deletedAt != null,
+      })
+    )
       return c.json({
         url: `${origin}${publicPrefix(id, v)}__view`,
         expiresAt: null,
@@ -253,7 +266,7 @@ export function mountArtifacts(app: AppType): void {
     const buf = await readCapped(c, LIMITS.extractedTextBytes);
     await putExtractedText(
       c.env,
-      { kind: "user", user },
+      callerOf(user),
       id,
       v,
       utf8Decoder.decode(buf),

@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { sandbox, script } from "./stubs.ts";
+import { root, sandbox, script } from "./stubs.ts";
 
 const FAKE = `oa_pat_${"A".repeat(32)}`;
 const ok = (step: string) => `{"step":"${step}","status":"ok"}`;
@@ -137,31 +137,35 @@ describe("prod-setup.sh", () => {
       expect(r.calls[1]).not.toContain("--check");
       expect(r.calls[2]).toContain("--ci --revoke-ci-tokens");
     });
-    it("install, preflight and upgrade pass --solo --browser --plan paid; cleanup does not", () => {
+    it("install, preflight and upgrade pass --team --yes-paid --email-domain mail.leourbina.com --browser --plan paid; cleanup does not", () => {
       // Prod is Workers Paid, but stateless CI reads the plan as unknown and
-      // --json never guesses team: both are explicit. No email flags yet.
+      // --json never guesses team: team, email and the plan are explicit.
       const r = sequence(false);
-      for (const c of r.calls.slice(0, 2))
-        expect(c).toContain("--solo --browser --plan paid");
-      expect(install([ok("a")]).calls[0]).toContain(
-        "--solo --browser --plan paid",
-      );
-      expect(r.calls[2]).not.toContain("--solo");
+      const SWITCH =
+        "--team --yes-paid --email-domain mail.leourbina.com --browser --plan paid";
+      for (const c of r.calls.slice(0, 2)) expect(c).toContain(SWITCH);
+      expect(install([ok("a")]).calls[0]).toContain(SWITCH);
+      expect(r.calls[2]).not.toContain("--team");
       expect(r.calls[2]).not.toContain("--browser");
-      for (const c of r.calls)
-        expect(c).not.toMatch(/--team|email-domain|yes-paid/);
+      for (const c of r.calls) expect(c).not.toContain("--solo");
     });
   });
 });
 
 describe("prod-setup.sh demo modes", () => {
-  const demoEnv = {
+  // Record<string, string>: the demo run may add DEMO_PUBLIC_HOME (and a bad value for it).
+  const demoEnv: Record<string, string> = {
     DEMO_NAME: "open-artifacts-demo",
     DEMO_APP_HOST: "demo.example.com",
     DEMO_CONTENT_HOST: "demo-content.example.com",
     DEMO_OWNER_EMAIL: "o@example.com",
   };
-  const run = (mode: string, lines: string[], env = demoEnv, exit = 0) => {
+  const run = (
+    mode: string,
+    lines: string[],
+    env: Record<string, string> = demoEnv,
+    exit = 0,
+  ) => {
     const body = `cat <<'EOF_FIXTURE'\n${lines.join("\n")}\nEOF_FIXTURE\nexit ${exit}`;
     const sb = sandbox({ pnpm: body });
     const r = sb.run(["bash", script("prod-setup.sh"), mode], {
@@ -209,17 +213,88 @@ describe("prod-setup.sh demo modes", () => {
     ).not.toBe(0);
   });
   it("refuses the production Worker name or host without running setup", () => {
-    for (const bad of [
+    const bad: Record<string, string>[] = [
       { DEMO_NAME: "open-artifacts-prod" },
       { DEMO_APP_HOST: "artifacts.leourbina.com" },
       { DEMO_NAME: "custom-prod", PROD_NAME: "custom-prod" },
-    ]) {
-      const r = run("demo-install", [ok("a")], { ...demoEnv, ...bad });
-      expect(r.code, JSON.stringify(bad)).toBe(2);
+    ];
+    for (const b of bad) {
+      const r = run("demo-install", [ok("a")], { ...demoEnv, ...b });
+      expect(r.code, JSON.stringify(b)).toBe(2);
       expect(r.calls).toEqual([]);
     }
   });
   it("requires the DEMO_* values", () => {
     expect(run("demo-install", [ok("a")], {} as never).code).not.toBe(0);
+  });
+  describe("DEMO_PUBLIC_HOME", () => {
+    const ID = "AbCdEfGhJkMnPqRs";
+    it("demo-upgrade and demo-install pass --var PUBLIC_HOME=<id>", () => {
+      for (const m of ["demo-upgrade", "demo-install"]) {
+        const r = run(m, [ok("a")], { ...demoEnv, DEMO_PUBLIC_HOME: ID });
+        expect(r.code, m).toBe(0);
+        expect(r.calls[0], m).toContain(`--var PUBLIC_HOME=${ID}`);
+      }
+    });
+    it("passes no --var when unset or empty", () => {
+      for (const env of [demoEnv, { ...demoEnv, DEMO_PUBLIC_HOME: "" }]) {
+        const r = run("demo-upgrade", [ok("a")], env);
+        expect(r.code).toBe(0);
+        expect(r.calls[0]).not.toContain("--var");
+      }
+    });
+    it("rejects an invalid id with the error JSON and never calls pnpm", () => {
+      for (const bad of [
+        "x; rm -rf /",
+        "AbCdEfGh",
+        "AbCdEfGh JkMnPqR",
+        "AbCdEfGhJkMnPqR0",
+        `${ID}\n`,
+      ]) {
+        for (const m of ["demo-install", "demo-upgrade"]) {
+          const r = run(m, [ok("a")], { ...demoEnv, DEMO_PUBLIC_HOME: bad });
+          expect(r.code, `${m} ${JSON.stringify(bad)}`).toBe(1);
+          expect(r.out).toContain(
+            '{"step":"demo-vars","status":"error","message":"DEMO_PUBLIC_HOME is not an artifact id"}',
+          );
+          expect(r.calls).toEqual([]);
+        }
+      }
+    });
+    it("prod modes never pass PUBLIC_HOME, even when it is set", () => {
+      for (const m of ["install", "preflight", "upgrade", "cleanup"]) {
+        const r = install([ok("a")], 0, m, { DEMO_PUBLIC_HOME: ID });
+        expect(r.code, m).toBe(0);
+        expect(r.calls[0], m).not.toContain("--var");
+        expect(r.calls[0], m).not.toContain("PUBLIC_HOME");
+      }
+    });
+  });
+
+  describe("ops-demo-install.yml", () => {
+    const wf = readFileSync(
+      join(root, ".github/workflows/ops-demo-install.yml"),
+      "utf8",
+    );
+    it("never interpolates inputs.mode into a run: line", () => {
+      const lines = wf.split("\n");
+      let inRun = false;
+      let runIndent = 0;
+      for (const l of lines) {
+        const indent = l.length - l.trimStart().length;
+        const m = /^(\s*)(?:- )?run:/.exec(l);
+        if (m) {
+          inRun = true;
+          runIndent = indent;
+          expect(l).not.toMatch(/\$\{\{\s*inputs\./);
+        } else if (inRun && l.trim() && indent > runIndent) {
+          expect(l).not.toMatch(/\$\{\{\s*inputs\./);
+        } else if (l.trim()) inRun = false;
+      }
+      expect(wf).toMatch(/MODE: \$\{\{ inputs\.mode \}\}/);
+      expect(wf).toMatch(
+        /DEMO_PUBLIC_HOME: \$\{\{ vars\.DEMO_PUBLIC_HOME \}\}/,
+      );
+    });
   });
 });

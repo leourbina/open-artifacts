@@ -39,7 +39,7 @@ Nothing else in `apps/server/src` uses KV. Spec 3 rules out the obvious fix (one
 
 **Ratelimit namespaces, found while checking:** `RL_ANON` uses `namespace_id: "1001"`. A namespace ID is account-wide, so every hosted install would share one per-IP counter, and one tenant's traffic would throttle another's. That isn't a data leak, but it is a cross-tenant effect. Fixed in M1: Task 3 gives each install its own block of IDs (Task 4 allocates `installs.rl_ns`), and Task 1 confirms ratelimit bindings work on user Workers and whether there's a per-account cap.
 
-Still unconfirmed (Task 1 spike, needs the subscription): `Fetcher.scheduled()` through a dispatch namespace binding, and whether `send_email`, `browser` and `ratelimit` bindings and static assets work on user Workers.
+Answered by the Task 1 spike (2026-10-21, `docs/ops/hosted.md`): `Fetcher.scheduled()` works through a dispatch namespace binding; `send_email`, `browser`, `ratelimit`, `service` and `assets` bindings are all accepted on user Workers, and SQLite Durable Objects work in a namespace. `send_email` delivery and `browser` rendering are not yet exercised.
 
 ## Shared account state (review finding 10)
 
@@ -56,7 +56,7 @@ All installs share one Cloudflare account, so some state is shared even though n
 ## Spec gaps closed here (review finding 12)
 
 - **Audit of control-plane actions:** a platform D1 table `hosted_audit(id INTEGER PRIMARY KEY, at INTEGER, actor TEXT, action TEXT, install_id TEXT, detail TEXT)`, append-only (triggers abort `UPDATE` and `DELETE`). Every `oa:hosted` command writes a row before and after it acts (Task 8).
-- **Control-plane token:** the CLI's Cloudflare token can read every customer's D1 and R2. It lives in the macOS keychain (`security find-generic-password -s oa-hosted-<env>`), never in a file, and is created with an expiry of 7 days or less. CI holds only the staging token; for prod it holds just the inventory key and a Workers Scripts Read token (Task 7b).
+- **Control-plane token:** the CLI's Cloudflare token can read every customer's D1 and R2. It lives in the macOS keychain (`security find-generic-password -s oa-hosted-<env>`), never in a file. CI holds only the staging token; for prod it holds just the inventory key and a Workers Scripts Read token (Task 7b).
 - **Custom hostnames:** M4 in the roadmap, not M1. Rule for later: a `HOSTS` key is written only after the Cloudflare for SaaS hostname is active and its ownership verified, and is unique across installs.
 - **P2's `HOSTED=1`** is set on every hosted install (Task 3).
 - **Backups:** export is `NotInM1`, so FinQore has no R2 or Durable Object backup in M1. **User-accepted on 2026-10-21** (via the Manager): FinQore runs without backup or export until M2. D1 Time Travel (30 days) covers the database only.
@@ -71,8 +71,21 @@ All installs share one Cloudflare account, so some state is shared even though n
 - All four are separate registrable domains in our Cloudflare account, and every tenant hostname is one level deep, so Universal SSL covers them (no Advanced Certificate Manager).
 - `hosts(slug, domains)` (Task 2) already refuses equal or nested app and content domains; the CLI (Task 8) takes the pair from a fixed per-env table (`DOMAINS[env]`), never from flags, and a test pins the table to the values above.
 - **PSL:** all four domains go in the Public Suffix List private section, each whole domain as a suffix (they are tenant-only). For each: a `_psl.<domain>` TXT record holding the publicsuffix/list PR URL, then one PR listing all four with purpose and contact. Weeks to reach browsers; FinQore alone is fine before then, a second prod tenant waits on it, and P5 marks same-site cases `unproven` until the entries ship.
-- **Tokens scoped by env:** the staging Cloudflare token gets zone rights (Workers Routes Edit, DNS Read) only on `open-artifacts-staging.app` and `open-artifacts-staging.page`; the prod token only on `open-artifacts.app` and `open-artifacts.page`. Neither can touch the other env's zones or `open-artifacts.com`. Account-level rights (Workers Scripts, WfP, D1, R2, KV) stay as in Global Constraints. The CLI refuses a token whose zone list includes the other env's zones (checked via the token verify and zone list calls before any write).
+- **No zone permissions on the provisioning tokens.** With WfP the routing is one wildcard record and one wildcard route per zone, set once (Task 6 deploy, by the user or a one-off ops run), so provisioning needs no DNS or Routes rights at all: Workers Scripts Edit, D1 Edit, Workers R2 Storage Edit, Workers KV Storage Edit, and Workers Scripts Read for the check. The two zone-scoped tokens that plan B's per-install Custom Domains needed are retired once the four zones are wired. The account-level rights cross envs (one account), which is why the CLI keeps its env-prefix guard.
+- **Token lifetime (user, 2026-10-21):** every laptop-held Cloudflare token has `expires_on` at most **30 days** out. Before any write the CLI calls `/user/tokens/verify` and refuses unless `status` is `active`, `not_before` ≤ now and `expires_on` is set and ≤ now + 30 days; it warns within 5 days. The token check is a Workers Scripts **Read** call (`GET /accounts/{id}/workers/scripts?per_page=1`), not a zone probe. Tests pin each refusal.
 - **Gate:** no DNS, route or `_psl` write until the Manager gives an explicit go once all four zones are active.
+
+## Workers for Platforms is the M1 target (Manager, 2026-10-21: plan B dropped)
+
+The user enabled Workers for Platforms on the account (`GET /accounts/{id}/workers/dispatch/namespaces` answers 200). The Task 1 spike passed, so M1 goes straight to WfP: there is no plan-B install and **no export/import cutover**. Results and the rulings below: `docs/ops/hosted.md` (PR #407).
+
+- **One provisioner, one target.** `WfpProvisioner` takes `target: { kind: "namespace"; ns: string }`. Every `cf.ts` script call goes to `/accounts/{id}/workers/dispatch/namespaces/{ns}/scripts/{name}` (upload, secrets, settings, assets, delete). Everything else is unchanged: names by install ID (`oa-<id>`, env-prefixed), per-install D1, R2, KV and secrets, upload metadata, the drift test, resume, rollback rules, the platform D1. Keep the `account` target in `cf.ts` for tests and for the dispatch Worker itself (platform scripts live in the account).
+- **Routing: one dispatch Worker, two wildcard routes per env.** `apps/dispatch` maps `Host` → install ID (platform D1 or `HOSTS`) and forwards the request untouched. Each env wires **both** its tenant zones: a proxied `*` AAAA record and the route `*.<zone>/*` → `oa-<env>-dispatch`, for `<env>.app` and `<env>.page` (four zones in total). Universal SSL covers the one-level tenant names; both routes and both records are part of Task 6's deploy, and Task 9's smoke checks a host on each zone.
+- **An unmapped host never reaches an install.** The dispatch Worker answers a plain 404 for anything not mapped: a typo, an old install, uppercase, a trailing dot, a port, a bare apex, or the `www`/`auth`-style platform names. No fallthrough to a default install, no 500. P5 adds the cross-install case (a host mapped to A must never serve B's content).
+- **Tokens: no zone permissions.** The per-env provisioning token needs Workers Scripts Edit (which covers dispatch namespaces and their scripts, assets, secrets and subdomain), D1 Edit, Workers R2 Storage Edit and Workers KV Storage Edit, plus Workers Scripts Read for the check. DNS and routes are a one-time per-zone setup, not a provisioning permission, so DNS Edit, Zone Read and Workers Routes Edit are dropped from the provisioning tokens and the two zone tokens are retired once the four zones are wired.
+- **Scheduler: central, no per-install crons.** Task 7 calls `DISPATCHER.get(names(id).script).scheduled({ cron, scheduledTime })` for every active install (10 at a time, 25 s timeout each). The signed `/__oa/nightly` route is **not** part of M1; Backend's contract stays parked for M2.
+- **Durable Object migration tag.** The settings API does not expose it (`migration_tag` is null for account and namespace scripts alike). Read it with the 412 probe: send the upload with a deliberately empty or wrong `old_tag` and parse `expected tag is '<tag>'` from `Actor migration tag precondition failed` (the upload is rejected, nothing changes). Alternatively record the tag in `installs` on our own uploads and reconcile it with the same probe on resume. Either way: **send no `migrations` when the live tag already equals the target** (re-sending an applied migration fails 400/412).
+- **Limits.** Scripts per dispatch namespace are unlimited, so the account's 500-script cap and the "refuse under 50 free slots" rule are gone. D1 50,000 DBs / 1 TB per account, R2 no constraint, **KV 1,000 namespaces per account stays the ~1,000-install cap** (M2: the D1-backed KV shim). Rate limiting counts per Cloudflare location, so a tenant can exceed its own limit across colos.
 
 ## Test-hook bundles (agreed with Backend, 2026-10-21; #393)
 
@@ -110,17 +123,17 @@ Safeguards, each pinned by a test:
 
 ---
 
-### Task 1: Spike and limits record (needs the subscription gate)
+### Task 1: Spike and limits record — DONE (2026-10-21)
 
 **Files:**
-- Create: `docs/ops/hosted.md` (limits table above, spike results, runbook skeleton)
-- Create: `scripts/hosted/spike/` (throwaway; deleted at the end of the task)
+- Create: `docs/ops/hosted.md` — written, PR #407 (limits table, spike results, rulings, runbook skeleton)
+- Create: `scripts/hosted/spike/` (throwaway; deleted with the spike resources)
 
-- [ ] **Step 1:** Ask the Manager to get the user's approval for the Workers for Platforms subscription. Stop until it's on.
-- [ ] **Step 2:** In a `oa-spike` namespace, upload a 20-line user Worker exporting `fetch` and `scheduled` (writes a timestamp to a KV binding), a dispatch Worker with a namespace binding, and call `env.DISPATCHER.get("spike").scheduled({ cron: "17 3 * * *" })`. Record whether the handler ran (KV timestamp).
-- [ ] **Step 3:** Upload the real `apps/server` bundle once to the spike namespace with all template bindings plus its static assets (Task 3's metadata, by hand). Record which bindings the API accepts: `send_email`, `browser`, `ratelimit` (that it works per user Worker with IDs of 1,000,000 and up, and any cap on ratelimit namespaces per account), `service` to an account Worker (P2's auth broker asks), `assets`, `durable_object_namespace` with `new_sqlite_classes` migration.
-- [ ] **Step 4:** Write the results into `docs/ops/hosted.md`. Rule on each failure in the doc: `scheduled()` unsupported means Task 7 uses the signed route in its fallback; a rejected binding is listed as excluded in Task 3's table with the user-visible effect.
-- [ ] **Step 5:** Delete the spike namespace and its resources; commit the doc.
+- [x] **Step 1:** Workers for Platforms is on the account (user, 2026-10-21). `GET /accounts/{id}/workers/dispatch/namespaces` answers 200.
+- [x] **Step 2:** `scheduled()` through a namespace binding ran the handler (KV stamp, then the real server script). Task 7 keeps the primary path.
+- [x] **Step 3:** The real 0.22.0 bundle uploaded with 27 bindings live (`d1`, `r2`, `kv`, DO, `ratelimit`, `browser`, `send_email`, `assets`, `service`, secrets); SQLite DOs work in a namespace; assets use the 32-hex manifest hash and a 202→201 jwt flow; `keep_assets` works without a jwt. Wildcard DNS + wildcard route to a dispatch Worker served the install on a mapped host and answered 404 on an unmapped one.
+- [x] **Step 4:** Results and rulings in `docs/ops/hosted.md`.
+- [x] **Step 5:** Spike namespace, scripts, D1, R2, KV, route and DNS record deleted.
 
 ### Task 2: `@oa/provision` package: types, install IDs, names
 
@@ -271,12 +284,12 @@ it("refuses equal or nested app and content domains", () => {
 
 **Interfaces:**
 - Consumes: `HOSTS` KV contract and `names(id).script` (Tasks 2, 4).
-- Produces: a Worker with bindings `DISPATCHER` (dispatch namespace) and `HOSTS` (KV). No routes in the repo config: routes `*.<app-domain>/*` and `*.<content-domain>/*` are added at the human DNS gate.
+- Produces: a Worker with bindings `DISPATCHER` (dispatch namespace) and `HOSTS` (KV). No routes in the repo config: **four** routes and four proxied wildcard records are wired at deploy time, one pair per env, covering **both** tenant zones: `*.<env>.app/*` and `*.<env>.page/*` → `oa-<env>-dispatch` (staging and prod). Task 9's smoke checks one host on each of the four zones; a missing route on the `.page` zone means tenant content hosts 404, so both are part of the same deploy step and both appear in the runbook.
 
 Behavior: `host = new URL(req.url).hostname.toLowerCase().replace(/\.$/, "")` → `HOSTS.get(host, { cacheTtl: 60 })` → `isInstallId` → `await DISPATCHER.get(names(id).script).fetch(req)` with the request unchanged. Any miss, invalid value, `DISPATCHER.get` error or rejected `.fetch()` returns `new Response("Not found", { status: 404 })` with no other body or headers. It reads no other header, sets none, and never logs request headers or URLs beyond the host.
 
 - [ ] **Step 1: Write the failing tests** (vitest pool workers, fake `DISPATCHER` recording which script was called)
-  - `unmapped host → 404 with a generic body and nothing dispatched`.
+  - `unmapped host → 404 with a generic body and nothing dispatched` (typo, an old install's host, uppercase, trailing dot, an explicit port, the bare apex and `www`).
   - `uppercase, trailing dot and explicit port map to the same install`.
   - `app and content hosts of one install dispatch to the same script`.
   - `a HOSTS value that isn't an install id → 404` (no script name injection).
@@ -308,9 +321,9 @@ Behavior: `host = new URL(req.url).hostname.toLowerCase().replace(/\.$/, "")` �
 - Produces: `runNightly(env, now: number, o?: { concurrency?: number }): Promise<{ ok: string[]; failed: { id: string; reason: string }[] }>`; `scheduled` calls it and logs one line per failure. It also sums each install's email sends from the previous day against the account limit and logs an `email-quota` alert at 80%.
 - Scale limit: 10 at a time × up to 25 s each fits about 360 installs inside one cron invocation's wall time. M2 replaces the loop with a Queue fan-out (one message per install); M1 asserts the count and logs a warning above 300.
 
-Primary path (if Task 1 confirms it): `DISPATCHER.get(names(id).script).scheduled({ cron: "17 3 * * *", scheduledTime: now })` for every `active` install, 10 at a time, 25 s timeout each. The server's existing `scheduled` handler runs unchanged.
+Confirmed by the Task 1 spike: `DISPATCHER.get(names(id).script).scheduled({ cron: "17 3 * * *", scheduledTime: now })` for every `active` install, 10 at a time, 25 s timeout each. The server's existing `scheduled` handler runs unchanged.
 
-Fallback (only if Task 1 shows `scheduled()` isn't available through the namespace): a new server route `POST /__oa/nightly` accepting only a body `{ installHost, ts }` signed with Ed25519 by the scheduler (private key a scheduler secret; public key a server var `NIGHTLY_PUBKEY`), `ts` within 5 minutes, `installHost === APP_HOST`, plus a nonce accepted once (a per-day `nightly_runs` row in the install's D1, so a replay the same day is refused). That route is Backend-owned code; coordinate before building and add its cross-install replay case to P5.
+The signed `POST /__oa/nightly` route is **not** part of M1 (it was plan B's fallback); Backend's contract for it stays parked for M2, where per-install crons or bindings may return.
 
 - [ ] **Step 1: Write the failing tests**
   - `runs every active install and skips creating, upgrading and deleting ones`.

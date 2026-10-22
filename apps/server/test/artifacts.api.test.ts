@@ -1,4 +1,5 @@
 import { env } from "cloudflare:workers";
+import { normalizeEmail } from "@oa/auth-core";
 import {
   type ArtifactSummary,
   ArtifactSummarySchema,
@@ -12,7 +13,6 @@ import {
 import { beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { getDb } from "../src/db/client.js";
-import { normEmail } from "../src/db/email.js";
 import { shares } from "../src/db/schema.js";
 import { listQuery, publish } from "../src/services/artifacts.js";
 import { getUser } from "../src/services/users.js";
@@ -40,7 +40,7 @@ async function share(id: string, email: string, role: "viewer" | "editor") {
     .insert(shares)
     .values({
       artifactId: id,
-      email: normEmail(email) ?? email,
+      email: normalizeEmail(email) ?? email,
       role,
       createdBy: owner.userId,
       createdAt: Date.now(),

@@ -9,7 +9,8 @@ import {
   QUOTA_MESSAGE,
 } from "@oa/shared";
 import { createMcpHandler } from "agents/mcp/server";
-import type { Caller } from "../auth/authz.js";
+import { type Caller, callerOf, withAccessCache } from "../auth/authz.js";
+import { enforce, TOOL_POLICY } from "../auth/route-policy.js";
 import type { Env } from "../env.js";
 import {
   ApiError,
@@ -107,9 +108,10 @@ export function createServer(ctx: McpContext): McpServer {
   };
   const t: ToolEnv = {
     ...ctx,
-    caller: { kind: "user", user: ctx.user },
+    caller: callerOf(ctx.user),
     agentNow,
   };
+  enforceToolPolicy(server, t);
   registerArtifactTools(server, t);
   registerDataTools(server, t);
   server.registerResource(
@@ -267,4 +269,39 @@ export function mcpHandler(env: Env, factory: () => McpServer) {
     allowedOriginHostnames: [new URL(`http://${env.APP_HOST}`).hostname],
     maxRequestBodySize: mcpBodyCap(env),
   });
+}
+
+/**
+ * Enforces TOOL_POLICY at tools/call dispatch (P3 T5): the SDK runs every
+ * tool through executeToolHandler, whichever way it was registered or later
+ * updated, so this is the one choke point. A tool without an entry fails;
+ * an `artifact` policy authorizes the tool's `id` input (404 otherwise)
+ * before the handler, which reuses that access row.
+ */
+type Dispatch = {
+  _registeredTools: Record<string, unknown>;
+  executeToolHandler: (tool: unknown, args: unknown, ctx: unknown) => unknown;
+};
+function enforceToolPolicy(server: McpServer, t: ToolEnv): void {
+  const d = server as unknown as Dispatch;
+  const run = d.executeToolHandler.bind(server);
+  d.executeToolHandler = (tool, args, ctx) => {
+    const name = Object.entries(d._registeredTools).find(
+      ([, v]) => v === tool,
+    )?.[0];
+    const p = name === undefined ? undefined : TOOL_POLICY[name];
+    return withAccessCache(async () => {
+      try {
+        if (!p)
+          throw new Error(`MCP tool ${name ?? "?"} has no TOOL_POLICY entry`);
+        const id = (args as { id?: unknown } | undefined)?.id;
+        await enforce(p, t.caller, t.env, () =>
+          typeof id === "string" ? id : "",
+        );
+      } catch (e) {
+        return guard(() => Promise.reject(e));
+      }
+      return run(tool, args, ctx);
+    });
+  };
 }

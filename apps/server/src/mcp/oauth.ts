@@ -5,7 +5,8 @@ import {
 } from "@cloudflare/workers-oauth-provider";
 import { AUTH, MCP_PATH, type Member, type OAuthClient, R } from "@oa/shared";
 import type { Context } from "hono";
-import { requireUser, TEAM_ROLES } from "../auth/authz.js";
+import { callerOf, capOfCaller, requireUser } from "../auth/authz.js";
+import { orgCan } from "../auth/policy.js";
 import type { Env } from "../env.js";
 import { readCappedRequest } from "../http/body.js";
 import { ApiError, errorJson } from "../http/errors.js";
@@ -66,6 +67,10 @@ export const clientNameOf = (name: string | undefined, fallback: string) =>
     .replace(HIDDEN_CHARS, "")
     .slice(0, MAX_CLIENT_NAME);
 
+/** Members only, and never a capped caller (a guest, a code session outside the domains, P3's restricted). */
+const canConnect = (user: Member) =>
+  orgCan(user, "mcp.connect", { cap: capOfCaller(callerOf(user)) });
+
 /**
  * Bearer OAuth access tokens at /mcp: the grant's user, attributed to the
  * registered client name and the MCP clientInfo.version.
@@ -77,7 +82,7 @@ const apiHandler = {
     const user = props?.userId ? await getUser(env, props.userId) : null;
     if (!user) return mcpUnauthorized(env);
     // A member demoted to guest loses agent access (grants are also revoked).
-    if (user.role === "guest")
+    if (!canConnect(user))
       return mcpUnauthorized(env, "Only members can connect agents");
     const capped = await capMcpBody(req, env);
     if (capped instanceof Response) return capped;
@@ -361,7 +366,7 @@ async function showConsent(c: Context<AppEnv>): Promise<Response> {
       status: 302,
       headers: { location: login, "cache-control": "no-store" },
     });
-  if (!TEAM_ROLES.includes(user.role)) return membersOnly();
+  if (!canConnect(user)) return membersOnly();
   // beginConsent writes KV: cap renders per user (RL_ANON, when bound).
   const rl = c.env.RL_ANON as RateLimit | undefined;
   if (rl && !(await rl.limit({ key: CONSENT_KEY + user.id })).success)
@@ -422,7 +427,7 @@ async function decideConsent(c: Context<AppEnv>): Promise<Response> {
       "Start connecting again from your agent.",
       403,
     );
-  if (!TEAM_ROLES.includes(user.role)) return membersOnly();
+  if (!canConnect(user)) return membersOnly();
   const oauth = oauthApi(c.env);
   try {
     if (form.get("decision") !== "approve") {

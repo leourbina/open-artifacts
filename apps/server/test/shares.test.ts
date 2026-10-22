@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { type Member, newId, R, ShareSchema } from "@oa/shared";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
+import { sessionCookieName, signSession } from "../src/auth/session.js";
 import { publish } from "../src/services/artifacts.js";
 import { getUser } from "../src/services/users.js";
 import { api, errOf, login } from "./helpers.js";
@@ -87,6 +88,18 @@ describe("shares", () => {
   it("non-owners (incl. editor) get 404 on list/put/delete", async () => {
     const id = await pub();
     await put(id, owner, editor.email, "editor");
+    // The guest lost their last share above (deactivated, which ended their
+    // sessions: P2 T2 checks session_epoch). Their old cookie stays dead.
+    await put(await pub(), owner, guest.email, "viewer");
+    expect((await api(app, R.artifacts, guest.cookie)).status).toBe(401);
+    // A new sign-in (the real Access callback path is covered in oidc.test.ts)
+    // mints a fresh cookie at the reactivated epoch.
+    const epoch = await env.DB.prepare(
+      "select session_epoch e from users where id = ?",
+    )
+      .bind(guest.userId)
+      .first<{ e: number }>();
+    guest.cookie = `${sessionCookieName(env)}=${await signSession(env, guest.userId, Date.now(), { provider: "access", epoch: epoch?.e ?? 0 })}`;
     for (const u of [editor, member, guest]) {
       expect((await api(app, R.shares(id), u.cookie)).status).toBe(404);
       expect((await put(id, u, "z@x.com", "viewer")).status).toBe(404);

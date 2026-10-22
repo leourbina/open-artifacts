@@ -3,8 +3,16 @@ name: Ops - demo first install
 # never a PROD secret. Dispatch only, from main.
 # TODO(#299): the demo should raise RL_ANON and ANON_WRITES_PER_MIN to 120. oa:setup has no
 # flag or var for either on main yet; once #299 lands, set them here (or as a wrangler var).
+# PUBLIC_HOME (the gallery artifact for signed-out visitors) comes from the repo variable
+# DEMO_PUBLIC_HOME; setup keeps it across later upgrades.
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: install (first time) or upgrade (re-apply, for example after changing DEMO_PUBLIC_HOME)
+        type: choice
+        options: [install, upgrade]
+        default: install
 permissions:
   contents: read
 concurrency:
@@ -34,7 +42,11 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           OA_ACCESS_TOKEN: ${{ secrets.DEMO_OA_ACCESS_TOKEN }}
-        run: bash scripts/ci/prod-setup.sh demo-install
+          DEMO_PUBLIC_HOME: ${{ vars.DEMO_PUBLIC_HOME }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          case "$MODE" in install | upgrade) ;; *) echo "mode must be install or upgrade"; exit 1 ;; esac
+          bash scripts/ci/prod-setup.sh "demo-$MODE"
       - name: Revoke leaked setup-ci tokens
         if: always()
         timeout-minutes: 3

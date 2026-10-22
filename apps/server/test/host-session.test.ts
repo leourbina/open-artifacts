@@ -1,8 +1,9 @@
 import { env } from "cloudflare:workers";
-import { R } from "@oa/shared";
+import { AUTH, R } from "@oa/shared";
 import type { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
+import { mw } from "../src/auth/route-policy.js";
 import {
   clearSessionCookie,
   sessionCookie,
@@ -40,11 +41,17 @@ describe("__Host- session cookie", () => {
     );
   });
 
-  const probe = createApp((a) => {
-    const g = a as unknown as Hono<{ Bindings: Env; Variables: AppVariables }>;
-    g.use("/probe", session());
-    g.get("/probe", (c) => c.json({ user: c.var.user }));
-  });
+  const probe = createApp(
+    (a) => {
+      const g = a as unknown as Hono<{
+        Bindings: Env;
+        Variables: AppVariables;
+      }>;
+      g.use("/probe", mw(session()));
+      g.get("/probe", (c) => c.json({ user: c.var.user }));
+    },
+    { "GET /probe": { public: "test probe" } },
+  );
   const who = async (cookie: string, e: Env) =>
     (
       (await (
@@ -58,7 +65,10 @@ describe("__Host- session cookie", () => {
 
   it("prod ignores a planted plain cookie (validly signed); reads __Host-", async () => {
     const { userId } = await login("host-sess@x.com");
-    const v = await signSession(env, userId);
+    const v = await signSession(env, userId, Date.now(), {
+      provider: "access",
+      epoch: 0,
+    });
     expect(await who(`${PLAIN}=${v}`, prod)).toBeNull();
     expect((await who(`${HOST}=${v}`, prod))?.id).toBe(userId);
     // dev: plain name only
@@ -70,7 +80,8 @@ describe("__Host- session cookie", () => {
     const app = createApp();
     const post = (cookie: string) =>
       app.fetch(
-        new Request(`http://app.localhost${R.members}`, {
+        // Logout: public to the policy gate, guarded by CSRF.
+        new Request(`http://app.localhost${AUTH.logout}`, {
           method: "POST",
           headers: { cookie, "content-type": "application/json" },
           body: "{}",

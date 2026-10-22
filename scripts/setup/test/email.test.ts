@@ -187,6 +187,68 @@ describe("team/solo and the email step", () => {
     expect(l.message).toContain("EMAIL");
   });
 
+  describe("prod switch to team (preflight runs before the deploy that adds EMAIL)", () => {
+    const PD = "mail.prod.example.com";
+    const SWITCH = ["--team", "--yes-paid", "--email-domain", PD];
+    const PREFLIGHT = [
+      ...BASE,
+      ...SWITCH,
+      "--upgrade",
+      "--browser",
+      "--plan",
+      "paid",
+      "--check",
+      "--strict",
+    ];
+    const UPGRADE = [
+      ...BASE,
+      ...SWITCH,
+      "--upgrade",
+      "--browser",
+      "--plan",
+      "paid",
+      "--ci",
+    ];
+
+    it("a live solo Worker without EMAIL reads as no drift under --check --strict", async () => {
+      const w = world({ dns: onboarded(PD) });
+      expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+      expect(cfg(w)).not.toHaveProperty("send_email");
+      w.lines.length = 0;
+      expect(await run(PREFLIGHT, w.deps, ROOT)).toBe(0);
+      expect(line(w.lines, "email")).toMatchObject({ status: "done" });
+      expect(parse(w.lines).at(-1).data).toMatchObject({
+        team: true,
+        email: true,
+        emailDomain: PD,
+      });
+    });
+
+    it("the upgrade adds EMAIL and preflight stays clean afterwards", async () => {
+      const w = world({ dns: onboarded(PD) });
+      expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+      w.lines.length = 0;
+      expect(await run(UPGRADE, w.deps, ROOT)).toBe(0);
+      expect(cfg(w).send_email).toEqual([{ name: "EMAIL" }]);
+      expect(cfg(w).vars.EMAIL_FROM).toBe(`noreply@${PD}`);
+      w.lines.length = 0;
+      expect(await run(PREFLIGHT, w.deps, ROOT)).toBe(0);
+      expect(line(w.lines, "email")).toMatchObject({ status: "done" });
+    });
+
+    it("pending onboarding is reported, not silently ignored", async () => {
+      const w = world({ dns: onboarded(PD) });
+      expect(await run(HOSTS, w.deps, ROOT)).toBe(0);
+      w.dns.length = 0;
+      w.lines.length = 0;
+      const code = await run(PREFLIGHT, w.deps, ROOT);
+      expect(code).toBe(2);
+      const l = line(w.lines, "email");
+      expect(l.status).toBe("todo");
+      expect(l.message).toContain("not onboarded");
+    });
+  });
+
   it("--check reports team, email, emailDomain", async () => {
     const w = world({ dns: onboarded(D) });
     await run(TEAM, w.deps, ROOT);

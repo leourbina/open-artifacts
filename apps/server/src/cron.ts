@@ -1,3 +1,4 @@
+import { sweepLoginCodes } from "./auth/codes.js";
 import { sweepEmailCounters } from "./email/send.js";
 import type { Env } from "./env.js";
 import { logError } from "./log.js";
@@ -8,7 +9,8 @@ import { sweepUploads } from "./services/uploads.js";
 
 /** Daily cron: purge soft-deleted artifacts past 30 days, sweep stale uploads,
  * delete OAuth clients that never completed a grant, re-enqueue search
- * indexing that never completed (C3), drop past days' email counters, check the latest release (B3). */
+ * indexing that never completed (C3), drop past days' email counters and
+ * expired sign-in codes, check the latest release (B3). */
 export async function scheduled(
   _event: ScheduledController,
   env: Env,
@@ -22,6 +24,7 @@ export async function scheduled(
       sweepUngrantedClients(env, now),
       reindexStale(env, now),
       sweepEmailCounters(env, now),
+      sweepLoginCodes(env, now),
       checkLatestRelease(env, now),
     ]).then((rs) => {
       for (const r of rs)

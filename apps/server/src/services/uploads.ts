@@ -9,7 +9,8 @@ import {
   type UploadCreated,
   type UploadCreateInput,
 } from "@oa/shared";
-import { requireAccess } from "../auth/authz.js";
+import { authorize, callerOf, capOfCaller } from "../auth/authz.js";
+import { orgCan } from "../auth/policy.js";
 import type { Env } from "../env.js";
 import { ApiError, appOrigin } from "../http/errors.js";
 import { hmacSign, hmacVerify } from "../util/crypto.js";
@@ -70,7 +71,14 @@ export async function createUpload(
   const db = env.DB;
   const stmts: D1PreparedStatement[] = [];
   let artifactId = input.artifactId;
+  const who = callerOf(user);
+  // Reserving or uploading into a new artifact is a create (capped callers can't).
+  const mayCreate = () => {
+    if (!orgCan(user, "artifact.create", { cap: capOfCaller(who) }))
+      throw new ApiError("space_forbidden", "You can't create artifacts");
+  };
   if (artifactId === undefined) {
+    mayCreate();
     artifactId = newId();
     stmts.push(
       db
@@ -84,9 +92,9 @@ export async function createUpload(
       .prepare("select 1 from artifacts where id = ?")
       .bind(artifactId)
       .first();
-    if (exists)
-      await requireAccess(env, { kind: "user", user }, artifactId, "editor");
+    if (exists) await authorize(env, who, artifactId, "upload");
     else {
+      mayCreate();
       const r = await db
         .prepare(
           "select 1 from reserved_artifacts where id = ? and user_id = ?",

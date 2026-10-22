@@ -1,6 +1,30 @@
 // #167: with email off, adding a member or sharing shows the link to send;
 // with it on (?mock=email, ?mock=email-fail) the copy says what was emailed.
-import { expect, test } from "@playwright/test";
+import { createRequire } from "node:module";
+import { expect, type Page, test } from "@playwright/test";
+
+const AXE = createRequire(import.meta.url).resolve("axe-core/axe.min.js", {
+  paths: [new URL("../../../packages/ui", import.meta.url).pathname],
+});
+const axeRun = async (page: Page): Promise<string[]> => {
+  await page.addScriptTag({ path: AXE });
+  return page.evaluate(async () => {
+    // @ts-expect-error injected
+    const r = await axe.run(document, { resultTypes: ["violations"] });
+    return r.violations
+      .filter(
+        (x: { impact: string }) =>
+          x.impact === "serious" || x.impact === "critical",
+      )
+      .map(
+        (x: { id: string; impact: string; nodes: { target: string[] }[] }) =>
+          `${x.impact} ${x.id}: ${x.nodes
+            .map((n) => n.target.join(" "))
+            .slice(0, 4)
+            .join(" | ")}`,
+      );
+  });
+};
 
 test("adding a member confirms with the sign-in link and copies it", async ({
   page,
@@ -109,4 +133,90 @@ test("email on: sharing says the link was emailed", async ({ page }) => {
       "We emailed them a link. They'll sign in with a one-time code.",
     ),
   ).toBeVisible();
+});
+
+// Hosted P4 Task 15 (D14 A): Members rows with the Restricted badge and the
+// More menu keep the layout at 390 and 1280, light and dark.
+for (const scheme of ["light", "dark"] as const)
+  for (const width of [1280, 390])
+    test.describe(`hosted members ${scheme} ${width}`, () => {
+      test.use({ colorScheme: scheme, viewport: { width, height: 860 } });
+
+      test("badge, reason and the More menu", async ({ page }, info) => {
+        await page.goto("/settings/members?hosted=1");
+        await page.waitForLoadState("networkidle");
+        const dan = page.locator("li", { hasText: "Dan Contractor" });
+        await expect(
+          dan
+            .getByText("Restricted", { exact: true })
+            .filter({ visible: true }),
+        ).toHaveCount(1);
+        // At <= 600px the badge and reason move to the control line.
+        await expect(
+          dan
+            .getByText(
+              width > 600
+                ? "dan@example.com · via Contractors"
+                : "via Contractors",
+            )
+            .filter({ visible: true }),
+        ).toHaveCount(1);
+        const over = await page.evaluate(
+          () => (document.scrollingElement?.scrollWidth ?? 0) - innerWidth,
+        );
+        expect(over, "horizontal overflow px").toBeLessThanOrEqual(0);
+        let v = await axeRun(page);
+        expect(v, v.join("\n")).toEqual([]);
+        await page.screenshot({
+          path: info.outputPath(`members-restricted-${scheme}-${width}.png`),
+          fullPage: true,
+        });
+        await dan
+          .getByRole("button", { name: "More for Dan Contractor" })
+          .click();
+        const menu = page.getByRole("menu");
+        await expect(
+          menu.getByRole("menuitem", { name: /Restricted via Contractors/ }),
+        ).toBeDisabled();
+        await page.waitForFunction(() =>
+          document.getAnimations().every((x) => x.playState !== "running"),
+        );
+        await page.screenshot({
+          path: info.outputPath(`members-menu-${scheme}-${width}.png`),
+          fullPage: true,
+        });
+        await menu.getByRole("menuitem", { name: "Restrict by hand…" }).click();
+        await expect(page.getByRole("alertdialog")).toContainText(
+          "Restrict Dan Contractor?",
+        );
+        await page.waitForFunction(() =>
+          document.getAnimations().every((x) => x.playState !== "running"),
+        );
+        v = await axeRun(page);
+        expect(v, v.join("\n")).toEqual([]);
+        await page.screenshot({
+          path: info.outputPath(`members-confirm-${scheme}-${width}.png`),
+          fullPage: true,
+        });
+      });
+    });
+
+test("keyboard: open the More menu, restrict by hand, focus comes back", async ({
+  page,
+}) => {
+  await page.goto("/settings/members?hosted=1");
+  await page.waitForLoadState("networkidle");
+  const more = page.getByRole("button", { name: "More for Bob Builder" });
+  await more.focus();
+  await page.keyboard.press("Enter");
+  await page.getByRole("menuitem", { name: "Restrict by hand…" }).focus();
+  await page.keyboard.press("Enter");
+  const d = page.getByRole("alertdialog");
+  await d.getByRole("button", { name: "Restrict" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(d).toHaveCount(0);
+  await expect(page.locator("li", { hasText: "Bob Builder" })).toContainText(
+    "bob@example.com · by hand",
+  );
+  await expect(more).toBeFocused();
 });

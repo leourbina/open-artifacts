@@ -3,8 +3,10 @@
 // bindings, metered with the thread CPU clock minus D1/R2 shims and DO
 // methods (DO rows meter the DO invocation itself). Per route: p95 of RUNS
 // requests after warm-up, median of 5 such runs. Part of `pnpm test:cpu`.
-import { LIMITS } from "@oa/shared";
-import { beforeAll, describe, expect, it } from "vitest";
+import { GOOGLE_JWKS_URL, GOOGLE_TOKEN_URL } from "@oa/auth-core";
+import { AUTH, LIMITS, newId } from "@oa/shared";
+import { exportJWK, generateKeyPair, SignJWT } from "jose";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   apiReq,
   type BenchEnv,
@@ -18,9 +20,14 @@ import {
   summarize,
 } from "../../scripts/bench.js";
 import { FakeSocket, meterDo } from "../../scripts/bench-env.js";
+import { getDb } from "../../src/db/client.js";
+import { users } from "../../src/db/schema.js";
 import type { ArtifactRuntime } from "../../src/runtime/do.js";
 
 const BAR_MS = 2;
+/** Sign-in rows (P2 T10): their own bars, in the same reference-machine ms. */
+const SIGNIN_MS = { providers: 1, google: 3, codeRequest: 2, codeVerify: 2 };
+const CID = "cid.apps.googleusercontent.com";
 /**
  * The one row with its own bar: an owner-only data reset (R.dataReset) rewrites
  * a whole snapshot (500 docs / 1 MB on Free) in one DO transaction. Rare (a
@@ -50,12 +57,159 @@ const escapeHeavy = (bytes: number) =>
 
 let c: Ctx;
 let scale = 1;
+/** The fake Google: one RS256 key; the next token response is set per iteration. */
+let gKey: CryptoKeyPair;
+let gJwk: Record<string, unknown>;
+let nextIdToken = "";
 beforeAll(async () => {
+  gKey = await generateKeyPair("RS256", { extractable: true });
+  gJwk = { ...(await exportJWK(gKey.publicKey)), kid: "g1", alg: "RS256" };
+  const real = globalThis.fetch;
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url === GOOGLE_JWKS_URL) return Response.json({ keys: [gJwk] });
+    if (url === GOOGLE_TOKEN_URL)
+      return Response.json({ id_token: nextIdToken });
+    return real(input, init);
+  });
+  for (const k of ["log", "warn"] as const)
+    vi.spyOn(console, k).mockImplementation(() => {});
   c = await setup();
   const me = routes().find((r) => r.name === "GET /api/v1/me");
   if (!me) throw new Error("no calibration scenario");
   scale = Math.min(MAX_SCALE, Math.max(1, (await p95Median(me)) / REF_ME_MS));
 }, 120_000);
+afterAll(() => vi.restoreAllMocks());
+
+/** The bench env with direct sign-in (Google direct and codes) and a fake mailer. */
+function signInEnv(): { env: BenchEnv; codeFor: (to: string) => string } {
+  const sent: { to: string; text: string }[] = [];
+  const env = {
+    ...c.env,
+    AUTH_PROVIDERS: "google,email",
+    AUTH_DOMAINS: "a.com",
+    AUTH_DOMAIN_JOIN: "member",
+    GOOGLE_CLIENT_ID: CID,
+    GOOGLE_CLIENT_SECRET: "s",
+    INSTALL_ID: "inst-a",
+    EMAIL_FROM: "noreply@mail.example.com",
+    EMAIL: {
+      async send(m: { to: string; text: string }) {
+        sent.push(m);
+        return { messageId: `m${sent.length}` };
+      },
+    },
+  } as unknown as BenchEnv;
+  const codeFor = (to: string) => {
+    const m = [...sent].reverse().find((x) => x.to === to);
+    const d = m?.text.match(/\b(\d{4}) (\d{4})\b/);
+    if (!d) throw new Error("no code sent");
+    return `${d[1]}${d[2]}`;
+  };
+  return { env, codeFor };
+}
+
+let ipN = 0;
+let mailN = 0;
+/** A sign-in POST from a fresh IP (the per-IP counters never cap a run). */
+const signInPost = (path: string, body: unknown, cookie?: string) =>
+  new Request(`${APP}${path}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-oa-request": "1",
+      "sec-fetch-site": "same-origin",
+      "cf-connecting-ip": `10.${(ipN >> 16) & 255}.${(ipN >> 8) & 255}.${ipN++ & 255}`,
+      ...(cookie ? { cookie } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+const cookieOf = (r: Response, re: RegExp) =>
+  r.headers
+    .getSetCookie()
+    .find((x) => re.test(x))
+    ?.split(";")[0];
+/** A guest row for a fresh address, and the daily send pool reset; unmetered. */
+async function seedGuest(env: BenchEnv): Promise<string> {
+  env.DB.sqlite.prepare("delete from counters where key = 'code:*'").run();
+  const email = `cpu-${mailN++}@x.com`;
+  await getDb(env).insert(users).values({
+    id: newId(),
+    email,
+    name: "cpu",
+    role: "guest",
+    createdAt: Date.now(),
+  });
+  return email;
+}
+
+function signInRoutes(): Scenario[] {
+  const s = signInEnv();
+  const { env } = s;
+  const w = (
+    name: string,
+    budgetMs: number,
+    prepare: Scenario["prepare"],
+  ): Scenario => ({ name, budgetMs, bucket: "worker", prepare });
+  return [
+    w("GET /auth/providers", SIGNIN_MS.providers, async () =>
+      step(env, new Request(`${APP}${AUTH.providers}`), "providers"),
+    ),
+    w(
+      "Google callback (RS256 verify, admission, session)",
+      SIGNIN_MS.google,
+      async () => {
+        const start = await call(
+          env,
+          new Request(`${APP}${AUTH.loginGoogle}?next=/`),
+        );
+        const u = new URL(start.headers.get("location") ?? "");
+        const cookie = cookieOf(start, /oa_oidc_/);
+        if (!cookie) throw new Error("no state cookie");
+        const now = Math.floor(Date.now() / 1000);
+        const n = mailN++;
+        nextIdToken = await new SignJWT({
+          iss: "https://accounts.google.com",
+          aud: CID,
+          azp: CID,
+          sub: `cpu-sub-${n}`,
+          email: `cpu-g${n}@a.com`,
+          email_verified: true,
+          hd: "a.com",
+          nonce: u.searchParams.get("nonce"),
+          iat: now,
+          exp: now + 3600,
+        })
+          .setProtectedHeader({ alg: "RS256", kid: "g1" })
+          .sign(gKey.privateKey);
+        const r = new Request(
+          `${APP}${AUTH.callbackGoogle}?state=${u.searchParams.get("state")}&code=c${n}`,
+          { headers: { cookie } },
+        );
+        return async () => {
+          const res = await call(env, r);
+          const loc = res.headers.get("location") ?? "";
+          if (res.status !== 302 || loc.includes("error="))
+            throw new Error(`google callback: ${res.status} ${loc}`);
+        };
+      },
+    ),
+    w("POST code request", SIGNIN_MS.codeRequest, async () => {
+      const email = await seedGuest(env);
+      return async () => {
+        const res = await call(env, signInPost(AUTH.codeRequest, { email }));
+        if (res.status !== 202) throw new Error(`code request: ${res.status}`);
+      };
+    }),
+    w("POST code verify", SIGNIN_MS.codeVerify, async () => {
+      const email = await seedGuest(env);
+      const req = await call(env, signInPost(AUTH.codeRequest, { email }));
+      const cookie = cookieOf(req, /^oa_code=/);
+      const r = signInPost(AUTH.codeVerify, { code: s.codeFor(email) }, cookie);
+      return step(env, r, "code verify");
+    }),
+  ];
+}
 
 /** p95 of RUNS requests after warm-up, median of REPEATS runs. */
 async function p95Median(s: Scenario, p95s: number[] = []): Promise<number> {
@@ -353,10 +507,14 @@ describe(`code CPU ≤ ${BAR_MS} ms per route (p95, median of ${REPEATS})`, () =
     `publish with ${EVENTS_SOCKETS} event sockets (worker)`,
     `publish with ${EVENTS_SOCKETS} event sockets (do)`,
     "index alarm 64 KB html (do)",
+    "GET /auth/providers",
+    "Google callback (RS256 verify, admission, session)",
+    "POST code request",
+    "POST code verify",
   ];
   for (const name of names)
     it(name, async ({ annotate }) => {
-      const s = routes().find((r) => r.name === name);
+      const s = [...routes(), ...signInRoutes()].find((r) => r.name === name);
       if (!s) throw new Error(`no scenario ${name}`);
       const p95s: number[] = [];
       const median = await p95Median(s, p95s);

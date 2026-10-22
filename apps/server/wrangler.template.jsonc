@@ -38,6 +38,11 @@
       "name": "RL_ANON",
       "namespace_id": "1001",
       "simple": { "limit": 30, "period": 60 }
+    },
+    {
+      "name": "RL_AUTH",
+      "namespace_id": "1002",
+      "simple": { "limit": 20, "period": 60 }
     }
   ],
   "triggers": { "crons": ["17 3 * * *"] },
@@ -60,5 +65,6 @@
     "WORKER_NAME": "{{WORKER_NAME}}",
     "OAUTH_KV_ID": "{{KV_ID}}"
   },
+  "define": { "__OA_TEST_HOOKS_ALLOWED__": "false" },
   "observability": { "enabled": true }
 }

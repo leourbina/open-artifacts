@@ -17,7 +17,7 @@ export function isAsciiEmail(s: string): boolean {
  * Canonical form for every email write and lookup: trimmed + lowercased
  * printable ASCII. Returns null for anything else (treat as invalid).
  */
-export function normEmail(s: string): string | null {
+export function normalizeEmail(s: string): string | null {
   if (!isAsciiEmail(s)) return null;
   const e = s.trim().toLowerCase();
   return isAsciiEmail(e) ? e : null;

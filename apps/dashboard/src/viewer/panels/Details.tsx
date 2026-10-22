@@ -9,7 +9,9 @@ import {
   useVersionInfo,
 } from "../../api/queries";
 import { useSingleFlight } from "../../api/useSingleFlight";
+import { useCan, useHosted } from "../../auth/permissions";
 import { toast } from "../../layout/toast";
+import { MoveDialog, useMoveTargets } from "../../spaces/MoveDialog";
 import { useOfferUndo } from "../useOfferUndo";
 
 const fmtSize = (n: number) =>
@@ -26,8 +28,11 @@ const fail = (e: unknown, fallback: string) =>
 
 export function Details({ artifact }: { artifact: ArtifactSummary }) {
   const { id } = artifact;
-  const canEdit = artifact.access !== "viewer";
-  const owner = artifact.access === "owner";
+  const can = useCan(artifact);
+  const { features, personalSpaceId } = useHosted();
+  const spaces = features.includes("spaces");
+  const targets = useMoveTargets(artifact);
+  const [moving, setMoving] = useState(false);
   const info = useVersionInfo(id, artifact.currentVersion).data;
   const patch = usePatchArtifact(id);
   const del = useDeleteArtifact(id);
@@ -88,7 +93,7 @@ export function Details({ artifact }: { artifact: ArtifactSummary }) {
 
   return (
     <div className="oa-details">
-      {canEdit && (
+      {can.edit && (
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -140,10 +145,31 @@ export function Details({ artifact }: { artifact: ArtifactSummary }) {
         </dd>
         <dt>Created</dt>
         <dd>{new Date(artifact.createdAt).toLocaleString()}</dd>
-        <dt>Owner</dt>
+        <dt>{artifact.space?.kind === "shared" ? "Created by" : "Owner"}</dt>
         <dd>{displayName(artifact.owner)}</dd>
+        {spaces && artifact.space && (
+          <>
+            <dt>Space</dt>
+            <dd>
+              {artifact.space.kind === "shared"
+                ? artifact.space.name
+                : artifact.space.id === personalSpaceId
+                  ? "Personal"
+                  : `${displayName(artifact.owner)}'s personal space`}
+            </dd>
+          </>
+        )}
       </dl>
-      {owner && (
+      {spaces && can.move && targets.length > 0 && (
+        <Button variant="secondary" onClick={() => setMoving(true)}>
+          Move
+        </Button>
+      )}
+      {/* Outside the gate: a finished move can leave no targets. */}
+      {moving && (
+        <MoveDialog artifact={artifact} onClose={() => setMoving(false)} />
+      )}
+      {can.delete && (
         <>
           <Button variant="danger" onClick={() => setConfirm(true)}>
             Delete artifact

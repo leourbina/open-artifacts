@@ -2,6 +2,7 @@ import { type ArtifactSummary, LIMITS, R } from "@oa/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
 import { ApiClientError, api } from "../api/client";
+import { canOf } from "../api/contract";
 import { qk, useVersionInfo } from "../api/queries";
 
 // Once per session, across remounts.
@@ -33,7 +34,8 @@ export interface SideEffectDeps {
 export function createSideEffects(d: SideEffectDeps) {
   const { artifact, version } = d;
   const id = artifact.id;
-  const canEdit = artifact.access === "editor" || artifact.access === "owner";
+  // Edit never depends on features: managers upload thumbnails and PDF text too.
+  const canEdit = canOf(artifact, []).edit;
   let pending: string | undefined;
   return {
     onHello() {

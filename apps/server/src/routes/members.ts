@@ -6,9 +6,11 @@ import {
 } from "@oa/shared";
 import type { Context } from "hono";
 import { requireUser } from "../auth/authz.js";
+import { orgCan } from "../auth/policy.js";
 import { jsonBody } from "../http/body.js";
 import { ApiError } from "../http/errors.js";
 import { type AppEnv, execCtx } from "../http/middleware.js";
+import { resetIdentity } from "../services/identity.js";
 import {
   inviteMember,
   listMembers,
@@ -20,7 +22,7 @@ import type { AppType } from "./index.js";
 /** Owner/admin only: 401 anonymous, 404 for everyone else (route hidden). */
 export function requireManager(c: Context<AppEnv>): Member {
   const user = requireUser(c);
-  if (user.role !== "owner" && user.role !== "admin")
+  if (!orgCan(user, "members.manage"))
     throw new ApiError("not_found", "Not found");
   return user;
 }
@@ -53,6 +55,14 @@ export function mountMembers(app: AppType): void {
   app.delete(MEMBER, async (c) => {
     requireManager(c);
     await removeMember(c.env, c.req.param("id"), execCtx(c));
+    return c.body(null, 204);
+  });
+
+  // Literal so Hono infers :id; must equal R.memberIdentity(id, "google").
+  // Clears an identity_conflict: the member's next Google sign-in links afresh.
+  app.delete("/api/v1/members/:id/identities/google", async (c) => {
+    const actor = requireManager(c);
+    await resetIdentity(c.env, actor, c.req.param("id"));
     return c.body(null, 204);
   });
 }

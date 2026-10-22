@@ -1,10 +1,25 @@
-import { ARTIFACT_SANDBOX_ATTR, type Member } from "@oa/shared";
+import { inDomains } from "@oa/auth-core";
+import {
+  ARTIFACT_SANDBOX_ATTR,
+  AUTH,
+  type AuthMethod,
+  type Member,
+  R,
+  SIGN_IN_PAGE,
+} from "@oa/shared";
 import type { Context, MiddlewareHandler } from "hono";
 import { getCookie } from "hono/cookie";
+import { callerOf, capOfCaller, withCap } from "../auth/authz.js";
+import { authConfig } from "../auth/config.js";
 import { verifyPat } from "../auth/pat.js";
-import { readSession, sessionCookieName } from "../auth/session.js";
+import { isGuestRole } from "../auth/policy.js";
+import {
+  readSession,
+  type Session,
+  sessionCookieName,
+} from "../auth/session.js";
 import type { Env } from "../env.js";
-import { getUser } from "../services/users.js";
+import { getUser, getUserWithEpoch } from "../services/users.js";
 import { frameOpts, isEmbedRequest } from "./embed.js";
 import { ApiError, appOrigin, toErrorResponse } from "./errors.js";
 
@@ -14,6 +29,12 @@ export type AppVariables = {
   /** PAT label when authenticated by Bearer token (agent attribution), else null. */
   tokenLabel: string | null;
   tokenId: string | null;
+  /** Set once the session has been read (the policy gate may read it first). */
+  sessionResolved?: boolean;
+  /** How this request authenticated (Me.auth.method); null when anonymous. */
+  authMethod: AuthMethod | null;
+  /** Session expiry (ms) for a cookie session; null otherwise. */
+  sessionExp: number | null;
 };
 export type AppEnv = { Bindings: Env; Variables: AppVariables };
 
@@ -29,6 +50,19 @@ export const COOP_EXEMPT: ReadonlySet<string> = new Set([
   "/auth/login",
   "/auth/callback",
   "/auth/dev-login",
+  SIGN_IN_PAGE,
+  AUTH.loginGoogle,
+  AUTH.callbackGoogle,
+]);
+
+/**
+ * OAuth/OIDC callbacks: their URL carries a code and state, so the page they
+ * land on (or an error page) must not send it on as a Referer.
+ * Exact pathnames only.
+ */
+export const NO_REFERRER: ReadonlySet<string> = new Set([
+  AUTH.callback,
+  AUTH.callbackGoogle,
 ]);
 
 /**
@@ -42,6 +76,8 @@ type SecurityOpts = {
   csp?: string;
   /** Cross-Origin-Opener-Policy: same-origin (app host only; see appHostOpts). */
   coop?: boolean;
+  /** Referrer-Policy: no-referrer instead of strict-origin-when-cross-origin. */
+  noReferrer?: boolean;
 };
 
 /**
@@ -57,6 +93,7 @@ export const appHostOpts = (
 ): SecurityOpts => ({
   ...frameOpts(env, method, pathname),
   coop: !COOP_EXEMPT.has(pathname),
+  noReferrer: NO_REFERRER.has(pathname),
 });
 
 /** `res` with the standard security headers; a copy when its headers are immutable. */
@@ -81,7 +118,10 @@ export function withSecurityHeaders(
 function setSecurityHeaders(h: Headers, opts: SecurityOpts): void {
   h.set("X-Robots-Tag", "noindex, nofollow");
   h.set("X-Content-Type-Options", "nosniff");
-  h.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  h.set(
+    "Referrer-Policy",
+    opts.noReferrer ? "no-referrer" : "strict-origin-when-cross-origin",
+  );
   if (opts.coop) h.set("Cross-Origin-Opener-Policy", "same-origin");
   else h.delete("Cross-Origin-Opener-Policy");
   if (opts.frameAncestors) {
@@ -108,19 +148,48 @@ export const securityHeaders =
 const BEARER = /^\s*Bearer(?:\s+(.*?))?\s*$/i;
 
 /**
- * Sets c.var.user (Member | null), tokenLabel, tokenId.
+ * A signed session is still good for this user and install: its epoch is the
+ * user's current one (a bump ends every session), its tenant, if any, is
+ * still a verified domain, and a domain-code session ends once Google is on.
+ */
+export function sessionStillValid(
+  env: Env,
+  s: Session,
+  sessionEpoch: number,
+): boolean {
+  if ((s.e ?? 0) !== sessionEpoch) return false;
+  if (s.t === undefined) return true;
+  const cfg = authConfig(env);
+  if (!inDomains(cfg.domains, s.t)) return false;
+  return !(s.p === "code" && cfg.providers.has("google"));
+}
+
+/**
+ * Sets c.var.user (Member | null), tokenLabel, tokenId, authMethod, sessionExp.
  * An `Authorization: Bearer …` header is authoritative: a valid PAT sets the
  * user, anything else yields null with no cookie fallback. Any other (or no)
  * Authorization header falls through to the session cookie (sessionCookieName). The user row is
- * loaded on every request, so deleted users resolve to null.
+ * loaded on every request, so deleted users resolve to null, and a cookie
+ * session must pass sessionStillValid.
  * `X-OA-Embed: 1` or `?embed=1` (isEmbedRequest) forces anonymous.
  */
+/** A guest while the guest cap is on, however they authenticated (session or PAT). */
 export const session = (): MiddlewareHandler<AppEnv> => async (c, next) => {
+  await resolveSession(c);
+  await next();
+};
+
+/** Reads the session once per request (idempotent); see `session()`. */
+export async function resolveSession(c: Context<AppEnv>): Promise<void> {
+  if (c.get("sessionResolved")) return;
+  c.set("sessionResolved", true);
   c.set("user", null);
   c.set("tokenLabel", null);
   c.set("tokenId", null);
+  c.set("authMethod", null);
+  c.set("sessionExp", null);
   // Embed mode: anonymous regardless of cookie or Bearer (a downgrade only).
-  if (isEmbedRequest(c.req.raw)) return next();
+  if (isEmbedRequest(c.req.raw)) return;
   const bearer = BEARER.exec(c.req.header("authorization") ?? "");
   if (bearer) {
     let ctx: Pick<ExecutionContext, "waitUntil"> | undefined;
@@ -135,15 +204,66 @@ export const session = (): MiddlewareHandler<AppEnv> => async (c, next) => {
       c.set("user", user);
       c.set("tokenLabel", pat.label);
       c.set("tokenId", pat.tokenId);
+      c.set("authMethod", "pat");
     }
   } else {
     const s = await readSession(c.env, getCookie(c, sessionCookieName(c.env)));
-    if (s) c.set("user", await getUser(c.env, s.uid));
+    const row = s ? await getUserWithEpoch(c.env, s.uid) : null;
+    if (s && row && sessionStillValid(c.env, s, row.sessionEpoch)) {
+      // The cap travels on the member itself (authz CAP, set once by getUser
+      // from authConfig.guestsReadOnly and P3's restriction); a code session
+      // outside the verified domains is capped on top, whatever the env says.
+      // An existing cap (P3's "restricted") is kept; no cap becomes "guest".
+      if (s.p === "code" && s.t === undefined)
+        c.set(
+          "user",
+          withCap(row.user, capOfCaller(callerOf(row.user)) ?? "guest"),
+        );
+      else c.set("user", row.user);
+      c.set("authMethod", s.p);
+      c.set("sessionExp", s.exp);
+    }
+  }
+}
+
+export const CSRF_HEADER = "X-OA-Request";
+
+/**
+ * The non-GET routes a capped caller keeps, matched exactly (method and whole
+ * path, never a prefix): their own display name, a data query (a read sent as
+ * POST), and revoking their own tokens and agent grants (both routes check
+ * ownership).
+ */
+const CAPPED_ALLOWED: readonly (readonly [string, RegExp])[] = [
+  ["PATCH", /^\/api\/v1\/me$/],
+  ["POST", /^\/api\/v1\/artifacts\/[^/]+\/data\/[^/]+\/query$/],
+  ["DELETE", /^\/api\/v1\/tokens\/[^/]+$/],
+  ["DELETE", /^\/api\/v1\/oauth-clients\/[^/]+$/],
+];
+
+/**
+ * A capped caller (CapReason on the member: a guest while the guest cap is on,
+ * any code session outside the verified domains, a P3 restricted member) is
+ * read-only on the whole API, as defence in depth behind P3's can():
+ * every mutation is refused here, before any route, so no write path can be
+ * missed (artifacts, versions, shares, data, storage, uploads, tokens). Only
+ * CAPPED_ALLOWED passes. Creating an artifact is 403 space_forbidden (#359);
+ * everything else 404 (never 403).
+ */
+export const readOnlyCap = (): MiddlewareHandler<AppEnv> => async (c, next) => {
+  const m = c.req.method;
+  if (m !== "GET" && m !== "HEAD" && capOfCaller(callerOf(c.var.user))) {
+    const path = c.req.path;
+    if (CAPPED_ALLOWED.some(([am, re]) => am === m && re.test(path)))
+      return next();
+    if (m === "POST" && path === R.artifacts)
+      return toErrorResponse(
+        new ApiError("space_forbidden", "Guests can't publish here"),
+      );
+    return toErrorResponse(new ApiError("not_found", "Not found"));
   }
   await next();
 };
-
-export const CSRF_HEADER = "X-OA-Request";
 
 /**
  * Mutating requests (anything but GET/HEAD) that authenticate by session cookie
