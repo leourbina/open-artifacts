@@ -41,13 +41,35 @@ it("the Space select comes first, with its helper; Personal, then publishable sp
     fields.indexOf(within(d).getByLabelText("Title")),
   );
   expect(
-    within(d).getByText("People in this space get access by their role."),
+    within(d).getByText("Only you, and anyone you share it with."),
   ).toBeVisible();
   expect(box).toHaveTextContent("Personal");
   fireEvent.click(box);
   expect(
     (await screen.findAllByRole("option")).map((o) => o.textContent),
   ).toEqual(["Personal", "Engineering"]); // Exec (viewer) is hidden
+});
+
+it("the helper follows the selection: Personal, then a space", async () => {
+  mountHosted("/");
+  const d = await openUpload();
+  expect(await space()).toHaveTextContent("Personal");
+  expect(
+    within(d).getByText("Only you, and anyone you share it with."),
+  ).toBeVisible();
+  expect(
+    within(d).queryByText("People in this space get access by their role."),
+  ).toBeNull();
+  fireEvent.click(await space());
+  fireEvent.click(await screen.findByRole("option", { name: "Engineering" }));
+  expect(
+    await within(d).findByText(
+      "People in this space get access by their role.",
+    ),
+  ).toBeVisible();
+  expect(
+    within(d).queryByText("Only you, and anyone you share it with."),
+  ).toBeNull();
 });
 
 it("inside a space you can publish to, it's preselected and sent as spaceId", async () => {

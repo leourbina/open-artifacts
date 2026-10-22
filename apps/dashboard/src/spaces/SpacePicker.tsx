@@ -38,7 +38,9 @@ export function SpacePicker({
         placeholder="Choose a space"
       />
       <small id={`${id}-help`} className="up-help">
-        People in this space get access by their role.
+        {value && value === personalSpaceId
+          ? "Only you, and anyone you share it with."
+          : "People in this space get access by their role."}
       </small>
     </div>
   );
