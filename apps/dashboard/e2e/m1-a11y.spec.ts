@@ -25,6 +25,16 @@ const ROUTES = [
   "/settings/usage?mock=cpu",
 ];
 
+/**
+ * Waits until every CSS transition and animation has finished. Switching
+ * data-theme starts color transitions (shadcn tabs use transition-colors,
+ * 150ms); axe measuring mid-way reads blended colors and fails contrast.
+ */
+const settled = (page: Page) =>
+  page.waitForFunction(() =>
+    document.getAnimations().every((a) => a.playState !== "running"),
+  );
+
 const open = async (page: Page, path: string, theme: string, w: number) => {
   await page.setViewportSize({ width: w, height: 800 });
   await page.goto(path);
@@ -33,7 +43,7 @@ const open = async (page: Page, path: string, theme: string, w: number) => {
     (t) => document.documentElement.setAttribute("data-theme", t),
     theme,
   );
-  await page.waitForTimeout(150);
+  await settled(page);
 };
 
 /** Serious and critical axe violations on the current page. */
