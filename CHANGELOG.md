@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.23.1](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.23.0...v0.23.1) (2026-10-22)
+
+
+### Bug Fixes
+
+* **dashboard:** making an artifact public keeps anonymous writes on ([#418](https://github.com/open-artifacts-ai/open-artifacts/issues/418)) ([#419](https://github.com/open-artifacts-ai/open-artifacts/issues/419)) ([7ad1b14](https://github.com/open-artifacts-ai/open-artifacts/commit/7ad1b149db46f992ab6fa51cce0bb0ea278f629d))
+* **server:** answer only the configured app and content hosts (P1 6b) ([#415](https://github.com/open-artifacts-ai/open-artifacts/issues/415)) ([c060b0a](https://github.com/open-artifacts-ai/open-artifacts/commit/c060b0aecd2e5307c4d137462576866f377adb7d))
+* **setup:** exact welcome lookup, no ownership moves on --upgrade ([#417](https://github.com/open-artifacts-ai/open-artifacts/issues/417)) ([38c214a](https://github.com/open-artifacts-ai/open-artifacts/commit/38c214ad268bac91a406d64041679778954c491a))
+
 ## [0.23.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.22.0...v0.23.0) (2026-10-21)
 
 
