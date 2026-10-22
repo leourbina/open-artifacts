@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.30.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.29.0...v0.30.0) (2026-10-22)
+
+
+### Features
+
+* **authz:** guests are read-only under direct sign-in (P2 T9) ([#386](https://github.com/open-artifacts-ai/open-artifacts/issues/386)) ([8648244](https://github.com/open-artifacts-ai/open-artifacts/commit/8648244fd6edfe0ddf4f3c3f97e6e20ce3d42cc4))
+
 ## [0.29.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.28.0...v0.29.0) (2026-10-22)
 
 
