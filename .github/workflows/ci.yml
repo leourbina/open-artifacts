@@ -165,6 +165,60 @@ jobs:
         if: ${{ steps.ro.outputs.release_only != 'true' }}
       - run: pnpm build
         if: ${{ steps.ro.outputs.release_only != 'true' }}
+  # Builds the real release bundle (buildBundle, dry run) and asserts it contains no
+  # live test hooks. Same release-only fast path as the other jobs: never skipped
+  # via needs/if, so it can be a required check.
+  no-test-hooks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      # Fast path for release-please PRs: decided inside each job (a skipped or
+      # missing job would count as passing a required check). The script comes from
+      # the BASE commit, never from the code under test, and any error or any
+      # output other than exactly "release-only" means full CI.
+      - id: ro
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+        run: |
+          rel=false
+          if [ -n "${BASE_SHA:-}" ] && [ -n "${HEAD_SHA:-}" ] \
+            && git show "$BASE_SHA:scripts/ci/release-only.ts" > "$RUNNER_TEMP/release-only.ts" 2> /dev/null \
+            && out=$(node --experimental-strip-types --no-warnings "$RUNNER_TEMP/release-only.ts" "$BASE_SHA" "$HEAD_SHA" 2> /dev/null) \
+            && [ "$out" = "release-only" ]; then
+            rel=true
+          fi
+          echo "release_only=$rel" >> "$GITHUB_OUTPUT"
+      - name: release-only change
+        if: ${{ steps.ro.outputs.release_only == 'true' }}
+        run: |
+          echo "release-only change: skipped (the base commit is on main, which only the merge queue can update)"
+          exit 0
+      - uses: pnpm/action-setup@v4
+        if: ${{ steps.ro.outputs.release_only != 'true' }}
+      - uses: actions/setup-node@v4
+        if: ${{ steps.ro.outputs.release_only != 'true' }}
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+        if: ${{ steps.ro.outputs.release_only != 'true' }}
+      - name: Build the release bundle (buildBundle, dry run)
+        if: ${{ steps.ro.outputs.release_only != 'true' }}
+        run: |
+          pnpm --filter @oa/provision build
+          pnpm --filter @oa/server run gen
+          mkdir -p apps/server/dist-assets
+          node --experimental-strip-types scripts/ci/build-release-bundle.ts "$RUNNER_TEMP/release-bundle"
+      - name: No test hooks in the release bundle
+        if: ${{ steps.ro.outputs.release_only != 'true' }}
+        run: pnpm check-no-test-hooks "$RUNNER_TEMP/release-bundle"
   # No secrets: the real suite runs a local `wrangler dev` (ENVIRONMENT=dev in a
   # generated temp config), never staging.
   e2e:
