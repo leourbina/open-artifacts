@@ -1,5 +1,5 @@
+import { normalizeEmail } from "@oa/auth-core";
 import { CODE_POLICY } from "@oa/shared";
-import { normEmail } from "../db/email.js";
 import { stmt } from "../db/stmt.js";
 import {
   type Cap,
@@ -97,7 +97,7 @@ export async function codesKey(
 
 /** HMAC of the normalized address: the row key and the counter key part. */
 export async function emailKey(env: Env, email: string): Promise<string> {
-  const e = normEmail(email) ?? email.trim().toLowerCase();
+  const e = normalizeEmail(email) ?? email.trim().toLowerCase();
   return hmacSign(await codesKey(env, "oa:login-codes"), `email:${e}`);
 }
 
@@ -306,7 +306,7 @@ export async function deliverCode(
   now = Date.now(),
 ): Promise<{ requestId: string } | null> {
   if (!emailEnabled(env)) return logSend("email_off");
-  const to = normEmail(email);
+  const to = normalizeEmail(email);
   if (!to) return logSend("ineligible");
   if ((await codeEligibility(env, cfg, to)).kind === "none")
     return logSend("ineligible");
