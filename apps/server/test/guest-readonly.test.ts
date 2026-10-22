@@ -3,6 +3,7 @@ import { R } from "@oa/shared";
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { accessLevel } from "../src/auth/authz.js";
+import { createPat } from "../src/auth/pat.js";
 import { sessionCookieName, signSession } from "../src/auth/session.js";
 import type { Env } from "../src/env.js";
 import { publish } from "../src/services/artifacts.js";
@@ -209,6 +210,78 @@ describe("guest read cap (direct sign-in)", () => {
           body: { v: 1 },
         })
       ).status,
+    ).toBe(404);
+  });
+
+  it("a capped guest can query data (a read); a data write stays refused", async () => {
+    const email = uniq("g", "x.com");
+    const id = await sharedArtifact(email);
+    const g = await sessionFor(email, "guest");
+    const e = direct();
+    const q = await call(e, R.dataQuery(id, "c"), g, {
+      method: "POST",
+      body: {},
+    });
+    expect(q.status).toBe(200);
+    const w = await call(e, R.dataDoc(id, "c", "query"), g, {
+      method: "PUT",
+      body: { v: 1 },
+    });
+    expect(w.status).toBe(404);
+    // Only the exact route: a POST elsewhere under the collection is refused.
+    expect(
+      (
+        await call(e, `${R.dataQuery(id, "c")}/x`, g, {
+          method: "POST",
+          body: {},
+        })
+      ).status,
+    ).toBe(404);
+  });
+
+  it("a guest without an explicit cap is capped on a code session", async () => {
+    // Access-only install: guestsReadOnly is off, so the member row has no cap.
+    const email = uniq("g", "x.com");
+    const id = await sharedArtifact(email);
+    const { userId } = await login(email, "guest");
+    const cookie = async (provider: "access" | "code") =>
+      `${SESSION}=${await signSession(env, userId, Date.now(), { provider })}`;
+    const g = await cookie("code");
+    expect(
+      (
+        await call(env, R.artifact(id), await cookie("access"), {
+          method: "PATCH",
+          body: { title: "x" },
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await call(env, R.artifact(id), g, {
+          method: "PATCH",
+          body: { title: "x" },
+        })
+      ).status,
+    ).toBe(404);
+  });
+
+  it("a capped guest can revoke their own token, not someone else's", async () => {
+    const email = uniq("g", "x.com");
+    const { userId } = await login(email, "guest");
+    const g = `${SESSION}=${await signSession(env, userId, Date.now(), { provider: "access" })}`;
+    const own = await createPat(env, userId, "mine");
+    const other = await login(uniq("o"));
+    const theirs = await createPat(env, other.userId, "theirs");
+    const e = direct();
+    expect(
+      (await call(e, R.token(theirs.id), g, { method: "DELETE" })).status,
+    ).toBe(404);
+    expect(
+      (await call(e, R.token(own.id), g, { method: "DELETE" })).status,
+    ).toBe(204);
+    expect(
+      (await call(e, R.tokens, g, { method: "POST", body: { label: "n" } }))
+        .status,
     ).toBe(404);
   });
 
