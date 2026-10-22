@@ -9,8 +9,11 @@ import {
 } from "@oa/ui/shadcn";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useRef } from "react";
+import { useHosted } from "../auth/permissions";
 import { useMe } from "../auth/useMe";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
+import { copyText } from "../settings/ui";
+import { useCurrentSpace } from "../spaces/useCurrentSpace";
 import { DropZone } from "../upload/DropZone";
 import { AppLink } from "./AppLink";
 import { ArtifactCard } from "./ArtifactCard";
@@ -33,6 +36,11 @@ const TABS: { id: Scope; label: string }[] = [
   { id: "shared", label: "Shared with me" },
   { id: "team", label: "Team" },
 ];
+const ROLE_LINE = {
+  viewer: "You're a viewer",
+  editor: "You're an editor",
+  manager: "You're a manager",
+} as const;
 const VIEW_KEY = "oa.library.view";
 type View = "grid" | "list";
 
@@ -77,15 +85,24 @@ const EMPTY: Record<Scope, [string, React.ReactNode]> = {
 
 export function Library({ scope }: { scope: Scope }) {
   const me = useMe();
+  const { space } = useCurrentSpace();
+  const { spaces } = useHosted();
+  const personal = space?.kind === "personal";
+  const spaceName = space ? (personal ? "Personal" : space.name) : null;
+  const myRole = space
+    ? (spaces.find((x) => x.id === space.id)?.myRole ?? null)
+    : null;
   useDocumentTitle(
-    scope === "all"
-      ? "Library"
-      : (TABS.find((t) => t.id === scope)?.label ?? null),
+    spaceName ??
+      (scope === "all"
+        ? "Library"
+        : (TABS.find((t) => t.id === scope)?.label ?? null)),
   );
   const navigate = useNavigate();
   const s = useSearch({ strict: false }) as {
     format?: Format;
     agent?: string;
+    space?: string;
     view?: View;
   };
   const view: View = s.view ?? storedView() ?? "grid";
@@ -93,7 +110,12 @@ export function Library({ scope }: { scope: Scope }) {
     void navigate({ to, search } as never);
   const set = (patch: object) => go(PATH[scope], { ...s, ...patch });
 
-  const q = useLibraryQuery({ scope, format: s.format, agent: s.agent });
+  const q = useLibraryQuery({
+    scope,
+    format: s.format,
+    agent: s.agent,
+    space: space?.id,
+  });
   const items = uniqueItems(q.data?.pages);
   // Remember agents seen so far so others stay selectable while one is filtered.
   const seenAgents = useRef(new Set<string>());
@@ -102,11 +124,45 @@ export function Library({ scope }: { scope: Scope }) {
   const agents = [...seenAgents.current].sort();
   const guest = me.status === "authed" && me.me.user.role === "guest";
   const meId = me.status === "authed" ? me.me.user.id : undefined;
+  // Guests and restricted (capped) members can't create anywhere.
+  const canCreate =
+    me.status === "authed" && !guest && (me.me.auth?.cap ?? null) === null;
 
   const sentinel = useSentinel(q);
 
   const filtered = Boolean(s.format || s.agent);
-  const [emptyTitle, emptyText] = EMPTY[scope];
+  const canPublishHere =
+    personal || myRole === "editor" || myRole === "manager";
+  const [emptyTitle, emptyText] =
+    space && scope === "all"
+      ? personal
+        ? [
+            "Your personal space",
+            "Only you can see what's here until you share it or move it to a space.",
+          ]
+        : canPublishHere
+          ? [
+              `Nothing in ${space.name} yet`,
+              `Ask any AI agent to publish here, for example "publish this to ${space.name}".`,
+            ]
+          : [
+              `Nothing in ${space.name} yet`,
+              "You can view this space. What its editors publish shows up here.",
+            ]
+      : EMPTY[scope];
+  const emptyAction =
+    space && scope === "all" && !personal && canPublishHere ? (
+      <Button
+        size="sm"
+        variant="outline"
+        className="text-[length:var(--oa-text-sm)]"
+        onClick={() =>
+          copyText(`publish this to ${space.name}`, "Prompt copied")
+        }
+      >
+        Copy prompt
+      </Button>
+    ) : undefined;
 
   const results = (
     <>
@@ -160,15 +216,21 @@ export function Library({ scope }: { scope: Scope }) {
           icon={<LibraryIcon />}
           title={filtered ? "No artifacts match these filters" : emptyTitle}
           description={filtered ? "Try removing a filter." : emptyText}
+          action={filtered ? undefined : emptyAction}
         />
       )}
       {items.length > 0 && (
         <div className={view === "grid" ? GRID : LIST}>
           {items.map((a) =>
             view === "grid" ? (
-              <ArtifactCard key={a.id} artifact={a} meId={meId} />
+              <ArtifactCard
+                key={a.id}
+                artifact={a}
+                meId={meId}
+                showSpace={!space}
+              />
             ) : (
-              <ArtifactRow key={a.id} artifact={a} />
+              <ArtifactRow key={a.id} artifact={a} showSpace={!space} />
             ),
           )}
         </div>
@@ -180,15 +242,25 @@ export function Library({ scope }: { scope: Scope }) {
   return (
     <section className={PAGE}>
       <div className={BAR}>
-        <h1 className={H1}>Library</h1>
+        <div className="min-w-0">
+          <h1 className={H1}>{spaceName ?? "Library"}</h1>
+          {myRole && !personal && (
+            <p className="mt-[2px] text-[length:var(--oa-text-sm)] text-muted-foreground">
+              {ROLE_LINE[myRole]}
+            </p>
+          )}
+        </div>
         <span className="flex-1" />
-        <DropZone button allowed={me.status === "authed" && !guest} />
+        {/* Uploading into a space waits for its picker (Task 7). */}
+        {!space && <DropZone button allowed={canCreate} />}
       </div>
       {/* One tree whether or not /me has loaded: the results never remount
           when the tabs appear (a remount detaches every card mid-use). */}
       <Tabs
         value={scope}
-        onValueChange={(id) => go(PATH[id as Scope], {})}
+        onValueChange={(id) =>
+          go(PATH[id as Scope], space ? { space: space.id } : {})
+        }
         className="gap-[var(--oa-space-4)]"
       >
         {/* The strip scrolls, so the hairline is an inset shadow, the
@@ -198,7 +270,12 @@ export function Library({ scope }: { scope: Scope }) {
             variant="line"
             className="h-[34px] w-full justify-start gap-[var(--oa-space-4)] overflow-x-auto rounded-none p-0 shadow-[inset_0_-1px_0_var(--color-border)] [scrollbar-width:none]"
           >
-            {TABS.filter((t) => !guest || t.id === "shared").map((t) => (
+            {TABS.filter(
+              (t) =>
+                (!guest || t.id === "shared") &&
+                // Inside a space: All, Mine and Shared with me.
+                !(space && t.id === "team"),
+            ).map((t) => (
               <TabsTrigger
                 key={t.id}
                 value={t.id}

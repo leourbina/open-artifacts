@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { newId } from "@oa/shared";
+import { newId, PAGES } from "@oa/shared";
 import { Hono } from "hono";
 import { exportJWK, generateKeyPair, type JWTPayload, SignJWT } from "jose";
 import {
@@ -19,6 +19,7 @@ import { readSession, sessionCookieName } from "../src/auth/session.js";
 import type { Env } from "../src/env.js";
 import { FAVICON_TAGS } from "../src/http/head.js";
 import { type AppVariables, session } from "../src/http/middleware.js";
+import { patchMember } from "../src/services/members.js";
 import { b64urlEncode } from "../src/util/crypto.js";
 import { login } from "./helpers.js";
 
@@ -238,6 +239,26 @@ describe("GET /auth/login", () => {
     // verifier never leaks in the URL
     expect(loc.href).not.toContain("verifier");
   });
+
+  it("never starts Access when access isn't an enabled provider", async () => {
+    // No provider at all: 404.
+    const none = await call("/auth/login", {}, { ...env, AUTH_PROVIDERS: "" });
+    expect(none.status).toBe(404);
+    expect(oidcSet(none)).toBeUndefined();
+    for (const AUTH_PROVIDERS of ["email", "google,email"]) {
+      const e = { ...env, AUTH_PROVIDERS };
+      // Direct sign-in: the SPA chooser (P2 T6), no OIDC state.
+      const r = await call("/auth/login", {}, e);
+      expect(r.status).toBe(302);
+      expect(r.headers.get("location")).toMatch(/^\/sign-in\?next=/);
+      expect(oidcSet(r)).toBeUndefined();
+      // ?via=access without access is ignored: the chooser again.
+      const via = await call("/auth/login?via=access", {}, e);
+      expect(via.status).toBe(302);
+      expect(via.headers.get("location")).toMatch(/^\/sign-in\?next=/);
+      expect(oidcSet(via)).toBeUndefined();
+    }
+  });
 });
 
 describe("safeNext", () => {
@@ -406,8 +427,8 @@ describe("GET /auth/callback", () => {
     const now = Date.now();
     await env.DB.batch([
       env.DB.prepare(
-        "insert into artifacts (id, owner_id, title, format, created_at, updated_at) values (?, ?, 't', 'html', ?, ?)",
-      ).bind(aid, userId, now, now),
+        "insert into artifacts (id, owner_id, space_id, title, format, created_at, updated_at) values (?, ?, ?, 't', 'html', ?, ?)",
+      ).bind(aid, userId, userId, now, now),
       env.DB.prepare(
         "insert into shares (artifact_id, email, role, created_by, created_at) values (?, 'guest@x.com', 'viewer', ?, ?)",
       ).bind(aid, userId, now),
@@ -611,8 +632,8 @@ describe("callback failure logging", () => {
     const { l, r } = await run("token_http_302", (b) => callback(b, b.oidc));
     expect(r.status).toBe(401);
     expect(l.error).toBe("invalid_client");
-    expect(String(l.description)).toMatch(/^Client auth failedx+$/);
-    expect(String(l.description).length).toBe(200);
+    // Capped at 200 chars, then redacted: the x-run reads as a token.
+    expect(l.description).toBe("Client auth <token>");
     expect(await r.text()).not.toContain("invalid_client");
   });
   it("token 4xx JSON body logs error + description", async () => {
@@ -893,5 +914,64 @@ describe("state cookie hardening (size cap, cookie tossing)", () => {
     const c = oidcSet(r) ?? "";
     expect(c).toMatch(/^oa_oidc_[A-Za-z0-9_-]{10}=/);
     expect(c).toMatch(/; Path=\/auth(;|$)/);
+  });
+});
+
+describe("session epoch on the Access callback (#369)", () => {
+  const epochOf = (email: string) =>
+    env.DB.prepare("select id, session_epoch e from users where email = ?")
+      .bind(email)
+      .first<{ id: string; e: number }>();
+  const sessOf = (r: Response) => readSession(env, cookieVal(r, SESSION));
+
+  it("a reactivated guest gets a live session at the new epoch", async () => {
+    const email = `rein-${newId().slice(0, 6)}@x.com`;
+    await login(email, "guest");
+    // The last share going deactivates (status removed, epoch + 1); a new
+    // share reactivates. Sign-in must use the bumped epoch, not 0.
+    await env.DB.prepare(
+      "update users set status = 'removed', session_epoch = session_epoch + 1 where email = ?",
+    )
+      .bind(email)
+      .run();
+    await env.DB.prepare("update users set status = 'active' where email = ?")
+      .bind(email)
+      .run();
+    const b = await begin({ email });
+    const r = await callback(b, b.oidc);
+    expect(r.status).toBe(302);
+    const row = await epochOf(email);
+    const s = await sessOf(r);
+    expect(s?.uid).toBe(row?.id);
+    expect(s?.e).toBe(row?.e);
+  });
+
+  it("a role change (epoch bump) does not lock the user out", async () => {
+    const email = `role-${newId().slice(0, 6)}@x.com`;
+    const { userId } = await login(email, "member");
+    const first = await begin({ email });
+    expect((await callback(first, first.oidc)).status).toBe(302);
+    const before = (await epochOf(email))?.e ?? 0;
+    await patchMember(env, userId, { role: "admin" });
+    const bumped = (await epochOf(email))?.e ?? 0;
+    // The role change must have bumped the epoch, or this test proves nothing.
+    expect(bumped).toBeGreaterThan(before);
+    const second = await begin({ email });
+    const r = await callback(second, second.oidc);
+    expect(r.status).toBe(302);
+    expect((await sessOf(r))?.e).toBe(bumped);
+  });
+
+  it("a non-active user lands on noAccess with no session", async () => {
+    const email = `sus-${newId().slice(0, 6)}@x.com`;
+    const { userId } = await login(email, "member");
+    await env.DB.prepare("update users set status = 'suspended' where id = ?")
+      .bind(userId)
+      .run();
+    const b = await begin({ email });
+    const r = await callback(b, b.oidc);
+    expect(r.status).toBe(302);
+    expect(r.headers.get("location")).toBe(PAGES.noAccess);
+    expect(cookieVal(r, SESSION)).toBeUndefined();
   });
 });

@@ -1,5 +1,120 @@
 # Changelog
 
+## [0.31.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.30.0...v0.31.0) (2026-10-22)
+
+
+### Features
+
+* **auth:** sign-in events and CPU budgets (P2 T10) ([#389](https://github.com/open-artifacts-ai/open-artifacts/issues/389)) ([2adcf13](https://github.com/open-artifacts-ai/open-artifacts/commit/2adcf13da8f92d7a551732e455d5599ceeed0724))
+* **dashboard:** spaces in the sidebar and the space marker (P4 Task 6) ([#448](https://github.com/open-artifacts-ai/open-artifacts/issues/448)) ([7efcdac](https://github.com/open-artifacts-ai/open-artifacts/commit/7efcdacb06606375f91e16ac5c71adbba33531b1))
+
+## [0.30.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.29.0...v0.30.0) (2026-10-22)
+
+
+### Features
+
+* **authz:** guests are read-only under direct sign-in (P2 T9) ([#386](https://github.com/open-artifacts-ai/open-artifacts/issues/386)) ([8648244](https://github.com/open-artifacts-ai/open-artifacts/commit/8648244fd6edfe0ddf4f3c3f97e6e20ce3d42cc4))
+
+## [0.29.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.28.0...v0.29.0) (2026-10-22)
+
+
+### Features
+
+* **auth:** code sign-in routes (P2 T8) ([#384](https://github.com/open-artifacts-ai/open-artifacts/issues/384)) ([91e6d64](https://github.com/open-artifacts-ai/open-artifacts/commit/91e6d64b03efd9b015fb0282196fefdbd031c668))
+* **dashboard:** public links off per space in the Share panel (P4 Task 9) ([#445](https://github.com/open-artifacts-ai/open-artifacts/issues/445)) ([1963354](https://github.com/open-artifacts-ai/open-artifacts/commit/1963354eacb785fcc7a917bc735a6b70f77e456c))
+* **shared:** space People contract: member manager rule, frozen-sync removal, groups role/via, paging, member_synced, allMembers ([#446](https://github.com/open-artifacts-ai/open-artifacts/issues/446)) ([598650c](https://github.com/open-artifacts-ai/open-artifacts/commit/598650c83856f3ec9fc34ab0ded1b20c6e697b8a))
+* **shared:** space-manager mappings, org Every-space mappings, directory_mapping_off (contract) ([#422](https://github.com/open-artifacts-ai/open-artifacts/issues/422)) ([f360744](https://github.com/open-artifacts-ai/open-artifacts/commit/f3607443e79bd8e3bcd7eea31735249d686f8892))
+
+## [0.28.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.27.0...v0.28.0) (2026-10-22)
+
+
+### Features
+
+* **auth:** providers endpoint, Google sign-in routes, Me sign-in fields (P2 T6) ([#380](https://github.com/open-artifacts-ai/open-artifacts/issues/380)) ([8221a95](https://github.com/open-artifacts-ai/open-artifacts/commit/8221a95ac9df1717a5a69e35c02d1c412ee741a9))
+
+## [0.27.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.26.1...v0.27.0) (2026-10-22)
+
+
+### Features
+
+* **auth:** admission, linking and code eligibility (P2 T5) ([#375](https://github.com/open-artifacts-ai/open-artifacts/issues/375)) ([8a34089](https://github.com/open-artifacts-ai/open-artifacts/commit/8a34089b1f3bb0d3a700be43180db0cbff6579b8))
+* **dashboard:** Google directory page, held sweeps and restricted groups (P4 Tasks 17, 18) ([#437](https://github.com/open-artifacts-ai/open-artifacts/issues/437)) ([70f7439](https://github.com/open-artifacts-ai/open-artifacts/commit/70f74396fe81045d771030ca17c77312f14db995))
+* **dashboard:** restricted members, badge plus row menu (P4 Task 15) ([#439](https://github.com/open-artifacts-ai/open-artifacts/issues/439)) ([393103b](https://github.com/open-artifacts-ai/open-artifacts/commit/393103b668aa930b3adaf84bae5143c729e77191))
+
+## [0.26.1](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.26.0...v0.26.1) (2026-10-22)
+
+
+### Bug Fixes
+
+* **provision:** signed release records cover assets, template and migrations; prod locked ([#426](https://github.com/open-artifacts-ai/open-artifacts/issues/426) review) ([#435](https://github.com/open-artifacts-ai/open-artifacts/issues/435)) ([1d06125](https://github.com/open-artifacts-ai/open-artifacts/commit/1d061253991b7923367de691d46d42ba4d0281e1))
+
+## [0.26.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.25.0...v0.26.0) (2026-10-22)
+
+
+### Features
+
+* **dashboard:** hosted sign-in, Google plus emailed codes (P4 Task 14) ([#430](https://github.com/open-artifacts-ai/open-artifacts/issues/430)) ([e77e183](https://github.com/open-artifacts-ai/open-artifacts/commit/e77e183fdf0dcdcf10640699ca01eddd23bdd41a))
+
+## [0.25.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.24.0...v0.25.0) (2026-10-22)
+
+
+### Features
+
+* **auth:** Google ID token verification and the direct transport (P2 T4) ([#372](https://github.com/open-artifacts-ai/open-artifacts/issues/372)) ([d79438c](https://github.com/open-artifacts-ai/open-artifacts/commit/d79438c6cb577611ed0dd23363717719112d6472))
+
+## [0.24.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.23.1...v0.24.0) (2026-10-22)
+
+
+### Features
+
+* **auth:** provider interface, derived-key cookies, session epoch and tenant (P2 T2) ([#369](https://github.com/open-artifacts-ai/open-artifacts/issues/369)) ([2a6534f](https://github.com/open-artifacts-ai/open-artifacts/commit/2a6534fcba8358339614867742d251c334b138bf))
+* **provision:** WfpProvisioner.create on Workers for Platforms ([#426](https://github.com/open-artifacts-ai/open-artifacts/issues/426)) ([635a08f](https://github.com/open-artifacts-ai/open-artifacts/commit/635a08f4be9bd36f048b4de3b19ba4fba2d7e2e6))
+
+## [0.23.1](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.23.0...v0.23.1) (2026-10-22)
+
+
+### Bug Fixes
+
+* **dashboard:** making an artifact public keeps anonymous writes on ([#418](https://github.com/open-artifacts-ai/open-artifacts/issues/418)) ([#419](https://github.com/open-artifacts-ai/open-artifacts/issues/419)) ([7ad1b14](https://github.com/open-artifacts-ai/open-artifacts/commit/7ad1b149db46f992ab6fa51cce0bb0ea278f629d))
+* **server:** answer only the configured app and content hosts (P1 6b) ([#415](https://github.com/open-artifacts-ai/open-artifacts/issues/415)) ([c060b0a](https://github.com/open-artifacts-ai/open-artifacts/commit/c060b0aecd2e5307c4d137462576866f377adb7d))
+* **setup:** exact welcome lookup, no ownership moves on --upgrade ([#417](https://github.com/open-artifacts-ai/open-artifacts/issues/417)) ([38c214a](https://github.com/open-artifacts-ai/open-artifacts/commit/38c214ad268bac91a406d64041679778954c491a))
+
+## [0.23.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.22.0...v0.23.0) (2026-10-21)
+
+
+### Features
+
+* **dashboard:** hosted P4 permissions from can (Task 3) ([#382](https://github.com/open-artifacts-ai/open-artifacts/issues/382)) ([a8ea6fb](https://github.com/open-artifacts-ai/open-artifacts/commit/a8ea6fbec5b46790bc5cd33f723d14f1e90a7a2a))
+* **dashboard:** restrict_admin and code_unavailable error copy ([#399](https://github.com/open-artifacts-ai/open-artifacts/issues/399)) ([2d3a7cb](https://github.com/open-artifacts-ai/open-artifacts/commit/2d3a7cbfde02947fedf1f1d6297c7f0b6d8031b2))
+* **library:** space filter in the URL and query (P4 Task 5) ([#416](https://github.com/open-artifacts-ai/open-artifacts/issues/416)) ([88b202c](https://github.com/open-artifacts-ai/open-artifacts/commit/88b202c8199490020bc3acd5491103d4179b409c))
+* **ops:** prod setup switches to team email (mail.leourbina.com) ([#409](https://github.com/open-artifacts-ai/open-artifacts/issues/409)) ([58dd2ac](https://github.com/open-artifacts-ai/open-artifacts/commit/58dd2ac9daf53a2a0dec505f2ef0a5844dfedc2c))
+* **server:** report installId on /healthz for hosted installs (P1 6b) ([#410](https://github.com/open-artifacts-ai/open-artifacts/issues/410)) ([b993fee](https://github.com/open-artifacts-ai/open-artifacts/commit/b993feeeb13cb7eb85ec7689f853d2ddc2a68f86))
+* **server:** RL_AUTH ratelimit binding for direct sign-in ([#385](https://github.com/open-artifacts-ai/open-artifacts/issues/385)) ([0ea22ce](https://github.com/open-artifacts-ai/open-artifacts/commit/0ea22ce82ea8a4e20ffd6c7f7286f8fee03f4b84))
+* **spaces:** spaces schema, personal space per user (P3 T1) ([#408](https://github.com/open-artifacts-ai/open-artifacts/issues/408)) ([b67aa9b](https://github.com/open-artifacts-ai/open-artifacts/commit/b67aa9b31155974f5ca953ea0d86368d658fa869))
+
+
+### Bug Fixes
+
+* **demo:** heartbeat seats, adopted writes and visible errors in the real-time demos ([#413](https://github.com/open-artifacts-ai/open-artifacts/issues/413)) ([63d8061](https://github.com/open-artifacts-ai/open-artifacts/commit/63d8061fedc472f1d3a30e17feb7bc71e114c080))
+* **setup:** run the full MCP selftest on CI upgrades ([#171](https://github.com/open-artifacts-ai/open-artifacts/issues/171)) ([#403](https://github.com/open-artifacts-ai/open-artifacts/issues/403)) ([f4e9862](https://github.com/open-artifacts-ai/open-artifacts/commit/f4e986249b14155a62b7124a707d7e3d1ea9d17a))
+
+## [0.22.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.21.0...v0.22.0) (2026-10-21)
+
+
+### Features
+
+* **db:** identities, login_codes, users.session_epoch and status (0008, P2 T3) ([#368](https://github.com/open-artifacts-ai/open-artifacts/issues/368)) ([4eccd8e](https://github.com/open-artifacts-ai/open-artifacts/commit/4eccd8e3730972604ba2dd3bf418dd546be00a4a))
+* **provision:** env-prefixed names and the foreign-resource guard ([#402](https://github.com/open-artifacts-ai/open-artifacts/issues/402)) ([c1ef1fe](https://github.com/open-artifacts-ai/open-artifacts/commit/c1ef1fe85d17325f2040b16930f8fd393f12d9e1))
+
+## [0.21.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.20.0...v0.21.0) (2026-10-21)
+
+
+### Features
+
+* **provision:** user Worker bundle and upload metadata ([#391](https://github.com/open-artifacts-ai/open-artifacts/issues/391)) ([b78cb5c](https://github.com/open-artifacts-ai/open-artifacts/commit/b78cb5c81eee2b82958e867580c9a361288e743e))
+* **server:** enforce route and tool policy before handlers (P3 T5) ([#374](https://github.com/open-artifacts-ai/open-artifacts/issues/374)) ([19c5de9](https://github.com/open-artifacts-ai/open-artifacts/commit/19c5de95a4d7c57b2ac3cd4f74830df986affb71))
+* **viewer:** live version updates (option B: safe swap, otherwise the chip) ([#349](https://github.com/open-artifacts-ai/open-artifacts/issues/349)) ([00c9d44](https://github.com/open-artifacts-ai/open-artifacts/commit/00c9d44ff69a8bab05726ad9b3493163160a87da))
+
 ## [0.20.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.19.0...v0.20.0) (2026-10-21)
 
 

@@ -76,18 +76,29 @@ export const ROUTE_POLICY: Readonly<Record<string, Policy>> = {
   "ALL /robots.txt": { public: "405" },
   "ALL /skill.md": { public: "405" },
   "ALL /upgrade.md": { public: "405" },
+  "GET /auth/providers": {
+    public: "sign-in offering; config only, never D1",
+  },
   "GET /auth/login": { public: "sign-in start" },
   "GET /auth/callback": { public: "sign-in callback" },
+  "GET /auth/login/google": { public: "sign-in start (Google)" },
+  "GET /auth/callback/google": { public: "sign-in callback (Google)" },
+  // Emailed codes: no session yet; the login guard (X-OA-Request, JSON,
+  // same-origin) and the pending code cookie carry the protection.
+  "POST /auth/code/request": { public: "code request; login guard, Turnstile" },
+  "POST /auth/code/verify": { public: "code verify; login guard" },
   "POST /auth/logout": { public: "sign-out (same-origin, CSRF)" },
   "GET /auth/dev-login": { public: "dev only; refused outside dev" },
-  // #387: verifies its own Ed25519 signature; no user policy.
-  "POST /__oa/nightly": { public: "signed nightly trigger (Ed25519)" },
+  // P2 test hooks: 404 unless TEST_HOOKS is on (test-hooks/index.ts decides).
+  "ALL /__test/*": { public: "test hooks; 404 unless TEST_HOOKS is on" },
   "GET /api/v1/me": { user: "the caller" },
   "PATCH /api/v1/me": { user: "the caller" },
   "GET /api/v1/members": { org: "members.manage" },
   "POST /api/v1/members": { org: "members.manage" },
   "PATCH /api/v1/members/:id": { org: "members.manage" },
   "DELETE /api/v1/members/:id": { org: "members.manage" },
+  // The handler requires a manager and 404s for the owner's own link.
+  "DELETE /api/v1/members/:id/identities/google": { org: "members.manage" },
   "GET /api/v1/settings": { org: "settings.read" },
   "PATCH /api/v1/settings": { org: "settings.manage" },
   "GET /api/v1/artifacts": { user: "list, filtered by listFilterSql" },
@@ -155,9 +166,6 @@ export const ROUTE_POLICY: Readonly<Record<string, Policy>> = {
   "GET /*": { public: "SPA and assets" },
   "HEAD /*": { public: "SPA and assets" },
 };
-
-/** Policy entries whose route lands in another PR (coverage test exemption). */
-export const PENDING_ROUTES: readonly string[] = ["POST /__oa/nightly"];
 
 /** Content host routes: the handlers verify signed tokens or public visibility. */
 export const CONTENT_POLICY: Readonly<Record<string, Policy>> = {
@@ -266,8 +274,13 @@ export async function enforce(
   }
   if (who.kind !== "user")
     throw new ApiError("unauthorized", "Sign in required");
-  if ("org" in p && !orgCan(who.user, p.org, { cap: capOfCaller(who) }))
+  if ("org" in p && !orgCan(who.user, p.org, { cap: capOfCaller(who) })) {
+    // #359: any create by a capped caller (guests under direct sign-in, P3's
+    // restricted members) is 403 space_forbidden, never 404.
+    if (p.org === "artifact.create" && capOfCaller(who))
+      throw new ApiError("space_forbidden", "Guests can't publish here");
     throw notFound();
+  }
 }
 
 /**

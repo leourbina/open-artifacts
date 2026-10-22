@@ -16,11 +16,11 @@ async function deleted(daysAgo: number): Promise<string> {
   const id = newId();
   const t = Date.now() - daysAgo * DAY;
   await env.DB.prepare(
-    `insert into artifacts (id, owner_id, title, format, visibility, current_version,
+    `insert into artifacts (id, owner_id, space_id, title, format, visibility, current_version,
        capabilities, allow_anonymous_writes, created_at, updated_at, deleted_at)
-     values (?, ?, 't', 'markdown', 'private', 0, '{}', 0, ?, ?, ?)`,
+     values (?, ?, ?, 't', 'markdown', 'private', 0, '{}', 0, ?, ?, ?)`,
   )
-    .bind(id, owner, t, t, t)
+    .bind(id, owner, owner, t, t, t)
     .run();
   return id;
 }

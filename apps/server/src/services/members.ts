@@ -1,20 +1,21 @@
-import {
-  type Member,
-  type MemberInvite,
-  type MemberInviteResult,
-  type MemberPatch,
-  newId,
-  type Settings,
-  type SettingsPatch,
+import { normalizeEmail } from "@oa/auth-core";
+import type {
+  Member,
+  MemberInvite,
+  MemberInviteResult,
+  MemberPatch,
+  Settings,
+  SettingsPatch,
 } from "@oa/shared";
-import { and, asc, eq, isNotNull, isNull } from "drizzle-orm";
+import { and, asc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { getDb } from "../db/client.js";
-import { normEmail } from "../db/email.js";
 import {
   artifacts,
+  identities,
   reservedArtifacts,
   settings,
   shares,
+  spaces,
   tokens,
   uploads,
   users,
@@ -27,7 +28,7 @@ import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
 import { revokeAllGrants } from "../mcp/oauth-api.js";
 import { closeRuntimeSockets, MAX_CLOSE } from "../runtime/revoke.js";
-import { toMember } from "./users.js";
+import { insertUser, toMember } from "./users.js";
 
 export async function listMembers(env: Env): Promise<Member[]> {
   const rows = await getDb(env)
@@ -46,17 +47,14 @@ export async function inviteMember(
   inviter: Member,
   input: MemberInvite,
 ): Promise<MemberInviteResult> {
-  const email = normEmail(input.email);
+  const email = normalizeEmail(input.email);
   if (!email) throw new ApiError("bad_request", "Invalid email");
-  const [row] = await getDb(env)
-    .insert(users)
-    .values({
-      id: newId(),
-      email,
-      name: "",
-      role: input.role,
-      createdAt: Date.now(),
-    })
+  const [row] = await insertUser(env, {
+    email,
+    name: "",
+    role: input.role,
+    createdAt: Date.now(),
+  })
     .onConflictDoNothing({ target: users.email })
     .returning();
   if (!row) throw new ApiError("conflict", "Already a member");
@@ -75,7 +73,7 @@ export async function inviteMember(
           recipient: email,
           appHost: env.APP_HOST,
         }),
-      { kind: "invite", replyTo: normEmail(inviter.email) ?? undefined },
+      { kind: "invite", replyTo: normalizeEmail(inviter.email) ?? undefined },
     );
   }
   return { ...toMember(row), emailed };
@@ -100,7 +98,8 @@ export async function patchMember(
   const db = getDb(env);
   const [out] = await db
     .update(users)
-    .set({ role: patch.role })
+    // A role change ends the member's sessions (they re-sign-in with the new role).
+    .set({ role: patch.role, sessionEpoch: sql`${users.sessionEpoch} + 1` })
     .where(eq(users.id, id))
     .returning();
   if (!out) throw new ApiError("not_found", "Not found");
@@ -146,14 +145,24 @@ export async function removeMember(
   const to = owner.id;
   await db.batch([
     // Split live/deleted: owner_id is only indexed by the two partial indexes (#248).
+    // space_id moves with owner_id (P3 T1): the artifacts now live in the
+    // instance owner's personal space. (With the spaces flag on, T6 keeps the
+    // row instead of deleting it, and the spaces stay put.)
     db
       .update(artifacts)
-      .set({ ownerId: to })
+      .set({ ownerId: to, spaceId: to })
       .where(and(eq(artifacts.ownerId, id), isNull(artifacts.deletedAt))),
     db
       .update(artifacts)
-      .set({ ownerId: to })
+      .set({ ownerId: to, spaceId: to })
       .where(and(eq(artifacts.ownerId, id), isNotNull(artifacts.deletedAt))),
+    // The personal space's id IS its owner's user id, so re-pointing it would
+    // leave a row named after the removed user and owned by the instance owner.
+    // It is empty by now (the artifacts above moved), so drop it; ownership is
+    // the id, never owner_user_id.
+    db
+      .delete(spaces)
+      .where(and(eq(spaces.id, id), eq(spaces.kind, "personal"))),
     db
       .update(versions)
       .set({ createdBy: to })
@@ -165,6 +174,7 @@ export async function removeMember(
       .set({ userId: to })
       .where(eq(reservedArtifacts.userId, id)),
     db.delete(tokens).where(eq(tokens.userId, id)),
+    db.delete(identities).where(eq(identities.userId, id)),
     db.delete(users).where(eq(users.id, id)),
   ]);
   // Live sockets the member opened via shares stay open otherwise (best effort, capped).

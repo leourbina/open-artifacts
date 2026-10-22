@@ -174,3 +174,50 @@ export function shareEmail(
     },
   );
 }
+
+const CODE_TXT = `Your {{instanceName}} sign-in code is {{code}}
+
+Enter it on the sign-in page. It expires in {{minutes}} minutes and works once.
+
+If you didn't ask for this, ignore this email: nobody can sign in without the code.
+
+{{appHost}}
+`;
+
+const CODE_HTML = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="color-scheme" content="light dark"><title>Sign-in code</title></head>
+<body style="margin:0;padding:24px;font:16px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+<p>Your {{instanceName}} sign-in code is</p>
+<p style="font:600 28px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:2px">{{code}}</p>
+<p>Enter it on the sign-in page. It expires in {{minutes}} minutes and works once.</p>
+<p style="color:#5d636e">If you didn't ask for this, ignore this email: nobody can sign in without the code.</p>
+<p style="color:#5d636e">{{appHost}}</p>
+</body></html>
+`;
+
+/**
+ * A sign-in code, shown as "1234 5678" (Design). No link carries the code,
+ * and the subject never contains it (subjects show up in notifications).
+ */
+export function loginCodeEmail(p: {
+  code: string;
+  instance: string;
+  appHost: string;
+  minutes: number;
+}): EmailContent {
+  if (!/^\d{8}$/.test(p.code)) throw new Error("invalid code");
+  const url = new URL(`https://${p.appHost}/`);
+  if (url.host !== p.appHost.toLowerCase()) throw new Error("invalid app host");
+  const values = {
+    instanceName: oneLine(p.instance, NAME_MAX),
+    code: `${p.code.slice(0, 4)} ${p.code.slice(4)}`,
+    minutes: String(p.minutes),
+    appHost: url.host,
+  };
+  return render(
+    CODE_HTML,
+    CODE_TXT,
+    "Your {{instanceName}} sign-in code",
+    values,
+  );
+}

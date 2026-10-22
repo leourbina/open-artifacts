@@ -33,17 +33,66 @@ export function newInstallId(): InstallId {
   return out;
 }
 
-export function names(id: InstallId): {
-  script: string;
-  d1: string;
-  r2: string;
-  kv: string;
-} {
+export type Env = "staging" | "prod";
+
+/** Every hosted resource name carries its environment; the account is shared. */
+export const ENV_PREFIX: Readonly<Record<Env, string>> = Object.freeze({
+  staging: "oa-s-",
+  prod: "oa-p-",
+});
+
+export class ForeignResource extends Error {
+  constructor(name: string, env?: unknown) {
+    super(
+      `refusing to touch ${JSON.stringify(name)}: not an ${String(env)} resource`,
+    );
+    this.name = "ForeignResource";
+  }
+}
+
+/** Throws unless `name` starts with the exact prefix of `env` (case-sensitive). */
+export function assertOwnResource(name: string, env: Env): void {
+  const p = Object.hasOwn(ENV_PREFIX, env) ? ENV_PREFIX[env] : undefined;
+  if (p === undefined || typeof name !== "string" || !name.startsWith(p))
+    throw new ForeignResource(String(name), env);
+}
+
+export function names(
+  id: InstallId,
+  env: Env,
+): { script: string; d1: string; r2: string; kv: string } {
+  if (!Object.hasOwn(ENV_PREFIX, env)) throw new ForeignResource(id, env);
+  const p = ENV_PREFIX[env];
   return {
-    script: `oa-${id}`,
-    d1: `oa-${id}`,
-    r2: `oa-${id}`,
-    kv: `oa-${id}-oauth`,
+    script: `${p}${id}`,
+    d1: `${p}${id}`,
+    r2: `${p}${id}`,
+    kv: `${p}${id}-oauth`,
+  };
+}
+
+export function platformNames(env: Env): {
+  db: string;
+  releases: string;
+  registry: string;
+  scheduler: string;
+  inventory: string;
+  broker: string;
+  dispatch: string;
+  turnstile: string;
+} {
+  if (!Object.hasOwn(ENV_PREFIX, env)) throw new ForeignResource("", env);
+  const p = ENV_PREFIX[env];
+  return {
+    db: `${p}platform`,
+    releases: `${p}releases`,
+    registry: `${p}broker-registry`,
+    scheduler: `${p}scheduler`,
+    inventory: `${p}inventory`,
+    broker: `${p}auth-broker`,
+    dispatch: `${p}dispatch`,
+    // The one Turnstile widget of the env (created once by Task 8's init).
+    turnstile: `${p}turnstile`,
   };
 }
 
@@ -51,7 +100,13 @@ export function hosts(
   slug: string,
   domains: { app: string; content: string },
 ): { appHost: string; contentHost: string } {
-  if (!SLUG_RE.test(slug) || RESERVED_SLUGS.includes(slug)) {
+  // "--" at positions 3-4 is IDNA-reserved ("xn--" is punycode): a slug
+  // like that could render as another name (homograph).
+  if (
+    !SLUG_RE.test(slug) ||
+    RESERVED_SLUGS.includes(slug) ||
+    slug.slice(2, 4) === "--"
+  ) {
     throw new Error(`invalid slug: ${slug}`);
   }
   const { app, content } = domains;

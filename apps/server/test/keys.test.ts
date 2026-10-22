@@ -19,6 +19,7 @@ describe("deriveKey", () => {
       "oa:oidc-state",
       "oa:code-cookie",
       "oa:login-codes",
+      "oa:code-email",
     ]);
   });
 
@@ -28,9 +29,13 @@ describe("deriveKey", () => {
     ).not.toBe(await deriveKey(secret, "oa:session"));
   });
 
-  test("refuses a short secret", async () => {
+  test("refuses an empty secret, derives from a short one", async () => {
+    await expect(
+      deriveKey({ SESSION_SECRET: "" }, "oa:session"),
+    ).rejects.toThrow("SESSION_SECRET is not set");
+    // HKDF accepts any length: a short secret is weak, not unusable.
     await expect(
       deriveKey({ SESSION_SECRET: "short" }, "oa:session"),
-    ).rejects.toThrow("SESSION_SECRET must be at least 32 characters");
+    ).resolves.toMatch(/^[A-Za-z0-9_-]+$/);
   });
 });

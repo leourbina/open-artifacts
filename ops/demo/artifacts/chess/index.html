@@ -306,7 +306,7 @@
   <aside>
     <h2 id="moves-h">Moves</h2>
     <ol class="moves" id="moves" aria-labelledby="moves-h"></ol>
-    <p class="note">Every window checks each move against the rules. Seats free up 5 minutes after the last move.</p>
+    <p class="note" id="note">Every window checks each move against the rules. A seat frees up 90 seconds after its player leaves.</p>
   </aside>
   <p class="sr" id="announce" aria-live="polite"></p>
 </main>
@@ -536,9 +536,9 @@
   const TABLE = "table";
   const TABLE_ID = "table";
   const MOVES = "moves";
-  /* A seat frees 5 minutes after the last move (or its claim). No heartbeat: the demo has 10k writes a day. */
-  const SEAT_TTL_MS = 5 * 60 * 1000;
-  const SKEW_MS = 30 * 1000; // grace for other browsers' clocks when checking a write
+  /* A seated window checks in every 15 seconds; a seat that misses 90 seconds of check-ins is away, and free to take. */
+  const HEARTBEAT_MS = 15 * 1000;
+  const SEAT_TTL_MS = 90 * 1000;
   const COLORS = ["w", "b"];
   const NAME = { w: "White", b: "Black" };
   const SEAT = { w: "white", b: "black" };
@@ -548,11 +548,13 @@
 
   const OA = window.openArtifacts;
   const $ = (id) => document.getElementById(id);
-  const el = { seats: $("seats"), board: $("board"), promo: $("promo"), status: $("status"), actions: $("actions"), moves: $("moves"), error: $("error"), announce: $("announce") };
+  const el = { seats: $("seats"), board: $("board"), promo: $("promo"), status: $("status"), actions: $("actions"), moves: $("moves"), note: $("note"), error: $("error"), announce: $("announce") };
 
   let me = null;       // { id, signedIn }
   let tableCol = null, movesCol = null;
-  let table = null;    // { g, white, black }: the last seats this window accepted
+  let table = null;    // { g, white, black }: the server's seats as this window last saw them
+  let stamp = "";      // updatedAt of that table doc; older events are skipped
+  let heartbeat = null;
   let game = null;     // the game replayed from accepted moves
   const pending = new Map(); // move docs that arrived ahead of their turn, by doc id
   let busy = false;
@@ -609,6 +611,16 @@
     return { id: localId(), signedIn: false };
   }
 
+  /* A friendly name derived from the id, so every window shows the same one and nobody can pick another's. */
+  const ADJECTIVES = ["Quiet", "Swift", "Amber", "Bright", "Clever", "Steady", "Brisk", "Calm", "Bold", "Sunny", "Gentle", "Lucky"];
+  const NOUNS = ["Otter", "Falcon", "Maple", "Cedar", "Comet", "Heron", "Willow", "Lark", "Pebble", "Finch", "Badger", "Fern"];
+  function nameFor(id) {
+    let h = 2166136261;
+    for (const c of String(id)) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
+    h >>>= 0;
+    return `${ADJECTIVES[h % ADJECTIVES.length]} ${NOUNS[Math.floor(h / ADJECTIVES.length) % NOUNS.length]}`;
+  }
+
   /* ---------- seats ---------- */
 
   const emptyTable = () => ({ g: "g0", white: null, black: null });
@@ -618,44 +630,22 @@
     const at = Number(s.at);
     return id && Number.isFinite(at) ? { id, at } : null;
   }
-  /** The stored doc as a table, or null when it isn't one. */
+  /** The stored doc as a table, or null when it isn't one. A doc a seat patch created has no game id yet: it is g0. */
   function normalizeTable(data) {
-    if (!data || typeof data.g !== "string" || !/^[A-Za-z0-9_-]{1,32}$/.test(data.g)) return null;
-    return { g: data.g, white: cleanSeat(data.white), black: cleanSeat(data.black) };
+    if (!data || typeof data !== "object") return null;
+    const g = data.g === undefined ? "g0" : data.g;
+    if (typeof g !== "string" || !/^[A-Za-z0-9_-]{1,32}$/.test(g)) return null;
+    return { g, white: cleanSeat(data.white), black: cleanSeat(data.black) };
   }
-  const lastAt = () => (game && table && game.g === table.g ? game.lastAt : 0);
-  const live = (seat, grace = 0) => Boolean(seat) && Date.now() - Math.max(seat.at, lastAt()) < SEAT_TTL_MS + grace;
-  const sameSeat = (a, b) => (a ? a.id + ":" + a.at : "") === (b ? b.id + ":" + b.at : "");
+  const live = (seat) => Boolean(seat) && Date.now() - seat.at < SEAT_TTL_MS;
+  const away = (seat) => Boolean(seat) && !live(seat);
   const seatOf = (c, t = table) => t && t[SEAT[c]];
 
-  /** The color this window plays, or null when watching. */
+  /** The color this window holds (even while away, until someone takes it), or null when watching. */
   function myColor() {
     if (!table || !me) return null;
-    for (const c of COLORS) if (live(seatOf(c)) && seatOf(c).id === me.id) return c;
+    for (const c of COLORS) if (seatOf(c) && seatOf(c).id === me.id) return c;
     return null;
-  }
-
-  /**
-   * Accepts new seats only if they follow from the previous ones by a single
-   * claim, leave or start over. Seats are first come, first served.
-   */
-  function legalTable(prev, next) {
-    if (next.white && next.black && next.white.id === next.black.id) return false;
-    if (next.g !== prev.g) {
-      // Start over: seats stay with their holders (the nightly reset opens both).
-      if (!next.white && !next.black) return true;
-      return COLORS.every((c) => {
-        const a = seatOf(c, prev), b = seatOf(c, next);
-        return sameSeat(a, b) || Boolean(a && b && a.id === b.id);
-      });
-    }
-    // Claim or leave: a seat is let go, or taken when it is free.
-    for (const c of COLORS) {
-      const a = seatOf(c, prev), b = seatOf(c, next);
-      if (sameSeat(a, b) || b === null) continue;
-      if (live(a, SKEW_MS) && a.id !== b.id) return false;
-    }
-    return true;
   }
 
   /* ---------- data ---------- */
@@ -664,6 +654,7 @@
   async function load() {
     const doc = await tableCol.get(TABLE_ID).catch((e) => { if (e && e.code === "not_found") return null; throw e; });
     const t = (doc && normalizeTable(doc.data)) || emptyTable();
+    stamp = (doc && doc.updatedAt) || "";
     const docs = [];
     let cursor;
     do {
@@ -684,20 +675,30 @@
     game = g;
     selected = -1;
     closePromo();
+    syncHeartbeat();
     render();
+  }
+
+  /**
+   * The server's table doc is the seats: every window converges on it. A
+   * write's returned doc is adopted at once, so this window never waits on the
+   * live feed for its own seat; an event older than what it already has is skipped.
+   */
+  function adoptTable(doc) {
+    if (!doc || doc.id !== TABLE_ID) return;
+    if (!doc.data) { load().catch(() => {}); return; } // too large to broadcast inline
+    if (doc.updatedAt && stamp && doc.updatedAt < stamp) return;
+    const next = normalizeTable(doc.data);
+    if (!next) return;
+    stamp = doc.updatedAt || stamp;
+    setTable(next, true);
   }
 
   function onTable(e) {
     if (!table) return; // load() has not finished; it reads the latest anyway
     if (e.resync) { load().catch(() => {}); return; }
     if (e.deleted.includes(TABLE_ID)) { load().catch(() => {}); return; }
-    for (const d of e.docs) {
-      if (d.id !== TABLE_ID) continue;
-      if (!d.data) { load().catch(() => {}); continue; }
-      const next = normalizeTable(d.data);
-      if (!next || !legalTable(table, next)) continue; // skip writes that break the rules
-      setTable(next, true);
-    }
+    for (const d of e.docs) adoptTable(d);
   }
 
   function onMoves(e) {
@@ -751,10 +752,11 @@
       let msg = "";
       for (const c of COLORS) {
         const a = seatOf(c, prev), b = seatOf(c, next);
-        if ((a && a.id) !== (b && b.id)) msg += `${NAME[c]}: ${b ? (me && b.id === me.id ? "you" : "another browser") : "open"}. `;
+        if ((a && a.id) !== (b && b.id)) msg += `${NAME[c]}: ${b ? (me && b.id === me.id ? "you" : nameFor(b.id)) : "open"}. `;
       }
       if (msg) say(msg);
     }
+    syncHeartbeat();
     render();
   }
 
@@ -765,7 +767,7 @@
   const seatFor = () => ({ id: me.id, at: Date.now() });
   const blocked = () => busy || readOnly || closed;
 
-  /** Optimistic write: show it now, and go back to the server's state if it is rejected. */
+  /** Optimistic move: show it now, and go back to the server's state if it is rejected. */
   async function write(show, save) {
     if (busy) { hint(SAVING); return; }
     if (readOnly || closed) { hint(el.error.textContent || "This board can't save moves."); return; }
@@ -784,29 +786,64 @@
       render();
     }
   }
-  function writeTable(next) {
-    write(() => setTable(next, true), () => tableCol.set(TABLE_ID, next));
+
+  /**
+   * Seat changes read the latest table first, so a click never acts on stale
+   * seats, then patch only the fields that change (a concurrent heartbeat is
+   * never clobbered) and adopt the doc the server returns. `decide` returns the
+   * patch, or a hint when the action no longer applies.
+   */
+  async function writeTable(decide) {
+    if (busy) { hint(SAVING); return; }
+    if (readOnly || closed) { hint(el.error.textContent || "This board can't save moves."); return; }
+    if (!hasId()) { hint(NO_ID); return; }
+    busy = true;
+    showError("");
+    render();
+    let why = "";
+    try {
+      const doc = await tableCol.get(TABLE_ID).catch((e) => { if (e && e.code === "not_found") return null; throw e; });
+      if (doc) adoptTable(doc);
+      const patch = decide();
+      if (typeof patch === "string") why = patch;
+      else if (patch) adoptTable(await tableCol.update(TABLE_ID, patch));
+    } catch (err) {
+      handleWriteError(err);
+      await load().catch(() => {});
+    } finally {
+      busy = false;
+      render();
+    }
+    if (why) hint(why);
   }
 
-  /* Seats are checked against the clock at click time, not the last render. */
   function claim(c) {
     if (notReady()) return;
-    const mine = myColor();
-    if (mine) { hint(`You already play ${NAME[mine]}.`); return; }
-    if (live(seatOf(c))) { hint(`${NAME[c]} was just taken by another browser.`); return; }
-    writeTable({ ...table, [SEAT[c]]: seatFor() });
+    writeTable(() => {
+      const mine = myColor();
+      if (mine) return `You already play ${NAME[mine]}.`;
+      if (live(seatOf(c))) return `${NAME[c]} was just taken by ${nameFor(seatOf(c).id)}.`;
+      return { [SEAT[c]]: seatFor() };
+    });
   }
   function leave() {
     if (notReady()) return;
-    const c = myColor();
-    if (c) writeTable({ ...table, [SEAT[c]]: null });
-    else hint("Your seat already timed out.");
+    writeTable(() => {
+      const c = myColor();
+      return c ? { [SEAT[c]]: null } : "You no longer hold a seat.";
+    });
   }
+  /** A new game. A player keeps their seat and frees an away opponent's. */
   function startOver() {
     if (notReady()) return;
-    if (!canStartOver()) { hint("Only a player can start over while the seats are taken."); return; }
-    const c = myColor();
-    writeTable({ ...table, g: "g" + randomId(6), ...(c ? { [SEAT[c]]: seatFor() } : {}) });
+    writeTable(() => {
+      if (!canStartOver()) return "Only a player can start over while the seats are taken.";
+      const patch = { g: "g" + randomId(6) };
+      for (const c of COLORS) if (away(seatOf(c))) patch[SEAT[c]] = null;
+      const mine = myColor();
+      if (mine) patch[SEAT[mine]] = seatFor();
+      return patch;
+    });
   }
   function play(m) {
     if (!hasId()) { hint(NO_ID); return; }
@@ -824,20 +861,50 @@
     }, () => movesCol.set(moveId(doc.g, n), doc));
   }
 
+  /* ---------- heartbeat ---------- */
+
+  function syncHeartbeat() {
+    const c = myColor();
+    if (!c || readOnly || closed) { clearInterval(heartbeat); heartbeat = null; return; }
+    if (heartbeat) return;
+    heartbeat = setInterval(touchSeat, HEARTBEAT_MS);
+    // A seat just claimed was written now; one found on load may be away: check in at once.
+    if (Date.now() - seatOf(c).at > HEARTBEAT_MS) touchSeat();
+  }
+  /** Keeps this window's seat live. Never revives a seat it no longer holds. */
+  async function touchSeat() {
+    const c = myColor();
+    if (!c) { syncHeartbeat(); return; }
+    if (busy || readOnly || closed || !hasId()) return;
+    try {
+      adoptTable(await tableCol.update(TABLE_ID, { [SEAT[c]]: seatFor() }));
+    } catch (err) {
+      handleWriteError(err);
+      syncHeartbeat();
+    }
+  }
+
   /** Why a click on the board did nothing for a window without a seat. */
   function whyWatching() {
-    if (COLORS.some((c) => seatOf(c) && seatOf(c).id === me.id)) return "Your seat timed out after 5 minutes without a move. Take a seat to play again.";
     return COLORS.some((c) => !live(seatOf(c))) ? "Take a seat to play." : "You are watching. Both seats are taken.";
   }
   function whyWaiting(c) {
     if (game.end) return "This game is over. Start over to play again.";
+    const them = seatOf(flip(c));
+    if (away(them)) return `${nameFor(them.id)} is away. Wait for them, or start over to free their seat.`;
     if (!bothSeated()) return `Waiting for someone to take ${NAME[flip(c)]}.`;
     return `It's ${NAME[pos(game).turn]}'s turn.`;
   }
 
   const bothSeated = () => COLORS.every((c) => live(seatOf(c)));
   const canMove = (c) => Boolean(game) && bothSeated() && !game.end && pos(game).turn === c;
-  const canStartOver = () => Boolean(game) && game.moves.length > 0 && (Boolean(myColor()) || !COLORS.some((c) => live(seatOf(c))));
+  /* A player can always start over (to free an away opponent); a watcher only when nobody is live. */
+  const canStartOver = () => {
+    if (!game || !table) return false;
+    const awaySeat = COLORS.some((c) => away(seatOf(c)));
+    if (myColor()) return game.moves.length > 0 || awaySeat;
+    return !COLORS.some((c) => live(seatOf(c))) && (game.moves.length > 0 || awaySeat);
+  };
   const targetsOf = (sq) => (game ? game.legal.filter((m) => m.from === sq) : []);
 
   function handleWriteError(err) {
@@ -847,7 +914,7 @@
       closed = true;
       showError("The board is done for today. It resets at 00:00 UTC.");
     } else if (code === "rate_limited") showError("Too many moves from your network. Try again in a minute.");
-    else if (code === "unauthorized") { readOnly = true; showError("Sign in to play on this board."); }
+    else if (code === "unauthorized") { readOnly = true; showError("This demo isn't accepting moves from signed-out visitors right now."); }
     else if (code === "capability_denied") { readOnly = true; showError("This board can't save moves."); }
     else showError("That move didn't save. Try again.");
   }
@@ -947,10 +1014,13 @@
 
   /* ---------- render ---------- */
 
+  /** A seat's label: its holder's name, with (you) or (away). */
   const nameOf = (c) => {
     const seat = seatOf(c);
-    if (!live(seat)) return "open";
-    return me && seat.id === me.id ? "you" : "another browser";
+    if (!seat) return "open";
+    const name = nameFor(seat.id);
+    if (!live(seat)) return `${name} (away)`;
+    return me && seat.id === me.id ? `${name} (you)` : name;
   };
 
   function statusText() {
@@ -959,8 +1029,11 @@
     const end = game.end;
     if (end && end.mate) return end.winner === mine ? "Checkmate. You win." : `Checkmate. ${NAME[end.winner]} wins.`;
     if (end) return `Draw by ${end.draw}.`;
+    if (mine && !live(seatOf(mine))) return "Reconnecting your seat…";
     const open = COLORS.filter((c) => !live(seatOf(c)));
     if (open.length) {
+      const them = mine && seatOf(flip(mine));
+      if (away(them)) return `${nameFor(them.id)} is away. Wait for them, or start over to free their seat.`;
       if (mine) return `Waiting for someone to take ${NAME[flip(mine)]}. Open this page in another browser to play both sides.`;
       return open.length === 2 ? "Both seats are open. Take one to play." : `${NAME[open[0]]} is open. Take it to play.`;
     }
@@ -977,7 +1050,6 @@
     say(`${who}: ${game.sans[n]}. ${game.end || inCheck(pos(game)) ? statusText() : ""}`);
   }
 
-  let expiry = null;
   function render() {
     if (!game || !table) { el.status.textContent = statusText(); return; }
     const mine = myColor();
@@ -1049,12 +1121,8 @@
 
     renderMoves();
     el.status.textContent = statusText();
+    el.note.textContent = `${me ? `You're ${nameFor(me.id)}. ` : ""}Every window checks each move against the rules. A seat frees up 90 seconds after its player leaves.`;
     renderActions(mine);
-
-    // Re-render the moment a seat expires, so a stale label never offers the wrong button.
-    clearTimeout(expiry);
-    const left = Math.min(...COLORS.map((c) => (live(seatOf(c)) ? Math.max(seatOf(c).at, lastAt()) + SEAT_TTL_MS - Date.now() : Infinity)));
-    if (left < Infinity) expiry = setTimeout(render, left + 50);
   }
   function coord(kind, text) {
     const c = document.createElement("span");
@@ -1140,11 +1208,13 @@
   const SAVING = "Saving your last move…";
   const NO_ID = "Can't tell who you are, so nothing was saved. Reload to try again.";
   let hintTimer = null;
+  let lastHint = 0;
   /** Says why a click did nothing, on the status line and to screen readers, then goes back to the usual status. */
   function hint(msg) {
     render(); // refresh first: what the click saw may be stale
     el.status.textContent = msg;
     say(msg);
+    lastHint = Date.now();
     clearTimeout(hintTimer);
     hintTimer = setTimeout(render, 4000);
   }
@@ -1179,8 +1249,11 @@
     ready = true;
     failText = "";
     render();
-    // Seats expire on the clock, not on a write: re-render so labels stay honest.
-    setInterval(render, 10000);
+    // Seats go away on the clock, not on a write: re-render so labels stay honest.
+    setInterval(() => { if (Date.now() - lastHint > 4000) render(); }, 5000);
+    // Back from a hidden tab (timers throttled): check in now.
+    document.addEventListener("visibilitychange", () => { if (!document.hidden && myColor()) touchSeat(); });
+    window.addEventListener("pagehide", () => { clearInterval(heartbeat); heartbeat = null; });
   }
   setTimeout(() => { if (!ready && !failText) fail("Could not connect. Reload to try again."); }, 10000);
   boot().catch(() => fail());

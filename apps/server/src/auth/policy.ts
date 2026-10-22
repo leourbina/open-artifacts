@@ -99,6 +99,17 @@ export const TEAM_ROLES: readonly Role[] = ["owner", "admin", "member"];
 /** A member, admin or owner (not a guest). */
 export const isTeamRole = (role: Role): boolean => TEAM_ROLES.includes(role);
 
+/**
+ * A verified sign-in promotes a guest to member (direct sign-in: the domain or
+ * code proved the address); every other role is left alone. Lives here because
+ * role decisions never leave src/auth.
+ */
+export const promotedRole = (role: Role): Role =>
+  role === "guest" ? "member" : role;
+
+/** The guest role, for the few data decisions that key on it. */
+export const isGuestRole = (role: Role): boolean => role === "guest";
+
 const SPACE_RANK: Record<SpaceRole, number> = {
   viewer: 1,
   editor: 2,

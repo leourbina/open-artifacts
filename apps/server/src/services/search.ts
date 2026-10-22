@@ -1,3 +1,4 @@
+import { normalizeEmail } from "@oa/auth-core";
 import {
   type Format,
   LIMITS,
@@ -14,7 +15,6 @@ import {
   rowLevel,
 } from "../auth/authz.js";
 import { getDb } from "../db/client.js";
-import { normEmail } from "../db/email.js";
 import { artifacts, shares, users } from "../db/schema.js";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
@@ -504,7 +504,7 @@ export function searchQuery(
   offset: number,
   limit: number,
 ) {
-  const email = normEmail(caller.user.email);
+  const email = normalizeEmail(caller.user.email);
   return getDb(env)
     .select({
       a: artifacts,

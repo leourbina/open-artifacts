@@ -119,7 +119,7 @@ describe("members API", () => {
       });
       expect(bad.status).toBe(400);
     }
-    // Kelvin sign: passes z.email() style checks in some engines; normEmail rejects.
+    // Kelvin sign: passes z.email() style checks in some engines; normalizeEmail rejects.
     const k = await call(R.members, admin.cookie, {
       method: "POST",
       body: { email: "Kelvin@x.com", role: "member" },
@@ -181,6 +181,7 @@ describe("members API", () => {
     await db.insert(artifacts).values({
       id: aid,
       ownerId: v.userId,
+      spaceId: v.userId,
       title: "t",
       format: "html",
       createdAt: now,

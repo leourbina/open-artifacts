@@ -1,3 +1,4 @@
+import { normalizeEmail } from "@oa/auth-core";
 import {
   type AccessLevel,
   type AgentRef,
@@ -32,7 +33,6 @@ import {
 } from "../auth/authz.js";
 import { can } from "../auth/policy.js";
 import { getDb } from "../db/client.js";
-import { normEmail } from "../db/email.js";
 import { artifacts, shares, users } from "../db/schema.js";
 import type { Env } from "../env.js";
 import { ApiError, appOrigin } from "../http/errors.js";
@@ -213,12 +213,15 @@ export async function publish(
     stmts.push(
       db
         .prepare(
-          `insert into artifacts (id, owner_id, title, description, format, visibility,
+          `insert into artifacts (id, owner_id, space_id, title, description, format, visibility,
              current_version, capabilities, allow_anonymous_writes, created_at, updated_at)
-           select ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ? where 1${guard}`,
+           select ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ? where 1${guard}`,
         )
         .bind(
           id,
+          user.id,
+          // Every artifact lives in a space (P3 T1): the creator's personal
+          // space today; T10 reads input.spaceId for a shared space.
           user.id,
           input.title,
           input.description ?? null,
@@ -533,7 +536,8 @@ const ISO_DATE =
  */
 export function listQuery(env: Env, caller: Caller, q: ListQuery) {
   const db = getDb(env);
-  const email = caller.kind === "user" ? normEmail(caller.user.email) : null;
+  const email =
+    caller.kind === "user" ? normalizeEmail(caller.user.email) : null;
   const conds: (SQL | undefined)[] = [
     listFilterSql(caller, q.scope, q.includeDeleted),
   ];
@@ -541,7 +545,7 @@ export function listQuery(env: Env, caller: Caller, q: ListQuery) {
   if (q.visibility) conds.push(eq(artifacts.visibility, q.visibility));
   if (q.agent !== undefined) conds.push(eq(artifacts.lastAgentName, q.agent));
   if (q.owner !== undefined) {
-    const e = normEmail(q.owner);
+    const e = normalizeEmail(q.owner);
     if (!e) throw bad("Invalid owner email", "owner");
     conds.push(
       sql`${artifacts.ownerId} = (select u.id from users u where u.email = ${e})`,
@@ -775,7 +779,7 @@ export async function putThumbnail(
   const editor = can(r.level, "publish", canCtx(who, r.artifact));
   let firstThumbnail = editor;
   if (!editor) {
-    const email = normEmail(user.email);
+    const email = normalizeEmail(user.email);
     const shared = email
       ? await env.DB.prepare(
           "select 1 x from shares where artifact_id = ? and email = ?",

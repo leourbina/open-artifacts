@@ -12,6 +12,7 @@ export const KEY_LABELS = [
   "oa:oidc-state",
   "oa:code-cookie",
   "oa:login-codes",
+  "oa:code-email",
 ] as const;
 export type KeyLabel = (typeof KEY_LABELS)[number];
 
@@ -40,15 +41,18 @@ async function derive(secret: string, label: KeyLabel): Promise<string> {
   return b64urlEncode(new Uint8Array(bits));
 }
 
+/**
+ * HKDF accepts a secret of any length, so a short SESSION_SECRET still gets
+ * derived keys (cookieKeys logs a one-time warning; it must not break
+ * sign-in). Empty or missing is the only error.
+ */
 export function deriveKey(
   env: Pick<Env, "SESSION_SECRET">,
   label: KeyLabel,
 ): Promise<string> {
   const secret = env.SESSION_SECRET;
-  if (typeof secret !== "string" || secret.length < 32)
-    return Promise.reject(
-      new Error("SESSION_SECRET must be at least 32 characters"),
-    );
+  if (typeof secret !== "string" || secret.length === 0)
+    return Promise.reject(new Error("SESSION_SECRET is not set"));
   const id = `${label}\u0000${secret}`;
   let k = cache.get(id);
   if (!k) {
@@ -57,4 +61,65 @@ export function deriveKey(
     cache.set(id, k);
   }
   return k;
+}
+
+/**
+ * Shorter secrets are weak and warned about (a one-time log line), but they
+ * still key HKDF: it accepts any length, so there is no raw-secret
+ * fallback for them. A pre-P2 cookie signed with a short raw secret is simply
+ * invalid after the upgrade (signs in once).
+ */
+export const MIN_SECRET_LENGTH = 32;
+
+/**
+ * Until then, cookies signed with the raw SESSION_SECRET (state and session,
+ * from before the per-purpose keys) are still accepted. A follow-up removes
+ * it; an install that upgrades after this date signs everyone out once.
+ */
+export const LEGACY_KEY_UNTIL = Date.UTC(2026, 11, 1);
+
+export const SHORT_SECRET_PROBLEM =
+  "SESSION_SECRET shorter than 32 characters; rotate it";
+
+/**
+ * Install-level problems for setup and admins only (never public /healthz).
+ * TODO(P2 T12): nothing reports this yet; setup's selftest should surface it.
+ */
+export function secretProblems(env: Pick<Env, "SESSION_SECRET">): string[] {
+  const s = env.SESSION_SECRET;
+  return typeof s === "string" && s.length > 0 && s.length < MIN_SECRET_LENGTH
+    ? [SHORT_SECRET_PROBLEM]
+    : [];
+}
+
+let warned = false;
+
+/**
+ * Keys for a cookie that predates the per-purpose keys (session, OIDC
+ * state): `key` signs and verifies, `legacy` (if not null) also verifies.
+ * - The derived key always signs and verifies (HKDF accepts any length, a
+ *   short secret included); the raw secret also verifies until
+ *   LEGACY_KEY_UNTIL, for cookies from before the per-purpose keys.
+ * - A short secret is warned about once in the log, never an error: the
+ *   install keeps signing people in (secretProblems is for setup; see TODO).
+ * - Missing or empty: throws (the install is misconfigured).
+ */
+export async function cookieKeys(
+  env: Pick<Env, "SESSION_SECRET">,
+  label: "oa:session" | "oa:oidc-state",
+  now = Date.now(),
+): Promise<{ key: string; legacy: string | null }> {
+  const s = env.SESSION_SECRET;
+  if (typeof s !== "string" || s.length === 0)
+    throw new Error("SESSION_SECRET is not set");
+  if (s.length < MIN_SECRET_LENGTH && !warned) {
+    warned = true;
+    console.warn(JSON.stringify({ evt: "session_secret_short" }));
+  }
+  return {
+    key: await deriveKey(env, label),
+    // Raw-secret cookies only ever existed on installs with a 32+ char
+    // secret; a short one gets no legacy path (see the block above).
+    legacy: s.length >= MIN_SECRET_LENGTH && now < LEGACY_KEY_UNTIL ? s : null,
+  };
 }

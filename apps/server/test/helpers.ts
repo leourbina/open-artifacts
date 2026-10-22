@@ -5,10 +5,10 @@ import {
   waitOnExecutionContext,
 } from "cloudflare:test";
 import { env } from "cloudflare:workers";
+import { normalizeEmail } from "@oa/auth-core";
 import { newId, type Role } from "@oa/shared";
 import { sessionCookieName, signSession } from "../src/auth/session.js";
 import { getDb } from "../src/db/client.js";
-import { normEmail } from "../src/db/email.js";
 import { users } from "../src/db/schema.js";
 import { runtimeStub } from "../src/runtime/do.js";
 
@@ -18,7 +18,7 @@ export async function login(
   role: Role = "member",
 ): Promise<{ cookie: string; userId: string }> {
   const userId = newId();
-  const e = normEmail(email);
+  const e = normalizeEmail(email);
   if (!e) throw new Error(`invalid test email: ${email}`);
   await getDb(env)
     .insert(users)
@@ -29,8 +29,23 @@ export async function login(
       role,
       createdAt: Date.now(),
     });
+  // The real epoch, like a real sign-in: a hand-signed e:0 cookie would hide
+  // epoch bugs (the #369 Access regression).
+  const row = await env.DB.prepare(
+    "select session_epoch e from users where id = ?",
+  )
+    .bind(userId)
+    .first<{ e: number }>();
   return {
-    cookie: `${sessionCookieName(env)}=${await signSession(env, userId)}`,
+    cookie: `${sessionCookieName(env)}=${await signSession(
+      env,
+      userId,
+      Date.now(),
+      {
+        provider: "access",
+        epoch: row?.e ?? 0,
+      },
+    )}`,
     userId,
   };
 }

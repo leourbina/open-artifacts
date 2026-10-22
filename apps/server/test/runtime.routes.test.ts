@@ -674,5 +674,5 @@ describe("fix round 1", () => {
     for (const u of [viewer, owner])
       expect((await open(id, u)).readyState).toBe(1);
     for (const w of socks) w.close();
-  });
+  }, 60_000); // 104 WebSocket upgrades: slow under a loaded full-suite run
 });

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import designConsent from "../../../design/screens/oauth-consent.html?raw";
 import { createApp } from "../src/app.js";
 import { createPat, verifyPat } from "../src/auth/pat.js";
+import { sessionCookieName, signSession } from "../src/auth/session.js";
 import { FAVICON_TAGS } from "../src/http/head.js";
 import { CONSENT_TEMPLATE } from "../src/mcp/consent-template.js";
 import { clientNameOf, oauthApi, oauthProvider } from "../src/mcp/oauth.js";
@@ -504,6 +505,36 @@ describe("MCP auth: OAuth", () => {
   });
 });
 
+describe("MCP auth: capped callers (P2 T9 review)", () => {
+  /** A code session outside the verified domains: capped whatever the role. */
+  const codeCookie = async (userId: string) =>
+    `${sessionCookieName(env)}=${await signSession(env, userId, Date.now(), { provider: "code", epoch: 0 })}`;
+
+  it("a capped member at the consent page gets the members-only message", async () => {
+    const m = await login(`oauth-capped-${tag}@x.com`);
+    const clientId = await register();
+    const page = await consentPage(
+      authorizeUrl(clientId, (await pkce()).challenge),
+      await codeCookie(m.userId),
+    );
+    expect(page.r.status).toBe(403);
+    expect(page.body).toContain("Only members can connect agents");
+  });
+
+  it("a capped caller can still revoke their own grant", async () => {
+    const { member } = await oauthToken(`oauth-caprv-${tag}@x.com`);
+    const capped = await codeCookie(member.userId);
+    const [g] = (await (
+      await api(app, R.oauthClients, capped)
+    ).json()) as OAuthClient[];
+    expect(g).toBeDefined();
+    const d = await api(app, R.oauthClient(g?.grantId ?? ""), capped, {
+      method: "DELETE",
+    });
+    expect(d.status).toBe(204);
+  });
+});
+
 describe("MCP auth: fix round 1", () => {
   const grantsOf = async (userId: string) =>
     (await oauthApi(env).listUserGrants(userId)).items;
@@ -524,6 +555,17 @@ describe("MCP auth: fix round 1", () => {
     expect(
       new URL(r.headers.get("location") ?? "").searchParams.get("code"),
     ).toBeTruthy();
+  });
+
+  it("a guest's PAT verifies but is refused at /mcp (members only)", async () => {
+    const g = await login(`pat-guest-${tag}@x.com`, "guest");
+    const { token } = await createPat(env, g.userId, "g");
+    expect(await verifyPat(env, token)).not.toBeNull();
+    const r = await listTools(`Bearer ${token}`);
+    expect(r.status).toBe(401);
+    expect(
+      ((await r.json()) as { error: { message: string } }).error.message,
+    ).toBe("Only members can connect agents");
   });
 
   it("demotion to guest revokes the user's OAuth grants and PATs", async () => {

@@ -6,7 +6,10 @@
  * shared "Engineering" (caller manager), "Exec" (caller viewer, publicLinks
  * off) and "Clients" (no role: admin view)); space members keyed by user id;
  * group mappings; restricted groups; directory status; audit; a suspended
- * member (Carol) with personal artifacts to transfer. Every artifact gets
+ * member (Carol) with personal artifacts to transfer. Every-space (org)
+ * mappings are one row per group, merged into each shared space's members at
+ * read time (never written as per-space rows). Settings.spaceManagerMappings
+ * (default on) lets space managers map groups to viewer/editor. Every artifact gets
  * `space` and `can` (artifactCan) on each request; "Meeting notes" lives in
  * Engineering, so its access is "manager".
  *
@@ -56,10 +59,13 @@ import {
   GroupMappingPutSchema,
   type RestrictedGroup,
   SPACE_MANAGER_FIELDS,
+  SPACE_MANAGER_MAPPING_ROLES,
   type Space,
   SpaceCreateSchema,
   type SpaceMember,
+  type SpaceMemberGroup,
   SpaceMemberPutSchema,
+  SpaceMembersQuerySchema,
   SpacePatchSchema,
 } from "../hosted/spaces.js";
 import { OtpLatestInputSchema } from "../hosted/test-hooks.js";
@@ -72,6 +78,7 @@ import type {
   PublishInput,
   Share,
 } from "../schemas.js";
+import { SettingsPatchSchema } from "../schemas.js";
 
 /** The code the mock accepts (any address). */
 export const HOSTED_MOCK_CODE = "24681357";
@@ -132,6 +139,8 @@ type MemberRow = {
   manualRole: SpaceRole | null;
   syncRole: SpaceRole | null;
   groups: GroupRef[];
+  /** Frozen-sync override (lowered or removed by hand): org mappings no longer merge in until the next reconcile. */
+  detached?: boolean;
 };
 
 const T0 = "2026-01-01T00:00:00.000Z";
@@ -291,6 +300,10 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
       ],
     ],
   ]);
+  /** "Every space" mappings: one row per group. */
+  const orgMappings: GroupMapping[] = [];
+  /** Settings.spaceManagerMappings (hosted default on). */
+  let spaceManagerMappings = true;
   const restricted: RestrictedGroup[] = [
     { ...G.contractors, memberCount: 1, createdAt: T0 },
   ];
@@ -389,10 +402,53 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
           ? "restricted"
           : null;
   const cap = (): CapReason | null => capOf(me.user);
+  /** A shared space's member rows plus org mappings, merged at read time (copies; personal: none). */
+  const rowsOf = (s: SpaceRow): MemberRow[] => {
+    const base = rows.get(s.id) ?? [];
+    const live = (x: MemberRow) => !!(x.manualRole || x.syncRole);
+    if (s.kind === "personal" || orgMappings.length === 0)
+      return base.filter(live);
+    const out = new Map(
+      base.map((r) => [r.userId, { ...r, groups: [...r.groups] }]),
+    );
+    for (const m of orgMappings)
+      for (const userId of groupMembers.get(m.groupId) ?? []) {
+        if (out.get(userId)?.detached) continue;
+        const r = out.get(userId) ?? {
+          userId,
+          manualRole: null,
+          syncRole: null,
+          groups: [],
+        };
+        r.syncRole = maxRole(r.syncRole, m.role);
+        if (!r.groups.some((g) => g.groupId === m.groupId))
+          r.groups.push({ groupId: m.groupId, email: m.email, name: m.name });
+        out.set(userId, r);
+      }
+    return [...out.values()].filter(live);
+  };
+  /** The stored (per-space) row for a user, created empty when missing. */
+  const baseRow = (s: SpaceRow, userId: string): MemberRow => {
+    const list = rows.get(s.id) ?? [];
+    rows.set(s.id, list);
+    let row = list.find((x) => x.userId === userId);
+    if (!row) {
+      row = { userId, manualRole: null, syncRole: null, groups: [] };
+      list.push(row);
+    }
+    return row;
+  };
+  /** Frozen sync: drop the synced part of a row (org mappings included) by hand. */
+  const detach = (row: MemberRow) => {
+    row.manualRole = null;
+    row.syncRole = null;
+    row.groups = [];
+    row.detached = true;
+  };
   const roleIn = (s: SpaceRow, userId = me.user.id): SpaceRole | null => {
     if (s.kind === "personal") return s.ownerId === userId ? "manager" : null;
     const u = memberOf(userId);
-    const r = rows.get(s.id)?.find((x) => x.userId === userId);
+    const r = rowsOf(s).find((x) => x.userId === userId);
     // allMembersRole never reaches guests or restricted members.
     const all =
       u && u.role !== "guest" && !restrictionOf(u.id) ? s.allMembersRole : null;
@@ -412,13 +468,30 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
     })(),
     allMembersRole: s.allMembersRole,
     myRole: roleIn(s),
-    memberCount: s.kind === "personal" ? 1 : (rows.get(s.id)?.length ?? 0),
+    memberCount: s.kind === "personal" ? 1 : rowsOf(s).length,
     artifactCount: artifacts.filter(
       (a) => a.space?.id === s.id && a.deletedAt === null,
     ).length,
     createdAt: s.createdAt,
+    can: {
+      manageMappings:
+        s.kind === "shared" &&
+        (isAdmin() || (roleIn(s) === "manager" && spaceManagerMappings)),
+    },
   });
-  const memberView = (r: MemberRow): SpaceMember | null => {
+  /** groups[] with the role each mapping grants: the space's own (via "space") and Every space (via "every"). */
+  const groupsView = (s: SpaceRow, r: MemberRow): SpaceMemberGroup[] =>
+    r.groups.flatMap((g) => {
+      const own = mappings.get(s.id)?.find((m) => m.groupId === g.groupId);
+      const every = orgMappings.find((m) => m.groupId === g.groupId);
+      const out: SpaceMemberGroup[] = [];
+      if (own) out.push({ ...g, role: own.role, via: "space" });
+      if (every) out.push({ ...g, role: every.role, via: "every" });
+      return out.length > 0
+        ? out
+        : [{ ...g, role: r.syncRole ?? "viewer", via: "space" as const }];
+    });
+  const memberView = (s: SpaceRow, r: MemberRow): SpaceMember | null => {
     const u = memberOf(r.userId);
     if (!u) return null;
     const role = maxRole(r.manualRole, r.syncRole) as SpaceRole;
@@ -431,8 +504,13 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
         r.manualRole && RANK[r.manualRole] >= RANK[role] ? "manual" : "sync",
       manualRole: r.manualRole,
       syncRole: r.syncRole,
-      groups: r.groups,
+      groups: groupsView(s, r),
       cap: capOf(u),
+      // As roleIn: allMembersRole never reaches guests or restricted members.
+      allMembers:
+        s.kind === "shared" && u.role !== "guest" && !restrictionOf(u.id)
+          ? s.allMembersRole
+          : null,
     };
   };
   /** Can the caller see this shared space (member or org admin)? */
@@ -612,6 +690,42 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
     directoryMode !== "google"
       ? err("directory_sync_off", "Directory sync is off or frozen")
       : null;
+  /**
+   * Space mapping gate: org admins pass; else the space's manager (no role:
+   * 404). PUT (add or change) needs spaceManagerMappings on (403
+   * directory_mapping_off); list and remove never do. Every role touched (PUT
+   * body, the existing row) must be viewer|editor (403 space_forbidden).
+   */
+  const mappingGate = (
+    s: SpaceRow,
+    op: "list" | "put" | "remove",
+    roles: (SpaceRole | undefined)[] = [],
+  ): Response | null => {
+    if (isAdmin()) return null;
+    if (roleIn(s) !== "manager") return notFound();
+    if (op === "put" && !spaceManagerMappings)
+      return err(
+        "directory_mapping_off",
+        "Space managers can't change group mappings on this install",
+      );
+    if (
+      roles.some(
+        (r) =>
+          r && !(SPACE_MANAGER_MAPPING_ROLES as readonly string[]).includes(r),
+      )
+    )
+      return err(
+        "space_forbidden",
+        "Only an admin can change a manager mapping",
+        { target: "mapping" },
+      );
+    return null;
+  };
+  const settingsView = () => ({
+    name: me.instance.name,
+    defaultVisibility: me.instance.defaultVisibility,
+    spaceManagerMappings,
+  });
   const sp = "*/api/v1/spaces/:id";
   const validSuccessor = (u: Member | undefined): u is Member =>
     !!u &&
@@ -1006,13 +1120,35 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
     ),
     http.get(
       `${sp}/members`,
-      authed(({ request, params }) => {
+      authed(async ({ request, params }) => {
         const s = sharedSpace(params.id);
         if (s instanceof Response) return s;
-        const list = (rows.get(s.id) ?? [])
-          .map((r) => memberView(r))
-          .filter((x): x is SpaceMember => x !== null);
-        return page(list, new URL(request.url).searchParams);
+        const qs = new URL(request.url).searchParams;
+        const raw: Record<string, string> = {};
+        qs.forEach((v, k) => {
+          raw[k] = v;
+        });
+        const q = SpaceMembersQuerySchema.safeParse(raw);
+        if (!q.success)
+          return err("bad_request", "Invalid query", q.error.issues);
+        const needle = q.data.q?.toLowerCase();
+        const list = rowsOf(s)
+          .map((r) => memberView(s, r))
+          .filter((x): x is SpaceMember => x !== null)
+          .filter(
+            (m) =>
+              (!needle ||
+                (m.user.email ?? "").toLowerCase().startsWith(needle) ||
+                (m.user.name ?? "")
+                  .toLowerCase()
+                  .split(/\s+/)
+                  .some((w) => w.startsWith(needle))) &&
+              (!q.data.group ||
+                m.groups.some((g) => g.groupId === q.data.group)),
+          );
+        const res = page(list, qs);
+        // Page<SpaceMember> plus the filtered total.
+        return HttpResponse.json({ ...(await res.json()), total: list.length });
       }),
     ),
     http.post(
@@ -1045,7 +1181,7 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
           role: r.data.role,
         });
         refresh();
-        return HttpResponse.json(memberView(row), { status: 201 });
+        return HttpResponse.json(memberView(s, row), { status: 201 });
       }),
     ),
     http.put(
@@ -1060,17 +1196,39 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
         if (!u) return notFound();
         const r = await c.body(request, SpaceMemberPutSchema);
         if (r.error) return r.error;
-        const list = rows.get(s.id) ?? [];
-        rows.set(s.id, list);
-        let row = list.find((x) => x.userId === u.id);
-        if (!row) {
-          row = { userId: u.id, manualRole: null, syncRole: null, groups: [] };
-          list.push(row);
-          log("space.member.add", { type: "user", id: u.id }, s.id);
-        } else log("space.member.role", { type: "user", id: u.id }, s.id);
-        row.manualRole = r.data.role;
+        const cur = rowsOf(s).find((x) => x.userId === u.id);
+        // Only an org admin grants or changes the Manager role on a member.
+        if (
+          !isAdmin() &&
+          (r.data.role === "manager" || cur?.manualRole === "manager")
+        )
+          return err(
+            "space_forbidden",
+            "Only an admin can grant or change the Manager role",
+            { target: "member" },
+          );
+        // Frozen, synced row: any role (raise or lower, manual rules above) is a manual override.
+        const frozenSynced = directoryMode === "frozen" && !!cur?.syncRole;
+        const row = baseRow(s, u.id);
+        if (frozenSynced) {
+          // Manual override; the next reconcile after unfreezing replaces it.
+          detach(row);
+          row.manualRole = r.data.role;
+          log("space.member.role", { type: "user", id: u.id }, s.id, {
+            syncFrozen: true,
+            role: r.data.role,
+          });
+        } else {
+          log(
+            cur ? "space.member.role" : "space.member.add",
+            { type: "user", id: u.id },
+            s.id,
+          );
+          row.manualRole = r.data.role;
+        }
         refresh();
-        return HttpResponse.json(memberView(row));
+        const out = rowsOf(s).find((x) => x.userId === u.id) ?? row;
+        return HttpResponse.json(memberView(s, out));
       }),
     ),
     http.delete(
@@ -1079,12 +1237,28 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
         const s = sharedSpace(params.id);
         if (s instanceof Response) return s;
         if (!isAdmin() && roleIn(s) !== "manager") return notFound();
-        const list = rows.get(s.id) ?? [];
-        const row = list.find((x) => x.userId === params.userId);
-        if (!row?.manualRole) return notFound();
+        const userId = params.userId as string;
+        const cur = rowsOf(s).find((x) => x.userId === userId);
+        if (!cur) return notFound();
+        if (directoryMode === "frozen" && cur.syncRole) {
+          // Removing access is always allowed, synced rows included.
+          detach(baseRow(s, userId));
+          log("space.member.remove", { type: "user", id: userId }, s.id, {
+            syncFrozen: true,
+          });
+          refresh();
+          return noContent();
+        }
+        if (!cur.manualRole)
+          return cur.syncRole && directoryMode === "google"
+            ? err(
+                "member_synced",
+                "This person comes from a Google group. Remove them from the group in Google, or change their role here.",
+              )
+            : notFound();
+        const row = baseRow(s, userId);
         row.manualRole = null;
-        if (!row.syncRole) list.splice(list.indexOf(row), 1);
-        log("space.member.remove", { type: "user", id: row.userId }, s.id);
+        log("space.member.remove", { type: "user", id: userId }, s.id);
         refresh();
         return noContent();
       }),
@@ -1094,7 +1268,10 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
       authed(({ params }) => {
         const s = sharedSpace(params.id);
         if (s instanceof Response) return s;
-        if (!isAdmin()) return notFound();
+        if (s.kind === "personal")
+          return err("space_personal", "Personal spaces have no mappings");
+        const denied = mappingGate(s, "list");
+        if (denied) return denied;
         return HttpResponse.json(mappings.get(s.id) ?? []);
       }),
     ),
@@ -1103,13 +1280,19 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
       authed(async ({ request, params }) => {
         const s = sharedSpace(params.id);
         if (s instanceof Response) return s;
-        if (!isAdmin()) return notFound();
         if (s.kind === "personal")
           return err("space_personal", "Personal spaces have no mappings");
-        const off = syncOff();
-        if (off) return off;
+        const denied = mappingGate(s, "put");
+        if (denied) return denied;
         const r = await c.body(request, GroupMappingPutSchema);
         if (r.error) return r.error;
+        const existing = mappings
+          .get(s.id)
+          ?.find((x) => x.groupId === params.groupId);
+        const forbidden = mappingGate(s, "put", [r.data.role, existing?.role]);
+        if (forbidden) return forbidden;
+        const off = syncOff();
+        if (off) return off;
         const g = groups.find((x) => x.groupId === params.groupId);
         if (!g) return notFound();
         const list = mappings.get(s.id) ?? [];
@@ -1136,18 +1319,107 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
       authed(({ params }) => {
         const s = sharedSpace(params.id);
         if (s instanceof Response) return s;
-        if (!isAdmin()) return notFound();
-        const off = syncOff();
-        if (off) return off;
+        if (s.kind === "personal")
+          return err("space_personal", "Personal spaces have no mappings");
+        const denied = mappingGate(s, "remove");
+        if (denied) return denied;
         const list = mappings.get(s.id) ?? [];
         const i = list.findIndex((x) => x.groupId === params.groupId);
         if (i < 0) return notFound();
+        const forbidden = mappingGate(s, "remove", [list[i]?.role]);
+        if (forbidden) return forbidden;
+        const off = syncOff();
+        if (off) return off;
         list.splice(i, 1);
         log(
           "mapping.remove",
           { type: "mapping", id: params.groupId as string },
           s.id,
         );
+        return noContent();
+      }),
+    ),
+    // -- settings (hosted adds spaceManagerMappings; settings.manage = org owner, admin)
+    http.get(
+      "*/api/v1/settings",
+      authed(() => HttpResponse.json(settingsView())),
+    ),
+    http.patch(
+      "*/api/v1/settings",
+      authed(async ({ request }) => {
+        if (!isAdmin()) return notFound();
+        const r = await c.body(request, SettingsPatchSchema);
+        if (r.error) return r.error;
+        const { spaceManagerMappings: next, ...rest } = r.data;
+        Object.assign(me.instance, rest);
+        if (next !== undefined && next !== spaceManagerMappings) {
+          spaceManagerMappings = next;
+          log(
+            "settings.space_manager_mappings",
+            { type: "directory", id: "settings" },
+            null,
+            { spaceManagerMappings: next },
+          );
+        }
+        return HttpResponse.json(settingsView());
+      }),
+    ),
+    // -- "Every space" mappings (org admin; never personal spaces)
+    http.get(
+      "*/api/v1/directory/org-mappings",
+      authed(({ request }) =>
+        isAdmin()
+          ? page(orgMappings, new URL(request.url).searchParams)
+          : notFound(),
+      ),
+    ),
+    http.put(
+      "*/api/v1/directory/org-mappings/:groupId",
+      authed(async ({ request, params }) => {
+        if (!isAdmin()) return notFound();
+        const r = await c.body(request, GroupMappingPutSchema);
+        if (r.error) return r.error;
+        const off = syncOff();
+        if (off) return off;
+        const g = groups.find((x) => x.groupId === params.groupId);
+        if (!g) return notFound();
+        let m = orgMappings.find((x) => x.groupId === g.groupId);
+        if (!m) {
+          m = {
+            groupId: g.groupId,
+            email: g.email,
+            name: g.name,
+            role: r.data.role,
+            memberCount: g.memberCount,
+            lastSyncedAt: null,
+          };
+          orgMappings.push(m);
+        }
+        m.role = r.data.role;
+        log("mapping.set", { type: "mapping", id: m.groupId }, null, {
+          scope: "org",
+          role: m.role,
+        });
+        refresh();
+        return HttpResponse.json(m);
+      }),
+    ),
+    http.delete(
+      "*/api/v1/directory/org-mappings/:groupId",
+      authed(({ params }) => {
+        if (!isAdmin()) return notFound();
+        const off = syncOff();
+        if (off) return off;
+        const i = orgMappings.findIndex((x) => x.groupId === params.groupId);
+        if (i < 0) return notFound();
+        orgMappings.splice(i, 1);
+        log(
+          "mapping.remove",
+          { type: "mapping", id: params.groupId as string },
+          null,
+          { scope: "org" },
+        );
+        refresh();
         return noContent();
       }),
     ),

@@ -66,5 +66,10 @@ export const HealthzSchema = z.object({
   version: z.string(),
   /** Hosted M1; optional so older servers parse. */
   testHooks: z.boolean().optional(),
+  /**
+   * Hosted installs only: the trimmed INSTALL_ID. Opaque, non-secret, and
+   * proof of routing only - never an authorization signal.
+   */
+  installId: z.string().optional(),
 });
 export type Healthz = z.infer<typeof HealthzSchema>;

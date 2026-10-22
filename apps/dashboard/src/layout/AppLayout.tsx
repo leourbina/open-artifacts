@@ -16,9 +16,15 @@ import {
   useSidebar,
 } from "@oa/ui/shadcn";
 import { useQueryClient } from "@tanstack/react-query";
-import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
+import {
+  Outlet,
+  useNavigate,
+  useRouterState,
+  useSearch,
+} from "@tanstack/react-router";
 import { type MouseEvent, type ReactNode, useEffect } from "react";
 import { ApiClientError } from "../api/client";
+import { hasFeature } from "../api/contract";
 import { qk } from "../api/queries";
 import { useRedirect } from "../auth/redirect";
 import { useSignOut } from "../auth/signOut";
@@ -28,6 +34,7 @@ import { SearchBox } from "../library/SearchBox";
 import { EdgePanel } from "../pages/Edge";
 import { NotPublic } from "../pages/NotPublic";
 import { MEASURE } from "../settings/ui";
+import { SpaceSwitcher } from "../spaces/SpaceSwitcher";
 import { CpuBanner } from "./CpuBanner";
 import { DisplayNamePrompt } from "./DisplayNamePrompt";
 import { QuotaBanner } from "./QuotaBanner";
@@ -289,6 +296,8 @@ function Sidebar({ me, path }: { me: Me | null; path: string }) {
   const on = (p: string) => path === p || path.startsWith(`${p}/`);
   const go = useGo();
   const home = guest ? "/shared" : "/";
+  const { space } = useSearch({ strict: false }) as { space?: string };
+  const inSpace = Boolean(space) && hasFeature(me, "spaces");
   const update = instanceUpdate(me);
   return (
     <ShSidebar variant="inset">
@@ -321,7 +330,8 @@ function Sidebar({ me, path }: { me: Me | null; path: string }) {
                   <>
                     <Link
                       to="/"
-                      active={path === "/"}
+                      // While a space is open, its Spaces link is current instead.
+                      active={path === "/" && !inSpace}
                       icon={I.lib}
                       label="Library"
                     />
@@ -365,6 +375,7 @@ function Sidebar({ me, path }: { me: Me | null; path: string }) {
             </SidebarGroupContent>
           </SidebarGroup>
         </nav>
+        <SpaceSwitcher path={path} />
       </SidebarContent>
       {/* On phones the chip takes the nav rows' inset: 8px (content) + 8px (group). */}
       {shouldNudge(update) && (

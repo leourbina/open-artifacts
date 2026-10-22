@@ -20,6 +20,7 @@ import {
 } from "@oa/ui/shadcn";
 import { useState } from "react";
 import { ApiClientError } from "../../api/client";
+import { errorCopy } from "../../api/errorCopy";
 import {
   useDeleteShare,
   usePatchArtifact,
@@ -28,6 +29,7 @@ import {
 } from "../../api/queries";
 import { useSingleFlight } from "../../api/useSingleFlight";
 import { emailEnabled } from "../../auth/emailEnabled";
+import { useCan } from "../../auth/permissions";
 import { useMe } from "../../auth/useMe";
 import { CopyLink } from "../../layout/CopyLink";
 import { Modal } from "../../layout/Modal";
@@ -58,6 +60,15 @@ const fail = (e: unknown, fallback: string) =>
     title: e instanceof ApiClientError ? e.message : fallback,
     tone: "danger",
   });
+/** A refused visibility change: Design's copy for hosted codes (public_links_off), else the server's words. */
+const failVisibility = (e: unknown) =>
+  e instanceof ApiClientError && e.code === "public_links_off"
+    ? toast({
+        title: "Couldn't save",
+        description: errorCopy(e, ""),
+        tone: "danger",
+      })
+    : fail(e, "Couldn't save");
 
 /** Trimmed, lowercased, ASCII-only email, or null. */
 export const parseEmail = (raw: string) => {
@@ -106,7 +117,14 @@ function RoleSelect({
 
 export function Share({ artifact }: { artifact: ArtifactSummary }) {
   const { id } = artifact;
-  const owner = artifact.access === "owner";
+  const can = useCan(artifact);
+  const vis = can.setVisibility;
+  const people = can.share;
+  // Q7: a space with public links off blocks new ones; one that's already
+  // public keeps working, so Public stays available to it.
+  const space = artifact.space;
+  const publicOff =
+    space?.publicLinks === false && artifact.visibility !== "public";
   const shares = useShares(id);
   const patch = usePatchArtifact(id);
   const put = usePutShare(id);
@@ -144,13 +162,15 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
       patch.mutate(
         {
           visibility: v,
-          ...(artifact.allowAnonymousWrites && { allowAnonymousWrites: false }),
+          // Anonymous writes need public links: turn them off only when leaving public.
+          ...(v !== "public" &&
+            artifact.allowAnonymousWrites && { allowAnonymousWrites: false }),
         },
         {
           onSettled: done,
           onError: (e) => {
             setPending(null);
-            fail(e, "Couldn't save");
+            failVisibility(e);
           },
         },
       ),
@@ -204,7 +224,7 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
         <h3 id="oa-share-vis" className={H3}>
           Visibility
         </h3>
-        {owner ? (
+        {vis ? (
           <ToggleGroup
             type="single"
             variant="outline"
@@ -219,6 +239,12 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
               <ToggleGroupItem
                 key={o.value}
                 value={o.value}
+                disabled={o.value === "public" && publicOff}
+                aria-describedby={
+                  o.value === "public" && space?.publicLinks === false
+                    ? "oa-share-public-off"
+                    : undefined
+                }
                 className={`px-[var(--oa-space-3)] ${CONTROL}`}
                 // Radio semantics: arrowing to an option chooses it, as the
                 // radiogroup role promises (Radix only moves focus).
@@ -235,7 +261,16 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
         <p className={`oa-vis-note mt-[var(--oa-space-2)] ${MUTED}`}>
           {NOTE[staged]}
         </p>
-        {owner && changed && (
+        {space?.publicLinks === false && (
+          <p
+            id="oa-share-public-off"
+            className={`mt-[var(--oa-space-1)] ${MUTED}`}
+          >
+            Public links are off for {space.name}. A space manager can turn them
+            on.
+          </p>
+        )}
+        {vis && changed && (
           <div className="mt-[var(--oa-space-4)] flex items-center gap-[var(--oa-space-2)]">
             <Button
               size="sm"
@@ -263,7 +298,7 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
         )}
       </section>
 
-      {owner && (
+      {people && (
         <section>
           <h3 className={H3}>Add people</h3>
           <form
@@ -359,7 +394,7 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
               <span className={NAME} title={s.email}>
                 {s.email}
               </span>
-              {owner ? (
+              {people ? (
                 <>
                   <RoleSelect
                     label={`Role for ${s.email}`}
@@ -403,7 +438,7 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
             <Checkbox
               label={label}
               checked={artifact.capabilities[k]}
-              disabled={!owner || patch.isPending}
+              disabled={!vis || patch.isPending}
               onCheckedChange={(on) => setCap(k, on === true)}
             />
             <small className="oa-muted">{hint}</small>
@@ -414,7 +449,7 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
             label="Allow anonymous writes"
             checked={artifact.allowAnonymousWrites}
             disabled={
-              !owner ||
+              !vis ||
               patch.isPending ||
               artifact.visibility !== "public" ||
               !artifact.capabilities.db

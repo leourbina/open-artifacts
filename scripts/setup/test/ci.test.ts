@@ -235,7 +235,8 @@ describe("--ci", () => {
     w.lines.length = 0;
     expect(await run(CI, w.deps, ROOT)).toBe(0);
     const pubs = w.mcpCalls.filter((c) => c.name === "publish_artifact");
-    expect(pubs[1].arguments.id).toBe("art1");
+    // The second run finds the page by title and its latest text is unchanged.
+    expect(pubs).toHaveLength(1);
   });
 
   it("without --name is an error", async () => {

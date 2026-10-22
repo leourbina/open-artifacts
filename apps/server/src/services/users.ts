@@ -1,8 +1,10 @@
+import { normalizeEmail } from "@oa/auth-core";
 import { type Member, newId, type Role, type UserRef } from "@oa/shared";
 import { eq } from "drizzle-orm";
 import { withCap } from "../auth/authz.js";
+import { authConfig } from "../auth/config.js";
+import { capOf } from "../auth/policy.js";
 import { getDb } from "../db/client.js";
-import { normEmail } from "../db/email.js";
 import { shares, users } from "../db/schema.js";
 import { stmt } from "../db/stmt.js";
 import type { Env } from "../env.js";
@@ -46,7 +48,7 @@ export function toMember(
     "id" | "email" | "name" | "displayName" | "role" | "lastSeenAt"
   >,
 ): Member {
-  const email = normEmail(r.email) ?? r.email;
+  const email = normalizeEmail(r.email) ?? r.email;
   return {
     id: r.id,
     email,
@@ -58,6 +60,69 @@ export function toMember(
 }
 
 const defaultName = (email: string) => email.split("@")[0] || email;
+
+/**
+ * The only way the app inserts a user (P2 seam with P3): every path that
+ * creates a person (sign-in, invite, codes, dev and test hooks) goes through
+ * here or through googleLinkStmts below. P3's AFTER INSERT trigger adds the
+ * personal space. Returns the drizzle insert for the caller's conflict rule.
+ */
+export function insertUser(
+  env: Env,
+  u: {
+    email: string;
+    name: string;
+    role: Role;
+    createdAt: number;
+    lastSeenAt?: number;
+  },
+) {
+  return getDb(env)
+    .insert(users)
+    .values({ id: newId(), ...u });
+}
+
+/**
+ * First Google sign-in, race-safe in one batch: create the user (or touch an
+ * active one), link (google, sub) only to an ACTIVE row with that email (never
+ * a removed or suspended one), then read back the row and its Google link.
+ * The caller decides from the read: status not active → removed; another
+ * subject → identity_conflict.
+ */
+export function googleLinkStmts(
+  env: Env,
+  p: {
+    email: string;
+    name: string | null;
+    role: Role;
+    subject: string;
+    tenant: string;
+    now: number;
+  },
+): D1PreparedStatement[] {
+  return [
+    stmt(
+      env.DB,
+      // One owner: an 'owner' insert while an owner row exists becomes a member.
+      `insert into users (id, email, name, role, created_at, last_seen_at) values (?1, ?2, ?3,
+         case when ?4 = 'owner' and exists (select 1 from users where role = 'owner') then 'member' else ?4 end, ?5, ?5)
+       on conflict(email) do update set last_seen_at = excluded.last_seen_at where users.status = 'active'`,
+    ).bind(newId(), p.email, p.name ?? defaultName(p.email), p.role, p.now),
+    stmt(
+      env.DB,
+      `insert into identities (provider, subject, tenant, user_id, created_at)
+       select 'google', ?1, ?2, id, ?3 from users where email = ?4 and status = 'active'
+       on conflict do nothing`,
+    ).bind(p.subject, p.tenant, p.now, p.email),
+    stmt(
+      env.DB,
+      `select u.id, u.email, u.name, u.display_name as displayName, u.role, u.last_seen_at as lastSeenAt,
+              u.status, i.subject
+       from users u left join identities i on i.user_id = u.id and i.provider = 'google'
+       where u.email = ?1`,
+    ).bind(p.email),
+  ];
+}
 
 /** Insert, or on email conflict force `role` (if given) and refresh name/last_seen_at. */
 async function upsert(
@@ -71,16 +136,13 @@ async function upsert(
   const set: Partial<UserRow> = { lastSeenAt: now };
   if (name !== null) set.name = name;
   if (forceRole) set.role = role;
-  const [row] = await getDb(env)
-    .insert(users)
-    .values({
-      id: newId(),
-      email,
-      name: name ?? defaultName(email),
-      role,
-      createdAt: now,
-      lastSeenAt: now,
-    })
+  const [row] = await insertUser(env, {
+    email,
+    name: name ?? defaultName(email),
+    role,
+    createdAt: now,
+    lastSeenAt: now,
+  })
     .onConflictDoUpdate({ target: users.email, set })
     .returning();
   if (!row) throw new Error("user upsert returned no row");
@@ -93,9 +155,9 @@ export async function upsertOnLogin(
   name: string | null,
 ): Promise<Member | null> {
   // Non-ASCII / malformed emails are no-access: never folded onto an account.
-  const e = normEmail(email);
+  const e = normalizeEmail(email);
   if (!e) return null;
-  const owner = normEmail(env.OWNER_EMAIL ?? "");
+  const owner = normalizeEmail(env.OWNER_EMAIL ?? "");
   if (owner && e === owner)
     return toMember(await upsert(env, e, name, "owner", true));
 
@@ -104,6 +166,9 @@ export async function upsertOnLogin(
     await db.select().from(users).where(eq(users.email, e)).limit(1)
   )[0];
   if (existing) {
+    // Deactivated (a guest whose last share went, or P3's sync): no sign-in.
+    // A new share reactivates a guest (putShare).
+    if (existing.status !== "active") return null;
     const set: Partial<UserRow> = { lastSeenAt: Date.now() };
     if (name !== null) set.name = name;
     const [row] = await db
@@ -130,28 +195,61 @@ export async function upsertWithRole(
   email: string,
   role: Role,
 ): Promise<Member> {
-  const e = normEmail(email);
+  const e = normalizeEmail(email);
   if (!e) throw new Error("invalid email");
   return toMember(await upsert(env, e, null, role, true));
 }
 
 const USER_BY_ID =
-  "select id, email, name, display_name as displayName, role, last_seen_at as lastSeenAt from users where id = ? limit 1";
+  "select id, email, name, display_name as displayName, role, last_seen_at as lastSeenAt, session_epoch as sessionEpoch from users where id = ? and status = 'active' limit 1";
 
-/** Every authenticated request: one prepared D1 statement, no ORM mapping. */
-export async function getUser(env: Env, id: string): Promise<Member | null> {
+/**
+ * Every authenticated request: one prepared D1 statement, no ORM mapping.
+ * A deactivated user (status not 'active') resolves to null, so their session
+ * cookie, PATs and OAuth tokens all stop working. `sessionEpoch` is what a
+ * session cookie's `e` must equal.
+ */
+export async function getUserWithEpoch(
+  env: Env,
+  id: string,
+): Promise<{ user: Member; sessionEpoch: number } | null> {
   const row = await stmt(env.DB, USER_BY_ID)
     .bind(id)
     .first<
       Pick<
         UserRow,
-        "id" | "email" | "name" | "displayName" | "role" | "lastSeenAt"
+        | "id"
+        | "email"
+        | "name"
+        | "displayName"
+        | "role"
+        | "lastSeenAt"
+        | "sessionEpoch"
       >
     >();
   // Every request's user comes through here (session, PAT, OAuth), so the cap
-  // is set once. Sources: P2's authConfig.guestsReadOnly and P3's restriction
-  // (users.restricted_*, 0009); until those land nobody is capped.
-  return row ? withCap(toMember(row), null) : null;
+  // is set once (P3's capOf: the one source authz's CAP reads). Sources: P2's
+  // authConfig.guestsReadOnly and P3's restriction columns (0009; until they
+  // land nobody is restricted).
+  if (!row) return null;
+  return {
+    user: withCap(
+      toMember(row),
+      capOf(
+        {
+          role: row.role as Role,
+          restrictedManual: false,
+          restrictedSync: false,
+        },
+        authConfig(env),
+      ),
+    ),
+    sessionEpoch: row.sessionEpoch,
+  };
+}
+
+export async function getUser(env: Env, id: string): Promise<Member | null> {
+  return (await getUserWithEpoch(env, id))?.user ?? null;
 }
 
 export type Profile = {

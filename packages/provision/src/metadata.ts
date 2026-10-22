@@ -3,9 +3,8 @@
 // Bindings: https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/configuration/bindings/
 // The same metadata works for `/workers/scripts/{name}` (account) and the
 // dispatch-namespace endpoint; only the target URL differs (not decided here).
-import { readFileSync } from "node:fs";
 import { normalizeVar, TUNABLES } from "@oa/shared";
-import { isInstallId, names } from "./names.js";
+import { assertOwnResource, isInstallId, names } from "./names.js";
 import type { InstallId } from "./types.js";
 
 /** Remove // and /* *\/ comments and trailing commas, leaving strings intact. */
@@ -40,17 +39,6 @@ export function parseTemplate(text: string): Template {
   return JSON.parse(stripJsonc(text)) as Template;
 }
 
-let cached: Template | undefined;
-export function loadTemplate(): Template {
-  cached ??= parseTemplate(
-    readFileSync(
-      new URL("../../../apps/server/wrangler.template.jsonc", import.meta.url),
-      "utf8",
-    ),
-  );
-  return cached;
-}
-
 /** Template entries hosted does not upload as bindings, each with a reason. */
 export const TEMPLATE_BINDINGS_EXCLUDED: Record<string, string> = {
   routes: "custom domains are attached separately by the provisioner",
@@ -59,6 +47,8 @@ export const TEMPLATE_BINDINGS_EXCLUDED: Record<string, string> = {
     "set by the provisioner via the script subdomain API {enabled:false, previews_enabled:false}",
   preview_urls:
     "set by the provisioner via the script subdomain API {enabled:false, previews_enabled:false}",
+  define:
+    "build-time constants (the test-hooks guard, false), folded into the bundle by buildBundle; not a binding",
   ANALYTICS_TOKEN: "an account analytics token would expose every install",
   ACCESS_TEAM_DOMAIN: "hosted signs in directly, without Access (P2)",
   ACCESS_CLIENT_ID: "hosted signs in directly, without Access (P2)",
@@ -93,6 +83,7 @@ export const HOSTED_ADDED = [
   "NIGHTLY_PUBKEY",
   "TEST_HOOKS",
   "TEST_HOOK_KEY",
+  "TEST_DOMAIN",
   "SESSION_SECRET",
   "CONTENT_SIGNING_KEY",
 ] as const;
@@ -122,6 +113,14 @@ export const HOSTED_VARS: Record<string, (v: string) => string | undefined> = {
       ? undefined
       : "expected an https URL",
   EMAIL_FROM: (v) => (EMAIL_RE.test(v) ? undefined : "expected an email"),
+  // Test-hook installs only (checked in userWorkerMetadata): hooks act only
+  // on emails @TEST_DOMAIN.
+  TEST_DOMAIN: (v) =>
+    HOST_RE.test(v) ? undefined : "expected a lowercase hostname",
+  // "on" or "off" only; the server enables domain codes only when its other
+  // conditions hold too, which create checks (see wfp.ts) before any call.
+  EMAIL_CODE_DOMAIN: (v) =>
+    v === "on" || v === "off" ? undefined : 'expected "on" or "off"',
   NIGHTLY_PUBKEY: (v) =>
     /^[A-Za-z0-9_-]{43}$/.test(v) &&
     Buffer.from(v, "base64url").toString("base64url") === v
@@ -137,6 +136,28 @@ const PASSTHROUGH = [
   "AUTH_BROKER_URL",
   "NIGHTLY_PUBKEY",
 ];
+
+export type Vars = Record<string, string>;
+
+const providersOf = (v: Vars): string[] =>
+  (v.AUTH_PROVIDERS ?? "").split(",").map((p) => p.trim());
+
+/** True when google is in next's AUTH_PROVIDERS and was not in prev's. */
+export function googleNewlyEnabled(prev: Vars, next: Vars): boolean {
+  return (
+    providersOf(next).includes("google") &&
+    !providersOf(prev).includes("google")
+  );
+}
+
+/**
+ * Turning google on later must end every session minted before (domain-code
+ * sessions included). Task 5's var-change path runs this against the install's
+ * D1 whenever googleNewlyEnabled(prev, next) holds.
+ */
+export function epochBumpSql(): string {
+  return "UPDATE users SET session_epoch = session_epoch + 1";
+}
 
 export type Binding = { type: string; name: string; [k: string]: unknown };
 
@@ -194,8 +215,8 @@ export interface ResourceMetaInput {
   /** Exactly one of assetsJwt (assets were uploaded) and keepAssets. */
   assetsJwt?: string;
   keepAssets?: boolean;
-  /** Test seam; defaults to apps/server/wrangler.template.jsonc. */
-  template?: Template;
+  /** The release's server template (verified against the signed record). */
+  template: Template;
 }
 
 const ASSET_CONFIG_KEYS = [
@@ -204,10 +225,43 @@ const ASSET_CONFIG_KEYS = [
   "html_handling",
 ];
 
+/** Durable Object migration steps that lose or move data: never sent. */
+export const DO_MIGRATION_REFUSED = [
+  "deleted_classes",
+  "renamed_classes",
+  "transferred_classes",
+  "deleted_sqlite_classes",
+] as const;
+/** The only step keys a hosted upload sends (besides tag). */
+export const DO_MIGRATION_ALLOWED = ["new_sqlite_classes", "new_classes"];
+
+/** Refuses any template migration step that is not purely additive. */
+export function assertSafeMigrations(template: Template): void {
+  const all = template.migrations ?? [];
+  if (!Array.isArray(all))
+    throw new Error("template migrations must be an array");
+  for (const m of all as Record<string, unknown>[]) {
+    if (!m || typeof m !== "object" || typeof m.tag !== "string" || !m.tag)
+      throw new Error("every Durable Object migration step needs a tag");
+    for (const k of Object.keys(m)) {
+      if (k === "tag") continue;
+      if ((DO_MIGRATION_REFUSED as readonly string[]).includes(k))
+        throw new Error(
+          `Durable Object migration ${m.tag} has ${k}; hosted only applies new_sqlite_classes and new_classes`,
+        );
+      if (!DO_MIGRATION_ALLOWED.includes(k))
+        throw new Error(
+          `Durable Object migration ${m.tag} has unknown key ${JSON.stringify(k)}`,
+        );
+    }
+  }
+}
+
 function migrationsFor(
   template: Template,
   current: string | null,
 ): UploadMetadata["migrations"] {
+  assertSafeMigrations(template);
   const all = (template.migrations ?? []) as {
     tag: string;
     [k: string]: unknown;
@@ -265,8 +319,12 @@ export function userWorkerMetadata(
   r: ResourceMetaInput,
 ): UploadMetadata {
   checkInputs(i, r);
-  const t = r.template ?? loadTemplate();
-  const n = names(i.id);
+  // F5: no fallback to the checkout's template; the caller passes the release's.
+  if (!r.template || typeof r.template !== "object")
+    throw new Error("userWorkerMetadata needs the release template");
+  const t = r.template;
+  const n = names(i.id, r.env);
+  for (const v of [n.script, n.d1, n.r2, n.kv]) assertOwnResource(v, r.env);
   for (const k of ["d1_databases", "r2_buckets", "kv_namespaces"])
     if ((t[k] ?? []).length > 1)
       throw new Error(
@@ -288,6 +346,10 @@ export function userWorkerMetadata(
     const why = check(v);
     if (why) throw new Error(`invalid var ${k}: ${why}`);
   }
+  if (i.vars.TEST_DOMAIN !== undefined && (!i.testHooks || r.env === "prod"))
+    throw new Error(
+      "TEST_DOMAIN is only allowed on test-hook installs outside prod",
+    );
   if (i.vars.INSTALL_ID !== undefined && i.vars.INSTALL_ID !== i.id)
     throw new Error("INSTALL_ID must equal the install id");
   if (i.vars.EMAIL_FROM !== undefined && i.vars.EMAIL_FROM !== emailFrom)
@@ -330,6 +392,18 @@ export function userWorkerMetadata(
     if (Object.hasOwn(TEMPLATE_BINDINGS_EXCLUDED, k)) continue;
     plain[k] = render(v, `var ${k}`);
   }
+  // Every resource name the template emits, rendered, must be this env's own.
+  assertOwnResource(plain.WORKER_NAME ?? n.script, r.env);
+  for (const [k, field, key] of [
+    ["d1_databases", "database_name", "d1"],
+    ["r2_buckets", "bucket_name", "r2"],
+    ["kv_namespaces", "title", "kv"],
+  ] as const)
+    for (const e of (t[k] ?? []) as Record<string, string>[])
+      assertOwnResource(
+        e[field] === undefined ? n[key] : render(e[field], `${k}.${field}`),
+        r.env,
+      );
   Object.assign(plain, {
     PLAN: "paid",
     ENVIRONMENT: "production",
@@ -341,11 +415,15 @@ export function userWorkerMetadata(
     const v = i.vars[k];
     if (v !== undefined) plain[k] = v;
   }
+  // "off" is the same as absent: nothing is uploaded.
+  if (i.vars.EMAIL_CODE_DOMAIN === "on") plain.EMAIL_CODE_DOMAIN = "on";
   for (const k of Object.keys(TUNABLES)) {
     const v = i.vars[k];
     if (v !== undefined) plain[k] = normalizeVar(k, v);
   }
   if (i.testHooks) plain.TEST_HOOKS = "1";
+  if (i.testHooks && i.vars.TEST_DOMAIN !== undefined)
+    plain.TEST_DOMAIN = i.vars.TEST_DOMAIN;
 
   const bindings: Binding[] = Object.entries(plain).map(([name, text]) => ({
     type: "plain_text",
@@ -443,5 +521,16 @@ export function userWorkerMetadata(
   const migrations = migrationsFor(t, r.doMigrationTag);
   if (migrations) meta.migrations = migrations;
   if (missing.length > 0) meta.keep_bindings = ["secret_text", "secret_key"];
+  assertUniqueBindings(meta.bindings);
   return meta;
+}
+
+/** Two bindings with one name would let one silently shadow the other. */
+export function assertUniqueBindings(bindings: readonly Binding[]): void {
+  const seen = new Set<string>();
+  for (const b of bindings) {
+    if (seen.has(b.name))
+      throw new Error(`duplicate binding name ${JSON.stringify(b.name)}`);
+    seen.add(b.name);
+  }
 }

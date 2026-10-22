@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import {
   type Binding,
   buildBundle,
+  epochBumpSql,
+  googleNewlyEnabled,
   HOSTED_ADDED,
   type InstallMetaInput,
   KNOWN_SECRETS,
@@ -13,8 +15,10 @@ import {
   type ResourceMetaInput,
   scriptSubdomainSettings,
   TEMPLATE_BINDINGS_EXCLUDED,
+  type Template,
   userWorkerMetadata,
 } from "../src/index.js";
+import { loadTemplate } from "../src/internal/template.js";
 
 const TEMPLATE_PATH = new URL(
   "../../../apps/server/wrangler.template.jsonc",
@@ -43,6 +47,7 @@ const res = (o: Partial<ResourceMetaInput> = {}): ResourceMetaInput => ({
   assetsJwt: "jwt",
   mainModule: "index.js",
   secrets: { SESSION_SECRET: "s", CONTENT_SIGNING_KEY: "c" },
+  template: tpl,
   ...o,
 });
 const text = (b: Binding[], name: string) =>
@@ -122,7 +127,7 @@ describe("userWorkerMetadata", () => {
     });
     expect(by("FILES")).toMatchObject({
       type: "r2_bucket",
-      bucket_name: names("iabcdefghjk2").r2,
+      bucket_name: names("iabcdefghjk2", "staging").r2,
     });
     expect(by("OAUTH_KV")).toMatchObject({
       type: "kv_namespace",
@@ -243,7 +248,9 @@ describe("userWorkerMetadata", () => {
     expect(text(m.bindings, "APP_HOST")).toBe("a.app.test");
     expect(text(m.bindings, "CONTENT_HOST")).toBe("a.content.test");
     expect(text(m.bindings, "OWNER_EMAIL")).toBe("o@x.test");
-    expect(text(m.bindings, "WORKER_NAME")).toBe(names("iabcdefghjk2").script);
+    expect(text(m.bindings, "WORKER_NAME")).toBe(
+      names("iabcdefghjk2", "staging").script,
+    );
     expect(text(m.bindings, "PLAN")).toBe("paid");
     expect(text(m.bindings, "ENVIRONMENT")).toBe("production");
   });
@@ -728,6 +735,88 @@ describe("buildBundle", () => {
     );
     await expect(buildBundle(root, async () => {})).rejects.toThrow(
       /no index.js/,
+    );
+  });
+});
+
+describe("env-prefixed names in metadata", () => {
+  it("staging and prod emit their own prefixes", () => {
+    const st = userWorkerMetadata(inst(), res({ env: "staging" }));
+    const pr = userWorkerMetadata(inst(), res({ env: "prod" }));
+    expect(text(st.bindings, "WORKER_NAME")).toBe("oa-s-iabcdefghjk2");
+    expect(text(pr.bindings, "WORKER_NAME")).toBe("oa-p-iabcdefghjk2");
+    const bucket = (m: typeof st) =>
+      (m.bindings.find((b) => b.type === "r2_bucket") as Binding).bucket_name;
+    expect(bucket(st)).toBe("oa-s-iabcdefghjk2");
+    expect(bucket(pr)).toBe("oa-p-iabcdefghjk2");
+  });
+  it("a forged env cannot produce a foreign name", () => {
+    for (const env of ["dev", "", "oa-s-", undefined, "Prod"])
+      expect(() =>
+        userWorkerMetadata(inst(), res({ env: env as never })),
+      ).toThrow();
+  });
+  it("a foreign name from the template is refused", () => {
+    const base = loadTemplate();
+    const forge = (mut: (t: Template) => void) => {
+      const tpl = structuredClone(base);
+      mut(tpl);
+      return () => userWorkerMetadata(inst(), res({ template: tpl }));
+    };
+    expect(forge((t) => (t.vars.WORKER_NAME = "open-artifacts"))).toThrow(
+      /ForeignResource|refusing/,
+    );
+    expect(
+      forge((t) => (t.d1_databases[0].database_name = "open-artifacts")),
+    ).toThrow(/refusing/);
+    expect(
+      forge((t) => (t.r2_buckets[0].bucket_name = "terrazul-api")),
+    ).toThrow(/refusing/);
+    expect(forge(() => {})).not.toThrow();
+  });
+});
+
+describe("EMAIL_CODE_DOMAIN var (H-ECD)", () => {
+  const val = (v: string) => () =>
+    userWorkerMetadata(inst({ vars: { EMAIL_CODE_DOMAIN: v } }), res());
+  it("accepts on and off only", () => {
+    expect(val("on")).not.toThrow();
+    expect(val("off")).not.toThrow();
+    for (const v of ["ON", "true", "1", "", " on", "yes"])
+      expect(val(v)).toThrow(/EMAIL_CODE_DOMAIN/);
+  });
+  it("on is a plain_text binding; off and absent are not bound", () => {
+    const text = (vars: Record<string, string>) =>
+      userWorkerMetadata(inst({ vars }), res()).bindings.find(
+        (b) => b.name === "EMAIL_CODE_DOMAIN",
+      );
+    expect(text({ EMAIL_CODE_DOMAIN: "on" })).toEqual({
+      type: "plain_text",
+      name: "EMAIL_CODE_DOMAIN",
+      text: "on",
+    });
+    expect(text({ EMAIL_CODE_DOMAIN: "off" })).toBeUndefined();
+    expect(text({})).toBeUndefined();
+  });
+});
+
+describe("googleNewlyEnabled and epochBumpSql (H-ECD)", () => {
+  it.each([
+    [{}, { AUTH_PROVIDERS: "google" }, true],
+    [{ AUTH_PROVIDERS: "email" }, { AUTH_PROVIDERS: "email, google" }, true],
+    [{ AUTH_PROVIDERS: "google" }, { AUTH_PROVIDERS: "google,email" }, false],
+    [{ AUTH_PROVIDERS: "google" }, { AUTH_PROVIDERS: "google" }, false],
+    [{ AUTH_PROVIDERS: "google" }, { AUTH_PROVIDERS: "email" }, false],
+    [{ AUTH_PROVIDERS: "email" }, { AUTH_PROVIDERS: "email" }, false],
+    [{}, {}, false],
+    [{ AUTH_PROVIDERS: "email" }, {}, false],
+    [{}, { AUTH_PROVIDERS: "googler" }, false],
+  ])("%j -> %j is %s", (prev, next, want) => {
+    expect(googleNewlyEnabled(prev, next)).toBe(want);
+  });
+  it("epochBumpSql is the exact statement", () => {
+    expect(epochBumpSql()).toBe(
+      "UPDATE users SET session_epoch = session_epoch + 1",
     );
   });
 });

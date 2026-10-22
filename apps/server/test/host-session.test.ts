@@ -65,7 +65,10 @@ describe("__Host- session cookie", () => {
 
   it("prod ignores a planted plain cookie (validly signed); reads __Host-", async () => {
     const { userId } = await login("host-sess@x.com");
-    const v = await signSession(env, userId);
+    const v = await signSession(env, userId, Date.now(), {
+      provider: "access",
+      epoch: 0,
+    });
     expect(await who(`${PLAIN}=${v}`, prod)).toBeNull();
     expect((await who(`${HOST}=${v}`, prod))?.id).toBe(userId);
     // dev: plain name only

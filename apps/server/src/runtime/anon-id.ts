@@ -47,8 +47,10 @@ const derive = (ikm: CryptoKey, info: string) =>
 let derived: { secret: string; key: Promise<Keys> } | null = null;
 function anonKeys(env: Pick<Env, "SESSION_SECRET">): Promise<Keys> {
   const s = env.SESSION_SECRET;
-  if (typeof s !== "string" || s.length < 32)
-    throw new Error("SESSION_SECRET must be at least 32 characters");
+  // Same rule as auth/keys.ts: HKDF accepts any length, so a short secret
+  // still derives keys (it is warned about there); only empty is an error.
+  if (typeof s !== "string" || s.length === 0)
+    throw new Error("SESSION_SECRET is not set");
   if (derived?.secret !== s) {
     const key = crypto.subtle
       .importKey("raw", enc.encode(s), "HKDF", false, ["deriveKey"])

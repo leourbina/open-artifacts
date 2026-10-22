@@ -395,6 +395,12 @@
     lastWrite = Date.now();
     const target = col;
     target.set(me.id, { c })
+      // Adopt the saved doc: your pin never waits on the live feed.
+      .then((d) => {
+        if (target !== col || !d || pending !== null) return;
+        const saved = validPin(d);
+        if (saved !== null) pins.set(d.id, saved);
+      })
       .catch((err) => {
         if (target !== col) return;
         handleWriteError(err);
@@ -417,7 +423,7 @@
       closed = true;
       showError("Pins are done for today. A fresh map opens at 00:00 UTC.");
     } else if (code === "rate_limited") showError("Your pin didn't save. Too many pins from your network. Try again in a minute.");
-    else if (code === "unauthorized") { readOnly = true; showError("Sign in to pin your country."); }
+    else if (code === "unauthorized") { readOnly = true; showError("This demo isn't accepting pins from signed-out visitors right now."); }
     else if (code === "capability_denied") { readOnly = true; showError("This map can't save pins."); }
     else showError("Your pin didn't save. Try again.");
   }

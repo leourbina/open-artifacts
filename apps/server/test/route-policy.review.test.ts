@@ -49,6 +49,7 @@ beforeAll(async () => {
       .values({
         id,
         ownerId: owner.id,
+        spaceId: owner.id,
         title: `rv-${visibility}`,
         format: "html",
         visibility,

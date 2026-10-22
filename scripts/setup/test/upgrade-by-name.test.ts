@@ -30,6 +30,10 @@ const cloud = (o: Opts = {}) =>
     apps: [app("open-artifacts")],
     secrets: SECRETS,
     worker: VARS,
+    // An installed Worker has its owner's row; --upgrade checks it, never creates it.
+    seed: {
+      users: [{ id: "u-owner", email: "owner@example.com", role: "owner" }],
+    },
     ...o,
   });
 const ok = (w: W) => {
@@ -255,7 +259,8 @@ describe("--upgrade --name edge cases", () => {
     const argv = ["--name", "open-artifacts", "--ci", "--upgrade"];
     expect(await run(argv, w.deps, ROOT)).toBe(0);
     expect(w.files.has(STATE)).toBe(false);
-    expect(parse(w).at(-1).data.sources.appHost).toBe("worker");
+    expect(line(w, "state").data.sources.appHost).toBe("worker");
+    expect(parse(w).at(-1)).toMatchObject({ step: "revoke-ci-token" });
   });
 });
 

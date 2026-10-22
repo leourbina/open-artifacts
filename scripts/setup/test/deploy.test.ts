@@ -705,8 +705,10 @@ describe("B16-6 owner token hardening", () => {
       "owner",
     );
     expect(line(w, "owner-token").message).toContain(
-      "previous owner old@example.com demoted to admin",
+      "demoted 1 previous owner to admin",
     );
+    // A count, not the email: CI logs may be public.
+    expect(line(w, "owner-token").message).not.toContain("old@example.com");
   });
 
   it("the same owner is not demoted", async () => {
