@@ -147,7 +147,9 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
       patch.mutate(
         {
           visibility: v,
-          ...(artifact.allowAnonymousWrites && { allowAnonymousWrites: false }),
+          // Anonymous writes need public links: turn them off only when leaving public.
+          ...(v !== "public" &&
+            artifact.allowAnonymousWrites && { allowAnonymousWrites: false }),
         },
         {
           onSettled: done,
