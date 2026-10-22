@@ -139,26 +139,42 @@ export async function upsertWithRole(
 }
 
 const USER_BY_ID =
-  "select id, email, name, display_name as displayName, role, last_seen_at as lastSeenAt from users where id = ? and status = 'active' limit 1";
+  "select id, email, name, display_name as displayName, role, last_seen_at as lastSeenAt, session_epoch as sessionEpoch from users where id = ? and status = 'active' limit 1";
 
 /**
  * Every authenticated request: one prepared D1 statement, no ORM mapping.
  * A deactivated user (status not 'active') resolves to null, so their session
- * cookie, PATs and OAuth tokens all stop working.
+ * cookie, PATs and OAuth tokens all stop working. `sessionEpoch` is what a
+ * session cookie's `e` must equal.
  */
-export async function getUser(env: Env, id: string): Promise<Member | null> {
+export async function getUserWithEpoch(
+  env: Env,
+  id: string,
+): Promise<{ user: Member; sessionEpoch: number } | null> {
   const row = await stmt(env.DB, USER_BY_ID)
     .bind(id)
     .first<
       Pick<
         UserRow,
-        "id" | "email" | "name" | "displayName" | "role" | "lastSeenAt"
+        | "id"
+        | "email"
+        | "name"
+        | "displayName"
+        | "role"
+        | "lastSeenAt"
+        | "sessionEpoch"
       >
     >();
   // Every request's user comes through here (session, PAT, OAuth), so the cap
   // is set once. Sources: P2's authConfig.guestsReadOnly and P3's restriction
   // (users.restricted_*, 0009); until those land nobody is capped.
-  return row ? withCap(toMember(row), null) : null;
+  return row
+    ? { user: withCap(toMember(row), null), sessionEpoch: row.sessionEpoch }
+    : null;
+}
+
+export async function getUser(env: Env, id: string): Promise<Member | null> {
+  return (await getUserWithEpoch(env, id))?.user ?? null;
 }
 
 export type Profile = {

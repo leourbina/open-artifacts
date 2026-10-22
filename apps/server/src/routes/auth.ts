@@ -1,4 +1,5 @@
 import { AUTH, MemberSchema, PAGES, RoleSchema } from "@oa/shared";
+import { authConfig } from "../auth/config.js";
 import {
   buildAuthorizeRedirect,
   clearOidcCookie,
@@ -8,6 +9,7 @@ import {
   pickStateCookie,
   safeNext,
 } from "../auth/oidc.js";
+import { accessProvider } from "../auth/providers/access.js";
 import {
   clearSessionCookie,
   sessionCookie,
@@ -16,7 +18,11 @@ import {
 import { normEmail } from "../db/email.js";
 import { ApiError, toErrorResponse } from "../http/errors.js";
 import { FAVICON_TAGS } from "../http/head.js";
-import { upsertOnLogin, upsertWithRole } from "../services/users.js";
+import {
+  getUserWithEpoch,
+  upsertOnLogin,
+  upsertWithRole,
+} from "../services/users.js";
 import type { AppType } from "./index.js";
 
 const redirect = (location: string, cookies: string[]) => {
@@ -61,8 +67,13 @@ const EmailSchema = MemberSchema.shape.email;
 
 export function mountAuth(app: AppType): void {
   app.get(AUTH.login, async (c) => {
+    // Access start exists only while Access sign-in is enabled (the callback
+    // already refuses otherwise).
+    if (!authConfig(c.env).providers.has("access"))
+      throw new ApiError("not_found", "Not found");
     const { location, stateCookie, evict } = await buildAuthorizeRedirect(
       c.env,
+      accessProvider,
       c.req.query("next") ?? "/",
       {
         retry: c.req.query("retry") === "1",
@@ -73,6 +84,9 @@ export function mountAuth(app: AppType): void {
   });
 
   app.get(AUTH.callback, async (c) => {
+    // The Access callback exists only while Access sign-in is enabled.
+    if (!authConfig(c.env).providers.has("access"))
+      throw new ApiError("not_found", "Not found");
     // This attempt's state cookie is single-use: cleared on success and on
     // every failure. Other attempts' cookies (other tabs) are left alone.
     const picked = await pickStateCookie(
@@ -82,13 +96,31 @@ export function mountAuth(app: AppType): void {
     );
     const clear = picked ? [clearOidcCookie(c.env, picked.name)] : [];
     try {
-      const { email, name, next } = await handleCallback(c.env, c.req.raw);
+      const { email, name, next } = await handleCallback(
+        c.env,
+        accessProvider,
+        c.req.raw,
+      );
       const user = await upsertOnLogin(c.env, email, name);
       if (!user) {
         logOidcFail("no_access");
         return redirect(PAGES.noAccess, clear);
       }
-      const sess = sessionCookie(await signSession(c.env, user.id), c.env);
+      // The epoch must come from the row: a guest reactivated after #368,
+      // or any user whose epoch a role change bumped, is otherwise issued a
+      // dead cookie (e:0) and loops 401 -> /auth/login.
+      const row = await getUserWithEpoch(c.env, user.id);
+      if (!row) {
+        logOidcFail("no_access");
+        return redirect(PAGES.noAccess, clear);
+      }
+      const sess = sessionCookie(
+        await signSession(c.env, user.id, Date.now(), {
+          provider: "access",
+          epoch: row.sessionEpoch,
+        }),
+        c.env,
+      );
       return redirect(next, [...clear, sess]);
     } catch (e) {
       if (e instanceof OidcStateError) {
@@ -121,7 +153,14 @@ export function mountAuth(app: AppType): void {
       throw new ApiError("bad_request", "Invalid email");
     if (!role.success) throw new ApiError("bad_request", "Invalid role");
     const user = await upsertWithRole(c.env, email.data, role.data);
-    const sess = sessionCookie(await signSession(c.env, user.id), c.env);
+    const row = await getUserWithEpoch(c.env, user.id);
+    const sess = sessionCookie(
+      await signSession(c.env, user.id, Date.now(), {
+        provider: "dev",
+        epoch: row?.sessionEpoch ?? 0,
+      }),
+      c.env,
+    );
     return redirect(safeNext(c.env, c.req.query("next")), [sess]);
   });
 }

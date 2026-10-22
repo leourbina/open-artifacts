@@ -1,10 +1,20 @@
-import { ARTIFACT_SANDBOX_ATTR, type Member } from "@oa/shared";
+import { inDomains } from "@oa/auth-core";
+import {
+  ARTIFACT_SANDBOX_ATTR,
+  type AuthMethod,
+  type Member,
+} from "@oa/shared";
 import type { Context, MiddlewareHandler } from "hono";
 import { getCookie } from "hono/cookie";
+import { authConfig } from "../auth/config.js";
 import { verifyPat } from "../auth/pat.js";
-import { readSession, sessionCookieName } from "../auth/session.js";
+import {
+  readSession,
+  type Session,
+  sessionCookieName,
+} from "../auth/session.js";
 import type { Env } from "../env.js";
-import { getUser } from "../services/users.js";
+import { getUser, getUserWithEpoch } from "../services/users.js";
 import { frameOpts, isEmbedRequest } from "./embed.js";
 import { ApiError, appOrigin, toErrorResponse } from "./errors.js";
 
@@ -16,6 +26,10 @@ export type AppVariables = {
   tokenId: string | null;
   /** Set once the session has been read (the policy gate may read it first). */
   sessionResolved?: boolean;
+  /** How this request authenticated (Me.auth.method); null when anonymous. */
+  authMethod: AuthMethod | null;
+  /** Session expiry (ms) for a cookie session; null otherwise. */
+  sessionExp: number | null;
 };
 export type AppEnv = { Bindings: Env; Variables: AppVariables };
 
@@ -34,6 +48,13 @@ export const COOP_EXEMPT: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * OAuth/OIDC callbacks: their URL carries a code and state, so the page they
+ * land on (or an error page) must not send it on as a Referer.
+ * Exact pathnames only.
+ */
+export const NO_REFERRER: ReadonlySet<string> = new Set(["/auth/callback"]);
+
+/**
  * `frameAncestors` (a pre-validated source list from frameOpts) replaces
  * X-Frame-Options with `Content-Security-Policy: frame-ancestors …` (merged
  * into `csp`, when given, as one header); it wins over `frameDeny`.
@@ -44,6 +65,8 @@ type SecurityOpts = {
   csp?: string;
   /** Cross-Origin-Opener-Policy: same-origin (app host only; see appHostOpts). */
   coop?: boolean;
+  /** Referrer-Policy: no-referrer instead of strict-origin-when-cross-origin. */
+  noReferrer?: boolean;
 };
 
 /**
@@ -59,6 +82,7 @@ export const appHostOpts = (
 ): SecurityOpts => ({
   ...frameOpts(env, method, pathname),
   coop: !COOP_EXEMPT.has(pathname),
+  noReferrer: NO_REFERRER.has(pathname),
 });
 
 /** `res` with the standard security headers; a copy when its headers are immutable. */
@@ -83,7 +107,10 @@ export function withSecurityHeaders(
 function setSecurityHeaders(h: Headers, opts: SecurityOpts): void {
   h.set("X-Robots-Tag", "noindex, nofollow");
   h.set("X-Content-Type-Options", "nosniff");
-  h.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  h.set(
+    "Referrer-Policy",
+    opts.noReferrer ? "no-referrer" : "strict-origin-when-cross-origin",
+  );
   if (opts.coop) h.set("Cross-Origin-Opener-Policy", "same-origin");
   else h.delete("Cross-Origin-Opener-Policy");
   if (opts.frameAncestors) {
@@ -110,11 +137,29 @@ export const securityHeaders =
 const BEARER = /^\s*Bearer(?:\s+(.*?))?\s*$/i;
 
 /**
- * Sets c.var.user (Member | null), tokenLabel, tokenId.
+ * A signed session is still good for this user and install: its epoch is the
+ * user's current one (a bump ends every session), its tenant, if any, is
+ * still a verified domain, and a domain-code session ends once Google is on.
+ */
+export function sessionStillValid(
+  env: Env,
+  s: Session,
+  sessionEpoch: number,
+): boolean {
+  if ((s.e ?? 0) !== sessionEpoch) return false;
+  if (s.t === undefined) return true;
+  const cfg = authConfig(env);
+  if (!inDomains(cfg.domains, s.t)) return false;
+  return !(s.p === "code" && cfg.providers.has("google"));
+}
+
+/**
+ * Sets c.var.user (Member | null), tokenLabel, tokenId, authMethod, sessionExp.
  * An `Authorization: Bearer …` header is authoritative: a valid PAT sets the
  * user, anything else yields null with no cookie fallback. Any other (or no)
  * Authorization header falls through to the session cookie (sessionCookieName). The user row is
- * loaded on every request, so deleted users resolve to null.
+ * loaded on every request, so deleted users resolve to null, and a cookie
+ * session must pass sessionStillValid.
  * `X-OA-Embed: 1` or `?embed=1` (isEmbedRequest) forces anonymous.
  */
 export const session = (): MiddlewareHandler<AppEnv> => async (c, next) => {
@@ -129,6 +174,8 @@ export async function resolveSession(c: Context<AppEnv>): Promise<void> {
   c.set("user", null);
   c.set("tokenLabel", null);
   c.set("tokenId", null);
+  c.set("authMethod", null);
+  c.set("sessionExp", null);
   // Embed mode: anonymous regardless of cookie or Bearer (a downgrade only).
   if (isEmbedRequest(c.req.raw)) return;
   const bearer = BEARER.exec(c.req.header("authorization") ?? "");
@@ -145,10 +192,16 @@ export async function resolveSession(c: Context<AppEnv>): Promise<void> {
       c.set("user", user);
       c.set("tokenLabel", pat.label);
       c.set("tokenId", pat.tokenId);
+      c.set("authMethod", "pat");
     }
   } else {
     const s = await readSession(c.env, getCookie(c, sessionCookieName(c.env)));
-    if (s) c.set("user", await getUser(c.env, s.uid));
+    const row = s ? await getUserWithEpoch(c.env, s.uid) : null;
+    if (s && row && sessionStillValid(c.env, s, row.sessionEpoch)) {
+      c.set("user", row.user);
+      c.set("authMethod", s.p);
+      c.set("sessionExp", s.exp);
+    }
   }
 }
 

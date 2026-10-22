@@ -1,5 +1,3 @@
-import { AUTH } from "@oa/shared";
-import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { Env } from "../env.js";
 import { ApiError, appOrigin } from "../http/errors.js";
 import {
@@ -8,6 +6,11 @@ import {
   hmacSign,
   hmacVerify,
 } from "../util/crypto.js";
+import type { ProviderId } from "./config.js";
+import { cookieKeys, LEGACY_KEY_UNTIL } from "./keys.js";
+import type { OidcProvider, VerifiedIdentity } from "./providers/types.js";
+
+export { accessIssuer } from "./providers/access.js";
 
 /*
  * OIDC login state.
@@ -33,6 +36,11 @@ import {
  * and the legacy un-prefixed `oa_oidc` cookie is no longer accepted at all.
  * k is a public hash prefix, not a secret; nothing is accepted on k alone.
  *
+ * The payload names its provider (`p`); a callback for another provider is a
+ * state mismatch, so one flow's state can never be redeemed by another (mix-up).
+ * State cookies are signed with deriveKey("oa:oidc-state"); cookies signed with the
+ * raw SESSION_SECRET (before P2) are still read until LEGACY_KEY_UNTIL.
+ *
  * State failures (missing / bad sig / expired / mismatch) redirect once to
  * /auth/login?retry=1. The retry flag rides in the signed payload and as a
  * public `r1.` prefix on `state` (so it survives even if the cookie never comes
@@ -54,7 +62,8 @@ const MAX_SCANNED = 16;
 const RETRY_MARK = "r1.";
 const MAX_NEXT_LEN = 2048;
 const MAX_COOKIE_LEN = 4096;
-const CLOCK_TOLERANCE_S = 60;
+
+export { LEGACY_KEY_UNTIL };
 
 type OidcState = {
   state: string;
@@ -63,13 +72,16 @@ type OidcState = {
   next: string;
   exp: number;
   retry?: boolean;
+  /** Provider; absent (cookies from before P2) reads as "access". */
+  p?: ProviderId;
 };
 
-export function accessIssuer(env: Env): string {
-  return `https://${env.ACCESS_TEAM_DOMAIN}/cdn-cgi/access/sso/oidc/${env.ACCESS_CLIENT_ID}`;
-}
+type StateKeys = { key: string; legacy: string | null };
 
-const redirectUri = (env: Env) => `${appOrigin(env)}${AUTH.callback}`;
+/** The state-cookie key, plus the legacy raw secret while it is still accepted. */
+async function stateKeys(env: Env): Promise<StateKeys> {
+  return cookieKeys(env, "oa:oidc-state");
+}
 
 const unsafePrefix = (p: string) =>
   !p.startsWith("/") || p.startsWith("//") || p.startsWith("/\\");
@@ -92,13 +104,6 @@ export function safeNext(env: Env, next: string | undefined | null): string {
   } catch {
     return "/";
   }
-}
-
-function requireSecret(env: Env): string {
-  const s = env.SESSION_SECRET;
-  if (typeof s !== "string" || s.length < 32)
-    throw new Error("SESSION_SECRET must be at least 32 characters");
-  return s;
 }
 
 const randomB64 = (n: number) =>
@@ -146,7 +151,7 @@ function parseCookies(header: string | null | undefined): [string, string][] {
 /** Set-Cookie clears for the oldest attempts so that, with the new one, at most MAX_ATTEMPTS remain. */
 async function evictions(
   env: Env,
-  secret: string,
+  keys: StateKeys,
   cookieHeader: string | null | undefined,
 ): Promise<string[]> {
   const seen = new Map<string, string>();
@@ -158,8 +163,7 @@ async function evictions(
   let scanned = 0;
   for (const [name, value] of seen) {
     // Bound HMAC work; anything past the cap is treated as unparseable.
-    const r =
-      scanned++ < MAX_SCANNED ? await readOidcState(secret, value) : null;
+    const r = scanned++ < MAX_SCANNED ? await readOidcState(keys, value) : null;
     ranked.push({ name, exp: r?.st ? r.st.exp : Number.NEGATIVE_INFINITY });
   }
   ranked.sort((a, b) => a.exp - b.exp);
@@ -168,10 +172,11 @@ async function evictions(
 
 export async function buildAuthorizeRedirect(
   env: Env,
+  provider: OidcProvider,
   next: string,
   opts: { retry?: boolean; cookieHeader?: string | null } = {},
 ): Promise<{ location: string; stateCookie: string; evict: string[] }> {
-  const secret = requireSecret(env);
+  const keys = await stateKeys(env);
   const retry = opts.retry === true;
   const st: OidcState = {
     state: `${retry ? RETRY_MARK : ""}${randomB64(32)}`,
@@ -180,6 +185,7 @@ export async function buildAuthorizeRedirect(
     next: safeNext(env, next),
     exp: Date.now() + OIDC_MAX_AGE_S * 1000,
     ...(retry ? { retry: true } : {}),
+    p: provider.id,
   };
   const name = await stateCookieName(env, st.state);
   const sign = async () => {
@@ -187,7 +193,7 @@ export async function buildAuthorizeRedirect(
     return oidcCookie(
       env,
       name,
-      `${p}.${await hmacSign(secret, p)}`,
+      `${p}.${await hmacSign(keys.key, p)}`,
       OIDC_MAX_AGE_S,
     );
   };
@@ -198,25 +204,18 @@ export async function buildAuthorizeRedirect(
     st.next = "/";
     stateCookie = await sign();
   }
-  const u = new URL(`${accessIssuer(env)}/authorization`);
-  u.search = new URLSearchParams({
-    client_id: env.ACCESS_CLIENT_ID,
-    response_type: "code",
-    scope: "openid email profile",
-    redirect_uri: redirectUri(env),
-    state: st.state,
-    nonce: st.nonce,
-    code_challenge: await s256(st.verifier),
-    code_challenge_method: "S256",
-  }).toString();
   return {
-    location: u.toString(),
+    location: await provider.authorizeUrl(env, {
+      state: st.state,
+      nonce: st.nonce,
+      challenge: await s256(st.verifier),
+    }),
     stateCookie,
-    evict: await evictions(env, secret, opts.cookieHeader),
+    evict: await evictions(env, keys, opts.cookieHeader),
   };
 }
 
-const tag = (v: unknown) =>
+export const tag = (v: unknown) =>
   typeof v === "string"
     ? v
         .toLowerCase()
@@ -245,7 +244,7 @@ export class OidcStateError extends ApiError {
   }
 }
 
-const fail = (
+export const fail = (
   stage: string,
   extra?: Record<string, string | undefined>,
 ): never => {
@@ -271,7 +270,7 @@ type StateRead =
 
 /** HMAC-verified payload; expired payloads are returned (for `next`/`retry`) but flagged. */
 async function readOidcState(
-  secret: string,
+  keys: StateKeys,
   value: string,
 ): Promise<StateRead> {
   const bad = { stage: "state_bad_sig" } as const;
@@ -279,7 +278,11 @@ async function readOidcState(
   const parts = value.split(".");
   if (parts.length !== 2) return bad;
   const [p, sig] = parts as [string, string];
-  if (!(await hmacVerify(secret, p, sig))) return bad;
+  if (
+    !(await hmacVerify(keys.key, p, sig)) &&
+    !(keys.legacy !== null && (await hmacVerify(keys.legacy, p, sig)))
+  )
+    return bad;
   const raw = b64urlDecode(p);
   if (!raw) return bad;
   try {
@@ -291,7 +294,8 @@ async function readOidcState(
       typeof o.verifier !== "string" ||
       typeof o.next !== "string" ||
       typeof o.exp !== "number" ||
-      !Number.isFinite(o.exp)
+      !Number.isFinite(o.exp) ||
+      (o.p !== undefined && o.p !== "access" && o.p !== "google")
     )
       return bad;
     const st = o as OidcState;
@@ -303,68 +307,22 @@ async function readOidcState(
   }
 }
 
-const desc = (v: unknown) =>
-  typeof v === "string"
-    ? // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control chars is the point
-      v.replace(/[\u0000-\u001f\u007f-\u009f]/g, "").slice(0, 200)
-    : undefined;
-
-/**
- * IdP error/error_description from a failed token response (never the body
- * otherwise). Access answers token errors with a 302 to
- * redirect_uri?error=…&error_description=…; others use a JSON body.
- */
-async function tokenErrorInfo(
-  res: Response,
-): Promise<{ error?: string; description?: string }> {
-  try {
-    if (res.status >= 300 && res.status < 400) {
-      await res.body?.cancel();
-      const loc = res.headers.get("location");
-      if (!loc) return {};
-      const p = new URL(loc, "https://invalid.local").searchParams;
-      return {
-        error: tag(p.get("error")),
-        description: desc(p.get("error_description")),
-      };
-    }
-    if (res.status >= 400 && res.status < 500) {
-      const text = await res.text();
-      if (text.length > 16_384) return {};
-      const j = JSON.parse(text) as {
-        error?: unknown;
-        error_description?: unknown;
-      } | null;
-      return { error: tag(j?.error), description: desc(j?.error_description) };
-    }
-    await res.body?.cancel();
-  } catch {
-    // non-JSON or malformed: stage alone is logged
-  }
-  return {};
-}
-
 /** Constant-time string equality via HMAC verify. */
-async function safeEqual(secret: string, a: string, b: string) {
+export async function safeEqual(secret: string, a: string, b: string) {
   return hmacVerify(secret, a, await hmacSign(secret, b));
 }
 
-const jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
-function jwks(issuer: string) {
-  let s = jwksCache.get(issuer);
-  if (!s) {
-    s = createRemoteJWKSet(new URL(`${issuer}/jwks`));
-    jwksCache.set(issuer, s);
-  }
-  return s;
-}
-
-/** Throws ApiError("unauthorized") on every failure; never leaks upstream detail. */
+/**
+ * Validates this browser's state cookie for `provider`, then lets the provider
+ * redeem the code. Throws OidcStateError on state failures (the route retries
+ * once) and ApiError("unauthorized") on everything else; never leaks detail.
+ */
 export async function handleCallback(
   env: Env,
+  provider: OidcProvider,
   req: Request,
-): Promise<{ email: string; name: string | null; next: string }> {
-  const secret = requireSecret(env);
+): Promise<VerifiedIdentity & { next: string }> {
+  const keys = await stateKeys(env);
   const q = new URL(req.url).searchParams;
   const state = q.get("state") ?? "";
   const failState = (stage: string, from?: OidcState): never => {
@@ -377,89 +335,22 @@ export async function handleCallback(
   };
   const picked = await pickStateCookie(env, req, state);
   if (!picked) return failState("no_state_cookie");
-  const read = await readOidcState(secret, picked.value);
+  const read = await readOidcState(keys, picked.value);
   if (read.stage === "state_bad_sig") return failState("state_bad_sig");
   if (read.stage === "state_expired")
     return failState("state_expired", read.st);
   const st = read.st;
-  if (!(await safeEqual(secret, state, st.state)))
+  if (!(await safeEqual(keys.key, state, st.state)))
     return failState("state_mismatch");
+  // Mix-up: a state minted for one provider is never redeemed by another.
+  if ((st.p ?? "access") !== provider.id) return failState("state_mismatch");
   if (q.has("error")) return fail("idp_error", { error: tag(q.get("error")) });
   const code = q.get("code");
   if (!code) return fail("no_code");
-
-  const issuer = accessIssuer(env);
-  let idToken: unknown;
-  try {
-    const res = await fetch(`${issuer}/token`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/x-www-form-urlencoded",
-        accept: "application/json",
-      },
-      body: new URLSearchParams({
-        grant_type: "authorization_code",
-        code,
-        redirect_uri: redirectUri(env),
-        client_id: env.ACCESS_CLIENT_ID,
-        client_secret: env.ACCESS_CLIENT_SECRET,
-        code_verifier: st.verifier,
-      }),
-      redirect: "manual",
-    });
-    if (!res.ok)
-      return fail(`token_http_${res.status}`, await tokenErrorInfo(res));
-    let body: unknown;
-    try {
-      body = await res.json();
-    } catch {
-      return fail("token_bad_json");
-    }
-    idToken = (body as { id_token?: unknown } | null)?.id_token;
-  } catch (e) {
-    if (e instanceof ApiError) throw e;
-    return fail("token_fetch");
-  }
-  if (typeof idToken !== "string") return fail("no_id_token");
-
-  let claims: Record<string, unknown>;
-  try {
-    ({ payload: claims } = await jwtVerify(idToken as string, jwks(issuer), {
-      issuer,
-      audience: env.ACCESS_CLIENT_ID,
-      algorithms: ["RS256"],
-      clockTolerance: CLOCK_TOLERANCE_S,
-      requiredClaims: ["exp", "nonce"],
-    }));
-  } catch (e) {
-    const err = e as { code?: unknown; claim?: unknown };
-    return fail("jwt_verify", {
-      code:
-        typeof err?.code === "string"
-          ? err.code.replace(/[^A-Z_]/g, "").slice(0, 64)
-          : undefined,
-      claim: tag(err?.claim),
-    });
-  }
-  // Access sets aud to the client id; reject multi-audience tokens outright.
-  const aud = claims.aud;
-  if (
-    Array.isArray(aud) &&
-    (aud.length !== 1 || aud[0] !== env.ACCESS_CLIENT_ID)
-  )
-    return fail("aud");
-  if (
-    typeof claims.nonce !== "string" ||
-    !(await safeEqual(secret, claims.nonce, st.nonce))
-  )
-    return fail("nonce");
-  const email = claims.email;
-  if (typeof email !== "string" || !email.includes("@")) return fail("email");
-  if (claims.email_verified === false) return fail("email_unverified");
-  const name =
-    typeof claims.name === "string" && claims.name.trim()
-      ? claims.name.trim().slice(0, 200)
-      : null;
-  // Normalization (and ASCII-only rejection) happens in upsertOnLogin.
-  return { email: email.trim(), name, next: safeNext(env, st.next) };
+  const id = await provider.redeem(env, {
+    code,
+    verifier: st.verifier,
+    nonce: st.nonce,
+  });
+  return { ...id, next: safeNext(env, st.next) };
 }
