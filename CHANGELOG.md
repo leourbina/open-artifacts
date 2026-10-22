@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.29.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.28.0...v0.29.0) (2026-10-22)
+
+
+### Features
+
+* **auth:** code sign-in routes (P2 T8) ([#384](https://github.com/open-artifacts-ai/open-artifacts/issues/384)) ([91e6d64](https://github.com/open-artifacts-ai/open-artifacts/commit/91e6d64b03efd9b015fb0282196fefdbd031c668))
+* **dashboard:** public links off per space in the Share panel (P4 Task 9) ([#445](https://github.com/open-artifacts-ai/open-artifacts/issues/445)) ([1963354](https://github.com/open-artifacts-ai/open-artifacts/commit/1963354eacb785fcc7a917bc735a6b70f77e456c))
+* **shared:** space People contract: member manager rule, frozen-sync removal, groups role/via, paging, member_synced, allMembers ([#446](https://github.com/open-artifacts-ai/open-artifacts/issues/446)) ([598650c](https://github.com/open-artifacts-ai/open-artifacts/commit/598650c83856f3ec9fc34ab0ded1b20c6e697b8a))
+* **shared:** space-manager mappings, org Every-space mappings, directory_mapping_off (contract) ([#422](https://github.com/open-artifacts-ai/open-artifacts/issues/422)) ([f360744](https://github.com/open-artifacts-ai/open-artifacts/commit/f3607443e79bd8e3bcd7eea31735249d686f8892))
+
 ## [0.28.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.27.0...v0.28.0) (2026-10-22)
 
 
