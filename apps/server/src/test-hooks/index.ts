@@ -8,11 +8,14 @@ import {
   TEST_HOOKS_ALLOWED,
   TestSessionInputSchema,
 } from "@oa/shared";
+import { eq } from "drizzle-orm";
 import type { Context } from "hono";
 import { emailKey } from "../auth/codes.js";
 import { authConfig } from "../auth/config.js";
 import { signSession } from "../auth/session.js";
+import { getDb } from "../db/client.js";
 import { normEmail } from "../db/email.js";
+import { users } from "../db/schema.js";
 import type { Env } from "../env.js";
 import { ApiError, appOrigin, toErrorResponse } from "../http/errors.js";
 import { type AppEnv, execCtx } from "../http/middleware.js";
@@ -20,7 +23,7 @@ import { type GrantProps, oauthProvider } from "../mcp/oauth.js";
 import { oauthApi } from "../mcp/oauth-api.js";
 import { mcpResource } from "../mcp/server.js";
 import type { AppType } from "../routes/index.js";
-import { getUserWithEpoch, upsertWithRole } from "../services/users.js";
+import { getUserWithEpoch, insertUser, toMember } from "../services/users.js";
 import { b64urlEncode } from "../util/crypto.js";
 
 // /__test/* (P2 T14): hooks P5's cross-tenant suite uses against stg-a and
@@ -142,26 +145,37 @@ async function audit(
   log(outcome === "ok" ? hook : outcome);
 }
 
-/** The user's current role, or null when there is no such user. */
-const currentRole = (env: Env, email: string) =>
-  env.DB.prepare("select role from users where email = ? limit 1")
-    .bind(email)
-    .first<string>("role");
-
 /**
- * A user the hooks may act on: TEST_DOMAIN only, never the owner, and never a
- * role change for an existing user. Null means refuse.
+ * A user the hooks may act on: TEST_DOMAIN only, never the owner (by address
+ * or by role, so new users are capped at admin), and never a role change for
+ * an existing user. Race-free: insert-if-absent, then judge the stored row,
+ * so a concurrent writer can't slip a different role past the check. Null
+ * means refuse.
  */
 async function testUser(
   env: Env,
   email: string,
   role: Role,
 ): Promise<Member | null> {
+  if (role === "owner") return null;
   if (!inTestDomain(env, email)) return null;
   if (email === normEmail(env.OWNER_EMAIL ?? "")) return null;
-  const now = await currentRole(env, email);
-  if (now !== null && now !== role) return null;
-  return upsertWithRole(env, email, role);
+  const now = Date.now();
+  await insertUser(env, {
+    email,
+    name: email.split("@")[0] || email,
+    role,
+    createdAt: now,
+    lastSeenAt: now,
+  }).onConflictDoNothing();
+  const row = await getDb(env)
+    .select()
+    .from(users)
+    .where(eq(users.email, email))
+    .get();
+  if (!row) return null;
+  const { role: stored, status } = row;
+  return stored === role && status === "active" ? toMember(row) : null;
 }
 
 /** P3 owns space roles; until it lands, a session hook asking for them is refused. */

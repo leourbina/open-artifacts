@@ -23,7 +23,10 @@ const TD = "p5.test";
 type RlCall = { key: string };
 const rlCalls: RlCall[] = [];
 const passRl = {
-  limit: async (o: RlCall) => (rlCalls.push(o), { success: true }),
+  limit: async (o: RlCall) => {
+    rlCalls.push(o);
+    return { success: true };
+  },
 } as unknown as RateLimit;
 const ON = {
   TEST_HOOKS: "1",
@@ -195,9 +198,10 @@ describe("activation", () => {
 describe("rate limit first", () => {
   const failRl = (keys: string[]) =>
     ({
-      limit: async ({ key }: { key: string }) => (
-        keys.push(key), { success: false }
-      ),
+      limit: async ({ key }: { key: string }) => {
+        keys.push(key);
+        return { success: false };
+      },
     }) as unknown as RateLimit;
 
   it("over RL_ANON (test:<install>:<ip>) is the 404, before the key compare or D1", async () => {
@@ -360,6 +364,45 @@ describe("TEST_DOMAIN and refusals", () => {
     expect(
       (await hook(on(), TEST_HOOKS.session, { email, role: "member" })).status,
     ).toBe(200);
+  });
+
+  it("session: role owner is refused outright (new users cap at admin)", async () => {
+    const email = tu("own");
+    await same404(
+      await hook(on(), TEST_HOOKS.session, { email, role: "owner" }),
+    );
+    expect(
+      await env.DB.prepare("select id from users where email = ?")
+        .bind(email)
+        .first(),
+    ).toBeNull();
+    expect(
+      (await hook(on(), TEST_HOOKS.session, { email, role: "admin" })).status,
+    ).toBe(200);
+  });
+
+  it("session: racing roles for one new address: one wins, the other is the 404, the row keeps the winner's role", async () => {
+    const email = tu("race");
+    const roles = ["member", "admin", "guest"] as const;
+    const rs = await Promise.all(
+      roles.map((role) => hook(on(), TEST_HOOKS.session, { email, role })),
+    );
+    const ok = rs.flatMap((r, i) => (r.status === 200 ? [roles[i]] : []));
+    expect(ok).toHaveLength(1);
+    for (const r of rs) if (r.status !== 200) await same404(r);
+    expect(
+      await env.DB.prepare("select role from users where email = ?")
+        .bind(email)
+        .first("role"),
+    ).toBe(ok[0]);
+  });
+
+  it("session: a suspended user is refused, not revived", async () => {
+    const email = tu("susp");
+    await seedUser(email, "member", { status: "suspended" });
+    await same404(
+      await hook(on(), TEST_HOOKS.session, { email, role: "member" }),
+    );
   });
 
   it("session: bad input and spaces are the identical 404", async () => {
