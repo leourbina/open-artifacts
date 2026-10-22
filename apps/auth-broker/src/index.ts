@@ -5,11 +5,13 @@
 //   PKCE challenge, and a signed broker state naming the install.
 // - GET  /google/callback   Google → the install's registered origin only.
 // - POST /google/redeem     the install (Ed25519-signed, within 60 s) trades
-//   the code for Google's raw ID token, returned unmodified. The install
+//   the code for Google's raw ID token, returned unmodified. It sends back the
+//   broker state with H(client nonce || challenge), which must match. The install
 //   verifies it itself (signature, aud, its nonce, hd); the broker never
 //   vouches for anyone.
 import {
   brokerNonce,
+  flowHash,
   GOOGLE_AUTHORIZE_URL,
   GOOGLE_TOKEN_URL,
   keyId,
@@ -84,11 +86,6 @@ function same(a: Uint8Array, b: Uint8Array): boolean {
   return d === 0;
 }
 
-async function sha256B64(data: string): Promise<string> {
-  const d = await crypto.subtle.digest("SHA-256", enc.encode(data));
-  return b64(new Uint8Array(d));
-}
-
 /**
  * The broker state binds the exact flow: install, the install's client state,
  * H(client nonce || code challenge), and a short expiry. A state minted for
@@ -150,20 +147,29 @@ const ipOf = (req: Request) =>
   req.headers.get("cf-connecting-ip")?.trim() || "unknown";
 
 /**
- * Charges both buckets before any Google or registry work: per IP, then per
- * install. A missing binding fails closed (503) rather than unlimited.
+ * Charges the per-IP bucket before any Google or registry work. A missing
+ * binding (either one) fails closed (503) rather than unlimited.
  */
-async function rateLimited(
+async function ipLimited(env: Env, req: Request): Promise<Response | null> {
+  if (!env.RL_BROKER_IP || !env.RL_BROKER_INSTALL)
+    return log("rate_limit", "unbound"), json({ error: "unavailable" }, 503);
+  if (!(await env.RL_BROKER_IP.limit({ key: `ip:${ipOf(req)}` })).success)
+    return log("rate_limit", "ip"), json({ error: "rate_limited" }, 429);
+  return null;
+}
+
+/**
+ * Charges the per-install bucket only once the request is tied to a real
+ * install (authorize) or authenticated as it (redeem): junk requests naming
+ * install B must not drain B's sign-in.
+ */
+async function installLimited(
   env: Env,
-  req: Request,
   install: string,
 ): Promise<Response | null> {
-  const ip = env.RL_BROKER_IP;
   const byInstall = env.RL_BROKER_INSTALL;
-  if (!ip || !byInstall)
+  if (!byInstall)
     return log("rate_limit", "unbound"), json({ error: "unavailable" }, 503);
-  if (!(await ip.limit({ key: `ip:${ipOf(req)}` })).success)
-    return log("rate_limit", "ip"), json({ error: "rate_limited" }, 429);
   if (!(await byInstall.limit({ key: `install:${install}` })).success)
     return log("rate_limit", "install"), json({ error: "rate_limited" }, 429);
   return null;
@@ -192,10 +198,12 @@ async function authorize(
     return (
       log("authorize", "misconfigured"), json({ error: "server_error" }, 500)
     );
-  const limited = await rateLimited(env, req, install);
+  const limited = await ipLimited(env, req);
   if (limited) return limited;
   const entry = await lookupInstall(env.BROKER_REGISTRY, install, now);
   if (!entry) return log("authorize", "unknown_install"), notFound();
+  const busy = await installLimited(env, install);
+  if (busy) return busy;
   const u = new URL(GOOGLE_AUTHORIZE_URL);
   u.search = new URLSearchParams({
     client_id: env.GOOGLE_CLIENT_ID,
@@ -205,7 +213,7 @@ async function authorize(
     state: await signState(env, {
       i: install,
       s: state,
-      h: await sha256B64(`${nonce}|${challenge}`),
+      h: await flowHash(nonce, challenge),
       exp: now + STATE_TTL_MS,
     }),
     // One Google client, one redirect URI: bind the nonce to this install so
@@ -242,6 +250,8 @@ async function callback(
       error && /^[a-z_]{1,64}$/.test(error) ? error : "access_denied",
     );
   to.searchParams.set("state", st.s);
+  // Back at redeem, with the install's H(nonce || challenge) to match.
+  to.searchParams.set("bstate", q.get("state") ?? "");
   log("callback", code ? "ok" : "idp_error");
   return new Response(null, {
     status: 302,
@@ -253,7 +263,16 @@ async function callback(
   });
 }
 
-type Redeem = { install: string; code: string; verifier: string; ts: number };
+type Redeem = {
+  install: string;
+  code: string;
+  verifier: string;
+  ts: number;
+  /** The broker state this flow's callback carried. */
+  bstate: string;
+  /** H(client nonce || challenge), recomputed by the install. */
+  h: string;
+};
 
 async function redeem(req: Request, env: Env, now: number): Promise<Response> {
   const kid = req.headers.get("x-oa-kid") ?? "";
@@ -270,13 +289,15 @@ async function redeem(req: Request, env: Env, now: number): Promise<Response> {
     typeof body?.install !== "string" ||
     typeof body.code !== "string" ||
     typeof body.verifier !== "string" ||
-    typeof body.ts !== "number"
+    typeof body.ts !== "number" ||
+    typeof body.bstate !== "string" ||
+    typeof body.h !== "string"
   )
     return refused();
   const origin = fixedOrigin(env);
   if (!origin)
     return log("redeem", "misconfigured"), json({ error: "server_error" }, 500);
-  const limited = await rateLimited(env, req, body.install);
+  const limited = await ipLimited(env, req);
   if (limited) return limited;
   const entry = await lookupInstall(env.BROKER_REGISTRY, body.install, now);
   if (!entry) return log("redeem", "unknown_install"), refused();
@@ -290,6 +311,17 @@ async function redeem(req: Request, env: Env, now: number): Promise<Response> {
     return log("redeem", "bad_signature"), refused();
   if (Math.abs(now - body.ts) > REDEEM_SKEW_MS)
     return log("redeem", "stale"), refused();
+  const busy = await installLimited(env, body.install);
+  if (busy) return busy;
+  // The broker state must be this install's, unexpired, and bind the flow
+  // the install holds: H(client nonce || challenge), compared in constant time.
+  const st = await readState(env, body.bstate, now);
+  if (
+    !st ||
+    st.i !== body.install ||
+    !same(enc.encode(st.h), enc.encode(body.h))
+  )
+    return log("redeem", "bad_flow"), refused();
 
   const res = await fetch(GOOGLE_TOKEN_URL, {
     method: "POST",

@@ -1,5 +1,11 @@
 import { env } from "cloudflare:workers";
-import { brokerNonce, keyId, publicFromPkcs8, signRedeem } from "@oa/auth-core";
+import {
+  brokerNonce,
+  flowHash,
+  keyId,
+  publicFromPkcs8,
+  signRedeem,
+} from "@oa/auth-core";
 import { AUTH, SIGN_IN_PAGE } from "@oa/shared";
 import { generateKeyPair } from "jose";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -203,6 +209,8 @@ describe("Google through the broker", () => {
       code,
       verifier,
       ts: Date.now(),
+      bstate: gq.get("state"),
+      h: await flowHash(bB.clientNonce, challenge),
     });
     const kid = await keyId(await publicFromPkcs8(TEST_BROKER_KEY));
     const redeemed = await broker.fetch(
@@ -331,5 +339,44 @@ describe("Google through the broker", () => {
       await keyId(await publicFromPkcs8(TEST_BROKER_KEY)),
     );
     expect(seen[0]?.headers.get("x-oa-sig")).toMatch(/^[A-Za-z0-9_-]{86}$/);
+  });
+
+  it("the redeem carries the relayed broker state and H(client nonce || challenge)", async () => {
+    const seen: Record<string, unknown>[] = [];
+    const e = installEnv(async (req) => {
+      seen.push(await req.clone().json());
+      return broker.fetch(req as never, brokerEnv);
+    });
+    const b = await begin(e);
+    await get(
+      e,
+      `${AUTH.callbackGoogle}?code=x&state=${b.installState}&bstate=${encodeURIComponent(b.bstate)}`,
+      b.cookie,
+    );
+    expect(seen[0]).toMatchObject({
+      bstate: b.bstate,
+      h: await flowHash(b.clientNonce, b.challenge),
+    });
+  });
+
+  it("a broker state from another flow (hash mismatch) is a failed sign-in", async () => {
+    const e = installEnv();
+    const victim = await begin(e);
+    const other = await begin(e);
+    const code = g.issueCode(
+      { nonce: victim.nonce, email: uniq("mx"), sub: uniq("mx-sub") },
+      victim.challenge,
+    );
+    const calls = g.tokenCalls.length;
+    expect(
+      loc(
+        await get(
+          e,
+          `${AUTH.callbackGoogle}?code=${code}&state=${victim.installState}&bstate=${encodeURIComponent(other.bstate)}`,
+          victim.cookie,
+        ),
+      ),
+    ).toBe(`${SIGN_IN_PAGE}?error=failed&next=%2Fa%2Fx`);
+    expect(g.tokenCalls.length).toBe(calls);
   });
 });

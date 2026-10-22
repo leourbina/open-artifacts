@@ -122,3 +122,19 @@ export async function brokerNonce(
   );
   return b64.enc(new Uint8Array(d));
 }
+
+/**
+ * H(client nonce | code challenge): what the broker state binds on the broker
+ * transport, and what the install proves it holds at redeem. A broker state
+ * minted for one flow can't be redeemed with another flow's nonce/challenge.
+ */
+export async function flowHash(
+  clientNonce: string,
+  challenge: string,
+): Promise<string> {
+  const d = await crypto.subtle.digest(
+    "SHA-256",
+    enc.encode(`${clientNonce}|${challenge}`),
+  );
+  return b64.enc(new Uint8Array(d));
+}

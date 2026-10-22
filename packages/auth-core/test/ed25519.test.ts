@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   brokerNonce,
+  flowHash,
   keyId,
   publicFromPkcs8,
   redeemTranscript,
@@ -82,5 +83,18 @@ describe("ed25519 request signing", () => {
       ).toString("base64url"),
     );
     expect(await brokerNonce("inst-a", "client-nonce")).toBe(a);
+  });
+
+  test("the flow hash is H(client nonce | challenge), base64url", async () => {
+    const h = await flowHash("n1", "ch");
+    expect(h).toBe(
+      Buffer.from(
+        await crypto.subtle.digest(
+          "SHA-256",
+          new TextEncoder().encode("n1|ch"),
+        ),
+      ).toString("base64url"),
+    );
+    expect(await flowHash("n2", "ch")).not.toBe(h);
   });
 });

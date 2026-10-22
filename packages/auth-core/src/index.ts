@@ -1,6 +1,7 @@
 export { inDomains, parseDomains } from "./domains.js";
 export {
   brokerNonce,
+  flowHash,
   keyId,
   publicFromPkcs8,
   redeemTranscript,

@@ -1,5 +1,6 @@
 import {
   brokerNonce,
+  flowHash,
   GOOGLE_AUTHORIZE_URL,
   GOOGLE_TOKEN_URL,
   GoogleTokenError,
@@ -11,6 +12,7 @@ import {
 import { AUTH } from "@oa/shared";
 import type { Env } from "../../env.js";
 import { ApiError, appOrigin } from "../../http/errors.js";
+import { b64urlEncode } from "../../util/crypto.js";
 import { authConfig, type GoogleTransport } from "../config.js";
 import { fail } from "../oidc.js";
 import type { OidcProvider, VerifiedIdentity } from "./types.js";
@@ -46,12 +48,20 @@ const kidOf = (signingKey: string) => {
   return k;
 };
 
+/** The PKCE S256 challenge of `verifier`. */
+const s256 = async (verifier: string) =>
+  b64urlEncode(
+    new Uint8Array(
+      await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)),
+    ),
+  );
+
 /** Google's raw ID token for `code`, by this install's transport. */
 async function exchange(
   env: Env,
   clientId: string,
   t: GoogleTransport,
-  a: { code: string; verifier: string },
+  a: { code: string; verifier: string; nonce: string; bstate?: string },
 ): Promise<string> {
   let res: Response;
   if (t.kind === "direct") {
@@ -77,6 +87,9 @@ async function exchange(
       code: a.code,
       verifier: a.verifier,
       ts: Date.now(),
+      // The broker refuses unless its state binds this exact flow.
+      bstate: a.bstate ?? "",
+      h: await flowHash(a.nonce, await s256(a.verifier)),
     });
     const kid = await kidOf(t.signingKey);
     const req = new Request(`${t.url}/google/redeem`, {
