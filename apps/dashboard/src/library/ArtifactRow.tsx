@@ -1,5 +1,6 @@
 import type { ArtifactSummary } from "@oa/shared";
-import { FormatIcon, VisibilityBadge } from "@oa/ui";
+import { FormatIcon } from "@oa/ui";
+import { SpaceMarker, Visibility } from "../spaces/SpaceMarker";
 import { AppLink } from "./AppLink";
 import { Snippet } from "./Snippet";
 import { relativeTime } from "./time";
@@ -10,9 +11,12 @@ const ROW = `lib-row ${STRETCH} flex flex-wrap items-center gap-y-[var(--oa-spac
 export function ArtifactRow({
   artifact: a,
   snippet,
+  showSpace,
 }: {
   artifact: ArtifactSummary;
   snippet?: string;
+  /** The cross-space Library: show which space each artifact is in. */
+  showSpace?: boolean;
 }) {
   return (
     <article className={ROW}>
@@ -31,7 +35,8 @@ export function ArtifactRow({
       <div
         className={`flex flex-none items-center gap-[var(--oa-space-3)] ${META} max-[600px]:basis-full max-[600px]:pl-[calc(16px+var(--oa-space-3))]`}
       >
-        <VisibilityBadge visibility={a.visibility} />
+        <Visibility visibility={a.visibility} space={a.space} />
+        {showSpace && <SpaceMarker space={a.space} />}
         {a.lastAgent && <span>{a.lastAgent.name}</span>}
         <time dateTime={a.updatedAt}>{relativeTime(a.updatedAt)}</time>
       </div>

@@ -23,9 +23,17 @@ export const useLibraryQuery = (f: LibraryFilters) => {
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam, signal }) => {
       const mine = f.space !== undefined && f.space === personalSpaceId;
-      const scope = f.space === undefined ? f.scope : mine ? "mine" : "space";
+      // Inside a space the tabs still apply: spaceId narrows any scope.
+      const scope =
+        f.space === undefined
+          ? f.scope
+          : f.scope === "all"
+            ? mine
+              ? "mine"
+              : "space"
+            : f.scope;
       const p = new URLSearchParams({ scope });
-      if (f.space && !mine) p.set("spaceId", f.space);
+      if (f.space && !(mine && scope === "mine")) p.set("spaceId", f.space);
       if (f.format) p.set("format", f.format);
       if (f.agent) p.set("agent", f.agent);
       if (pageParam) p.set("cursor", pageParam);

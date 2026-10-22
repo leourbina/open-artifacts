@@ -1,18 +1,25 @@
 import type { ArtifactSummary } from "@oa/shared";
-import { Avatar, FormatIcon, VisibilityBadge } from "@oa/ui";
+import { Avatar, FormatIcon } from "@oa/ui";
+import { SpaceMarker, Visibility } from "../spaces/SpaceMarker";
 import { AppLink } from "./AppLink";
 import { relativeTime } from "./time";
 import { META, STRETCH, TITLE_LINK } from "./ui";
 
-export type CardProps = { artifact: ArtifactSummary; meId?: string };
+export type CardProps = {
+  artifact: ArtifactSummary;
+  meId?: string;
+  /** The cross-space Library: show which space each artifact is in. */
+  showSpace?: boolean;
+};
 
-function Meta({ artifact: a, meId }: CardProps) {
+function Meta({ artifact: a, meId, showSpace }: CardProps) {
   return (
     <div
       className={`flex flex-wrap items-center gap-[var(--oa-space-2)] ${META}`}
     >
       <FormatIcon format={a.format} size={14} />
-      <VisibilityBadge visibility={a.visibility} />
+      <Visibility visibility={a.visibility} space={a.space} />
+      {showSpace && <SpaceMarker space={a.space} />}
       {a.lastAgent && <span>{a.lastAgent.name}</span>}
       {a.owner.id !== meId && (
         <Avatar
