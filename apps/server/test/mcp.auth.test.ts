@@ -508,7 +508,7 @@ describe("MCP auth: OAuth", () => {
 describe("MCP auth: capped callers (P2 T9 review)", () => {
   /** A code session outside the verified domains: capped whatever the role. */
   const codeCookie = async (userId: string) =>
-    `${sessionCookieName(env)}=${await signSession(env, userId, Date.now(), { provider: "code" })}`;
+    `${sessionCookieName(env)}=${await signSession(env, userId, Date.now(), { provider: "code", epoch: 0 })}`;
 
   it("a capped member at the consent page gets the members-only message", async () => {
     const m = await login(`oauth-capped-${tag}@x.com`);

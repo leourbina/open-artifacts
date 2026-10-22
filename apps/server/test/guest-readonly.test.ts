@@ -77,7 +77,7 @@ async function sessionFor(
   tenant?: string,
 ) {
   const { userId } = await login(email, role);
-  return `${SESSION}=${await signSession(env, userId, Date.now(), { provider, tenant })}`;
+  return `${SESSION}=${await signSession(env, userId, Date.now(), { provider, tenant, epoch: 0 })}`;
 }
 
 const WRITES = (id: string) =>
@@ -245,7 +245,7 @@ describe("guest read cap (direct sign-in)", () => {
     const id = await sharedArtifact(email);
     const { userId } = await login(email, "guest");
     const cookie = async (provider: "access" | "code") =>
-      `${SESSION}=${await signSession(env, userId, Date.now(), { provider })}`;
+      `${SESSION}=${await signSession(env, userId, Date.now(), { provider, epoch: 0 })}`;
     const g = await cookie("code");
     expect(
       (
@@ -268,7 +268,7 @@ describe("guest read cap (direct sign-in)", () => {
   it("a capped guest can revoke their own token, not someone else's", async () => {
     const email = uniq("g", "x.com");
     const { userId } = await login(email, "guest");
-    const g = `${SESSION}=${await signSession(env, userId, Date.now(), { provider: "access" })}`;
+    const g = `${SESSION}=${await signSession(env, userId, Date.now(), { provider: "access", epoch: 0 })}`;
     const own = await createPat(env, userId, "mine");
     const other = await login(uniq("o"));
     const theirs = await createPat(env, other.userId, "theirs");
