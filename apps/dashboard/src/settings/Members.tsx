@@ -3,6 +3,11 @@ import { Avatar, displayName } from "@oa/ui";
 import {
   Badge,
   Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
   Input,
   Select,
   SelectContent,
@@ -12,11 +17,13 @@ import {
 } from "@oa/ui/shadcn";
 import { useRef, useState } from "react";
 import { ApiClientError } from "../api/client";
+import { hasFeature } from "../api/contract";
 import {
   useInviteMember,
   useMembers,
   usePatchMember,
   useRemoveMember,
+  useSetRestricted,
 } from "../api/queries";
 import { emailEnabled } from "../auth/emailEnabled";
 import { useMe } from "../auth/useMe";
@@ -24,6 +31,8 @@ import { CopyLink } from "../layout/CopyLink";
 import { Modal } from "../layout/Modal";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { relativeTime } from "../library/time";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { restrictionReason } from "./restriction";
 import { errorText, muted, SettingsCard } from "./ui";
 
 type Assignable = "admin" | "member";
@@ -206,23 +215,57 @@ const lastSeen = (iso: string | null) => {
 const ROW =
   "grid min-h-[52px] grid-cols-[minmax(0,1fr)_112px_136px_72px] items-center gap-[10px] border-0 border-t border-border py-[var(--oa-space-2)] max-[600px]:grid-cols-[minmax(0,1fr)_112px]";
 
-function Row({ m, you }: { m: Member; you: boolean }) {
+/** The Restricted badge: warning-soft, unlike the neutral role badges. */
+const RESTRICTED_BADGE =
+  "border-transparent bg-[var(--oa-warning-soft)] text-[var(--oa-warning)]";
+
+/** "Bob" from "Bob Builder", else the email's local part. */
+const firstName = (m: Member) =>
+  m.name?.trim().split(/\s+/)[0] || m.email.split("@")[0];
+
+function Row({ m, you, hosted }: { m: Member; you: boolean; hosted: boolean }) {
   const patch = usePatchMember();
   const [confirm, setConfirm] = useState(false);
+  const [restricting, setRestricting] = useState(false);
+  const [lifting, setLifting] = useState(false);
   const remove = useRemoveMember();
+  const setRestricted = useSetRestricted();
   const label = displayName(m);
   const locked = m.role === "owner" || you;
+  const why = hosted ? restrictionReason(m.restriction) : null;
+  const manual = m.restriction?.manual === true;
+  const groups = m.restriction?.groups ?? [];
+  // The manual flag only: active members, never owners, admins or guests.
+  const canRestrict =
+    hosted && m.role === "member" && (m.status ?? "active") === "active";
+  const first = firstName(m);
   return (
     <li className={ROW}>
       <div className="flex min-w-0 items-center gap-[10px]">
         <Avatar name={m.name} email={m.email} />
         <div className="min-w-0">
-          <b className="block truncate font-medium">
-            <span>{label}</span>
+          <b className="flex min-w-0 items-center gap-[6px] font-medium">
+            <span className="truncate">{label}</span>
             {you && <span className="text-muted-foreground"> (you)</span>}
+            {why && (
+              <Badge
+                variant="outline"
+                data-tone="warning"
+                className={`flex-none max-[600px]:hidden ${RESTRICTED_BADGE}`}
+              >
+                Restricted
+              </Badge>
+            )}
           </b>
-          {m.name && (
-            <small className={`block truncate ${muted}`}>{m.email}</small>
+          {(m.name || why) && (
+            <small className={`block truncate ${muted}`}>
+              {m.name ? m.email : null}
+              {/* At <= 600px the badge and reason move to the control line. */}
+              <span className="max-[600px]:hidden">
+                {m.name && why ? " · " : null}
+                {why}
+              </span>
+            </small>
           )}
         </div>
       </div>
@@ -239,9 +282,75 @@ function Row({ m, you }: { m: Member; you: boolean }) {
         />
       )}
       {/* Labelled inline: there is no column header at any width. */}
-      <span className={muted}>{lastSeen(m.lastSeenAt)}</span>
+      <span className={muted}>
+        {why && (
+          <span className="mb-[4px] hidden items-center gap-[6px] max-[600px]:flex">
+            <Badge
+              variant="outline"
+              data-tone="warning"
+              className={RESTRICTED_BADGE}
+            >
+              Restricted
+            </Badge>{" "}
+            {why}
+          </span>
+        )}
+        {lastSeen(m.lastSeenAt)}
+      </span>
       {locked ? (
         <span />
+      ) : hosted ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="justify-self-end"
+              aria-label={`More for ${label}`}
+            >
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 16 16"
+                width="16"
+                height="16"
+                fill="currentColor"
+              >
+                <circle cx="3" cy="8" r="1.5" />
+                <circle cx="8" cy="8" r="1.5" />
+                <circle cx="13" cy="8" r="1.5" />
+              </svg>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            className="text-[length:var(--oa-text-sm)]"
+          >
+            {canRestrict && (
+              <DropdownMenuItem
+                onSelect={() =>
+                  manual ? setLifting(true) : setRestricting(true)
+                }
+              >
+                {manual ? "Lift manual restriction…" : "Restrict by hand…"}
+              </DropdownMenuItem>
+            )}
+            {groups.length > 0 && (
+              // The group cause is cleared on Directory, never here.
+              <DropdownMenuItem disabled className="flex-col items-start gap-0">
+                <span>
+                  Restricted {restrictionReason({ manual: false, groups })}
+                </span>
+                <small className={muted}>
+                  Lift it in Directory, Restricted groups
+                </small>
+              </DropdownMenuItem>
+            )}
+            {(canRestrict || groups.length > 0) && <DropdownMenuSeparator />}
+            <DropdownMenuItem onSelect={() => setConfirm(true)}>
+              Remove…
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       ) : (
         <Button
           variant="ghost"
@@ -253,6 +362,38 @@ function Row({ m, you }: { m: Member; you: boolean }) {
           Remove
         </Button>
       )}
+      <ConfirmDialog
+        open={restricting}
+        onClose={() => setRestricting(false)}
+        title={`Restrict ${label}?`}
+        body={
+          <p>
+            {first} will only be able to view, in every space and in their
+            personal space. They can't publish, edit, share or write live data,
+            from the app or any AI agent. Their artifacts stay where they are.
+          </p>
+        }
+        confirm="Restrict"
+        onConfirm={() =>
+          setRestricted.mutate({ memberId: m.id, restricted: true })
+        }
+      />
+      <ConfirmDialog
+        open={lifting}
+        onClose={() => setLifting(false)}
+        title={`Lift ${first}'s manual restriction?`}
+        body={
+          <p>
+            {groups.length
+              ? `${first} stays restricted ${restrictionReason({ manual: false, groups })}. To lift that, remove ${groups.map((g) => g.name ?? g.email).join(", ")} from Restricted groups in Directory.`
+              : `${first} gets back the roles their spaces and groups give them.`}
+          </p>
+        }
+        confirm="Lift manual restriction"
+        onConfirm={() =>
+          setRestricted.mutate({ memberId: m.id, restricted: false })
+        }
+      />
       <Modal
         open={confirm}
         onClose={() => setConfirm(false)}
@@ -284,6 +425,8 @@ export function Members() {
   const q = useMembers();
   const [inviting, setInviting] = useState(false);
   const me = state.status === "authed" ? state.me.user : null;
+  // Hosted (the spaces feature): restriction badges and the row's More menu.
+  const hosted = state.status === "authed" && hasFeature(state.me, "spaces");
   return (
     <SettingsCard
       id="oa-members-h"
@@ -305,7 +448,7 @@ export function Members() {
       ) : (
         <ul className="grid p-0">
           {q.data?.map((m) => (
-            <Row key={m.id} m={m} you={m.id === me?.id} />
+            <Row key={m.id} m={m} you={m.id === me?.id} hosted={hosted} />
           ))}
         </ul>
       )}
