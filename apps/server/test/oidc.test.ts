@@ -239,6 +239,14 @@ describe("GET /auth/login", () => {
     // verifier never leaks in the URL
     expect(loc.href).not.toContain("verifier");
   });
+
+  it("is 404 when access isn't an enabled provider", async () => {
+    for (const AUTH_PROVIDERS of ["email", "google,email", ""]) {
+      const r = await call("/auth/login", {}, { ...env, AUTH_PROVIDERS });
+      expect(r.status).toBe(404);
+      expect(oidcSet(r)).toBeUndefined();
+    }
+  });
 });
 
 describe("safeNext", () => {
@@ -931,11 +939,15 @@ describe("session epoch on the Access callback (#369)", () => {
     const { userId } = await login(email, "member");
     const first = await begin({ email });
     expect((await callback(first, first.oidc)).status).toBe(302);
+    const before = (await epochOf(email))?.e ?? 0;
     await patchMember(env, userId, { role: "admin" });
+    const bumped = (await epochOf(email))?.e ?? 0;
+    // The role change must have bumped the epoch, or this test proves nothing.
+    expect(bumped).toBeGreaterThan(before);
     const second = await begin({ email });
     const r = await callback(second, second.oidc);
     expect(r.status).toBe(302);
-    expect((await sessOf(r))?.e).toBe((await epochOf(email))?.e);
+    expect((await sessOf(r))?.e).toBe(bumped);
   });
 
   it("a non-active user lands on noAccess with no session", async () => {
