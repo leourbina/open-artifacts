@@ -57,8 +57,6 @@ import type {
 import {
   type GroupMapping,
   GroupMappingPutSchema,
-  type OrgMapping,
-  OrgMappingPutSchema,
   type RestrictedGroup,
   SPACE_MANAGER_FIELDS,
   SPACE_MANAGER_MAPPING_ROLES,
@@ -299,7 +297,7 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
     ],
   ]);
   /** "Every space" mappings: one row per group. */
-  const orgMappings: OrgMapping[] = [];
+  const orgMappings: GroupMapping[] = [];
   /** Settings.spaceManagerMappings (hosted default on). */
   let spaceManagerMappings = true;
   const restricted: RestrictedGroup[] = [
@@ -651,23 +649,33 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
       ? err("directory_sync_off", "Directory sync is off or frozen")
       : null;
   /**
-   * Space mapping gate: org admins pass; else the space's manager while
-   * spaceManagerMappings is on (403 directory_mapping_off), for viewer|editor
-   * only (403 space_forbidden). No role: 404.
+   * Space mapping gate: org admins pass; else the space's manager (no role:
+   * 404). PUT (add or change) needs spaceManagerMappings on (403
+   * directory_mapping_off); list and remove never do. Every role touched (PUT
+   * body, the existing row) must be viewer|editor (403 space_forbidden).
    */
-  const mappingGate = (s: SpaceRow, role?: SpaceRole): Response | null => {
+  const mappingGate = (
+    s: SpaceRow,
+    op: "list" | "put" | "remove",
+    roles: (SpaceRole | undefined)[] = [],
+  ): Response | null => {
     if (isAdmin()) return null;
     if (roleIn(s) !== "manager") return notFound();
-    if (!spaceManagerMappings)
+    if (op === "put" && !spaceManagerMappings)
       return err(
         "directory_mapping_off",
         "Space managers can't change group mappings on this install",
       );
     if (
-      role &&
-      !(SPACE_MANAGER_MAPPING_ROLES as readonly string[]).includes(role)
+      roles.some(
+        (r) =>
+          r && !(SPACE_MANAGER_MAPPING_ROLES as readonly string[]).includes(r),
+      )
     )
-      return err("space_forbidden", "Only an admin can map a group to manager");
+      return err(
+        "space_forbidden",
+        "Only an admin can change a manager mapping",
+      );
     return null;
   };
   const settingsView = () => ({
@@ -1157,7 +1165,9 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
       authed(({ params }) => {
         const s = sharedSpace(params.id);
         if (s instanceof Response) return s;
-        const denied = mappingGate(s);
+        if (s.kind === "personal")
+          return err("space_personal", "Personal spaces have no mappings");
+        const denied = mappingGate(s, "list");
         if (denied) return denied;
         return HttpResponse.json(mappings.get(s.id) ?? []);
       }),
@@ -1167,13 +1177,16 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
       authed(async ({ request, params }) => {
         const s = sharedSpace(params.id);
         if (s instanceof Response) return s;
-        const denied = mappingGate(s);
-        if (denied) return denied;
         if (s.kind === "personal")
           return err("space_personal", "Personal spaces have no mappings");
+        const denied = mappingGate(s, "put");
+        if (denied) return denied;
         const r = await c.body(request, GroupMappingPutSchema);
         if (r.error) return r.error;
-        const forbidden = mappingGate(s, r.data.role);
+        const existing = mappings
+          .get(s.id)
+          ?.find((x) => x.groupId === params.groupId);
+        const forbidden = mappingGate(s, "put", [r.data.role, existing?.role]);
         if (forbidden) return forbidden;
         const off = syncOff();
         if (off) return off;
@@ -1203,12 +1216,14 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
       authed(({ params }) => {
         const s = sharedSpace(params.id);
         if (s instanceof Response) return s;
-        const denied = mappingGate(s);
+        if (s.kind === "personal")
+          return err("space_personal", "Personal spaces have no mappings");
+        const denied = mappingGate(s, "remove");
         if (denied) return denied;
         const list = mappings.get(s.id) ?? [];
         const i = list.findIndex((x) => x.groupId === params.groupId);
         if (i < 0) return notFound();
-        const forbidden = mappingGate(s, list[i]?.role);
+        const forbidden = mappingGate(s, "remove", [list[i]?.role]);
         if (forbidden) return forbidden;
         const off = syncOff();
         if (off) return off;
@@ -1249,13 +1264,17 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
     // -- "Every space" mappings (org admin; never personal spaces)
     http.get(
       "*/api/v1/directory/org-mappings",
-      authed(() => (isAdmin() ? HttpResponse.json(orgMappings) : notFound())),
+      authed(({ request }) =>
+        isAdmin()
+          ? page(orgMappings, new URL(request.url).searchParams)
+          : notFound(),
+      ),
     ),
     http.put(
       "*/api/v1/directory/org-mappings/:groupId",
       authed(async ({ request, params }) => {
         if (!isAdmin()) return notFound();
-        const r = await c.body(request, OrgMappingPutSchema);
+        const r = await c.body(request, GroupMappingPutSchema);
         if (r.error) return r.error;
         const off = syncOff();
         if (off) return off;

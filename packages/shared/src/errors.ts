@@ -72,7 +72,7 @@ export const STATUS_FOR: Record<ErrorCode, number> = {
   reauth_required: 401,
   /** PUT R.memberRestricted(id) on an org owner or admin: they can't be restricted. */
   restrict_admin: 400,
-  /** A space manager (not an org admin) changes a space's group mappings while Settings.spaceManagerMappings is off. */
+  /** A space manager (not an org admin) adds or changes a space's group mapping (PUT) while Settings.spaceManagerMappings is off. Listing and removing stay allowed. */
   directory_mapping_off: 403,
 };
 

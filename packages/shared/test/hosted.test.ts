@@ -23,8 +23,6 @@ import {
   MembersQuerySchema,
   MeSchema,
   normalizeCode,
-  OrgMappingPutSchema,
-  OrgMappingSchema,
   PageSchema,
   PublishInputSchema,
   parseFeatures,
@@ -801,19 +799,6 @@ describe("hosted contract: space-manager and Every-space mappings", () => {
       manageMappings: true,
     });
     expect(SPACE_MANAGER_MAPPING_ROLES).toEqual(["viewer", "editor"]);
-    expect(
-      OrgMappingSchema.parse({
-        groupId: "g",
-        email: "g@example.com",
-        name: null,
-        role: "editor",
-        memberCount: null,
-        lastSyncedAt: null,
-      }).role,
-    ).toBe("editor");
-    expect(OrgMappingPutSchema.safeParse({ role: "owner" }).success).toBe(
-      false,
-    );
     expect(AuditEventSchema.shape.action.options).toContain(
       "settings.space_manager_mappings",
     );
@@ -887,9 +872,26 @@ describe("hosted contract: space-manager and Every-space mappings", () => {
     expect((await call("DELETE", R.spaceMapping(ENG, "gSales03"))).status).toBe(
       204,
     );
+    // Bob's own personal space: mappings don't exist there.
+    const personal = await call("GET", R.spaceMappings(bob));
+    expect(personal.status).toBe(400);
+    expect((await errCode(personal)).code).toBe("space_personal");
   });
 
-  it("setting off: a space manager gets 403 directory_mapping_off; admins still map", async () => {
+  it("a space manager can't change or remove a manager-role row an admin set", async () => {
+    fresh({ hosted: true });
+    await call("PUT", R.spaceMapping(ENG, "gSales03"), { role: "manager" });
+    await bobManagesEng();
+    const demote = await call("PUT", R.spaceMapping(ENG, "gSales03"), {
+      role: "viewer",
+    });
+    expect(demote.status).toBe(403);
+    expect((await errCode(demote)).code).toBe("space_forbidden");
+    const del = await call("DELETE", R.spaceMapping(ENG, "gSales03"));
+    expect((await errCode(del)).code).toBe("space_forbidden");
+  });
+
+  it("setting off: a manager's PUT is 403 directory_mapping_off; list and remove still work", async () => {
     fresh({ hosted: true });
     await call("PATCH", R.settings, { spaceManagerMappings: false });
     const eng = Strict.Space.parse(await json(await call("GET", R.space(ENG))));
@@ -902,23 +904,34 @@ describe("hosted contract: space-manager and Every-space mappings", () => {
     });
     expect(r.status).toBe(403);
     expect((await errCode(r)).code).toBe("directory_mapping_off");
-    expect((await call("GET", R.spaceMappings(ENG))).status).toBe(403);
+    expect(
+      z
+        .array(Strict.GroupMapping)
+        .parse(await json(await call("GET", R.spaceMappings(ENG)))),
+    ).toEqual([expect.objectContaining({ groupId: "gEng01" })]);
+    expect((await call("DELETE", R.spaceMapping(ENG, "gEng01"))).status).toBe(
+      204,
+    );
   });
 
   it("an Every-space mapping is an effective role in every shared space, never Personal", async () => {
     fresh({ hosted: true });
     expect(
-      z
-        .array(OrgMappingSchema.strict())
-        .parse(await json(await call("GET", R.orgMappings))),
-    ).toEqual([]);
-    const m = OrgMappingSchema.strict().parse(
+      PageSchema(Strict.GroupMapping).parse(
+        await json(await call("GET", R.orgMappings)),
+      ),
+    ).toEqual({ items: [], nextCursor: null });
+    const m = Strict.GroupMapping.parse(
       await json(await call("PUT", R.orgMapping("gEng01"), { role: "editor" })),
     );
     expect(m).toMatchObject({ groupId: "gEng01", role: "editor" });
     // One row per group: a second PUT updates it.
     await call("PUT", R.orgMapping("gEng01"), { role: "editor" });
-    expect(await json(await call("GET", R.orgMappings))).toHaveLength(1);
+    expect(
+      PageSchema(Strict.GroupMapping).parse(
+        await json(await call("GET", `${R.orgMappings}?limit=1`)),
+      ).items,
+    ).toHaveLength(1);
     // Not expanded into per-space mapping rows.
     expect(await json(await call("GET", R.spaceMappings(CLIENTS)))).toEqual([]);
     const members = PageSchema(Strict.SpaceMember).parse(

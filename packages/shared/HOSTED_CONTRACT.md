@@ -126,10 +126,10 @@ every flag that is on.
 | `PUT R.spaceMember(id, userId)` | `SpaceMemberPut` → `SpaceMember` | space manager, org admin |
 | `DELETE R.spaceMember(id, userId)` | 204 (manual row only) | space manager, org admin |
 | `POST R.spaceMemberSelf(id)` `/spaces/:id/members/self` | `SpaceMemberPut` → 201 `SpaceMember` | org admin adds themselves; shared spaces only (400 `space_personal`); audited `space.admin_self_add`; managers notified |
-| `GET R.spaceMappings(id)` | → `GroupMapping[]` (per-space rows only) | org admin; space manager while `spaceManagerMappings` is on (off: 403 `directory_mapping_off`) |
-| `PUT/DELETE R.spaceMapping(id, groupId)` | `GroupMappingPut` → `GroupMapping` / 204; 409 `directory_sync_off` when sync is off or frozen | org admin (any role); space manager for `viewer \| editor` only (`SPACE_MANAGER_MAPPING_ROLES`) while `spaceManagerMappings` is on. Order: no role 404; setting off 403 `directory_mapping_off`; a `manager` role (PUT body, or the existing row on DELETE) 403 `space_forbidden`; sync off 409 |
-| `GET R.orgMappings` `/directory/org-mappings` | → `OrgMapping[]` | org admin |
-| `PUT/DELETE R.orgMapping(groupId)` | `OrgMappingPut` → `OrgMapping` (upsert) / 204; 409 `directory_sync_off` when off or frozen | org admin; audited `mapping.set` / `mapping.remove` with `spaceId: null` |
+| `GET R.spaceMappings(id)` | → `GroupMapping[]` (per-space rows only); personal: 400 `space_personal` | org admin; space manager (any setting). **Manager access pending server implementation (P3 T9/T14)** |
+| `PUT/DELETE R.spaceMapping(id, groupId)` | `GroupMappingPut` → `GroupMapping` / 204; 409 `directory_sync_off` when sync is off or frozen | org admin (any role); space manager for rows that are and stay `viewer \| editor` (`SPACE_MANAGER_MAPPING_ROLES`). Order: personal 400 `space_personal`; no role 404; manager PUT while `spaceManagerMappings` is off 403 `directory_mapping_off` (DELETE always allowed: removing access); a `manager` role (PUT body, or the existing row on PUT or DELETE) 403 `space_forbidden`; sync off 409. **Manager access pending server implementation (P3 T9/T14)** |
+| `GET R.orgMappings` `/directory/org-mappings` | `?cursor&limit` → `Page<GroupMapping>` | org admin. **Pending server implementation (P3 T9/T14)** |
+| `PUT/DELETE R.orgMapping(groupId)` | `GroupMappingPut` → `GroupMapping` (upsert) / 204; 409 `directory_sync_off` when off or frozen | org admin; audited `mapping.set` / `mapping.remove` with `spaceId: null`. **Pending server implementation (P3 T9/T14)** |
 | `GET R.restrictedGroups` | → `RestrictedGroup[]` | org admin |
 | `PUT R.restrictedGroup(groupId)` | (no body) → `RestrictedGroup`; 409 `directory_sync_off` when off or frozen | org admin; audited `restricted.set` |
 | `DELETE R.restrictedGroup(groupId)` | 204, in any mode (lifts a frozen restriction) | org admin; audited `restricted.remove` |
@@ -137,7 +137,7 @@ every flag that is on.
 
 Personal spaces are never created, patched, deleted or given members here: 400 `space_personal`.
 
-**"Every space" mappings** (`OrgMapping`): one row per group, applied to every
+**"Every space" mappings** (`GroupMapping` rows under `R.orgMappings`): one row per group, applied to every
 shared space (including ones created later) and NEVER to a personal space. They
 are never expanded into per-space rows: a member's effective role in a shared
 space is the read-time max of the space's own rows (manual, sync,
@@ -153,8 +153,7 @@ only per-space rows.
 | `SpaceMemberSchema` | userId-keyed: `{ userId, user, status, role, source: manual \| sync, manualRole, syncRole, groups: GroupRef[], cap }` |
 | `SpaceMemberPutSchema` | `{ role }` |
 | `GroupMappingSchema` / `GroupMappingPutSchema` | `GroupRef + { role, memberCount, lastSyncedAt }` / `{ role }` |
-| `OrgMappingSchema` / `OrgMappingPutSchema` | same shapes as `GroupMapping` / `GroupMappingPut`, for "Every space" rows |
-| `SpaceCanSchema` | `{ manageMappings }`: true for org admins, and for the space's managers while `spaceManagerMappings` is on; false on personal spaces |
+| `SpaceCanSchema` | `{ manageMappings }`: may add or change mappings. True for org admins, and for the space's managers while `spaceManagerMappings` is on; false on personal spaces. Managers can always list and remove `viewer`/`editor` rows |
 | `SPACE_MANAGER_MAPPING_ROLES` | `viewer`, `editor`: the roles a space manager may map |
 | `RestrictedGroupSchema` | `GroupRef + { memberCount, createdAt }`. Restricted members (a restricted group or the manual flag) are viewer everywhere: no `allMembersRole`, no create (personal space included), no data writes, on REST, MCP and the data API |
 
@@ -219,7 +218,7 @@ These are the names P2 and P3 use; the contract wins. There is no
 | `turnstile_failed` | 403 | Turnstile token rejected |
 | `reauth_required` | 401 | break-glass routes need a fresh Google sign-in |
 | `restrict_admin` | 400 | `PUT R.memberRestricted(id)` on an org owner or admin |
-| `directory_mapping_off` | 403 | a space manager (not an org admin) changes or lists a space's mappings while `Settings.spaceManagerMappings` is off |
+| `directory_mapping_off` | 403 | a space manager (not an org admin) adds or changes a space mapping (PUT) while `Settings.spaceManagerMappings` is off; list and DELETE stay allowed |
 
 ## Test hooks (`hosted/test-hooks.ts`, types only)
 
@@ -244,7 +243,7 @@ personal space per member, Engineering (caller manager, allMembersRole viewer,
 member Carol with `{ live: 2, deleted: 1 }` to transfer; a held sweep
 (`gSales03`); `can` from `artifactCan` on every request; `public_links_off`
 on PATCH and publish; `Settings.spaceManagerMappings` (default on, PATCH
-admin-only and audited); space managers map `viewer`/`editor` only; org
+admin-only and audited); space managers map `viewer`/`editor` only (never over a manager row); org
 mappings (none seeded) merge into shared spaces at read time, never personal. Code flow: `HOSTED_MOCK_CODE` (`24681357`) verifies the last
 requested address; 5 wrong tries expire it; 6+ requests per address 429.
 Verify signs the mock in as that address (member for `MOCK_DOMAIN`, else a
