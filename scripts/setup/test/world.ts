@@ -37,6 +37,9 @@ export const filler = (n: number) =>
   Array.from({ length: n }, (_, i) => ({ id: `f${i}`, title: `other-${i}` }));
 
 type World = {
+  /** App and content hosts the fake serves (default app.example.com and a.b.usercontent.example.com). */
+  appHost?: string;
+  contentHost?: string;
   /** Extra files (token files) and their modes. */
   files?: Record<string, string>;
   fileModes?: Record<string, number>;
@@ -74,6 +77,19 @@ type World = {
   healthPlanFirst?: (string | undefined)[];
   /** /healthz reports this plan instead of the deployed PLAN var. */
   healthPlan?: string;
+  /** Artifacts already on the install (welcome lookup tests). */
+  existingArtifacts?: {
+    id: string;
+    title: string;
+    /** The caller's level (default "owner"); a team or shared artifact is "viewer"/"editor". */
+    access?: "owner" | "editor" | "viewer" | "manager";
+  }[];
+  /** Called with each D1 statement before it runs (e.g. to delete a row mid-run). */
+  onSql?: (sql: string) => void;
+  /** The content get_artifact answers with (defaults to the last publish). */
+  welcomeContent?: string;
+  /** tools/list omits search_artifacts. */
+  noSearchTool?: boolean;
   /** tools/list omits publish_artifact. */
   noPublishTool?: boolean;
   /** The token INSERT fails, or silently writes nothing. */
@@ -239,7 +255,9 @@ export function world(w: World = {}) {
   let dryRuns = 0;
   /** The content of the last publish (kept when a test clears mcpCalls). */
   let lastPublished = "";
-  const pubs: { id: string; title: string }[] = [];
+  const pubs: { id: string; title: string; access?: string }[] = [
+    ...(w.existingArtifacts ?? []),
+  ];
   const deleted = [...(w.deletedArtifacts ?? [])];
   /** Every mutation, in order. `values` holds every secret value seen. */
   const ops: string[] = [];
@@ -285,6 +303,7 @@ export function world(w: World = {}) {
         m = st.match(re) ?? [];
         return m.length > 0;
       };
+      w.onSql?.(st);
       if (w.d1Fails && st.includes("INSERT INTO tokens"))
         throw new Error("D1 down");
       if (w.failOn?.test(st)) throw new Error("D1 statement failed");
@@ -324,13 +343,18 @@ export function world(w: World = {}) {
         )
       ) {
         const email = unq(m[2]).toLowerCase();
-        const user = db.users.find((x) => x.email === email) ?? {
-          id: m[1],
-          email,
-          role: "owner",
-        };
-        if (!db.users.includes(user)) db.users.push(user);
-        user.role = "owner";
+        const existing = db.users.find((x) => x.email === email);
+        // ON CONFLICT(email) DO NOTHING (--upgrade) leaves the row untouched.
+        if (st.includes("ON CONFLICT(email) DO NOTHING")) {
+          if (!existing) db.users.push({ id: m[1], email, role: "owner" });
+        } else {
+          const user = existing ?? { id: m[1], email, role: "owner" };
+          if (!db.users.includes(user)) db.users.push(user);
+          user.role = "owner";
+        }
+      } else if (is(/^SELECT id FROM users WHERE email = '((?:[^']|'')*)'$/)) {
+        const email = unq(m[1]).toLowerCase();
+        results = db.users.filter((u) => u.email === email);
       } else if (
         is(
           /^UPDATE tokens SET revoked_at = (\d+) WHERE user_id = \(SELECT id FROM users WHERE email = '((?:[^']|'')*)'\) AND label = 'setup-ci' AND revoked_at IS NULL$/,
@@ -499,12 +523,14 @@ export function world(w: World = {}) {
       return { code: 0, stdout, stderr: "" };
     },
     fetch: async (input, init) => {
+      const appHost = w.appHost ?? "app.example.com";
+      const contentHost = w.contentHost ?? "a.b.usercontent.example.com";
       const u = new URL(String(input));
       const m = init?.method ?? "GET";
       const auth = new Headers(init?.headers).get("authorization");
       const body = init?.body ? JSON.parse(String(init.body)) : undefined;
       const q = (k: string) => u.searchParams.get(k);
-      if (u.host === "app.example.com") {
+      if (u.host === appHost) {
         if (u.pathname === "/healthz") {
           hits.push("GET /healthz");
           if (w.healthzDown) throw new Error("fetch failed");
@@ -558,22 +584,60 @@ export function world(w: World = {}) {
               tools: [
                 ...(w.noPublishTool ? [] : [{ name: "publish_artifact" }]),
                 { name: "get_artifact" },
+                ...(w.noSearchTool ? [] : [{ name: "search_artifacts" }]),
                 { name: "list_artifacts" },
               ],
             });
           if (body.method === "tools/call") {
             mcpCalls.push(body.params);
-            if (body.params.name === "list_artifacts")
-              return reply(
-                { structuredContent: { items: pubs, nextCursor: null } },
-                true,
-              );
             const prev = body.params.arguments.id;
             const err = (text: string) =>
               reply({ isError: true, content: [{ type: "text", text }] }, true);
+            if (body.params.name === "list_artifacts") {
+              const from = Number(body.params.arguments.cursor ?? 0);
+              const limit = Number(body.params.arguments.limit ?? 25);
+              const items = pubs
+                .slice(from, from + limit)
+                .map((x) => ({ access: "owner", ...x }));
+              const next =
+                from + limit < pubs.length ? `${from + limit}` : null;
+              return reply(
+                { structuredContent: { items, nextCursor: next } },
+                true,
+              );
+            }
+            if (body.params.name === "search_artifacts") {
+              const q = String(body.params.arguments.q ?? "").toLowerCase();
+              const items = pubs
+                .filter((x) => x.title.toLowerCase().includes(q))
+                .map((x) => ({ access: "owner", ...x }));
+              return reply(
+                { structuredContent: { items, nextCursor: null } },
+                true,
+              );
+            }
+            if (body.params.name === "get_artifact") {
+              const a = pubs.find((x) => x.id === prev);
+              if (!a || deleted.includes(a.id))
+                return err("not_found: Artifact not found");
+              return reply(
+                {
+                  structuredContent: {
+                    id: a.id,
+                    title: a.title,
+                    version: 1,
+                    content: w.welcomeContent ?? lastPublished,
+                  },
+                },
+                true,
+              );
+            }
             if (w.publishError) return err(w.publishError);
             if (prev && deleted.includes(prev))
               return err("not_found: Artifact not found");
+            const target = pubs.find((x) => x.id === prev);
+            if (target && (target.access ?? "owner") === "viewer")
+              return err("forbidden: you can only view this artifact");
             lastPublished = body.params.arguments.content ?? "";
             const id = prev ?? `art${++published}`;
             if (!pubs.some((x) => x.id === id))
@@ -584,7 +648,7 @@ export function world(w: World = {}) {
                 structuredContent: {
                   id,
                   version: 1,
-                  url: w.viewUrl ?? `https://app.example.com/a/${id}`,
+                  url: w.viewUrl ?? `https://${appHost}/a/${id}`,
                 },
               },
               true,
@@ -592,7 +656,7 @@ export function world(w: World = {}) {
           }
         }
         const cu = u.pathname.match(
-          /^\/api\/v1\/artifacts\/(\w+)\/content-url$/,
+          /^\/api\/v1\/artifacts\/([\w-]+)\/content-url$/,
         );
         if (cu) {
           hits.push("GET content-url");
@@ -605,13 +669,13 @@ export function world(w: World = {}) {
           )
             return Response.json({ error: "unauthorized" }, { status: 401 });
           return Response.json({
-            url: `https://a.b.usercontent.example.com/s/sig/${cu[1]}/1/__view`,
+            url: `https://${contentHost}/s/sig/${cu[1]}/1/__view`,
             expiresAt: "2026-10-18T00:00:00.000Z",
           });
         }
         return new Response("nf", { status: 404 });
       }
-      if (u.host === "a.b.usercontent.example.com") {
+      if (u.host === contentHost) {
         hits.push(`GET content ${auth ? "with auth" : "no auth"}`);
         const last = lastPublished;
         if (w.contentStatus)

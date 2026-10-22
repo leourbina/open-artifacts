@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { run } from "../src/index.ts";
 import { ROOT } from "./fakes.ts";
@@ -86,5 +88,100 @@ describe("--ci --upgrade selftest (#171)", () => {
     expect(w.db.tokens).toHaveLength(before);
     expect(line(w, "owner-token").message).toContain("kept (--upgrade)");
     expect(line(w, "revoke-ci-token")).toBeUndefined();
+  });
+});
+
+describe("welcome lookup is exact and never duplicates the page", () => {
+  const welcome = readFileSync(
+    join(import.meta.dirname, "../welcome.md"),
+    "utf8",
+  );
+  const filler = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ id: `x${i}`, title: `Other ${i}` }));
+  const pubs = (w: W) =>
+    w.mcpCalls.filter((c) => c.name === "publish_artifact");
+
+  it("finds it by exact title with search_artifacts and republishes nothing when unchanged", async () => {
+    const w = world({
+      existingArtifacts: [
+        ...filler(3),
+        { id: "art-w", title: "Welcome to Open Artifacts" },
+      ],
+      welcomeContent: welcome,
+      contentBody: welcome,
+    });
+    expect(await run(CI, w.deps, ROOT)).toBe(0);
+    expect(w.mcpCalls.some((c) => c.name === "search_artifacts")).toBe(true);
+    expect(pubs(w)).toHaveLength(0);
+    expect(line(w, "selftest").message).toContain("unchanged");
+  });
+
+  it("pages list_artifacts when the server has no search_artifacts", async () => {
+    // The page sits past the first 100 items: a fixed limit-100 lookup misses it.
+    const w = world({
+      noSearchTool: true,
+      existingArtifacts: [
+        ...filler(120),
+        { id: "art-w", title: "Welcome to Open Artifacts" },
+      ],
+      welcomeContent: welcome,
+      contentBody: welcome,
+    });
+    expect(await run(CI, w.deps, ROOT)).toBe(0);
+    expect(pubs(w)).toHaveLength(0);
+    expect(line(w, "selftest").message).toContain("unchanged");
+  });
+
+  it("updates the found page instead of publishing a second one when the text changed", async () => {
+    const w = world({
+      existingArtifacts: [{ id: "art-w", title: "Welcome to Open Artifacts" }],
+      welcomeContent: "old text",
+    });
+    expect(await run(CI, w.deps, ROOT)).toBe(0);
+    const p = pubs(w);
+    expect(p).toHaveLength(1);
+    expect(p[0].arguments.id).toBe("art-w");
+  });
+});
+
+describe("owner-token under --upgrade never moves ownership", () => {
+  it("skips both the demote and role='owner'", async () => {
+    const w = await installed();
+    expect(await run([...CI, "--upgrade"], w.deps, ROOT)).toBe(0);
+    const all = w.sqls.join("; ");
+    expect(all).not.toContain("SET role");
+    expect(all).not.toContain("INSERT INTO users");
+  });
+
+  it("fails when a different owner exists, without demoting it", async () => {
+    const w = await installed();
+    const me = w.db.users.find((u) => u.email === "owner@example.com");
+    if (me) me.role = "admin";
+    w.db.users.push({
+      id: "u-other",
+      email: "other@example.com",
+      role: "owner",
+    });
+    const before = w.db.tokens.length;
+    w.lines.length = 0;
+    w.sqls.length = 0;
+    expect(await run([...CI, "--upgrade"], w.deps, ROOT)).not.toBe(0);
+    expect(line(w, "owner-token")).toMatchObject({ status: "error" });
+    expect(line(w, "owner-token").message).toContain("won't change ownership");
+    expect(
+      w.db.users.filter((u) => u.role === "owner").map((u) => u.email),
+    ).toEqual(["other@example.com"]);
+    expect(w.sqls.join("; ")).not.toContain("SET role");
+    expect(w.db.tokens).toHaveLength(before);
+  });
+
+  it("fails when the configured owner has no row, instead of creating one", async () => {
+    const w = await installed();
+    w.db.users = [];
+    w.lines.length = 0;
+    expect(await run([...CI, "--upgrade"], w.deps, ROOT)).not.toBe(0);
+    expect(line(w, "owner-token")).toMatchObject({ status: "error" });
+    expect(line(w, "owner-token").message).toContain("no user row");
+    expect(w.db.users.map((u) => u.email)).not.toContain("owner@example.com");
   });
 });

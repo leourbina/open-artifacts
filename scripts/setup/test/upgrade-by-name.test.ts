@@ -30,6 +30,10 @@ const cloud = (o: Opts = {}) =>
     apps: [app("open-artifacts")],
     secrets: SECRETS,
     worker: VARS,
+    // An installed Worker has its owner's row; --upgrade checks it, never creates it.
+    seed: {
+      users: [{ id: "u-owner", email: "owner@example.com", role: "owner" }],
+    },
     ...o,
   });
 const ok = (w: W) => {

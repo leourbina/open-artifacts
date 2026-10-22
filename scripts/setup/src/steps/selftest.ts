@@ -238,21 +238,68 @@ async function mcp(ctx: Ctx, token: string, prev?: string, prevHash?: string) {
     });
   const text = (r: { content?: { text?: string }[] }) =>
     r?.content?.[0]?.text ?? "no id";
-  // --ci keeps no state: find the owner's existing welcome page by title instead of publishing a new one each run.
-  if (
-    !prev &&
-    ctx.opts.ci &&
-    tools.some((t: { name: string }) => t.name === "list_artifacts")
-  ) {
-    const l = await post("tools/call", {
-      name: "list_artifacts",
-      arguments: { scope: "mine", limit: 100 },
+  const has = (name: string) =>
+    tools.some((t: { name: string }) => t.name === name);
+  const exact = (
+    r: { structuredContent?: { items?: unknown } } | undefined,
+  ) => {
+    const items = r?.structuredContent?.items;
+    if (!Array.isArray(items)) return undefined;
+    // Only the caller's own page: search and list also return team and shared
+    // artifacts, and a member's same-title page must not be used or published to.
+    const hit = items.find(
+      (a: { title?: string; id?: string; access?: string }) =>
+        a?.title === TITLE && typeof a?.id === "string" && a.access === "owner",
+    );
+    return typeof hit?.id === "string" ? hit.id : undefined;
+  };
+  /**
+   * --ci keeps no state: find the owner's page by exact title, never a fixed
+   * page of the list (a 100-item page can hide it and publish a duplicate).
+   * search_artifacts when the server has it, otherwise every page of
+   * list_artifacts.
+   */
+  const findWelcome = async (): Promise<string | undefined> => {
+    if (!has("search_artifacts") && !has("list_artifacts")) return undefined;
+    const tool = has("search_artifacts")
+      ? "search_artifacts"
+      : "list_artifacts";
+    const base =
+      tool === "search_artifacts"
+        ? { q: TITLE }
+        : { scope: "mine", limit: 100 };
+    let cursor: string | undefined;
+    for (let page = 0; page < 50; page++) {
+      const r = await post("tools/call", {
+        name: tool,
+        arguments: { ...base, ...(cursor ? { cursor } : {}) },
+      });
+      const hit = exact(r);
+      if (hit) return hit;
+      cursor = r?.structuredContent?.nextCursor ?? undefined;
+      if (!cursor) return undefined;
+    }
+    return undefined;
+  };
+  /** The page's latest text, so an unchanged page is never republished. */
+  const latestIsCurrent = async (id: string) => {
+    if (!has("get_artifact")) return false;
+    const r = await post("tools/call", {
+      name: "get_artifact",
+      arguments: { id },
     });
-    const items = l?.structuredContent?.items;
-    const hit = Array.isArray(items)
-      ? items.find((a: { title?: string }) => a?.title === TITLE)
-      : undefined;
-    if (typeof hit?.id === "string") prev = hit.id;
+    const text_ = r?.structuredContent?.content;
+    return (
+      typeof text_ === "string" && tokenHash(`${TITLE}\n${text_}`) === hash
+    );
+  };
+  if (!prev && ctx.opts.ci) {
+    const found = await findWelcome();
+    if (found) {
+      if (await latestIsCurrent(found))
+        return { id: found, url: undefined, hash, unchanged: true };
+      prev = found;
+    }
   }
   let r = await publish(prev);
   // The saved welcome artifact was deleted: publish a fresh one instead.
