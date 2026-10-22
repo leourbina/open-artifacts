@@ -71,3 +71,62 @@ for (const path of [
       );
       expect(sw, "horizontal overflow px").toBeLessThanOrEqual(0);
     });
+
+// Hosted sign-in (P4 Task 14): a hostile address stops at the field, and a
+// hostile `next` never leaves the app.
+const BIDI_EMAIL = "\u202eadmin\u202c@example.com";
+const LONG_EMAIL = `${"a".repeat(300)}@example.com`;
+const MARKUP_EMAIL = `<script>alert(1)</script>@example.com`;
+
+for (const [kind, email] of [
+  ["bidi", BIDI_EMAIL],
+  ["long", LONG_EMAIL],
+  ["markup", MARKUP_EMAIL],
+] as const)
+  test(`hostile ${kind} email on /sign-in`, async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/sign-in?hosted=1&method=code");
+    await page.waitForLoadState("networkidle");
+    await page.getByRole("textbox", { name: "Email" }).fill(email);
+    await page.getByRole("button", { name: "Send code" }).click();
+    await expect(page.getByRole("alert")).toHaveText(
+      "Enter a valid email address.",
+    );
+    // Still the address step: no request went out and nothing rendered as markup.
+    await expect(
+      page.getByRole("textbox", { name: "Code", exact: true }),
+    ).toHaveCount(0);
+    expect(
+      await page.evaluate(() => (window as { __xss?: number }).__xss),
+    ).toBeUndefined();
+    expect(await page.locator("img[src=x], svg[onload]").count()).toBe(0);
+    const sw = await page.evaluate(
+      () => (document.scrollingElement?.scrollWidth ?? 0) - innerWidth,
+    );
+    expect(sw, "horizontal overflow px").toBeLessThanOrEqual(0);
+  });
+
+test("a hostile next never leaves the app", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/sign-in?hosted=1&next=%2F%2Fevil.example");
+  await page.waitForLoadState("networkidle");
+  await expect(
+    page.getByRole("link", { name: "Continue with Google" }),
+  ).toHaveAttribute("href", "/auth/login/google?next=%2F");
+  // The guest link drops it too; the code request carries the safe next and
+  // sign-in lands on "/".
+  const guest = page.getByRole("link", {
+    name: "Get a sign-in code",
+    exact: true,
+  });
+  await expect(guest).toHaveAttribute("href", "/sign-in?method=code&next=%2F");
+  await guest.click();
+  await page.getByRole("textbox", { name: "Email" }).fill("bob@example.com");
+  await page.getByRole("button", { name: "Send code" }).click();
+  await page
+    .getByRole("textbox", { name: "Code", exact: true })
+    .fill("24681357");
+  await page.getByRole("button", { name: "Verify" }).click();
+  await page.waitForURL((url) => url.pathname === "/");
+  expect(page.url()).not.toContain("evil.example");
+});
