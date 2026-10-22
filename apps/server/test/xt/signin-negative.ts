@@ -364,7 +364,9 @@ export const SIGNIN_NEGATIVE_CASES: NegativeCase[] = [
       });
       await expectStatus(
         await send(b, R.me, { headers: { cookie, ...swap(ah) } }),
-        [401],
+        // 404: a foreign Host is refused before any session read (#415);
+        // 401: the request reached B and B refused A's cookie. Never 200.
+        [401, 404],
         "B /me with A's cookie and A's host headers",
       );
       // A ignores forwarded hosts: still A, still its own session.
