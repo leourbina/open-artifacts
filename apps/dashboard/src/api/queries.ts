@@ -701,4 +701,6 @@ export const useResetIdentity = () =>
       api.send("DELETE", R.memberIdentity(memberId, "google"), undefined),
     () => [qk.members],
     "Couldn't reset the sign-in.",
+    // The Members row says these itself, naming the person.
+    (e) => e.status === 404 || e.status === 403,
   );
