@@ -7,6 +7,7 @@ import {
   SIGN_IN_PAGE,
   type SignInError,
 } from "@oa/shared";
+import { logAuth, oidcStage } from "../auth/audit.js";
 import { authConfig } from "../auth/config.js";
 import {
   buildAuthorizeRedirect,
@@ -84,6 +85,12 @@ const toSignIn = (error: SignInError, next: string, cookies: string[]) =>
     cookies,
   );
 
+/** The logged stage of a callback failure: an OidcStage enum value only. */
+const catchStage = (e: unknown) =>
+  e instanceof OidcStateError || e instanceof OidcRedeemError
+    ? oidcStage(e.stage)
+    : "failed";
+
 export function mountAuth(app: AppType): void {
   app.get(AUTH.login, async (c) => {
     const cfg = authConfig(c.env);
@@ -131,6 +138,7 @@ export function mountAuth(app: AppType): void {
       const user = await upsertOnLogin(c.env, email, name);
       if (!user) {
         logOidcFail("no_access");
+        logAuth({ provider: "access", outcome: "refused", stage: "no_access" });
         return redirect(PAGES.noAccess, clear);
       }
       // The epoch must come from the row: a guest reactivated after #368,
@@ -139,6 +147,7 @@ export function mountAuth(app: AppType): void {
       const row = await getUserWithEpoch(c.env, user.id);
       if (!row) {
         logOidcFail("no_access");
+        logAuth({ provider: "access", outcome: "refused", stage: "no_access" });
         return redirect(PAGES.noAccess, clear);
       }
       const sess = sessionCookie(
@@ -148,8 +157,14 @@ export function mountAuth(app: AppType): void {
         }),
         c.env,
       );
+      logAuth({ provider: "access", outcome: "ok", uid: user.id });
       return redirect(next, [...clear, sess]);
     } catch (e) {
+      logAuth({
+        provider: "access",
+        outcome: e instanceof ApiError ? "refused" : "error",
+        stage: catchStage(e),
+      });
       if (e instanceof OidcStateError) {
         if (e.retry) return retryPage(e.next, clear);
         return redirect(
@@ -193,15 +208,19 @@ export function mountAuth(app: AppType): void {
       const r = await admit(c.env, authConfig(c.env), id);
       if (!r.ok) {
         logOidcFail(r.reason);
+        logAuth({ provider: "google", outcome: "refused", stage: r.reason });
         return toSignIn(r.reason, id.next, clear);
       }
       try {
         await onGoogleSignIn(c.env, r.user);
       } catch {
-        console.warn(JSON.stringify({ evt: "directory_sync_failed" }));
+        logAuth({ evt: "directory_sync_failed" });
       }
       const row = await getUserWithEpoch(c.env, r.user.id);
-      if (!row) return toSignIn("failed", id.next, clear);
+      if (!row) {
+        logAuth({ provider: "google", outcome: "error", stage: "no_user" });
+        return toSignIn("failed", id.next, clear);
+      }
       const sess = sessionCookie(
         await signSession(c.env, r.user.id, Date.now(), {
           provider: "google",
@@ -210,8 +229,19 @@ export function mountAuth(app: AppType): void {
         }),
         c.env,
       );
+      logAuth({
+        provider: "google",
+        outcome: "ok",
+        uid: r.user.id,
+        tenant: id.tenant ?? undefined,
+      });
       return redirect(id.next, [...clear, sess]);
     } catch (e) {
+      logAuth({
+        provider: "google",
+        outcome: e instanceof ApiError ? "refused" : "error",
+        stage: catchStage(e),
+      });
       if (e instanceof OidcStateError) {
         if (e.retry) return toSignIn("expired", e.next, clear);
         return redirect(

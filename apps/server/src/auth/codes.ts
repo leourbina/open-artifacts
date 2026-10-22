@@ -14,6 +14,7 @@ import { ApiError } from "../http/errors.js";
 import { codeEligibility } from "../services/identity.js";
 import { getSettings } from "../services/members.js";
 import { b64urlDecode, hmacSign } from "../util/crypto.js";
+import { logAuth } from "./audit.js";
 import type { AuthConfig } from "./config.js";
 import { deriveKey, MIN_SECRET_LENGTH } from "./keys.js";
 
@@ -193,10 +194,6 @@ function randomCode(): string {
   }
 }
 
-/** A structured auth signal for alerting; never carries an address or IP. */
-export const logAuth = (name: "code_abuse", scope: "email" | "send") =>
-  console.warn(JSON.stringify({ evt: name, scope }));
-
 // A soft counter: counts in the bucket and never refuses; returns the count.
 const BUMP = `insert into counters (key, n, day) values (?1, 1, ?2)
   on conflict (key) do update set
@@ -251,7 +248,8 @@ export async function takeRequestSlot(
   if (refused === 2)
     return { ok: false, retryAfter: retryAfter("hour", now), scope: "email" };
   const n = await bump(env, `code:e:${ek}`, counterBucket("hour", now));
-  if (n === CODE_LIMITS.perEmailPerHourAlert) logAuth("code_abuse", "email");
+  if (n === CODE_LIMITS.perEmailPerHourAlert)
+    logAuth({ evt: "code_abuse", scope: "email" });
   return { ok: true };
 }
 
@@ -335,7 +333,7 @@ export async function deliverCode(
     (await bump(env, `code:sentd:${ek}`, day)) ===
     CODE_LIMITS.sendsPerEmailPerDayAlert
   )
-    logAuth("code_abuse", "send");
+    logAuth({ evt: "code_abuse", scope: "send" });
   const code = await createCode(env, ek, requestId, now);
   const instance =
     (await getSettings(env).catch(() => null))?.name ?? "Open Artifacts";
