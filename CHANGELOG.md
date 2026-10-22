@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.25.0...v0.26.0) (2026-10-22)
+
+
+### Features
+
+* **dashboard:** hosted sign-in, Google plus emailed codes (P4 Task 14) ([#430](https://github.com/open-artifacts-ai/open-artifacts/issues/430)) ([e77e183](https://github.com/open-artifacts-ai/open-artifacts/commit/e77e183fdf0dcdcf10640699ca01eddd23bdd41a))
+
 ## [0.25.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.24.0...v0.25.0) (2026-10-22)
 
 
