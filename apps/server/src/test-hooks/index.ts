@@ -1,3 +1,4 @@
+import { normalizeEmail } from "@oa/auth-core";
 import {
   type Member,
   newId,
@@ -14,7 +15,6 @@ import { emailKey } from "../auth/codes.js";
 import { authConfig } from "../auth/config.js";
 import { signSession } from "../auth/session.js";
 import { getDb } from "../db/client.js";
-import { normEmail } from "../db/email.js";
 import { users } from "../db/schema.js";
 import type { Env } from "../env.js";
 import { ApiError, appOrigin, toErrorResponse } from "../http/errors.js";
@@ -159,7 +159,7 @@ async function testUser(
 ): Promise<Member | null> {
   if (role === "owner") return null;
   if (!inTestDomain(env, email)) return null;
-  if (email === normEmail(env.OWNER_EMAIL ?? "")) return null;
+  if (email === normalizeEmail(env.OWNER_EMAIL ?? "")) return null;
   const now = Date.now();
   await insertUser(env, {
     email,
@@ -291,7 +291,7 @@ export function mountTestHooks(app: AppType): void {
         return notFound();
       }
       const { email: raw, role, spaces = [] } = input.data;
-      const email = normEmail(raw);
+      const email = normalizeEmail(raw);
       const user =
         email && spacesSupported(spaces)
           ? await testUser(env, email, role)
@@ -311,7 +311,7 @@ export function mountTestHooks(app: AppType): void {
 
     if (hook === "otp_latest") {
       const input = OtpLatestInputSchema.safeParse(body);
-      const email = input.success ? normEmail(input.data.email) : null;
+      const email = input.success ? normalizeEmail(input.data.email) : null;
       if (!email || !inTestDomain(env, email)) {
         await audit(env, hook, ip, "refused", email ? { email } : {});
         return notFound();
@@ -325,7 +325,9 @@ export function mountTestHooks(app: AppType): void {
     }
 
     const email = oauthHookEmail(env);
-    const user = normEmail(email) ? await testUser(env, email, "member") : null;
+    const user = normalizeEmail(email)
+      ? await testUser(env, email, "member")
+      : null;
     if (!user) {
       await audit(env, hook, ip, "refused", { email });
       return notFound();
