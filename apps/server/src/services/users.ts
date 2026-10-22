@@ -2,6 +2,8 @@ import { normalizeEmail } from "@oa/auth-core";
 import { type Member, newId, type Role, type UserRef } from "@oa/shared";
 import { eq } from "drizzle-orm";
 import { withCap } from "../auth/authz.js";
+import { authConfig } from "../auth/config.js";
+import { capOf } from "../auth/policy.js";
 import { getDb } from "../db/client.js";
 import { shares, users } from "../db/schema.js";
 import { stmt } from "../db/stmt.js";
@@ -226,11 +228,24 @@ export async function getUserWithEpoch(
       >
     >();
   // Every request's user comes through here (session, PAT, OAuth), so the cap
-  // is set once. Sources: P2's authConfig.guestsReadOnly and P3's restriction
-  // (users.restricted_*, 0009); until those land nobody is capped.
-  return row
-    ? { user: withCap(toMember(row), null), sessionEpoch: row.sessionEpoch }
-    : null;
+  // is set once (P3's capOf: the one source authz's CAP reads). Sources: P2's
+  // authConfig.guestsReadOnly and P3's restriction columns (0009; until they
+  // land nobody is restricted).
+  if (!row) return null;
+  return {
+    user: withCap(
+      toMember(row),
+      capOf(
+        {
+          role: row.role as Role,
+          restrictedManual: false,
+          restrictedSync: false,
+        },
+        authConfig(env),
+      ),
+    ),
+    sessionEpoch: row.sessionEpoch,
+  };
 }
 
 export async function getUser(env: Env, id: string): Promise<Member | null> {
