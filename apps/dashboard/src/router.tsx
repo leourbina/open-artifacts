@@ -5,6 +5,7 @@ import {
   createRouter,
   type RouterHistory,
   useParams,
+  useSearch,
 } from "@tanstack/react-router";
 import { AppLayout } from "./layout/AppLayout";
 import { useDocumentTitle } from "./layout/useDocumentTitle";
@@ -77,6 +78,16 @@ function ViewerRoute() {
 function FullRoute() {
   const { id } = useParams({ strict: false }) as { id: string };
   return <Shell id={id} chromeless />;
+}
+
+/** `/sign-in`: the SPA owns the chooser and the code forms. */
+function SignInRoute() {
+  const { error, next, method } = useSearch({ strict: false }) as {
+    error?: string;
+    next?: string;
+    method?: string;
+  };
+  return <SignIn error={error} next={next} method={method} />;
 }
 
 function DiffRoute() {
@@ -152,9 +163,24 @@ const routeTree = root.addChildren([
   ]),
   usage,
   route("/no-access", NoAccess),
-  route("/sign-in", () => (
-    <SignIn failed={new URLSearchParams(location.search).has("error")} />
-  )),
+  createRoute({
+    getParentRoute: () => root,
+    path: "/sign-in",
+    // After a refused Google sign-in: `?error=` (never echoed) and `?next=`;
+    // `?method=code` is the guest code page. An empty `?error=` still counts,
+    // as it always has on the Access page.
+    validateSearch: (s: Record<string, unknown>) => {
+      const error = typeof s.error === "string" ? s.error : undefined;
+      const next = str(s.next);
+      const method = s.method === "code" ? "code" : undefined;
+      return {
+        ...(error !== undefined && { error }),
+        ...(next && { next }),
+        ...(method && { method }),
+      };
+    },
+    component: SignInRoute,
+  }),
   route("*", NotFound),
 ]);
 

@@ -46,6 +46,17 @@ const ROUTES: Route[] = [
   { path: "/a/Cd5fGhJkLm6nPqRs/diff/1/2" },
   { path: "/no-access" },
   { path: "/sign-in" },
+  { path: "/sign-in?hosted=1" },
+  { path: "/sign-in?hosted=1&error=tenant" },
+  { path: "/sign-in?hosted=1&method=code" },
+  {
+    path: "/sign-in?hosted=1&method=code#code",
+    after: async (p) => {
+      await p.getByRole("textbox", { name: "Email" }).fill("bob@example.com");
+      await p.getByRole("button", { name: "Send code" }).click();
+      await p.getByRole("textbox", { name: "Code", exact: true }).waitFor();
+    },
+  },
   { path: "/nope" },
   { path: "/settings/members" },
   { path: "/settings/agents" },
