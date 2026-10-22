@@ -142,10 +142,10 @@ export type SpaceForbiddenDetails = z.infer<typeof SpaceForbiddenDetailsSchema>;
  * PUT R.spaceMember(id, userId) (space manager, org admin) -> SpaceMember.
  * Sets the manual row. A space manager (not an org admin) granting manager,
  * or changing a member whose manualRole is manager: 403 space_forbidden
- * { target: "member" }. While sync is frozen, on a row with a syncRole: a
- * role at or below the effective role replaces the synced row with a manual
- * override (the next reconcile after unfreezing replaces it); a raise is 403
- * space_forbidden { target: "member" }. Audited space.member.add/role
+ * { target: "member" }. While sync is frozen, on a row with a syncRole: any
+ * role (raise or lower) is a manual grant under those rules and replaces the
+ * synced row with a manual override (the next reconcile after unfreezing
+ * replaces it). Audited space.member.add/role
  * (frozen override: detail { syncFrozen: true, role }).
  *
  * DELETE R.spaceMember(id, userId) -> 204: removes the manual row. A

@@ -1136,13 +1136,46 @@ describe("hosted contract: space People", () => {
     expect((await list(ENG)).items.map((m) => m.userId)).toContain(bob);
   });
 
-  it("frozen sync: DELETE removes a synced row; PUT may lower (manual override), not raise; audited", async () => {
+  it("frozen sync: raising a synced row is a manual grant (managers up to editor, admins any)", async () => {
     fresh({ hosted: { directory: "frozen" } });
+    // Admin raises Bob's synced editor (Engineering) to manager.
+    expect(
+      StrictMember.parse(
+        await json(
+          await call("PUT", R.spaceMember(ENG, bob), { role: "manager" }),
+        ),
+      ),
+    ).toMatchObject({
+      role: "manager",
+      source: "manual",
+      manualRole: "manager",
+      syncRole: null,
+      groups: [],
+    });
+    // Bob, now a manager, works on Ada's synced viewer row in Exec.
+    await call("PUT", R.spaceMember(EXEC, bob), { role: "manager" });
+    await signIn("bob@example.com");
     expect(
       await forbidden(
-        await call("PUT", R.spaceMember(ENG, bob), { role: "manager" }),
+        await call("PUT", R.spaceMember(EXEC, ada), { role: "manager" }),
       ),
     ).toBe("member");
+    expect(
+      StrictMember.parse(
+        await json(
+          await call("PUT", R.spaceMember(EXEC, ada), { role: "editor" }),
+        ),
+      ),
+    ).toMatchObject({
+      role: "editor",
+      source: "manual",
+      manualRole: "editor",
+      syncRole: null,
+    });
+  });
+
+  it("frozen sync: DELETE removes a synced row; PUT may lower (manual override); audited", async () => {
+    fresh({ hosted: { directory: "frozen" } });
     const low = StrictMember.parse(
       await json(
         await call("PUT", R.spaceMember(ENG, bob), { role: "viewer" }),

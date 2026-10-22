@@ -1207,17 +1207,8 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
             "Only an admin can grant or change the Manager role",
             { target: "member" },
           );
+        // Frozen, synced row: any role (raise or lower, manual rules above) is a manual override.
         const frozenSynced = directoryMode === "frozen" && !!cur?.syncRole;
-        if (
-          frozenSynced &&
-          RANK[r.data.role] >
-            RANK[maxRole(cur?.manualRole, cur?.syncRole) as SpaceRole]
-        )
-          return err(
-            "space_forbidden",
-            "Directory sync is frozen: a synced role can only be lowered",
-            { target: "member" },
-          );
         const row = baseRow(s, u.id);
         if (frozenSynced) {
           // Manual override; the next reconcile after unfreezing replaces it.

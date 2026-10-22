@@ -125,7 +125,7 @@ every flag that is on.
 | `PATCH R.space(id)` | `SpacePatch` → `Space` | `name`, `publicLinks`: space manager or org admin (`publicLinks` audited `space.public_links`; off blocks new public links only - existing links and sockets keep working, nothing is rewritten). `allMembersRole`: org admin |
 | `DELETE R.space(id)` | 204; 409 `space_not_empty` | org owner, admin |
 | `GET R.spaceMembers(id)` | `SpaceMembersQuery { q?, group?, cursor?, limit? }` → `SpaceMembersPage` (`Page<SpaceMember>` + `total`, the count matching `q`/`group`) | member, org admin. `q`: case-insensitive prefix of the email or of any word of the name; `group`: a groupId (either `via`) |
-| `PUT R.spaceMember(id, userId)` | `SpaceMemberPut` → `SpaceMember` | space manager, org admin. Only an org admin grants Manager or changes a member whose `manualRole` is manager: else 403 `space_forbidden` `{ target: "member" }`. **Sync frozen**, on a row with a `syncRole`: a role at or below the effective role becomes a manual override (`source: "manual"`, `syncRole: null`, `groups: []`) that the next reconcile after unfreezing replaces; a raise is 403 `space_forbidden` `{ target: "member" }`. Audited `space.member.add` / `space.member.role` (frozen override: detail `{ syncFrozen: true, role }`) |
+| `PUT R.spaceMember(id, userId)` | `SpaceMemberPut` → `SpaceMember` | space manager, org admin. Only an org admin grants Manager or changes a member whose `manualRole` is manager: else 403 `space_forbidden` `{ target: "member" }`. **Sync frozen**, on a row with a `syncRole`: any role, raise or lower, is a manual grant under the rules above (admins any role; managers up to editor) and becomes a manual override (`source: "manual"`, `syncRole: null`, `groups: []`) that the next reconcile after unfreezing replaces. Audited `space.member.add` / `space.member.role` (frozen override: detail `{ syncFrozen: true, role }`) |
 | `DELETE R.spaceMember(id, userId)` | 204 | space manager, org admin. Removes the manual row. A synced-only row while sync is live: 409 `member_synced`. **Sync frozen**: also removes a synced row (removing access is always allowed). Audited `space.member.remove` (frozen: detail `{ syncFrozen: true }`) |
 | `POST R.spaceMemberSelf(id)` `/spaces/:id/members/self` | `SpaceMemberPut` → 201 `SpaceMember` | org admin adds themselves; shared spaces only (400 `space_personal`); audited `space.admin_self_add`; managers notified |
 | `GET R.spaceMappings(id)` | → `GroupMapping[]` (per-space rows only); personal: 400 `space_personal` | org admin; space manager (any setting). **Manager access pending server implementation (P3 T9/T14)** |
@@ -159,7 +159,9 @@ only per-space rows.
 
 **Per-row reason line** (UI): built from `manualRole`, `groups[].role`/`via` and
 `allMembers`, strongest first, e.g. "Manager by hand, Editor via eng@",
-"Viewer via All members". A non-null `cap` still limits access to viewer.
+"Viewer via All members"; via `every`: "Editor via eng@ (every space)". A group
+mapped both per-space and every space shows only its stronger entry in the
+line, never twice. A non-null `cap` still limits access to viewer.
 | `SpaceMemberPutSchema` | `{ role }` |
 | `GroupMappingSchema` / `GroupMappingPutSchema` | `GroupRef + { role, memberCount, lastSyncedAt }` / `{ role }` |
 | `SpaceCanSchema` | `{ manageMappings }`: may add or change mappings. True for org admins, and for the space's managers while `spaceManagerMappings` is on; false on personal spaces. Managers can always list and remove `viewer`/`editor` rows |
@@ -215,7 +217,7 @@ These are the names P2 and P3 use; the contract wins. There is no
 
 | Code | Status | Meaning |
 |---|---|---|
-| `space_forbidden` | 403 | publish or move into a space you can't publish to; any create by a capped caller; a member or mapping change your role can't make (details `{ target: member \| mapping }`) |
+| `space_forbidden` | 403 | publish or move into a space you can't publish to; any create by a capped caller; a member or mapping change your role can't make (details `{ target: member \| mapping }`). UI copy (space managers only; admins are never refused this): `member` "Only an admin can make someone a manager."; `mapping` "Only an admin can make a group a manager." |
 | `space_personal` | 400 | a personal space as a move/transfer target or a spaces-route target |
 | `space_not_empty` | 409 | delete a space that still holds artifacts (trash counts) |
 | `public_links_off` | 403 | make an artifact public in a space whose publicLinks is off |
