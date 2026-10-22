@@ -7,6 +7,7 @@ import {
 } from "@oa/shared";
 import { Button, Dialog, FormatIcon } from "@oa/ui";
 import {
+  Badge,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -31,7 +32,7 @@ import {
   useVersionInfo,
   useVersions,
 } from "../api/queries";
-import { accessLabel, useCan } from "../auth/permissions";
+import { accessLabel, useCan, useHosted } from "../auth/permissions";
 import { toast } from "../layout/toast";
 import { VersionsDot } from "./LiveChip";
 import { fullPath } from "./paths";
@@ -154,6 +155,8 @@ export function TitleBar({
   const canShare = authed && (can.share || can.setVisibility);
   const canDelete = authed && can.delete;
   const canEdit = authed && can.edit;
+  // Hosted only: self-hosted viewers keep the bare title bar.
+  const viewOnly = useHosted().features.includes("spaces") && !can.edit;
   const go = (to: string) => void navigate({ to: to as string });
 
   const info = useVersionInfo(artifact.id, version, authed).data;
@@ -228,6 +231,14 @@ export function TitleBar({
           <h1 className={H1}>{artifact.title}</h1>
         )}
         <VisibilityBadge visibility={artifact.visibility} />
+        {viewOnly && (
+          <Badge
+            variant="secondary"
+            className="h-[18px] rounded-sm px-[6px] py-0 text-[length:var(--oa-text-xs)]"
+          >
+            View only
+          </Badge>
+        )}
         {artifact.space && (
           <span className="text-[length:var(--oa-text-sm)] text-muted-foreground">
             {accessLabel(artifact.access)}

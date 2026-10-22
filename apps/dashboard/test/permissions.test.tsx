@@ -32,12 +32,11 @@ const managerCan = {
   delete: true,
   move: true,
 };
-const serve = (a: object) =>
-  server.use(
-    http.get(`*${R.artifact(arts[0].id)}`, () =>
-      HttpResponse.json({ ...arts[0], ...a }),
-    ),
+const handler = (a: object) =>
+  http.get(`*${R.artifact(arts[0].id)}`, () =>
+    HttpResponse.json({ ...arts[0], ...a }),
   );
+const serve = (a: object) => server.use(handler(a));
 
 it("viewer sees no edit affordance but keeps data writes", async () => {
   serve({
@@ -53,6 +52,30 @@ it("viewer sees no edit affordance but keeps data writes", async () => {
   expect(
     screen.queryByText("You can view this, but not change it."),
   ).toBeNull();
+});
+
+it("hosted viewer sees the View only chip and still no buttons", async () => {
+  mountHosted(`/a/${arts[0].id}`, true, undefined, [
+    handler({ access: "viewer", can: none }),
+  ]);
+  expect(await screen.findByText("View only")).toBeVisible();
+  for (const name of ["Rename", "Share", "Delete"])
+    expect(screen.queryByRole("button", { name })).toBeNull();
+});
+
+it("hosted editor gets no View only chip", async () => {
+  mountHosted(`/a/${arts[0].id}`, true, undefined, [
+    handler({ access: "editor", can: { ...none, edit: true } }),
+  ]);
+  await screen.findByRole("heading", { name: arts[0].title });
+  expect(screen.queryByText("View only")).toBeNull();
+});
+
+it("self-hosted viewer gets no View only chip", async () => {
+  serve({ access: "viewer", can: undefined, space: undefined });
+  mount(`/a/${arts[0].id}`);
+  await screen.findByRole("heading", { name: arts[0].title });
+  expect(screen.queryByText("View only")).toBeNull();
 });
 
 it("self-hosted viewer share (no can, no space): no notice, no access label", async () => {

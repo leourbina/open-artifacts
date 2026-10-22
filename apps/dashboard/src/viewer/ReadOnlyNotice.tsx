@@ -5,7 +5,9 @@ const InfoIcon = svg("M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2zM8 7.2v3.7M8 5v.2");
 /**
  * The caller can't write this artifact's live data (`can.dataWrite` false:
  * a guest or a restricted member). The renav notice's banner, without
- * actions; the look is pending Design (D10).
+ * actions. Decided (D10): the "View only" chip and hidden buttons in the
+ * title bar, plus this notice for guests and contractors on live-data
+ * artifacts.
  */
 export function ReadOnlyNotice() {
   return (
