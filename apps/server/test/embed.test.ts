@@ -254,8 +254,9 @@ describe("EMBED_ORIGINS headers", () => {
       "https://x.open-artifacts.com",
       "https://gallery.example.org",
     ]);
-    // End to end: a same-site-only list leaves /full at DENY.
-    const full = await app(`${viewerPath(id)}/full`, {
+    // End to end: a same-site-only list leaves /full at DENY. The request goes
+    // to the configured APP_HOST: any other host is 404 before routing.
+    const full = await call(`http://app.example.com${viewerPath(id)}/full`, {
       APP_HOST: "app.example.com",
       EMBED_ORIGINS: "https://gallery.example.com",
     });
