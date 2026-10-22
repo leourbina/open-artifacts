@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.24.0...v0.25.0) (2026-10-22)
+
+
+### Features
+
+* **auth:** Google ID token verification and the direct transport (P2 T4) ([#372](https://github.com/open-artifacts-ai/open-artifacts/issues/372)) ([d79438c](https://github.com/open-artifacts-ai/open-artifacts/commit/d79438c6cb577611ed0dd23363717719112d6472))
+
 ## [0.24.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.23.1...v0.24.0) (2026-10-22)
 
 
