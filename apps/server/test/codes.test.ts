@@ -8,6 +8,7 @@ import {
   deliverCode,
   emailKey,
   ipKey,
+  netKey,
   takeRequestSlot,
   verifyCode,
 } from "../src/auth/codes.js";
@@ -256,10 +257,10 @@ describe("verifyCode", () => {
 describe("request throttles", () => {
   it("count ineligible addresses too, never with plaintext keys, (address, IP) first", async () => {
     const ek = await emailKey(env, uniq("nobody", "x.com"));
-    const ik = await ipKey(env, "192.0.2.10");
+    const ip = "192.0.2.10";
     for (let i = 0; i < CODE_LIMITS.perEmailIpPer10Min; i++)
-      expect(await takeRequestSlot(env, cfg, ek, ik)).toEqual({ ok: true });
-    expect(await takeRequestSlot(env, cfg, ek, ik)).toMatchObject({
+      expect(await takeRequestSlot(env, cfg, ek, ip)).toEqual({ ok: true });
+    expect(await takeRequestSlot(env, cfg, ek, ip)).toMatchObject({
       ok: false,
       scope: "email",
     });
@@ -271,17 +272,28 @@ describe("request throttles", () => {
     expect(keys.some((k) => k.includes("@"))).toBe(false);
   });
 
-  it("per address: code_abuse logged at 10, refused at 30, across IPs", async () => {
-    const ek = await emailKey(env, uniq("target", "x.com"));
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    for (let i = 0; i < CODE_LIMITS.perEmailPerHour; i++)
-      expect(await takeRequestSlot(env, cfg, ek, `ik-${i}`)).toEqual({
+  it("per (address, network): refused at 10 an hour inside one /24, never on another network", async () => {
+    const ek = await emailKey(env, uniq("net", "x.com"));
+    for (let i = 0; i < CODE_LIMITS.perEmailNetPerHour; i++)
+      expect(await takeRequestSlot(env, cfg, ek, `198.18.7.${i + 1}`)).toEqual({
         ok: true,
       });
-    expect(await takeRequestSlot(env, cfg, ek, "ik-x")).toMatchObject({
+    expect(await takeRequestSlot(env, cfg, ek, "198.18.7.200")).toMatchObject({
       ok: false,
       scope: "email",
     });
+    expect(await takeRequestSlot(env, cfg, ek, "198.18.8.1")).toEqual({
+      ok: true,
+    });
+  });
+
+  it("per address across networks is soft: never refused, code_abuse logged once at 10", async () => {
+    const ek = await emailKey(env, uniq("target", "x.com"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    for (let i = 0; i < 40; i++)
+      expect(await takeRequestSlot(env, cfg, ek, `198.19.${i}.1`)).toEqual({
+        ok: true,
+      });
     const abuse = warn.mock.calls.filter((c) =>
       String(c[0]).includes("code_abuse"),
     );
@@ -291,35 +303,40 @@ describe("request throttles", () => {
 
   it("one IP's 31 requests for one address don't consume that address's other buckets", async () => {
     const ek = await emailKey(env, uniq("victim", "x.com"));
-    const ik = await ipKey(env, "192.0.2.20");
-    for (let i = 0; i < 31; i++) await takeRequestSlot(env, cfg, ek, ik);
-    expect(await counter(`code:eip:${ek}:${ik}`)).toBe(
-      CODE_LIMITS.perEmailIpPer10Min,
-    );
-    expect(await counter(`code:e:${ek}`)).toBe(CODE_LIMITS.perEmailIpPer10Min);
-    expect(await counter(`code:ip:${ik}`)).toBe(CODE_LIMITS.perEmailIpPer10Min);
-    // The address is still reachable from elsewhere.
-    expect(
-      await takeRequestSlot(env, cfg, ek, await ipKey(env, "192.0.2.21")),
-    ).toEqual({ ok: true });
+    const ip = "192.0.2.20";
+    const ik = await ipKey(env, ip);
+    const nk = await netKey(env, ip);
+    for (let i = 0; i < 31; i++) await takeRequestSlot(env, cfg, ek, ip);
+    const n = CODE_LIMITS.perEmailIpPer10Min;
+    expect(await counter(`code:eip:${ek}:${ik}`)).toBe(n);
+    expect(await counter(`code:en:${ek}:${nk}`)).toBe(n);
+    expect(await counter(`code:e:${ek}`)).toBe(n);
+    expect(await counter(`code:ip:${ik}`)).toBe(n);
+    // The address is still reachable from its own network's other hosts.
+    expect(await takeRequestSlot(env, cfg, ek, "192.0.2.21")).toEqual({
+      ok: true,
+    });
   });
 
   it("an IP over its day cap consumes no per-address bucket", async () => {
-    const ik = await ipKey(env, "192.0.2.22");
+    const ip = "192.0.2.22";
+    const ik = await ipKey(env, ip);
+    const nk = await netKey(env, ip);
     await fillCounter(`code:ip:${ik}`, CODE_LIMITS.perIpPerDay - 30, "day");
     const eks: string[] = [];
     for (let i = 0; i < 31; i++) {
       const ek = await emailKey(env, uniq(`other${i}`, "x.com"));
       eks.push(ek);
-      await takeRequestSlot(env, cfg, ek, ik);
+      await takeRequestSlot(env, cfg, ek, ip);
     }
     expect(await counter(`code:ip:${ik}`)).toBe(CODE_LIMITS.perIpPerDay);
     const last = eks[30] as string;
     expect(await counter(`code:e:${last}`)).toBe(0);
     expect(await counter(`code:eip:${last}:${ik}`)).toBe(0);
+    expect(await counter(`code:en:${last}:${nk}`)).toBe(0);
   });
 
-  it("IPv6 keys by /64; IPv4 by the whole address", async () => {
+  it("IPv6 keys by /64; IPv4 by the whole address (network: /24)", async () => {
     expect(await ipKey(env, "2001:db8:a:b:1::1")).toBe(
       await ipKey(env, "2001:0db8:000a:000b:ffff:ffff:ffff:ffff"),
     );
@@ -329,12 +346,36 @@ describe("request throttles", () => {
     expect(await ipKey(env, "192.0.2.1")).not.toBe(
       await ipKey(env, "192.0.2.2"),
     );
+    expect(await netKey(env, "192.0.2.1")).toBe(
+      await netKey(env, "192.0.2.254"),
+    );
+    expect(await netKey(env, "192.0.2.1")).not.toBe(
+      await netKey(env, "192.0.3.1"),
+    );
+  });
+
+  it("IPv4-mapped IPv6 keys as IPv4, not one shared ::ffff /64", async () => {
+    for (const mapped of ["::ffff:192.0.2.1", "::FFFF:c000:201"])
+      expect(await ipKey(env, mapped)).toBe(await ipKey(env, "192.0.2.1"));
+    expect(await ipKey(env, "::ffff:192.0.2.1")).not.toBe(
+      await ipKey(env, "::ffff:198.51.100.1"),
+    );
+    expect(await netKey(env, "::ffff:192.0.2.9")).toBe(
+      await netKey(env, "192.0.2.1"),
+    );
+    expect(await netKey(env, "::ffff:192.0.2.9")).not.toBe(
+      await netKey(env, "::ffff:198.51.100.9"),
+    );
   });
 
   it("per IP: 50 a day", async () => {
-    const ik = await ipKey(env, "192.0.2.11");
-    await fillCounter(`code:ip:${ik}`, CODE_LIMITS.perIpPerDay, "day");
-    const r = await takeRequestSlot(env, cfg, await emailKey(env, E), ik);
+    const ip = "192.0.2.11";
+    await fillCounter(
+      `code:ip:${await ipKey(env, ip)}`,
+      CODE_LIMITS.perIpPerDay,
+      "day",
+    );
+    const r = await takeRequestSlot(env, cfg, await emailKey(env, E), ip);
     expect(r).toMatchObject({ ok: false, scope: "ip" });
     if (!r.ok) expect(r.retryAfter).toBeGreaterThan(0);
   });
@@ -381,146 +422,90 @@ describe("deliverCode", () => {
     expect(await counter("code:*")).toBe(before);
   });
 
-  it("H1: at most 5 real sends per address per hour", async () => {
-    await seedUser(E, "guest");
-    const m = mailer();
-    const e = withMail(direct(), m);
-    const ek = await emailKey(e, E);
-    const t0 = hourStart(1);
-    for (let i = 0; i < CODE_LIMITS.sendsPerEmailPerHour; i++)
-      expect(
-        await deliverCode(
-          e,
-          authConfig(e),
-          E,
-          ek,
-          `s${i}`,
-          `198.51.${i}.1`,
-          t0 + i * 61_000,
-        ),
-      ).not.toBeNull();
-    expect(
-      await deliverCode(
-        e,
-        authConfig(e),
-        E,
-        ek,
-        "s-over",
-        "198.51.99.1",
-        t0 + 600_000,
-      ),
-    ).toBeNull();
-    expect(m.sent).toHaveLength(CODE_LIMITS.sendsPerEmailPerHour);
-  });
-
-  it("at most 10 real sends per address per day, across hours and networks", async () => {
-    await seedUser(E, "guest");
-    const m = mailer();
-    const e = withMail(direct(), m);
-    const ek = await emailKey(e, E);
-    const sendAt = (i: number) =>
-      deliverCode(
-        e,
-        authConfig(e),
-        E,
-        ek,
-        `d${i}`,
-        `198.51.${i}.1`,
-        hourStart(2 + Math.floor(i / 5)) + (i % 5) * 61_000,
-      );
-    for (let i = 0; i < CODE_LIMITS.sendsPerEmailPerDay; i++)
-      expect(await sendAt(i)).not.toBeNull();
-    expect(await sendAt(CODE_LIMITS.sendsPerEmailPerDay)).toBeNull();
-    expect(m.sent).toHaveLength(CODE_LIMITS.sendsPerEmailPerDay);
-  });
-
-  it("at most 5 sends per (address, IPv4 /24) and (address, IPv6 /64) per day", async () => {
-    await seedUser(E, "guest");
-    const m = mailer();
-    const e = withMail(direct(), m);
-    const ek = await emailKey(e, E);
+  it("per (address, network): 3 sends an hour and 5 a day, IPv4 /24 and IPv6 /64", async () => {
     const at = (h: number, i: number) => hourStart(h) + i * 61_000;
-    for (let i = 0; i < CODE_LIMITS.sendsPerEmailNetPerDay; i++)
-      expect(
-        await deliverCode(
-          e,
-          authConfig(e),
-          E,
-          ek,
-          `n${i}`,
-          `198.51.100.${i + 1}`,
-          at(3, i),
-        ),
-      ).not.toBeNull();
-    expect(
-      await deliverCode(
-        e,
-        authConfig(e),
-        E,
-        ek,
-        "n-over",
-        "198.51.100.200",
-        at(4, 0),
-      ),
-    ).toBeNull();
-    // Another /24 still gets one.
-    expect(
-      await deliverCode(
-        e,
-        authConfig(e),
-        E,
-        ek,
-        "n-other",
+    for (const [addr, net, other] of [
+      [
+        uniq("g4", "x.com"),
+        (i: number) => `198.51.100.${i + 1}`,
         "198.51.101.1",
-        at(4, 1),
-      ),
-    ).not.toBeNull();
-
-    const F = uniq("g6", "x.com");
-    await seedUser(F, "guest");
-    const fk = await emailKey(e, F);
-    for (let i = 0; i < CODE_LIMITS.sendsPerEmailNetPerDay; i++)
-      expect(
-        await deliverCode(
-          e,
-          authConfig(e),
-          F,
-          fk,
-          `v${i}`,
-          `2001:db8:1:2::${i + 1}`,
-          at(3, i),
-        ),
-      ).not.toBeNull();
-    expect(
-      await deliverCode(
-        e,
-        authConfig(e),
-        F,
-        fk,
-        "v-over",
-        "2001:db8:1:2:ffff::9",
-        at(4, 0),
-      ),
-    ).toBeNull();
-    expect(
-      await deliverCode(
-        e,
-        authConfig(e),
-        F,
-        fk,
-        "v-other",
+      ],
+      [
+        uniq("g6", "x.com"),
+        (i: number) => `2001:db8:1:2::${i + 1}`,
         "2001:db8:1:3::1",
-        at(4, 1),
-      ),
-    ).not.toBeNull();
+      ],
+    ] as const) {
+      await seedUser(addr, "guest");
+      const m = mailer();
+      const e = withMail(direct(), m);
+      const ek = await emailKey(e, addr);
+      const send = (rid: string, ip: string, t: number) =>
+        deliverCode(e, authConfig(e), addr, ek, rid, ip, t);
+      for (let i = 0; i < CODE_LIMITS.sendsPerEmailNetPerHour; i++)
+        expect(await send(`h${i}`, net(i), at(1, i))).not.toBeNull();
+      expect(await send("h-over", net(9), at(1, 5))).toBeNull();
+      for (let i = 0; i < 2; i++)
+        expect(await send(`d${i}`, net(10 + i), at(2, i))).not.toBeNull();
+      expect(await send("d-over", net(20), at(3, 0))).toBeNull();
+      expect(m.sent).toHaveLength(CODE_LIMITS.sendsPerEmailNetPerDay);
+      // Another network is untouched.
+      expect(await send("other", other, at(3, 1))).not.toBeNull();
+    }
   });
 
-  it("a second send inside 60 s isn't delivered (and frees its cap slots)", async () => {
+  it("strangers capping other networks never stop the victim's network; code_abuse at 25", async () => {
+    const victim = uniq("victim", "x.com");
+    await seedUser(victim, "guest");
+    const m = mailer();
+    const e = withMail(direct(), m);
+    const ek = await emailKey(e, victim);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const at = (h: number, i: number) => hourStart(h) + i * 61_000;
+    for (let n = 0; n < 6; n++) {
+      const ip = `198.18.${100 + n}.1`;
+      for (let i = 0; i < CODE_LIMITS.sendsPerEmailNetPerDay; i++)
+        expect(
+          await deliverCode(
+            e,
+            authConfig(e),
+            victim,
+            ek,
+            `a${n}-${i}`,
+            ip,
+            at(6 + Math.floor(i / 3), n * 3 + (i % 3)),
+          ),
+        ).not.toBeNull();
+      expect(
+        await deliverCode(
+          e,
+          authConfig(e),
+          victim,
+          ek,
+          `a${n}-x`,
+          ip,
+          at(9, n),
+        ),
+      ).toBeNull();
+    }
+    const abuse = warn.mock.calls.filter((c) =>
+      String(c[0]).includes('"code_abuse","scope":"send"'),
+    );
+    expect(abuse).toHaveLength(1);
+    warn.mockRestore();
+    expect(
+      await deliverCode(e, authConfig(e), victim, ek, "mine", IP, at(9, 20)),
+    ).not.toBeNull();
+    expect(m.sent).toHaveLength(6 * CODE_LIMITS.sendsPerEmailNetPerDay + 1);
+  });
+
+  it("a second send inside 60 s from one network isn't delivered (and frees its cap slots)", async () => {
     await seedUser(E, "guest");
     const m = mailer();
     const e = withMail(direct(), m);
     const ek = await emailKey(e, E);
-    const t0 = hourStart(5);
+    const nk = await netKey(e, IP);
+    const t0 = hourStart(12);
     expect(
       await deliverCode(e, authConfig(e), E, ek, "rs1", IP, t0),
     ).not.toBeNull();
@@ -528,14 +513,26 @@ describe("deliverCode", () => {
       await deliverCode(e, authConfig(e), E, ek, "rs2", IP, t0 + 59_000),
     ).toBeNull();
     expect(m.sent).toHaveLength(1);
-    expect(await counter(`code:sent:${ek}`)).toBe(1);
+    expect(await counter(`code:sentn:${ek}:${nk}`)).toBe(1);
     expect(
       await one("select 1 from login_codes where request_id = 'rs2'"),
     ).toBeNull();
+    // Another network's resend clock is its own.
+    expect(
+      await deliverCode(
+        e,
+        authConfig(e),
+        E,
+        ek,
+        "rs-o",
+        "198.18.50.1",
+        t0 + 1000,
+      ),
+    ).not.toBeNull();
     expect(
       await deliverCode(e, authConfig(e), E, ek, "rs3", IP, t0 + 60_000),
     ).not.toBeNull();
-    expect(m.sent).toHaveLength(2);
+    expect(m.sent).toHaveLength(3);
   });
 
   it("a full code pool sends nothing", async () => {

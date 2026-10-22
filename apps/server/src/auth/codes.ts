@@ -20,24 +20,32 @@ import { deriveKey, MIN_SECRET_LENGTH } from "./keys.js";
 // Emailed one-time sign-in codes (P2). One row per request, keyed by HMACs
 // (no plaintext email or code at rest), 8 digits, 10 minutes, 5 attempts per
 // request enforced atomically in D1. Limits that count every well-formed
-// address (enumeration resistance) run in the request; the pool and
-// per-address send caps only on a real send.
+// address (enumeration resistance) run in the request; the pool and the send
+// caps only on a real send.
+//
+// Every hard per-address limit is keyed per (address, network), network =
+// IPv4 /24 or IPv6 /64, so a stranger elsewhere can never use up the
+// victim's own network's allowance. Cross-network per-address counts are
+// soft: logged and alerted as code_abuse, never refused. Against a
+// distributed attacker (many networks) the bound is Turnstile, which is
+// required on every code request whenever it's configured, plus the per-IP
+// day cap and the code pool.
 
 /** Server-only limits; CODE_POLICY (length, TTL, resend, attempts) is #359's. */
 export const CODE_LIMITS = {
   /** Requests per (address, IP) per 10 minutes: also the resend floor. */
   perEmailIpPer10Min: 3,
-  /** Requests per address per hour: logged as code_abuse at this count. */
+  /** Requests per (address, network) per hour. */
+  perEmailNetPerHour: 10,
+  /** Requests per address per hour, across networks: code_abuse here (soft, never refused). */
   perEmailPerHourAlert: 10,
-  /** Requests per address per hour, across IPs. */
-  perEmailPerHour: 30,
-  /** Real sends per address per hour. */
-  sendsPerEmailPerHour: 5,
-  /** Real sends per address per UTC day. */
-  sendsPerEmailPerDay: 10,
-  /** Real sends per (address, IPv4 /24 or IPv6 /64) per UTC day. */
+  /** Real sends per (address, network) per hour. */
+  sendsPerEmailNetPerHour: 3,
+  /** Real sends per (address, network) per UTC day. */
   sendsPerEmailNetPerDay: 5,
-  /** Seconds between two real sends to one address (server side). */
+  /** Real sends per address per UTC day, across networks: code_abuse here (soft, never refused). */
+  sendsPerEmailPerDayAlert: 25,
+  /** Seconds between two real sends to one (address, network). */
   resendSec: 60,
   /** Requests per IP per UTC day. */
   perIpPerDay: 50,
@@ -93,6 +101,14 @@ export async function emailKey(env: Env, email: string): Promise<string> {
   return hmacSign(await codesKey(env, "oa:login-codes"), `email:${e}`);
 }
 
+/** An IPv4-mapped IPv6 address (::ffff:a.b.c.d) as plain IPv4; else null. */
+function mappedV4(h: string[]): string | null {
+  if (h.slice(0, 5).some((x) => x !== "0000") || h[5] !== "ffff") return null;
+  const hi = Number.parseInt(h[6] as string, 16);
+  const lo = Number.parseInt(h[7] as string, 16);
+  return [hi >> 8, hi & 255, lo >> 8, lo & 255].join(".");
+}
+
 /** Expands an IPv6 address to 8 four-digit hextets; null when it isn't one. */
 function ipv6Hextets(ip: string): string[] | null {
   const a = (ip.split("%")[0] ?? "").toLowerCase();
@@ -126,10 +142,13 @@ function ipv6Hextets(ip: string): string[] | null {
 
 /**
  * The client network a counter keys on: IPv6 by its /64 (one host usually
- * holds the whole /64); IPv4 whole, or by its /24 with `v4Net`.
+ * holds the whole /64); IPv4 whole, or by its /24 with `v4Net`. IPv4-mapped
+ * IPv6 (::ffff:a.b.c.d) keys as the IPv4 address.
  */
 export function ipNet(ip: string, v4Net = false): string {
   const v6 = ipv6Hextets(ip);
+  const v4 = v6 && mappedV4(v6);
+  if (v4) return ipNet(v4, v4Net);
   if (v6) return `${v6.slice(0, 4).join(":")}::/64`;
   if (v4Net && /^\d{1,3}(\.\d{1,3}){3}$/.test(ip))
     return `${ip.split(".").slice(0, 3).join(".")}.0/24`;
@@ -147,7 +166,7 @@ export async function ipKey(env: Env, ip: string): Promise<string> {
   return shortIpHmac(env, `ip:${ipNet(ip)}`);
 }
 
-/** HMAC of the client's IPv4 /24 or IPv6 /64, for the per-network send cap. */
+/** HMAC of the client's network (IPv4 /24 or IPv6 /64), for per-(address, network) caps. */
 export async function netKey(env: Env, ip: string): Promise<string> {
   return shortIpHmac(env, `net:${ipNet(ip, true)}`);
 }
@@ -174,23 +193,44 @@ function randomCode(): string {
   }
 }
 
+/** A structured auth signal for alerting; never carries an address or IP. */
+export const logAuth = (name: "code_abuse", scope: "email" | "send") =>
+  console.warn(JSON.stringify({ evt: name, scope }));
+
+// A soft counter: counts in the bucket and never refuses; returns the count.
+const BUMP = `insert into counters (key, n, day) values (?1, 1, ?2)
+  on conflict (key) do update set
+    n = case when counters.day = excluded.day then counters.n + 1 else 1 end,
+    day = excluded.day
+  returning n`;
+
+async function bump(env: Env, key: string, bucket: string): Promise<number> {
+  const r = await stmt(env.DB, BUMP).bind(key, bucket).first<{ n: number }>();
+  return r?.n ?? 0;
+}
+
 /**
  * Request limits that count every well-formed address, eligible or not, so a
  * 429 says nothing about who can sign in: per IP per day, per (address, IP)
- * per 10 minutes, per address per hour (code_abuse logged at the alert
- * count). Taken in that order, all or nothing: a refusal consumes no other
- * bucket, so one IP can't burn another address's caps. (address, IP)
- * refusals report scope "email" (#359).
+ * per 10 minutes, per (address, network) per hour. Taken in that order, all
+ * or nothing: a refusal consumes no other bucket, so one IP can't burn
+ * another address's caps, and nothing keyed only by the address refuses, so
+ * strangers elsewhere can't lock the victim's network out. Per address
+ * across networks is soft (code_abuse at the alert count); Turnstile is the
+ * bound on distributed attackers. Address refusals report scope "email"
+ * (#359).
  */
 export async function takeRequestSlot(
   env: Env,
   _cfg: AuthConfig,
   ek: string,
-  ik: string,
+  ip: string,
   now = Date.now(),
 ): Promise<
   { ok: true } | { ok: false; retryAfter: number; scope: "ip" | "email" }
 > {
+  const ik = await ipKey(env, ip);
+  const nk = await netKey(env, ip);
   const refused = await takeAll(env, [
     [`code:ip:${ik}`, CODE_LIMITS.perIpPerDay, counterBucket("day", now)],
     [
@@ -198,7 +238,11 @@ export async function takeRequestSlot(
       CODE_LIMITS.perEmailIpPer10Min,
       counterBucket("tenMin", now),
     ],
-    [`code:e:${ek}`, CODE_LIMITS.perEmailPerHour, counterBucket("hour", now)],
+    [
+      `code:en:${ek}:${nk}`,
+      CODE_LIMITS.perEmailNetPerHour,
+      counterBucket("hour", now),
+    ],
   ]);
   if (refused === 0)
     return { ok: false, retryAfter: retryAfter("day", now), scope: "ip" };
@@ -206,11 +250,8 @@ export async function takeRequestSlot(
     return { ok: false, retryAfter: retryAfter("tenMin", now), scope: "email" };
   if (refused === 2)
     return { ok: false, retryAfter: retryAfter("hour", now), scope: "email" };
-  const n = await stmt(env.DB, "select n from counters where key = ?1")
-    .bind(`code:e:${ek}`)
-    .first<{ n: number }>();
-  if (n?.n === CODE_LIMITS.perEmailPerHourAlert)
-    console.warn(JSON.stringify({ evt: "code_abuse", scope: "email" }));
+  const n = await bump(env, `code:e:${ek}`, counterBucket("hour", now));
+  if (n === CODE_LIMITS.perEmailPerHourAlert) logAuth("code_abuse", "email");
   return { ok: true };
 }
 
@@ -238,7 +279,7 @@ const logSend = (outcome: string): null => {
   return null;
 };
 
-// One real send per address per resendSec, sliding: n holds the last send's
+// One real send per (address, network) per resendSec, sliding: n holds the last send's
 // time (ms); day is the UTC day, so the daily sweep drops old rows.
 const RESEND = `insert into counters (key, n, day) values (?1, ?2, ?3)
   on conflict (key) do update set n = excluded.n, day = excluded.day
@@ -247,10 +288,12 @@ const RESEND = `insert into counters (key, n, day) values (?1, ?2, ?3)
 
 /**
  * The real send, after the response (waitUntil): eligibility, then the send
- * caps (per address per hour and per day, per (address, IPv4 /24 or IPv6
- * /64) per day) and the code pool, all or nothing and only now, then the
- * 60 s resend gate (refunding the caps when it refuses), then the row and
- * the email. Null when nothing was sent; the route answers the same 202
+ * caps (per (address, network) per hour and per day) and the code pool, all
+ * or nothing and only now, then the per-(address, network) 60 s resend gate
+ * (refunding the caps when it refuses), then the row and the email. Sends to
+ * one address across networks are soft: counted, code_abuse at the alert
+ * count, never refused, so no stranger can stop the victim's own network
+ * getting codes. Null when nothing was sent; the route answers the same 202
  * either way. A failed send deletes its row.
  */
 export async function deliverCode(
@@ -268,30 +311,31 @@ export async function deliverCode(
   if ((await codeEligibility(env, cfg, to)).kind === "none")
     return logSend("ineligible");
   const day = counterBucket("day", now);
+  const nk = await netKey(env, ip);
   const caps: Cap[] = [
     [
-      `code:sent:${ek}`,
-      CODE_LIMITS.sendsPerEmailPerHour,
+      `code:sentn:${ek}:${nk}`,
+      CODE_LIMITS.sendsPerEmailNetPerHour,
       counterBucket("hour", now),
     ],
-    [`code:sentd:${ek}`, CODE_LIMITS.sendsPerEmailPerDay, day],
-    [
-      `code:sentn:${ek}:${await netKey(env, ip)}`,
-      CODE_LIMITS.sendsPerEmailNetPerDay,
-      day,
-    ],
+    [`code:sentnd:${ek}:${nk}`, CODE_LIMITS.sendsPerEmailNetPerDay, day],
     ["code:*", cfg.codeEmailsPerDay, day],
   ];
   const refused = await takeAll(env, caps);
   if (refused === caps.length - 1) return logSend("pool_full");
   if (refused !== -1) return logSend("capped");
   const gate = await stmt(env.DB, RESEND)
-    .bind(`code:rs:${ek}`, now, day, CODE_LIMITS.resendSec * 1000)
+    .bind(`code:rs:${ek}:${nk}`, now, day, CODE_LIMITS.resendSec * 1000)
     .first();
   if (!gate) {
     await refundAll(env, caps);
     return logSend("resend_wait");
   }
+  if (
+    (await bump(env, `code:sentd:${ek}`, day)) ===
+    CODE_LIMITS.sendsPerEmailPerDayAlert
+  )
+    logAuth("code_abuse", "send");
   const code = await createCode(env, ek, requestId, now);
   const instance =
     (await getSettings(env).catch(() => null))?.name ?? "Open Artifacts";
