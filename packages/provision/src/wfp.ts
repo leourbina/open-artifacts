@@ -91,6 +91,13 @@ export interface ReleaseRecord {
   variant: BundleVariant;
   /** bundleSha256() of the bytes the bundle step built. */
   sha256: string;
+  /**
+   * A JSON boolean, on purpose. Wrangler's `define` config holds the string
+   * "true"/"false" (a JS expression the bundler substitutes, so the code sees
+   * a real boolean and dead-code elimination works). This record is our own
+   * schema: T3b converts the config string to a boolean when it writes it.
+   * Do not change this to a string; checkRecord refuses one.
+   */
   defines: { [TEST_HOOKS_DEFINE]: boolean };
 }
 
