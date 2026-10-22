@@ -13,6 +13,7 @@ import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
 import { codeEligibility } from "../services/identity.js";
 import { getSettings } from "../services/members.js";
+import { recordTestOtp } from "../test-hooks/index.js";
 import { b64urlDecode, hmacSign } from "../util/crypto.js";
 import { logAuth } from "./audit.js";
 import type { AuthConfig } from "./config.js";
@@ -53,6 +54,12 @@ export const CODE_LIMITS = {
   /** Failed verifications per IP per hour. */
   failsPerIpPerHour: 30,
 } as const;
+
+// `false` in release builds (build-flags.d.ts): no reference to test-hooks/.
+const recordOtp =
+  typeof __OA_TEST_HOOKS_ALLOWED__ !== "undefined" &&
+  __OA_TEST_HOOKS_ALLOWED__ === true &&
+  recordTestOtp;
 
 const TTL_MS = CODE_POLICY.ttlSec * 1000;
 const MAX_U32_UNBIASED = 4_200_000_000; // largest multiple of 10^8 below 2^32
@@ -351,6 +358,7 @@ export async function deliverCode(
       }),
     { kind: "code", now, caps: [] },
   );
+  if (recordOtp && sent) await recordOtp(env, to, ek, code);
   if (!sent) {
     await stmt(
       env.DB,

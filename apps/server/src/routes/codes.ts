@@ -27,6 +27,7 @@ import { ApiError, appOrigin, errorJson } from "../http/errors.js";
 import { type AppEnv, CSRF_HEADER, execCtx } from "../http/middleware.js";
 import { codeEligibility } from "../services/identity.js";
 import { getUserWithEpoch, insertUser } from "../services/users.js";
+import { forgetTestOtp } from "../test-hooks/index.js";
 import {
   b64urlDecode,
   b64urlEncode,
@@ -38,6 +39,12 @@ import type { AppType } from "./index.js";
 
 // Emailed-code sign-in (#359 AUTH.codeRequest / AUTH.codeVerify). JSON only;
 // the SPA at SIGN_IN_PAGE owns the forms.
+
+// `false` in release builds (build-flags.d.ts): no reference to test-hooks/.
+const forgetOtp =
+  typeof __OA_TEST_HOOKS_ALLOWED__ !== "undefined" &&
+  __OA_TEST_HOOKS_ALLOWED__ === true &&
+  forgetTestOtp;
 
 const GUEST_MAX_AGE_S = 86_400;
 const MAX_COOKIE_LEN = 1024;
@@ -362,6 +369,7 @@ export function mountCodes(app: AppType): void {
       readOnly: guest,
     });
     res.headers.append("set-cookie", clearPending(c));
+    if (forgetOtp) await forgetOtp(c.env, p.ek);
     res.headers.append("set-cookie", sessionCookie(sess, c.env, maxAgeS));
     res.headers.set("cache-control", "no-store");
     return res;

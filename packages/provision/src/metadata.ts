@@ -47,6 +47,8 @@ export const TEMPLATE_BINDINGS_EXCLUDED: Record<string, string> = {
     "set by the provisioner via the script subdomain API {enabled:false, previews_enabled:false}",
   preview_urls:
     "set by the provisioner via the script subdomain API {enabled:false, previews_enabled:false}",
+  define:
+    "build-time constants (the test-hooks guard, false), folded into the bundle by buildBundle; not a binding",
   ANALYTICS_TOKEN: "an account analytics token would expose every install",
   ACCESS_TEAM_DOMAIN: "hosted signs in directly, without Access (P2)",
   ACCESS_CLIENT_ID: "hosted signs in directly, without Access (P2)",

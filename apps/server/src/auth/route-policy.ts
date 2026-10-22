@@ -89,6 +89,8 @@ export const ROUTE_POLICY: Readonly<Record<string, Policy>> = {
   "POST /auth/code/verify": { public: "code verify; login guard" },
   "POST /auth/logout": { public: "sign-out (same-origin, CSRF)" },
   "GET /auth/dev-login": { public: "dev only; refused outside dev" },
+  // P2 test hooks: 404 unless TEST_HOOKS is on (test-hooks/index.ts decides).
+  "ALL /__test/*": { public: "test hooks; 404 unless TEST_HOOKS is on" },
   "GET /api/v1/me": { user: "the caller" },
   "PATCH /api/v1/me": { user: "the caller" },
   "GET /api/v1/members": { org: "members.manage" },
