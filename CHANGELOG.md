@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.24.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.23.1...v0.24.0) (2026-10-22)
+
+
+### Features
+
+* **auth:** provider interface, derived-key cookies, session epoch and tenant (P2 T2) ([#369](https://github.com/open-artifacts-ai/open-artifacts/issues/369)) ([2a6534f](https://github.com/open-artifacts-ai/open-artifacts/commit/2a6534fcba8358339614867742d251c334b138bf))
+* **provision:** WfpProvisioner.create on Workers for Platforms ([#426](https://github.com/open-artifacts-ai/open-artifacts/issues/426)) ([635a08f](https://github.com/open-artifacts-ai/open-artifacts/commit/635a08f4be9bd36f048b4de3b19ba4fba2d7e2e6))
+
 ## [0.23.1](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.23.0...v0.23.1) (2026-10-22)
 
 
