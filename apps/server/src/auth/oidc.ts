@@ -6,6 +6,7 @@ import {
   hmacSign,
   hmacVerify,
 } from "../util/crypto.js";
+import { logAuth } from "./audit.js";
 import type { ProviderId } from "./config.js";
 import { cookieKeys, LEGACY_KEY_UNTIL } from "./keys.js";
 import type { OidcProvider, VerifiedIdentity } from "./providers/types.js";
@@ -231,7 +232,7 @@ export function logOidcFail(
   stage: string,
   extra: Record<string, string | undefined> = {},
 ): void {
-  console.warn(JSON.stringify({ evt: "oidc_fail", stage, ...extra }));
+  logAuth({ ...extra, evt: "oidc_fail", stage });
 }
 
 /** State-cookie failure: the route redirects to a retry login (or the static page). */
@@ -239,6 +240,8 @@ export class OidcStateError extends ApiError {
   constructor(
     public next: string,
     public retry: boolean,
+    /** The logged state stage ("no_state_cookie", "state_expired", …). */
+    public stage: string = "state",
   ) {
     super("unauthorized", "Login failed");
   }
@@ -375,6 +378,7 @@ export async function handleCallback(
     throw new OidcStateError(
       safeNext(env, from?.next ?? "/"),
       from?.retry === true || state.startsWith(RETRY_MARK),
+      stage,
     );
   };
   const picked = await pickStateCookie(env, req, state);

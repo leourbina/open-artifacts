@@ -632,8 +632,8 @@ describe("callback failure logging", () => {
     const { l, r } = await run("token_http_302", (b) => callback(b, b.oidc));
     expect(r.status).toBe(401);
     expect(l.error).toBe("invalid_client");
-    expect(String(l.description)).toMatch(/^Client auth failedx+$/);
-    expect(String(l.description).length).toBe(200);
+    // Capped at 200 chars, then redacted: the x-run reads as a token.
+    expect(l.description).toBe("Client auth <token>");
     expect(await r.text()).not.toContain("invalid_client");
   });
   it("token 4xx JSON body logs error + description", async () => {

@@ -7,7 +7,7 @@ import {
   SIGN_IN_PAGE,
   type SignInError,
 } from "@oa/shared";
-import { logAuth } from "../auth/audit.js";
+import { logAuth, oidcStage } from "../auth/audit.js";
 import { authConfig } from "../auth/config.js";
 import {
   buildAuthorizeRedirect,
@@ -85,6 +85,12 @@ const toSignIn = (error: SignInError, next: string, cookies: string[]) =>
     cookies,
   );
 
+/** The logged stage of a callback failure: an OidcStage enum value only. */
+const catchStage = (e: unknown) =>
+  e instanceof OidcStateError || e instanceof OidcRedeemError
+    ? oidcStage(e.stage)
+    : "failed";
+
 export function mountAuth(app: AppType): void {
   app.get(AUTH.login, async (c) => {
     const cfg = authConfig(c.env);
@@ -157,12 +163,7 @@ export function mountAuth(app: AppType): void {
       logAuth({
         provider: "access",
         outcome: e instanceof ApiError ? "refused" : "error",
-        stage:
-          e instanceof OidcStateError
-            ? "state"
-            : e instanceof OidcRedeemError
-              ? (e.stage ?? "failed")
-              : "failed",
+        stage: catchStage(e),
       });
       if (e instanceof OidcStateError) {
         if (e.retry) return retryPage(e.next, clear);
@@ -213,7 +214,7 @@ export function mountAuth(app: AppType): void {
       try {
         await onGoogleSignIn(c.env, r.user);
       } catch {
-        console.warn(JSON.stringify({ evt: "directory_sync_failed" }));
+        logAuth({ evt: "directory_sync_failed" });
       }
       const row = await getUserWithEpoch(c.env, r.user.id);
       if (!row) {
@@ -239,12 +240,7 @@ export function mountAuth(app: AppType): void {
       logAuth({
         provider: "google",
         outcome: e instanceof ApiError ? "refused" : "error",
-        stage:
-          e instanceof OidcStateError
-            ? "state"
-            : e instanceof OidcRedeemError
-              ? (e.stage ?? "failed")
-              : "failed",
+        stage: catchStage(e),
       });
       if (e instanceof OidcStateError) {
         if (e.retry) return toSignIn("expired", e.next, clear);

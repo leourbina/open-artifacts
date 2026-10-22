@@ -1,5 +1,6 @@
 import { inDomains, normalizeEmail } from "@oa/auth-core";
 import type { Member, Role } from "@oa/shared";
+import { logAuth } from "../auth/audit.js";
 import type { AuthConfig } from "../auth/config.js";
 import { isGuestRole, orgCan, promotedRole } from "../auth/policy.js";
 import type { VerifiedIdentity } from "../auth/providers/types.js";
@@ -42,8 +43,7 @@ const AN_OWNER = "select 1 as x from users where role = 'owner' limit 1";
 
 const member = (r: UserRow) => toMember(r as Parameters<typeof toMember>[0]);
 
-const logDrift = () =>
-  console.warn(JSON.stringify({ evt: "email_drift", outcome: "kept" }));
+const logDrift = () => logAuth({ evt: "email_drift", outcome: "kept" });
 
 /** Name, last-seen, guest promotion (hd verified) and owner role on sign-in. */
 async function touch(

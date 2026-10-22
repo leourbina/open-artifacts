@@ -289,6 +289,9 @@ export function mountCodes(app: AppType): void {
   app.post(AUTH.codeVerify, async (c) => {
     guard(c);
     const cfg = requireCodes(c);
+    // Before any D1 work (the pending check reads the code-cookie key).
+    if (!(await authLimit(c, cfg.installKey, clientIp(c))))
+      return rateLimited(60, "ip");
     const parsed = CodeVerifySchema.safeParse(
       await c.req.json().catch(() => null),
     );

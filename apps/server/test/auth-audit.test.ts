@@ -124,7 +124,83 @@ describe("auth events", () => {
     const cap = capture();
     await get(env, `${AUTH.callback}?state=s&code=c`);
     expect(cap.events()).toEqual([
-      { evt: "auth", provider: "access", outcome: "refused", stage: "state" },
+      {
+        evt: "auth",
+        provider: "access",
+        outcome: "refused",
+        stage: "no_state_cookie",
+      },
+    ]);
+  });
+
+  it("an expired pending code logs one refused event with stage expired", async () => {
+    const guest = uniq("x", "x.com");
+    await seedUser(guest, "guest");
+    const m = mailer();
+    const em = { ...direct(), ...m.env } as Env;
+    const req = await post(em, AUTH.codeRequest, { email: guest });
+    const pending = req.headers
+      .getSetCookie()
+      .find((c) => c.startsWith("oa_code="))
+      ?.split(";")[0];
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now + 3_600_000);
+    const cap = capture();
+    const r = await post(
+      em,
+      AUTH.codeVerify,
+      { code: m.codeFor(guest) },
+      pending,
+    );
+    expect(r.status).toBe(401);
+    expect(cap.events()).toEqual([
+      { evt: "auth", provider: "code", outcome: "refused", stage: "expired" },
+    ]);
+  });
+
+  it("a Google token-endpoint failure logs its stage as an enum, no status or code", async () => {
+    const e = direct();
+    const g = await fakeGoogle();
+    const start = await get(e, `${AUTH.loginGoogle}?next=/`);
+    const u = new URL(start.headers.get("location") ?? "");
+    const cookie =
+      start.headers
+        .getSetCookie()
+        .find((c) => /oa_oidc_/.test(c))
+        ?.split(";")[0] ?? "";
+    g.setTokenStatus(500);
+    const cap = capture();
+    await get(
+      e,
+      `${AUTH.callbackGoogle}?state=${u.searchParams.get("state")}&code=c-1`,
+      cookie,
+    );
+    expect(cap.events()).toEqual([
+      {
+        evt: "auth",
+        provider: "google",
+        outcome: "refused",
+        stage: "token_http",
+      },
+    ]);
+  });
+
+  it("sign-in warnings go through logAuth and log.ts redaction", async () => {
+    const { logAuth } = await import("../src/auth/audit.js");
+    const cap = capture();
+    logAuth({
+      evt: "oidc_fail",
+      stage: "jwt_verify",
+      description: "for bob@a.com",
+    });
+    logAuth({ evt: "directory_sync_failed" });
+    logAuth({ evt: "code_abuse", scope: "email" });
+    logAuth({ evt: "email_drift", outcome: "kept" });
+    expect(cap.lines.map((l) => JSON.parse(l))).toEqual([
+      { evt: "oidc_fail", stage: "jwt_verify", description: "for <email>" },
+      { evt: "directory_sync_failed" },
+      { evt: "code_abuse", scope: "email" },
+      { evt: "email_drift", outcome: "kept" },
     ]);
   });
 });

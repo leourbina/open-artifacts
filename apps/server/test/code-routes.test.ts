@@ -270,6 +270,40 @@ describe("POST AUTH.codeVerify", () => {
     };
   }
 
+  it("RL_AUTH is checked first: a denial is 429 scope ip before any D1 call", async () => {
+    const guest = uniq("g", "x.com");
+    await seedUser(guest, "guest");
+    const s = await start(direct(), guest);
+    const keys: string[] = [];
+    let d1 = 0;
+    const DB = new Proxy(env.DB, {
+      get(t, k) {
+        if (k === "prepare" || k === "batch" || k === "exec") d1++;
+        const v = Reflect.get(t, k, t);
+        return typeof v === "function" ? v.bind(t) : v;
+      },
+    });
+    const r = await verify(
+      {
+        ...s.e,
+        DB,
+        RL_AUTH: {
+          limit: async ({ key }: { key: string }) => {
+            keys.push(key);
+            return { success: false };
+          },
+        } as unknown as RateLimit,
+      } as Env,
+      "00000000",
+      s.cookie,
+      { ip: "203.0.113.7" },
+    );
+    expect(r.status).toBe(429);
+    expect((await errOf(r)).details).toMatchObject({ scope: "ip" });
+    expect(keys).toEqual(["inst-a:203.0.113.7"]);
+    expect(d1).toBe(0);
+  });
+
   it("guest round trip: 200 CodeVerified, readOnly, 24 h session p=code, cookie cleared", async () => {
     const guest = uniq("g", "x.com");
     await seedUser(guest, "guest");
