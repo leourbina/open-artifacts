@@ -46,6 +46,7 @@ import { ATTENTION, AttentionDot } from "./AttentionDot";
 import { CpuBanner } from "./CpuBanner";
 import { DisplayNamePrompt } from "./DisplayNamePrompt";
 import { QuotaBanner } from "./QuotaBanner";
+import { SyncBanner, SyncDot, syncDot } from "./SyncBanner";
 import { Toaster } from "./toast";
 import { UpdateChip, UpdateDot } from "./UpdateChip";
 import { instanceUpdate, shouldNudge } from "./update";
@@ -178,10 +179,18 @@ function Layout() {
         >
           <QuotaBanner />
           <div className="oa-page">
-            {/* In the page's content column: the settings measure there. */}
+            {/* In the page's content column: the settings measure there.
+                The Directory page's own status header replaces the sync banner. */}
+            {!/^\/settings\/directory\/?$/i.test(path) && (
+              <SyncBanner
+                me={me}
+                className={/^\/settings(\/|$)/i.test(path) ? MEASURE : ""}
+              />
+            )}
             <CpuBanner
               role={me?.user.role}
               plan={me?.instance.plan}
+              usageOff={hasFeature(me, "usage_off")}
               className={/^\/settings(\/|$)/i.test(path) ? MEASURE : ""}
             />
             <Outlet />
@@ -193,21 +202,40 @@ function Layout() {
   );
 }
 
-/** Opens/collapses the sidebar. On phones, an update puts a dot on it (Design's A). */
+/** Opens/collapses the sidebar. On phones, an update (Design's A) or sync
+    trouble (D13 B) puts a dot on it. */
 function MenuTrigger({ me }: { me: Me | null }) {
   const { isMobile } = useSidebar();
   const update = instanceUpdate(me);
+  const sync = syncDot(me);
   const dot = isMobile && shouldNudge(update);
+  const syncTone = isMobile && !dot ? sync : null;
   return (
     <span className="relative inline-flex">
       <SidebarTrigger
-        aria-label={dot ? "Open menu, update available" : "Toggle navigation"}
+        aria-label={
+          dot
+            ? "Open menu, update available"
+            : syncTone
+              ? "Open menu, Settings needs attention"
+              : "Toggle navigation"
+        }
       />
       {dot && (
         <UpdateDot
           breaking={update.breaking === true}
           ring="page"
           className="pointer-events-none absolute top-[6px] right-[5px]"
+        />
+      )}
+      {syncTone && (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute top-[6px] right-[5px] block size-2 rounded-full"
+          style={{
+            background: `var(--oa-${syncTone})`,
+            boxShadow: "0 0 0 2px var(--oa-bg)",
+          }}
         />
       )}
     </span>
@@ -275,14 +303,14 @@ function Link({
   active,
   icon,
   label,
-  attention = false,
+  attention,
 }: {
   to: string;
   active: boolean;
   icon: ReactNode;
   label: string;
-  /** A lasting dot: something there needs an admin. */
-  attention?: boolean;
+  /** A lasting dot: a sync tone (D13 B) wins over true (something there needs an admin). */
+  attention?: boolean | "warning" | "danger" | null;
 }) {
   const go = useGo();
   return (
@@ -296,7 +324,11 @@ function Link({
         >
           {icon}
           <span>{label}</span>
-          {attention && <AttentionDot />}
+          {typeof attention === "string" ? (
+            <SyncDot tone={attention} className="ml-auto" />
+          ) : (
+            attention && <AttentionDot />
+          )}
         </a>
       </SidebarMenuButton>
     </SidebarMenuItem>
@@ -314,6 +346,8 @@ function Sidebar({ me, path }: { me: Me | null; path: string }) {
   const update = instanceUpdate(me);
   // Departed people with artifacts to transfer (org admins, hosted).
   const departed = useDeparted(me);
+  const usageOff = hasFeature(me, "usage_off");
+  const sync = syncDot(me);
   return (
     <ShSidebar variant="inset">
       <SidebarHeader
@@ -366,7 +400,7 @@ function Sidebar({ me, path }: { me: Me | null; path: string }) {
                         label="Team"
                       />
                     )}
-                    {(role === "owner" || role === "admin") && (
+                    {(role === "owner" || role === "admin") && !usageOff && (
                       <Link
                         to="/settings/usage"
                         active={on("/settings/usage")}
@@ -382,7 +416,7 @@ function Sidebar({ me, path }: { me: Me | null; path: string }) {
                         }
                         icon={I.gear}
                         label="Settings"
-                        attention={departed.length > 0}
+                        attention={sync ?? departed.length > 0}
                       />
                     )}
                   </>

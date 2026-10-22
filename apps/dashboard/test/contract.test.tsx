@@ -91,6 +91,16 @@ test("hosted param tokens", () => {
     providers: ["email"],
     turnstile: true,
   });
+  expect(parseHostedParam("auth-failed")).toEqual({
+    unhealthy: true,
+    unhealthyState: "auth_failed",
+  });
+  expect(parseHostedParam("scope-missing")?.unhealthyState).toBe(
+    "scope_missing",
+  );
+  expect(parseHostedParam("customer-mismatch")?.unhealthyState).toBe(
+    "customer_mismatch",
+  );
 });
 
 test("no features: no hosted request from signed-in pages", async () => {

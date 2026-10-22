@@ -133,3 +133,14 @@ for (const width of [1280, 390])
         contentType: "image/png",
       });
     });
+
+test("hosted: no Usage link", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/?hosted=1");
+  await expect(
+    page
+      .getByRole("navigation", { name: "Primary" })
+      .getByRole("link", { name: /^Settings/ }),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "Usage" })).toHaveCount(0);
+});

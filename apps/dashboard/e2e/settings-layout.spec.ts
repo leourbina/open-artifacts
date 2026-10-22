@@ -130,3 +130,30 @@ test("hosted: the Spaces tab sits after Members", async ({ page }) => {
     "Instance",
   ]);
 });
+
+test("hosted tab strip at 375 scrolls without clipping", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 800 });
+  await page.goto("/settings/profile?hosted=1");
+  const nav = page.getByRole("navigation", { name: "Settings sections" });
+  await expect(nav.getByRole("link")).toHaveText([
+    "Profile",
+    "Members",
+    "Spaces",
+    /^Directory/,
+    "Agents",
+    "Instance",
+  ]);
+  const g = await nav.evaluate((el) => ({
+    overflowX: getComputedStyle(el).overflowX,
+    sideScroll:
+      document.documentElement.scrollWidth -
+      document.documentElement.clientWidth,
+  }));
+  expect(g.overflowX).toBe("auto");
+  expect(g.sideScroll).toBe(0);
+  // The last tab is reachable by scrolling the strip, not clipped off.
+  const last = nav.getByRole("link", { name: "Instance" });
+  await last.scrollIntoViewIfNeeded();
+  const [n, l] = await Promise.all([nav.boundingBox(), last.boundingBox()]);
+  expect(l && n && l.x + l.width <= n.x + n.width + 0.5).toBe(true);
+});
