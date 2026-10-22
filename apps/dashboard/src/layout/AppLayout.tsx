@@ -404,7 +404,11 @@ function TopBar({ me }: { me: Me | null }) {
           alignItems: "center",
         }}
       >
-        <span>{me.user.email}</span>
+        {/* Below 640px the avatar alone (it opens the account menu), so the
+            search and its space chip get the room. */}
+        <span data-header-email="" className="max-[640px]:hidden">
+          {me.user.email}
+        </span>
         <Menu
           trigger={
             <Button

@@ -137,3 +137,23 @@ test("keyboard: reach a space from the sidebar, then search everywhere", async (
   );
   await expect(box).toHaveAccessibleName("Search artifacts");
 });
+
+for (const [width, shown] of [
+  [1280, true],
+  [640, true],
+  [639, false],
+  [390, false],
+] as const)
+  test(`header email at ${width}px: ${shown ? "shown" : "avatar only"}`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`/?hosted=1&space=${ENG}`);
+    await page.waitForLoadState("networkidle");
+    const email = page.locator("[data-header-email]");
+    if (shown) await expect(email).toBeVisible();
+    else await expect(email).toBeHidden();
+    // The avatar still opens the account menu.
+    await page.getByRole("button", { name: "Account menu" }).click();
+    await expect(page.getByRole("menuitem", { name: "Sign out" })).toBeVisible();
+  });
