@@ -450,6 +450,12 @@ export type OAuthClient = z.infer<typeof OAuthClientSchema>;
 export const SettingsSchema = z.object({
   name: z.string().min(1).max(80),
   defaultVisibility: z.enum(["private", "team"]),
+  /**
+   * Hosted M1: space managers may map groups to viewer/editor in their spaces
+   * (default true; absent when not hosted). PATCH needs settings.manage (org
+   * owner, admin); audited settings.space_manager_mappings.
+   */
+  spaceManagerMappings: z.boolean().optional(),
 });
 export type Settings = z.infer<typeof SettingsSchema>;
 

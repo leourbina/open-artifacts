@@ -23,12 +23,18 @@ import {
   MembersQuerySchema,
   MeSchema,
   normalizeCode,
+  OrgMappingPutSchema,
+  OrgMappingSchema,
   PageSchema,
   PublishInputSchema,
   parseFeatures,
   R,
   RestrictedGroupSchema,
   SearchHitSchema,
+  SettingsPatchSchema,
+  SettingsSchema,
+  SPACE_MANAGER_MAPPING_ROLES,
+  SpaceCanSchema,
   SpaceMemberSchema,
   SpacePatchSchema,
   SpaceSchema,
@@ -93,6 +99,7 @@ describe("hosted contract schemas", () => {
     expect(STATUS_FOR.space_forbidden).toBe(403);
     expect(STATUS_FOR.turnstile_required).toBe(400);
     expect(STATUS_FOR.directory_sync_off).toBe(409);
+    expect(STATUS_FOR.directory_mapping_off).toBe(403);
   });
 
   it("old shapes still parse; new fields are optional", () => {
@@ -758,5 +765,201 @@ describe("hosted mocks: sync banner fields", () => {
       banner: false,
       tokensUnverified: false,
     });
+  });
+});
+
+describe("hosted contract: space-manager and Every-space mappings", () => {
+  const signIn = async (email: string) => {
+    await call("POST", AUTH.codeRequest, { email });
+    await call("POST", AUTH.codeVerify, { code: HOSTED_MOCK_CODE });
+  };
+  const ENG = "SpEngNpQrSt2uVwX";
+  const CLIENTS = "SpCliNpQrSt4uVwX";
+  const ada = fixtures.members[0]?.id as string;
+  const bob = fixtures.members[1]?.id as string;
+  /** As Ada (owner): make Bob a manager of Engineering, then sign in as Bob. */
+  const bobManagesEng = async () => {
+    await call("PUT", R.spaceMember(ENG, bob), { role: "manager" });
+    await signIn("bob@example.com");
+  };
+
+  it("schemas: settings flag, Space.can, org mappings, audit action", () => {
+    expect(
+      SettingsSchema.parse({
+        name: "x",
+        defaultVisibility: "team",
+        spaceManagerMappings: false,
+      }).spaceManagerMappings,
+    ).toBe(false);
+    expect(
+      SettingsSchema.parse({ name: "x", defaultVisibility: "team" }),
+    ).not.toHaveProperty("spaceManagerMappings");
+    expect(SettingsPatchSchema.parse({ spaceManagerMappings: true })).toEqual({
+      spaceManagerMappings: true,
+    });
+    expect(SpaceCanSchema.parse({ manageMappings: true })).toEqual({
+      manageMappings: true,
+    });
+    expect(SPACE_MANAGER_MAPPING_ROLES).toEqual(["viewer", "editor"]);
+    expect(
+      OrgMappingSchema.parse({
+        groupId: "g",
+        email: "g@example.com",
+        name: null,
+        role: "editor",
+        memberCount: null,
+        lastSyncedAt: null,
+      }).role,
+    ).toBe("editor");
+    expect(OrgMappingPutSchema.safeParse({ role: "owner" }).success).toBe(
+      false,
+    );
+    expect(AuditEventSchema.shape.action.options).toContain(
+      "settings.space_manager_mappings",
+    );
+    expect(R.orgMappings).toBe("/api/v1/directory/org-mappings");
+    expect(R.orgMapping("g/1")).toBe("/api/v1/directory/org-mappings/g%2F1");
+  });
+
+  it("settings: spaceManagerMappings defaults on; PATCH is admin-only and audited", async () => {
+    fresh({ hosted: true });
+    const s = SettingsSchema.strict().parse(
+      await json(await call("GET", R.settings)),
+    );
+    expect(s.spaceManagerMappings).toBe(true);
+    const off = SettingsSchema.strict().parse(
+      await json(
+        await call("PATCH", R.settings, { spaceManagerMappings: false }),
+      ),
+    );
+    expect(off.spaceManagerMappings).toBe(false);
+    const me = Strict.Me.parse(await json(await call("GET", R.me)));
+    expect(me.instance).not.toHaveProperty("spaceManagerMappings");
+    const audit = PageSchema(AuditEventSchema).parse(
+      await json(await call("GET", R.audit)),
+    );
+    expect(audit.items[0]).toMatchObject({
+      action: "settings.space_manager_mappings",
+      detail: { spaceManagerMappings: false },
+    });
+    await signIn("bob@example.com");
+    expect(
+      (await call("PATCH", R.settings, { spaceManagerMappings: true })).status,
+    ).toBe(404);
+  });
+
+  it("hosted off: settings carry no spaceManagerMappings", async () => {
+    fresh();
+    expect(await (await call("GET", R.settings)).text()).not.toContain(
+      "spaceManagerMappings",
+    );
+  });
+
+  it("a space manager maps viewer/editor; manager is space_forbidden", async () => {
+    fresh({ hosted: true });
+    await bobManagesEng();
+    const sp = Strict.Space.parse(await json(await call("GET", R.space(ENG))));
+    expect(sp.can).toEqual({ manageMappings: true });
+    expect(
+      z
+        .array(Strict.GroupMapping)
+        .parse(await json(await call("GET", R.spaceMappings(ENG)))),
+    ).toHaveLength(1);
+    const ok = Strict.GroupMapping.parse(
+      await json(
+        await call("PUT", R.spaceMapping(ENG, "gSales03"), { role: "viewer" }),
+      ),
+    );
+    expect(ok).toMatchObject({ groupId: "gSales03", role: "viewer" });
+    const mgr = await call("PUT", R.spaceMapping(ENG, "gSales03"), {
+      role: "manager",
+    });
+    expect(mgr.status).toBe(403);
+    expect((await errCode(mgr)).code).toBe("space_forbidden");
+    // Exec: Bob has no role there, so mapping routes stay 404.
+    expect(
+      (
+        await call("PUT", R.spaceMapping("SpExcNpQrSt3uVwX", "gSales03"), {
+          role: "viewer",
+        })
+      ).status,
+    ).toBe(404);
+    expect((await call("DELETE", R.spaceMapping(ENG, "gSales03"))).status).toBe(
+      204,
+    );
+  });
+
+  it("setting off: a space manager gets 403 directory_mapping_off; admins still map", async () => {
+    fresh({ hosted: true });
+    await call("PATCH", R.settings, { spaceManagerMappings: false });
+    const eng = Strict.Space.parse(await json(await call("GET", R.space(ENG))));
+    expect(eng.can).toEqual({ manageMappings: true });
+    await bobManagesEng();
+    const sp = Strict.Space.parse(await json(await call("GET", R.space(ENG))));
+    expect(sp.can).toEqual({ manageMappings: false });
+    const r = await call("PUT", R.spaceMapping(ENG, "gSales03"), {
+      role: "viewer",
+    });
+    expect(r.status).toBe(403);
+    expect((await errCode(r)).code).toBe("directory_mapping_off");
+    expect((await call("GET", R.spaceMappings(ENG))).status).toBe(403);
+  });
+
+  it("an Every-space mapping is an effective role in every shared space, never Personal", async () => {
+    fresh({ hosted: true });
+    expect(
+      z
+        .array(OrgMappingSchema.strict())
+        .parse(await json(await call("GET", R.orgMappings))),
+    ).toEqual([]);
+    const m = OrgMappingSchema.strict().parse(
+      await json(await call("PUT", R.orgMapping("gEng01"), { role: "editor" })),
+    );
+    expect(m).toMatchObject({ groupId: "gEng01", role: "editor" });
+    // One row per group: a second PUT updates it.
+    await call("PUT", R.orgMapping("gEng01"), { role: "editor" });
+    expect(await json(await call("GET", R.orgMappings))).toHaveLength(1);
+    // Not expanded into per-space mapping rows.
+    expect(await json(await call("GET", R.spaceMappings(CLIENTS)))).toEqual([]);
+    const members = PageSchema(Strict.SpaceMember).parse(
+      await json(await call("GET", R.spaceMembers(CLIENTS))),
+    );
+    expect(members.items).toEqual([
+      expect.objectContaining({
+        userId: bob,
+        role: "editor",
+        source: "sync",
+        syncRole: "editor",
+      }),
+    ]);
+    await signIn("bob@example.com");
+    const clients = Strict.Space.parse(
+      await json(await call("GET", R.space(CLIENTS))),
+    );
+    expect(clients.myRole).toBe("editor");
+    expect(clients.can).toEqual({ manageMappings: false });
+    // Personal spaces: Bob's own stays manager; Ada's stays invisible.
+    expect(
+      Strict.Space.parse(await json(await call("GET", R.space(bob)))).myRole,
+    ).toBe("manager");
+    expect((await call("GET", R.space(ada))).status).toBe(404);
+    expect((await call("GET", R.orgMappings)).status).toBe(404);
+  });
+
+  it("org mappings: DELETE, sync off, audit", async () => {
+    fresh({ hosted: true });
+    await call("PUT", R.orgMapping("gEng01"), { role: "viewer" });
+    expect((await call("DELETE", R.orgMapping("gEng01"))).status).toBe(204);
+    expect((await call("DELETE", R.orgMapping("gEng01"))).status).toBe(404);
+    const audit = PageSchema(AuditEventSchema).parse(
+      await json(await call("GET", R.audit)),
+    );
+    expect(audit.items.slice(0, 2)).toEqual([
+      expect.objectContaining({ action: "mapping.remove", spaceId: null }),
+      expect.objectContaining({ action: "mapping.set", spaceId: null }),
+    ]);
+    fresh({ hosted: { directory: "frozen" } });
+    const r = await call("PUT", R.orgMapping("gEng01"), { role: "viewer" });
+    expect((await errCode(r)).code).toBe("directory_sync_off");
   });
 });
