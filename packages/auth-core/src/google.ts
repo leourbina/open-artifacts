@@ -8,6 +8,7 @@ import {
   jwtVerify,
 } from "jose";
 import { inDomains } from "./domains.js";
+import { normalizeEmail } from "./email.js";
 
 export const GOOGLE_ISSUERS = [
   "https://accounts.google.com",
@@ -19,6 +20,8 @@ export const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 export const GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs";
 
 const CLOCK_TOLERANCE_S = 60;
+/** Google ID tokens live 1 h; refuse anything issued earlier than that. */
+const MAX_TOKEN_AGE = "1h";
 const MAX_NAME = 200;
 
 export type GoogleIdentity = {
@@ -67,9 +70,9 @@ async function sameString(a: string, b: string): Promise<boolean> {
 /**
  * Verifies a Google ID token for one install, in this order: signature
  * (RS256 only, Google's JWKS unless `jwks` is given), iss, aud, exp/iat
- * (60 s skew) and required claims; then aud is exactly the client id; azp,
+ * (60 s skew, issued at most 1 h ago) and required claims; then aud is exactly the client id; azp,
  * when present, is the client id; nonce equals this flow's nonce (constant
- * time); email_verified is true; hd is one of `domains` exactly. The email
+ * time); email_verified is true; the email normalizes (normalizeEmail); hd is one of `domains` exactly. The email
  * domain is never consulted.
  */
 export async function verifyGoogleIdToken(
@@ -91,6 +94,7 @@ export async function verifyGoogleIdToken(
       issuer: [...GOOGLE_ISSUERS],
       audience: opts.clientId,
       clockTolerance: CLOCK_TOLERANCE_S,
+      maxTokenAge: MAX_TOKEN_AGE,
       requiredClaims: ["sub", "exp", "iat", "nonce", "email"],
       ...(opts.now !== undefined ? { currentDate: new Date(opts.now) } : {}),
     }));
@@ -115,17 +119,14 @@ export async function verifyGoogleIdToken(
   if (claims.email_verified !== true)
     throw new GoogleTokenError("email_unverified");
   if (!inDomains(opts.domains, claims.hd)) throw new GoogleTokenError("tenant");
-  const { sub, email } = claims;
-  if (
-    typeof sub !== "string" ||
-    !sub ||
-    typeof email !== "string" ||
-    !email.includes("@")
-  )
+  const { sub } = claims;
+  const email =
+    typeof claims.email === "string" ? normalizeEmail(claims.email) : null;
+  if (typeof sub !== "string" || !sub || !email)
     throw new GoogleTokenError("claims");
   const name =
     typeof claims.name === "string" && claims.name.trim()
       ? claims.name.trim().slice(0, MAX_NAME)
       : null;
-  return { sub, email: email.trim(), name, hd: claims.hd as string };
+  return { sub, email, name, hd: claims.hd as string };
 }

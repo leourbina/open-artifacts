@@ -1,3 +1,4 @@
+import { normalizeEmail } from "@oa/auth-core";
 import {
   type AccessLevel,
   type AgentRef,
@@ -32,7 +33,6 @@ import {
 } from "../auth/authz.js";
 import { can } from "../auth/policy.js";
 import { getDb } from "../db/client.js";
-import { normEmail } from "../db/email.js";
 import { artifacts, shares, users } from "../db/schema.js";
 import type { Env } from "../env.js";
 import { ApiError, appOrigin } from "../http/errors.js";
@@ -536,7 +536,8 @@ const ISO_DATE =
  */
 export function listQuery(env: Env, caller: Caller, q: ListQuery) {
   const db = getDb(env);
-  const email = caller.kind === "user" ? normEmail(caller.user.email) : null;
+  const email =
+    caller.kind === "user" ? normalizeEmail(caller.user.email) : null;
   const conds: (SQL | undefined)[] = [
     listFilterSql(caller, q.scope, q.includeDeleted),
   ];
@@ -544,7 +545,7 @@ export function listQuery(env: Env, caller: Caller, q: ListQuery) {
   if (q.visibility) conds.push(eq(artifacts.visibility, q.visibility));
   if (q.agent !== undefined) conds.push(eq(artifacts.lastAgentName, q.agent));
   if (q.owner !== undefined) {
-    const e = normEmail(q.owner);
+    const e = normalizeEmail(q.owner);
     if (!e) throw bad("Invalid owner email", "owner");
     conds.push(
       sql`${artifacts.ownerId} = (select u.id from users u where u.email = ${e})`,
@@ -778,7 +779,7 @@ export async function putThumbnail(
   const editor = can(r.level, "publish", canCtx(who, r.artifact));
   let firstThumbnail = editor;
   if (!editor) {
-    const email = normEmail(user.email);
+    const email = normalizeEmail(user.email);
     const shared = email
       ? await env.DB.prepare(
           "select 1 x from shares where artifact_id = ? and email = ?",

@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { normalizeEmail } from "@oa/auth-core";
 import {
   type AccessLevel,
   type CapReason,
@@ -20,7 +21,6 @@ import {
 } from "drizzle-orm";
 import type { Context } from "hono";
 import { getDb } from "../db/client.js";
-import { normEmail } from "../db/email.js";
 import { artifacts, shares } from "../db/schema.js";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
@@ -90,7 +90,7 @@ export function requireUser(c: Context<AppEnv>): Member {
   return user;
 }
 
-const callerEmail = (u: Member) => normEmail(u.email);
+const callerEmail = (u: Member) => normalizeEmail(u.email);
 
 /**
  * Spec §6.5 rev 2 as P3's decision table (policy.ts `decide`). Until spaces

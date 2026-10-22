@@ -20,7 +20,7 @@ import {
 const inList = (col: string, values: readonly string[]) =>
   sql.raw(`"${col}" in (${values.map((v) => `'${v}'`).join(", ")})`);
 
-// EMAIL RULE: all email writes and lookups go through normEmail() (./email.ts),
+// EMAIL RULE: all email writes and lookups go through normalizeEmail() (@oa/auth-core),
 // because SQLite COLLATE NOCASE only folds ASCII.
 //
 // FTS RULE (for B8): artifact_search rows use rowid = artifacts.rowid (the implicit

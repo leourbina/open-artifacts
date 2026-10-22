@@ -1,4 +1,5 @@
 export { inDomains, parseDomains } from "./domains.js";
+export { isAsciiEmail, normalizeEmail } from "./email.js";
 export {
   GOOGLE_AUTHORIZE_URL,
   GOOGLE_ISSUERS,

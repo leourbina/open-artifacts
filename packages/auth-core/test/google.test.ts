@@ -82,6 +82,22 @@ describe("verifyGoogleIdToken", () => {
     });
   });
 
+  test("the email is normalized (trimmed, lowercased); non-ASCII is refused", async () => {
+    expect((await verify(await mint({ email: " Bob@A.COM " }))).email).toBe(
+      "bob@a.com",
+    );
+    expect(await stageOf(verify(await mint({ email: "Kim@a.com" })))).toBe(
+      "claims",
+    );
+  });
+
+  test("a token issued over an hour ago is refused even if exp is later", async () => {
+    const old = { iat: NOW - 3600 - 61, exp: NOW + 3600 };
+    expect(await stageOf(verify(await mint(old)))).toBe("jwt_verify");
+    const fresh = { iat: NOW - 3600 + 30, exp: NOW + 3600 };
+    expect(await stageOf(verify(await mint(fresh)))).toBe("ok");
+  });
+
   test("accepts the short issuer form", async () => {
     expect((await verify(await mint({ iss: "accounts.google.com" }))).sub).toBe(
       "S1",
