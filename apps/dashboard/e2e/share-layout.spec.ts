@@ -202,7 +202,9 @@ for (const width of [1280, 375, 390])
       const group = page.getByRole("radiogroup", { name: "Visibility" });
       await expect(group.getByRole("radio", { name: "Public" })).toBeDisabled();
       await expect(
-        page.getByText("Off for Engineering. Ask an admin."),
+        page.getByText(
+          "Public links are off for Engineering. A space manager can turn them on.",
+        ),
       ).toBeVisible();
       const over = await page.evaluate(
         () => (document.scrollingElement?.scrollWidth ?? 0) - innerWidth,

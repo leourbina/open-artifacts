@@ -51,7 +51,8 @@ const open = (overrides: HttpHandler[] = []) => {
   return mount(`${viewerPath(art.id)}?panel=open&tab=share`);
 };
 const group = () => screen.findByRole("radiogroup", { name: "Visibility" });
-const REASON = "Off for Exec. Ask an admin.";
+const REASON =
+  "Public links are off for Exec. A space manager can turn them on.";
 
 // Radix Select needs these in jsdom.
 Element.prototype.hasPointerCapture ??= () => false;
@@ -92,7 +93,7 @@ it("no space (self-hosted): the Share panel is unchanged", async () => {
   open();
   const g = await group();
   expect(within(g).getByRole("radio", { name: "Public" })).toBeEnabled();
-  expect(screen.queryByText(/Ask an admin\./)).toBeNull();
+  expect(screen.queryByText(/A space manager can turn them on\./)).toBeNull();
 });
 
 it("a public-on space: Public is available and no reason shows", async () => {
@@ -101,7 +102,7 @@ it("a public-on space: Public is available and no reason shows", async () => {
   ]);
   const g = await group();
   expect(within(g).getByRole("radio", { name: "Public" })).toBeEnabled();
-  expect(screen.queryByText(/Ask an admin\./)).toBeNull();
+  expect(screen.queryByText(/A space manager can turn them on\./)).toBeNull();
 });
 
 it("a 403 public_links_off from a stale tab shows the copy and keeps the old visibility", async () => {

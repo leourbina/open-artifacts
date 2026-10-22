@@ -266,7 +266,8 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
             id="oa-share-public-off"
             className={`mt-[var(--oa-space-1)] ${MUTED}`}
           >
-            Off for {space.name}. Ask an admin.
+            Public links are off for {space.name}. A space manager can turn them
+            on.
           </p>
         )}
         {vis && changed && (
