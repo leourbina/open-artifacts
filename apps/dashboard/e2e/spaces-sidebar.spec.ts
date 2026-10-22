@@ -169,13 +169,11 @@ for (const scheme of ["light", "dark"] as const)
       await page.setViewportSize({ width, height: 900 });
       await page.goto(`/?hosted=1&space=${ENG}`);
       await page.waitForLoadState("networkidle");
-      await page
-        .getByTestId("upload-files")
-        .setInputFiles({
-          name: "notes.md",
-          mimeType: "text/markdown",
-          buffer: Buffer.from("# x"),
-        });
+      await page.getByTestId("upload-files").setInputFiles({
+        name: "notes.md",
+        mimeType: "text/markdown",
+        buffer: Buffer.from("# x"),
+      });
       const d = page.getByRole("dialog", { name: "Create artifact" });
       await expect(d.getByRole("combobox", { name: "Space" })).toHaveText(
         /Engineering/,
