@@ -73,14 +73,15 @@ async function googleCallback(
   const set =
     start.headers.getSetCookie().find((c) => /oa_oidc_/.test(c)) ?? "";
   const stateCookie = set.split(";")[0] ?? "";
-  const code = g.issueCode(
-    { nonce: u.searchParams.get("nonce"), ...claims },
-    u.searchParams.get("code_challenge") as string,
-  );
-  return {
-    path: `${AUTH.callbackGoogle}?state=${u.searchParams.get("state")}&code=${code}`,
-    stateCookie,
+  /** A callback path with a freshly minted Google code for this state. */
+  const fresh = () => {
+    const code = g.issueCode(
+      { nonce: u.searchParams.get("nonce"), ...claims },
+      u.searchParams.get("code_challenge") as string,
+    );
+    return `${AUTH.callbackGoogle}?state=${u.searchParams.get("state")}&code=${code}`;
   };
+  return { path: fresh(), fresh, stateCookie };
 }
 
 /** Runs /auth/login/google → fake Google → /auth/callback/google. */
@@ -335,6 +336,21 @@ describe("direct-mode sign-in routes", () => {
     expect(loc(again)).toBe(`${SIGN_IN_PAGE}?error=failed&next=%2Fa%2Fx`);
     expect(cookieVal(again, SESSION)).toBeUndefined();
     expect(clearsState(again)).toBe(true);
+  });
+
+  it("the same state cookie with a fresh Google code is refused (single use server-side)", async () => {
+    const e = direct();
+    const email = uniq("replay2");
+    const cb = await googleCallback(e, { email, sub: `rp2-${email}` });
+    const first = await get(cb.path, e, cb.stateCookie);
+    expect(cookieVal(first, SESSION)).toBeDefined();
+    const calls = g.tokenCalls.length;
+    const again = await get(cb.fresh(), e, cb.stateCookie);
+    expect(loc(again)).toBe(`${SIGN_IN_PAGE}?error=failed&next=%2Fa%2Fx`);
+    expect(cookieVal(again, SESSION)).toBeUndefined();
+    expect(clearsState(again)).toBe(true);
+    // Refused before the code is redeemed at Google.
+    expect(g.tokenCalls.length).toBe(calls);
   });
 
   it.each(["removed", "suspended"])(

@@ -328,6 +328,29 @@ async function readOidcState(
   }
 }
 
+/** KV prefix for consumed OIDC states (the HMAC of the nonce, never the nonce). */
+const USED_STATE = "oidc_used:";
+/** KV's minimum expirationTtl. */
+const KV_MIN_TTL_S = 60;
+
+/**
+ * Single use server-side: the browser clears the state cookie, but a captured
+ * cookie plus a fresh code must not sign in again. Marks this state consumed
+ * in OAUTH_KV until it expires; a second use fails (stage state_replay).
+ * Best effort against two concurrent uses (KV has no compare-and-set); the
+ * IdP's single-use code and the nonce still bind each sign-in.
+ */
+async function consumeState(
+  env: Env,
+  key: string,
+  st: OidcState,
+): Promise<void> {
+  const id = USED_STATE + (await hmacSign(key, `used:${st.nonce}`));
+  if ((await env.OAUTH_KV.get(id)) !== null) fail("state_replay");
+  const ttl = Math.max(KV_MIN_TTL_S, Math.ceil((st.exp - Date.now()) / 1000));
+  await env.OAUTH_KV.put(id, "1", { expirationTtl: ttl });
+}
+
 /** Constant-time string equality via HMAC verify. */
 export async function safeEqual(secret: string, a: string, b: string) {
   return hmacVerify(secret, a, await hmacSign(secret, b));
@@ -367,6 +390,7 @@ export async function handleCallback(
   if ((st.p ?? "access") !== provider.id) return failState("state_mismatch");
   const next = safeNext(env, st.next);
   try {
+    await consumeState(env, keys.key, st);
     if (q.has("error"))
       return fail("idp_error", { error: tag(q.get("error")) });
     const code = q.get("code");
