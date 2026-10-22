@@ -39,6 +39,7 @@ import {
   RoleSelect,
   SpaceAccess,
 } from "./SpaceAccess";
+import { SpacePeople } from "./SpacePeople";
 import { Switch } from "./Switch";
 
 const PAGE = "/settings/spaces";
@@ -550,6 +551,11 @@ function SpaceDetail({
   onDeleted: () => void;
 }) {
   useDocumentTitle(space.name);
+  const state = useMe();
+  const frozen =
+    state.status === "authed" && hasFeature(state.me, "sync_frozen");
+  // A kept group's "Edit people" narrows People to it.
+  const [group, setGroup] = useState("");
   return (
     <div className={STACK}>
       <div className="grid gap-[var(--oa-space-2)]">
@@ -573,7 +579,20 @@ function SpaceDetail({
         admin={admin}
         syncOn={syncOn}
         orgName={orgName}
+        frozen={frozen}
+        onEditPeople={setGroup}
       />
+      {/* People: org admins and the space's managers (D6). */}
+      {(admin || space.myRole === "manager") && (
+        <SpacePeople
+          space={space}
+          admin={admin}
+          orgName={orgName}
+          frozen={frozen}
+          group={group}
+          onGroup={setGroup}
+        />
+      )}
       {admin && <DeleteSpace space={space} onDeleted={onDeleted} />}
     </div>
   );

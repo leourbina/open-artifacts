@@ -132,3 +132,52 @@ test("keyboard: open a space from the list, add a group, change its role", async
   await page.keyboard.press("Enter");
   await expect(role).toHaveText("Editor");
 });
+
+// Hosted P4 Task 12 (D6): the People card on Engineering (and frozen), with
+// the Add people dialog, at 1280 and 375, light and dark.
+for (const scheme of ["light", "dark"] as const)
+  for (const width of [1280, 375])
+    test.describe(`people ${scheme} ${width}`, () => {
+      test.use({ colorScheme: scheme, viewport: { width, height: 900 } });
+
+      for (const [name, hosted] of [
+        ["people", "1"],
+        ["people-frozen", "frozen"],
+      ] as const)
+        test(`${name}: axe, no sideways scroll`, async ({ page }, info) => {
+          await page.goto(
+            `/settings/spaces?hosted=${hosted}&space=SpEngNpQrSt2uVwX`,
+          );
+          await page.waitForLoadState("networkidle");
+          const card = page.getByRole("region", { name: "People" });
+          await expect(card.getByText("Bob Builder")).toBeVisible();
+          await card.scrollIntoViewIfNeeded();
+          const v = await axeRun(page);
+          expect(v, v.join("\n")).toEqual([]);
+          await noOverflow(page);
+          await page.screenshot({
+            path: info.outputPath(`${name}-${scheme}-${width}.png`),
+            fullPage: true,
+          });
+        });
+
+      test("add people dialog", async ({ page }, info) => {
+        await page.goto("/settings/spaces?hosted=1&space=SpEngNpQrSt2uVwX");
+        await page.waitForLoadState("networkidle");
+        await page
+          .getByRole("region", { name: "People" })
+          .getByRole("button", { name: "Add people" })
+          .click();
+        const d = page.getByRole("dialog", {
+          name: "Add people to Engineering",
+        });
+        await d.getByRole("combobox", { name: "People" }).fill("da");
+        await page.getByRole("option", { name: /Dan Contractor/ }).click();
+        await settle(page);
+        const v = await axeRun(page);
+        expect(v, v.join("\n")).toEqual([]);
+        await page.screenshot({
+          path: info.outputPath(`people-add-${scheme}-${width}.png`),
+        });
+      });
+    });

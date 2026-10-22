@@ -49,6 +49,7 @@ export function RoleSelect({
   roles,
   none,
   disabled,
+  labels = (r) => ROLE_LABEL[r],
   onChange,
 }: {
   label: string;
@@ -56,6 +57,8 @@ export function RoleSelect({
   roles: SpaceRole[];
   none?: boolean;
   disabled?: boolean;
+  /** Each role's option text (default: the role's name). */
+  labels?: (role: SpaceRole) => string;
   onChange: (role: SpaceRole | null) => void;
 }) {
   return (
@@ -69,7 +72,10 @@ export function RoleSelect({
         size="sm"
         className="w-[120px] text-[length:var(--oa-text-sm)]"
       >
-        <SelectValue />
+        {/* The trigger names the role; the options can say more. */}
+        <SelectValue>
+          {value ? ROLE_LABEL[value] : none ? "None" : undefined}
+        </SelectValue>
       </SelectTrigger>
       <SelectContent position="popper">
         {none && (
@@ -83,7 +89,7 @@ export function RoleSelect({
             value={r}
             className="text-[length:var(--oa-text-sm)]"
           >
-            {ROLE_LABEL[r]}
+            {labels(r)}
           </SelectItem>
         ))}
       </SelectContent>
@@ -155,12 +161,17 @@ export function SpaceAccess({
   admin,
   syncOn,
   orgName,
+  frozen = false,
+  onEditPeople,
 }: {
   space: Space;
   admin: boolean;
   /** Group sync is running (sync_google): mappings can change. */
   syncOn: boolean;
   orgName: string;
+  /** Group sync is frozen: each kept group offers "Edit people" (filters People). */
+  frozen?: boolean;
+  onEditPeople?: (groupId: string) => void;
 }) {
   const mappings = useSpaceMappings(space.id);
   // Every-space rows: org admins only (R.orgMappings is admin-only).
@@ -253,9 +264,22 @@ export function SpaceAccess({
                       </Button>
                     </>
                   ) : (
-                    <span className="text-[length:var(--oa-text-sm)]">
-                      {ROLE_LABEL[g.role]}
-                    </span>
+                    <>
+                      <span className="text-[length:var(--oa-text-sm)]">
+                        {ROLE_LABEL[g.role]}
+                      </span>
+                      {frozen && onEditPeople && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-[length:var(--oa-text-sm)]"
+                          aria-label={`Edit people from ${g.email}`}
+                          onClick={() => onEditPeople(g.groupId)}
+                        >
+                          Edit people
+                        </Button>
+                      )}
+                    </>
                   )
                 }
               />
@@ -312,7 +336,7 @@ export function SpaceAccess({
       <Problem problem={problem} />
       <p className={muted}>
         {!syncOn
-          ? "Group sync is off, so mappings can't change. Edit people by hand under People."
+          ? "Group sync is off, so mappings can't change. Edit people manually under People."
           : admin
             ? "Someone in more than one group gets the highest role. Changes apply within a minute and are recorded in the audit log."
             : canMap
