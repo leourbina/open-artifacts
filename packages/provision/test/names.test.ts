@@ -41,7 +41,9 @@ describe("provision names", () => {
       inventory: "oa-s-inventory",
       broker: "oa-s-auth-broker",
       dispatch: "oa-s-dispatch",
+      turnstile: "oa-s-turnstile",
     });
+    expect(platformNames("prod").turnstile).toBe("oa-p-turnstile");
     expect(platformNames("prod").db).toBe("oa-p-platform");
     for (const env of ["staging", "prod"] as const) {
       const other = env === "staging" ? "prod" : "staging";
@@ -98,6 +100,12 @@ describe("provision names", () => {
       appHost: "finqore.app.test",
       contentHost: "finqore.content.test",
     });
+  });
+  it("refuses punycode and IDNA-reserved slugs (H-T4b L4)", () => {
+    for (const s of ["xn--80ak6aa92e", "xn--a", "ab--c", "a1--", "zz--zz"])
+      expect(() => hosts(s, D)).toThrow(/slug/);
+    for (const s of ["a-b", "abc--d", "a--b", "x-n--a", "finqore"])
+      expect(() => hosts(s, D)).not.toThrow();
   });
   it("refuses equal or nested app and content domains", () => {
     expect(() => hosts("a", { app: "x.test", content: "x.test" })).toThrow(

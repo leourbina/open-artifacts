@@ -3,12 +3,15 @@
 // own D1, R2, KV and secrets, named by install id and env.
 //
 // create(), each step idempotent by checking first:
-//   pre-flight (no Cloudflare call): env, target, domains, owner email,
-//     bundle variant, release record vs the bytes, secrets, metadata dry run
+//   pre-flight (no Cloudflare call): prod lock, env, target, domains, owner
+//     email, bundle variant, Turnstile inputs, the signed release record and
+//     every release file against it, secrets, metadata dry run
 //   token check -> resolve platform D1, HOSTS and registry by name
+//   -> Turnstile widget (GET, codes on only)
 //   -> platform row (creating, rl_ns, hosts, audit; one batch) -> D1 -> R2
 //   -> KV (ids resolved by name and checked against the row) -> server
-//   migrations -> upload (assets, secret_text bindings, DO tag probe)
+//   migrations (re-read and re-checked) -> upload (modules, assets and
+//   template re-read and re-checked; secret_text bindings, DO tag probe)
 //   -> subdomain off (account only) -> broker keypair (flag) -> HOSTS
 //   -> /healthz -> owner PAT (0600) -> MCP selftest -> active.
 import { createHash, generateKeyPairSync, type KeyObject } from "node:crypto";
@@ -21,14 +24,13 @@ import {
   readFileSync,
   writeSync,
 } from "node:fs";
-import { readdir, readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { newId, newPat } from "@oa/shared";
-import type { Bundle } from "./bundle.js";
-import { type Cf, CfError, type Target } from "./cf.js";
+import { type Cf, CfError, type Module, type Target } from "./cf.js";
 import {
+  assertSafeMigrations,
   KNOWN_SECRETS,
-  loadTemplate,
+  parseTemplate,
   scriptSubdomainSettings,
   type Template,
   type UploadMetadata,
@@ -52,6 +54,24 @@ import {
   PlatformDb,
   RL_BASE,
 } from "./platform.js";
+import {
+  assertAssetPath,
+  assetEntries,
+  type BundleVariant,
+  bundleSha256,
+  MIGRATION_RE,
+  migrationsSha256,
+  RELEASE_PUBKEY,
+  RELEASE_PUBKEY_PLACEHOLDER,
+  type ReleaseAsset,
+  type ReleaseAssetEntry,
+  type ReleaseFile,
+  type ReleaseReader,
+  type ReleaseRecord,
+  sha256Hex,
+  TEST_HOOKS_DEFINE,
+  verifyReleaseSignature,
+} from "./release.js";
 import type { CreateInput, Install, InstallId } from "./types.js";
 
 /** The dispatch namespace of each env (live M1 target). */
@@ -72,35 +92,6 @@ export const HOSTED_DOMAINS: Record<Env, { app: string; content: string }> = {
 /** The platform HOSTS KV namespace title (host -> install id). */
 export const hostsKvTitle = (env: Env): string => `${ENV_PREFIX[env]}hosts`;
 
-/**
- * Compile-time define, confirmed by Backend: a BOOLEAN literal, `true` only in
- * the redline bundle and `false` in the release bundle.
- */
-export const TEST_HOOKS_DEFINE = "__OA_TEST_HOOKS_ALLOWED__" as const;
-
-export type BundleVariant = "release" | "redline";
-
-/**
- * The per-release manifest entry for one bundle variant, written by the
- * bundle step after building both variants and running check-no-test-hooks.
- * TODO(T3b): the two-variant buildBundle, the check-no-test-hooks gate and
- * writing this manifest are task T3b, a blocker before any prod create.
- */
-export interface ReleaseRecord {
-  version: string;
-  variant: BundleVariant;
-  /** bundleSha256() of the bytes the bundle step built. */
-  sha256: string;
-  /**
-   * A JSON boolean, on purpose. Wrangler's `define` config holds the string
-   * "true"/"false" (a JS expression the bundler substitutes, so the code sees
-   * a real boolean and dead-code elimination works). This record is our own
-   * schema: T3b converts the config string to a boolean when it writes it.
-   * Do not change this to a string; checkRecord refuses one.
-   */
-  defines: { [TEST_HOOKS_DEFINE]: boolean };
-}
-
 export interface WfpCreateInput extends CreateInput {
   bundle: BundleVariant;
   version: string;
@@ -109,16 +100,26 @@ export interface WfpCreateInput extends CreateInput {
 export interface WfpOptions {
   cf: Cf;
   env: Env;
+  /** Live envs use { kind: "namespace", ns: NAMESPACES[env] }. */
   target: Target;
   /** Must equal HOSTED_DOMAINS[env]. */
   domains: { app: string; content: string };
-  /** Fetches a release's bundle of the given variant (R2 in production). */
-  bundles: (version: string, variant: BundleVariant) => Promise<Bundle>;
-  /** Reads the independent per-release record; null when there is none. */
-  releaseRecord: (
-    version: string,
-    variant: BundleVariant,
-  ) => Promise<ReleaseRecord | null>;
+  /** The release's signed record and files (R2 in production); never the checkout. */
+  release: ReleaseReader;
+  /**
+   * Prod stays locked until the T3b record writer exists. T3b flips this in
+   * code; no CLI flag sets it.
+   */
+  prodRecordWriter?: "t3b";
+  /** Tests only: allow { kind: "account" } (live envs use the namespace). */
+  __testOnlyAllowAccountTarget?: true;
+  /** Tests only: the release public key instead of RELEASE_PUBKEY[env]. */
+  __testOnlyReleasePubkey?: string;
+  /**
+   * The env's one Turnstile widget (sitekey and secret from the keychain item
+   * oa-hosted-<env>-turnstile). Required when codes are on.
+   */
+  turnstile?: { sitekey: string; secret: string };
   patDir: string;
   /** Broker keypair (P2); off until the broker exists. */
   brokerEnabled?: boolean;
@@ -129,14 +130,31 @@ export interface WfpOptions {
   healthTimeoutMs?: number;
   /** Require /healthz to report installId (Task 6b, Backend). */
   requireInstallId?: boolean;
-  /** Test seam; defaults to apps/server/wrangler.template.jsonc. */
-  template?: Template;
-  /** Defaults to apps/server/migrations. */
-  serverMigrationsDir?: string;
 }
 
 export class ProvisionRefused extends Error {
   override name = "ProvisionRefused";
+}
+
+/** Prod creates are refused until the T3b release-record writer exists. */
+export class ProdLocked extends ProvisionRefused {
+  override name = "ProdLocked";
+}
+
+/** As the server: codes are on with AUTH_PROVIDERS containing email, or EMAIL_CODE_DOMAIN=on. */
+export function codesOn(vars: Record<string, string>): boolean {
+  const providers = (vars.AUTH_PROVIDERS ?? "").split(",").map((p) => p.trim());
+  return providers.includes("email") || vars.EMAIL_CODE_DOMAIN === "on";
+}
+
+/** The release, read and checked against its signed record. */
+interface Checked {
+  rec: ReleaseRecord;
+  mainModule: string;
+  modules: Module[];
+  assets: ReleaseAsset[];
+  template: Template;
+  migrations: ReleaseFile[];
 }
 
 const SECRET_BYTES = 48;
@@ -146,7 +164,8 @@ export const CREATE_SECRETS = [
   "DIRECTORY_TOKEN_KEY",
 ] as const;
 /** Secrets metadata.ts does not know; appended to its bindings here. */
-const EXTRA_SECRETS = ["DIRECTORY_TOKEN_KEY"];
+const EXTRA_SECRETS = ["DIRECTORY_TOKEN_KEY", "TURNSTILE_SECRET"];
+const SITEKEY_RE = /^[0-9A-Za-z_-]{8,64}$/;
 /** An old_tag no script can have: the 412 it draws names the live tag. */
 const PROBE_TAG = "__oa_probe__";
 const HEALTH_TIMEOUT_MS = 120_000;
@@ -159,7 +178,7 @@ const DAY = 86_400_000;
 const HOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/;
 const ASCII_EMAIL = /^[!-?A-~]+@[!-?A-~]+$/;
 const WELCOME_TITLE = "Welcome to Open Artifacts";
-const MIGRATION_RE = /^\d{4}_[a-z0-9_]+\.sql$/;
+const HEX64 = /^[0-9a-f]{64}$/;
 
 const b64u = (b: Uint8Array) => Buffer.from(b).toString("base64url");
 
@@ -189,26 +208,6 @@ export function assertSessionSecret(v: string, others: string[]): void {
     throw new Error("SESSION_SECRET must be at least 32 bytes");
   if (others.includes(v))
     throw new Error("SESSION_SECRET must be distinct from every other secret");
-}
-
-/** SHA-256 over exactly what is uploaded: the main module and every module's name, type and bytes. */
-export function bundleSha256(
-  b: Pick<Bundle, "modules" | "mainModule">,
-): string {
-  return createHash("sha256")
-    .update(
-      canonicalJson({
-        mainModule: b.mainModule,
-        modules: [...b.modules]
-          .sort((x, y) => (x.name < y.name ? -1 : 1))
-          .map((m) => ({
-            name: m.name,
-            type: m.type,
-            sha256: createHash("sha256").update(m.bytes).digest("hex"),
-          })),
-      }),
-    )
-    .digest("hex");
 }
 
 /** The broker registry origin: exactly https://<appHost>. */
@@ -267,6 +266,16 @@ function writeSecretFile(path: string, text: string): void {
   }
 }
 
+/** One record assets entry: a safe path, a size and a full sha256. */
+function assertAssetEntry(a: unknown): asserts a is ReleaseAssetEntry {
+  const x = a as ReleaseAssetEntry;
+  assertAssetPath(x?.path);
+  if (!Number.isSafeInteger(x.size) || x.size < 0)
+    throw new Error(`asset ${x.path} has no valid size`);
+  if (typeof x.sha256 !== "string" || !HEX64.test(x.sha256))
+    throw new Error(`asset ${x.path} has no valid sha256`);
+}
+
 const errCode = (e: unknown) =>
   (e as { code?: string })?.code ?? (e as Error)?.name ?? "error";
 
@@ -276,6 +285,8 @@ type Meta = {
   ownerEmail: string;
   vars: Record<string, string>;
   testHooks: boolean;
+  /** The verified Turnstile sitekey when codes are on. */
+  sitekey: string | null;
 };
 
 export class WfpProvisioner {
@@ -344,14 +355,28 @@ export class WfpProvisioner {
   private checkOptions(): void {
     const { env, o } = this;
     if (env !== "staging" && env !== "prod") throw new ForeignResource("", env);
+    // L2: no prod create before the T3b record writer (a code change).
+    if (env === "prod" && o.prodRecordWriter !== "t3b")
+      throw new ProdLocked(
+        "prod is locked until the T3b release-record writer exists",
+      );
     const t = this.target;
     if (t.kind === "namespace") {
       if (t.ns !== NAMESPACES[env])
         throw new ProvisionRefused(
           `namespace ${JSON.stringify(t.ns)} is not the ${env} dispatch namespace (${NAMESPACES[env]})`,
         );
-    } else if (t.kind !== "account")
-      throw new ProvisionRefused("target must be account or namespace");
+    } else if (t.kind === "account") {
+      // L3: live envs always use the namespace.
+      if (o.__testOnlyAllowAccountTarget !== true)
+        throw new ProvisionRefused(
+          "the account target is for tests only; live envs use the dispatch namespace",
+        );
+    } else throw new ProvisionRefused("target must be account or namespace");
+    if (this.pubkey() === RELEASE_PUBKEY_PLACEHOLDER)
+      throw new ProvisionRefused(
+        `RELEASE_PUBKEY.${env} is still the placeholder; T3b must set the release signing key before any create`,
+      );
     const d = HOSTED_DOMAINS[env];
     if (o.domains?.app !== d.app || o.domains?.content !== d.content)
       throw new ProvisionRefused(
@@ -389,17 +414,23 @@ export class WfpProvisioner {
       );
   }
 
-  /** The bytes to upload must match the independent release record. */
-  private checkRecord(
-    i: WfpCreateInput,
-    b: Bundle,
-    rec: ReleaseRecord | null,
-  ): void {
+  private pubkey(): string {
+    return this.o.__testOnlyReleasePubkey ?? RELEASE_PUBKEY[this.env];
+  }
+
+  /** L2 then M1: the record is trusted only after its signature checks out. */
+  private async readRecord(i: WfpCreateInput): Promise<ReleaseRecord> {
     const want = `${i.version} (${i.bundle})`;
-    if (!rec)
+    const signed = await this.o.release.record(i.version, i.bundle);
+    if (!signed)
       throw new ProvisionRefused(
         `no release record for ${want}; the bundle step (T3b) must write one before any create`,
       );
+    if (!verifyReleaseSignature(signed, this.pubkey()))
+      throw new ProvisionRefused(
+        `release record ${want}: the signature is missing or does not verify against the ${this.env} release key`,
+      );
+    const rec = signed.record;
     if (rec.version !== i.version || rec.variant !== i.bundle)
       throw new ProvisionRefused(
         `the release record read for ${want} is for ${String(rec.version)} (${String(rec.variant)})`,
@@ -413,16 +444,112 @@ export class WfpProvisioner {
       throw new ProvisionRefused(
         `release record ${want}: ${TEST_HOOKS_DEFINE} must be ${i.bundle === "redline"}`,
       );
-    if (typeof rec.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(rec.sha256))
-      throw new ProvisionRefused(`release record ${want} has no valid sha256`);
-    if (b?.version !== i.version)
+    for (const k of ["sha256", "templateSha256", "migrationsSha256"] as const)
+      if (typeof rec[k] !== "string" || !HEX64.test(rec[k]))
+        throw new ProvisionRefused(`release record ${want} has no valid ${k}`);
+    if (!Array.isArray(rec.assets))
+      throw new ProvisionRefused(`release record ${want} has no assets list`);
+    try {
+      let prev = "";
+      for (const [n, a] of rec.assets.entries()) {
+        assertAssetEntry(a);
+        if (n > 0 && !(a.path > prev))
+          throw new Error("assets are not sorted by path, or repeat one");
+        prev = a.path;
+      }
+    } catch (e) {
       throw new ProvisionRefused(
-        `the fetched bundle is not version ${i.version}`,
+        `release record ${want}: ${(e as Error).message}`,
       );
-    if (bundleSha256(b) !== rec.sha256)
+    }
+    return rec;
+  }
+
+  /** M1: each read is checked against the record right before it is used. */
+  private refuse(rec: ReleaseRecord, what: string, why?: string): never {
+    throw new ProvisionRefused(
+      `release ${rec.version} (${rec.variant}): the ${what} do not match the signed record${why ? ` (${why})` : ""}`,
+    );
+  }
+
+  private async readModules(
+    rec: ReleaseRecord,
+  ): Promise<{ mainModule: string; modules: Module[] }> {
+    const m = await this.o.release.modules(rec.version, rec.variant);
+    // A private copy: the bytes hashed are the bytes uploaded.
+    const copy = {
+      mainModule: String(m?.mainModule),
+      modules: (m?.modules ?? []).map((x) => ({
+        name: x.name,
+        type: x.type,
+        bytes: new Uint8Array(x.bytes),
+      })),
+    };
+    if (bundleSha256(copy) !== rec.sha256) this.refuse(rec, "modules");
+    return copy;
+  }
+
+  private async readAssets(rec: ReleaseRecord): Promise<ReleaseAsset[]> {
+    const list = await this.o.release.assets(rec.version, rec.variant);
+    const copy = (list ?? []).map((a) => ({
+      path: a?.path,
+      bytes: new Uint8Array(a?.bytes ?? []),
+    }));
+    let got: ReturnType<typeof assetEntries>;
+    try {
+      got = assetEntries(copy);
+    } catch (e) {
       throw new ProvisionRefused(
-        `bundle bytes for ${want} do not match the release record`,
+        `release ${rec.version} (${rec.variant}): ${(e as Error).message}`,
       );
+    }
+    if (canonicalJson(got) !== canonicalJson(rec.assets))
+      this.refuse(rec, "assets", "an extra, missing or changed file");
+    return copy;
+  }
+
+  private async readTemplate(rec: ReleaseRecord): Promise<Template> {
+    const bytes = new Uint8Array(
+      (await this.o.release.template(rec.version, rec.variant)) ?? [],
+    );
+    if (sha256Hex(bytes) !== rec.templateSha256) this.refuse(rec, "template");
+    const t = parseTemplate(new TextDecoder().decode(bytes));
+    // L5: only additive Durable Object migrations, before any call.
+    try {
+      assertSafeMigrations(t);
+    } catch (e) {
+      throw new ProvisionRefused((e as Error).message);
+    }
+    return t;
+  }
+
+  private async readMigrations(rec: ReleaseRecord): Promise<ReleaseFile[]> {
+    const list = await this.o.release.migrations(rec.version, rec.variant);
+    const copy = (list ?? []).map((f) => ({
+      name: f?.name,
+      bytes: new Uint8Array(f?.bytes ?? []),
+    }));
+    let h: string;
+    try {
+      h = migrationsSha256(copy);
+    } catch (e) {
+      throw new ProvisionRefused(
+        `release ${rec.version} (${rec.variant}): ${(e as Error).message}`,
+      );
+    }
+    if (h !== rec.migrationsSha256) this.refuse(rec, "migrations");
+    return copy.sort((a, b) => (a.name < b.name ? -1 : 1));
+  }
+
+  /** Pre-flight: the signed record, then every release file against it. */
+  private async readRelease(i: WfpCreateInput): Promise<Checked> {
+    if (!this.o.release) throw new ProvisionRefused("no release reader");
+    const rec = await this.readRecord(i);
+    const { mainModule, modules } = await this.readModules(rec);
+    const assets = await this.readAssets(rec);
+    const template = await this.readTemplate(rec);
+    const migrations = await this.readMigrations(rec);
+    return { rec, mainModule, modules, assets, template, migrations };
   }
 
   /** Belt and braces before every upload: hooks only reach a staging test install. */
@@ -440,14 +567,49 @@ export class WfpProvisioner {
       );
   }
 
-  private template(): Template {
-    return this.o.template ?? loadTemplate();
+  /** Codes on needs the env's Turnstile sitekey and secret; checked before any call. */
+  private turnstileInput(
+    vars: Record<string, string>,
+  ): { sitekey: string; secret: string } | null {
+    if (!codesOn(vars)) return null;
+    const ts = this.o.turnstile;
+    if (
+      !ts ||
+      typeof ts.sitekey !== "string" ||
+      typeof ts.secret !== "string" ||
+      ts.sitekey.trim() === "" ||
+      ts.secret.trim() === ""
+    )
+      throw new ProvisionRefused(
+        `codes are on (AUTH_PROVIDERS has email, or EMAIL_CODE_DOMAIN=on) but the ${this.env} Turnstile sitekey and secret are missing; run the Turnstile init for ${this.env} first`,
+      );
+    if (!SITEKEY_RE.test(ts.sitekey))
+      throw new ProvisionRefused("the Turnstile sitekey is malformed");
+    this.sensitive.add(ts.secret);
+    return { sitekey: ts.sitekey, secret: ts.secret };
   }
 
-  private tags(): string[] {
-    return ((this.template().migrations ?? []) as { tag: string }[]).map(
-      (m) => m.tag,
-    );
+  /** Read-only: the widget is the env's one, with exactly the env's app domain. */
+  private async checkWidget(sitekey: string): Promise<void> {
+    const name = platformNames(this.env).turnstile;
+    const domain = HOSTED_DOMAINS[this.env].app;
+    const w = await this.cf.turnstileWidget(sitekey);
+    if (!w || w.sitekey !== sitekey)
+      throw new ProvisionRefused(
+        `Turnstile widget ${sitekey} not found on the account`,
+      );
+    if (w.name !== name)
+      throw new ProvisionRefused(
+        `Turnstile widget ${sitekey} is not ${name} (the ${this.env} widget)`,
+      );
+    if (
+      !Array.isArray(w.domains) ||
+      w.domains.length !== 1 ||
+      w.domains[0] !== domain
+    )
+      throw new ProvisionRefused(
+        `Turnstile widget ${sitekey} must list exactly [${domain}]`,
+      );
   }
 
   // ---------- create ----------
@@ -464,10 +626,8 @@ export class WfpProvisioner {
     const testHooks = i.testHooks === true;
     const vars = i.vars ?? {};
     this.checkVariant(i, vars);
-    const bundle = await this.o.bundles(i.version, i.bundle);
-    const record = await this.o.releaseRecord(i.version, i.bundle);
-    this.checkRecord(i, bundle, record);
-    const rec = record as ReleaseRecord;
+    const ts = this.turnstileInput(vars);
+    const rel = await this.readRelease(i);
 
     // Secrets for a fresh upload; unused (and dropped) when the script exists.
     const secrets: Record<string, string> = {};
@@ -482,10 +642,19 @@ export class WfpProvisioner {
     );
     if (new Set(Object.values(secrets)).size !== Object.keys(secrets).length)
       throw new Error("generated secrets are not distinct");
+    // Not generated: the env's widget secret, sent like the others.
+    if (ts) secrets.TURNSTILE_SECRET = ts.secret;
 
     // Dry run: template, vars and ratelimit rules fail here, before any call.
-    const meta: Meta = { appHost, contentHost, ownerEmail, vars, testHooks };
-    this.metadata("iaaaaaaaaaaa", meta, bundle, {
+    const meta: Meta = {
+      appHost,
+      contentHost,
+      ownerEmail,
+      vars,
+      testHooks,
+      sitekey: ts?.sitekey ?? null,
+    };
+    this.metadata("iaaaaaaaaaaa", meta, rel, {
       d1Id: "00000000-0000-4000-8000-000000000000",
       kvId: "0".repeat(32),
       rlNs: RL_BASE[this.env],
@@ -497,6 +666,7 @@ export class WfpProvisioner {
 
     await this.checkToken();
     await this.resolvePlatform();
+    if (ts) await this.checkWidget(ts.sitekey);
 
     // ---------- platform row ----------
     const hash = inputsHash({ ownerEmail, vars, testHooks });
@@ -561,7 +731,7 @@ export class WfpProvisioner {
     }
     const id = row.id;
     try {
-      return await this.steps(row, res, i, bundle, rec, secrets, meta);
+      return await this.steps(row, res, i, rel, secrets, meta);
     } catch (e) {
       if (e instanceof Error && !e.message.startsWith(`install ${id}`))
         e.message = `install ${id}: ${e.message}`;
@@ -662,7 +832,7 @@ export class WfpProvisioner {
   private metadata(
     id: InstallId,
     m: Meta,
-    b: Bundle,
+    b: { rec: ReleaseRecord; mainModule: string; template: Template },
     r: {
       d1Id: string;
       kvId: string;
@@ -676,12 +846,13 @@ export class WfpProvisioner {
     const known = Object.fromEntries(
       Object.entries(r.secrets).filter(([k]) => !EXTRA_SECRETS.includes(k)),
     );
+    const { sitekey, ...install } = m;
     const meta = userWorkerMetadata(
-      { id, ...m },
+      { id, ...install },
       {
         d1Id: r.d1Id,
         kvId: r.kvId,
-        version: b.version,
+        version: b.rec.version,
         rlNs: r.rlNs,
         doMigrationTag: r.tag,
         env: this.env,
@@ -690,9 +861,15 @@ export class WfpProvisioner {
         secrets: known,
         mainModule: b.mainModule,
         assetsJwt: r.assetsJwt,
-        ...(this.o.template ? { template: this.o.template } : {}),
+        template: b.template,
       },
     );
+    if (sitekey !== null)
+      meta.bindings.push({
+        type: "plain_text",
+        name: "TURNSTILE_SITE_KEY",
+        text: sitekey,
+      });
     for (const k of EXTRA_SECRETS) {
       const v = r.secrets[k];
       if (v !== undefined)
@@ -714,12 +891,13 @@ export class WfpProvisioner {
     row: InstallRow,
     resolved: { d1: string | null; kv: string | null } | undefined,
     i: WfpCreateInput,
-    b: Bundle,
-    rec: ReleaseRecord,
+    rel: Checked,
     fresh: Record<string, string>,
     m: Meta,
   ): Promise<Install> {
     const { cf, env, target, platform } = this;
+    const rec = rel.rec;
+    const version = rec.version;
     const id = row.id;
     const n = names(id, env);
     const testHooks = m.testHooks;
@@ -743,19 +921,22 @@ export class WfpProvisioner {
     }
     if (row.kv_id !== kvId) await platform.update(id, { kv_id: kvId });
 
-    await this.migrate(d1Id, n.d1);
+    await this.migrate(rec, d1Id, n.d1);
 
     // Upload, only when something is missing or behind.
-    const tags = this.tags();
+    const tags = ((rel.template.migrations ?? []) as { tag: string }[]).map(
+      (x) => x.tag,
+    );
     const latest = tags.length ? (tags[tags.length - 1] as string) : null;
     const exists = await cf.scriptExists(target, n.script);
     const required = [
       ...CREATE_SECRETS,
       ...(testHooks ? ["TEST_HOOK_KEY"] : []),
+      ...(m.sitekey !== null ? ["TURNSTILE_SECRET"] : []),
     ];
     const have = exists ? await cf.secretList(target, n.script) : [];
     const missing = required.filter((k) => !have.includes(k));
-    const behind = row.version !== b.version || row.do_migration_tag !== latest;
+    const behind = row.version !== version || row.do_migration_tag !== latest;
     if (!exists || missing.length > 0 || behind) {
       const send = Object.fromEntries(
         missing.map((k) => [k, fresh[k] as string]),
@@ -773,27 +954,29 @@ export class WfpProvisioner {
       }
       const upload = async (tag: string | null, probe = false) => {
         this.assertHooksAllowed(rec.variant, testHooks);
-        if (bundleSha256(b) !== rec.sha256)
-          throw new ProvisionRefused(
-            "the bytes about to be uploaded do not match the release record",
-          );
-        const { jwt } = await cf.assetsUpload(
-          target,
-          n.script,
-          resolve(b.assetsDir),
+        // M1: re-read from the release and re-check right before the write;
+        // what is uploaded is exactly what was just checked.
+        const mods = await this.readModules(rec);
+        const assets = await this.readAssets(rec);
+        const template = await this.readTemplate(rec);
+        const { jwt } = await cf.assetsUpload(target, n.script, assets);
+        const meta = this.metadata(
+          id,
+          m,
+          { rec, mainModule: mods.mainModule, template },
+          {
+            d1Id: d1Id as string,
+            kvId: kvId as string,
+            rlNs: row.rl_ns,
+            tag,
+            mode: exists ? "update" : "create",
+            secrets: send,
+            assetsJwt: jwt,
+          },
         );
-        const meta = this.metadata(id, m, b, {
-          d1Id: d1Id as string,
-          kvId: kvId as string,
-          rlNs: row.rl_ns,
-          tag,
-          mode: exists ? "update" : "create",
-          secrets: send,
-          assetsJwt: jwt,
-        });
         if (probe && meta.migrations) meta.migrations.old_tag = PROBE_TAG;
         assertOwnResource(n.script, env);
-        await cf.scriptUpload(target, n.script, meta, b.modules);
+        await cf.scriptUpload(target, n.script, meta, mods.modules);
       };
       // Decision 5: the settings API never reports the tag. The journal is
       // checked by uploading: a 412 names the live tag and changes nothing.
@@ -816,11 +999,11 @@ export class WfpProvisioner {
         await upload(live === "" ? null : live);
       }
       await platform.update(id, {
-        version: b.version,
+        version,
         do_migration_tag: latest,
       });
       await platform.audit(id, "create.upload", {
-        version: b.version,
+        version,
         variant: rec.variant,
         sha256: rec.sha256,
       });
@@ -843,28 +1026,30 @@ export class WfpProvisioner {
       await cf.kvPut(this.hostsKv.id, h, id);
     }
 
-    await this.health(id, m.appHost, b.version);
+    await this.health(id, m.appHost, version);
     const patFile = await this.mintPat(d1Id, n.d1, m.ownerEmail, m.appHost);
     await this.selftest(m.appHost, patFile);
 
     await platform.update(id, { state: "active" });
-    await platform.audit(id, "create.active", { version: b.version });
+    await platform.audit(id, "create.active", { version });
     return {
       id,
       slug: i.slug,
       appHost: m.appHost,
       contentHost: m.contentHost,
-      version: b.version,
+      version,
       patFile,
     };
   }
 
-  /** apps/server/migrations/*.sql in order, recorded in d1_migrations as wrangler does. */
-  private async migrate(d1Id: string, d1Name: string): Promise<void> {
-    const dir =
-      this.o.serverMigrationsDir ??
-      new URL("../../../apps/server/migrations/", import.meta.url).pathname;
-    const files = (await readdir(dir)).filter((f) => f.endsWith(".sql")).sort();
+  /** The release's D1 migrations in order, recorded in d1_migrations as wrangler does. */
+  private async migrate(
+    rec: ReleaseRecord,
+    d1Id: string,
+    d1Name: string,
+  ): Promise<void> {
+    // M1: re-read from the release and re-check right before applying.
+    const files = await this.readMigrations(rec);
     assertOwnResource(d1Name, this.env);
     await this.cf.d1Query(
       d1Id,
@@ -873,15 +1058,15 @@ export class WfpProvisioner {
     const r = await this.cf.d1Query(d1Id, "SELECT name FROM d1_migrations");
     const done = new Set((r[0]?.results ?? []).map((x) => String(x.name)));
     for (const f of files) {
-      if (done.has(f)) continue;
-      if (!MIGRATION_RE.test(f))
-        throw new Error(`unexpected migration file name ${f}`);
-      const sql = (await readFile(join(dir, f), "utf8")).trimEnd();
+      if (done.has(f.name)) continue;
+      if (!MIGRATION_RE.test(f.name))
+        throw new Error(`unexpected migration file name ${f.name}`);
+      const sql = new TextDecoder().decode(f.bytes).trimEnd();
       assertOwnResource(d1Name, this.env);
       // One query: the file and its record land together or not at all.
       await this.cf.d1Query(
         d1Id,
-        `${sql}${sql.endsWith(";") ? "" : ";"}\nINSERT INTO d1_migrations (name) VALUES ('${f}');`,
+        `${sql}${sql.endsWith(";") ? "" : ";"}\nINSERT INTO d1_migrations (name) VALUES ('${f.name}');`,
       );
     }
   }

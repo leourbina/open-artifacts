@@ -209,10 +209,43 @@ const ASSET_CONFIG_KEYS = [
   "html_handling",
 ];
 
+/** Durable Object migration steps that lose or move data: never sent. */
+export const DO_MIGRATION_REFUSED = [
+  "deleted_classes",
+  "renamed_classes",
+  "transferred_classes",
+  "deleted_sqlite_classes",
+] as const;
+/** The only step keys a hosted upload sends (besides tag). */
+export const DO_MIGRATION_ALLOWED = ["new_sqlite_classes", "new_classes"];
+
+/** Refuses any template migration step that is not purely additive. */
+export function assertSafeMigrations(template: Template): void {
+  const all = template.migrations ?? [];
+  if (!Array.isArray(all))
+    throw new Error("template migrations must be an array");
+  for (const m of all as Record<string, unknown>[]) {
+    if (!m || typeof m !== "object" || typeof m.tag !== "string" || !m.tag)
+      throw new Error("every Durable Object migration step needs a tag");
+    for (const k of Object.keys(m)) {
+      if (k === "tag") continue;
+      if ((DO_MIGRATION_REFUSED as readonly string[]).includes(k))
+        throw new Error(
+          `Durable Object migration ${m.tag} has ${k}; hosted only applies new_sqlite_classes and new_classes`,
+        );
+      if (!DO_MIGRATION_ALLOWED.includes(k))
+        throw new Error(
+          `Durable Object migration ${m.tag} has unknown key ${JSON.stringify(k)}`,
+        );
+    }
+  }
+}
+
 function migrationsFor(
   template: Template,
   current: string | null,
 ): UploadMetadata["migrations"] {
+  assertSafeMigrations(template);
   const all = (template.migrations ?? []) as {
     tag: string;
     [k: string]: unknown;
