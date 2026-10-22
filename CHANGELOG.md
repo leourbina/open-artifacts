@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.1](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.26.0...v0.26.1) (2026-10-22)
+
+
+### Bug Fixes
+
+* **provision:** signed release records cover assets, template and migrations; prod locked ([#426](https://github.com/open-artifacts-ai/open-artifacts/issues/426) review) ([#435](https://github.com/open-artifacts-ai/open-artifacts/issues/435)) ([1d06125](https://github.com/open-artifacts-ai/open-artifacts/commit/1d061253991b7923367de691d46d42ba4d0281e1))
+
 ## [0.26.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.25.0...v0.26.0) (2026-10-22)
 
 
