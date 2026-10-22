@@ -11,13 +11,25 @@ import { MEASURE } from "./ui";
 const TAB =
   "relative inline-flex h-[34px] flex-none items-center rounded-sm px-[var(--oa-space-3)] text-[length:var(--oa-text-sm)] font-medium whitespace-nowrap text-muted-foreground transition-colors after:absolute after:inset-x-0 after:bottom-0 after:h-[2px] after:bg-foreground after:opacity-0 hover:text-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-[-2px] focus-visible:outline-ring aria-[current=page]:text-foreground aria-[current=page]:after:opacity-100";
 
-const TABS: { to: string; label: string; roles: Role[] }[] = [
+const TABS: {
+  to: string;
+  label: string;
+  roles: Role[];
+  /** Only where the instance reports a directory (hosted). */
+  directory?: true;
+}[] = [
   {
     to: "/settings/profile",
     label: "Profile",
     roles: ["owner", "admin", "member"],
   },
   { to: "/settings/members", label: "Members", roles: ["owner", "admin"] },
+  {
+    to: "/settings/directory",
+    label: "Directory",
+    roles: ["owner", "admin"],
+    directory: true,
+  },
   {
     to: "/settings/agents",
     label: "Agents",
@@ -30,6 +42,8 @@ export function SettingsLayout() {
   const state = useMe();
   const path = useRouterState({ select: (s) => s.location.pathname });
   const role = state.status === "authed" ? state.me.user.role : null;
+  const directory =
+    state.status === "authed" ? state.me.instance.directory : undefined;
   // Compare the normalized path: the router matches case-insensitively, ignoring a trailing slash.
   const here = path.toLowerCase().replace(/\/+$/, "");
   if (role === "guest") return <Outlet />; // no chrome; the gate redirects
@@ -43,7 +57,9 @@ export function SettingsLayout() {
         className="mt-[var(--oa-space-3)] mb-[var(--oa-space-5)] flex gap-[var(--oa-space-1)] overflow-x-auto shadow-[inset_0_-1px_0_var(--color-border)] [scrollbar-width:none]"
         aria-label="Settings sections"
       >
-        {TABS.filter((t) => role && t.roles.includes(role)).map((t) => (
+        {TABS.filter(
+          (t) => role && t.roles.includes(role) && (!t.directory || directory),
+        ).map((t) => (
           <AppLink
             key={t.to}
             href={t.to}
