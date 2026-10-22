@@ -25,6 +25,12 @@ import { callWorker, nextIp } from "./mcp-helpers.js";
 // P2 Task 8: code sign-in routes.
 const app = createApp();
 const APP = "http://app.localhost";
+/** A passing siteverify response for this install (hostname and action are checked). */
+const TURNSTILE_OK = {
+  success: true,
+  hostname: "app.localhost",
+  action: "code_request",
+};
 const SESSION = sessionCookieName(env);
 const CODE_COOKIE = "oa_code"; // dev naming in the test env (prod: __Host-oa_code)
 afterEach(() => vi.restoreAllMocks());
@@ -196,7 +202,7 @@ describe("POST AUTH.codeRequest", () => {
 
   it("a passing Turnstile token lets a trial domain member through", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      Response.json({ success: true }),
+      Response.json(TURNSTILE_OK),
     );
     const owner = uniq("own");
     await seedUser(owner, "owner");
@@ -244,7 +250,7 @@ describe("POST AUTH.codeRequest", () => {
     await seedUser(linked, "member", { googleSub: `L-${linked}` });
     const m = mailer();
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      Response.json({ success: true }),
+      Response.json(TURNSTILE_OK),
     );
     await request(withMail(direct(), m), owner);
     await request(withMail(trial(), m), linked, { token: "ok" });
@@ -296,7 +302,7 @@ describe("POST AUTH.codeVerify", () => {
 
   it("trial domain member: 7 days, t = domain, not read-only", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      Response.json({ success: true }),
+      Response.json(TURNSTILE_OK),
     );
     const owner = uniq("own");
     await seedUser(owner, "owner");
@@ -471,6 +477,34 @@ describe("code routes: review fixes", () => {
     expect(await errOf(r)).toMatchObject({ code: "code_unavailable" });
   });
 
+  it("hosted without Turnstile: 503 code_unavailable, before any counter or email", async () => {
+    const m = mailer();
+    const r = await request(
+      withMail(
+        direct({
+          HOSTED: "1",
+          TURNSTILE_SITE_KEY: undefined,
+          TURNSTILE_SECRET: undefined,
+        }),
+        m,
+      ),
+      uniq("h", "x.com"),
+    );
+    expect(r.status).toBe(503);
+    expect(await errOf(r)).toMatchObject({ code: "code_unavailable" });
+    expect(cookieOf(r, CODE_COOKIE)).toBeUndefined();
+    expect(m.sent).toHaveLength(0);
+  });
+
+  it("hosted with Turnstile configured still requires the token", async () => {
+    const r = await request(
+      direct({ HOSTED: "1", TURNSTILE_SITE_KEY: "k", TURNSTILE_SECRET: "s" }),
+      uniq("h", "x.com"),
+    );
+    expect(r.status).toBe(400);
+    expect((await errOf(r)).code).toBe("turnstile_required");
+  });
+
   it("the pending cookie never holds the plaintext address", async () => {
     const addr = uniq("plain", "x.com");
     const r = await request(direct(), addr);
@@ -604,7 +638,7 @@ describe("code routes: review fixes", () => {
     // 2. The SPA requests a code with that next, then verifies it.
     const ts = vi
       .spyOn(globalThis, "fetch")
-      .mockResolvedValue(Response.json({ success: true }));
+      .mockResolvedValue(Response.json(TURNSTILE_OK));
     const rq = await request(e, member, { next, token: "ok" });
     ts.mockRestore();
     expect(rq.status).toBe(202);

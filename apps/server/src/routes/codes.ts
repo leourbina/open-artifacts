@@ -1,3 +1,4 @@
+import { normalizeEmail } from "@oa/auth-core";
 import {
   AUTH,
   CODE_POLICY,
@@ -12,15 +13,13 @@ import {
   codesKey,
   deliverCode,
   emailKey,
-  ipKey,
   takeRequestSlot,
   verifyCode,
 } from "../auth/codes.js";
 import { authConfig } from "../auth/config.js";
 import { safeNext } from "../auth/oidc.js";
 import { sessionCookie, signSession } from "../auth/session.js";
-import { verifyTurnstile } from "../auth/turnstile.js";
-import { normEmail } from "../db/email.js";
+import { requireTurnstile } from "../auth/turnstile.js";
 import { stmt } from "../db/stmt.js";
 import { ApiError, appOrigin, errorJson } from "../http/errors.js";
 import { type AppEnv, CSRF_HEADER, execCtx } from "../http/middleware.js";
@@ -234,22 +233,24 @@ export function mountCodes(app: AppType): void {
     const parsed = CodeRequestSchema.safeParse(
       await c.req.json().catch(() => null),
     );
-    const email = parsed.success ? normEmail(parsed.data.email) : null;
+    const email = parsed.success ? normalizeEmail(parsed.data.email) : null;
     if (!parsed.success || !email)
       throw new ApiError("bad_request", "Invalid email", { field: "email" });
     const ip = clientIp(c);
-    if (cfg.turnstile) {
-      if (!parsed.data.turnstileToken)
-        throw new ApiError("turnstile_required", "Turnstile token required", {
-          field: "turnstile",
-          required: true,
-        });
-      if (!(await verifyTurnstile(cfg, parsed.data.turnstileToken, ip)))
-        throw new ApiError("turnstile_failed", "Turnstile check failed");
-    }
+    // Turnstile is the bound on distributed attackers (the per-network caps
+    // can't stop many networks), so hosted installs never run codes without it.
+    // Self-hosted installs without Turnstile are weaker (docs/self-hosting).
+    if (c.env.HOSTED === "1" && !cfg.turnstile)
+      throw new ApiError("code_unavailable", "Sign-in by code is unavailable");
+    await requireTurnstile(
+      cfg,
+      parsed.data.turnstileToken,
+      ip,
+      c.env.APP_HOST ?? new URL(c.req.url).hostname,
+    );
     if (!(await authLimit(c, cfg.installKey, ip))) return rateLimited(60, "ip");
     const ek = await emailKey(c.env, email);
-    const slot = await takeRequestSlot(c.env, cfg, ek, await ipKey(c.env, ip));
+    const slot = await takeRequestSlot(c.env, cfg, ek, ip);
     if (!slot.ok) return rateLimited(slot.retryAfter, slot.scope);
 
     const rid = b64urlEncode(crypto.getRandomValues(new Uint8Array(16)));
@@ -264,7 +265,7 @@ export function mountCodes(app: AppType): void {
     };
     // Eligibility, the row and the email happen after the response, so its
     // timing says nothing about the address.
-    const work = deliverCode(c.env, cfg, email, ek, rid).catch(() => null);
+    const work = deliverCode(c.env, cfg, email, ek, rid, ip).catch(() => null);
     const ctx = execCtx(c);
     if (ctx) ctx.waitUntil(work);
     else await work;
