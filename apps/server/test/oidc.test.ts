@@ -240,11 +240,23 @@ describe("GET /auth/login", () => {
     expect(loc.href).not.toContain("verifier");
   });
 
-  it("is 404 when access isn't an enabled provider", async () => {
-    for (const AUTH_PROVIDERS of ["email", "google,email", ""]) {
-      const r = await call("/auth/login", {}, { ...env, AUTH_PROVIDERS });
-      expect(r.status).toBe(404);
+  it("never starts Access when access isn't an enabled provider", async () => {
+    // No provider at all: 404.
+    const none = await call("/auth/login", {}, { ...env, AUTH_PROVIDERS: "" });
+    expect(none.status).toBe(404);
+    expect(oidcSet(none)).toBeUndefined();
+    for (const AUTH_PROVIDERS of ["email", "google,email"]) {
+      const e = { ...env, AUTH_PROVIDERS };
+      // Direct sign-in: the SPA chooser (P2 T6), no OIDC state.
+      const r = await call("/auth/login", {}, e);
+      expect(r.status).toBe(302);
+      expect(r.headers.get("location")).toMatch(/^\/sign-in\?next=/);
       expect(oidcSet(r)).toBeUndefined();
+      // ?via=access without access is ignored: the chooser again.
+      const via = await call("/auth/login?via=access", {}, e);
+      expect(via.status).toBe(302);
+      expect(via.headers.get("location")).toMatch(/^\/sign-in\?next=/);
+      expect(oidcSet(via)).toBeUndefined();
     }
   });
 });
