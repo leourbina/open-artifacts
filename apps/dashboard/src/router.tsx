@@ -16,6 +16,7 @@ import { NoAccess } from "./pages/NoAccess";
 import { NotFound } from "./pages/NotFound";
 import { SignIn } from "./pages/SignIn";
 import { Agents } from "./settings/Agents";
+import { Directory } from "./settings/Directory";
 import { Instance } from "./settings/Instance";
 import { Members } from "./settings/Members";
 import { Profile } from "./settings/Profile";
@@ -158,6 +159,7 @@ const routeTree = root.addChildren([
   settings.addChildren([
     gated("/settings/profile", [...ADMINS, "member"], "/", Profile),
     gated("/settings/members", ADMINS, "/settings/agents", Members),
+    gated("/settings/directory", ADMINS, "/settings/agents", Directory),
     gated("/settings/agents", [...ADMINS, "member"], "/", Agents),
     gated("/settings/instance", ADMINS, "/settings/agents", Instance),
   ]),

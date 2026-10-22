@@ -245,11 +245,15 @@ const failureToast = (
   });
 };
 
-/** Run `fn` then invalidate every key `keys()` returns. */
+/**
+ * Run `fn` then invalidate every key `keys()` returns. `inline` picks the
+ * failures the page shows itself (no toast for those).
+ */
 const useInvalidating = <V, T>(
   fn: (v: V) => Promise<T>,
   keys: () => (readonly unknown[])[],
   failure?: string,
+  inline?: (e: ApiClientError) => boolean,
 ) => {
   const qc = useQueryClient();
   return useMutation({
@@ -257,7 +261,10 @@ const useInvalidating = <V, T>(
     // Here, not at the call site: the row (and its component) may be gone by now.
     ...(failure
       ? {
-          onError: (e: unknown) => failureToast(qc, failure, e),
+          onError: (e: unknown) => {
+            if (e instanceof ApiClientError && inline?.(e)) return;
+            failureToast(qc, failure, e);
+          },
         }
       : {}),
     onSuccess: () =>
@@ -497,6 +504,9 @@ export const useDeleteMapping = (id: string) =>
     mappingKeys(id),
     "Couldn't change access.",
   );
+/** The Directory page shows these itself: sync is off (409), or the directory wants a fresh Google sign-in. */
+const directoryInline = (e: ApiClientError) =>
+  e.code === "directory_sync_off" || e.code === "reauth_required";
 export const useRestrictedGroups = () =>
   useQuery({
     queryKey: qk.restrictedGroups,
@@ -515,6 +525,7 @@ export const usePutRestrictedGroup = () =>
       ),
     restrictedKeys,
     "Couldn't change the restriction.",
+    directoryInline,
   );
 export const useDeleteRestrictedGroup = () =>
   useInvalidating(
@@ -561,6 +572,7 @@ export const useDirectorySync = () =>
     () => api.send("POST", R.directorySync, undefined, SyncStatusSchema),
     () => [qk.directory],
     "Couldn't start a sync.",
+    directoryInline,
   );
 export const useConfirmHeld = () =>
   useInvalidating(
@@ -573,12 +585,14 @@ export const useConfirmHeld = () =>
       ),
     () => [qk.directory, qk.members],
     "Couldn't apply the change.",
+    directoryInline,
   );
 export const useDisconnectDirectory = () =>
   useInvalidating(
     () => api.send("DELETE", R.directory, undefined),
     () => [qk.directory, qk.me],
     "Couldn't disconnect.",
+    directoryInline,
   );
 /** Refreshes on failure too: a refused move may mean the page is stale. */
 export const useMoveArtifact = (id: string) => {
