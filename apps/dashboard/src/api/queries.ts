@@ -595,13 +595,16 @@ export const useDisconnectDirectory = () =>
     directoryInline,
   );
 /** Refreshes on failure too: a refused move may mean the page is stale. */
-export const useMoveArtifact = (id: string) => {
+/** `quiet`: the caller shows failures itself (the Move dialog does, inline). */
+export const useMoveArtifact = (id: string, quiet = false) => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (spaceId: string) =>
       api.send("POST", R.moveArtifact(id), { spaceId }, ArtifactSummarySchema),
-    onError: (e) =>
-      failureToast(qc, "Couldn't move the artifact.", e, "Try again."),
+    onError: (e) => {
+      if (!quiet)
+        failureToast(qc, "Couldn't move the artifact.", e, "Try again.");
+    },
     onSettled: () =>
       Promise.all(
         [qk.artifact(id), ["artifacts"], ["spaces"], ["search"]].map(
