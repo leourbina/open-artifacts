@@ -2,7 +2,12 @@
 // (Design: bottom-right 16px in; full width less the 16px gutters on
 // phones; a "Dismiss" close button with a 24px hit area and the 2px ring;
 // errors announced assertively). Each run attaches a screenshot.
+import { createRequire } from "node:module";
 import { expect, type Page, test } from "@playwright/test";
+
+const AXE = createRequire(import.meta.url).resolve("axe-core/axe.min.js", {
+  paths: [new URL("../../../packages/ui", import.meta.url).pathname],
+});
 
 const openShare = async (page: Page) => {
   await page.goto("/");
@@ -165,3 +170,60 @@ test("dialogs are a surface, not the page gray", async ({ page }) => {
   });
   expect(bg[0]).toBe(bg[1]);
 });
+
+// Hosted P4 Task 9 (D9 / Q7): in a space with public links off, "Public"
+// stays visible but disabled, with the reason; the panel keeps its layout.
+for (const width of [1280, 375, 390])
+  for (const scheme of ["light", "dark"] as const)
+    test(`hosted public-off share panel at ${width}px ${scheme}`, async ({
+      page,
+    }, info) => {
+      await page.emulateMedia({ colorScheme: scheme });
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto("/?hosted=1");
+      await page.getByRole("link", { name: "Meeting notes" }).first().waitFor();
+      // Turn public links off in Engineering (the caller manages it) through
+      // the mock API, before the artifact is fetched (a reload resets the mock).
+      const status = await page.evaluate(async () => {
+        const r = await fetch("/api/v1/spaces/SpEngNpQrSt2uVwX", {
+          method: "PATCH",
+          headers: {
+            "content-type": "application/json",
+            "X-OA-Request": "1",
+          },
+          body: JSON.stringify({ publicLinks: false }),
+        });
+        return r.status;
+      });
+      expect(status).toBe(200);
+      await page.getByRole("link", { name: "Meeting notes" }).first().click();
+      await page.waitForURL(/\/a\//);
+      await page.getByRole("button", { name: "Share" }).click();
+      const group = page.getByRole("radiogroup", { name: "Visibility" });
+      await expect(group.getByRole("radio", { name: "Public" })).toBeDisabled();
+      await expect(
+        page.getByText(
+          "Public links are off for Engineering. A space manager can turn them on.",
+        ),
+      ).toBeVisible();
+      const over = await page.evaluate(
+        () => (document.scrollingElement?.scrollWidth ?? 0) - innerWidth,
+      );
+      expect(over, "horizontal overflow px").toBeLessThanOrEqual(0);
+      await page.addScriptTag({ path: AXE });
+      const v: string[] = await page.evaluate(async () => {
+        // @ts-expect-error injected
+        const r = await axe.run(document, { resultTypes: ["violations"] });
+        return r.violations
+          .filter(
+            (x: { impact: string }) =>
+              x.impact === "serious" || x.impact === "critical",
+          )
+          .map((x: { id: string }) => x.id);
+      });
+      expect(v).toEqual([]);
+      await page.screenshot({
+        path: info.outputPath(`share-public-off-${scheme}-${width}.png`),
+        fullPage: true,
+      });
+    });
