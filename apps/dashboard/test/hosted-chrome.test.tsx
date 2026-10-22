@@ -89,7 +89,7 @@ it.each([
   );
   const b = await sync("alert");
   expect(b).toHaveTextContent(
-    `Google directory sync stoppedGoogle sync stopped Jan 5, 2:10 PM: ${why} ${FROZEN_RECONNECT} ${fix} Sign-ins now last at most 24 hours.`,
+    `Google directory sync stoppedGoogle sync stopped Jan 5 at 2:10 PM: ${why} ${FROZEN_RECONNECT} ${fix} Sign-ins now last at most 24 hours.`,
   );
   expect(b).toHaveTextContent(TOKENS);
   expect(within(b).getByRole("link", { name: "Reconnect" })).toHaveAttribute(
@@ -108,6 +108,20 @@ it("owner: a danger state from today says only the time", async () => {
   const b = await sync("alert");
   expect(b).toHaveTextContent(
     "Google sync stopped at 2:10 PM: our connection was revoked or expired.",
+  );
+  expect(b).not.toHaveTextContent("Sign-ins now last at most 24 hours.");
+});
+
+it("an outage from yesterday under 24 hours old gets its date", async () => {
+  at410();
+  mountHosted(
+    "/",
+    { unhealthy: true, unhealthyState: "auth_failed" },
+    dir({ unhealthySince: new Date(2026, 9, 20, 22, 5).toISOString() }),
+  );
+  const b = await sync("alert");
+  expect(b).toHaveTextContent(
+    "Google sync stopped Oct 20 at 10:05 PM: our connection was revoked or expired.",
   );
   expect(b).not.toHaveTextContent("Sign-ins now last at most 24 hours.");
 });

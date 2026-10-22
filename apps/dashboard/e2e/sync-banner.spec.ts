@@ -69,6 +69,10 @@ for (const [name, token, role] of STATES)
           expect(g.inMain).toBe(true);
           expect(g.sideScroll).toBe(0);
 
+          // Let the theme's color transitions finish, or the shot catches them mid-fade.
+          await page.evaluate(() =>
+            Promise.all(document.getAnimations().map((a) => a.finished)),
+          );
           const file = `${name}-${where}-${width}-${theme}.png`;
           const dir = process.env.OA_SHOTS_DIR;
           await info.attach(file, {

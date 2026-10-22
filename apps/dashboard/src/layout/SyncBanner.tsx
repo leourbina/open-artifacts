@@ -32,12 +32,12 @@ const time = (d: Date) =>
   d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 const day = (d: Date) =>
   d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-/** "at 2:10 PM" today; otherwise "Oct 19 at 2:10 PM" (retrying) or "Oct 20, 3:12 PM" (stopped). */
-const stoppedAt = (since: string | null, sep: " at " | ", ") => {
+/** " at 2:10 PM" today, else " Oct 20 at 2:10 PM" (the Directory page's when() rule). */
+const stoppedAt = (since: string | null) => {
   if (!since) return "";
   const d = new Date(since);
   const today = d.toDateString() === new Date().toDateString();
-  return today ? ` at ${time(d)}` : ` ${day(d)}${sep}${time(d)}`;
+  return today ? ` at ${time(d)}` : ` ${day(d)} at ${time(d)}`;
 };
 
 const FROZEN =
@@ -69,12 +69,12 @@ const copy = (state: Failing, since: string | null, owner: boolean) => {
   if (!stopped)
     return {
       title: "Google directory sync is failing",
-      body: `Google sync stopped${stoppedAt(since, " at ")} and we keep retrying. ${FROZEN} sync recovers.`,
+      body: `Google sync stopped${stoppedAt(since)} and we keep retrying. ${FROZEN} sync recovers.`,
     };
   const [why, fix] = stopped;
   return {
     title: "Google directory sync stopped",
-    body: `Google sync stopped${stoppedAt(since, ", ")}: ${why} ${FROZEN} you reconnect.${owner ? ` ${fix}` : ""}`,
+    body: `Google sync stopped${stoppedAt(since)}: ${why} ${FROZEN} you reconnect.${owner ? ` ${fix}` : ""}`,
     reconnect: true,
   };
 };
