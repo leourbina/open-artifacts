@@ -1,29 +1,58 @@
-import { describe, expect, it } from "vitest";
+import { generateKeyPair } from "jose";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Env } from "../src/env.js";
 import worker from "../src/index.js";
 import { direct, mailer } from "./auth-helpers.js";
+import { type FakeGoogle, fakeGoogle } from "./fixtures/fake-google.js";
 import { type Install, SIGNIN_NEGATIVE_CASES } from "./xt/signin-negative.js";
 
 // P2 Task 13: the sign-in negative catalog against two local installs (one
-// worker, two envs: different secrets, install ids and hook keys). Cases that
-// need separate D1/KV per install run live only (xt:live).
+// worker, two envs: different secrets, install ids, hosts and hook keys).
+// Cases that need separate D1/KV per install or real DNS run live only.
 const m = mailer();
+let g: FakeGoogle;
+let attacker: CryptoKey;
+beforeAll(async () => {
+  g = await fakeGoogle();
+  attacker = (await generateKeyPair("RS256")).privateKey;
+});
+afterAll(() => g.restore());
+
 function local(id: string, secret: string, hookKey: string): Install {
+  const appHost = `${id}.localhost`;
+  const contentHost = `${id}-content.localhost`;
   const e = {
-    ...direct({ INSTALL_ID: id, SESSION_SECRET: secret }),
+    ...direct({
+      INSTALL_ID: id,
+      SESSION_SECRET: secret,
+      APP_HOST: appHost,
+      CONTENT_HOST: contentHost,
+    }),
     ...m.env,
     TEST_HOOKS: "1",
     TEST_HOOK_KEY: hookKey,
   } as Env;
   return {
-    origin: "http://app.localhost",
+    origin: `http://${appHost}`,
+    contentOrigin: `http://${contentHost}`,
     hookKey,
     sessionCookie: "oa_session",
     codeCookie: "oa_code",
+    // Signed by a key Google never published.
+    forgeGoogleCode: async ({ nonce, challenge }) =>
+      g.issueCode({ nonce }, challenge, attacker),
     async fetch(req) {
       const waits: Promise<unknown>[] = [];
+      // The edge routes by Host: a swapped Host header reaches this worker
+      // as that hostname.
+      const url = new URL(req.url);
+      const host = req.headers.get("host");
+      if (host) url.host = host;
       const r = await worker.fetch(
-        new Request(req, {
+        new Request(url, {
+          method: req.method,
+          body: req.body,
+          redirect: "manual",
           headers: new Headers([
             ...req.headers,
             [

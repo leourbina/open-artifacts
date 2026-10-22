@@ -3,16 +3,16 @@ import { defineConfig } from "vitest/config";
 /**
  * Plain Node (real fetch, real fs; no worker pool).
  * - Always: the xt helper unit tests (test/xt/*.node.test.ts).
- * - With XT_A set: the sign-in negative catalog live against two installs
- *   (P5 runs it on stg-a and stg-b every release). Origins in XT_A and XT_B;
- *   credentials only from 0600 files: XT_A_KEY_FILE, XT_B_KEY_FILE and, where
- *   Turnstile is on, XT_TURNSTILE_FILE.
+ * - Only with XT_LIVE=1 (pnpm xt:live sets it): the sign-in negative catalog
+ *   live against two staging installs (P5 runs it every release). See
+ *   test/xt/live.xt.ts for its env and guards; credentials only from 0600
+ *   files.
  */
 export default defineConfig({
   test: {
     include: [
       "test/xt/*.node.test.ts",
-      ...(process.env.XT_A ? ["test/xt/*.xt.ts"] : []),
+      ...(process.env.XT_LIVE === "1" ? ["test/xt/*.xt.ts"] : []),
     ],
     testTimeout: 30_000,
   },

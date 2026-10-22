@@ -20,8 +20,19 @@ Open Artifacts signs people in through Cloudflare Access by default. Direct sign
 | `EMAIL_CODE_DOMAIN` | var | `on` lets domain members use codes, only while Google is off. |
 | `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET` | var, secret | When set, every code request needs a Turnstile token. Required for domain codes. |
 | `CODE_EMAILS_PER_DAY` | var | Daily cap on code emails (default 200), separate from invites (`EMAIL_DAILY_CAP`, default 100). |
+| `SESSION_SECRET` | secret | At least 32 characters of random data (setup generates one). See below. |
 
 Codes need email sending set up (`EMAIL` binding and `EMAIL_FROM`). Code requests are rate limited per IP by the `RL_AUTH` binding.
+
+## SESSION_SECRET
+
+Direct sign-in keys everything it signs from `SESSION_SECRET`: one key per purpose (session cookies, sign-in state, code hashes, pending-code cookies), each derived with HKDF.
+
+- **Use at least 32 characters.** Setup generates a random one. To make your own: `openssl rand -base64 32`.
+- **Emailed codes need it.** With a shorter secret, code requests answer 503 `code_unavailable`.
+- **Shorter, older secrets (legacy).** Session and sign-in cookies keep working, signed with the raw secret as before, so nobody is signed out. `/healthz` then reports `SESSION_SECRET shorter than 32 characters; rotate it`. Rotate it soon.
+- **Cookies from before the per-purpose keys** (signed with the raw secret) are still accepted until 1 December 2026. After that date they are refused, and anyone still holding one signs in again once.
+- **Rotating it** signs everyone out and invalidates every pending code.
 
 ## Setting up Google
 
