@@ -99,7 +99,7 @@ every flag that is on.
 | `GET AUTH.callbackGoogle` `/auth/callback/google` | 302 `next`; any refusal (incl. `no_access`) 302 `SIGN_IN_PAGE?error=SignInError&next` only |
 | `POST AUTH.codeRequest` `/auth/code/request` | `CodeRequest` → 202 `CodeRequested` |
 | `POST AUTH.codeVerify` `/auth/code/verify` | `CodeVerify` → 200 `CodeVerified` |
-| `DELETE R.memberIdentity(id, "google")` | 204; owner/admin reset a member's Google link (never the owner's) |
+| `DELETE R.memberIdentity(id, "google")` | 204; owner/admin reset a member's Google link (never the owner's). An ADMIN target needs the OWNER: an admin resetting a peer admin gets 403 `owner_only` (server rule pending; mocked). |
 
 | Schema | Meaning |
 |---|---|
