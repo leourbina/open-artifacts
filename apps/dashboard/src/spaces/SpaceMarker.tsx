@@ -29,7 +29,7 @@ export const visibilityHint = (
 };
 
 /** The visibility badge, with its hint on hover where it has one. */
-export function Visibility({
+export function VisibilityWithHint({
   visibility,
   space,
 }: {

@@ -1,6 +1,6 @@
 import type { ArtifactSummary } from "@oa/shared";
 import { Avatar, FormatIcon } from "@oa/ui";
-import { SpaceMarker, Visibility } from "../spaces/SpaceMarker";
+import { SpaceMarker, VisibilityWithHint } from "../spaces/SpaceMarker";
 import { AppLink } from "./AppLink";
 import { relativeTime } from "./time";
 import { META, STRETCH, TITLE_LINK } from "./ui";
@@ -18,7 +18,7 @@ function Meta({ artifact: a, meId, showSpace }: CardProps) {
       className={`flex flex-wrap items-center gap-[var(--oa-space-2)] ${META}`}
     >
       <FormatIcon format={a.format} size={14} />
-      <Visibility visibility={a.visibility} space={a.space} />
+      <VisibilityWithHint visibility={a.visibility} space={a.space} />
       {showSpace && <SpaceMarker space={a.space} />}
       {a.lastAgent && <span>{a.lastAgent.name}</span>}
       {a.owner.id !== meId && (
