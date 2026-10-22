@@ -183,7 +183,8 @@ function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
 const codeHash = async (env: Env, ek: string, rid: string, code: string) =>
   hmacSign(await codesKey(env, "oa:login-codes"), `${ek}:${rid}:${code}`);
 
-function randomCode(): string {
+/** Exported for the distribution test. */
+export function randomCode(): string {
   const buf = new Uint32Array(1);
   for (;;) {
     crypto.getRandomValues(buf);

@@ -9,6 +9,7 @@ import {
   emailKey,
   ipKey,
   netKey,
+  randomCode,
   takeRequestSlot,
   verifyCode,
 } from "../src/auth/codes.js";
@@ -75,19 +76,27 @@ beforeEach(() => {
 });
 
 describe("codes at rest", () => {
-  it("8 digits, uniform per position", async () => {
+  it("8 digits, uniform per position", () => {
+    // The generator alone (no D1), so this is fast and stable under CI load.
+    const N = 20_000;
     const counts = Array.from({ length: 8 }, () => new Array(10).fill(0));
-    const ek = await emailKey(env, E);
-    for (let i = 0; i < 2000; i++) {
-      const code = await createCode(env, ek, `u-${i}-${E}`, Date.now());
+    for (let i = 0; i < N; i++) {
+      const code = randomCode();
       expect(code).toMatch(/^\d{8}$/);
       [...code].forEach((d, p) => {
         counts[p][Number(d)]++;
       });
     }
-    // 200 expected per cell; 5 sigma ≈ 67.
+    // 2000 expected per cell; sigma = sqrt(N * 0.1 * 0.9) ≈ 42; 6 sigma ≈ 255.
     for (const pos of counts)
-      for (const n of pos) expect(Math.abs(n - 200)).toBeLessThan(67);
+      for (const n of pos) expect(Math.abs(n - N / 10)).toBeLessThan(255);
+  });
+
+  it("createCode stores an 8-digit code", async () => {
+    const ek = await emailKey(env, E);
+    expect(await createCode(env, ek, `fmt-${E}`, Date.now())).toMatch(
+      /^\d{8}$/,
+    );
   });
 
   it("the row holds no plaintext email or code", async () => {
