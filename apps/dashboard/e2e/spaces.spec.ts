@@ -155,11 +155,36 @@ for (const scheme of ["light", "dark"] as const)
           const v = await axeRun(page);
           expect(v, v.join("\n")).toEqual([]);
           await noOverflow(page);
+          // Viewport, not fullPage: a full-page capture paints the sticky top
+          // bar mid-page. The card is scrolled into view above.
           await page.screenshot({
             path: info.outputPath(`${name}-${scheme}-${width}.png`),
-            fullPage: true,
           });
         });
+
+      test("frozen: Edit people filters People to the group", async ({
+        page,
+      }, info) => {
+        await page.goto(
+          "/settings/spaces?hosted=frozen&space=SpEngNpQrSt2uVwX",
+        );
+        await page.waitForLoadState("networkidle");
+        await page
+          .getByRole("button", { name: "Edit people from eng@example.com" })
+          .click();
+        const card = page.getByRole("region", { name: "People" });
+        await expect(
+          card.getByText(/^1 person from eng@ as of .+ · Editor$/),
+        ).toBeVisible();
+        await expect(card.getByText("Bob Builder")).toBeVisible();
+        await expect(card.getByText("Ada Lovelace")).toHaveCount(0);
+        await card.scrollIntoViewIfNeeded();
+        await page.screenshot({
+          path: info.outputPath(
+            `people-frozen-filtered-${scheme}-${width}.png`,
+          ),
+        });
+      });
 
       test("add people dialog", async ({ page }, info) => {
         await page.goto("/settings/spaces?hosted=1&space=SpEngNpQrSt2uVwX");

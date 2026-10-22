@@ -623,3 +623,44 @@ it("Add people is a full-width sheet on a phone", async () => {
   expect(d.className).toContain("max-[640px]:max-w-full");
   expect(d.className).toContain("max-[640px]:bottom-0");
 });
+
+it("Ada (an owner in the mock) can give Manager; a non-admin manager gets only Viewer and Editor", async () => {
+  const viewerRow = serve([
+    person({
+      userId: "l1",
+      user: { id: "l1", name: "Lee Chen", email: "lee@example.com" },
+      role: "viewer",
+      manualRole: "viewer",
+    }),
+  ]);
+  mountWith([viewerRow], asManager);
+  fireEvent.click(
+    within(await row("Lee Chen")).getByRole("combobox", {
+      name: "Role for Lee Chen",
+    }),
+  );
+  expect(
+    (await screen.findAllByRole("option")).map((o) => o.textContent),
+  ).toEqual(["Viewer", "Editor"]);
+});
+
+it("as an admin the same row offers Viewer, Editor and Manager", async () => {
+  mountWith([
+    serve([
+      person({
+        userId: "l1",
+        user: { id: "l1", name: "Lee Chen", email: "lee@example.com" },
+        role: "viewer",
+        manualRole: "viewer",
+      }),
+    ]),
+  ]);
+  fireEvent.click(
+    within(await row("Lee Chen")).getByRole("combobox", {
+      name: "Role for Lee Chen",
+    }),
+  );
+  expect(
+    (await screen.findAllByRole("option")).map((o) => o.textContent),
+  ).toEqual(["Viewer", "Editor", "Manager"]);
+});
