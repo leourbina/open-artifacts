@@ -161,6 +161,17 @@ describe("admit (Google)", () => {
     expect((await rowOf(r.user.id)).role).toBe("member");
   });
 
+  it("OWNER_EMAIL has no special path once an owner exists: join invite → no_access", async () => {
+    await seedUser(uniq("owner"), "owner");
+    const boss = uniq("boss");
+    const e = direct({ AUTH_DOMAIN_JOIN: "invite", OWNER_EMAIL: boss });
+    expect(await admit(e, authConfig(e), g({ email: boss }))).toEqual({
+      ok: false,
+      reason: "no_access",
+    });
+    expect(await count("users where email = ?", boss)).toBe(0);
+  });
+
   it("a guest row is promoted to member by hd (alias email domain)", async () => {
     const email = uniq("g", "alias.com");
     const uid = await seedUser(email, "guest");

@@ -38,6 +38,8 @@ const BY_SUBJECT = `select ${USER_COLS} from identities i join users u on u.id =
 const BY_EMAIL = `select ${USER_COLS}, (select subject from identities i where i.user_id = u.id and i.provider = 'google') as subject
   from users u where u.email = ?1 limit 1`;
 
+const AN_OWNER = "select 1 as x from users where role = 'owner' limit 1";
+
 const member = (r: UserRow) => toMember(r as Parameters<typeof toMember>[0]);
 
 const logDrift = () =>
@@ -73,7 +75,7 @@ async function followDrift(
 ): Promise<UserRow> {
   if (email === row.email) return row;
   // Never onto OWNER_EMAIL: drift must not hand anyone the owner address.
-  if (email === normEmail(env.OWNER_EMAIL ?? "")) {
+  if (email === normalizeEmail(env.OWNER_EMAIL ?? "")) {
     logDrift();
     return row;
   }
@@ -132,7 +134,10 @@ export async function admit(
   if (existing && existing.status !== "active")
     return { ok: false, reason: "removed" };
   if (existing?.subject) return { ok: false, reason: "identity_conflict" };
-  const isOwner = email === normalizeEmail(env.OWNER_EMAIL ?? "");
+  // OWNER_EMAIL is special only while no owner exists; then normal join rules.
+  const isOwner =
+    email === normalizeEmail(env.OWNER_EMAIL ?? "") &&
+    !(await stmt(env.DB, AN_OWNER).first());
   if (!existing && !isOwner && cfg.domainJoin !== "member")
     return { ok: false, reason: "no_access" };
 
