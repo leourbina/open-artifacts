@@ -48,18 +48,18 @@ export function ownerStatements(
         revokeCiSql(email, now),
       ]
     : [];
-  // --upgrade never moves ownership: a mistyped --owner-email must not demote
-  // the real owner during a routine release. The caller checks these first.
+  // --upgrade never writes users: a mistyped --owner-email must not move
+  // ownership, and the token INSERT selects FROM users, so a row deleted after
+  // the caller's pre-check cannot be recreated as an owner.
   const upsert =
     mode === "upgrade"
-      ? `INSERT INTO users (id, email, name, role, created_at) VALUES (${lit(base58(16))}, ${e}, ${lit(name)}, 'owner', ${now}) ON CONFLICT(email) DO NOTHING`
+      ? undefined
       : `INSERT INTO users (id, email, name, role, created_at) VALUES (${lit(base58(16))}, ${e}, ${lit(name)}, 'owner', ${now}) ON CONFLICT(email) DO UPDATE SET role = 'owner'`;
-  const [upsertOrInsert, ...rest] = [
-    upsert,
+  const rest = [
     `INSERT INTO tokens (id, user_id, label, token_hash, created_at) SELECT ${lit(tokenId)}, id, ${lit(label)}, ${lit(hash)}, ${now} FROM users WHERE email = ${e} AND (SELECT count(*) FROM tokens WHERE user_id = users.id AND revoked_at IS NULL) < ${MAX_ACTIVE}`,
     `SELECT id FROM tokens WHERE id = ${lit(tokenId)} AND revoked_at IS NULL`,
   ];
-  return [upsertOrInsert, ...stale, ...rest] as string[];
+  return [...(upsert ? [upsert] : []), ...stale, ...rest] as string[];
 }
 
 /**
@@ -208,6 +208,10 @@ export const ownerToken: Step = {
       state.ownerTokenId = prev;
       writeState(ctx.fs, ctx.root, state);
     };
+    // Nothing was minted yet: no revoke to run or to report.
+    const notMinted = () => {
+      if (ci) ctx.ciTokenId = undefined;
+    };
     const uncertain = () => {
       untrack();
       return {
@@ -226,39 +230,40 @@ export const ownerToken: Step = {
         pre = await d1Raw(ctx, `${ownerUpgradeCheckSql(email)};`);
       } catch {
         untrack();
+        notMinted();
         return uncertain();
       }
       if ((pre[0]?.results ?? []).length) {
         untrack();
+        notMinted();
         throw new Error(
           "setup --upgrade won't change ownership: this install already has a different owner. Check the owner email, or transfer ownership on purpose with a non-upgrade run using --new-owner-token",
         );
       }
       if (!(pre[1]?.results ?? []).length) {
         untrack();
+        notMinted();
         throw new Error(
           "setup --upgrade won't change ownership: the configured owner has no user row in this install. Check the owner email, or run setup without --upgrade to create the owner",
         );
       }
     }
+    const stmts = ownerStatements(
+      email,
+      id,
+      tokenHash(token),
+      Date.now(),
+      label,
+      ci,
+      ctx.opts.upgrade ? "upgrade" : "install",
+    );
     let res: D1Result[];
     try {
-      res = await d1Raw(
-        ctx,
-        ownerSql(
-          email,
-          id,
-          tokenHash(token),
-          Date.now(),
-          label,
-          ci,
-          ctx.opts.upgrade ? "upgrade" : "install",
-        ),
-      );
+      res = await d1Raw(ctx, `${stmts.join("; ")};`);
     } catch {
       return uncertain();
     }
-    if (res.length < 3) return uncertain();
+    if (res.length < stmts.length) return uncertain();
     const [insert, verify] = [res[res.length - 2], res[res.length - 1]];
     if (!insert?.meta?.changes) {
       untrack();
@@ -302,7 +307,7 @@ export const ownerToken: Step = {
         ? "owner token minted for selftest (not printed; revoked at end of run)"
         : `minted owner token ${id}; saved to ${tokenFile} (don't read or print it; point your client config at it)`,
     );
-    const stale = ci ? (res[1]?.meta?.changes ?? 0) : 0;
+    const stale = ci ? (res[res.length - 3]?.meta?.changes ?? 0) : 0;
     if (stale > 0) ctx.notes.push(`revoked ${stale} stale setup-ci tokens`);
     // Two commands, so one failing doesn't skip the other. The file and state are kept either way.
     let failed: string | undefined;

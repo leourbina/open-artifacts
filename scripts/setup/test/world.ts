@@ -78,7 +78,14 @@ type World = {
   /** /healthz reports this plan instead of the deployed PLAN var. */
   healthPlan?: string;
   /** Artifacts already on the install (welcome lookup tests). */
-  existingArtifacts?: { id: string; title: string }[];
+  existingArtifacts?: {
+    id: string;
+    title: string;
+    /** The caller's level (default "owner"); a team or shared artifact is "viewer"/"editor". */
+    access?: "owner" | "editor" | "viewer" | "manager";
+  }[];
+  /** Called with each D1 statement before it runs (e.g. to delete a row mid-run). */
+  onSql?: (sql: string) => void;
   /** The content get_artifact answers with (defaults to the last publish). */
   welcomeContent?: string;
   /** tools/list omits search_artifacts. */
@@ -248,7 +255,7 @@ export function world(w: World = {}) {
   let dryRuns = 0;
   /** The content of the last publish (kept when a test clears mcpCalls). */
   let lastPublished = "";
-  const pubs: { id: string; title: string }[] = [
+  const pubs: { id: string; title: string; access?: string }[] = [
     ...(w.existingArtifacts ?? []),
   ];
   const deleted = [...(w.deletedArtifacts ?? [])];
@@ -296,6 +303,7 @@ export function world(w: World = {}) {
         m = st.match(re) ?? [];
         return m.length > 0;
       };
+      w.onSql?.(st);
       if (w.d1Fails && st.includes("INSERT INTO tokens"))
         throw new Error("D1 down");
       if (w.failOn?.test(st)) throw new Error("D1 statement failed");
@@ -588,7 +596,9 @@ export function world(w: World = {}) {
             if (body.params.name === "list_artifacts") {
               const from = Number(body.params.arguments.cursor ?? 0);
               const limit = Number(body.params.arguments.limit ?? 25);
-              const items = pubs.slice(from, from + limit);
+              const items = pubs
+                .slice(from, from + limit)
+                .map((x) => ({ access: "owner", ...x }));
               const next =
                 from + limit < pubs.length ? `${from + limit}` : null;
               return reply(
@@ -598,9 +608,9 @@ export function world(w: World = {}) {
             }
             if (body.params.name === "search_artifacts") {
               const q = String(body.params.arguments.q ?? "").toLowerCase();
-              const items = pubs.filter((x) =>
-                x.title.toLowerCase().includes(q),
-              );
+              const items = pubs
+                .filter((x) => x.title.toLowerCase().includes(q))
+                .map((x) => ({ access: "owner", ...x }));
               return reply(
                 { structuredContent: { items, nextCursor: null } },
                 true,
@@ -625,6 +635,9 @@ export function world(w: World = {}) {
             if (w.publishError) return err(w.publishError);
             if (prev && deleted.includes(prev))
               return err("not_found: Artifact not found");
+            const target = pubs.find((x) => x.id === prev);
+            if (target && (target.access ?? "owner") === "viewer")
+              return err("forbidden: you can only view this artifact");
             lastPublished = body.params.arguments.content ?? "";
             const id = prev ?? `art${++published}`;
             if (!pubs.some((x) => x.id === id))

@@ -150,7 +150,7 @@ describe("owner-token under --upgrade never moves ownership", () => {
     expect(await run([...CI, "--upgrade"], w.deps, ROOT)).toBe(0);
     const all = w.sqls.join("; ");
     expect(all).not.toContain("SET role");
-    expect(all).toContain("ON CONFLICT(email) DO NOTHING");
+    expect(all).not.toContain("INSERT INTO users");
   });
 
   it("fails when a different owner exists, without demoting it", async () => {

@@ -245,9 +245,11 @@ async function mcp(ctx: Ctx, token: string, prev?: string, prevHash?: string) {
   ) => {
     const items = r?.structuredContent?.items;
     if (!Array.isArray(items)) return undefined;
+    // Only the caller's own page: search and list also return team and shared
+    // artifacts, and a member's same-title page must not be used or published to.
     const hit = items.find(
-      (a: { title?: string; id?: string }) =>
-        a?.title === TITLE && typeof a?.id === "string",
+      (a: { title?: string; id?: string; access?: string }) =>
+        a?.title === TITLE && typeof a?.id === "string" && a.access === "owner",
     );
     return typeof hit?.id === "string" ? hit.id : undefined;
   };
