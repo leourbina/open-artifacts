@@ -21,7 +21,7 @@
 - When someone leaves, their personal artifacts wait for an admin transfer. Until then nobody new gets access: no new shares and no visibility changes.
 - Contractors, outside guests and restricted groups get no more than read-only on any surface, including MCP and the data API. They make no live-data writes and create nothing.
 - "Public links off" on a space stops every public path, including `/p/` content.
-- 404 for no access, never 403 (existing rule). Contract exceptions: `space_forbidden` (403) on publish or move into a space the caller can't publish to, and on any create by a capped caller; `public_links_off` (403) on making an artifact public in a space with public links off; `capability_denied`; `csrf`.
+- 404 for no access, never 403 (existing rule). Contract exceptions: `space_forbidden` (403) on publish or move into a space the caller can't publish to, and on any create by a capped caller; `public_links_off` (403) on making an artifact public in a space with public links off; `space_forbidden` (403) and `directory_mapping_off` (403) on a space manager's mapping PUT (Task 9); `capability_denied`; `csrf`.
 - Only the control-plane broker holds shared secrets (spec 4.1/4.7). Installs never hold the Google client secret.
 - No new KV namespace (account cap); any new limiter is a `ratelimits` entry in the wrangler template; DO classes join the template `migrations` list under the next tag.
 - Free-plan-style CPU per request and per DO alarm (target under 10 ms); D1 rows written pinned in `test/d1-rows.test.ts` (#248).
@@ -109,16 +109,17 @@ Internal `can(level, action, ctx)` where `ctx = { cap: CapReason | null; persona
 
 | Action | Who |
 |---|---|
-| `space.create`, `space.delete` (empty), `space.mappings`, `space.allMembers` (`allMembersRole`), `restricted.groups` (add: 409 `directory_sync_off` when sync is off or frozen; remove: any mode, which lifts a frozen restriction), `restricted.member` (manual flag, any mode; never lifts a group restriction) | org owner, org admin |
+| `space.create`, `space.delete` (empty), `space.mappings` (any role, any space), `org.mappings` (Every-space), `space.allMembers` (`allMembersRole`), `restricted.groups` (add: 409 `directory_sync_off` when sync is off or frozen; remove: any mode, which lifts a frozen restriction), `restricted.member` (manual flag, any mode; never lifts a group restriction) | org owner, org admin |
 | `space.publicLinks` (PATCH `publicLinks`; audited) | org owner, org admin, space manager |
 | `space.members` (manual rows), `space.rename` | org owner, org admin, space manager |
+| `space.mappings.manage` (`spaceParam: "sid"`; per-space mappings on the manager's own shared space). Role ceiling: viewer and editor only. PUT over an existing `manager` row, or with role `manager`, is 403 `space_forbidden`. When the org setting `spaceManagerMappings` is off, PUT is 403 `directory_mapping_off`; GET and DELETE of viewer and editor rows stay allowed (removing access is always allowed). GET on a personal space is 400 `space_personal`. Audited in the handler. | org owner, org admin (no ceiling), space manager (ceiling) |
 | `space.adminSelfAdd` (`POST R.spaceMemberSelf(id)`, body `SpaceMemberPut`, 201) | org owner, org admin (shared spaces only; audited `space.admin_self_add`; managers emailed) |
 | `space.publish` (publish or move into) | space editor or manager, not `cap` |
 | `artifact.create` (incl. personal) | any active non-capped member |
 | `transfer.departed` | org owner, org admin |
 | `directory.manage` (connect, sync, confirm held) | org owner; break-glass subset (Task 18) |
 | `audit.read` | org owner, org admin |
-| `members.manage`, `settings.manage`, `usage.read` | unchanged (owner, admin) |
+| `members.manage`, `settings.manage` (incl. `spaceManagerMappings`, default true, audited `settings.space_manager_mappings`), `usage.read` | unchanged (owner, admin) |
 | `tokens.create`, `mcp.connect` | non-guest, not `cap` |
 
 `ArtifactSummary.can` and `ArtifactSummary.space` (`SpaceRef`, which carries `publicLinks`) are filled on every artifact response, list and search included.
@@ -175,7 +176,7 @@ Each surface's gate is enforced by `enforcePolicy` middleware (Task 5) before th
 - Core (`hosted/core.ts`): `AccessLevelSchema` (`owner | editor | viewer | manager`), `SpaceRole`, `SpaceKind`, `SpaceRef` (`{ id, kind, name, publicLinks }`), `MySpace`, `MemberStatus`, `CapReason` (`guest | restricted`), `GroupRef` (`{ groupId, email, name }`), `Restriction` (`{ manual, groups: GroupRef[] }`), `Tier`, `DirectoryMode` (`off | google | frozen`), `FeatureFlag` + `parseFeatures` + `ENV_FEATURE_FLAGS`, `InstanceDirectory` (`{ mode, healthy, unhealthySince, banner, tokensUnverified }`), `MeAuth` (`{ method, readOnly, cap, expiresAt }`), `ArtifactCan` + `artifactCan`.
 - Spaces (`hosted/spaces.ts`): `Space`, `SpacesQuery`, `SpaceCreate`, `SpacePatch`, `SPACE_MANAGER_FIELDS`, `SpaceMember` (user-id keyed, with `status`, `source`, `manualRole`, `syncRole`, `groups: GroupRef[]`, `cap`), `SpaceMemberPut`, `GroupMapping` (`GroupRef` + `role`, `memberCount`, `lastSyncedAt`), `GroupMappingPut`, `RestrictedGroup` (`GroupRef` + `memberCount`, `createdAt`). `Space` has no `outsideSharing`.
 - Artifacts (`hosted/artifacts.ts`): `HostedListQuery`, `HostedSearchQuery`, `HostedPublishInput`, `MoveArtifactInput`, `TransferArtifactInput`, `TransferSummary`, `TransferInput`, `TransferResult`, `TRANSFER_PAGE` (100), `MembersQuery`.
-- Directory (`hosted/directory.ts`): `DirUser` (`{ id, primaryEmail, suspended, deleted }`), `DirectoryBinding`, `HeldSweep` (`GroupRef` + counts), `SyncStatus` (`{ mode, binding, healthy, state: ok | backoff | auth_failed | customer_mismatch | never, unhealthySince, lastSuccessAt, lastError, nextRunAt, staleAt, alertedAt, customerMismatch, held }`), `DirectoryGroup` (`{ groupId, email, name, memberCount }`), `DirectoryGroupsQuery`, `DirectoryConnectError`, `AuditReason` (why a status changed: `directory_suspend | directory_unsuspend | directory_delete | directory_new_id | directory_stale | admin_suspend | admin_remove | admin_restore`), `AuditAction`, `AuditEvent`.
+- Directory (`hosted/directory.ts`): `DirUser` (`{ id, primaryEmail, suspended, deleted }`), `DirectoryBinding`, `HeldSweep` (`GroupRef` + counts), `SyncStatus` (`{ mode, binding, healthy, state: ok | backoff | auth_failed | customer_mismatch | never, unhealthySince, lastSuccessAt, lastError, nextRunAt, staleAt, alertedAt, customerMismatch, held }`), `DirectoryGroup` (`{ groupId, email, name, memberCount }`), `DirectoryGroupsQuery`, `DirectoryConnectError`, `AuditReason` (why a status changed: `directory_suspend | directory_unsuspend | directory_delete | directory_new_id | directory_stale | admin_suspend | admin_remove | admin_restore`; `directory_stale` is unused by P3, since staleness never changes a status, and should be dropped from the contract), `AuditAction`, `AuditEvent`.
 - Test hooks (`hosted/test-hooks.ts`): `TEST_HOOKS_ALLOWED`, `TestSessionInput` (`spaces?: { spaceId, role }[]`).
 - Errors (no `space_publish_forbidden`, no `forbidden_identity`): `space_forbidden` (403), `public_links_off` (403), `space_personal`, `space_not_empty`, `use_move`, `invalid_successor`, `member_active`, `directory_sync_off`, `reauth_required`.
 - Server-internal (not in the contract): `GoogleUser` (`DirUser` plus `isAdmin`, `customerId`, used by `google.ts`), `roleIn(env, userId, spaceId): Promise<SpaceRole | null>`, `Cred = { cookie?: string; pat?: string; oauth?: string }` (`test/authz/surfaces.ts`), `AuditActor = { kind: "user" | "sync" | "system"; id: string | null }`.
@@ -467,7 +468,8 @@ it("export streams NDJSON with one line per event", async () => { /* lines.lengt
 
 **Interfaces:**
 - Routes and shapes exactly as in PR #359: `R.spaces` (`SpacesQuery` → `Page<Space>`), `R.space(id)`, `R.spaceMembers(id)` (`Page<SpaceMember>`), `R.spaceMember(id, userId)`, `R.spaceMappings(id)`, `R.spaceMapping(id, groupId)`, and the instance-wide `R.restrictedGroups` / `R.restrictedGroup(groupId)` (keyed by `groupId`; groups appear as `GroupRef { groupId, email, name }` everywhere). `PUT R.restrictedGroup` is 409 `directory_sync_off` when sync is off or frozen; `DELETE` works in any mode and lifts a frozen restriction. The manual flag `PUT/DELETE R.memberRestricted(id)` (→ `Member` with `restriction`; org owner or admin; any mode; audited `restricted.set` / `restricted.remove`) covers Team, manual and frozen installs and never lifts a group restriction. Any restriction change calls `revokeUserLive`. Owners and admins can never be restricted: `R.memberRestricted` on an owner or admin target is 400 `restrict_admin` (contract #370), and `orgCan` also drops every admin power under a cap as belt and braces. Mapping changes and restricted-group adds while sync is off or frozen are 409 `directory_sync_off`. Personal spaces on any of these routes are 400 `space_personal`; deleting a non-empty space is 409 `space_not_empty`.
-- **Every-space mappings (pending contract additions):** `GET R.orgMappings` (→ `Page<GroupMapping>`), `PUT R.orgMapping(groupId)` (`GroupMappingPut` → `GroupMapping`) and `DELETE R.orgMapping(groupId)` (204), org owner or admin (`space.mappings`), 409 `directory_sync_off` while sync is off or frozen, audited `mapping.set` / `mapping.remove` with `detail.scope = "org"`. PUT and DELETE write the one `org_group_mappings` row and the audit row; they never write per-space rows. The role is resolved at read time as the max with per-space roles (Tasks 3 and 4), applies to shared spaces created later with no extra write, and never applies to a personal space. PUT kicks `DirectorySync` (`mapping`) so the group's `directory_members` rows exist; DELETE or a lowered role enqueues `revokeUsers` for the group's members.
+- **Per-space mappings by space managers (`space.mappings.manage`, `spaceParam: "sid"`):** on `R.spaceMappings(id)` and `R.spaceMapping(id, groupId)`, org owners and admins may map any role; a space manager may map only `viewer` or `editor` on their own shared space. A manager's PUT with role `manager`, or over an existing `manager`-role row, is 403 `space_forbidden`. The org setting `spaceManagerMappings` (in `PATCH R.settings`, `settings.manage`, default true, audited `settings.space_manager_mappings`) gates manager PUTs: when off, a manager's PUT is 403 `directory_mapping_off`, while GET and DELETE of viewer and editor rows on their own space keep working (removing access is always allowed). GET on a personal space is 400 `space_personal`. The handler writes `mapping.set` / `mapping.remove` in the same batch.
+- **Every-space mappings (pending contract additions):** `GET R.orgMappings` (`GET /api/v1/directory/org-mappings` → `Page<GroupMapping>`), `PUT R.orgMapping(groupId)` (`PUT /api/v1/directory/org-mappings/:groupId`, `GroupMappingPut` → `GroupMapping`) and `DELETE R.orgMapping(groupId)` (204), org owner or admin only (`org.mappings`), 409 `directory_sync_off` while sync is off or frozen, audited `mapping.set` / `mapping.remove` with `detail.scope = "org"`. PUT and DELETE write the one `org_group_mappings` row and the audit row; they never write per-space rows. The role is resolved at read time as the max with per-space roles (Tasks 3 and 4), applies to shared spaces created later with no extra write, and never applies to a personal space. PUT kicks `DirectorySync` (`mapping`) so the group's `directory_members` rows exist; DELETE or a lowered role enqueues `revokeUsers` for the group's members.
 - `PATCH R.space(id)`: `SPACE_MANAGER_FIELDS` (`name`, `publicLinks`) for space managers and org admins; `allMembersRole` for org admins. Every `publicLinks` change writes `space.public_links`.
 - **Public links off (user decision, 2026-10-21 PM): it only blocks NEW links.**
   - One batch: the space update and the audit row. Nothing else: no artifact is rewritten to `team` and no socket is closed. Existing `/p/` links and their anonymous sockets keep working (the serving check never consults `public_links`).
@@ -496,13 +498,20 @@ it("space manager may turn public links off; audited space.public_links", async 
 it("mapping PUT while sync is off → 409 directory_sync_off", async () => { /* 409 */ });
 it("PUT R.orgMapping writes one org_group_mappings row and no space_members rows; a space created later grants the role; personal spaces never do", async () => { /* 1 row; role in new space; personal 404 */ });
 it("DELETE R.orgMapping revokes the group's members' live access", async () => { /* 4403 */ });
+it("GET /api/v1/directory/org-mappings returns Page<GroupMapping>", async () => { /* items, nextCursor */ });
+it("space manager maps a group as viewer on their space → 200, audited mapping.set", async () => { /* 200; audit */ });
+it("space manager maps a group as manager → 403 space_forbidden", async () => { /* 403 */ });
+it("space manager PUT over an existing manager-role row → 403 space_forbidden", async () => { /* 403 */ });
+it("spaceManagerMappings off: manager PUT → 403 directory_mapping_off; GET and DELETE of a viewer row still work", async () => { /* 403; 200; 204 */ });
+it("org admin may still map any role, setting on or off", async () => { /* 200 */ });
+it("mapping GET on a personal space → 400 space_personal", async () => { /* 400 */ });
 it("GET /spaces pages with nextCursor", async () => { /* items.length === limit; nextCursor set */ });
 it("self-add to a shared space by an admin audits and emails managers", async () => { /* 1 audit, 1 email per manager */ });
 it("self-add to a personal space → 400 space_personal", async () => { /* 400 */ });
 it("spaces flag off → POST /spaces 404, authz unchanged", async () => { /* 404 */ });
 ```
 
-- [ ] **Step 2: Run.** Expected: 15 failed. **Step 3: Implement.** **Step 4: Run** `pnpm -F @oa/server test spaces.api`. Expected: 15 passed.
+- [ ] **Step 2: Run.** Expected: 22 failed. **Step 3: Implement.** **Step 4: Run** `pnpm -F @oa/server test spaces.api`. Expected: 22 passed.
 - [ ] **Step 5: Commit** `feat(server): spaces API, public-links-off and space-wide revocation (P3)`.
 
 ### Task 10: Publish into spaces, move, transfer, MCP
@@ -859,7 +868,8 @@ P3 implements the server side of PR #359's spaces, artifacts and directory secti
 |---|---|---|
 | `AccessLevelSchema` + `manager`; `ArtifactSummary.space` (`SpaceRef`) and `.can` (`artifactCan`) | CHANGED | 2, 3, 4 |
 | `R.spaces`, `R.space`, `R.spaceMembers`, `R.spaceMember`, `R.spaceMappings`, `R.spaceMapping` | NEW | 9 |
-| `GET R.orgMappings` (`Page<GroupMapping>`), `PUT R.orgMapping(groupId)` (`GroupMappingPut`), `DELETE R.orgMapping(groupId)`: the Every-space mapping (`org_group_mappings`, #408) | PENDING contract addition | 4, 9, 14 |
+| `GET R.orgMappings` (`/api/v1/directory/org-mappings` → `Page<GroupMapping>`), `PUT R.orgMapping(groupId)` (`/api/v1/directory/org-mappings/:groupId`, `GroupMappingPut`), `DELETE R.orgMapping(groupId)`: the Every-space mapping (`org_group_mappings`, #408) | PENDING contract addition | 4, 9, 14 |
+| Setting `spaceManagerMappings` (default true; audit action `settings.space_manager_mappings`); error `directory_mapping_off` (403); drop unused `AuditReason` `directory_stale` | PENDING contract addition | 9 |
 | `R.restrictedGroups`, `R.restrictedGroup(groupId)` (`RestrictedGroup`), `R.memberRestricted(id)`, `R.spaceMemberSelf(id)`; `GroupRef`, `Restriction`, `Member.restriction` | NEW | 6, 9, 14 |
 | `R.directory`, `R.directoryGroups`, `R.directoryConnect`, `R.directoryCallback`, `R.directorySync`, `R.directoryHeldConfirm` (`SyncStatus`, `DirectoryGroup`, `DirectoryConnectError`) | NEW | 12, 13 |
 | `R.audit`, `R.auditExport` (`AuditEvent`) | NEW | 8 |
