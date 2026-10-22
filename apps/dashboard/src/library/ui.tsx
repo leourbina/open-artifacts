@@ -26,10 +26,12 @@ export function Empty({
   icon,
   title,
   description,
+  action,
 }: {
   icon: ReactNode;
   title: string;
   description: ReactNode;
+  action?: ReactNode;
 }) {
   return (
     <div className="flex flex-col items-center gap-[var(--oa-space-2)] px-[var(--oa-space-4)] py-[var(--oa-space-8)] text-center">
@@ -42,6 +44,7 @@ export function Empty({
       <p className="mb-[var(--oa-space-2)] max-w-[360px] text-[length:var(--oa-text-sm)] text-[var(--oa-text-2)]">
         {description}
       </p>
+      {action}
     </div>
   );
 }

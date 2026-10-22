@@ -8,6 +8,9 @@ const PAGES = {
   grid: "/?view=grid",
   list: "/?view=list",
   search: "/search?q=notes",
+  // Hosted (P4 Task 6): space chips on the cards keep today's measurements.
+  "hosted-grid": "/?hosted=1&view=grid",
+  "hosted-list": "/?hosted=1&view=list",
 } as const;
 
 const measure = (page: Page) =>
@@ -56,12 +59,14 @@ for (const [name, path] of Object.entries(PAGES))
           theme,
         );
         await expect(
-          page.locator(name === "grid" ? ".lib-card" : ".lib-row").first(),
+          page
+            .locator(name.endsWith("grid") ? ".lib-card" : ".lib-row")
+            .first(),
         ).toBeVisible();
         const m = await measure(page);
         expect(m.h1).toEqual(["20px", "600"]);
         expect(m.sideScroll).toBe(0);
-        if (name === "grid") {
+        if (name.endsWith("grid")) {
           expect(m.cardPad).toBe("12px");
           expect(m.rowGap).toBe(16);
           expect(m.colGap).toBe(16);
