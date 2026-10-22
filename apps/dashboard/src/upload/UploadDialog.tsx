@@ -4,7 +4,10 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { ApiClientError } from "../api/client";
+import { errorCopy } from "../api/errorCopy";
 import { qk } from "../api/queries";
+import { useHosted } from "../auth/permissions";
+import { SpacePicker } from "../spaces/SpacePicker";
 import "./upload.css";
 import { toast } from "../layout/toast";
 import {
@@ -21,10 +24,16 @@ const stem = (p: string) => (p.split("/").pop() ?? p).replace(/\.[^.]*$/, "");
 export function UploadDialog({
   files,
   onClose,
+  spaceId: initialSpace,
 }: {
   files: File[];
   onClose: () => void;
+  /** Hosted: the space to preselect (the open one, if you can publish there). */
+  spaceId?: string;
 }) {
+  const { features, personalSpaceId } = useHosted();
+  const spaces = features.includes("spaces");
+  const [space, setSpace] = useState<string | undefined>(initialSpace);
   // NFC, as the server and the pipeline see them.
   const paths = relativePaths(files).map((p) => {
     const r = normalizePath(p);
@@ -64,7 +73,16 @@ export function UploadDialog({
     abort.current = new AbortController();
     try {
       const r = await uploadArtifact(
-        { files, title, message, entry },
+        {
+          files,
+          title,
+          message,
+          entry,
+          // Personal is the server's default: only a shared space is sent.
+          ...(spaces && space && space !== personalSpaceId
+            ? { spaceId: space }
+            : {}),
+        },
         setProgress,
         abort.current.signal,
       );
@@ -82,9 +100,11 @@ export function UploadDialog({
       if (!alive.current) return;
       setProgress(null);
       setError(
-        e instanceof UploadValidationError || e instanceof ApiClientError
-          ? e.message
-          : "Upload failed. Try again.",
+        e instanceof ApiClientError
+          ? errorCopy(e, e.message)
+          : e instanceof UploadValidationError
+            ? e.message
+            : "Upload failed. Try again.",
       );
     }
   };
@@ -117,6 +137,7 @@ export function UploadDialog({
           if (!busy && !invalid) void submit();
         }}
       >
+        {spaces && <SpacePicker value={space} onChange={setSpace} />}
         <div>
           <label htmlFor="up-title">Title</label>
           <Input

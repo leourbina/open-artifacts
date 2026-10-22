@@ -178,7 +178,7 @@ it("across spaces, each card shows its space: the name, or Personal for mine", a
   ).toBeVisible();
 });
 
-it("inside a space: its name and your role; tabs and format filter stay; no chip, no Upload", async () => {
+it("inside a space: its name and your role; tabs and format filter stay; no chip; Upload where you can publish", async () => {
   mountHosted(`/?space=${ENG}`, true, undefined, [spaceList]);
   expect(
     await screen.findByRole("heading", { level: 1, name: "Engineering" }),
@@ -187,7 +187,10 @@ it("inside a space: its name and your role; tabs and format filter stay; no chip
   expect(screen.getByRole("tab", { name: "Mine" })).toBeVisible();
   const c = await card("Meeting notes");
   expect(within(c).queryByText("Engineering")).toBeNull();
-  expect(screen.queryByRole("button", { name: "Upload files" })).toBeNull();
+  // Task 7: a manager can publish here, so the Upload pair shows.
+  expect(
+    await screen.findByRole("button", { name: "Upload files" }),
+  ).toBeVisible();
 });
 
 it("across spaces the heading is Library and Upload stays", async () => {
