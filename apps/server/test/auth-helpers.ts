@@ -1,4 +1,5 @@
 import { env } from "cloudflare:workers";
+import { newId } from "@oa/shared";
 import type { Env } from "../src/env.js";
 
 /** The Google client id the fake Google issuer and direct() agree on. */
@@ -31,3 +32,55 @@ export const trial = (over: Partial<Env> = {}): Env =>
     TURNSTILE_SECRET: "s",
     ...over,
   });
+
+const tagged = () => crypto.randomUUID().slice(0, 8);
+
+/** A unique address under `domain`, so tests sharing one D1 never collide. */
+export const uniq = (local: string, domain = "a.com") =>
+  `${local}-${tagged()}@${domain}`;
+
+/** Inserts a user (optionally Google-linked, optionally not active). Returns its id. */
+export async function seedUser(
+  email: string,
+  role: "owner" | "admin" | "member" | "guest",
+  o: { googleSub?: string; tenant?: string; status?: string } = {},
+): Promise<string> {
+  const id = newId();
+  await env.DB.prepare(
+    "insert into users (id, email, name, role, created_at, status) values (?, ?, ?, ?, ?, ?)",
+  )
+    .bind(
+      id,
+      email,
+      email.split("@")[0],
+      role,
+      Date.now(),
+      o.status ?? "active",
+    )
+    .run();
+  if (o.googleSub)
+    await env.DB.prepare(
+      "insert into identities (provider, subject, tenant, user_id, created_at) values ('google', ?, ?, ?, ?)",
+    )
+      .bind(o.googleSub, o.tenant ?? "a.com", id, Date.now())
+      .run();
+  return id;
+}
+
+/** A share to `email` on a fresh artifact owned by a fresh member. */
+export async function seedShare(email: string): Promise<string> {
+  const owner = await seedUser(uniq("sharer"), "member");
+  const art = newId();
+  const now = Date.now();
+  await env.DB.prepare(
+    "insert into artifacts (id, owner_id, title, format, created_at, updated_at) values (?, ?, 't', 'markdown', ?, ?)",
+  )
+    .bind(art, owner, now, now)
+    .run();
+  await env.DB.prepare(
+    "insert into shares (artifact_id, email, role, created_by, created_at) values (?, ?, 'viewer', ?, ?)",
+  )
+    .bind(art, email, owner, now)
+    .run();
+  return art;
+}
