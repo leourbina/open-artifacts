@@ -79,9 +79,15 @@ it("an admin sees every shared space by name, never personal ones", async () => 
   const clients = within(list).getByRole("link", { name: /Clients/ });
   expect(clients).toHaveAttribute("href", `/settings/spaces?space=${CLIENTS}`);
   expect(clients).toHaveTextContent("No role for you");
-  expect(within(list).getByRole("link", { name: /Exec/ })).toHaveTextContent(
-    "Public links off",
-  );
+  const exec = within(list).getByRole("link", { name: /Exec/ });
+  expect(exec).toHaveTextContent("Public links off");
+  // A muted status chip with an icon, not the role badge's outline.
+  const chip = within(exec)
+    .getByText("Public links off")
+    .closest("[data-status]");
+  expect(chip).toHaveAttribute("data-status", "muted");
+  expect(chip?.querySelector("svg[aria-hidden='true']")).not.toBeNull();
+  expect(chip?.getAttribute("data-slot")).not.toBe("badge");
 });
 
 it("the Spaces tab shows for admins on a hosted instance", async () => {
@@ -200,16 +206,24 @@ it("a space manager who isn't an admin can rename and toggle public links only",
   expect(screen.queryByRole("button", { name: "Delete space" })).toBeNull();
 });
 
-it("turning public links off warns that public artifacts become team, then PATCHes", async () => {
+it("turning public links off: Design's confirm, then PATCH", async () => {
   const seen = calls("PATCH");
   mountHosted(`/settings/spaces?space=${ENG}`);
   const sw = await screen.findByRole("switch", { name: "Public links" });
   expect(sw).toHaveAttribute("aria-checked", "true");
   fireEvent.click(sw);
   const d = screen.getByRole("alertdialog");
-  expect(d).toHaveTextContent(
-    "Public artifacts in Engineering become visible to the team only.",
-  );
+  expect(
+    within(d).getByRole("heading", {
+      name: "Turn off public links in Engineering?",
+    }),
+  ).toBeVisible();
+  const lines = [...d.querySelectorAll("p")].map((p) => p.textContent);
+  expect(lines).toEqual([
+    "No one can make new public links in Engineering. Public links already here keep working.",
+    "To stop an existing link, open the artifact and make it private.",
+  ]);
+  expect(d).not.toHaveTextContent("visible to the team only");
   fireEvent.click(
     within(d).getByRole("button", { name: "Turn off public links" }),
   );
@@ -232,12 +246,63 @@ it("turning public links on needs no confirm", async () => {
   );
 });
 
-it("delete of a non-empty space shows the 409 message inline", async () => {
+it("a space with artifacts can't be deleted: the button is disabled, with the reason", async () => {
   mountHosted(`/settings/spaces?space=${ENG}`);
+  const del = await screen.findByRole("button", { name: "Delete space" });
+  expect(del).toBeDisabled();
+  expect(
+    screen.getByText("Move or delete its 1 artifact first (trash included)."),
+  ).toBeVisible();
+  expect(del).toHaveAttribute("aria-describedby");
+  expect(
+    document.getElementById(del.getAttribute("aria-describedby") as string),
+  ).toHaveTextContent("Move or delete its 1 artifact first (trash included).");
+});
+
+it("the reason pluralizes", async () => {
+  mountHosted(`/settings/spaces?space=${ENG}`, true, undefined, [
+    http.get("*/api/v1/spaces", () =>
+      HttpResponse.json({
+        items: [
+          {
+            id: ENG,
+            kind: "shared",
+            name: "Engineering",
+            publicLinks: true,
+            owner: null,
+            allMembersRole: "viewer",
+            myRole: "manager",
+            memberCount: 2,
+            artifactCount: 3,
+            createdAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+        nextCursor: null,
+      }),
+    ),
+  ]);
+  expect(
+    await screen.findByText(
+      "Move or delete its 3 artifacts first (trash included).",
+    ),
+  ).toBeVisible();
+});
+
+it("an empty space whose trash still holds artifacts: the 409 shows inline, once", async () => {
+  mountHosted(`/settings/spaces?space=${CLIENTS}`, true, undefined, [
+    http.delete(`*/api/v1/spaces/${CLIENTS}`, () =>
+      HttpResponse.json(
+        { error: { code: "space_not_empty", message: "server text" } },
+        { status: 409 },
+      ),
+    ),
+  ]);
   fireEvent.click(await screen.findByRole("button", { name: "Delete space" }));
-  const d = screen.getByRole("alertdialog");
-  expect(d).toHaveTextContent("Delete Engineering?");
-  fireEvent.click(within(d).getByRole("button", { name: "Delete" }));
+  fireEvent.click(
+    within(screen.getByRole("alertdialog")).getByRole("button", {
+      name: "Delete space",
+    }),
+  );
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "This space still has artifacts. Move or delete them first. Artifacts in the trash count too.",
   );
@@ -261,11 +326,16 @@ it("deleting an empty space returns to the list", async () => {
     ],
   );
   fireEvent.click(await screen.findByRole("button", { name: "Delete space" }));
-  fireEvent.click(
-    within(screen.getByRole("alertdialog")).getByRole("button", {
-      name: "Delete",
-    }),
+  const d = screen.getByRole("alertdialog");
+  expect(
+    within(d).getByRole("heading", { name: "Delete Clients?" }),
+  ).toBeVisible();
+  expect(d).toHaveTextContent(
+    "Clients is empty, so nothing else is deleted. This can't be undone.",
   );
+  const confirm = within(d).getByRole("button", { name: "Delete space" });
+  expect(confirm).toHaveAttribute("data-variant", "destructive");
+  fireEvent.click(confirm);
   await waitFor(() => expect(router.state.location.search).toEqual({}));
 });
 

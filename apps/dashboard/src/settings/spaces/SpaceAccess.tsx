@@ -176,6 +176,9 @@ export function SpaceAccess({
   const manager = space.myRole === "manager";
   const canMap = admin || (manager && (space.can?.manageMappings ?? false));
   const canEdit = syncOn && canMap;
+  // With the switch off a space manager keeps GET and DELETE of Viewer and
+  // Editor rows (#422); only adding and changing roles (PUT) is blocked.
+  const mapper = syncOn && (admin || manager);
   const roles = admin ? ALL_ROLES : MANAGER_ROLES;
   const rows = mappings.data ?? [];
 
@@ -214,7 +217,7 @@ export function SpaceAccess({
           {rows.map((g) => {
             const role = pending[g.groupId] ?? g.role;
             // A Manager row an admin set stays read-only for a space manager.
-            const editable = canEdit && (admin || g.role !== "manager");
+            const own = mapper && (admin || g.role !== "manager");
             return (
               <AccessRow
                 key={g.groupId}
@@ -225,12 +228,13 @@ export function SpaceAccess({
                     : groupMeta(g)
                 }
                 control={
-                  editable ? (
+                  own ? (
                     <>
                       <RoleSelect
                         label={`Role for ${g.email}`}
                         value={role}
                         roles={roles}
+                        disabled={!canEdit}
                         onChange={(r) => r && change(g.groupId, r)}
                       />
                       <Button
@@ -284,12 +288,12 @@ export function SpaceAccess({
           ))}
         </tbody>
       </table>
-      {canEdit && (
+      {mapper && (
         <GroupPicker
           label="Add a group"
           placeholder="Add a group…"
           exclude={rows.map((g) => g.groupId)}
-          disabled={put.isPending}
+          disabled={!canEdit || put.isPending}
           onPick={(g) => {
             setProblem(null);
             put.mutate(
@@ -298,6 +302,12 @@ export function SpaceAccess({
             );
           }}
         />
+      )}
+      {!admin && (
+        // Every-space rows are admin-only to read (#422), so managers get one line.
+        <p className={muted}>
+          Groups an admin set for every space also get access here.
+        </p>
       )}
       <Problem problem={problem} />
       <p className={muted}>

@@ -316,7 +316,24 @@ function SpaceList({
               </span>
               <span className="flex flex-wrap items-center gap-[6px]">
                 {!s.publicLinks && (
-                  <Badge variant="outline">Public links off</Badge>
+                  <span
+                    data-status="muted"
+                    className={`inline-flex items-center gap-[4px] ${muted}`}
+                  >
+                    <svg
+                      aria-hidden="true"
+                      viewBox="0 0 16 16"
+                      width="12"
+                      height="12"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                    >
+                      <path d="M6.5 9.5l3-3M7 4.5l1-1a2.5 2.5 0 0 1 3.5 3.5l-1 1M9 11.5l-1 1A2.5 2.5 0 0 1 4.5 9l1-1M2.5 2.5l11 11" />
+                    </svg>
+                    Public links off
+                  </span>
                 )}
                 <Badge variant="outline">
                   {s.myRole ? ROLE_LABEL[s.myRole] : "No role for you"}
@@ -391,9 +408,15 @@ function General({ space }: { space: Space }) {
         onClose={() => setAsking(false)}
         title={`Turn off public links in ${space.name}?`}
         body={
-          <p>
-            Public artifacts in {space.name} become visible to the team only.
-          </p>
+          <>
+            <p>
+              No one can make new public links in {space.name}. Public links
+              already here keep working.
+            </p>
+            <p>
+              To stop an existing link, open the artifact and make it private.
+            </p>
+          </>
         }
         confirm="Turn off public links"
         onConfirm={() => patch.mutate({ publicLinks: false })}
@@ -459,6 +482,10 @@ function DeleteSpace({
 }) {
   const del = useDeleteSpace();
   const [asking, setAsking] = useState(false);
+  const reason = useId();
+  // artifactCount is live artifacts only: an "empty" space can still hold
+  // trash, so the server's space_not_empty stays the authority.
+  const n = space.artifactCount;
   const refusal =
     del.error instanceof ApiClientError && del.error.code === "space_not_empty"
       ? errorCopy(del.error, "")
@@ -468,15 +495,23 @@ function DeleteSpace({
       <p className={muted}>
         Only an empty space can be deleted, trash included.
       </p>
-      <div>
+      <div className="flex flex-wrap items-center gap-[var(--oa-space-3)]">
         <Button
           size="sm"
           variant="outline"
           className="text-[length:var(--oa-text-sm)] text-destructive"
+          disabled={n > 0}
+          aria-describedby={n > 0 ? reason : undefined}
           onClick={() => setAsking(true)}
         >
           Delete space
         </Button>
+        {n > 0 && (
+          <small id={reason} className={muted}>
+            Move or delete its {n} {n === 1 ? "artifact" : "artifacts"} first
+            (trash included).
+          </small>
+        )}
       </div>
       {refusal && (
         <p role="alert" className={errorText}>
@@ -487,8 +522,14 @@ function DeleteSpace({
         open={asking}
         onClose={() => setAsking(false)}
         title={`Delete ${space.name}?`}
-        body={<p>This can't be undone.</p>}
-        confirm="Delete"
+        body={
+          <p>
+            {space.name} is empty, so nothing else is deleted. This can't be
+            undone.
+          </p>
+        }
+        confirm="Delete space"
+        danger
         onConfirm={() => del.mutate(space.id, { onSuccess: onDeleted })}
       />
     </SettingsCard>

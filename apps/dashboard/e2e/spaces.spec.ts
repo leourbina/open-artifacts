@@ -95,7 +95,7 @@ test("dialogs pass axe: New space, Add me, public links off", async ({
   await page.keyboard.press("Escape");
   await page.getByRole("switch", { name: "Public links" }).click();
   await expect(page.getByRole("alertdialog")).toContainText(
-    "become visible to the team only",
+    "Public links already here keep working.",
   );
   await settle(page);
   v = await axeRun(page);

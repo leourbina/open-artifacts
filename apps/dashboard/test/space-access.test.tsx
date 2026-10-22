@@ -239,17 +239,61 @@ it("a manager row set by an admin is read-only for a space manager", async () =>
   expect(within(r).queryByRole("button", { name: /Remove/ })).toBeNull();
 });
 
-it("mapping off: a space manager sees rows read-only and the reason", async () => {
+it("mapping off: a space manager can still remove viewer/editor rows; add and role changes are disabled", async () => {
+  const del = calls("DELETE");
+  const put = calls("PUT");
   mountHosted(ENG, true, asManager, [engWithoutMapping]);
   const r = await row(/eng@example.com/);
-  expect(r).toHaveTextContent("Editor");
-  expect(within(r).queryByRole("combobox")).toBeNull();
-  expect(screen.queryByRole("combobox", { name: "Add a group" })).toBeNull();
+  expect(
+    within(r).getByRole("combobox", { name: "Role for eng@example.com" }),
+  ).toBeDisabled();
+  expect(screen.getByRole("combobox", { name: "Add a group" })).toBeDisabled();
   expect(
     screen.getByText(
       "An admin has turned off group mapping by space managers. Ask an admin to add or change groups.",
     ),
   ).toBeVisible();
+  const remove = within(r).getByRole("button", {
+    name: "Remove eng@example.com",
+  });
+  expect(remove).toBeEnabled();
+  fireEvent.click(remove);
+  await waitFor(() =>
+    expect(del.at(-1)?.path).toBe(`/api/v1/spaces/${ID}/mappings/gEng01`),
+  );
+  expect(put).toHaveLength(0);
+});
+
+it("Remove is a ghost button named after the group", async () => {
+  mountHosted(ENG);
+  const remove = within(await row(/eng@example.com/)).getByRole("button", {
+    name: "Remove eng@example.com",
+  });
+  expect(remove).toHaveAttribute("data-variant", "ghost");
+  expect(remove).toHaveTextContent("Remove");
+});
+
+it("space managers don't see Every space rows, only a line saying they exist", async () => {
+  mountHosted(ENG, true, asManager, [serveOrg]);
+  await row(/eng@example.com/);
+  expect(
+    within(await groups()).queryByRole("row", { name: /exec@example.com/ }),
+  ).toBeNull();
+  expect(
+    screen.getByText(
+      "Groups an admin set for every space also get access here.",
+    ),
+  ).toBeVisible();
+});
+
+it("admins see Every space rows and not the managers' line", async () => {
+  mountHosted(ENG, true, undefined, [serveOrg]);
+  await row(/exec@example.com/);
+  expect(
+    screen.queryByText(
+      "Groups an admin set for every space also get access here.",
+    ),
+  ).toBeNull();
 });
 
 it("a 403 directory_mapping_off (switch turned off in another tab) shows the reason and restores the role", async () => {
