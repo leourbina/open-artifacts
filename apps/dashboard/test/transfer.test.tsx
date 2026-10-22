@@ -120,7 +120,9 @@ it("to a person: the helper names both, and the transfer posts the user", async 
     }),
   );
   expect(
-    await screen.findByText("Moved 2 artifacts to Bob Builder."),
+    await screen.findByText(
+      "Moved 2 artifacts (and 1 in trash) to Bob Builder.",
+    ),
   ).toBeVisible();
 });
 
@@ -140,7 +142,9 @@ it("to a space: the helper says who can open them, and it posts the space", asyn
     }),
   );
   expect(
-    await screen.findByText("Moved 2 artifacts to Engineering."),
+    await screen.findByText(
+      "Moved 2 artifacts (and 1 in trash) to Engineering.",
+    ),
   ).toBeVisible();
 });
 
@@ -230,7 +234,9 @@ it("progress reads Transferring… <done> of <n>", async () => {
   const d = await openFromCard();
   await chooseOption("Give them to", "Bob Builder");
   fireEvent.click(within(d).getByRole("button", { name: "Transfer 2" }));
-  expect(await within(d).findByText("Transferring… 0 of 3")).toBeVisible();
+  expect(
+    await within(d).findByText("Transferring… 0 of 3, including trash."),
+  ).toBeVisible();
   release();
 });
 
@@ -282,4 +288,27 @@ it("no dots when nobody departed has artifacts", async () => {
       within(nav).getByRole("link", { name: /^Settings/ }),
     ).toHaveAccessibleName("Settings"),
   );
+});
+
+it("no trash: plain progress and toast", async () => {
+  let release: () => void = () => {};
+  mountHosted("/settings/members", true, undefined, [
+    http.get(`*${R.memberTransfer(CAROL)}`, () =>
+      HttpResponse.json({ live: 2, deleted: 0 }),
+    ),
+    http.post(`*${R.memberTransfer(CAROL)}`, async () => {
+      await new Promise<void>((r) => {
+        release = r;
+      });
+      return HttpResponse.json({ moved: 2, remaining: 0, nextCursor: null });
+    }),
+  ]);
+  const d = await openFromCard();
+  await chooseOption("Give them to", "Bob Builder");
+  fireEvent.click(within(d).getByRole("button", { name: "Transfer 2" }));
+  expect(await within(d).findByText("Transferring… 0 of 2")).toBeVisible();
+  release();
+  expect(
+    await screen.findByText("Moved 2 artifacts to Bob Builder."),
+  ).toBeVisible();
 });

@@ -125,7 +125,7 @@ export function TransferDialog({
         },
       );
       toast({
-        title: `Moved ${artifacts(t.live)} to ${target.label}.`,
+        title: `Moved ${artifacts(t.live)}${t.of > t.live ? ` (and ${t.of - t.live} in trash)` : ""} to ${target.label}.`,
         tone: "success",
       });
       onClose();
@@ -228,6 +228,7 @@ export function TransferDialog({
         {progress && (
           <p role="status" className={muted}>
             Transferring… {progress.done} of {progress.of}
+            {progress.of > live ? ", including trash." : ""}
           </p>
         )}
         {failed && (

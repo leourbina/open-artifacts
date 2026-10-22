@@ -276,7 +276,7 @@ for (const scheme of ["light", "dark"] as const)
       });
       await d.getByRole("button", { name: "Transfer 2" }).click();
       await expect(
-        page.getByText("Moved 2 artifacts to Bob Builder."),
+        page.getByText("Moved 2 artifacts (and 1 in trash) to Bob Builder."),
       ).toBeVisible();
       await expect(card).toBeHidden();
     });
