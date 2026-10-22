@@ -2,7 +2,7 @@
 // No access is 404 (never 403), except the explicit space_forbidden on
 // publish/move. Personal spaces are never targets of these routes (space_personal).
 import { z } from "zod";
-import { UserRefSchema } from "../schemas.js";
+import { PageSchema, UserRefSchema } from "../schemas.js";
 import {
   CapReasonSchema,
   GroupRefSchema,
@@ -74,7 +74,23 @@ export const SPACE_MANAGER_FIELDS = ["name", "publicLinks"] as const;
 export const SpaceMemberSourceSchema = z.enum(["manual", "sync"]);
 export type SpaceMemberSource = z.infer<typeof SpaceMemberSourceSchema>;
 
-/** GET R.spaceMembers(id) -> Page<SpaceMember>. Keyed by user id. */
+/** How a group reaches a space: its own mapping, or an Every-space org mapping (R.orgMappings). */
+export const SpaceMemberGroupViaSchema = z.enum(["space", "every"]);
+export type SpaceMemberGroupVia = z.infer<typeof SpaceMemberGroupViaSchema>;
+
+/** One mapped group behind a member's syncRole: the role that mapping grants and where it comes from. */
+export const SpaceMemberGroupSchema = GroupRefSchema.extend({
+  role: SpaceRoleSchema,
+  via: SpaceMemberGroupViaSchema,
+});
+export type SpaceMemberGroup = z.infer<typeof SpaceMemberGroupSchema>;
+
+/**
+ * GET R.spaceMembers(id) -> SpaceMembersPage. Keyed by user id. The UI's
+ * per-row reason line comes from manualRole, groups[].role/via and
+ * allMembers (e.g. "Manager by hand, Editor via eng@", "Viewer via All
+ * members").
+ */
 export const SpaceMemberSchema = z.object({
   userId: z.string(),
   user: UserRefSchema,
@@ -85,14 +101,59 @@ export const SpaceMemberSchema = z.object({
   source: SpaceMemberSourceSchema,
   manualRole: SpaceRoleSchema.nullable(),
   syncRole: SpaceRoleSchema.nullable(),
-  /** Mapped groups that grant syncRole. */
-  groups: z.array(GroupRefSchema),
+  /** Mapped groups that grant syncRole, one entry per mapping (a group mapped here and Every space appears twice). */
+  groups: z.array(SpaceMemberGroupSchema),
   /** Guest or restricted: effective access is viewer whatever the role. */
   cap: CapReasonSchema.nullable(),
+  /** The space's allMembersRole when it applies to this person; null for guests, capped users, or when none is set. */
+  allMembers: SpaceRoleSchema.nullable(),
 });
 export type SpaceMember = z.infer<typeof SpaceMemberSchema>;
 
-/** PUT R.spaceMember(id, userId) (space manager, org admin) -> SpaceMember. Sets the manual row. Also the body of POST R.spaceMemberSelf(id). */
+/**
+ * GET R.spaceMembers(id) query. q: case-insensitive prefix of the email or of
+ * any word of the name; group: a groupId (members it reaches, either via).
+ */
+export const SpaceMembersQuerySchema = z.strictObject({
+  q: z.string().trim().min(1).max(200).optional(),
+  group: z.string().min(1).optional(),
+  cursor: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+export type SpaceMembersQuery = z.infer<typeof SpaceMembersQuerySchema>;
+export type SpaceMembersQueryInput = z.input<typeof SpaceMembersQuerySchema>;
+
+/** Page<SpaceMember> plus total: the count matching q/group across every page. */
+export const SpaceMembersPageSchema = PageSchema(SpaceMemberSchema).extend({
+  total: z.number().int(),
+});
+export type SpaceMembersPage = z.infer<typeof SpaceMembersPageSchema>;
+
+/** What a 403 space_forbidden on a member or mapping route refused (the UI picks its copy). */
+export const SpaceForbiddenTargetSchema = z.enum(["member", "mapping"]);
+export type SpaceForbiddenTarget = z.infer<typeof SpaceForbiddenTargetSchema>;
+/** 403 space_forbidden details on R.spaceMember PUT and R.spaceMapping PUT/DELETE. Publish/move refusals carry none. */
+export const SpaceForbiddenDetailsSchema = z.object({
+  target: SpaceForbiddenTargetSchema,
+});
+export type SpaceForbiddenDetails = z.infer<typeof SpaceForbiddenDetailsSchema>;
+
+/*
+ * PUT R.spaceMember(id, userId) (space manager, org admin) -> SpaceMember.
+ * Sets the manual row. A space manager (not an org admin) granting manager,
+ * or changing a member whose manualRole is manager: 403 space_forbidden
+ * { target: "member" }. While sync is frozen, on a row with a syncRole: a
+ * role at or below the effective role replaces the synced row with a manual
+ * override (the next reconcile after unfreezing replaces it); a raise is 403
+ * space_forbidden { target: "member" }. Audited space.member.add/role
+ * (frozen override: detail { syncFrozen: true, role }).
+ *
+ * DELETE R.spaceMember(id, userId) -> 204: removes the manual row. A
+ * synced-only row while sync is live: 409 member_synced. While frozen it
+ * removes the synced row too (removing access is always allowed); audited
+ * space.member.remove (frozen: detail { syncFrozen: true }).
+ */
+/** PUT R.spaceMember(id, userId) body (rules above). Also the body of POST R.spaceMemberSelf(id). */
 export const SpaceMemberPutSchema = z.strictObject({ role: SpaceRoleSchema });
 export type SpaceMemberPut = z.infer<typeof SpaceMemberPutSchema>;
 

@@ -25,6 +25,7 @@ export const ERROR_CODES = [
   "reauth_required",
   "restrict_admin",
   "directory_mapping_off",
+  "member_synced",
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
@@ -74,6 +75,8 @@ export const STATUS_FOR: Record<ErrorCode, number> = {
   restrict_admin: 400,
   /** A space manager (not an org admin) adds or changes a space's group mapping (PUT) while Settings.spaceManagerMappings is off. Listing and removing stay allowed. */
   directory_mapping_off: 403,
+  /** DELETE R.spaceMember on a synced-only row while directory sync is live: remove them from the Google group, or change their role. */
+  member_synced: 409,
 };
 
 export const QUOTA_MESSAGE =

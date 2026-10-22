@@ -63,7 +63,9 @@ import {
   type Space,
   SpaceCreateSchema,
   type SpaceMember,
+  type SpaceMemberGroup,
   SpaceMemberPutSchema,
+  SpaceMembersQuerySchema,
   SpacePatchSchema,
 } from "../hosted/spaces.js";
 import { OtpLatestInputSchema } from "../hosted/test-hooks.js";
@@ -137,6 +139,8 @@ type MemberRow = {
   manualRole: SpaceRole | null;
   syncRole: SpaceRole | null;
   groups: GroupRef[];
+  /** Frozen-sync override (lowered or removed by hand): org mappings no longer merge in until the next reconcile. */
+  detached?: boolean;
 };
 
 const T0 = "2026-01-01T00:00:00.000Z";
@@ -401,12 +405,15 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
   /** A shared space's member rows plus org mappings, merged at read time (copies; personal: none). */
   const rowsOf = (s: SpaceRow): MemberRow[] => {
     const base = rows.get(s.id) ?? [];
-    if (s.kind === "personal" || orgMappings.length === 0) return base;
+    const live = (x: MemberRow) => !!(x.manualRole || x.syncRole);
+    if (s.kind === "personal" || orgMappings.length === 0)
+      return base.filter(live);
     const out = new Map(
       base.map((r) => [r.userId, { ...r, groups: [...r.groups] }]),
     );
     for (const m of orgMappings)
       for (const userId of groupMembers.get(m.groupId) ?? []) {
+        if (out.get(userId)?.detached) continue;
         const r = out.get(userId) ?? {
           userId,
           manualRole: null,
@@ -418,7 +425,25 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
           r.groups.push({ groupId: m.groupId, email: m.email, name: m.name });
         out.set(userId, r);
       }
-    return [...out.values()];
+    return [...out.values()].filter(live);
+  };
+  /** The stored (per-space) row for a user, created empty when missing. */
+  const baseRow = (s: SpaceRow, userId: string): MemberRow => {
+    const list = rows.get(s.id) ?? [];
+    rows.set(s.id, list);
+    let row = list.find((x) => x.userId === userId);
+    if (!row) {
+      row = { userId, manualRole: null, syncRole: null, groups: [] };
+      list.push(row);
+    }
+    return row;
+  };
+  /** Frozen sync: drop the synced part of a row (org mappings included) by hand. */
+  const detach = (row: MemberRow) => {
+    row.manualRole = null;
+    row.syncRole = null;
+    row.groups = [];
+    row.detached = true;
   };
   const roleIn = (s: SpaceRow, userId = me.user.id): SpaceRole | null => {
     if (s.kind === "personal") return s.ownerId === userId ? "manager" : null;
@@ -454,7 +479,19 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
         (isAdmin() || (roleIn(s) === "manager" && spaceManagerMappings)),
     },
   });
-  const memberView = (r: MemberRow): SpaceMember | null => {
+  /** groups[] with the role each mapping grants: the space's own (via "space") and Every space (via "every"). */
+  const groupsView = (s: SpaceRow, r: MemberRow): SpaceMemberGroup[] =>
+    r.groups.flatMap((g) => {
+      const own = mappings.get(s.id)?.find((m) => m.groupId === g.groupId);
+      const every = orgMappings.find((m) => m.groupId === g.groupId);
+      const out: SpaceMemberGroup[] = [];
+      if (own) out.push({ ...g, role: own.role, via: "space" });
+      if (every) out.push({ ...g, role: every.role, via: "every" });
+      return out.length > 0
+        ? out
+        : [{ ...g, role: r.syncRole ?? "viewer", via: "space" as const }];
+    });
+  const memberView = (s: SpaceRow, r: MemberRow): SpaceMember | null => {
     const u = memberOf(r.userId);
     if (!u) return null;
     const role = maxRole(r.manualRole, r.syncRole) as SpaceRole;
@@ -467,8 +504,13 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
         r.manualRole && RANK[r.manualRole] >= RANK[role] ? "manual" : "sync",
       manualRole: r.manualRole,
       syncRole: r.syncRole,
-      groups: r.groups,
+      groups: groupsView(s, r),
       cap: capOf(u),
+      // As roleIn: allMembersRole never reaches guests or restricted members.
+      allMembers:
+        s.kind === "shared" && u.role !== "guest" && !restrictionOf(u.id)
+          ? s.allMembersRole
+          : null,
     };
   };
   /** Can the caller see this shared space (member or org admin)? */
@@ -675,6 +717,7 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
       return err(
         "space_forbidden",
         "Only an admin can change a manager mapping",
+        { target: "mapping" },
       );
     return null;
   };
@@ -1077,13 +1120,35 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
     ),
     http.get(
       `${sp}/members`,
-      authed(({ request, params }) => {
+      authed(async ({ request, params }) => {
         const s = sharedSpace(params.id);
         if (s instanceof Response) return s;
+        const qs = new URL(request.url).searchParams;
+        const raw: Record<string, string> = {};
+        qs.forEach((v, k) => {
+          raw[k] = v;
+        });
+        const q = SpaceMembersQuerySchema.safeParse(raw);
+        if (!q.success)
+          return err("bad_request", "Invalid query", q.error.issues);
+        const needle = q.data.q?.toLowerCase();
         const list = rowsOf(s)
-          .map((r) => memberView(r))
-          .filter((x): x is SpaceMember => x !== null);
-        return page(list, new URL(request.url).searchParams);
+          .map((r) => memberView(s, r))
+          .filter((x): x is SpaceMember => x !== null)
+          .filter(
+            (m) =>
+              (!needle ||
+                (m.user.email ?? "").toLowerCase().startsWith(needle) ||
+                (m.user.name ?? "")
+                  .toLowerCase()
+                  .split(/\s+/)
+                  .some((w) => w.startsWith(needle))) &&
+              (!q.data.group ||
+                m.groups.some((g) => g.groupId === q.data.group)),
+          );
+        const res = page(list, qs);
+        // Page<SpaceMember> plus the filtered total.
+        return HttpResponse.json({ ...(await res.json()), total: list.length });
       }),
     ),
     http.post(
@@ -1116,7 +1181,7 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
           role: r.data.role,
         });
         refresh();
-        return HttpResponse.json(memberView(row), { status: 201 });
+        return HttpResponse.json(memberView(s, row), { status: 201 });
       }),
     ),
     http.put(
@@ -1131,17 +1196,48 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
         if (!u) return notFound();
         const r = await c.body(request, SpaceMemberPutSchema);
         if (r.error) return r.error;
-        const list = rows.get(s.id) ?? [];
-        rows.set(s.id, list);
-        let row = list.find((x) => x.userId === u.id);
-        if (!row) {
-          row = { userId: u.id, manualRole: null, syncRole: null, groups: [] };
-          list.push(row);
-          log("space.member.add", { type: "user", id: u.id }, s.id);
-        } else log("space.member.role", { type: "user", id: u.id }, s.id);
-        row.manualRole = r.data.role;
+        const cur = rowsOf(s).find((x) => x.userId === u.id);
+        // Only an org admin grants or changes the Manager role on a member.
+        if (
+          !isAdmin() &&
+          (r.data.role === "manager" || cur?.manualRole === "manager")
+        )
+          return err(
+            "space_forbidden",
+            "Only an admin can grant or change the Manager role",
+            { target: "member" },
+          );
+        const frozenSynced = directoryMode === "frozen" && !!cur?.syncRole;
+        if (
+          frozenSynced &&
+          RANK[r.data.role] >
+            RANK[maxRole(cur?.manualRole, cur?.syncRole) as SpaceRole]
+        )
+          return err(
+            "space_forbidden",
+            "Directory sync is frozen: a synced role can only be lowered",
+            { target: "member" },
+          );
+        const row = baseRow(s, u.id);
+        if (frozenSynced) {
+          // Manual override; the next reconcile after unfreezing replaces it.
+          detach(row);
+          row.manualRole = r.data.role;
+          log("space.member.role", { type: "user", id: u.id }, s.id, {
+            syncFrozen: true,
+            role: r.data.role,
+          });
+        } else {
+          log(
+            cur ? "space.member.role" : "space.member.add",
+            { type: "user", id: u.id },
+            s.id,
+          );
+          row.manualRole = r.data.role;
+        }
         refresh();
-        return HttpResponse.json(memberView(row));
+        const out = rowsOf(s).find((x) => x.userId === u.id) ?? row;
+        return HttpResponse.json(memberView(s, out));
       }),
     ),
     http.delete(
@@ -1150,12 +1246,28 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
         const s = sharedSpace(params.id);
         if (s instanceof Response) return s;
         if (!isAdmin() && roleIn(s) !== "manager") return notFound();
-        const list = rows.get(s.id) ?? [];
-        const row = list.find((x) => x.userId === params.userId);
-        if (!row?.manualRole) return notFound();
+        const userId = params.userId as string;
+        const cur = rowsOf(s).find((x) => x.userId === userId);
+        if (!cur) return notFound();
+        if (directoryMode === "frozen" && cur.syncRole) {
+          // Removing access is always allowed, synced rows included.
+          detach(baseRow(s, userId));
+          log("space.member.remove", { type: "user", id: userId }, s.id, {
+            syncFrozen: true,
+          });
+          refresh();
+          return noContent();
+        }
+        if (!cur.manualRole)
+          return cur.syncRole && directoryMode === "google"
+            ? err(
+                "member_synced",
+                "This person comes from a Google group. Remove them from the group in Google, or change their role here.",
+              )
+            : notFound();
+        const row = baseRow(s, userId);
         row.manualRole = null;
-        if (!row.syncRole) list.splice(list.indexOf(row), 1);
-        log("space.member.remove", { type: "user", id: row.userId }, s.id);
+        log("space.member.remove", { type: "user", id: userId }, s.id);
         refresh();
         return noContent();
       }),

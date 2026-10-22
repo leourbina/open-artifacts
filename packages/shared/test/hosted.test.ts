@@ -33,7 +33,11 @@ import {
   SettingsSchema,
   SPACE_MANAGER_MAPPING_ROLES,
   SpaceCanSchema,
+  SpaceForbiddenDetailsSchema,
+  SpaceMemberGroupSchema,
   SpaceMemberSchema,
+  SpaceMembersPageSchema,
+  SpaceMembersQuerySchema,
   SpacePatchSchema,
   SpaceSchema,
   STATUS_FOR,
@@ -974,5 +978,199 @@ describe("hosted contract: space-manager and Every-space mappings", () => {
     fresh({ hosted: { directory: "frozen" } });
     const r = await call("PUT", R.orgMapping("gEng01"), { role: "viewer" });
     expect((await errCode(r)).code).toBe("directory_sync_off");
+  });
+});
+
+describe("hosted contract: space People", () => {
+  const signIn = async (email: string) => {
+    await call("POST", AUTH.codeRequest, { email });
+    await call("POST", AUTH.codeVerify, { code: HOSTED_MOCK_CODE });
+  };
+  const ENG = "SpEngNpQrSt2uVwX";
+  const EXEC = "SpExcNpQrSt3uVwX";
+  const ada = fixtures.members[0]?.id as string;
+  const bob = fixtures.members[1]?.id as string;
+  const carol = "Cr7tNpQrSt8uVwXy";
+  const dan = "Dn8uPqRsTu9vWxYz";
+  const StrictMember = SpaceMemberSchema.extend({
+    groups: z.array(SpaceMemberGroupSchema.strict()),
+  }).strict();
+  const StrictPage = SpaceMembersPageSchema.extend({
+    items: z.array(StrictMember),
+  }).strict();
+  const list = async (space: string, qs = "") =>
+    StrictPage.parse(
+      await json(await call("GET", `${R.spaceMembers(space)}${qs}`)),
+    );
+  const forbidden = async (r: Response) => {
+    expect(r.status).toBe(403);
+    const e = await errCode(r);
+    expect(e.code).toBe("space_forbidden");
+    return SpaceForbiddenDetailsSchema.strict().parse(e.details).target;
+  };
+
+  it("schemas: query, page total, groups role/via, details, member_synced", () => {
+    expect(SpaceMembersQuerySchema.parse({})).toEqual({ limit: 50 });
+    expect(
+      SpaceMembersQuerySchema.parse({ q: " bo ", group: "gEng01", limit: "2" }),
+    ).toEqual({ q: "bo", group: "gEng01", limit: 2 });
+    expect(() => SpaceMembersQuerySchema.parse({ lastSeenAt: "x" })).toThrow();
+    expect(
+      SpaceMembersPageSchema.parse({ items: [], nextCursor: null, total: 0 }),
+    ).toEqual({ items: [], nextCursor: null, total: 0 });
+    expect(() =>
+      SpaceMemberGroupSchema.parse({
+        groupId: "g",
+        email: "g@x",
+        name: null,
+        role: "viewer",
+        via: "org",
+      }),
+    ).toThrow();
+    expect(SpaceForbiddenDetailsSchema.parse({ target: "mapping" })).toEqual({
+      target: "mapping",
+    });
+    expect(ERROR_CODES.at(-1)).toBe("member_synced");
+    expect(STATUS_FOR.member_synced).toBe(409);
+    expect(Object.keys(SpaceMemberSchema.shape).at(-1)).toBe("allMembers");
+    expect(Object.keys(SpaceMemberSchema.shape)).not.toContain("lastSeenAt");
+  });
+
+  it("members: groups role/via, allMembers, total, q and group filters", async () => {
+    fresh({ hosted: true });
+    // Dan is restricted: no allMembers.
+    await call("PUT", R.spaceMember(ENG, dan), { role: "editor" });
+    const all = await list(ENG);
+    expect(all.total).toBe(3);
+    const by = (id: string) => all.items.find((m) => m.userId === id);
+    expect(by(bob)).toMatchObject({
+      syncRole: "editor",
+      groups: [
+        {
+          groupId: "gEng01",
+          email: "eng@example.com",
+          role: "editor",
+          via: "space",
+        },
+      ],
+      allMembers: "viewer",
+    });
+    expect(by(ada)).toMatchObject({
+      manualRole: "manager",
+      allMembers: "viewer",
+    });
+    expect(by(dan)).toMatchObject({ cap: "restricted", allMembers: null });
+    // Paging keeps the filtered total.
+    const p1 = await list(ENG, "?limit=1");
+    expect(p1.items).toHaveLength(1);
+    expect(p1.total).toBe(3);
+    expect(p1.nextCursor).not.toBeNull();
+    // q: name or email prefix, case-insensitive.
+    expect((await list(ENG, "?q=BO")).items.map((m) => m.userId)).toEqual([
+      bob,
+    ]);
+    expect((await list(ENG, "?q=ada%40")).items.map((m) => m.userId)).toEqual([
+      ada,
+    ]);
+    // Any word of the name: "build" finds Bob Builder; mid-word doesn't.
+    expect((await list(ENG, "?q=build")).items.map((m) => m.userId)).toEqual([
+      bob,
+    ]);
+    expect((await list(ENG, "?q=uilder")).total).toBe(0);
+    const eng = await list(ENG, "?group=gEng01");
+    expect(eng.items.map((m) => m.userId)).toEqual([bob]);
+    expect(eng.total).toBe(1);
+    expect((await call("GET", `${R.spaceMembers(ENG)}?bogus=1`)).status).toBe(
+      400,
+    );
+    // An Every-space mapping shows as via "every".
+    await call("PUT", R.orgMapping("gEng01"), { role: "viewer" });
+    expect((await list(ENG, "?group=gEng01")).items[0]?.groups).toEqual([
+      expect.objectContaining({
+        groupId: "gEng01",
+        role: "editor",
+        via: "space",
+      }),
+      expect.objectContaining({
+        groupId: "gEng01",
+        role: "viewer",
+        via: "every",
+      }),
+    ]);
+  });
+
+  it("a space manager can't grant or change Manager on a member (target member); mappings say target mapping", async () => {
+    fresh({ hosted: true });
+    await call("PUT", R.spaceMember(ENG, bob), { role: "manager" });
+    await signIn("bob@example.com");
+    expect(
+      await forbidden(
+        await call("PUT", R.spaceMember(ENG, carol), { role: "manager" }),
+      ),
+    ).toBe("member");
+    // Ada is a manager by hand: demoting her is changing the Manager role.
+    expect(
+      await forbidden(
+        await call("PUT", R.spaceMember(ENG, ada), { role: "viewer" }),
+      ),
+    ).toBe("member");
+    expect(
+      StrictMember.parse(
+        await json(
+          await call("PUT", R.spaceMember(ENG, carol), { role: "editor" }),
+        ),
+      ),
+    ).toMatchObject({ userId: carol, manualRole: "editor" });
+    expect(
+      await forbidden(
+        await call("PUT", R.spaceMapping(ENG, "gSales03"), { role: "manager" }),
+      ),
+    ).toBe("mapping");
+  });
+
+  it("live sync: DELETE on a synced-only row is 409 member_synced", async () => {
+    fresh({ hosted: true });
+    const r = await call("DELETE", R.spaceMember(ENG, bob));
+    expect(r.status).toBe(409);
+    expect((await errCode(r)).code).toBe("member_synced");
+    expect((await list(ENG)).items.map((m) => m.userId)).toContain(bob);
+  });
+
+  it("frozen sync: DELETE removes a synced row; PUT may lower (manual override), not raise; audited", async () => {
+    fresh({ hosted: { directory: "frozen" } });
+    expect(
+      await forbidden(
+        await call("PUT", R.spaceMember(ENG, bob), { role: "manager" }),
+      ),
+    ).toBe("member");
+    const low = StrictMember.parse(
+      await json(
+        await call("PUT", R.spaceMember(ENG, bob), { role: "viewer" }),
+      ),
+    );
+    expect(low).toMatchObject({
+      role: "viewer",
+      source: "manual",
+      manualRole: "viewer",
+      syncRole: null,
+      groups: [],
+    });
+    expect((await call("DELETE", R.spaceMember(EXEC, ada))).status).toBe(204);
+    expect((await list(EXEC)).items).toEqual([]);
+    const audit = PageSchema(AuditEventSchema).parse(
+      await json(await call("GET", R.audit)),
+    );
+    expect(audit.items.slice(0, 2)).toEqual([
+      expect.objectContaining({
+        action: "space.member.remove",
+        spaceId: EXEC,
+        detail: { syncFrozen: true },
+      }),
+      expect.objectContaining({
+        action: "space.member.role",
+        spaceId: ENG,
+        detail: { syncFrozen: true, role: "viewer" },
+      }),
+    ]);
   });
 });
