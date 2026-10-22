@@ -4,7 +4,11 @@ import type { Env } from "../src/env.js";
 import worker from "../src/index.js";
 import { direct, mailer } from "./auth-helpers.js";
 import { type FakeGoogle, fakeGoogle } from "./fixtures/fake-google.js";
-import { type Install, SIGNIN_NEGATIVE_CASES } from "./xt/signin-negative.js";
+import {
+  type Install,
+  SIGNIN_NEGATIVE_CASES,
+  XT_DOMAIN,
+} from "./xt/signin-negative.js";
 
 // P2 Task 13: the sign-in negative catalog against two local installs (one
 // worker, two envs: different secrets, install ids, hosts and hook keys).
@@ -31,6 +35,8 @@ function local(id: string, secret: string, hookKey: string): Install {
     ...m.env,
     TEST_HOOKS: "1",
     TEST_HOOK_KEY: hookKey,
+    // #393: hook sessions only for addresses under TEST_DOMAIN.
+    TEST_DOMAIN: XT_DOMAIN,
   } as Env;
   return {
     origin: `http://${appHost}`,

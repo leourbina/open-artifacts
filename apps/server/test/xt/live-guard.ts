@@ -1,10 +1,17 @@
 // Guards xt:live runs before any secret is read or any request is sent: it
 // only ever targets two staging installs with test hooks on, never prod.
 
-/** First DNS label of an allowed host: stg-*, rl-*, staging, staging-*. */
-const STAGING_LABEL = /^(stg|rl)-[a-z0-9-]+$|^staging(-[a-z0-9-]+)?$/;
-/** Any label that reads as production refuses the host outright. */
-const PROD_LABEL = /(^|-)(prod|production|live)(-|$)/;
+/**
+ * The only hosted staging zones. The WHOLE hostname must be exactly one
+ * label under one of them (a suffix match on a label boundary), so
+ * stg-a.evil.com, open-artifacts-staging.app.evil.com and
+ * xopen-artifacts-staging.app are all refused.
+ */
+export const STAGING_SUFFIXES = [
+  "open-artifacts-staging.app",
+  "open-artifacts-staging.page",
+] as const;
+const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
 /** The normalized origin, or throws unless it is an https staging origin. */
 export function stagingOrigin(raw: string): string {
@@ -14,7 +21,11 @@ export function stagingOrigin(raw: string): string {
   } catch {
     throw new Error("xt:live origin is not a URL");
   }
-  const labels = u.hostname.toLowerCase().split(".");
+  const host = u.hostname.toLowerCase();
+  const onStaging = STAGING_SUFFIXES.some((sfx) => {
+    if (!host.endsWith(`.${sfx}`)) return false;
+    return LABEL.test(host.slice(0, -sfx.length - 1));
+  });
   const ok =
     u.protocol === "https:" &&
     !u.port &&
@@ -23,12 +34,10 @@ export function stagingOrigin(raw: string): string {
     (u.pathname === "/" || u.pathname === "") &&
     !u.search &&
     !u.hash &&
-    labels.length >= 3 &&
-    STAGING_LABEL.test(labels[0] as string) &&
-    !labels.some((l) => PROD_LABEL.test(l));
+    onStaging;
   if (!ok)
     throw new Error(
-      `xt:live refuses ${u.host}: not an https origin on the staging allowlist (stg-*, rl-*, staging*)`,
+      `xt:live refuses ${u.host}: not an https origin on the staging allowlist (*.open-artifacts-staging.app, *.open-artifacts-staging.page)`,
     );
   return u.origin;
 }

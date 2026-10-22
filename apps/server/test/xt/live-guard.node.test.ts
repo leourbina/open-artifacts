@@ -3,25 +3,31 @@ import { checkHealth, stagingOrigin } from "./live-guard.js";
 
 describe("stagingOrigin", () => {
   it.each([
-    "https://stg-a.open-artifacts.com",
-    "https://rl-b.hosted.example.net/",
-    "https://staging.open-artifacts.com",
-    "https://staging-content.open-artifacts.com",
+    "https://stg-a.open-artifacts-staging.app",
+    "https://rl-b.open-artifacts-staging.app/",
+    "https://stg-a.open-artifacts-staging.page",
+    "https://STG-B.Open-Artifacts-Staging.Page",
   ])("allows %s", (o) => {
     expect(stagingOrigin(o)).toBe(new URL(o).origin);
   });
 
   it.each([
-    "http://stg-a.open-artifacts.com",
+    "http://stg-a.open-artifacts-staging.app",
+    "https://stg-a.evil.com",
+    "https://open-artifacts-staging.app.evil.com",
+    "https://stg-a.open-artifacts-staging.app.evil.com",
+    "https://xopen-artifacts-staging.app",
+    "https://stg-a.xopen-artifacts-staging.app",
+    "https://open-artifacts-staging.app",
+    "https://stg-a.open-artifacts-staging.app.",
+    "https://staging.open-artifacts.com",
+    "https://stg-a.open-artifacts.com",
     "https://open-artifacts.com",
     "https://app.open-artifacts.com",
     "https://artifacts.leourbina.com",
-    "https://prod-stg-a.open-artifacts.com",
-    "https://stg-a.prod.open-artifacts.com",
-    "https://stg-a.production.example.com",
-    "https://staging.open-artifacts.com:8443",
-    "https://u:p@stg-a.open-artifacts.com",
-    "https://stg-a.open-artifacts.com/path",
+    "https://stg-a.open-artifacts-staging.app:8443",
+    "https://u:p@stg-a.open-artifacts-staging.app",
+    "https://stg-a.open-artifacts-staging.app/path",
     "https://localhost",
     "not a url",
   ])("refuses %s", (o) => {

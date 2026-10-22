@@ -105,8 +105,11 @@ async function readString(
   return v;
 }
 
+/** Every catalog address is under this domain: both installs run with TEST_DOMAIN set to it (#393). */
+export const XT_DOMAIN = "xt-guest.example";
+
 const unique = (local: string) =>
-  `${local}-${crypto.randomUUID().slice(0, 8)}@xt-guest.example`;
+  `${local}-${crypto.randomUUID().slice(0, 8)}@${XT_DOMAIN}`;
 
 const hostOf = (origin: string) => new URL(origin).host;
 

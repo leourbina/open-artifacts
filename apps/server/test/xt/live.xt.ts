@@ -8,7 +8,8 @@ import { type Install, SIGNIN_NEGATIVE_CASES } from "./signin-negative.js";
 // XT_B_CONTENT); credentials ONLY from 0600 files (XT_A_KEY_FILE,
 // XT_B_KEY_FILE, XT_TURNSTILE_FILE), each read once, after the guards pass:
 // staging-allowlisted https origins, /healthz testHooks:true on both, and
-// distinct installIds.
+// distinct installIds. Both installs must run with TEST_DOMAIN=xt-guest.example
+// (XT_DOMAIN, #393): the session hook only serves addresses under it.
 const need = (k: string): string => {
   const v = process.env[k];
   if (!v) throw new Error(`${k} is required for xt:live`);
