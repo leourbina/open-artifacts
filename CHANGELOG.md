@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.28.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.27.0...v0.28.0) (2026-10-22)
+
+
+### Features
+
+* **auth:** providers endpoint, Google sign-in routes, Me sign-in fields (P2 T6) ([#380](https://github.com/open-artifacts-ai/open-artifacts/issues/380)) ([8221a95](https://github.com/open-artifacts-ai/open-artifacts/commit/8221a95ac9df1717a5a69e35c02d1c412ee741a9))
+
 ## [0.27.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.26.1...v0.27.0) (2026-10-22)
 
 
