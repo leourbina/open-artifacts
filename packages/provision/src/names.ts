@@ -36,10 +36,10 @@ export function newInstallId(): InstallId {
 export type Env = "staging" | "prod";
 
 /** Every hosted resource name carries its environment; the account is shared. */
-export const ENV_PREFIX: Record<Env, string> = {
+export const ENV_PREFIX: Readonly<Record<Env, string>> = Object.freeze({
   staging: "oa-s-",
   prod: "oa-p-",
-};
+});
 
 export class ForeignResource extends Error {
   constructor(name: string, env?: unknown) {
