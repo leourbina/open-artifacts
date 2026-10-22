@@ -8,7 +8,6 @@ import {
 } from "@oa/shared";
 import type { Context } from "hono";
 import { getCookie } from "hono/cookie";
-import { HTTPException } from "hono/http-exception";
 import {
   codesKey,
   deliverCode,
@@ -41,20 +40,65 @@ import type { AppType } from "./index.js";
 
 const GUEST_MAX_AGE_S = 86_400;
 const MAX_COOKIE_LEN = 1024;
+/** A longer `next` becomes "/", so the pending cookie stays under MAX_COOKIE_LEN. */
+const MAX_PENDING_NEXT = 512;
 
 /**
- * The pending code, in this browser only: { ek, email, rid, next, exp, f }.
- * `f` counts failed tries for the 401 wording (the server-side limit is the
- * row's attempts). Signed with the code-cookie key (codesKey).
+ * The pending code, in this browser only: { ek, ee, rid, next, exp, f }.
+ * `ee` is the address sealed (AES-GCM, oa:code-email key, `ek` as AAD), never
+ * plaintext; the UI shows the 202's maskedEmail. `f` counts failed tries for
+ * the 401 wording (the server-side limit is the row's attempts). Signed with
+ * the code-cookie key (codesKey).
  */
 type Pending = {
   ek: string;
-  email: string;
+  ee: string;
   rid: string;
   next: string;
   exp: number;
   f: number;
 };
+
+const aesKey = async (c: Context<AppEnv>) =>
+  crypto.subtle.importKey(
+    "raw",
+    b64urlDecode(await codesKey(c.env, "oa:code-email")) ?? new Uint8Array(),
+    "AES-GCM",
+    false,
+    ["encrypt", "decrypt"],
+  );
+
+async function sealEmail(c: Context<AppEnv>, email: string, ek: string) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv, additionalData: utf8Encoder.encode(ek) },
+    await aesKey(c),
+    utf8Encoder.encode(email),
+  );
+  const out = new Uint8Array(12 + ct.byteLength);
+  out.set(iv);
+  out.set(new Uint8Array(ct), 12);
+  return b64urlEncode(out);
+}
+
+async function openEmail(c: Context<AppEnv>, p: Pending) {
+  const raw = b64urlDecode(p.ee);
+  if (!raw || raw.length <= 12) return null;
+  try {
+    const pt = await crypto.subtle.decrypt(
+      {
+        name: "AES-GCM",
+        iv: raw.slice(0, 12),
+        additionalData: utf8Encoder.encode(p.ek),
+      },
+      await aesKey(c),
+      raw.slice(12),
+    );
+    return utf8Decoder.decode(pt);
+  } catch {
+    return null;
+  }
+}
 
 const cookieName = (c: Context<AppEnv>) =>
   c.env.ENVIRONMENT === "dev" ? "oa_code" : "__Host-oa_code";
@@ -85,7 +129,7 @@ async function readPending(c: Context<AppEnv>): Promise<Pending | null> {
     const p = JSON.parse(utf8Decoder.decode(bytes)) as Partial<Pending>;
     if (
       typeof p.ek !== "string" ||
-      typeof p.email !== "string" ||
+      typeof p.ee !== "string" ||
       typeof p.rid !== "string" ||
       typeof p.next !== "string" ||
       typeof p.exp !== "number" ||
@@ -147,12 +191,15 @@ const mask = (email: string) => {
   return `${email.slice(0, 1)}***${email.slice(at)}`;
 };
 
-/** RL_AUTH per install and IP; fails closed outside dev when unbound. */
+/** RL_AUTH per install and IP; outside dev, unbound is 503 code_unavailable. */
 async function authLimit(c: Context<AppEnv>, installKey: string, ip: string) {
   const rl = c.env.RL_AUTH;
   if (!rl) {
     if (c.env.ENVIRONMENT === "dev") return true;
-    throw new HTTPException(503, { message: "rate limiter unavailable" });
+    throw new ApiError(
+      "code_unavailable",
+      "Code sign-in is unavailable on this install",
+    );
   }
   return (await rl.limit({ key: `${installKey}:${ip}` })).success;
 }
@@ -206,11 +253,12 @@ export function mountCodes(app: AppType): void {
     if (!slot.ok) return rateLimited(slot.retryAfter, slot.scope);
 
     const rid = b64urlEncode(crypto.getRandomValues(new Uint8Array(16)));
+    const next = safeNext(c.env, parsed.data.next);
     const pending: Pending = {
       ek,
-      email,
+      ee: await sealEmail(c, email, ek),
       rid,
-      next: safeNext(c.env, parsed.data.next),
+      next: next.length > MAX_PENDING_NEXT ? "/" : next,
       exp: Date.now() + CODE_POLICY.ttlSec * 1000,
       f: 0,
     };
@@ -243,19 +291,30 @@ export function mountCodes(app: AppType): void {
     if (!parsed.success)
       throw new ApiError("bad_request", "Invalid request body");
     const p = await readPending(c);
-    if (!p || p.ek !== (await emailKey(c.env, p.email)))
+    const email = p ? await openEmail(c, p) : null;
+    if (!p || !email || p.ek !== (await emailKey(c.env, email)))
       return unauthorized({ reason: "no_pending" }, [clearPending(c)]);
     if (Date.now() > p.exp)
       return unauthorized({ reason: "expired" }, [clearPending(c)]);
 
     const r = await verifyCode(c.env, cfg, {
-      email: p.email,
+      email,
       requestId: p.rid,
       input: parsed.data.code,
       ip: clientIp(c),
     });
     if ("ipLocked" in r) return rateLimited(r.ipLocked, "ip");
-    const elig = r.ok ? await codeEligibility(c.env, cfg, p.email) : null;
+    const first = r.ok ? await codeEligibility(c.env, cfg, email) : null;
+    // A new address gets its row now; role and link are then read again, so
+    // a row that a concurrent sign-in or invite created is what's checked.
+    const elig =
+      first && first.kind !== "none" && first.userId === null
+        ? (await ensureUser(
+            c,
+            email,
+            first.kind === "guest" ? "guest" : "member",
+          )) && (await codeEligibility(c.env, cfg, email))
+        : first;
     if (!r.ok || !elig || elig.kind === "none") {
       const f = p.f + 1;
       const left = Math.max(0, CODE_POLICY.maxAttempts - f);
@@ -266,18 +325,11 @@ export function mountCodes(app: AppType): void {
       ]);
     }
 
-    const userId =
-      elig.userId ??
-      (await ensureUser(
-        c,
-        p.email,
-        elig.kind === "guest" ? "guest" : "member",
-      ));
-    const row = userId ? await getUserWithEpoch(c.env, userId) : null;
+    const row = elig.userId ? await getUserWithEpoch(c.env, elig.userId) : null;
     if (!row) return unauthorized({ reason: "expired" }, [clearPending(c)]);
     const user: Member = row.user;
     const guest = elig.kind === "guest";
-    const domain = p.email.slice(p.email.lastIndexOf("@") + 1);
+    const domain = email.slice(email.lastIndexOf("@") + 1);
     const maxAgeS = guest ? GUEST_MAX_AGE_S : undefined;
     const sess = await signSession(c.env, user.id, Date.now(), {
       provider: "code",

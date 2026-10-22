@@ -84,7 +84,7 @@ const retryAfter = (kind: BucketKind, now: number) =>
  */
 export async function codesKey(
   env: Env,
-  label: "oa:login-codes" | "oa:code-cookie",
+  label: "oa:login-codes" | "oa:code-cookie" | "oa:code-email",
 ): Promise<string> {
   const s = env.SESSION_SECRET;
   if (typeof s !== "string" || s.length < MIN_SECRET_LENGTH)

@@ -216,7 +216,7 @@ These are the names P2 and P3 use; the contract wins. There is no
 | `directory_sync_off` | 409 | mapping or restricted-group change while sync is off or frozen (also Sync now) |
 | `turnstile_required` | 400 | code request with no Turnstile token while Turnstile is configured |
 | `turnstile_failed` | 403 | Turnstile token rejected |
-| `code_unavailable` | 503 | code sign-in can't run: `SESSION_SECRET` is under 32 characters, so the code keys can't be derived |
+| `code_unavailable` | 503 | code sign-in can't run: `SESSION_SECRET` is under 32 characters, so the code keys can't be derived, or the `RL_AUTH` rate-limit binding is missing |
 | `reauth_required` | 401 | break-glass routes need a fresh Google sign-in |
 | `restrict_admin` | 400 | `PUT R.memberRestricted(id)` on an org owner or admin |
 | `directory_mapping_off` | 403 | a space manager (not an org admin) adds or changes a space mapping (PUT) while `Settings.spaceManagerMappings` is off; list and DELETE stay allowed |
