@@ -4,6 +4,7 @@ import { mountOAuth } from "../mcp/oauth.js";
 import { mountRuntime } from "../runtime/routes.js";
 import { mountArtifacts } from "./artifacts.js";
 import { mountAuth } from "./auth.js";
+import { mountCodes } from "./codes.js";
 import { mountMe } from "./me.js";
 import { mountMembers } from "./members.js";
 import { mountSearch } from "./search.js";
@@ -20,6 +21,7 @@ export type AppType = Hono<AppEnv>;
 // Called before the SPA fallback, which is always registered last.
 export function mountRoutes(app: AppType): void {
   mountAuth(app);
+  mountCodes(app);
   mountMe(app);
   mountMembers(app);
   mountSettings(app);

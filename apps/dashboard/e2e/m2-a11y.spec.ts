@@ -46,6 +46,17 @@ const ROUTES: Route[] = [
   { path: "/a/Cd5fGhJkLm6nPqRs/diff/1/2" },
   { path: "/no-access" },
   { path: "/sign-in" },
+  { path: "/sign-in?hosted=1" },
+  { path: "/sign-in?hosted=1&error=tenant" },
+  { path: "/sign-in?hosted=1&method=code" },
+  {
+    path: "/sign-in?hosted=1&method=code#code",
+    after: async (p) => {
+      await p.getByRole("textbox", { name: "Email" }).fill("bob@example.com");
+      await p.getByRole("button", { name: "Send code" }).click();
+      await p.getByRole("textbox", { name: "Code", exact: true }).waitFor();
+    },
+  },
   { path: "/nope" },
   { path: "/settings/members" },
   { path: "/settings/agents" },
@@ -64,6 +75,16 @@ const ROUTES: Route[] = [
   },
 ];
 
+/**
+ * Waits until every CSS transition and animation has finished. Switching
+ * data-theme starts color transitions (shadcn tabs use transition-colors,
+ * 150ms); axe measuring mid-way reads blended colors and fails contrast.
+ */
+const settled = (page: Page) =>
+  page.waitForFunction(() =>
+    document.getAnimations().every((a) => a.playState !== "running"),
+  );
+
 const open = async (page: Page, r: Route, theme: string, w: number) => {
   await page.setViewportSize({ width: w, height: 800 });
   await r.setup?.(page);
@@ -74,7 +95,7 @@ const open = async (page: Page, r: Route, theme: string, w: number) => {
     (t) => document.documentElement.setAttribute("data-theme", t),
     theme,
   );
-  await page.waitForTimeout(200);
+  await settled(page);
 };
 
 for (const r of ROUTES)

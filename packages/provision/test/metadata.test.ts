@@ -5,10 +5,11 @@ import { describe, expect, it } from "vitest";
 import {
   type Binding,
   buildBundle,
+  epochBumpSql,
+  googleNewlyEnabled,
   HOSTED_ADDED,
   type InstallMetaInput,
   KNOWN_SECRETS,
-  loadTemplate,
   names,
   parseTemplate,
   type ResourceMetaInput,
@@ -17,6 +18,7 @@ import {
   type Template,
   userWorkerMetadata,
 } from "../src/index.js";
+import { loadTemplate } from "../src/internal/template.js";
 
 const TEMPLATE_PATH = new URL(
   "../../../apps/server/wrangler.template.jsonc",
@@ -45,6 +47,7 @@ const res = (o: Partial<ResourceMetaInput> = {}): ResourceMetaInput => ({
   assetsJwt: "jwt",
   mainModule: "index.js",
   secrets: { SESSION_SECRET: "s", CONTENT_SIGNING_KEY: "c" },
+  template: tpl,
   ...o,
 });
 const text = (b: Binding[], name: string) =>
@@ -770,5 +773,50 @@ describe("env-prefixed names in metadata", () => {
       forge((t) => (t.r2_buckets[0].bucket_name = "terrazul-api")),
     ).toThrow(/refusing/);
     expect(forge(() => {})).not.toThrow();
+  });
+});
+
+describe("EMAIL_CODE_DOMAIN var (H-ECD)", () => {
+  const val = (v: string) => () =>
+    userWorkerMetadata(inst({ vars: { EMAIL_CODE_DOMAIN: v } }), res());
+  it("accepts on and off only", () => {
+    expect(val("on")).not.toThrow();
+    expect(val("off")).not.toThrow();
+    for (const v of ["ON", "true", "1", "", " on", "yes"])
+      expect(val(v)).toThrow(/EMAIL_CODE_DOMAIN/);
+  });
+  it("on is a plain_text binding; off and absent are not bound", () => {
+    const text = (vars: Record<string, string>) =>
+      userWorkerMetadata(inst({ vars }), res()).bindings.find(
+        (b) => b.name === "EMAIL_CODE_DOMAIN",
+      );
+    expect(text({ EMAIL_CODE_DOMAIN: "on" })).toEqual({
+      type: "plain_text",
+      name: "EMAIL_CODE_DOMAIN",
+      text: "on",
+    });
+    expect(text({ EMAIL_CODE_DOMAIN: "off" })).toBeUndefined();
+    expect(text({})).toBeUndefined();
+  });
+});
+
+describe("googleNewlyEnabled and epochBumpSql (H-ECD)", () => {
+  it.each([
+    [{}, { AUTH_PROVIDERS: "google" }, true],
+    [{ AUTH_PROVIDERS: "email" }, { AUTH_PROVIDERS: "email, google" }, true],
+    [{ AUTH_PROVIDERS: "google" }, { AUTH_PROVIDERS: "google,email" }, false],
+    [{ AUTH_PROVIDERS: "google" }, { AUTH_PROVIDERS: "google" }, false],
+    [{ AUTH_PROVIDERS: "google" }, { AUTH_PROVIDERS: "email" }, false],
+    [{ AUTH_PROVIDERS: "email" }, { AUTH_PROVIDERS: "email" }, false],
+    [{}, {}, false],
+    [{ AUTH_PROVIDERS: "email" }, {}, false],
+    [{}, { AUTH_PROVIDERS: "googler" }, false],
+  ])("%j -> %j is %s", (prev, next, want) => {
+    expect(googleNewlyEnabled(prev, next)).toBe(want);
+  });
+  it("epochBumpSql is the exact statement", () => {
+    expect(epochBumpSql()).toBe(
+      "UPDATE users SET session_epoch = session_epoch + 1",
+    );
   });
 });

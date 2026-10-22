@@ -1,3 +1,4 @@
+import { normalizeEmail } from "@oa/auth-core";
 import {
   type Format,
   type Member,
@@ -9,7 +10,6 @@ import {
 import { and, asc, eq } from "drizzle-orm";
 import { authorize, callerOf } from "../auth/authz.js";
 import { getDb } from "../db/client.js";
-import { normEmail } from "../db/email.js";
 import { shares } from "../db/schema.js";
 import { stmt } from "../db/stmt.js";
 import { emailEnabled, sendEmail } from "../email/send.js";
@@ -70,9 +70,9 @@ export async function putShare(
   s: { email: string; role: ShareRole },
 ): Promise<ShareResult> {
   const artifact = await ownerOnly(env, user, id);
-  const email = normEmail(s.email);
+  const email = normalizeEmail(s.email);
   if (!email) throw new ApiError("bad_request", "Invalid email");
-  if (email === normEmail(user.email))
+  if (email === normalizeEmail(user.email))
     throw new ApiError("bad_request", "Cannot share with yourself");
   const now = Date.now();
   // One atomic statement: a new email is inserted only while under the cap;
@@ -136,7 +136,7 @@ async function emailShare(
       {
         kind: "share",
         artifactId: artifact.id,
-        replyTo: normEmail(user.email) ?? undefined,
+        replyTo: normalizeEmail(user.email) ?? undefined,
       },
     );
   } catch {
@@ -152,7 +152,7 @@ export async function deleteShare(
   ctx?: Pick<ExecutionContext, "waitUntil">,
 ): Promise<void> {
   await ownerOnly(env, user, id, "unshare");
-  const e = normEmail(email);
+  const e = normalizeEmail(email);
   if (!e) throw new ApiError("not_found", "Not found");
   const out = await getDb(env)
     .delete(shares)

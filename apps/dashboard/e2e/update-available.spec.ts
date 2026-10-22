@@ -182,11 +182,13 @@ for (const w of [1280, 390])
         (c?.y ?? 0) + (c?.height ?? 0) - ((a?.y ?? 0) + (a?.height ?? 0)),
       );
     };
-    expect(await gap()).toBe(pad);
+    // Poll: the card can still be settling (fonts, the update query) on a
+    // loaded runner; a one-shot read caught 40 instead of 21 there.
+    await expect.poll(gap).toBe(pad);
     // Copied grows the card by the status line, then it collapses again.
     await actions.click();
     await expect(status).toHaveText("Copied, paste this into your agent");
-    expect(await gap()).toBeGreaterThan(pad);
+    await expect.poll(gap).toBeGreaterThan(pad);
     await expect(status).toBeEmpty({ timeout: 6000 });
-    expect(await gap()).toBe(pad);
+    await expect.poll(gap).toBe(pad);
   });

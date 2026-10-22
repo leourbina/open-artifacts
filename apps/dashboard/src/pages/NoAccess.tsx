@@ -1,4 +1,8 @@
 import { AUTH } from "@oa/shared";
+import { useNavigate } from "@tanstack/react-router";
+import { useEffect } from "react";
+import { useAuthProviders } from "../api/auth";
+import { SIGN_IN_PAGE } from "../api/contract";
 import { useSignOut } from "../auth/signOut";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { EdgePanel, SignedInAs } from "./Edge";
@@ -6,6 +10,19 @@ import { EdgePanel, SignedInAs } from "./Edge";
 export function NoAccess() {
   useDocumentTitle("No access");
   const signOut = useSignOut();
+  const navigate = useNavigate();
+  const providers = useAuthProviders();
+  // Hosted direct mode never lands here: every refusal is /sign-in?error=.
+  const hosted = providers.data?.mode === "direct";
+  useEffect(() => {
+    if (!hosted) return;
+    void navigate({
+      to: SIGN_IN_PAGE as string,
+      search: { error: "no_access" },
+      replace: true,
+    });
+  }, [hosted, navigate]);
+  if (hosted) return null;
   return (
     <EdgePanel>
       <h1>You're signed in, but there's nothing here for you yet</h1>

@@ -29,7 +29,15 @@ import {
   R,
   RestrictedGroupSchema,
   SearchHitSchema,
+  SettingsPatchSchema,
+  SettingsSchema,
+  SPACE_MANAGER_MAPPING_ROLES,
+  SpaceCanSchema,
+  SpaceForbiddenDetailsSchema,
+  SpaceMemberGroupSchema,
   SpaceMemberSchema,
+  SpaceMembersPageSchema,
+  SpaceMembersQuerySchema,
   SpacePatchSchema,
   SpaceSchema,
   STATUS_FOR,
@@ -93,6 +101,7 @@ describe("hosted contract schemas", () => {
     expect(STATUS_FOR.space_forbidden).toBe(403);
     expect(STATUS_FOR.turnstile_required).toBe(400);
     expect(STATUS_FOR.directory_sync_off).toBe(409);
+    expect(STATUS_FOR.directory_mapping_off).toBe(403);
   });
 
   it("old shapes still parse; new fields are optional", () => {
@@ -758,5 +767,443 @@ describe("hosted mocks: sync banner fields", () => {
       banner: false,
       tokensUnverified: false,
     });
+  });
+});
+
+describe("hosted contract: space-manager and Every-space mappings", () => {
+  const signIn = async (email: string) => {
+    await call("POST", AUTH.codeRequest, { email });
+    await call("POST", AUTH.codeVerify, { code: HOSTED_MOCK_CODE });
+  };
+  const ENG = "SpEngNpQrSt2uVwX";
+  const CLIENTS = "SpCliNpQrSt4uVwX";
+  const ada = fixtures.members[0]?.id as string;
+  const bob = fixtures.members[1]?.id as string;
+  /** As Ada (owner): make Bob a manager of Engineering, then sign in as Bob. */
+  const bobManagesEng = async () => {
+    await call("PUT", R.spaceMember(ENG, bob), { role: "manager" });
+    await signIn("bob@example.com");
+  };
+
+  it("schemas: settings flag, Space.can, org mappings, audit action", () => {
+    expect(
+      SettingsSchema.parse({
+        name: "x",
+        defaultVisibility: "team",
+        spaceManagerMappings: false,
+      }).spaceManagerMappings,
+    ).toBe(false);
+    expect(
+      SettingsSchema.parse({ name: "x", defaultVisibility: "team" }),
+    ).not.toHaveProperty("spaceManagerMappings");
+    expect(SettingsPatchSchema.parse({ spaceManagerMappings: true })).toEqual({
+      spaceManagerMappings: true,
+    });
+    expect(SpaceCanSchema.parse({ manageMappings: true })).toEqual({
+      manageMappings: true,
+    });
+    expect(SPACE_MANAGER_MAPPING_ROLES).toEqual(["viewer", "editor"]);
+    expect(AuditEventSchema.shape.action.options).toContain(
+      "settings.space_manager_mappings",
+    );
+    expect(R.orgMappings).toBe("/api/v1/directory/org-mappings");
+    expect(R.orgMapping("g/1")).toBe("/api/v1/directory/org-mappings/g%2F1");
+  });
+
+  it("settings: spaceManagerMappings defaults on; PATCH is admin-only and audited", async () => {
+    fresh({ hosted: true });
+    const s = SettingsSchema.strict().parse(
+      await json(await call("GET", R.settings)),
+    );
+    expect(s.spaceManagerMappings).toBe(true);
+    const off = SettingsSchema.strict().parse(
+      await json(
+        await call("PATCH", R.settings, { spaceManagerMappings: false }),
+      ),
+    );
+    expect(off.spaceManagerMappings).toBe(false);
+    const me = Strict.Me.parse(await json(await call("GET", R.me)));
+    expect(me.instance).not.toHaveProperty("spaceManagerMappings");
+    const audit = PageSchema(AuditEventSchema).parse(
+      await json(await call("GET", R.audit)),
+    );
+    expect(audit.items[0]).toMatchObject({
+      action: "settings.space_manager_mappings",
+      detail: { spaceManagerMappings: false },
+    });
+    await signIn("bob@example.com");
+    expect(
+      (await call("PATCH", R.settings, { spaceManagerMappings: true })).status,
+    ).toBe(404);
+  });
+
+  it("hosted off: settings carry no spaceManagerMappings", async () => {
+    fresh();
+    expect(await (await call("GET", R.settings)).text()).not.toContain(
+      "spaceManagerMappings",
+    );
+  });
+
+  it("a space manager maps viewer/editor; manager is space_forbidden", async () => {
+    fresh({ hosted: true });
+    await bobManagesEng();
+    const sp = Strict.Space.parse(await json(await call("GET", R.space(ENG))));
+    expect(sp.can).toEqual({ manageMappings: true });
+    expect(
+      z
+        .array(Strict.GroupMapping)
+        .parse(await json(await call("GET", R.spaceMappings(ENG)))),
+    ).toHaveLength(1);
+    const ok = Strict.GroupMapping.parse(
+      await json(
+        await call("PUT", R.spaceMapping(ENG, "gSales03"), { role: "viewer" }),
+      ),
+    );
+    expect(ok).toMatchObject({ groupId: "gSales03", role: "viewer" });
+    const mgr = await call("PUT", R.spaceMapping(ENG, "gSales03"), {
+      role: "manager",
+    });
+    expect(mgr.status).toBe(403);
+    expect((await errCode(mgr)).code).toBe("space_forbidden");
+    // Exec: Bob has no role there, so mapping routes stay 404.
+    expect(
+      (
+        await call("PUT", R.spaceMapping("SpExcNpQrSt3uVwX", "gSales03"), {
+          role: "viewer",
+        })
+      ).status,
+    ).toBe(404);
+    expect((await call("DELETE", R.spaceMapping(ENG, "gSales03"))).status).toBe(
+      204,
+    );
+    // Bob's own personal space: mappings don't exist there.
+    const personal = await call("GET", R.spaceMappings(bob));
+    expect(personal.status).toBe(400);
+    expect((await errCode(personal)).code).toBe("space_personal");
+  });
+
+  it("a space manager can't change or remove a manager-role row an admin set", async () => {
+    fresh({ hosted: true });
+    await call("PUT", R.spaceMapping(ENG, "gSales03"), { role: "manager" });
+    await bobManagesEng();
+    const demote = await call("PUT", R.spaceMapping(ENG, "gSales03"), {
+      role: "viewer",
+    });
+    expect(demote.status).toBe(403);
+    expect((await errCode(demote)).code).toBe("space_forbidden");
+    const del = await call("DELETE", R.spaceMapping(ENG, "gSales03"));
+    expect((await errCode(del)).code).toBe("space_forbidden");
+  });
+
+  it("setting off: a manager's PUT is 403 directory_mapping_off; list and remove still work", async () => {
+    fresh({ hosted: true });
+    await call("PATCH", R.settings, { spaceManagerMappings: false });
+    const eng = Strict.Space.parse(await json(await call("GET", R.space(ENG))));
+    expect(eng.can).toEqual({ manageMappings: true });
+    await bobManagesEng();
+    const sp = Strict.Space.parse(await json(await call("GET", R.space(ENG))));
+    expect(sp.can).toEqual({ manageMappings: false });
+    const r = await call("PUT", R.spaceMapping(ENG, "gSales03"), {
+      role: "viewer",
+    });
+    expect(r.status).toBe(403);
+    expect((await errCode(r)).code).toBe("directory_mapping_off");
+    expect(
+      z
+        .array(Strict.GroupMapping)
+        .parse(await json(await call("GET", R.spaceMappings(ENG)))),
+    ).toEqual([expect.objectContaining({ groupId: "gEng01" })]);
+    expect((await call("DELETE", R.spaceMapping(ENG, "gEng01"))).status).toBe(
+      204,
+    );
+  });
+
+  it("an Every-space mapping is an effective role in every shared space, never Personal", async () => {
+    fresh({ hosted: true });
+    expect(
+      PageSchema(Strict.GroupMapping).parse(
+        await json(await call("GET", R.orgMappings)),
+      ),
+    ).toEqual({ items: [], nextCursor: null });
+    const m = Strict.GroupMapping.parse(
+      await json(await call("PUT", R.orgMapping("gEng01"), { role: "editor" })),
+    );
+    expect(m).toMatchObject({ groupId: "gEng01", role: "editor" });
+    // One row per group: a second PUT updates it.
+    await call("PUT", R.orgMapping("gEng01"), { role: "editor" });
+    expect(
+      PageSchema(Strict.GroupMapping).parse(
+        await json(await call("GET", `${R.orgMappings}?limit=1`)),
+      ).items,
+    ).toHaveLength(1);
+    // Not expanded into per-space mapping rows.
+    expect(await json(await call("GET", R.spaceMappings(CLIENTS)))).toEqual([]);
+    const members = PageSchema(Strict.SpaceMember).parse(
+      await json(await call("GET", R.spaceMembers(CLIENTS))),
+    );
+    expect(members.items).toEqual([
+      expect.objectContaining({
+        userId: bob,
+        role: "editor",
+        source: "sync",
+        syncRole: "editor",
+      }),
+    ]);
+    await signIn("bob@example.com");
+    const clients = Strict.Space.parse(
+      await json(await call("GET", R.space(CLIENTS))),
+    );
+    expect(clients.myRole).toBe("editor");
+    expect(clients.can).toEqual({ manageMappings: false });
+    // Personal spaces: Bob's own stays manager; Ada's stays invisible.
+    expect(
+      Strict.Space.parse(await json(await call("GET", R.space(bob)))).myRole,
+    ).toBe("manager");
+    expect((await call("GET", R.space(ada))).status).toBe(404);
+    expect((await call("GET", R.orgMappings)).status).toBe(404);
+  });
+
+  it("org mappings: DELETE, sync off, audit", async () => {
+    fresh({ hosted: true });
+    await call("PUT", R.orgMapping("gEng01"), { role: "viewer" });
+    expect((await call("DELETE", R.orgMapping("gEng01"))).status).toBe(204);
+    expect((await call("DELETE", R.orgMapping("gEng01"))).status).toBe(404);
+    const audit = PageSchema(AuditEventSchema).parse(
+      await json(await call("GET", R.audit)),
+    );
+    expect(audit.items.slice(0, 2)).toEqual([
+      expect.objectContaining({ action: "mapping.remove", spaceId: null }),
+      expect.objectContaining({ action: "mapping.set", spaceId: null }),
+    ]);
+    fresh({ hosted: { directory: "frozen" } });
+    const r = await call("PUT", R.orgMapping("gEng01"), { role: "viewer" });
+    expect((await errCode(r)).code).toBe("directory_sync_off");
+  });
+});
+
+describe("hosted contract: space People", () => {
+  const signIn = async (email: string) => {
+    await call("POST", AUTH.codeRequest, { email });
+    await call("POST", AUTH.codeVerify, { code: HOSTED_MOCK_CODE });
+  };
+  const ENG = "SpEngNpQrSt2uVwX";
+  const EXEC = "SpExcNpQrSt3uVwX";
+  const ada = fixtures.members[0]?.id as string;
+  const bob = fixtures.members[1]?.id as string;
+  const carol = "Cr7tNpQrSt8uVwXy";
+  const dan = "Dn8uPqRsTu9vWxYz";
+  const StrictMember = SpaceMemberSchema.extend({
+    groups: z.array(SpaceMemberGroupSchema.strict()),
+  }).strict();
+  const StrictPage = SpaceMembersPageSchema.extend({
+    items: z.array(StrictMember),
+  }).strict();
+  const list = async (space: string, qs = "") =>
+    StrictPage.parse(
+      await json(await call("GET", `${R.spaceMembers(space)}${qs}`)),
+    );
+  const forbidden = async (r: Response) => {
+    expect(r.status).toBe(403);
+    const e = await errCode(r);
+    expect(e.code).toBe("space_forbidden");
+    return SpaceForbiddenDetailsSchema.strict().parse(e.details).target;
+  };
+
+  it("schemas: query, page total, groups role/via, details, member_synced", () => {
+    expect(SpaceMembersQuerySchema.parse({})).toEqual({ limit: 50 });
+    expect(
+      SpaceMembersQuerySchema.parse({ q: " bo ", group: "gEng01", limit: "2" }),
+    ).toEqual({ q: "bo", group: "gEng01", limit: 2 });
+    expect(() => SpaceMembersQuerySchema.parse({ lastSeenAt: "x" })).toThrow();
+    expect(
+      SpaceMembersPageSchema.parse({ items: [], nextCursor: null, total: 0 }),
+    ).toEqual({ items: [], nextCursor: null, total: 0 });
+    expect(() =>
+      SpaceMemberGroupSchema.parse({
+        groupId: "g",
+        email: "g@x",
+        name: null,
+        role: "viewer",
+        via: "org",
+      }),
+    ).toThrow();
+    expect(SpaceForbiddenDetailsSchema.parse({ target: "mapping" })).toEqual({
+      target: "mapping",
+    });
+    expect(ERROR_CODES.at(-1)).toBe("member_synced");
+    expect(STATUS_FOR.member_synced).toBe(409);
+    expect(Object.keys(SpaceMemberSchema.shape).at(-1)).toBe("allMembers");
+    expect(Object.keys(SpaceMemberSchema.shape)).not.toContain("lastSeenAt");
+  });
+
+  it("members: groups role/via, allMembers, total, q and group filters", async () => {
+    fresh({ hosted: true });
+    // Dan is restricted: no allMembers.
+    await call("PUT", R.spaceMember(ENG, dan), { role: "editor" });
+    const all = await list(ENG);
+    expect(all.total).toBe(3);
+    const by = (id: string) => all.items.find((m) => m.userId === id);
+    expect(by(bob)).toMatchObject({
+      syncRole: "editor",
+      groups: [
+        {
+          groupId: "gEng01",
+          email: "eng@example.com",
+          role: "editor",
+          via: "space",
+        },
+      ],
+      allMembers: "viewer",
+    });
+    expect(by(ada)).toMatchObject({
+      manualRole: "manager",
+      allMembers: "viewer",
+    });
+    expect(by(dan)).toMatchObject({ cap: "restricted", allMembers: null });
+    // Paging keeps the filtered total.
+    const p1 = await list(ENG, "?limit=1");
+    expect(p1.items).toHaveLength(1);
+    expect(p1.total).toBe(3);
+    expect(p1.nextCursor).not.toBeNull();
+    // q: name or email prefix, case-insensitive.
+    expect((await list(ENG, "?q=BO")).items.map((m) => m.userId)).toEqual([
+      bob,
+    ]);
+    expect((await list(ENG, "?q=ada%40")).items.map((m) => m.userId)).toEqual([
+      ada,
+    ]);
+    // Any word of the name: "build" finds Bob Builder; mid-word doesn't.
+    expect((await list(ENG, "?q=build")).items.map((m) => m.userId)).toEqual([
+      bob,
+    ]);
+    expect((await list(ENG, "?q=uilder")).total).toBe(0);
+    const eng = await list(ENG, "?group=gEng01");
+    expect(eng.items.map((m) => m.userId)).toEqual([bob]);
+    expect(eng.total).toBe(1);
+    expect((await call("GET", `${R.spaceMembers(ENG)}?bogus=1`)).status).toBe(
+      400,
+    );
+    // An Every-space mapping shows as via "every".
+    await call("PUT", R.orgMapping("gEng01"), { role: "viewer" });
+    expect((await list(ENG, "?group=gEng01")).items[0]?.groups).toEqual([
+      expect.objectContaining({
+        groupId: "gEng01",
+        role: "editor",
+        via: "space",
+      }),
+      expect.objectContaining({
+        groupId: "gEng01",
+        role: "viewer",
+        via: "every",
+      }),
+    ]);
+  });
+
+  it("a space manager can't grant or change Manager on a member (target member); mappings say target mapping", async () => {
+    fresh({ hosted: true });
+    await call("PUT", R.spaceMember(ENG, bob), { role: "manager" });
+    await signIn("bob@example.com");
+    expect(
+      await forbidden(
+        await call("PUT", R.spaceMember(ENG, carol), { role: "manager" }),
+      ),
+    ).toBe("member");
+    // Ada is a manager by hand: demoting her is changing the Manager role.
+    expect(
+      await forbidden(
+        await call("PUT", R.spaceMember(ENG, ada), { role: "viewer" }),
+      ),
+    ).toBe("member");
+    expect(
+      StrictMember.parse(
+        await json(
+          await call("PUT", R.spaceMember(ENG, carol), { role: "editor" }),
+        ),
+      ),
+    ).toMatchObject({ userId: carol, manualRole: "editor" });
+    expect(
+      await forbidden(
+        await call("PUT", R.spaceMapping(ENG, "gSales03"), { role: "manager" }),
+      ),
+    ).toBe("mapping");
+  });
+
+  it("live sync: DELETE on a synced-only row is 409 member_synced", async () => {
+    fresh({ hosted: true });
+    const r = await call("DELETE", R.spaceMember(ENG, bob));
+    expect(r.status).toBe(409);
+    expect((await errCode(r)).code).toBe("member_synced");
+    expect((await list(ENG)).items.map((m) => m.userId)).toContain(bob);
+  });
+
+  it("frozen sync: raising a synced row is a manual grant (managers up to editor, admins any)", async () => {
+    fresh({ hosted: { directory: "frozen" } });
+    // Admin raises Bob's synced editor (Engineering) to manager.
+    expect(
+      StrictMember.parse(
+        await json(
+          await call("PUT", R.spaceMember(ENG, bob), { role: "manager" }),
+        ),
+      ),
+    ).toMatchObject({
+      role: "manager",
+      source: "manual",
+      manualRole: "manager",
+      syncRole: null,
+      groups: [],
+    });
+    // Bob, now a manager, works on Ada's synced viewer row in Exec.
+    await call("PUT", R.spaceMember(EXEC, bob), { role: "manager" });
+    await signIn("bob@example.com");
+    expect(
+      await forbidden(
+        await call("PUT", R.spaceMember(EXEC, ada), { role: "manager" }),
+      ),
+    ).toBe("member");
+    expect(
+      StrictMember.parse(
+        await json(
+          await call("PUT", R.spaceMember(EXEC, ada), { role: "editor" }),
+        ),
+      ),
+    ).toMatchObject({
+      role: "editor",
+      source: "manual",
+      manualRole: "editor",
+      syncRole: null,
+    });
+  });
+
+  it("frozen sync: DELETE removes a synced row; PUT may lower (manual override); audited", async () => {
+    fresh({ hosted: { directory: "frozen" } });
+    const low = StrictMember.parse(
+      await json(
+        await call("PUT", R.spaceMember(ENG, bob), { role: "viewer" }),
+      ),
+    );
+    expect(low).toMatchObject({
+      role: "viewer",
+      source: "manual",
+      manualRole: "viewer",
+      syncRole: null,
+      groups: [],
+    });
+    expect((await call("DELETE", R.spaceMember(EXEC, ada))).status).toBe(204);
+    expect((await list(EXEC)).items).toEqual([]);
+    const audit = PageSchema(AuditEventSchema).parse(
+      await json(await call("GET", R.audit)),
+    );
+    expect(audit.items.slice(0, 2)).toEqual([
+      expect.objectContaining({
+        action: "space.member.remove",
+        spaceId: EXEC,
+        detail: { syncFrozen: true },
+      }),
+      expect.objectContaining({
+        action: "space.member.role",
+        spaceId: ENG,
+        detail: { syncFrozen: true, role: "viewer" },
+      }),
+    ]);
   });
 });

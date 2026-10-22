@@ -8,6 +8,8 @@ export interface Env {
   ASSETS: Fetcher;
   /** Anonymous-write limiter (per IP); unbound in the test pool. */
   RL_ANON?: RateLimit;
+  /** Sign-in code limiter, keyed `${installKey}:${ip}`; unbound in the test pool. */
+  RL_AUTH?: RateLimit;
   /** Browser Run, for server-side thumbnails (services/thumbs.ts); optional. */
   BROWSER?: Fetcher;
   /** Optional Email Service send binding; invite/share emails are off without it. */
@@ -91,6 +93,12 @@ export interface Env {
   TURNSTILE_SITE_KEY?: string;
   /** Code emails per UTC day (1..10000, default 200). */
   CODE_EMAILS_PER_DAY?: string;
+  /** "1" turns the /__test/* hooks on (staging only; also needs the build flag and the key). */
+  TEST_HOOKS?: string;
+  /** The only email domain /__test/* acts on, compared exactly (lowercase). Unset: hooks off. */
+  TEST_DOMAIN?: string;
+  /** Invite and share emails per UTC day, instance-wide (1..100000, default 100); set per install by Platform. */
+  EMAIL_DAILY_CAP?: string;
   /** "1" on hosted installs (Me.instance.hosted). */
   HOSTED?: string;
   /** Comma list of FeatureFlag (@oa/shared parseFeatures). */
@@ -102,6 +110,8 @@ export interface Env {
   /** Ed25519 private key, PKCS#8 DER base64url (broker transport). */
   BROKER_SIGNING_KEY?: string;
   TURNSTILE_SECRET?: string;
+  /** Bearer key for /__test/* (32+ chars). */
+  TEST_HOOK_KEY?: string;
   SESSION_SECRET: string;
   CONTENT_SIGNING_KEY: string;
   ANALYTICS_TOKEN?: string;

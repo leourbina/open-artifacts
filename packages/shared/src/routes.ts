@@ -73,7 +73,7 @@ export const R = {
   oauthClients: "/api/v1/oauth-clients",
   /** DELETE -> 204 */
   oauthClient: (grantId: string) => `/api/v1/oauth-clients/${seg(grantId)}`,
-  /** GET -> Settings; PATCH SettingsPatch -> Settings */
+  /** GET -> Settings; PATCH SettingsPatch -> Settings (hosted: spaceManagerMappings, settings.manage, audited settings.space_manager_mappings) */
   settings: "/api/v1/settings",
   /**
    * GET -> Usage: today's (UTC) free-plan counts. Also `cpu_limit_hits`
@@ -152,9 +152,9 @@ export const R = {
    * the space's managers are notified.
    */
   spaceMemberSelf: (id: string) => `/api/v1/spaces/${seg(id)}/members/self`,
-  /** GET -> GroupMapping[] (org admin). */
+  /** GET -> GroupMapping[] (org admin, space manager; personal: 400 space_personal). Manager access pending server implementation (P3 T9/T14). */
   spaceMappings: (id: string) => `/api/v1/spaces/${seg(id)}/mappings`,
-  /** PUT GroupMappingPut -> GroupMapping; DELETE -> 204. 409 directory_sync_off when sync is off or frozen. Keyed by Google group id. */
+  /** PUT GroupMappingPut -> GroupMapping; DELETE -> 204. 409 directory_sync_off when sync is off or frozen. Keyed by Google group id. Org admin: any role; space manager: viewer|editor rows only (a manager role in the body or the existing row: 403 space_forbidden); manager PUT while Settings.spaceManagerMappings is off: 403 directory_mapping_off (DELETE always allowed). Manager access pending server implementation (P3 T9/T14). */
   spaceMapping: (id: string, groupId: string) =>
     `/api/v1/spaces/${seg(id)}/mappings/${seg(groupId)}`,
   /** GET -> RestrictedGroup[] (org admin). */
@@ -166,6 +166,11 @@ export const R = {
    */
   restrictedGroup: (groupId: string) =>
     `/api/v1/directory/restricted-groups/${seg(groupId)}`,
+  /** GET ?cursor&limit -> Page<GroupMapping> (org admin): "Every space" mappings, one row per group, never expanded into per-space rows. Pending server implementation (P3 T9/T14). */
+  orgMappings: "/api/v1/directory/org-mappings",
+  /** PUT GroupMappingPut -> GroupMapping (upsert); DELETE -> 204 (org admin). 409 directory_sync_off when sync is off or frozen. Keyed by Google group id. Never applies to personal spaces. */
+  orgMapping: (groupId: string) =>
+    `/api/v1/directory/org-mappings/${seg(groupId)}`,
   /** GET -> SyncStatus (org owner, admin); DELETE -> 204 disconnect (org owner; memberships freeze). */
   directory: "/api/v1/directory",
   /** GET DirectoryGroupsQuery -> Page<DirectoryGroup> (org admin; group picker). */

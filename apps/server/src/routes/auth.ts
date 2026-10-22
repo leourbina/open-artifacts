@@ -1,23 +1,36 @@
-import { AUTH, MemberSchema, PAGES, RoleSchema } from "@oa/shared";
+import { normalizeEmail } from "@oa/auth-core";
+import {
+  AUTH,
+  MemberSchema,
+  PAGES,
+  RoleSchema,
+  SIGN_IN_PAGE,
+  type SignInError,
+} from "@oa/shared";
+import { logAuth, oidcStage } from "../auth/audit.js";
 import { authConfig } from "../auth/config.js";
 import {
   buildAuthorizeRedirect,
   clearOidcCookie,
   handleCallback,
   logOidcFail,
+  OidcRedeemError,
   OidcStateError,
   pickStateCookie,
   safeNext,
 } from "../auth/oidc.js";
 import { accessProvider } from "../auth/providers/access.js";
+import { googleProvider } from "../auth/providers/google.js";
 import {
   clearSessionCookie,
   sessionCookie,
   signSession,
 } from "../auth/session.js";
-import { normEmail } from "../db/email.js";
+import { signInMode } from "../auth/sign-in.js";
 import { ApiError, toErrorResponse } from "../http/errors.js";
 import { FAVICON_TAGS } from "../http/head.js";
+import { onGoogleSignIn } from "../services/directory.js";
+import { admit } from "../services/identity.js";
 import {
   getUserWithEpoch,
   upsertOnLogin,
@@ -65,11 +78,32 @@ ${FAVICON_TAGS}
 
 const EmailSchema = MemberSchema.shape.email;
 
+/** Every refused redirect sign-in lands here (#359): the SPA shows the reason. */
+const toSignIn = (error: SignInError, next: string, cookies: string[]) =>
+  redirect(
+    `${SIGN_IN_PAGE}?error=${error}&next=${encodeURIComponent(next)}`,
+    cookies,
+  );
+
+/** The logged stage of a callback failure: an OidcStage enum value only. */
+const catchStage = (e: unknown) =>
+  e instanceof OidcStateError || e instanceof OidcRedeemError
+    ? oidcStage(e.stage)
+    : "failed";
+
 export function mountAuth(app: AppType): void {
   app.get(AUTH.login, async (c) => {
-    // Access start exists only while Access sign-in is enabled (the callback
-    // already refuses otherwise).
-    if (!authConfig(c.env).providers.has("access"))
+    const cfg = authConfig(c.env);
+    // Direct sign-in: the SPA chooser; its Access button comes back with via=access.
+    if (
+      signInMode(cfg) === "direct" &&
+      !(cfg.providers.has("access") && c.req.query("via") === "access")
+    )
+      return redirect(
+        `${SIGN_IN_PAGE}?next=${encodeURIComponent(safeNext(c.env, c.req.query("next")))}`,
+        [],
+      );
+    if (!cfg.providers.has("access"))
       throw new ApiError("not_found", "Not found");
     const { location, stateCookie, evict } = await buildAuthorizeRedirect(
       c.env,
@@ -104,6 +138,7 @@ export function mountAuth(app: AppType): void {
       const user = await upsertOnLogin(c.env, email, name);
       if (!user) {
         logOidcFail("no_access");
+        logAuth({ provider: "access", outcome: "refused", stage: "no_access" });
         return redirect(PAGES.noAccess, clear);
       }
       // The epoch must come from the row: a guest reactivated after #368,
@@ -112,6 +147,7 @@ export function mountAuth(app: AppType): void {
       const row = await getUserWithEpoch(c.env, user.id);
       if (!row) {
         logOidcFail("no_access");
+        logAuth({ provider: "access", outcome: "refused", stage: "no_access" });
         return redirect(PAGES.noAccess, clear);
       }
       const sess = sessionCookie(
@@ -121,8 +157,14 @@ export function mountAuth(app: AppType): void {
         }),
         c.env,
       );
+      logAuth({ provider: "access", outcome: "ok", uid: user.id });
       return redirect(next, [...clear, sess]);
     } catch (e) {
+      logAuth({
+        provider: "access",
+        outcome: e instanceof ApiError ? "refused" : "error",
+        stage: catchStage(e),
+      });
       if (e instanceof OidcStateError) {
         if (e.retry) return retryPage(e.next, clear);
         return redirect(
@@ -134,6 +176,94 @@ export function mountAuth(app: AppType): void {
       for (const k of clear) res.headers.append("set-cookie", k);
       res.headers.set("cache-control", "no-store");
       return res;
+    }
+  });
+
+  app.get(AUTH.loginGoogle, async (c) => {
+    if (!authConfig(c.env).google) throw new ApiError("not_found", "Not found");
+    const { location, stateCookie, evict } = await buildAuthorizeRedirect(
+      c.env,
+      googleProvider,
+      c.req.query("next") ?? "/",
+      {
+        retry: c.req.query("retry") === "1",
+        cookieHeader: c.req.header("cookie"),
+      },
+    );
+    return redirect(location, [...evict, stateCookie]);
+  });
+
+  app.get(AUTH.callbackGoogle, async (c) => {
+    // Single-use state cookie, as for Access.
+    const picked = await pickStateCookie(
+      c.env,
+      c.req.raw,
+      c.req.query("state") ?? "",
+    );
+    const clear = picked ? [clearOidcCookie(c.env, picked.name)] : [];
+    let next = "/";
+    try {
+      const id = await handleCallback(c.env, googleProvider, c.req.raw);
+      next = id.next;
+      const r = await admit(c.env, authConfig(c.env), id);
+      if (!r.ok) {
+        logOidcFail(r.reason);
+        logAuth({ provider: "google", outcome: "refused", stage: r.reason });
+        return toSignIn(r.reason, id.next, clear);
+      }
+      try {
+        await onGoogleSignIn(c.env, r.user);
+      } catch {
+        logAuth({ evt: "directory_sync_failed" });
+      }
+      const row = await getUserWithEpoch(c.env, r.user.id);
+      if (!row) {
+        logAuth({ provider: "google", outcome: "error", stage: "no_user" });
+        return toSignIn("failed", id.next, clear);
+      }
+      const sess = sessionCookie(
+        await signSession(c.env, r.user.id, Date.now(), {
+          provider: "google",
+          tenant: id.tenant ?? undefined,
+          epoch: row.sessionEpoch,
+        }),
+        c.env,
+      );
+      logAuth({
+        provider: "google",
+        outcome: "ok",
+        uid: r.user.id,
+        tenant: id.tenant ?? undefined,
+      });
+      return redirect(id.next, [...clear, sess]);
+    } catch (e) {
+      logAuth({
+        provider: "google",
+        outcome: e instanceof ApiError ? "refused" : "error",
+        stage: catchStage(e),
+      });
+      if (e instanceof OidcStateError) {
+        if (e.retry) return toSignIn("expired", e.next, clear);
+        return redirect(
+          `${AUTH.loginGoogle}?next=${encodeURIComponent(e.next)}&retry=1`,
+          clear,
+        );
+      }
+      if (e instanceof OidcRedeemError)
+        return toSignIn(
+          e.stage === "tenant" ? "tenant" : "failed",
+          e.next,
+          clear,
+        );
+      if (e instanceof ApiError) {
+        const res = toErrorResponse(e);
+        for (const k of clear) res.headers.append("set-cookie", k);
+        res.headers.set("cache-control", "no-store");
+        return res;
+      }
+      // Anything unexpected (D1, signing): the sign-in page, never a 500.
+      logOidcFail("internal");
+      return toSignIn("failed", next, clear);
     }
   });
 
@@ -149,7 +279,7 @@ export function mountAuth(app: AppType): void {
       throw new ApiError("not_found", "Not found");
     const email = EmailSchema.safeParse((c.req.query("email") ?? "").trim());
     const role = RoleSchema.safeParse(c.req.query("role") ?? "member");
-    if (!email.success || normEmail(email.data) === null)
+    if (!email.success || normalizeEmail(email.data) === null)
       throw new ApiError("bad_request", "Invalid email");
     if (!role.success) throw new ApiError("bad_request", "Invalid role");
     const user = await upsertWithRole(c.env, email.data, role.data);

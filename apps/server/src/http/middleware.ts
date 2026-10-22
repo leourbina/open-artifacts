@@ -1,13 +1,18 @@
 import { inDomains } from "@oa/auth-core";
 import {
   ARTIFACT_SANDBOX_ATTR,
+  AUTH,
   type AuthMethod,
   type Member,
+  R,
+  SIGN_IN_PAGE,
 } from "@oa/shared";
 import type { Context, MiddlewareHandler } from "hono";
 import { getCookie } from "hono/cookie";
+import { callerOf, capOfCaller, withCap } from "../auth/authz.js";
 import { authConfig } from "../auth/config.js";
 import { verifyPat } from "../auth/pat.js";
+import { isGuestRole } from "../auth/policy.js";
 import {
   readSession,
   type Session,
@@ -45,6 +50,9 @@ export const COOP_EXEMPT: ReadonlySet<string> = new Set([
   "/auth/login",
   "/auth/callback",
   "/auth/dev-login",
+  SIGN_IN_PAGE,
+  AUTH.loginGoogle,
+  AUTH.callbackGoogle,
 ]);
 
 /**
@@ -52,7 +60,10 @@ export const COOP_EXEMPT: ReadonlySet<string> = new Set([
  * land on (or an error page) must not send it on as a Referer.
  * Exact pathnames only.
  */
-export const NO_REFERRER: ReadonlySet<string> = new Set(["/auth/callback"]);
+export const NO_REFERRER: ReadonlySet<string> = new Set([
+  AUTH.callback,
+  AUTH.callbackGoogle,
+]);
 
 /**
  * `frameAncestors` (a pre-validated source list from frameOpts) replaces
@@ -162,6 +173,7 @@ export function sessionStillValid(
  * session must pass sessionStillValid.
  * `X-OA-Embed: 1` or `?embed=1` (isEmbedRequest) forces anonymous.
  */
+/** A guest while the guest cap is on, however they authenticated (session or PAT). */
 export const session = (): MiddlewareHandler<AppEnv> => async (c, next) => {
   await resolveSession(c);
   await next();
@@ -198,7 +210,16 @@ export async function resolveSession(c: Context<AppEnv>): Promise<void> {
     const s = await readSession(c.env, getCookie(c, sessionCookieName(c.env)));
     const row = s ? await getUserWithEpoch(c.env, s.uid) : null;
     if (s && row && sessionStillValid(c.env, s, row.sessionEpoch)) {
-      c.set("user", row.user);
+      // The cap travels on the member itself (authz CAP, set once by getUser
+      // from authConfig.guestsReadOnly and P3's restriction); a code session
+      // outside the verified domains is capped on top, whatever the env says.
+      // An existing cap (P3's "restricted") is kept; no cap becomes "guest".
+      if (s.p === "code" && s.t === undefined)
+        c.set(
+          "user",
+          withCap(row.user, capOfCaller(callerOf(row.user)) ?? "guest"),
+        );
+      else c.set("user", row.user);
       c.set("authMethod", s.p);
       c.set("sessionExp", s.exp);
     }
@@ -206,6 +227,43 @@ export async function resolveSession(c: Context<AppEnv>): Promise<void> {
 }
 
 export const CSRF_HEADER = "X-OA-Request";
+
+/**
+ * The non-GET routes a capped caller keeps, matched exactly (method and whole
+ * path, never a prefix): their own display name, a data query (a read sent as
+ * POST), and revoking their own tokens and agent grants (both routes check
+ * ownership).
+ */
+const CAPPED_ALLOWED: readonly (readonly [string, RegExp])[] = [
+  ["PATCH", /^\/api\/v1\/me$/],
+  ["POST", /^\/api\/v1\/artifacts\/[^/]+\/data\/[^/]+\/query$/],
+  ["DELETE", /^\/api\/v1\/tokens\/[^/]+$/],
+  ["DELETE", /^\/api\/v1\/oauth-clients\/[^/]+$/],
+];
+
+/**
+ * A capped caller (CapReason on the member: a guest while the guest cap is on,
+ * any code session outside the verified domains, a P3 restricted member) is
+ * read-only on the whole API, as defence in depth behind P3's can():
+ * every mutation is refused here, before any route, so no write path can be
+ * missed (artifacts, versions, shares, data, storage, uploads, tokens). Only
+ * CAPPED_ALLOWED passes. Creating an artifact is 403 space_forbidden (#359);
+ * everything else 404 (never 403).
+ */
+export const readOnlyCap = (): MiddlewareHandler<AppEnv> => async (c, next) => {
+  const m = c.req.method;
+  if (m !== "GET" && m !== "HEAD" && capOfCaller(callerOf(c.var.user))) {
+    const path = c.req.path;
+    if (CAPPED_ALLOWED.some(([am, re]) => am === m && re.test(path)))
+      return next();
+    if (m === "POST" && path === R.artifacts)
+      return toErrorResponse(
+        new ApiError("space_forbidden", "Guests can't publish here"),
+      );
+    return toErrorResponse(new ApiError("not_found", "Not found"));
+  }
+  await next();
+};
 
 /**
  * Mutating requests (anything but GET/HEAD) that authenticate by session cookie

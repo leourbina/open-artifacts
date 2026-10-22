@@ -1,15 +1,14 @@
-import {
-  type Member,
-  type MemberInvite,
-  type MemberInviteResult,
-  type MemberPatch,
-  newId,
-  type Settings,
-  type SettingsPatch,
+import { normalizeEmail } from "@oa/auth-core";
+import type {
+  Member,
+  MemberInvite,
+  MemberInviteResult,
+  MemberPatch,
+  Settings,
+  SettingsPatch,
 } from "@oa/shared";
 import { and, asc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { getDb } from "../db/client.js";
-import { normEmail } from "../db/email.js";
 import {
   artifacts,
   identities,
@@ -29,7 +28,7 @@ import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
 import { revokeAllGrants } from "../mcp/oauth-api.js";
 import { closeRuntimeSockets, MAX_CLOSE } from "../runtime/revoke.js";
-import { toMember } from "./users.js";
+import { insertUser, toMember } from "./users.js";
 
 export async function listMembers(env: Env): Promise<Member[]> {
   const rows = await getDb(env)
@@ -48,17 +47,14 @@ export async function inviteMember(
   inviter: Member,
   input: MemberInvite,
 ): Promise<MemberInviteResult> {
-  const email = normEmail(input.email);
+  const email = normalizeEmail(input.email);
   if (!email) throw new ApiError("bad_request", "Invalid email");
-  const [row] = await getDb(env)
-    .insert(users)
-    .values({
-      id: newId(),
-      email,
-      name: "",
-      role: input.role,
-      createdAt: Date.now(),
-    })
+  const [row] = await insertUser(env, {
+    email,
+    name: "",
+    role: input.role,
+    createdAt: Date.now(),
+  })
     .onConflictDoNothing({ target: users.email })
     .returning();
   if (!row) throw new ApiError("conflict", "Already a member");
@@ -77,7 +73,7 @@ export async function inviteMember(
           recipient: email,
           appHost: env.APP_HOST,
         }),
-      { kind: "invite", replyTo: normEmail(inviter.email) ?? undefined },
+      { kind: "invite", replyTo: normalizeEmail(inviter.email) ?? undefined },
     );
   }
   return { ...toMember(row), emailed };

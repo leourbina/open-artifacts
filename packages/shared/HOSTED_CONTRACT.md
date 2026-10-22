@@ -15,15 +15,17 @@ hosted off.
   `PAGES.noAccess`.
 - **No access is 404**, never 403. The exceptions are explicit codes:
   `space_forbidden` (403) on publish or move into a space the caller can't
-  publish to, `public_links_off`, `turnstile_failed`, `csrf`, `capability_denied`.
+  publish to, or on a member or mapping change the caller's role can't make
+  (details `SpaceForbiddenDetails { target: member | mapping }`), `public_links_off`, `turnstile_failed`, `csrf`, `capability_denied`.
 - **Groups are keyed by `groupId`** (Google's stable group id, never the email)
   in every route and shape (`GroupRef { groupId, email, name }`).
 - **Owner checks are exact.** `manager` has the owner's rank but never passes
   an owner check (server `meetsLevel`); single transfer requires
   `level === "owner"`.
 - **Lists are cursor pages** (`Page<T>` = `{ items, nextCursor }`) when unbounded:
-  spaces, space members, directory groups, audit. Bounded lists are arrays:
-  members, mappings, restricted groups.
+  spaces, space members (`SpaceMembersPage` = `Page<SpaceMember>` plus
+  `total`), directory groups, audit. Bounded lists are arrays: org members,
+  mappings, restricted groups.
 - **Identity linking** is `identities(provider = "google", subject)`; the
   Google sign-in `sub` equals `DirUser.id`. No shape carries `users.directory_id`.
 - **`instance.hosted` exists once**, on `Me.instance`.
@@ -83,6 +85,9 @@ every flag that is on.
 | `Member` | `status?: MemberStatus` (absent = active), `identities?: ("google")[]`, `restriction?: Restriction \| null` |
 | `Me.instance` | `hosted?`, `tier?`, `signIn?`, `features?: FeatureFlag[]`, `directory?: InstanceDirectory` |
 | `Me` | `auth?: MeAuth`, `personalSpaceId?` (= user.id), `spaces?: MySpace[]` (shared, by name, ≤ 200) |
+| `Settings` (so `SettingsPatch`) | `spaceManagerMappings?: boolean` (hosted; default true, absent self-hosted). PATCH needs `settings.manage` (org owner, admin); audited `settings.space_manager_mappings` |
+| `Space` | `can?: SpaceCan` (`{ manageMappings }`) |
+| `AuditActionSchema` | `settings.space_manager_mappings` |
 | `ERROR_CODES` / `STATUS_FOR` | the codes below |
 
 ## Sign-in (`hosted/auth.ts`, P2)
@@ -119,12 +124,14 @@ every flag that is on.
 | `GET R.space(id)` | → `Space` | member, org admin |
 | `PATCH R.space(id)` | `SpacePatch` → `Space` | `name`, `publicLinks`: space manager or org admin (`publicLinks` audited `space.public_links`; off blocks new public links only - existing links and sockets keep working, nothing is rewritten). `allMembersRole`: org admin |
 | `DELETE R.space(id)` | 204; 409 `space_not_empty` | org owner, admin |
-| `GET R.spaceMembers(id)` | → `Page<SpaceMember>` | member, org admin |
-| `PUT R.spaceMember(id, userId)` | `SpaceMemberPut` → `SpaceMember` | space manager, org admin |
-| `DELETE R.spaceMember(id, userId)` | 204 (manual row only) | space manager, org admin |
+| `GET R.spaceMembers(id)` | `SpaceMembersQuery { q?, group?, cursor?, limit? }` → `SpaceMembersPage` (`Page<SpaceMember>` + `total`, the count matching `q`/`group`) | member, org admin. `q`: case-insensitive prefix of the email or of any word of the name; `group`: a groupId (either `via`) |
+| `PUT R.spaceMember(id, userId)` | `SpaceMemberPut` → `SpaceMember` | space manager, org admin. Only an org admin grants Manager or changes a member whose `manualRole` is manager: else 403 `space_forbidden` `{ target: "member" }`. **Sync frozen**, on a row with a `syncRole`: any role, raise or lower, is a manual grant under the rules above (admins any role; managers up to editor) and becomes a manual override (`source: "manual"`, `syncRole: null`, `groups: []`) that the next reconcile after unfreezing replaces. Audited `space.member.add` / `space.member.role` (frozen override: detail `{ syncFrozen: true, role }`) |
+| `DELETE R.spaceMember(id, userId)` | 204 | space manager, org admin. Removes the manual row. A synced-only row while sync is live: 409 `member_synced`. **Sync frozen**: also removes a synced row (removing access is always allowed). Audited `space.member.remove` (frozen: detail `{ syncFrozen: true }`) |
 | `POST R.spaceMemberSelf(id)` `/spaces/:id/members/self` | `SpaceMemberPut` → 201 `SpaceMember` | org admin adds themselves; shared spaces only (400 `space_personal`); audited `space.admin_self_add`; managers notified |
-| `GET R.spaceMappings(id)` | → `GroupMapping[]` | org admin |
-| `PUT/DELETE R.spaceMapping(id, groupId)` | `GroupMappingPut` → `GroupMapping` / 204; 409 `directory_sync_off` when sync is off or frozen | org admin |
+| `GET R.spaceMappings(id)` | → `GroupMapping[]` (per-space rows only); personal: 400 `space_personal` | org admin; space manager (any setting). **Manager access pending server implementation (P3 T9/T14)** |
+| `PUT/DELETE R.spaceMapping(id, groupId)` | `GroupMappingPut` → `GroupMapping` / 204; 409 `directory_sync_off` when sync is off or frozen | org admin (any role); space manager for rows that are and stay `viewer \| editor` (`SPACE_MANAGER_MAPPING_ROLES`). Order: personal 400 `space_personal`; no role 404; manager PUT while `spaceManagerMappings` is off 403 `directory_mapping_off` (DELETE always allowed: removing access); a `manager` role (PUT body, or the existing row on PUT or DELETE) 403 `space_forbidden` `{ target: "mapping" }`; sync off 409. **Manager access pending server implementation (P3 T9/T14)** |
+| `GET R.orgMappings` `/directory/org-mappings` | `?cursor&limit` → `Page<GroupMapping>` | org admin. **Pending server implementation (P3 T9/T14)** |
+| `PUT/DELETE R.orgMapping(groupId)` | `GroupMappingPut` → `GroupMapping` (upsert) / 204; 409 `directory_sync_off` when off or frozen | org admin; audited `mapping.set` / `mapping.remove` with `spaceId: null`. **Pending server implementation (P3 T9/T14)** |
 | `GET R.restrictedGroups` | → `RestrictedGroup[]` | org admin |
 | `PUT R.restrictedGroup(groupId)` | (no body) → `RestrictedGroup`; 409 `directory_sync_off` when off or frozen | org admin; audited `restricted.set` |
 | `DELETE R.restrictedGroup(groupId)` | 204, in any mode (lifts a frozen restriction) | org admin; audited `restricted.remove` |
@@ -132,14 +139,33 @@ every flag that is on.
 
 Personal spaces are never created, patched, deleted or given members here: 400 `space_personal`.
 
+**"Every space" mappings** (`GroupMapping` rows under `R.orgMappings`): one row per group, applied to every
+shared space (including ones created later) and NEVER to a personal space. They
+are never expanded into per-space rows: a member's effective role in a shared
+space is the read-time max of the space's own rows (manual, sync,
+`allMembersRole`) and the org mappings of their groups, surfaced as
+`SpaceMember.syncRole` / `groups` and `Space.myRole`. `R.spaceMappings` lists
+only per-space rows.
+
 | Schema | Meaning |
 |---|---|
 | `SpaceSchema` | `SpaceRef + { owner, allMembersRole, myRole, memberCount, artifactCount, createdAt }` (`outsideSharing` dropped until M4) |
 | `SpacesQuerySchema` | `{ kind?, cursor?, limit? }` |
 | `SpaceCreateSchema` / `SpacePatchSchema` | `{ name, allMembersRole, publicLinks }` (patch: partial); `SPACE_MANAGER_FIELDS` = name, publicLinks |
-| `SpaceMemberSchema` | userId-keyed: `{ userId, user, status, role, source: manual \| sync, manualRole, syncRole, groups: GroupRef[], cap }` |
+| `SpaceMemberSchema` | userId-keyed: `{ userId, user, status, role, source: manual \| sync, manualRole, syncRole, groups: SpaceMemberGroup[], cap, allMembers }`. `allMembers`: the space's `allMembersRole` when it applies to this person, null for guests and capped users (or when none is set) |
+| `SpaceMemberGroupSchema` | `GroupRef + { role, via: space \| every }`: one entry per mapping granting `syncRole` (`every` = an Every-space org mapping); a group mapped both ways appears twice |
+| `SpaceMembersQuerySchema` / `SpaceMembersPageSchema` | `{ q?, group?, cursor?, limit? }` (strict) / `Page<SpaceMember> + { total }` |
+| `SpaceForbiddenDetailsSchema` | `{ target: member \| mapping }` on `space_forbidden` from `R.spaceMember` PUT and `R.spaceMapping` PUT/DELETE (publish/move carry none) |
+
+**Per-row reason line** (UI): built from `manualRole`, `groups[].role`/`via` and
+`allMembers`, strongest first, e.g. "Manager by hand, Editor via eng@",
+"Viewer via All members"; via `every`: "Editor via eng@ (every space)". A group
+mapped both per-space and every space shows only its stronger entry in the
+line, never twice. A non-null `cap` still limits access to viewer.
 | `SpaceMemberPutSchema` | `{ role }` |
 | `GroupMappingSchema` / `GroupMappingPutSchema` | `GroupRef + { role, memberCount, lastSyncedAt }` / `{ role }` |
+| `SpaceCanSchema` | `{ manageMappings }`: may add or change mappings. True for org admins, and for the space's managers while `spaceManagerMappings` is on; false on personal spaces. Managers can always list and remove `viewer`/`editor` rows |
+| `SPACE_MANAGER_MAPPING_ROLES` | `viewer`, `editor`: the roles a space manager may map |
 | `RestrictedGroupSchema` | `GroupRef + { memberCount, createdAt }`. Restricted members (a restricted group or the manual flag) are viewer everywhere: no `allMembersRole`, no create (personal space included), no data writes, on REST, MCP and the data API |
 
 ## Artifacts, move and transfer (`hosted/artifacts.ts`, P3)
@@ -191,7 +217,7 @@ These are the names P2 and P3 use; the contract wins. There is no
 
 | Code | Status | Meaning |
 |---|---|---|
-| `space_forbidden` | 403 | publish or move into a space you can't publish to; any create by a capped caller |
+| `space_forbidden` | 403 | publish or move into a space you can't publish to; any create by a capped caller; a member or mapping change your role can't make (details `{ target: member \| mapping }`). UI copy (space managers only; admins are never refused this): `member` "Only an admin can make someone a manager."; `mapping` "Only an admin can make a group a manager." |
 | `space_personal` | 400 | a personal space as a move/transfer target or a spaces-route target |
 | `space_not_empty` | 409 | delete a space that still holds artifacts (trash counts) |
 | `public_links_off` | 403 | make an artifact public in a space whose publicLinks is off |
@@ -201,8 +227,11 @@ These are the names P2 and P3 use; the contract wins. There is no
 | `directory_sync_off` | 409 | mapping or restricted-group change while sync is off or frozen (also Sync now) |
 | `turnstile_required` | 400 | code request with no Turnstile token while Turnstile is configured |
 | `turnstile_failed` | 403 | Turnstile token rejected |
+| `code_unavailable` | 503 | code sign-in can't run: `SESSION_SECRET` is under 32 characters, so the code keys can't be derived, or the `RL_AUTH` rate-limit binding is missing |
 | `reauth_required` | 401 | break-glass routes need a fresh Google sign-in |
 | `restrict_admin` | 400 | `PUT R.memberRestricted(id)` on an org owner or admin |
+| `directory_mapping_off` | 403 | a space manager (not an org admin) adds or changes a space mapping (PUT) while `Settings.spaceManagerMappings` is off; list and DELETE stay allowed |
+| `member_synced` | 409 | `DELETE R.spaceMember` on a synced-only row while sync is live. UI copy: "This person comes from a Google group. Remove them from the group in Google, or change their role here." |
 
 ## Test hooks (`hosted/test-hooks.ts`, types only)
 
@@ -226,7 +255,9 @@ personal space per member, Engineering (caller manager, allMembersRole viewer,
 "Contractors", member Dan: `cap: "restricted"`, no allMembersRole); a suspended
 member Carol with `{ live: 2, deleted: 1 }` to transfer; a held sweep
 (`gSales03`); `can` from `artifactCan` on every request; `public_links_off`
-on PATCH and publish. Code flow: `HOSTED_MOCK_CODE` (`24681357`) verifies the last
+on PATCH and publish; `Settings.spaceManagerMappings` (default on, PATCH
+admin-only and audited); space managers map `viewer`/`editor` only (never over a manager row); org
+mappings (none seeded) merge into shared spaces at read time, never personal. Code flow: `HOSTED_MOCK_CODE` (`24681357`) verifies the last
 requested address; 5 wrong tries expire it; 6+ requests per address 429.
 Verify signs the mock in as that address (member for `MOCK_DOMAIN`, else a
 read-only guest).

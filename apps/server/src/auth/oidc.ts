@@ -6,6 +6,7 @@ import {
   hmacSign,
   hmacVerify,
 } from "../util/crypto.js";
+import { logAuth } from "./audit.js";
 import type { ProviderId } from "./config.js";
 import { cookieKeys, LEGACY_KEY_UNTIL } from "./keys.js";
 import type { OidcProvider, VerifiedIdentity } from "./providers/types.js";
@@ -231,7 +232,7 @@ export function logOidcFail(
   stage: string,
   extra: Record<string, string | undefined> = {},
 ): void {
-  console.warn(JSON.stringify({ evt: "oidc_fail", stage, ...extra }));
+  logAuth({ ...extra, evt: "oidc_fail", stage });
 }
 
 /** State-cookie failure: the route redirects to a retry login (or the static page). */
@@ -239,7 +240,30 @@ export class OidcStateError extends ApiError {
   constructor(
     public next: string,
     public retry: boolean,
+    /** The logged state stage ("no_state_cookie", "state_expired", …). */
+    public stage: string = "state",
   ) {
+    super("unauthorized", "Login failed");
+  }
+}
+
+/**
+ * A refusal after the state cookie checked out: the route knows where the
+ * user was going (`next`) and can send them back to the sign-in page.
+ */
+export class OidcRedeemError extends ApiError {
+  constructor(
+    public next: string,
+    /** The logged failure stage ("tenant", "jwt_verify", …), when known. */
+    public stage: string | null,
+  ) {
+    super("unauthorized", "Login failed");
+  }
+}
+
+/** ApiError("unauthorized") that remembers its (already logged) stage. */
+class OidcFailure extends ApiError {
+  constructor(public stage: string) {
     super("unauthorized", "Login failed");
   }
 }
@@ -249,7 +273,7 @@ export const fail = (
   extra?: Record<string, string | undefined>,
 ): never => {
   logOidcFail(stage, extra);
-  throw new ApiError("unauthorized", "Login failed");
+  throw new OidcFailure(stage);
 };
 
 /** The cookie for this attempt (by state), else null. No legacy fallback. */
@@ -307,6 +331,29 @@ async function readOidcState(
   }
 }
 
+/** KV prefix for consumed OIDC states (the HMAC of the nonce, never the nonce). */
+const USED_STATE = "oidc_used:";
+/** KV's minimum expirationTtl. */
+const KV_MIN_TTL_S = 60;
+
+/**
+ * Single use server-side: the browser clears the state cookie, but a captured
+ * cookie plus a fresh code must not sign in again. Marks this state consumed
+ * in OAUTH_KV until it expires; a second use fails (stage state_replay).
+ * Best effort against two concurrent uses (KV has no compare-and-set); the
+ * IdP's single-use code and the nonce still bind each sign-in.
+ */
+async function consumeState(
+  env: Env,
+  key: string,
+  st: OidcState,
+): Promise<void> {
+  const id = USED_STATE + (await hmacSign(key, `used:${st.nonce}`));
+  if ((await env.OAUTH_KV.get(id)) !== null) fail("state_replay");
+  const ttl = Math.max(KV_MIN_TTL_S, Math.ceil((st.exp - Date.now()) / 1000));
+  await env.OAUTH_KV.put(id, "1", { expirationTtl: ttl });
+}
+
 /** Constant-time string equality via HMAC verify. */
 export async function safeEqual(secret: string, a: string, b: string) {
   return hmacVerify(secret, a, await hmacSign(secret, b));
@@ -331,6 +378,7 @@ export async function handleCallback(
     throw new OidcStateError(
       safeNext(env, from?.next ?? "/"),
       from?.retry === true || state.startsWith(RETRY_MARK),
+      stage,
     );
   };
   const picked = await pickStateCookie(env, req, state);
@@ -344,13 +392,25 @@ export async function handleCallback(
     return failState("state_mismatch");
   // Mix-up: a state minted for one provider is never redeemed by another.
   if ((st.p ?? "access") !== provider.id) return failState("state_mismatch");
-  if (q.has("error")) return fail("idp_error", { error: tag(q.get("error")) });
-  const code = q.get("code");
-  if (!code) return fail("no_code");
-  const id = await provider.redeem(env, {
-    code,
-    verifier: st.verifier,
-    nonce: st.nonce,
-  });
-  return { ...id, next: safeNext(env, st.next) };
+  const next = safeNext(env, st.next);
+  try {
+    await consumeState(env, keys.key, st);
+    if (q.has("error"))
+      return fail("idp_error", { error: tag(q.get("error")) });
+    const code = q.get("code");
+    if (!code) return fail("no_code");
+    const id = await provider.redeem(env, {
+      code,
+      verifier: st.verifier,
+      nonce: st.nonce,
+    });
+    return { ...id, next };
+  } catch (e) {
+    if (e instanceof ApiError)
+      throw new OidcRedeemError(
+        next,
+        e instanceof OidcFailure ? e.stage : null,
+      );
+    throw e;
+  }
 }
