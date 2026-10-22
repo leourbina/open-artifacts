@@ -2,8 +2,10 @@ import { env } from "cloudflare:workers";
 import type { Member } from "@oa/shared";
 import { describe, expect, it } from "vitest";
 import { authConfig } from "../src/auth/config.js";
+import { createPat } from "../src/auth/pat.js";
 import type { VerifiedIdentity } from "../src/auth/providers/types.js";
 import type { Env } from "../src/env.js";
+import { oauthApi } from "../src/mcp/oauth-api.js";
 import {
   admit,
   codeEligibility,
@@ -122,6 +124,31 @@ describe("admit (Google)", () => {
     const r = await admit(env, cfg(), g({ subject: sub, email: taken }));
     expect(r.ok).toBe(true);
     expect((await rowOf(uid)).email).toBe(email);
+  });
+
+  it("email drift never moves a user onto OWNER_EMAIL", async () => {
+    const email = uniq("bob");
+    const sub = `drift3-${email}`;
+    const uid = await seedUser(email, "member", { googleSub: sub });
+    const boss = uniq("boss");
+    const e = direct({ OWNER_EMAIL: boss });
+    const r = await admit(e, authConfig(e), g({ subject: sub, email: boss }));
+    expect(r).toMatchObject({ ok: true, user: { role: "member" } });
+    expect(await rowOf(uid)).toMatchObject({ email, role: "member" });
+  });
+
+  it("OWNER_EMAIL is not promoted to owner while an owner row exists", async () => {
+    await seedUser(uniq("owner"), "owner");
+    const boss = uniq("boss");
+    const uid = await seedUser(boss, "member", { googleSub: `B-${boss}` });
+    const e = direct({ OWNER_EMAIL: boss });
+    const r = await admit(
+      e,
+      authConfig(e),
+      g({ subject: `B-${boss}`, email: boss }),
+    );
+    expect(r).toMatchObject({ ok: true, user: { role: "member" } });
+    expect((await rowOf(uid)).role).toBe("member");
   });
 
   it("a guest row is promoted to member by hd (alias email domain)", async () => {
@@ -262,24 +289,81 @@ describe("codeEligibility", () => {
 });
 
 describe("resetIdentity", () => {
-  it("removes the Google link and bumps the epoch", async () => {
+  const pats = (uid: string) =>
+    count("tokens where user_id = ? and revoked_at is null", uid);
+  const grants = async (uid: string) =>
+    (await oauthApi(env).listUserGrants(uid)).items.length;
+  const grant = async (userId: string) => {
+    const o = oauthApi(env);
+    const c = await o.createClient({
+      redirectUris: ["https://agent.example/cb"],
+      tokenEndpointAuthMethod: "none",
+    });
+    await o.completeAuthorization({
+      request: {
+        responseType: "code",
+        clientId: c.clientId,
+        redirectUri: "https://agent.example/cb",
+        scope: [],
+        state: "s",
+        codeChallenge: "c".repeat(43),
+        codeChallengeMethod: "S256",
+      },
+      userId,
+      metadata: {},
+      scope: [],
+      props: { userId },
+    });
+  };
+
+  it("removes the Google link, bumps the epoch, revokes PATs and grants", async () => {
     const email = uniq("reset");
     const uid = await seedUser(email, "member", { googleSub: `R-${email}` });
+    await createPat(env, uid, "t");
+    await grant(uid);
+    expect(await pats(uid)).toBe(1);
+    expect(await grants(uid)).toBe(1);
     await resetIdentity(env, admin, uid);
     expect(await subjectOf(uid)).toBeNull();
     expect((await rowOf(uid)).e).toBe(1);
+    expect(await pats(uid)).toBe(0);
+    expect(await grants(uid)).toBe(0);
   });
-  it("never the owner's link; 404 when there is no link", async () => {
+
+  it("an owner may reset; a member or guest may not (404, nothing changed)", async () => {
+    const email = uniq("victim");
+    const uid = await seedUser(email, "member", { googleSub: `V-${email}` });
+    await createPat(env, uid, "t");
+    for (const role of ["member", "guest"] as const)
+      await expect(
+        resetIdentity(env, { id: "m", role } as Member, uid),
+      ).rejects.toMatchObject({ code: "not_found" });
+    expect(await subjectOf(uid)).toBe(`V-${email}`);
+    expect((await rowOf(uid)).e).toBe(0);
+    expect(await pats(uid)).toBe(1);
+    await resetIdentity(env, { id: "o", role: "owner" } as Member, uid);
+    expect(await subjectOf(uid)).toBeNull();
+  });
+
+  it("never the owner's link; 404 when there is no link; no epoch bump or PAT revoke then", async () => {
     const email = uniq("owner");
     const uid = await seedUser(email, "owner", { googleSub: `O-${email}` });
+    await createPat(env, uid, "t");
+    await grant(uid);
     await expect(resetIdentity(env, admin, uid)).rejects.toMatchObject({
       code: "not_found",
     });
     expect(await subjectOf(uid)).toBe(`O-${email}`);
+    expect((await rowOf(uid)).e).toBe(0);
+    expect(await pats(uid)).toBe(1);
+    expect(await grants(uid)).toBe(1);
     const bare = await seedUser(uniq("bare"), "member");
+    await createPat(env, bare, "t");
     await expect(resetIdentity(env, admin, bare)).rejects.toMatchObject({
       code: "not_found",
     });
+    expect((await rowOf(bare)).e).toBe(0);
+    expect(await pats(bare)).toBe(1);
   });
 });
 

@@ -1,11 +1,12 @@
 import { inDomains, normalizeEmail } from "@oa/auth-core";
 import type { Member, Role } from "@oa/shared";
 import type { AuthConfig } from "../auth/config.js";
-import { isGuestRole, promotedRole } from "../auth/policy.js";
+import { isGuestRole, orgCan, promotedRole } from "../auth/policy.js";
 import type { VerifiedIdentity } from "../auth/providers/types.js";
 import { stmt } from "../db/stmt.js";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
+import { revokeAllGrants } from "../mcp/oauth-api.js";
 import { googleLinkStmts, toMember } from "./users.js";
 
 // Admission and account linking for direct sign-in (P2). identities
@@ -50,14 +51,16 @@ async function touch(
   now: number,
 ): Promise<Member> {
   const owner = normalizeEmail(env.OWNER_EMAIL ?? "");
-  const role =
-    owner && row.email === owner ? "owner" : promotedRole(row.role as Role);
+  const role = promotedRole(row.role as Role);
+  // OWNER_EMAIL becomes owner only while no owner row exists (one owner).
   const out = await stmt(
     env.DB,
-    `update users set last_seen_at = ?1, name = coalesce(?2, name), role = ?3 where id = ?4
+    `update users set last_seen_at = ?1, name = coalesce(?2, name),
+       role = case when ?5 = 1 and not exists (select 1 from users where role = 'owner') then 'owner' else ?3 end
+     where id = ?4
      returning id, email, name, display_name as displayName, role, last_seen_at as lastSeenAt, status`,
   )
-    .bind(now, id.name, role, row.id)
+    .bind(now, id.name, role, row.id, owner && row.email === owner ? 1 : 0)
     .first<UserRow>();
   return member(out ?? { ...row, role });
 }
@@ -69,6 +72,11 @@ async function followDrift(
   email: string,
 ): Promise<UserRow> {
   if (email === row.email) return row;
+  // Never onto OWNER_EMAIL: drift must not hand anyone the owner address.
+  if (email === normEmail(env.OWNER_EMAIL ?? "")) {
+    logDrift();
+    return row;
+  }
   try {
     const out = await stmt(
       env.DB,
@@ -192,28 +200,41 @@ export async function codeEligibility(
   return shared ? { kind: "guest", userId: null } : { kind: "none" };
 }
 
+/** The member's Google link, never the owner's (the predicate every reset statement shares). */
+const RESETTABLE = `exists (select 1 from identities i join users u on u.id = i.user_id
+  where i.provider = 'google' and u.id = ?1 and u.role <> 'owner')`;
+
 /**
- * Admin action: removes a member's Google link so their next Google sign-in
- * links afresh (clears an identity_conflict). Never the owner's link; 404
- * when there is none. Ends the member's sessions.
+ * Admin action (owner or admin; 404 for anyone else): removes a member's
+ * Google link so their next Google sign-in links afresh (clears an
+ * identity_conflict). Never the owner's link; 404 when there is none.
+ * One D1 transaction revokes their PATs, ends their sessions and deletes the
+ * link, each gated on the same predicate, so all happen or none do; OAuth
+ * grants (KV) are revoked once the delete is confirmed. A recycled address
+ * that re-links inherits no credential.
  */
 export async function resetIdentity(
   env: Env,
-  _actor: Member,
+  actor: Member,
   userId: string,
 ): Promise<void> {
-  const [del] = await env.DB.batch([
+  if (!orgCan(actor, "members.manage"))
+    throw new ApiError("not_found", "Not found");
+  const results = await env.DB.batch([
+    stmt(
+      env.DB,
+      `update tokens set revoked_at = ?2 where user_id = ?1 and revoked_at is null and ${RESETTABLE}`,
+    ).bind(userId, Date.now()),
+    stmt(
+      env.DB,
+      `update users set session_epoch = session_epoch + 1 where id = ?1 and ${RESETTABLE}`,
+    ).bind(userId),
     stmt(
       env.DB,
       `delete from identities where provider = 'google'
        and user_id = (select id from users where id = ?1 and role <> 'owner') returning 1`,
     ).bind(userId),
   ]);
-  if (!del?.results.length) throw new ApiError("not_found", "Not found");
-  await stmt(
-    env.DB,
-    "update users set session_epoch = session_epoch + 1 where id = ?1",
-  )
-    .bind(userId)
-    .run();
+  if (!results[2]?.results.length) throw new ApiError("not_found", "Not found");
+  await revokeAllGrants(env, userId);
 }
