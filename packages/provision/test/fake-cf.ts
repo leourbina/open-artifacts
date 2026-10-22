@@ -192,7 +192,9 @@ export class FakeCf {
   private isWriteQuery(body?: string): boolean {
     if (!body) return false;
     try {
-      const sql = String(JSON.parse(body).sql ?? "");
+      const j = JSON.parse(body);
+      if (Array.isArray(j.batch)) return true;
+      const sql = String(j.sql ?? "");
       return !/^\s*SELECT\b/i.test(sql);
     } catch {
       return true;
@@ -291,8 +293,23 @@ export class FakeCf {
     if (m) {
       const d = this.d1.get(m[1] as string);
       if (!d) return fail(404, "database not found", 7404);
-      const { sql, params } = json();
+      const { sql, params, batch } = json();
       try {
+        if (Array.isArray(batch)) {
+          // REST batch: one transaction, all or nothing.
+          d.db.exec("BEGIN");
+          try {
+            const out = batch.flatMap(
+              (q: { sql: string; params?: unknown[] }) =>
+                this.exec(d.db, q.sql, q.params ?? []),
+            );
+            d.db.exec("COMMIT");
+            return env(out);
+          } catch (e) {
+            d.db.exec("ROLLBACK");
+            throw e;
+          }
+        }
         return env(this.exec(d.db, sql, params ?? []));
       } catch (e) {
         return fail(400, `${(e as Error).message}: SQLITE_ERROR`, 7500);

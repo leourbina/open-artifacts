@@ -21,7 +21,7 @@ export interface InstallRow {
   test_hooks: number;
   inputs_hash: string;
   broker_kid: string | null;
-  state: "creating" | "active" | "upgrading" | "deleting";
+  state: "creating" | "active" | "upgrading" | "deleting" | "deleted";
   created_at: number | null;
   updated_at: number | null;
 }
@@ -101,15 +101,21 @@ export class PlatformDb {
     )[0];
   }
 
-  /** Installs that already hold any of these hosts, as app or content host. */
-  async holdersOf(hosts: string[]): Promise<InstallRow[]> {
+  /**
+   * Installs, in any state (deleted included), that hold any of these hosts
+   * as app host, content host or in the hosts table.
+   */
+  async holdersOf(hosts: [string, string]): Promise<InstallRow[]> {
     return this.read(
-      "SELECT * FROM installs WHERE app_host IN (?1, ?2) OR content_host IN (?1, ?2)",
-      [hosts[0], hosts[1] ?? hosts[0]],
+      "SELECT * FROM installs WHERE app_host IN (?1, ?2) OR content_host IN (?1, ?2) OR id IN (SELECT install_id FROM hosts WHERE host IN (?1, ?2))",
+      hosts,
     );
   }
 
-  /** Inserts the `creating` row, allocating the next free block of 8 ratelimit ids. */
+  /**
+   * One batch (all or nothing): the `creating` row with the next free block
+   * of 8 ratelimit ids, both hosts, and the create.start audit row.
+   */
   async insertCreating(r: {
     id: InstallId;
     slug: string;
@@ -121,23 +127,38 @@ export class PlatformDb {
   }): Promise<InstallRow> {
     const base = RL_BASE[this.env];
     const now = this.now();
-    await this.write(
-      `INSERT INTO installs (id, slug, app_host, content_host, owner_email, inputs_hash, test_hooks, state, rl_ns, created_at, updated_at)
+    assertOwnResource(this.db.name, this.env);
+    await this.cf.d1Batch(this.db.id, [
+      {
+        sql: `INSERT INTO installs (id, slug, app_host, content_host, owner_email, inputs_hash, test_hooks, state, rl_ns, created_at, updated_at)
 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'creating', COALESCE(MAX(rl_ns) + 8, ?8), ?9, ?9
 FROM installs WHERE rl_ns >= ?8 AND rl_ns < ?10`,
-      [
-        r.id,
-        r.slug,
-        r.appHost,
-        r.contentHost,
-        r.ownerEmail,
-        r.inputsHash,
-        r.testHooks ? 1 : 0,
-        base,
-        now,
-        base + 1_000_000,
-      ],
-    );
+        params: [
+          r.id,
+          r.slug,
+          r.appHost,
+          r.contentHost,
+          r.ownerEmail,
+          r.inputsHash,
+          r.testHooks ? 1 : 0,
+          base,
+          now,
+          base + 1_000_000,
+        ],
+      },
+      {
+        sql: "INSERT INTO hosts (host, install_id) VALUES (?1, ?2)",
+        params: [r.appHost, r.id],
+      },
+      {
+        sql: "INSERT INTO hosts (host, install_id) VALUES (?1, ?2)",
+        params: [r.contentHost, r.id],
+      },
+      {
+        sql: "INSERT INTO hosted_audit (at, install_id, action, detail) VALUES (?1, ?2, 'create.start', ?3)",
+        params: [now, r.id, canonicalJson({ slug: r.slug })],
+      },
+    ]);
     const row = await this.byId(r.id);
     if (!row) throw new Error(`install ${r.id}: row missing after insert`);
     if (row.rl_ns >= base + 1_000_000 || row.rl_ns % 8 !== 0)

@@ -53,6 +53,11 @@ export interface Cf {
   d1Create(name: string): Promise<string>;
   d1Get(name: string): Promise<string | null>;
   d1Query(id: string, sql: string, params?: unknown[]): Promise<D1Result[]>;
+  /** REST batch: the statements run as one transaction (all or none). */
+  d1Batch(
+    id: string,
+    stmts: { sql: string; params?: unknown[] }[],
+  ): Promise<D1Result[]>;
   d1Delete(id: string): Promise<void>;
   r2Create(name: string): Promise<void>;
   r2Exists(name: string): Promise<boolean>;
@@ -215,6 +220,12 @@ export function cfClient(o: {
       result<D1Result[]>("POST", `${acct}/d1/database/${seg(id)}/query`, {
         json: { sql, params },
       }),
+    d1Batch: (id, stmts) =>
+      result<D1Result[]>("POST", `${acct}/d1/database/${seg(id)}/query`, {
+        json: {
+          batch: stmts.map((q) => ({ sql: q.sql, params: q.params ?? [] })),
+        },
+      }),
     async d1Delete(id) {
       await call("DELETE", `${acct}/d1/database/${seg(id)}`);
     },
@@ -255,7 +266,18 @@ export function cfClient(o: {
     },
     async kvGet(id, key) {
       const r = await call("GET", kvPath(id, key), {}, [404]);
-      return r.status === 404 ? null : r.text;
+      if (r.status !== 404) return r.text;
+      // Only "key not found" (10009) is a miss; a missing namespace is an error.
+      const codes = (
+        (r.body as { errors?: { code?: unknown }[] })?.errors ?? []
+      ).map((e) => e?.code);
+      if (codes.includes(10009)) return null;
+      throw new CfError(
+        "GET",
+        `${acct}/storage/kv/namespaces/${seg(id)}/values`,
+        404,
+        describeErrors(r.body),
+      );
     },
     async kvDeleteKey(id, key) {
       await call("DELETE", kvPath(id, key));

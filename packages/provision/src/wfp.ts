@@ -3,12 +3,14 @@
 // own D1, R2, KV and secrets, named by install id and env.
 //
 // create(), each step idempotent by checking first:
-//   pre-flight (no Cloudflare call): names, target, bundle variant, secrets,
-//     metadata dry run
-//   token check -> platform row (creating, rl_ns) + audit -> D1 -> R2 -> KV
-//   -> server migrations -> upload (assets, secret_text bindings, DO tag
-//   probe) -> subdomain off (account only) -> broker keypair (flag)
-//   -> HOSTS -> /healthz -> owner PAT (0600) -> MCP selftest -> active.
+//   pre-flight (no Cloudflare call): env, target, domains, owner email,
+//     bundle variant, release record vs the bytes, secrets, metadata dry run
+//   token check -> resolve platform D1, HOSTS and registry by name
+//   -> platform row (creating, rl_ns, hosts, audit; one batch) -> D1 -> R2
+//   -> KV (ids resolved by name and checked against the row) -> server
+//   migrations -> upload (assets, secret_text bindings, DO tag probe)
+//   -> subdomain off (account only) -> broker keypair (flag) -> HOSTS
+//   -> /healthz -> owner PAT (0600) -> MCP selftest -> active.
 import { createHash, generateKeyPairSync, type KeyObject } from "node:crypto";
 import {
   closeSync,
@@ -34,6 +36,7 @@ import {
 } from "./metadata.js";
 import {
   assertOwnResource,
+  ENV_PREFIX,
   type Env,
   ForeignResource,
   hosts,
@@ -57,34 +60,58 @@ export const NAMESPACES: Record<Env, string> = {
   prod: "oa-prod",
 };
 
-// TODO(Backend): confirm this define name in writing (decision 8). Do not add
-// a second name; buildBundle sets it "true" only in the redline variant.
+/** The tenant domain pair of each env (user decision, 2026-10-21). */
+export const HOSTED_DOMAINS: Record<Env, { app: string; content: string }> = {
+  staging: {
+    app: "open-artifacts-staging.app",
+    content: "open-artifacts-staging.page",
+  },
+  prod: { app: "open-artifacts.app", content: "open-artifacts.page" },
+};
+
+/** The platform HOSTS KV namespace title (host -> install id). */
+export const hostsKvTitle = (env: Env): string => `${ENV_PREFIX[env]}hosts`;
+
+/**
+ * Compile-time define, confirmed by Backend: a BOOLEAN literal, `true` only in
+ * the redline bundle and `false` in the release bundle.
+ */
 export const TEST_HOOKS_DEFINE = "__OA_TEST_HOOKS_ALLOWED__" as const;
 
 export type BundleVariant = "release" | "redline";
 
-export interface HostedBundle extends Bundle {
+/**
+ * The per-release manifest entry for one bundle variant, written by the
+ * bundle step after building both variants and running check-no-test-hooks.
+ * TODO(T3b): the two-variant buildBundle, the check-no-test-hooks gate and
+ * writing this manifest are task T3b, a blocker before any prod create.
+ */
+export interface ReleaseRecord {
+  version: string;
   variant: BundleVariant;
-  defines: { [TEST_HOOKS_DEFINE]: "true" | "false" };
-  /** bundleHash() of this bundle, recorded per release. */
-  hash: string;
+  /** bundleSha256() of the bytes the bundle step built. */
+  sha256: string;
+  defines: { [TEST_HOOKS_DEFINE]: boolean };
 }
 
 export interface WfpCreateInput extends CreateInput {
   bundle: BundleVariant;
+  version: string;
 }
 
 export interface WfpOptions {
   cf: Cf;
   env: Env;
   target: Target;
-  platformDb: { id: string; name: string };
-  hostsKv: { id: string; title: string };
-  /** BROKER_REGISTRY; required only when brokerEnabled. */
-  registryKv?: { id: string; title: string };
+  /** Must equal HOSTED_DOMAINS[env]. */
   domains: { app: string; content: string };
   /** Fetches a release's bundle of the given variant (R2 in production). */
-  bundles: (variant: BundleVariant) => Promise<HostedBundle>;
+  bundles: (version: string, variant: BundleVariant) => Promise<Bundle>;
+  /** Reads the independent per-release record; null when there is none. */
+  releaseRecord: (
+    version: string,
+    variant: BundleVariant,
+  ) => Promise<ReleaseRecord | null>;
   patDir: string;
   /** Broker keypair (P2); off until the broker exists. */
   brokerEnabled?: boolean;
@@ -113,6 +140,8 @@ export const CREATE_SECRETS = [
 ] as const;
 /** Secrets metadata.ts does not know; appended to its bindings here. */
 const EXTRA_SECRETS = ["DIRECTORY_TOKEN_KEY"];
+/** An old_tag no script can have: the 412 it draws names the live tag. */
+const PROBE_TAG = "__oa_probe__";
 const HEALTH_TIMEOUT_MS = 120_000;
 const HEALTH_INTERVAL_MS = 2_000;
 const MAX_ACTIVE_TOKENS = 50;
@@ -121,10 +150,20 @@ const MAX_TOKEN_DAYS = 30;
 const WARN_TOKEN_DAYS = 5;
 const DAY = 86_400_000;
 const HOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/;
+const ASCII_EMAIL = /^[!-?A-~]+@[!-?A-~]+$/;
 const WELCOME_TITLE = "Welcome to Open Artifacts";
 const MIGRATION_RE = /^\d{4}_[a-z0-9_]+\.sql$/;
 
 const b64u = (b: Uint8Array) => Buffer.from(b).toString("base64url");
+
+/** As the server's normEmail: trimmed, lowercased printable ASCII, or null. */
+export function normOwnerEmail(s: string): string | null {
+  if (typeof s !== "string") return null;
+  const t = s.trim();
+  if (t.length > 320 || !ASCII_EMAIL.test(t)) return null;
+  const e = t.toLowerCase();
+  return ASCII_EMAIL.test(e) ? e : null;
+}
 
 /** 48 bytes from the CSPRNG, base64url. Generated per install, never derived. */
 export function newSecret(): string {
@@ -145,19 +184,13 @@ export function assertSessionSecret(v: string, others: string[]): void {
     throw new Error("SESSION_SECRET must be distinct from every other secret");
 }
 
-/** Hash of what a bundle uploads; pins the bytes, the variant and the define. */
-export function bundleHash(
-  b: Pick<
-    HostedBundle,
-    "variant" | "defines" | "modules" | "mainModule" | "version"
-  >,
+/** SHA-256 over exactly what is uploaded: the main module and every module's name, type and bytes. */
+export function bundleSha256(
+  b: Pick<Bundle, "modules" | "mainModule">,
 ): string {
   return createHash("sha256")
     .update(
       canonicalJson({
-        variant: b.variant,
-        define: b.defines?.[TEST_HOOKS_DEFINE],
-        version: b.version,
         mainModule: b.mainModule,
         modules: [...b.modules]
           .sort((x, y) => (x.name < y.name ? -1 : 1))
@@ -230,17 +263,28 @@ function writeSecretFile(path: string, text: string): void {
 const errCode = (e: unknown) =>
   (e as { code?: string })?.code ?? (e as Error)?.name ?? "error";
 
+type Meta = {
+  appHost: string;
+  contentHost: string;
+  ownerEmail: string;
+  vars: Record<string, string>;
+  testHooks: boolean;
+};
+
 export class WfpProvisioner {
   readonly notes: string[] = [];
   private readonly cf: Cf;
   private readonly env: Env;
   private readonly target: Target;
-  private readonly platform: PlatformDb;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly http: typeof fetch;
-  /** Values this run must never print; scrubbed from every thrown message. */
+  /** Values this run must never print; scrubbed from every thrown error. */
   private sensitive = new Set<string>();
+  // Resolved by name per run (never taken from the caller).
+  private platform!: PlatformDb;
+  private hostsKv!: { id: string; title: string };
+  private registryKv?: { id: string; title: string };
 
   constructor(private readonly o: WfpOptions) {
     this.cf = o.cf;
@@ -250,13 +294,15 @@ export class WfpProvisioner {
     this.sleep =
       o.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
     this.http = o.fetch ?? fetch;
-    this.platform = new PlatformDb(o.cf, o.platformDb, o.env, this.now);
   }
 
   async create(i: WfpCreateInput): Promise<Install> {
-    this.sensitive = new Set(
-      typeof i?.ownerEmail === "string" && i.ownerEmail ? [i.ownerEmail] : [],
-    );
+    this.sensitive = new Set();
+    if (typeof i?.ownerEmail === "string" && i.ownerEmail) {
+      this.sensitive.add(i.ownerEmail);
+      this.sensitive.add(i.ownerEmail.trim());
+      this.sensitive.add(i.ownerEmail.trim().toLowerCase());
+    }
     try {
       return await this.run(i);
     } catch (e) {
@@ -264,12 +310,24 @@ export class WfpProvisioner {
     }
   }
 
+  /** Scrubs every own string property (message, stack, Cloudflare text, route). */
   private scrub(e: unknown): unknown {
     if (!(e instanceof Error)) return new Error("create failed");
-    for (const v of this.sensitive) {
-      if (!v) continue;
-      e.message = e.message.split(v).join("[redacted]");
-      if (e.stack) e.stack = e.stack.split(v).join("[redacted]");
+    const rec = e as unknown as Record<string, unknown>;
+    for (const k of new Set([
+      ...Object.getOwnPropertyNames(e),
+      "message",
+      "stack",
+    ])) {
+      let v = rec[k];
+      if (typeof v !== "string") continue;
+      for (const s of this.sensitive)
+        if (s) v = (v as string).split(s).join("[redacted]");
+      try {
+        rec[k] = v;
+      } catch {
+        // read-only property: leave it
+      }
     }
     return e;
   }
@@ -279,19 +337,6 @@ export class WfpProvisioner {
   private checkOptions(): void {
     const { env, o } = this;
     if (env !== "staging" && env !== "prod") throw new ForeignResource("", env);
-    assertOwnResource(o.platformDb.name, env);
-    if (o.platformDb.name !== platformNames(env).db)
-      throw new ForeignResource(o.platformDb.name, env);
-    assertOwnResource(o.hostsKv.title, env);
-    if (o.brokerEnabled) {
-      if (!o.registryKv)
-        throw new ProvisionRefused(
-          "brokerEnabled needs the BROKER_REGISTRY KV",
-        );
-      assertOwnResource(o.registryKv.title, env);
-      if (o.registryKv.title !== platformNames(env).registry)
-        throw new ForeignResource(o.registryKv.title, env);
-    }
     const t = this.target;
     if (t.kind === "namespace") {
       if (t.ns !== NAMESPACES[env])
@@ -300,10 +345,15 @@ export class WfpProvisioner {
         );
     } else if (t.kind !== "account")
       throw new ProvisionRefused("target must be account or namespace");
+    const d = HOSTED_DOMAINS[env];
+    if (o.domains?.app !== d.app || o.domains?.content !== d.content)
+      throw new ProvisionRefused(
+        `domains must be the ${env} pair (${d.app}, ${d.content})`,
+      );
   }
 
-  /** Decision 8: which bundle may go where, before anything is fetched. */
-  private checkVariant(i: WfpCreateInput): void {
+  /** Decision 8 and TEST_DOMAIN: which bundle and vars may go where. */
+  private checkVariant(i: WfpCreateInput, vars: Record<string, string>): void {
     const hooks = i.testHooks === true;
     const stagingNs =
       this.env === "staging" &&
@@ -322,29 +372,55 @@ export class WfpProvisioner {
           "a test-hook install needs the redline bundle, not release",
         );
     } else throw new ProvisionRefused("bundle must be release or redline");
+    if (vars.TEST_DOMAIN !== undefined && (!hooks || this.env === "prod"))
+      throw new ProvisionRefused(
+        "TEST_DOMAIN is only allowed on test-hook installs outside prod",
+      );
+    if (hooks && typeof vars.TEST_DOMAIN !== "string")
+      throw new ProvisionRefused(
+        "a test-hook install needs vars.TEST_DOMAIN (hooks act only on emails @TEST_DOMAIN)",
+      );
   }
 
-  /** The fetched bundle must be the asked variant, with its define, untampered. */
-  private checkBundle(i: WfpCreateInput, b: HostedBundle): void {
-    const want = i.bundle === "redline" ? "true" : "false";
-    if (b?.variant !== i.bundle)
+  /** The bytes to upload must match the independent release record. */
+  private checkRecord(
+    i: WfpCreateInput,
+    b: Bundle,
+    rec: ReleaseRecord | null,
+  ): void {
+    const want = `${i.version} (${i.bundle})`;
+    if (!rec)
       throw new ProvisionRefused(
-        `asked for the ${i.bundle} bundle, got ${String(b?.variant)}`,
+        `no release record for ${want}; the bundle step (T3b) must write one before any create`,
       );
-    if (b.defines?.[TEST_HOOKS_DEFINE] !== want)
+    if (rec.version !== i.version || rec.variant !== i.bundle)
       throw new ProvisionRefused(
-        `${i.bundle} bundle must set ${TEST_HOOKS_DEFINE}=${want}`,
+        `the release record read for ${want} is for ${String(rec.version)} (${String(rec.variant)})`,
       );
-    if (bundleHash(b) !== b.hash)
+    const d = rec.defines?.[TEST_HOOKS_DEFINE];
+    if (typeof d !== "boolean")
       throw new ProvisionRefused(
-        `bundle ${b.version} (${b.variant}) does not match its recorded hash`,
+        `release record ${want}: ${TEST_HOOKS_DEFINE} must be a boolean literal`,
       );
-    this.assertHooksAllowed(b, i.testHooks === true);
+    if (d !== (i.bundle === "redline"))
+      throw new ProvisionRefused(
+        `release record ${want}: ${TEST_HOOKS_DEFINE} must be ${i.bundle === "redline"}`,
+      );
+    if (typeof rec.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(rec.sha256))
+      throw new ProvisionRefused(`release record ${want} has no valid sha256`);
+    if (b?.version !== i.version)
+      throw new ProvisionRefused(
+        `the fetched bundle is not version ${i.version}`,
+      );
+    if (bundleSha256(b) !== rec.sha256)
+      throw new ProvisionRefused(
+        `bundle bytes for ${want} do not match the release record`,
+      );
   }
 
-  /** Belt and braces: a hooks-enabled bundle only reaches a staging test install. */
-  private assertHooksAllowed(b: HostedBundle, testHooks: boolean): void {
-    if (b.defines[TEST_HOOKS_DEFINE] === "false") return;
+  /** Belt and braces before every upload: hooks only reach a staging test install. */
+  private assertHooksAllowed(variant: BundleVariant, testHooks: boolean): void {
+    if (variant === "release") return;
     const t = this.target;
     if (
       this.env !== "staging" ||
@@ -361,9 +437,10 @@ export class WfpProvisioner {
     return this.o.template ?? loadTemplate();
   }
 
-  private latestTag(): string | null {
-    const m = (this.template().migrations ?? []) as { tag: string }[];
-    return m.length ? (m[m.length - 1] as { tag: string }).tag : null;
+  private tags(): string[] {
+    return ((this.template().migrations ?? []) as { tag: string }[]).map(
+      (m) => m.tag,
+    );
   }
 
   // ---------- create ----------
@@ -371,14 +448,19 @@ export class WfpProvisioner {
   private async run(i: WfpCreateInput): Promise<Install> {
     this.checkOptions();
     if (i.plan !== "paid") throw new ProvisionRefused("plan must be paid");
+    const ownerEmail = normOwnerEmail(i.ownerEmail);
+    if (!ownerEmail)
+      throw new ProvisionRefused("ownerEmail is not a valid email");
     const { appHost, contentHost } = hosts(i.slug, this.o.domains);
     if (i.resumeId !== undefined && !isInstallId(i.resumeId))
       throw new ProvisionRefused("resumeId is not an install id");
-    this.checkVariant(i);
     const testHooks = i.testHooks === true;
     const vars = i.vars ?? {};
-    const bundle = await this.o.bundles(i.bundle);
-    this.checkBundle(i, bundle);
+    this.checkVariant(i, vars);
+    const bundle = await this.o.bundles(i.version, i.bundle);
+    const record = await this.o.releaseRecord(i.version, i.bundle);
+    this.checkRecord(i, bundle, record);
+    const rec = record as ReleaseRecord;
 
     // Secrets for a fresh upload; unused (and dropped) when the script exists.
     const secrets: Record<string, string> = {};
@@ -395,13 +477,7 @@ export class WfpProvisioner {
       throw new Error("generated secrets are not distinct");
 
     // Dry run: template, vars and ratelimit rules fail here, before any call.
-    const meta = {
-      appHost,
-      contentHost,
-      ownerEmail: i.ownerEmail,
-      vars,
-      testHooks,
-    };
+    const meta: Meta = { appHost, contentHost, ownerEmail, vars, testHooks };
     this.metadata("iaaaaaaaaaaa", meta, bundle, {
       d1Id: "00000000-0000-4000-8000-000000000000",
       kvId: "0".repeat(32),
@@ -413,14 +489,20 @@ export class WfpProvisioner {
     });
 
     await this.checkToken();
+    await this.resolvePlatform();
 
     // ---------- platform row ----------
-    const hash = inputsHash({ ownerEmail: i.ownerEmail, vars, testHooks });
+    const hash = inputsHash({ ownerEmail, vars, testHooks });
     let row = await this.findRow(i);
+    let res: { d1: string | null; kv: string | null } | undefined;
     if (row) {
       if (row.state === "active")
         throw new ProvisionRefused(
           `slug ${i.slug} already exists as active install ${row.id}`,
+        );
+      if (row.state === "deleted")
+        throw new ProvisionRefused(
+          `slug ${i.slug} belongs to deleted install ${row.id}; its slug and hosts stay held until a purge`,
         );
       if (row.state !== "creating")
         throw new ProvisionRefused(
@@ -434,6 +516,7 @@ export class WfpProvisioner {
         throw new ProvisionRefused(
           `install ${row.id}: hosts differ from the first run`,
         );
+      res = await this.resources(row);
     } else {
       const holders = await this.platform.holdersOf([appHost, contentHost]);
       if (holders.length > 0)
@@ -442,33 +525,75 @@ export class WfpProvisioner {
         );
     }
     for (const h of [appHost, contentHost]) {
-      const cur = await this.cf.kvGet(this.o.hostsKv.id, h);
+      const cur = await this.cf.kvGet(this.hostsKv.id, h);
       if (cur !== null && cur !== row?.id)
         throw new ProvisionRefused(`host ${h} is already taken by ${cur}`);
     }
     if (!row) {
-      const id = newInstallId();
       row = await this.platform.insertCreating({
-        id,
+        id: newInstallId(),
         slug: i.slug,
         appHost,
         contentHost,
-        ownerEmail: i.ownerEmail,
+        ownerEmail,
         testHooks,
         inputsHash: hash,
       });
-      await this.platform.audit(id, "create.start", { slug: i.slug });
     } else {
       await this.platform.audit(row.id, "create.resume", { slug: i.slug });
     }
     const id = row.id;
     try {
-      return await this.steps(row, i, bundle, secrets, meta);
+      return await this.steps(row, res, i, bundle, rec, secrets, meta);
     } catch (e) {
       if (e instanceof Error && !e.message.startsWith(`install ${id}`))
         e.message = `install ${id}: ${e.message}`;
       throw e;
     }
+  }
+
+  /** H1: the platform D1, HOSTS and registry come from env names, never from ids handed in. */
+  private async resolvePlatform(): Promise<void> {
+    const env = this.env;
+    const dbName = platformNames(env).db;
+    const dbId = await this.cf.d1Get(dbName);
+    if (!dbId) throw new ProvisionRefused(`platform D1 ${dbName} not found`);
+    this.platform = new PlatformDb(
+      this.cf,
+      { id: dbId, name: dbName },
+      env,
+      this.now,
+    );
+    const hostsTitle = hostsKvTitle(env);
+    const hostsId = await this.cf.kvFind(hostsTitle);
+    if (!hostsId)
+      throw new ProvisionRefused(`HOSTS KV ${hostsTitle} not found`);
+    this.hostsKv = { id: hostsId, title: hostsTitle };
+    if (this.o.brokerEnabled) {
+      const regTitle = platformNames(env).registry;
+      const regId = await this.cf.kvFind(regTitle);
+      if (!regId)
+        throw new ProvisionRefused(`broker registry KV ${regTitle} not found`);
+      this.registryKv = { id: regId, title: regTitle };
+    }
+  }
+
+  /** H1: an install's D1 and KV are resolved by name; a row id that disagrees is refused. */
+  private async resources(
+    row: InstallRow,
+  ): Promise<{ d1: string | null; kv: string | null }> {
+    const n = names(row.id, this.env);
+    const d1 = await this.cf.d1Get(n.d1);
+    if (row.d1_id !== null && row.d1_id !== d1)
+      throw new ProvisionRefused(
+        `install ${row.id}: installs.d1_id is not the id of D1 ${n.d1}; refusing to touch another database`,
+      );
+    const kv = await this.cf.kvFind(n.kv);
+    if (row.kv_id !== null && row.kv_id !== kv)
+      throw new ProvisionRefused(
+        `install ${row.id}: installs.kv_id is not the id of KV ${n.kv}; refusing to touch another namespace`,
+      );
+    return { d1, kv };
   }
 
   private async findRow(i: WfpCreateInput): Promise<InstallRow | undefined> {
@@ -519,14 +644,8 @@ export class WfpProvisioner {
 
   private metadata(
     id: InstallId,
-    m: {
-      appHost: string;
-      contentHost: string;
-      ownerEmail: string;
-      vars: Record<string, string>;
-      testHooks: boolean;
-    },
-    b: HostedBundle,
+    m: Meta,
+    b: Bundle,
     r: {
       d1Id: string;
       kvId: string;
@@ -566,8 +685,8 @@ export class WfpProvisioner {
     if (r.mode === "update") meta.keep_bindings = ["secret_text", "secret_key"];
     if (
       !m.testHooks &&
-      meta.bindings.some(
-        (x) => x.name === "TEST_HOOKS" || x.name === "TEST_HOOK_KEY",
+      meta.bindings.some((x) =>
+        ["TEST_HOOKS", "TEST_HOOK_KEY", "TEST_DOMAIN"].includes(x.name),
       )
     )
       throw new Error("hooks bindings on a non-test install");
@@ -576,24 +695,21 @@ export class WfpProvisioner {
 
   private async steps(
     row: InstallRow,
+    resolved: { d1: string | null; kv: string | null } | undefined,
     i: WfpCreateInput,
-    b: HostedBundle,
+    b: Bundle,
+    rec: ReleaseRecord,
     fresh: Record<string, string>,
-    m: {
-      appHost: string;
-      contentHost: string;
-      ownerEmail: string;
-      vars: Record<string, string>;
-      testHooks: boolean;
-    },
+    m: Meta,
   ): Promise<Install> {
     const { cf, env, target, platform } = this;
     const id = row.id;
     const n = names(id, env);
     const testHooks = m.testHooks;
+    const res = resolved ?? (await this.resources(row));
 
-    // D1, R2, KV
-    let d1Id = row.d1_id ?? (await cf.d1Get(n.d1));
+    // D1, R2, KV (ids resolved by name, checked against the row)
+    let d1Id = res.d1;
     if (!d1Id) {
       assertOwnResource(n.d1, env);
       d1Id = await cf.d1Create(n.d1);
@@ -603,7 +719,7 @@ export class WfpProvisioner {
       assertOwnResource(n.r2, env);
       await cf.r2Create(n.r2);
     }
-    let kvId = row.kv_id ?? (await cf.kvFind(n.kv));
+    let kvId = res.kv;
     if (!kvId) {
       assertOwnResource(n.kv, env);
       kvId = await cf.kvCreate(n.kv);
@@ -613,13 +729,14 @@ export class WfpProvisioner {
     await this.migrate(d1Id, n.d1);
 
     // Upload, only when something is missing or behind.
-    const latest = this.latestTag();
+    const tags = this.tags();
+    const latest = tags.length ? (tags[tags.length - 1] as string) : null;
     const exists = await cf.scriptExists(target, n.script);
     const required = [
       ...CREATE_SECRETS,
       ...(testHooks ? ["TEST_HOOK_KEY"] : []),
     ];
-    let have = exists ? await cf.secretList(target, n.script) : [];
+    const have = exists ? await cf.secretList(target, n.script) : [];
     const missing = required.filter((k) => !have.includes(k));
     const behind = row.version !== b.version || row.do_migration_tag !== latest;
     if (!exists || missing.length > 0 || behind) {
@@ -637,8 +754,12 @@ export class WfpProvisioner {
           );
         }
       }
-      const upload = async (tag: string | null) => {
-        this.assertHooksAllowed(b, testHooks);
+      const upload = async (tag: string | null, probe = false) => {
+        this.assertHooksAllowed(rec.variant, testHooks);
+        if (bundleSha256(b) !== rec.sha256)
+          throw new ProvisionRefused(
+            "the bytes about to be uploaded do not match the release record",
+          );
         const { jwt } = await cf.assetsUpload(
           target,
           n.script,
@@ -653,23 +774,23 @@ export class WfpProvisioner {
           secrets: send,
           assetsJwt: jwt,
         });
+        if (probe && meta.migrations) meta.migrations.old_tag = PROBE_TAG;
         assertOwnResource(n.script, env);
         await cf.scriptUpload(target, n.script, meta, b.modules);
       };
-      // Decision 5: the settings API never reports the tag; the journal is
-      // checked by a probe (a 412 names the live tag and changes nothing).
+      // Decision 5: the settings API never reports the tag. The journal is
+      // checked by uploading: a 412 names the live tag and changes nothing.
+      // An existing script with an empty journal is probed with a tag it
+      // cannot have; a missing script is never probed.
       const journal = exists ? row.do_migration_tag : null;
       try {
-        await upload(journal);
+        await upload(journal, exists && journal === null);
       } catch (e) {
         const live =
           exists && e instanceof CfError && e.status === 412
             ? /expected tag is '([^']*)'/.exec(e.cfMessage)?.[1]
             : undefined;
         if (live === undefined) throw e;
-        const tags = (
-          (this.template().migrations ?? []) as { tag: string }[]
-        ).map((x) => x.tag);
         if (live !== "" && !tags.includes(live))
           throw new Error(
             `live Durable Object migration tag ${live} is not in this release; forward-fix only`,
@@ -683,10 +804,9 @@ export class WfpProvisioner {
       });
       await platform.audit(id, "create.upload", {
         version: b.version,
-        variant: b.variant,
-        bundle: b.hash,
+        variant: rec.variant,
+        sha256: rec.sha256,
       });
-      have = [...new Set([...have, ...missing])];
     }
     // Decision 4: workers.dev and previews off, account scripts only (405 on namespace scripts).
     if (target.kind === "account") {
@@ -698,12 +818,12 @@ export class WfpProvisioner {
 
     // HOSTS: after the script exists and holds every secret.
     for (const h of [m.appHost, m.contentHost]) {
-      const cur = await cf.kvGet(this.o.hostsKv.id, h);
+      const cur = await cf.kvGet(this.hostsKv.id, h);
       if (cur === id) continue;
       if (cur !== null)
         throw new ProvisionRefused(`host ${h} is already taken by ${cur}`);
-      assertOwnResource(this.o.hostsKv.title, env);
-      await cf.kvPut(this.o.hostsKv.id, h, id);
+      assertOwnResource(this.hostsKv.title, env);
+      await cf.kvPut(this.hostsKv.id, h, id);
     }
 
     await this.health(id, m.appHost, b.version);
@@ -755,9 +875,8 @@ export class WfpProvisioner {
     script: string,
     appHost: string,
   ): Promise<void> {
-    const reg = this.o.registryKv as { id: string; title: string };
+    const reg = this.registryKv as { id: string; title: string };
     const origin = brokerOrigin(appHost);
-    assertBrokerOrigin(origin, appHost);
     const raw = await this.cf.kvGet(reg.id, id);
     const entry: RegistryEntry | null = raw === null ? null : JSON.parse(raw);
     if (entry && (entry.installId !== id || entry.origin !== origin))
@@ -778,6 +897,7 @@ export class WfpProvisioner {
       if (keys.length > 2)
         throw new Error("broker registry entry would hold more than 2 keys");
       const value: RegistryEntry = { installId: id, origin, keys };
+      assertBrokerOrigin(value.origin, appHost);
       if (entry?.disabled) value.disabled = true;
       assertOwnResource(reg.title, this.env);
       await this.cf.kvPut(reg.id, id, JSON.stringify(value));
