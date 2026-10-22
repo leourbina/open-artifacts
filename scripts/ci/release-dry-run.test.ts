@@ -112,3 +112,64 @@ describe("ci.yml release-dry-run job", () => {
       expect(JSON.stringify(j.needs ?? [])).not.toContain("release-dry-run");
   });
 });
+
+describe("ci.yml no-test-hooks job", () => {
+  const raw = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
+  const w = parse(raw);
+  const job = w.jobs["no-test-hooks"];
+  const steps: { run?: string; if?: string; id?: string }[] = job?.steps ?? [];
+  const runs = steps.map((s) => s.run ?? "").join("\n");
+  const s = JSON.stringify(job ?? {});
+  it("exists", () => {
+    expect(job).toBeDefined();
+  });
+  it("runs check-no-test-hooks on the path the build step writes", () => {
+    expect(runs).toMatch(
+      /build-release-bundle\.ts "\$RUNNER_TEMP\/release-bundle"/,
+    );
+    expect(runs).toMatch(
+      /pnpm check-no-test-hooks "\$RUNNER_TEMP\/release-bundle"/,
+    );
+  });
+  it("cannot be skipped: no continue-on-error, job-level if or needs", () => {
+    expect(job).toBeDefined();
+    expect(job["continue-on-error"]).toBeUndefined();
+    expect(job.if).toBeUndefined();
+    expect(job.needs).toBeUndefined();
+    for (const st of steps)
+      expect(JSON.stringify(st)).not.toContain("continue-on-error");
+  });
+  it("uses no secrets and does not persist credentials", () => {
+    expect(job).toBeDefined();
+    expect(s).not.toContain("secrets.");
+    expect(s).not.toContain("secrets[");
+    expect(steps.length).toBeGreaterThan(0);
+    expect(s).toContain('"persist-credentials":false');
+  });
+  it("uses the release-only pattern and gates both steps on it", () => {
+    expect(job).toBeDefined();
+    expect(runs).toContain('git show "$BASE_SHA:scripts/ci/release-only.ts"');
+    expect(runs).toContain('[ "$out" = "release-only" ]');
+    expect(s).toContain("merge_group.base_sha");
+    const gated = steps.filter((st) =>
+      /build-release-bundle|check-no-test-hooks/.test(st.run ?? ""),
+    );
+    expect(gated.length).toBeGreaterThanOrEqual(2);
+    for (const st of gated)
+      expect(st.if).toContain("steps.ro.outputs.release_only != 'true'");
+    expect(
+      steps.some(
+        (st) =>
+          /release_only == 'true'/.test(st.if ?? "") &&
+          /exit 0/.test(st.run ?? ""),
+      ),
+    ).toBe(true);
+  });
+  it("uses the same checkout, pnpm and node setup as the other jobs", () => {
+    expect(job).toBeDefined();
+    expect(s).toContain("actions/checkout@v4");
+    expect(s).toContain("pnpm/action-setup@v4");
+    expect(s).toContain("node-version-file");
+    expect(runs).toContain("pnpm install --frozen-lockfile");
+  });
+});
