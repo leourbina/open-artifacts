@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.31.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.30.0...v0.31.0) (2026-10-22)
+
+
+### Features
+
+* **auth:** sign-in events and CPU budgets (P2 T10) ([#389](https://github.com/open-artifacts-ai/open-artifacts/issues/389)) ([2adcf13](https://github.com/open-artifacts-ai/open-artifacts/commit/2adcf13da8f92d7a551732e455d5599ceeed0724))
+* **dashboard:** spaces in the sidebar and the space marker (P4 Task 6) ([#448](https://github.com/open-artifacts-ai/open-artifacts/issues/448)) ([7efcdac](https://github.com/open-artifacts-ai/open-artifacts/commit/7efcdacb06606375f91e16ac5c71adbba33531b1))
+
 ## [0.30.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.29.0...v0.30.0) (2026-10-22)
 
 
