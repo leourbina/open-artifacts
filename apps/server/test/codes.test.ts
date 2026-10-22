@@ -60,6 +60,11 @@ async function fixedCode(
   return { ek, requestId: rid };
 }
 
+/** The start of UTC hour `h` on a fixed future day (clean buckets per test). */
+const DAY0 =
+  Date.UTC(2031, 0, 1) + Math.floor(Math.random() * 1000) * 86_400_000;
+const hourStart = (h: number) => DAY0 + h * 3_600_000;
+
 let E: string;
 let cfg: ReturnType<typeof authConfig>;
 const IP = "203.0.113.7";
@@ -284,6 +289,48 @@ describe("request throttles", () => {
     warn.mockRestore();
   });
 
+  it("one IP's 31 requests for one address don't consume that address's other buckets", async () => {
+    const ek = await emailKey(env, uniq("victim", "x.com"));
+    const ik = await ipKey(env, "192.0.2.20");
+    for (let i = 0; i < 31; i++) await takeRequestSlot(env, cfg, ek, ik);
+    expect(await counter(`code:eip:${ek}:${ik}`)).toBe(
+      CODE_LIMITS.perEmailIpPer10Min,
+    );
+    expect(await counter(`code:e:${ek}`)).toBe(CODE_LIMITS.perEmailIpPer10Min);
+    expect(await counter(`code:ip:${ik}`)).toBe(CODE_LIMITS.perEmailIpPer10Min);
+    // The address is still reachable from elsewhere.
+    expect(
+      await takeRequestSlot(env, cfg, ek, await ipKey(env, "192.0.2.21")),
+    ).toEqual({ ok: true });
+  });
+
+  it("an IP over its day cap consumes no per-address bucket", async () => {
+    const ik = await ipKey(env, "192.0.2.22");
+    await fillCounter(`code:ip:${ik}`, CODE_LIMITS.perIpPerDay - 30, "day");
+    const eks: string[] = [];
+    for (let i = 0; i < 31; i++) {
+      const ek = await emailKey(env, uniq(`other${i}`, "x.com"));
+      eks.push(ek);
+      await takeRequestSlot(env, cfg, ek, ik);
+    }
+    expect(await counter(`code:ip:${ik}`)).toBe(CODE_LIMITS.perIpPerDay);
+    const last = eks[30] as string;
+    expect(await counter(`code:e:${last}`)).toBe(0);
+    expect(await counter(`code:eip:${last}:${ik}`)).toBe(0);
+  });
+
+  it("IPv6 keys by /64; IPv4 by the whole address", async () => {
+    expect(await ipKey(env, "2001:db8:a:b:1::1")).toBe(
+      await ipKey(env, "2001:0db8:000a:000b:ffff:ffff:ffff:ffff"),
+    );
+    expect(await ipKey(env, "2001:db8:a:b::1")).not.toBe(
+      await ipKey(env, "2001:db8:a:c::1"),
+    );
+    expect(await ipKey(env, "192.0.2.1")).not.toBe(
+      await ipKey(env, "192.0.2.2"),
+    );
+  });
+
   it("per IP: 50 a day", async () => {
     const ik = await ipKey(env, "192.0.2.11");
     await fillCounter(`code:ip:${ik}`, CODE_LIMITS.perIpPerDay, "day");
@@ -299,7 +346,7 @@ describe("deliverCode", () => {
     const m = mailer();
     const e = withMail(direct(), m);
     const ek = await emailKey(e, E);
-    expect(await deliverCode(e, authConfig(e), E, ek, "rid-1")).toEqual({
+    expect(await deliverCode(e, authConfig(e), E, ek, "rid-1", IP)).toEqual({
       requestId: "rid-1",
     });
     expect(m.sent).toHaveLength(1);
@@ -326,6 +373,7 @@ describe("deliverCode", () => {
           addr,
           await emailKey(e, addr),
           `r${i}`,
+          IP,
         ),
       ).toBeNull();
     }
@@ -338,12 +386,156 @@ describe("deliverCode", () => {
     const m = mailer();
     const e = withMail(direct(), m);
     const ek = await emailKey(e, E);
+    const t0 = hourStart(1);
     for (let i = 0; i < CODE_LIMITS.sendsPerEmailPerHour; i++)
       expect(
-        await deliverCode(e, authConfig(e), E, ek, `s${i}`),
+        await deliverCode(
+          e,
+          authConfig(e),
+          E,
+          ek,
+          `s${i}`,
+          `198.51.${i}.1`,
+          t0 + i * 61_000,
+        ),
       ).not.toBeNull();
-    expect(await deliverCode(e, authConfig(e), E, ek, "s-over")).toBeNull();
+    expect(
+      await deliverCode(
+        e,
+        authConfig(e),
+        E,
+        ek,
+        "s-over",
+        "198.51.99.1",
+        t0 + 600_000,
+      ),
+    ).toBeNull();
     expect(m.sent).toHaveLength(CODE_LIMITS.sendsPerEmailPerHour);
+  });
+
+  it("at most 10 real sends per address per day, across hours and networks", async () => {
+    await seedUser(E, "guest");
+    const m = mailer();
+    const e = withMail(direct(), m);
+    const ek = await emailKey(e, E);
+    const sendAt = (i: number) =>
+      deliverCode(
+        e,
+        authConfig(e),
+        E,
+        ek,
+        `d${i}`,
+        `198.51.${i}.1`,
+        hourStart(2 + Math.floor(i / 5)) + (i % 5) * 61_000,
+      );
+    for (let i = 0; i < CODE_LIMITS.sendsPerEmailPerDay; i++)
+      expect(await sendAt(i)).not.toBeNull();
+    expect(await sendAt(CODE_LIMITS.sendsPerEmailPerDay)).toBeNull();
+    expect(m.sent).toHaveLength(CODE_LIMITS.sendsPerEmailPerDay);
+  });
+
+  it("at most 5 sends per (address, IPv4 /24) and (address, IPv6 /64) per day", async () => {
+    await seedUser(E, "guest");
+    const m = mailer();
+    const e = withMail(direct(), m);
+    const ek = await emailKey(e, E);
+    const at = (h: number, i: number) => hourStart(h) + i * 61_000;
+    for (let i = 0; i < CODE_LIMITS.sendsPerEmailNetPerDay; i++)
+      expect(
+        await deliverCode(
+          e,
+          authConfig(e),
+          E,
+          ek,
+          `n${i}`,
+          `198.51.100.${i + 1}`,
+          at(3, i),
+        ),
+      ).not.toBeNull();
+    expect(
+      await deliverCode(
+        e,
+        authConfig(e),
+        E,
+        ek,
+        "n-over",
+        "198.51.100.200",
+        at(4, 0),
+      ),
+    ).toBeNull();
+    // Another /24 still gets one.
+    expect(
+      await deliverCode(
+        e,
+        authConfig(e),
+        E,
+        ek,
+        "n-other",
+        "198.51.101.1",
+        at(4, 1),
+      ),
+    ).not.toBeNull();
+
+    const F = uniq("g6", "x.com");
+    await seedUser(F, "guest");
+    const fk = await emailKey(e, F);
+    for (let i = 0; i < CODE_LIMITS.sendsPerEmailNetPerDay; i++)
+      expect(
+        await deliverCode(
+          e,
+          authConfig(e),
+          F,
+          fk,
+          `v${i}`,
+          `2001:db8:1:2::${i + 1}`,
+          at(3, i),
+        ),
+      ).not.toBeNull();
+    expect(
+      await deliverCode(
+        e,
+        authConfig(e),
+        F,
+        fk,
+        "v-over",
+        "2001:db8:1:2:ffff::9",
+        at(4, 0),
+      ),
+    ).toBeNull();
+    expect(
+      await deliverCode(
+        e,
+        authConfig(e),
+        F,
+        fk,
+        "v-other",
+        "2001:db8:1:3::1",
+        at(4, 1),
+      ),
+    ).not.toBeNull();
+  });
+
+  it("a second send inside 60 s isn't delivered (and frees its cap slots)", async () => {
+    await seedUser(E, "guest");
+    const m = mailer();
+    const e = withMail(direct(), m);
+    const ek = await emailKey(e, E);
+    const t0 = hourStart(5);
+    expect(
+      await deliverCode(e, authConfig(e), E, ek, "rs1", IP, t0),
+    ).not.toBeNull();
+    expect(
+      await deliverCode(e, authConfig(e), E, ek, "rs2", IP, t0 + 59_000),
+    ).toBeNull();
+    expect(m.sent).toHaveLength(1);
+    expect(await counter(`code:sent:${ek}`)).toBe(1);
+    expect(
+      await one("select 1 from login_codes where request_id = 'rs2'"),
+    ).toBeNull();
+    expect(
+      await deliverCode(e, authConfig(e), E, ek, "rs3", IP, t0 + 60_000),
+    ).not.toBeNull();
+    expect(m.sent).toHaveLength(2);
   });
 
   it("a full code pool sends nothing", async () => {
@@ -352,7 +544,7 @@ describe("deliverCode", () => {
     const e = withMail(direct({ CODE_EMAILS_PER_DAY: "3" }), m);
     await fillCounter("code:*", 3, "day");
     expect(
-      await deliverCode(e, authConfig(e), E, await emailKey(e, E), "p1"),
+      await deliverCode(e, authConfig(e), E, await emailKey(e, E), "p1", IP),
     ).toBeNull();
     expect(m.sent).toHaveLength(0);
     await fillCounter("code:*", 0, "day");
@@ -364,7 +556,7 @@ describe("deliverCode", () => {
     const e = withMail(direct({ EMAIL_DAILY_CAP: "1" }), m);
     await fillCounter("email:*", 1, "day");
     expect(
-      await deliverCode(e, authConfig(e), E, await emailKey(e, E), "sep"),
+      await deliverCode(e, authConfig(e), E, await emailKey(e, E), "sep", IP),
     ).not.toBeNull();
     await fillCounter("email:*", 0, "day");
   });
@@ -373,7 +565,7 @@ describe("deliverCode", () => {
     await seedUser(E, "guest");
     const e = withMail(direct(), mailer(true));
     const ek = await emailKey(e, E);
-    expect(await deliverCode(e, authConfig(e), E, ek, "fail-1")).toBeNull();
+    expect(await deliverCode(e, authConfig(e), E, ek, "fail-1", IP)).toBeNull();
     expect(
       await one("select 1 from login_codes where request_id = 'fail-1'"),
     ).toBeNull();
@@ -382,7 +574,7 @@ describe("deliverCode", () => {
   it("email off: nothing sent, no row", async () => {
     await seedUser(E, "guest");
     const ek = await emailKey(env, E);
-    expect(await deliverCode(direct(), cfg, E, ek, "off-1")).toBeNull();
+    expect(await deliverCode(direct(), cfg, E, ek, "off-1", IP)).toBeNull();
     expect(
       await one("select 1 from login_codes where request_id = 'off-1'"),
     ).toBeNull();
@@ -394,11 +586,25 @@ describe("deliverCode", () => {
     const m = mailer();
     const e = withMail(trial(), m);
     expect(
-      await deliverCode(e, authConfig(e), addr, await emailKey(e, addr), "t1"),
+      await deliverCode(
+        e,
+        authConfig(e),
+        addr,
+        await emailKey(e, addr),
+        "t1",
+        IP,
+      ),
     ).not.toBeNull();
     const g = withMail(direct(), m);
     expect(
-      await deliverCode(g, authConfig(g), addr, await emailKey(g, addr), "t2"),
+      await deliverCode(
+        g,
+        authConfig(g),
+        addr,
+        await emailKey(g, addr),
+        "t2",
+        IP,
+      ),
     ).toBeNull();
   });
 
@@ -413,7 +619,7 @@ describe("deliverCode", () => {
     const m = mailer();
     const e = withMail(direct(), m);
     const ek = await emailKey(e, E);
-    await deliverCode(e, authConfig(e), E, ek, "log-1");
+    await deliverCode(e, authConfig(e), E, ek, "log-1", IP);
     const code = m.codeFor(E);
     await verifyCode(e, authConfig(e), {
       email: E,
@@ -519,7 +725,7 @@ describe("a SESSION_SECRET under 32 characters", () => {
     const e = { ...short(), ...m.env } as Env;
     await seedUser("g@x.com", "guest");
     await expect(
-      deliverCode(e, authConfig(e), "g@x.com", "ek", "rid"),
+      deliverCode(e, authConfig(e), "g@x.com", "ek", "rid", IP),
     ).rejects.toMatchObject({ code: "code_unavailable" });
     expect(m.sent).toHaveLength(0);
     expect(

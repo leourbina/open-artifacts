@@ -78,30 +78,39 @@ export async function sweepEmailCounters(env: Env, now = Date.now()) {
 /** A counter cap: key, max, and the bucket it counts in (a day, an hour, …). */
 export type Cap = [key: string, max: number, bucket: string];
 
+const REFUND =
+  "update counters set n = n - 1 where key = ?1 and day = ?2 and n > 0";
+
 /**
- * Takes one slot under each cap, in one D1 batch (each an atomic conditional
- * upsert); true per cap that had room. A refused cap's siblings still count.
+ * Takes one slot under each cap, in order, each an atomic conditional
+ * upsert. All or nothing: at the first full cap the later caps are never
+ * touched and the earlier slots are refunded, so a refusal burns no sibling
+ * bucket. Returns the index of the refusing cap, or -1 when every slot was
+ * taken.
  */
-export async function takeEach(env: Env, caps: Cap[]): Promise<boolean[]> {
-  if (caps.length === 0) return [];
-  const rows = await env.DB.batch<{ n: number }>(
-    caps.map(([key, max, bucket]) => stmt(env.DB, TAKE).bind(key, bucket, max)),
-  );
-  return rows.map((r) => r.results.length > 0);
+export async function takeAll(env: Env, caps: Cap[]): Promise<number> {
+  for (let i = 0; i < caps.length; i++) {
+    const [key, max, bucket] = caps[i] as Cap;
+    const row = await stmt(env.DB, TAKE).bind(key, bucket, max).first();
+    if (row) continue;
+    if (i > 0)
+      await env.DB.batch(
+        caps.slice(0, i).map(([k, , b]) => stmt(env.DB, REFUND).bind(k, b)),
+      );
+    return i;
+  }
+  return -1;
+}
+
+/** Refunds one slot taken under each cap (a send that never happened). */
+export async function refundAll(env: Env, caps: Cap[]): Promise<void> {
+  if (caps.length === 0) return;
+  await env.DB.batch(caps.map(([k, , b]) => stmt(env.DB, REFUND).bind(k, b)));
 }
 
 /** True if EMAIL and EMAIL_FROM are both configured. */
 export const emailEnabled = (env: Env): boolean =>
   !!env.EMAIL && !!env.EMAIL_FROM;
-
-/**
- * Takes a slot under every daily cap (one D1 batch, each an atomic conditional
- * upsert). A send refused by one cap may still use a slot of another; that
- * only errs towards sending less.
- */
-async function takeSlot(env: Env, caps: Cap[]) {
-  return (await takeEach(env, caps)).every(Boolean);
-}
 
 /**
  * Sends `render()` to the (already validated) address `to` on behalf of
@@ -151,7 +160,7 @@ export async function sendEmail(
       if (opts.artifactId)
         caps.push([`email:a:${opts.artifactId}:${toKey}`, 1, day]);
     }
-    if (!(await takeSlot(env, caps))) {
+    if ((await takeAll(env, caps)) !== -1) {
       logFailed(opts.kind, "rate_limited");
       return false;
     }

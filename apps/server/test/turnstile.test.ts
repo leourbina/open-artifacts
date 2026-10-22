@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { authConfig } from "../src/auth/config.js";
-import { verifyTurnstile } from "../src/auth/turnstile.js";
+import { requireTurnstile, verifyTurnstile } from "../src/auth/turnstile.js";
 import { direct, trial } from "./auth-helpers.js";
+
+const HOST = "app.example.com";
+const ok = { success: true, hostname: HOST, action: "code_request" };
 
 const siteverify = (reply: () => Response | Promise<Response>) => {
   const calls: URLSearchParams[] = [];
@@ -18,10 +21,10 @@ const siteverify = (reply: () => Response | Promise<Response>) => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("verifyTurnstile", () => {
-  it("passes the secret, token and IP; true only on success: true", async () => {
-    const calls = siteverify(() => Response.json({ success: true }));
+  it("passes the secret, token and IP; true on success with our hostname and action", async () => {
+    const calls = siteverify(() => Response.json(ok));
     expect(
-      await verifyTurnstile(authConfig(trial()), "tok", "203.0.113.1"),
+      await verifyTurnstile(authConfig(trial()), "tok", "203.0.113.1", HOST),
     ).toBe(true);
     expect(Object.fromEntries(calls[0] ?? [])).toEqual({
       secret: "s",
@@ -30,22 +33,69 @@ describe("verifyTurnstile", () => {
     });
   });
 
+  it("refuses a token solved for another hostname", async () => {
+    siteverify(() => Response.json({ ...ok, hostname: "evil.example.com" }));
+    expect(await verifyTurnstile(authConfig(trial()), "tok", null, HOST)).toBe(
+      false,
+    );
+  });
+
+  it("refuses a token solved for another action (or none)", async () => {
+    siteverify(() => Response.json({ ...ok, action: "login" }));
+    expect(await verifyTurnstile(authConfig(trial()), "tok", null, HOST)).toBe(
+      false,
+    );
+    vi.restoreAllMocks();
+    siteverify(() => Response.json({ success: true, hostname: HOST }));
+    expect(await verifyTurnstile(authConfig(trial()), "tok", null, HOST)).toBe(
+      false,
+    );
+  });
+
   it("fails closed: refusal, HTTP error, network error, no token, not configured", async () => {
-    siteverify(() => Response.json({ success: false }));
-    expect(await verifyTurnstile(authConfig(trial()), "tok", null)).toBe(false);
+    const cfg = authConfig(trial());
+    siteverify(() => Response.json({ ...ok, success: false }));
+    expect(await verifyTurnstile(cfg, "tok", null, HOST)).toBe(false);
     vi.restoreAllMocks();
     siteverify(() => new Response("x", { status: 500 }));
-    expect(await verifyTurnstile(authConfig(trial()), "tok", null)).toBe(false);
+    expect(await verifyTurnstile(cfg, "tok", null, HOST)).toBe(false);
     vi.restoreAllMocks();
     siteverify(() => {
       throw new Error("down");
     });
-    expect(await verifyTurnstile(authConfig(trial()), "tok", null)).toBe(false);
-    expect(await verifyTurnstile(authConfig(trial()), undefined, null)).toBe(
+    expect(await verifyTurnstile(cfg, "tok", null, HOST)).toBe(false);
+    expect(await verifyTurnstile(cfg, undefined, null, HOST)).toBe(false);
+    expect(await verifyTurnstile(authConfig(direct()), "tok", null, HOST)).toBe(
       false,
     );
-    expect(await verifyTurnstile(authConfig(direct()), "tok", null)).toBe(
-      false,
-    );
+  });
+});
+
+describe("requireTurnstile", () => {
+  it("when configured, every request needs a token: none is turnstile_required", async () => {
+    const calls = siteverify(() => Response.json(ok));
+    for (let i = 0; i < 3; i++) {
+      await expect(
+        requireTurnstile(authConfig(trial()), undefined, null, HOST),
+      ).rejects.toMatchObject({
+        code: "turnstile_required",
+        details: { field: "turnstile", required: true },
+      });
+      await requireTurnstile(authConfig(trial()), `tok${i}`, null, HOST);
+    }
+    expect(calls).toHaveLength(3);
+  });
+
+  it("a refused token is turnstile_failed", async () => {
+    siteverify(() => Response.json({ ...ok, action: "other" }));
+    await expect(
+      requireTurnstile(authConfig(trial()), "tok", null, HOST),
+    ).rejects.toMatchObject({ code: "turnstile_failed" });
+  });
+
+  it("not configured: no check", async () => {
+    const calls = siteverify(() => Response.json(ok));
+    await requireTurnstile(authConfig(direct()), undefined, null, HOST);
+    expect(calls).toHaveLength(0);
   });
 });
