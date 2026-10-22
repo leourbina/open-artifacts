@@ -37,6 +37,9 @@ export const filler = (n: number) =>
   Array.from({ length: n }, (_, i) => ({ id: `f${i}`, title: `other-${i}` }));
 
 type World = {
+  /** App and content hosts the fake serves (default app.example.com and a.b.usercontent.example.com). */
+  appHost?: string;
+  contentHost?: string;
   /** Extra files (token files) and their modes. */
   files?: Record<string, string>;
   fileModes?: Record<string, number>;
@@ -512,12 +515,14 @@ export function world(w: World = {}) {
       return { code: 0, stdout, stderr: "" };
     },
     fetch: async (input, init) => {
+      const appHost = w.appHost ?? "app.example.com";
+      const contentHost = w.contentHost ?? "a.b.usercontent.example.com";
       const u = new URL(String(input));
       const m = init?.method ?? "GET";
       const auth = new Headers(init?.headers).get("authorization");
       const body = init?.body ? JSON.parse(String(init.body)) : undefined;
       const q = (k: string) => u.searchParams.get(k);
-      if (u.host === "app.example.com") {
+      if (u.host === appHost) {
         if (u.pathname === "/healthz") {
           hits.push("GET /healthz");
           if (w.healthzDown) throw new Error("fetch failed");
@@ -630,7 +635,7 @@ export function world(w: World = {}) {
                 structuredContent: {
                   id,
                   version: 1,
-                  url: w.viewUrl ?? `https://app.example.com/a/${id}`,
+                  url: w.viewUrl ?? `https://${appHost}/a/${id}`,
                 },
               },
               true,
@@ -651,13 +656,13 @@ export function world(w: World = {}) {
           )
             return Response.json({ error: "unauthorized" }, { status: 401 });
           return Response.json({
-            url: `https://a.b.usercontent.example.com/s/sig/${cu[1]}/1/__view`,
+            url: `https://${contentHost}/s/sig/${cu[1]}/1/__view`,
             expiresAt: "2026-10-18T00:00:00.000Z",
           });
         }
         return new Response("nf", { status: 404 });
       }
-      if (u.host === "a.b.usercontent.example.com") {
+      if (u.host === contentHost) {
         hits.push(`GET content ${auth ? "with auth" : "no auth"}`);
         const last = lastPublished;
         if (w.contentStatus)
