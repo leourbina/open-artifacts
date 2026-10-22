@@ -93,6 +93,7 @@ export const HOSTED_ADDED = [
   "NIGHTLY_PUBKEY",
   "TEST_HOOKS",
   "TEST_HOOK_KEY",
+  "TEST_DOMAIN",
   "SESSION_SECRET",
   "CONTENT_SIGNING_KEY",
 ] as const;
@@ -122,6 +123,10 @@ export const HOSTED_VARS: Record<string, (v: string) => string | undefined> = {
       ? undefined
       : "expected an https URL",
   EMAIL_FROM: (v) => (EMAIL_RE.test(v) ? undefined : "expected an email"),
+  // Test-hook installs only (checked in userWorkerMetadata): hooks act only
+  // on emails @TEST_DOMAIN.
+  TEST_DOMAIN: (v) =>
+    HOST_RE.test(v) ? undefined : "expected a lowercase hostname",
   NIGHTLY_PUBKEY: (v) =>
     /^[A-Za-z0-9_-]{43}$/.test(v) &&
     Buffer.from(v, "base64url").toString("base64url") === v
@@ -289,6 +294,10 @@ export function userWorkerMetadata(
     const why = check(v);
     if (why) throw new Error(`invalid var ${k}: ${why}`);
   }
+  if (i.vars.TEST_DOMAIN !== undefined && (!i.testHooks || r.env === "prod"))
+    throw new Error(
+      "TEST_DOMAIN is only allowed on test-hook installs outside prod",
+    );
   if (i.vars.INSTALL_ID !== undefined && i.vars.INSTALL_ID !== i.id)
     throw new Error("INSTALL_ID must equal the install id");
   if (i.vars.EMAIL_FROM !== undefined && i.vars.EMAIL_FROM !== emailFrom)
@@ -359,6 +368,8 @@ export function userWorkerMetadata(
     if (v !== undefined) plain[k] = normalizeVar(k, v);
   }
   if (i.testHooks) plain.TEST_HOOKS = "1";
+  if (i.testHooks && i.vars.TEST_DOMAIN !== undefined)
+    plain.TEST_DOMAIN = i.vars.TEST_DOMAIN;
 
   const bindings: Binding[] = Object.entries(plain).map(([name, text]) => ({
     type: "plain_text",
