@@ -37,7 +37,7 @@
   - Once sync has been unhealthy for over 1 h, browser sessions older than 24 h are refused and a banner appears. PATs and MCP OAuth grants are exempt from that cap; the banner says "agent tokens not re-verified" (`tokensUnverified: true`).
   - Owners get an email at 24 h.
   - There is **no stale cutoff** (user decision, 2026-10-21 PM): while sync is unhealthy, synced people keep last-sync access indefinitely, PATs and MCP OAuth grants included. `staleAt` is informational only (Task 18).
-- **Break-glass for a stale org owner:**
+- **Break-glass for an org owner locked out by `customer_mismatch`** (a stale directory never locks anyone out):
   - It needs a fresh Google sign-in (`hd` verified, within 10 min).
   - It opens only the directory status, connect and sync routes.
   - Every use is audited and emails the owner.
@@ -70,11 +70,11 @@
 ## Decision table (`auth/policy.ts`; Task 2)
 
 Inputs, gathered by one statement (Task 3):
-- **`caller`:** anonymous, or an active member with `id` and `orgRole`. Inactive or stale users never reach the table: `getUser` returns null (Tasks 6 and 18).
+- **`caller`:** anonymous, or an active member with `id` and `orgRole`. Inactive users never reach the table: `getUser` returns null (Task 6), as it does for synced users while the directory is in `customer_mismatch` (Task 18). Access unchanged when stale; `staleAt` is informational.
 - **`cap`:** a `CapReason | null` from `capOf`. `"guest"`: guests when P2's `authConfig.guestsReadOnly` is true. That is the one source: it is true whenever Google or email sign-in is enabled and is not configurable; `FEATURES` cannot set `guests_read_only`, which is only reported. `"restricted"`: the contract's `Restriction` `{ manual, groups: GroupRef[] }` (`Member.restriction`) is restricted if either applies. It is stored as `users.restricted_manual` (the admin's flag) and `users.restricted_sync` (member of a restricted group, kept by sync; frozen group restrictions stay in force). Restricted users never get `allMembersRole`. It is also reported as `Me.auth.cap`.
 - **Artifact:** `spaceKind` personal or shared, `spaceId`, `visibility`, `deleted`.
 - **Space:** `publicLinks`, `allMembersRole`.
-- **`spaceRole`:** the max over `space_members` rows for `caller.id` (manual and sync), plus `allMembersRole` when the caller is not a guest and `!cap`.
+- **`spaceRole`:** the max over `space_members` rows for `caller.id` (manual and sync), the caller's "Every space" role (the max `org_group_mappings.role` over the caller's groups, resolved at read time; shared spaces only, never personal), plus `allMembersRole` when the caller is not a guest and `!cap`.
 - **`shareRole`:** the caller's share on this artifact, if any.
 
 First match wins. Then, if `cap` is set, the level is capped at viewer.
@@ -135,7 +135,7 @@ Each surface's gate is enforced by `enforcePolicy` middleware (Task 5) before th
 | Uploads (create, put) | `upload` on the target artifact | next request |
 | MCP tools, all 17 plus `list_spaces` | `TOOL_POLICY`, checked against `tool-manifest.json` | next call (user row read per call; grants revoked) |
 | REST data API, storage, data reset, anon id | runtime `gate()` kinds mapped 1:1 to actions | next request |
-| Content host `/c/` signed (frame and `?dl=1`) | minted after `content.mint`; token carries `uid`; the serve statement joins `users.status` and staleness | next request |
+| Content host `/c/` signed (frame and `?dl=1`) | minted after `content.mint`; token carries `uid`; the serve statement joins `users.status` and the `customer_mismatch` check (staleness is not checked) | next request |
 | Content host `/p/` public | the serve statement requires `visibility = public` (the public-links toggle only blocks new links, so it is not part of this check) | next request |
 | data-subscribe WS | `subscribe` + presence `touch(authzAt)` awaited in the DO accept path | under 1 s |
 | events WS | `events` + same presence path; publisher names from policy | under 1 s |
@@ -195,6 +195,7 @@ Each surface's gate is enforced by `enforcePolicy` middleware (Task 5) before th
   - `spaces(id pk, kind 'personal'|'shared', name, owner_user_id null, all_members_role null, public_links int default 0, created_at, deleted_at)`. No `outside_sharing` column: it is dropped from both the schema and the contract until M4 (decided).
   - `space_members(space_id, user_id, role, source 'manual'|'sync', created_at, pk(space_id, user_id, source))`, with an index on `(user_id)`.
   - `group_mappings(space_id, group_id, group_email, role, pk(space_id, group_id))`.
+  - `org_group_mappings(group_id pk, group_email, role)`: the "Every space" mapping. One row per group, never expanded into per-space rows: it is resolved at read time as the max with the per-space roles (Tasks 3 and 4), applies to every shared space including ones created later, and never to a personal space.
   - `restricted_groups(group_id pk, group_email)`, keyed by Google `groupId`, never the email.
   - `directory_groups(group_id pk, email, parent_ids json, gen)`.
   - `directory_members(group_id, user_id, gen, pk(group_id, user_id))`.
@@ -285,7 +286,7 @@ it("orgCan artifact.create refuses capped members", () => { /* false */ });
   - `authorize(env, c: Caller, artifactId, action: PolicyAction, opts?: { allowDeleted?: boolean }): Promise<{ level: AccessLevel; artifact: ArtifactRow; space: SpaceRow; can: ArtifactCan }>` (`can` from `artifactCan`). It throws `not_found` when `!can`, or `capability_denied` for runtime actions on an undeclared capability.
   - `roleIn(env, userId: string, spaceId: string): Promise<SpaceRole | null>`.
   - `loadSpace(env, c: Caller, spaceId, action: OrgAction): Promise<SpaceRow>`: an unseen space is 404; a personal space is 400 `space_personal` on every spaces route, move and transfer target (contract), except `space.publish` when `spaceId == caller.id` (publishing into one's own personal space).
-- One SQL statement: `artifacts` by PK, joined to `spaces` by PK and to `shares` on (artifact, caller email). A scalar `max(rank)` over `space_members where space_id = ? and user_id = ?` gives the space role; `users.restricted` and `status` come from the session row already loaded.
+- One SQL statement: `artifacts` by PK, joined to `spaces` by PK and to `shares` on (artifact, caller email). A scalar `max(rank)` over `space_members where space_id = ? and user_id = ?`, maxed (when `spaces.kind = 'shared'`) with a scalar `max(rank)` over `org_group_mappings` joined to `directory_members` on `group_id` for `user_id = ?`, gives the space role (the Every-space term reads one row per org mapping, a handful); `users.restricted` and `status` come from the session row already loaded.
 - `accessLevel` becomes a thin wrapper until Task 5 deletes it. `requireAccess(min)` stays, built on the contract's exact-owner rule (server `meetsLevel`): `manager` has the owner's rank but never passes an owner check, so `requireAccess(..., "owner")` refuses `manager`. Every manager-allowed action (share, setVisibility, delete, undelete, data reset, move) goes through `authorize(..., action)` and `can`, never `requireAccess("owner")`. The only `requireAccess("owner")` left is single transfer.
 
 - [ ] **Step 1: Write failing tests** with rows-read counting (the `meta.rows_read` proxy, as `d1-rows.test.ts` does):
@@ -325,7 +326,7 @@ it("MCP data tools: creator without db capability gets capability_denied", async
   - **mine:** `space_id = caller.id`.
   - **shared:** the share subquery.
   - **team:** `visibility in (team, public)` for non-guests; public regardless of the space's public-links toggle (it only blocks new public links).
-  - **spaces:** `space_id in (select sm.space_id from space_members sm join spaces s on s.id = sm.space_id and s.kind = 'shared' where sm.user_id = ?)`, OR `space_id in (select id from spaces where kind = 'shared' and all_members_role is not null)` (the second omitted for guests and capped users).
+  - **spaces:** `space_id in (select sm.space_id from space_members sm join spaces s on s.id = sm.space_id and s.kind = 'shared' where sm.user_id = ?)`, OR `space_id in (select id from spaces where kind = 'shared' and all_members_role is not null)` (omitted for guests and capped users), OR `space_id in (select id from spaces where kind = 'shared') and exists (select 1 from org_group_mappings ogm join directory_members dm on dm.group_id = ogm.group_id where dm.user_id = ?)` (the Every-space mapping, resolved at read time; never personal spaces). `levelSql` takes the max of the per-space role and the Every-space role in the same `CASE`.
   - **space:** one shared space (`loadSpace` first).
 
 - [ ] **Step 1: Failing tests**
@@ -340,6 +341,8 @@ it("list(all) ids and levels equal authorize() for every seeded artifact", async
 });
 it("scope=space with another user's personal space id returns 400 space_personal and lists nothing", async () => { /* attack seed */ });
 it("search never returns another user's personal artifact to an admin", async () => { /* empty */ });
+it("an Every-space editor mapping lists every shared space (including one created after the mapping) at editor, and no personal space", async () => { /* editor; personal absent */ });
+it("Every-space viewer and per-space manager resolve to manager (max at read time)", async () => { /* manager */ });
 ```
 
 - [ ] **Step 2: Run.** Expected: fails (`scope` enum has no "space").
@@ -386,7 +389,7 @@ describe.each(scopedRoutesAndTools())("%s", (r) => {
 
 **Interfaces:**
 - Produces: `setUserStatus(env, userId, status, why: AuditReason, ctx?): Promise<void>`. It writes the status, revokes PATs, calls `revokeAllGrants` and then `revokeUserLive`, and writes an `audit` row in the same batch.
-- `getUser` returns null unless `status = 'active'` and the user is not stale (Task 18 extends the same statement).
+- `getUser` returns null unless `status = 'active'` (Task 18 extends the same statement with the `customer_mismatch` check for synced users). Access unchanged when stale; `staleAt` is informational.
 - Admission is P2's (confirmed seam): `identities(provider, subject)` is the only link, P2 verifies `sub ==` the directory user id, refuses non-active users, and then calls P3's `onGoogleSignIn(env, user)` (Task 14). P3 adds no admission code; its tests assert the seam behaviour end to end.
 - `removeMember` with `FEATURES.spaces` on calls `setUserStatus("removed")` and keeps the row and personal space.
 
@@ -414,7 +417,7 @@ it("unsuspend sets status back to active; a removed row stays removed", async ()
   - `closeAll(reason): Promise<number>`: sets `revokedAt = now` first. It then calls `closeActor` per recorded artifact, and failed closes go to a durable retry queue in its own storage, retried by alarm with backoff until 11 min old.
 - The route passes `authzAt` (when `authorize` ran) in a header to the artifact DO. The DO's accept path awaits `presence.touch`; if `ok` is false, it closes the socket with 4403 at once.
 - `ArtifactRuntime.closeActor(actor, reason): number`: every data and events socket is tagged `a:{actor}`.
-- `revokeUserLive(env, userId, reason, ctx?)`: never throws. It is called by `setUserStatus`, membership and mapping narrowing, sync, `removeMember`, transfer and stale (Task 18).
+- `revokeUserLive(env, userId, reason, ctx?)`: never throws. It is called by `setUserStatus`, membership and mapping narrowing, sync, `removeMember`, transfer and a customer mismatch (Task 18). Staleness never calls it.
 
 - [ ] **Step 1: Failing tests**
 
@@ -464,12 +467,13 @@ it("export streams NDJSON with one line per event", async () => { /* lines.lengt
 
 **Interfaces:**
 - Routes and shapes exactly as in PR #359: `R.spaces` (`SpacesQuery` → `Page<Space>`), `R.space(id)`, `R.spaceMembers(id)` (`Page<SpaceMember>`), `R.spaceMember(id, userId)`, `R.spaceMappings(id)`, `R.spaceMapping(id, groupId)`, and the instance-wide `R.restrictedGroups` / `R.restrictedGroup(groupId)` (keyed by `groupId`; groups appear as `GroupRef { groupId, email, name }` everywhere). `PUT R.restrictedGroup` is 409 `directory_sync_off` when sync is off or frozen; `DELETE` works in any mode and lifts a frozen restriction. The manual flag `PUT/DELETE R.memberRestricted(id)` (→ `Member` with `restriction`; org owner or admin; any mode; audited `restricted.set` / `restricted.remove`) covers Team, manual and frozen installs and never lifts a group restriction. Any restriction change calls `revokeUserLive`. Owners and admins can never be restricted: `R.memberRestricted` on an owner or admin target is 400 `restrict_admin` (contract #370), and `orgCan` also drops every admin power under a cap as belt and braces. Mapping changes and restricted-group adds while sync is off or frozen are 409 `directory_sync_off`. Personal spaces on any of these routes are 400 `space_personal`; deleting a non-empty space is 409 `space_not_empty`.
+- **Every-space mappings (pending contract additions):** `GET R.orgMappings` (→ `Page<GroupMapping>`), `PUT R.orgMapping(groupId)` (`GroupMappingPut` → `GroupMapping`) and `DELETE R.orgMapping(groupId)` (204), org owner or admin (`space.mappings`), 409 `directory_sync_off` while sync is off or frozen, audited `mapping.set` / `mapping.remove` with `detail.scope = "org"`. PUT and DELETE write the one `org_group_mappings` row and the audit row; they never write per-space rows. The role is resolved at read time as the max with per-space roles (Tasks 3 and 4), applies to shared spaces created later with no extra write, and never applies to a personal space. PUT kicks `DirectorySync` (`mapping`) so the group's `directory_members` rows exist; DELETE or a lowered role enqueues `revokeUsers` for the group's members.
 - `PATCH R.space(id)`: `SPACE_MANAGER_FIELDS` (`name`, `publicLinks`) for space managers and org admins; `allMembersRole` for org admins. Every `publicLinks` change writes `space.public_links`.
 - **Public links off (user decision, 2026-10-21 PM): it only blocks NEW links.**
   - One batch: the space update and the audit row. Nothing else: no artifact is rewritten to `team` and no socket is closed. Existing `/p/` links and their anonymous sockets keep working (the serving check never consults `public_links`).
   - New `public` on that space (PATCH or publish) is 403 `public_links_off`, enforced on the visibility route itself (pinned from the #367 review).
   - The move rule is separate (T10): a public artifact moved into a no-public-links space is rewritten to `team` in the move batch and its sockets close.
-- **Lowering `allMembersRole`, removing a mapping, or removing a member:** the job `revokeUsers(userIds)` runs in pages of 50, with no cap.
+- **Lowering `allMembersRole`, removing or lowering a mapping (per-space or Every-space), or removing a member:** the job `revokeUsers(userIds)` runs in pages of 50, with no cap.
 - Admin self-add (`POST R.spaceMemberSelf(id)`, `SpaceMemberPut` → 201 `SpaceMember`, org admin): shared spaces only (else 400 `space_personal`); writes `space.admin_self_add` and emails the space managers.
 
 - [ ] **Step 1: Failing tests**
@@ -490,13 +494,15 @@ it("manual restricted DELETE never lifts a group restriction", async () => { /* 
 it("restricting an owner or admin → 400 restrict_admin", async () => { /* 400 x2 */ });
 it("space manager may turn public links off; audited space.public_links", async () => { /* 200 */ });
 it("mapping PUT while sync is off → 409 directory_sync_off", async () => { /* 409 */ });
+it("PUT R.orgMapping writes one org_group_mappings row and no space_members rows; a space created later grants the role; personal spaces never do", async () => { /* 1 row; role in new space; personal 404 */ });
+it("DELETE R.orgMapping revokes the group's members' live access", async () => { /* 4403 */ });
 it("GET /spaces pages with nextCursor", async () => { /* items.length === limit; nextCursor set */ });
 it("self-add to a shared space by an admin audits and emails managers", async () => { /* 1 audit, 1 email per manager */ });
 it("self-add to a personal space → 400 space_personal", async () => { /* 400 */ });
 it("spaces flag off → POST /spaces 404, authz unchanged", async () => { /* 404 */ });
 ```
 
-- [ ] **Step 2: Run.** Expected: 13 failed. **Step 3: Implement.** **Step 4: Run** `pnpm -F @oa/server test spaces.api`. Expected: 13 passed.
+- [ ] **Step 2: Run.** Expected: 15 failed. **Step 3: Implement.** **Step 4: Run** `pnpm -F @oa/server test spaces.api`. Expected: 15 passed.
 - [ ] **Step 5: Commit** `feat(server): spaces API, public-links-off and space-wide revocation (P3)`.
 
 ### Task 10: Publish into spaces, move, transfer, MCP
@@ -562,9 +568,9 @@ from artifacts a join spaces s on s.id = a.space_id where a.id = ?1
 
 - Serving rules:
   - `/p/`: needs `visibility = 'public'` (the space's public-links toggle is not checked: it only blocks new links).
-  - `/c/` with a `uid`: needs `viewer_status = 'active'` and the user not stale (Task 18's condition in the same statement).
+  - `/c/` with a `uid`: needs `viewer_status = 'active'` and, for a synced user, no `customer_mismatch` (Task 18's condition in the same statement). Access unchanged when stale; `staleAt` is informational.
   - Anything else returns 404.
-- No KV. The `uid` status and staleness check runs when `FEATURES` has `content_revocation` (hosted sets it), as reworded in #359's flag table. The public-links toggle is deliberately absent here: turning it off never revokes an existing link.
+- No KV. The `uid` status check runs when `FEATURES` has `content_revocation` (hosted sets it), as reworded in #359's flag table. The public-links toggle is deliberately absent here: turning it off never revokes an existing link.
 
 - [ ] **Step 1: Failing tests**
 
@@ -682,7 +688,7 @@ it("500-user page parse + diff under 10 ms CPU", async () => { /* cpu */ });
 **Files:** Create `directory/apply.ts`, `directory/signin.ts`; Test `apps/server/test/directory.apply.test.ts`
 
 **Interfaces:**
-- `applyGroupDiff(env, groupId, added: string[], removed: string[], actor: AuditActor): Promise<{ narrowed: string[] }>`. It works on user ids, recomputes `space_members(source='sync')` as the max over mappings, recomputes `users.restricted_sync` (by `groupId`; owners and admins in a restricted group are logged and skipped, never restricted), and writes only the rows that changed. `narrowed` goes to `revokeUserLive`.
+- `applyGroupDiff(env, groupId, added: string[], removed: string[], actor: AuditActor): Promise<{ narrowed: string[] }>`. It works on user ids, keeps the group's flattened `directory_members` rows (nested groups resolved through `parent_ids`), recomputes `space_members(source='sync')` as the max over that space's per-space `group_mappings` only, recomputes `users.restricted_sync` (by `groupId`; owners and admins in a restricted group are logged and skipped, never restricted), and writes only the rows that changed. An Every-space mapping (`org_group_mappings`) is never expanded into `space_members` rows: its role is joined at read time (Tasks 3 and 4), so `applyGroupDiff` writes only the group's `directory_members` rows for it, and never touches a personal space. `narrowed` (users whose per-space or Every-space role dropped) goes to `revokeUserLive`.
 - `applyUser(env, u: DirUser, run: string): Promise<void>` (status changes carry `AuditReason` `directory_suspend`, `directory_unsuspend`, `directory_delete` or `directory_new_id`). It matches only through `identities('google', u.id)`. An unknown id creates a new user row and identity (the trigger creates the personal space). Unsuspend sets `status = 'active'` only on a `suspended` row; a `removed` row is never revived. `getUser` returns only `active` rows (#368), so a suspension is refused on every surface by that check.
 - `DELETE_USER`, or a `deleted` user in a listing:
   - `setUserStatus("removed")`.
@@ -693,7 +699,7 @@ it("500-user page parse + diff under 10 ms CPU", async () => { /* cpu */ });
 - `CHANGE_PRIMARY_EMAIL`: update `users.email` for that identity. Shares on the old address move only if the old address is the same identity's alias (otherwise they stay).
 - `onGoogleSignIn(env, user: Member)` is called by P2 after admission (directory id from the user's bound Google identity):
   - It checks `users.get` (suspended means refuse) and `userGroups`, then `applyGroupDiff` for that user only.
-  - If Google is unreachable, the sign-in proceeds (fail static) unless the install is stale or in `customer_mismatch`.
+  - If Google is unreachable, the sign-in proceeds (fail static) unless the install is in `customer_mismatch`. Access unchanged when stale; `staleAt` is informational.
 - P2 verifies Google `sub == directory user id` on sign-in (the seam test lives in P2; this task asserts it).
 
 - [ ] **Step 1: Failing tests**
@@ -706,6 +712,8 @@ it("recycled email: new Bob gets a new row and an empty personal space, no share
   expect(await listMine(nb)).toEqual([]); expect(await spaceRolesOf(nb.id)).toEqual([]);
 });
 it("two groups → max role; removal from one keeps the other, no revoke", async () => { /* editor stays */ });
+it("an Every-space group writes directory_members only, no space_members rows, and nothing for personal spaces", async () => { /* 0 sync rows */ });
+it("removal from an Every-space group narrows that user", async () => { /* narrowed contains user */ });
 it("restricted group membership (by groupId) sets users.restricted_sync and caps", async () => { /* restricted_sync = 1 */ });
 it("sign-in group diff adds and removes for that user only", async () => { /* one user's rows changed */ });
 it("rows written equal changed rows only", async () => { /* d1 rows */ });
@@ -713,7 +721,7 @@ it("directory UNSUSPEND_USER sets status active, never revives a removed row", a
 it("an owner or admin in a restricted group is skipped and logged", async () => { /* restricted_sync = 0; audit detail */ });
 ```
 
-- [ ] **Step 2: Run.** Expected: 5 failed. **Step 3: Implement.** **Step 4: Run** `pnpm -F @oa/server test directory.apply`. Expected: passes.
+- [ ] **Step 2: Run.** Expected: 9 failed. **Step 3: Implement.** **Step 4: Run** `pnpm -F @oa/server test directory.apply`. Expected: passes.
 - [ ] **Step 5: Commit** `feat(server): apply directory state by identity, never by email (P3)`.
 
 ### Task 15: Features and tier transitions
@@ -743,7 +751,7 @@ it("frozen still suspends departed users", async () => { /* suspended */ });
 **Files:** Create `test/authz/fixture.ts`, `test/authz/expect.ts`, `test/authz/surfaces.ts`, `test/authz.surface-matrix.test.ts`, `scripts/authz-probe.ts`; Modify `package.json` (`"test:authz-probe"`)
 
 **Interfaces:**
-- **Callers (16):** `orgOwner, orgAdmin, spaceManager, spaceEditor, spaceViewer, allMembersOnly, personalOwner, otherMember, guestShared, guestMappedEditor, restrictedContractor, suspendedUser, removedUser, recycledEmailUser, staleSynced, anonymous`. Each has a `Cred` (cookie, PAT, OAuth) where applicable.
+- **Callers (16):** `orgOwner, orgAdmin, spaceManager, spaceEditor, spaceViewer, allMembersOnly, personalOwner, otherMember, guestShared, guestMappedEditor, restrictedContractor, suspendedUser, removedUser, recycledEmailUser, staleSynced, anonymous` (`staleSynced` expects the same access as a fresh synced member). Each has a `Cred` (cookie, PAT, OAuth) where applicable.
 - **Artifacts (9):** `personalPrivate, personalTeam, personalPublic, spacePrivate, spaceTeam, spacePublic, spaceLinksOff, deletedPersonal, deletedSpace`.
 - **Attack seeds:** `otherPersonalSpaceId` (for publish, move and list `scope=space`).
 - `expect.ts`: `EXPECTED: Record<Caller, Record<Artifact, AccessLevel | null>>`, a literal table independent of `policy.ts`.
@@ -786,16 +794,16 @@ describe.each(SURFACES)("$name", (s) => {
 - [ ] **Step 1: Failing tests:** `"session with spaces: the caller has that role"`, `"TEST_HOOKS unset → 404"`, `"TEST_HOOKS=1 but TEST_HOOKS_ALLOWED false → 404"`, `"unknown role → 400"`.
 - [ ] **Step 2: Run.** Expected: 4 failed. **Step 3: Implement.** **Step 4: Run** `pnpm -F @oa/server test test-hooks`. Expected: passes. **Step 5: Commit** `test(server): test session hook seeds space roles (P3)`.
 
-### Task 18: Staleness, the session cap and break-glass
+### Task 18: Informational staleness, the session cap and break-glass
 
 **Files:** Modify `services/users.ts` (`getUser`), `http/middleware.ts` (session), `directory/sync-do.ts`, `routes/directory.ts`; Test `apps/server/test/directory.stale.test.ts`, matrix caller `staleSynced`
 
 **Interfaces:**
-- A **synced user** has an `identities(provider = 'google', subject)` row whose subject is bound to the connected directory (the binding from Task 12's initial pass and Task 14's `applyUser`, recorded as `identities.directory_bound = 1`; there is no `users.directory_id`), while a directory is connected (any tier, frozen included). `LIMITS.directoryStaleMs = 7 * 86_400_000`.
-- `getUser` keeps one statement and adds `and not (synced and (state = 'customer_mismatch' or last_success_at < now - directoryStaleMs))`. The content `load()` statement adds the same condition.
+- A **synced user** has an `identities(provider = 'google', subject)` row whose subject is bound to the connected directory (the binding from Task 12's initial pass and Task 14's `applyUser`, recorded as `identities.directory_bound = 1`; there is no `users.directory_id`), while a directory is connected (any tier, frozen included). `LIMITS.directoryStaleMs = 7 * 86_400_000` only decides when `staleAt` is reported.
+- `getUser` keeps one statement and adds `and not (synced and state = 'customer_mismatch')`. The content `load()` statement adds the same condition. Access unchanged when stale; `staleAt` is informational.
 - Session cap: if `unhealthy_since < now - 1h` and the cookie session's `iat < now - 24h` (P2's session payload carries `iat`, `p` (provider), `t` and `e`), the session resolves to null. PATs and MCP OAuth grants are exempt from this 24 h cap (decided). No stale cutoff applies to them: while unhealthy everyone keeps last-sync access; `staleAt` is informational. While unhealthy, `Me.instance.directory.health` (owners) carries `tokensUnverified: true` and the banner adds "agent tokens not re-verified".
-- On the first alarm past stale, `DirectorySync` runs `revokeUserLive` over all synced users (50 per alarm) and writes the audit row `directory.stale`. If that fails, sockets still re-gate at their 10 min rotation.
-- **Break-glass:** a stale or `customer_mismatch` org owner gets a restricted resolution only when all of these hold (otherwise 401 `reauth_required` on those routes):
+- On the first alarm past `directoryStaleMs`, `DirectorySync` sets `staleAt` and writes the audit row `directory.stale` (informational). It revokes nothing: access unchanged when stale; `staleAt` is informational.
+- **Break-glass:** a `customer_mismatch` org owner gets a restricted resolution only when all of these hold (otherwise 401 `reauth_required` on those routes):
   - The session's `p = 'google'`, with `hd` verified by P2.
   - `iat >= now - 10 min`.
   - The route is one of `R.directory` (GET), `R.directoryConnect`, `R.directoryCallback` or `R.directorySync`.
@@ -807,21 +815,21 @@ describe.each(SURFACES)("$name", (s) => {
 
 ```ts
 it("7 days + 1 min since success: staleAt is reported but access is unchanged (no stale cutoff)", async () => { /* access 200, staleAt set */ });
-it("stale: open sockets close 4403 and /c/ returns 404", async () => { /* 4403; 404 */ });
-it("6 d 23 h: allowed", async () => { /* allow */ });
+it("stale: open sockets stay open and /c/ still serves (access unchanged)", async () => { /* open; 200 */ });
+it("6 d 23 h: staleAt is null", async () => { /* null */ });
 it("manual member and OTP guest unaffected", async () => { /* allow */ });
 it("unhealthy 61 min: cookie session 25 h old → 401; 23 h old → 200", async () => { /* 401; 200 */ });
 it("unhealthy: a 30-day-old PAT and MCP grant still work; me.instance.directory.health.tokensUnverified is true for owners", async () => { /* 200; true */ });
-it("stale synced user's PAT and MCP OAuth grant get 401/404 on every SURFACES entry", async () => { /* all deny */ });
+it("stale synced user's PAT and MCP OAuth grant keep access on every SURFACES entry", async () => { /* all allow */ });
 it("break-glass: fresh Google sign-in (9 min) reaches R.directory; 11 min → 401 reauth_required", async () => { /* 200; 401 */ });
 it("break-glass: OTP session refused; artifact, data and member routes refused", async () => { /* 401 x4 */ });
 it("break-glass: each use audits and emails the owner", async () => { /* 1 audit, 1 email per use */ });
-it("success after stale restores access", async () => { /* allow */ });
+it("success after stale clears staleAt; access never changed", async () => { /* staleAt null; allow */ });
 ```
 
 - [ ] **Step 2: Run** `pnpm -F @oa/server test directory.stale`. Expected: 11 failed.
 - [ ] **Step 3: Implement.** **Step 4: Run** `pnpm -F @oa/server test directory.stale authz.surface-matrix`. Expected: passes.
-- [ ] **Step 5: Commit** `feat(server): stale fail-closed, session cap, break-glass (P3)`.
+- [ ] **Step 5: Commit** `feat(server): informational staleAt, session cap, break-glass (P3)`.
 
 ### Task 19: `usage_off` feature flag
 
@@ -851,6 +859,7 @@ P3 implements the server side of PR #359's spaces, artifacts and directory secti
 |---|---|---|
 | `AccessLevelSchema` + `manager`; `ArtifactSummary.space` (`SpaceRef`) and `.can` (`artifactCan`) | CHANGED | 2, 3, 4 |
 | `R.spaces`, `R.space`, `R.spaceMembers`, `R.spaceMember`, `R.spaceMappings`, `R.spaceMapping` | NEW | 9 |
+| `GET R.orgMappings` (`Page<GroupMapping>`), `PUT R.orgMapping(groupId)` (`GroupMappingPut`), `DELETE R.orgMapping(groupId)`: the Every-space mapping (`org_group_mappings`, #408) | PENDING contract addition | 4, 9, 14 |
 | `R.restrictedGroups`, `R.restrictedGroup(groupId)` (`RestrictedGroup`), `R.memberRestricted(id)`, `R.spaceMemberSelf(id)`; `GroupRef`, `Restriction`, `Member.restriction` | NEW | 6, 9, 14 |
 | `R.directory`, `R.directoryGroups`, `R.directoryConnect`, `R.directoryCallback`, `R.directorySync`, `R.directoryHeldConfirm` (`SyncStatus`, `DirectoryGroup`, `DirectoryConnectError`) | NEW | 12, 13 |
 | `R.audit`, `R.auditExport` (`AuditEvent`) | NEW | 8 |
