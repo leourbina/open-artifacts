@@ -46,23 +46,34 @@ const first = (m: SpaceMember) =>
   m.user.name?.trim().split(/\s+/)[0] || m.user.email?.split("@")[0] || "";
 const nameOf = (m: SpaceMember) => displayName(m.user);
 
-/** "via eng@, Every space (exec@)": the groups that grant the synced role. */
-const groupsText = (m: SpaceMember, lead = "via ") => {
-  const own = m.groups
-    .filter((g) => g.via === "space")
-    .map((g) => short(g.email));
-  const every = m.groups
-    .filter((g) => g.via === "every")
-    .map((g) => short(g.email));
-  return [
-    own.length ? `${lead}${own.join(", ")}` : null,
-    every.length ? `Every space (${every.join(", ")})` : null,
-  ]
-    .filter(Boolean)
-    .join(", ");
+/**
+ * The groups that grant the synced role, one per group: a group mapped here
+ * and as Every space shows only its stronger entry (a tie keeps this space's).
+ */
+const grants = (m: SpaceMember) => {
+  const best = new Map<string, SpaceMember["groups"][number]>();
+  for (const g of m.groups) {
+    const had = best.get(g.groupId);
+    if (
+      !had ||
+      RANK[g.role] > RANK[had.role] ||
+      (RANK[g.role] === RANK[had.role] && g.via === "space")
+    )
+      best.set(g.groupId, g);
+  }
+  return [...best.values()];
+};
+/** "via eng@, exec@ (every space)". */
+const groupsText = (m: SpaceMember) => {
+  const list = grants(m).map(
+    (g) => `${short(g.email)}${g.via === "every" ? " (every space)" : ""}`,
+  );
+  return list.length ? `via ${list.join(", ")}` : "";
 };
 const syncShort = (m: SpaceMember) =>
-  m.groups.map((g) => short(g.email)).join(", ") || "a group";
+  grants(m)
+    .map((g) => short(g.email))
+    .join(", ") || "a group";
 
 /** Where access comes from, winning role first. */
 const source = (m: SpaceMember, frozen: boolean) => {
@@ -238,7 +249,16 @@ function PersonRow({
                 Restricted
               </Badge>
             )}
-            {m.cap === "guest" && <Badge variant="outline">Guest</Badge>}
+            {m.cap === "guest" && (
+              <>
+                <Badge variant="outline">Guest</Badge>
+                <span className="sr-only">
+                  {name}, guest, can only view. Guests sign in by link and can't
+                  publish, edit or write live data, from the app or any AI
+                  agent.
+                </span>
+              </>
+            )}
             {m.status === "suspended" && (
               <Badge variant="outline">Suspended</Badge>
             )}
@@ -409,6 +429,7 @@ function AddPeople({
   return (
     <Modal
       onClose={onClose}
+      sheetOnPhone
       title={`Add people to ${space.name}`}
       description="They get access within a minute. Recorded in the audit log."
       footer={
@@ -541,7 +562,11 @@ function AddPeople({
         </fieldset>
         {capped.map((m) => (
           <p key={m.id} className={`m-0 ${muted}`}>
-            {displayName(m)} can only view, whatever the role.
+            {displayName(m)} can only view, whatever the role
+            {m.restriction?.groups.length
+              ? `: restricted via ${m.restriction.groups.map((g) => g.name ?? g.email).join(", ")}`
+              : ""}
+            .
           </p>
         ))}
         {error && (

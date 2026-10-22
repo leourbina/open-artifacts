@@ -113,8 +113,31 @@ it("a combined row reads winning role first", async () => {
     "rina@example.com · Manager (manually added), Editor via eng@",
   );
   expect(await row("Sam Ortiz")).toHaveTextContent(
-    "sam@example.com · via eng@, Every space (exec@)",
+    "sam@example.com · via eng@, exec@ (every space)",
   );
+});
+
+it("a group mapped both ways shows only its stronger entry", async () => {
+  mountWith([
+    serve([
+      person({
+        userId: "s1",
+        user: { id: "s1", name: "Sam Ortiz", email: "sam@example.com" },
+        role: "manager",
+        manualRole: "manager",
+        syncRole: "editor",
+        groups: [
+          { ...eng, role: "viewer", via: "space" },
+          { ...eng, role: "editor", via: "every" },
+        ],
+      }),
+    ]),
+  ]);
+  const r = await row("Sam Ortiz");
+  expect(r).toHaveTextContent(
+    "sam@example.com · Manager (manually added), Editor via eng@ (every space)",
+  );
+  expect(r).not.toHaveTextContent("Viewer via eng@");
 });
 
 it("a synced person's select only raises; it PUTs the manual role by user id", async () => {
@@ -259,6 +282,9 @@ it("restricted and guest rows show Viewer as text with their chip and reason", a
   expect(within(dan).getByText("Viewer")).toBeVisible();
   const gia = await row("Gia Ruiz");
   expect(within(gia).getByText("Guest")).toBeVisible();
+  expect(gia).toHaveTextContent(
+    "Gia Ruiz, guest, can only view. Guests sign in by link and can't publish, edit or write live data, from the app or any AI agent.",
+  );
   expect(gia).toHaveTextContent(
     "gia@partner.io · Guest · can only view · via eng@",
   );
@@ -441,7 +467,7 @@ it("Add people: org members only, already-here marked, Viewer by default, one PU
     await screen.findByRole("option", { name: /Dan Contractor/ }),
   );
   expect(d).toHaveTextContent(
-    "Dan Contractor can only view, whatever the role.",
+    "Dan Contractor can only view, whatever the role: restricted via Contractors.",
   );
   fireEvent.click(within(d).getByRole("button", { name: "Add 1 person" }));
   await waitFor(() =>
@@ -584,4 +610,16 @@ it("frozen: Edit people on a kept group filters People to it, and Show everyone 
   await waitFor(() =>
     expect(within(card).queryByText(/from eng@ as of/)).toBeNull(),
   );
+});
+
+it("Add people is a full-width sheet on a phone", async () => {
+  mountHosted(ENG);
+  fireEvent.click(
+    within(await people()).getByRole("button", { name: "Add people" }),
+  );
+  const d = await screen.findByRole("dialog", {
+    name: "Add people to Engineering",
+  });
+  expect(d.className).toContain("max-[640px]:max-w-full");
+  expect(d.className).toContain("max-[640px]:bottom-0");
 });

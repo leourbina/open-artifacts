@@ -134,9 +134,9 @@ test("keyboard: open a space from the list, add a group, change its role", async
 });
 
 // Hosted P4 Task 12 (D6): the People card on Engineering (and frozen), with
-// the Add people dialog, at 1280 and 375, light and dark.
+// the Add people dialog, at 1280 and 390, light and dark.
 for (const scheme of ["light", "dark"] as const)
-  for (const width of [1280, 375])
+  for (const width of [1280, 390])
     test.describe(`people ${scheme} ${width}`, () => {
       test.use({ colorScheme: scheme, viewport: { width, height: 900 } });
 

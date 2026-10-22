@@ -10,6 +10,9 @@ import {
 } from "@oa/ui/shadcn";
 import { type ReactNode, useRef } from "react";
 
+const SHEET =
+  "max-[640px]:top-auto max-[640px]:bottom-0 max-[640px]:max-w-full max-[640px]:translate-y-0 max-[640px]:rounded-b-none";
+
 /** Header, body and footer of a dialog. */
 export function Modal({
   open = true,
@@ -18,6 +21,7 @@ export function Modal({
   description,
   footer,
   children,
+  sheetOnPhone = false,
 }: {
   open?: boolean;
   onClose: () => void;
@@ -25,12 +29,14 @@ export function Modal({
   description: string;
   footer: ReactNode;
   children?: ReactNode;
+  /** Below 640px: a full-width sheet from the bottom. */
+  sheetOnPhone?: boolean;
 }) {
   const opener = useRef<HTMLElement | null>(null);
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent
-        className="gap-[var(--oa-space-4)] sm:max-w-[440px]"
+        className={`gap-[var(--oa-space-4)] sm:max-w-[440px] ${sheetOnPhone ? SHEET : ""}`}
         // No Radix Trigger (the dialog is controlled), so put focus back on
         // whatever opened it, as a trigger would.
         onOpenAutoFocus={() => {

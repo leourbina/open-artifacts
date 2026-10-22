@@ -303,13 +303,18 @@ it("across spaces there is no chip", async () => {
 it("visibilityHint", () => {
   const eng = { id: ENG, kind: "shared" as const, name: "Engineering" };
   const mine = { id: PERSONAL, kind: "personal" as const, name: "Ada" };
+  // Design D6 section 9: the space on Private, the org on Team.
   expect(visibilityHint("team", eng, "Acme")).toBe("Everyone at Acme");
   expect(visibilityHint("team", mine, "Acme")).toBe("Everyone at Acme");
   expect(visibilityHint("private", eng, "Acme")).toBe(
-    "People with access to Engineering",
+    "People with access to Engineering, and anyone you add",
   );
-  expect(visibilityHint("private", mine, "Acme")).toBeNull();
-  expect(visibilityHint("public", eng, "Acme")).toBeNull();
+  expect(visibilityHint("private", mine, "Acme")).toBe(
+    "Only you, and anyone you add",
+  );
+  expect(visibilityHint("public", eng, "Acme")).toBe(
+    "Anyone with the link, no sign-in",
+  );
   expect(visibilityHint("team", undefined, "Acme")).toBeNull();
 });
 
