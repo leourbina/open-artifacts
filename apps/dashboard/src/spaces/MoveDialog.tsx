@@ -54,7 +54,7 @@ export function MoveDialog({
     ? null
     : fromPersonal
       ? count !== undefined
-        ? `Its ${count} ${count === 1 ? "member gets" : "members get"} access by their role. You can't move it back to Personal.`
+        ? `${target.name}'s ${count} ${count === 1 ? "member gets" : "members get"} access by their role. You can't move it back to Personal.`
         : `People in ${target.name} get access by their role. You can't move it back to Personal.`
       : `${target.name} members get access. People only in ${a.space?.name} lose it.`;
 

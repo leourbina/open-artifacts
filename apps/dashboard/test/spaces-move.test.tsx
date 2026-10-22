@@ -113,13 +113,13 @@ it("space to space: who gains and who loses access", async () => {
   );
 });
 
-it("out of Personal: one-way, with the space's member count", async () => {
+it("out of Personal: one-way, with the space's name and member count", async () => {
   mountHosted(details(LANDING));
   const d = await openMove();
   fireEvent.click(within(d).getByRole("radio", { name: /^Engineering/ }));
   expect(
     await within(d).findByText(
-      /^Its \d+ members? get access by their role\. You can't move it back to Personal\.$/,
+      /^Engineering's \d+ members? gets? access by their role\. You can't move it back to Personal\.$/,
     ),
   ).toBeVisible();
 });
