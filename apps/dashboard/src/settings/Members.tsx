@@ -32,8 +32,10 @@ import { Modal } from "../layout/Modal";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { relativeTime } from "../library/time";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { type Departed, useDeparted } from "./departed";
 import { restrictionReason } from "./restriction";
-import { errorText, muted, SettingsCard } from "./ui";
+import { TransferDialog } from "./Transfer";
+import { errorText, muted, SettingsCard, STACK } from "./ui";
 
 type Assignable = "admin" | "member";
 /** Owner is never offered, to anyone. */
@@ -427,32 +429,115 @@ export function Members() {
   const me = state.status === "authed" ? state.me.user : null;
   // Hosted (the spaces feature): restriction badges and the row's More menu.
   const hosted = state.status === "authed" && hasFeature(state.me, "spaces");
+  const departed = useDeparted(state.status === "authed" ? state.me : null);
   return (
-    <SettingsCard
-      id="oa-members-h"
-      title="Members"
-      action={
-        <Button
-          size="sm"
-          className="text-[length:var(--oa-text-sm)]"
-          onClick={() => setInviting(true)}
-        >
-          Add member
-        </Button>
-      }
-    >
-      {q.isError ? (
-        <p role="alert" className={errorText}>
-          Couldn't load members.
-        </p>
-      ) : (
-        <ul className="grid p-0">
-          {q.data?.map((m) => (
-            <Row key={m.id} m={m} you={m.id === me?.id} hosted={hosted} />
-          ))}
-        </ul>
-      )}
-      {inviting && <InviteDialog onClose={() => setInviting(false)} />}
+    <div className={STACK}>
+      {departed.length > 0 && <DepartedCard people={departed} />}
+      <SettingsCard
+        id="oa-members-h"
+        title="Members"
+        action={
+          <Button
+            size="sm"
+            className="text-[length:var(--oa-text-sm)]"
+            onClick={() => setInviting(true)}
+          >
+            Add member
+          </Button>
+        }
+      >
+        {q.isError ? (
+          <p role="alert" className={errorText}>
+            Couldn't load members.
+          </p>
+        ) : (
+          <ul className="grid p-0">
+            {q.data?.map((m) => (
+              <Row key={m.id} m={m} you={m.id === me?.id} hosted={hosted} />
+            ))}
+          </ul>
+        )}
+        {inviting && <InviteDialog onClose={() => setInviting(false)} />}
+      </SettingsCard>
+    </div>
+  );
+}
+
+const STATUS = { suspended: "Suspended", removed: "Removed" } as const;
+
+/** Departed people who still have personal artifacts (counts only, never titles). */
+function DepartedCard({ people }: { people: Departed[] }) {
+  return (
+    <SettingsCard id="oa-departed-h" title="Departed">
+      <p className={muted}>
+        {people.length === 1
+          ? "1 person left with personal artifacts to transfer."
+          : `${people.length} people left with personal artifacts to transfer.`}
+      </p>
+      <ul className="grid p-0">
+        {people.map((d) => (
+          <DepartedRow key={d.member.id} d={d} />
+        ))}
+      </ul>
     </SettingsCard>
+  );
+}
+
+function DepartedRow({ d: { member: m, summary } }: { d: Departed }) {
+  const [open, setOpen] = useState(false);
+  const label = displayName(m);
+  const n = summary.live;
+  return (
+    <li className="flex flex-wrap items-center gap-[10px] border-0 border-t border-border py-[var(--oa-space-2)] first:border-t-0">
+      <Avatar name={m.name} email={m.email} />
+      <div className="min-w-0 flex-1">
+        <b className="flex min-w-0 items-center gap-[6px] font-medium">
+          <span className="truncate">{label}</span>
+          <Badge variant="outline" className="flex-none">
+            {STATUS[m.status === "removed" ? "removed" : "suspended"]}
+          </Badge>
+        </b>
+        <small className={`block ${muted}`}>
+          {n} personal {n === 1 ? "artifact" : "artifacts"}
+          {summary.deleted > 0 && ` (plus ${summary.deleted} in trash)`} · their
+          space artifacts stay put
+        </small>
+      </div>
+      <Button
+        size="sm"
+        variant="outline"
+        className="text-[length:var(--oa-text-sm)]"
+        aria-label={`Transfer ${label}'s artifacts`}
+        onClick={() => setOpen(true)}
+      >
+        Transfer
+      </Button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="sm" aria-label={`More for ${label}`}>
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 16 16"
+              width="16"
+              height="16"
+              fill="currentColor"
+            >
+              <circle cx="3" cy="8" r="1.5" />
+              <circle cx="8" cy="8" r="1.5" />
+              <circle cx="13" cy="8" r="1.5" />
+            </svg>
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="end"
+          className="text-[length:var(--oa-text-sm)]"
+        >
+          <DropdownMenuItem onSelect={() => setOpen(true)}>
+            Transfer…
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {open && <TransferDialog member={m} onClose={() => setOpen(false)} />}
+    </li>
   );
 }
