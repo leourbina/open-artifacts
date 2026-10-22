@@ -100,6 +100,19 @@ it("choosing Engineering opens the Library filtered to it, and marks the link cu
       ),
     ).toHaveAttribute("aria-current", "page"),
   );
+  // The same active look as Library's link.
+  expect(
+    within(screen.getByRole("navigation", { name: "Spaces" })).getByRole(
+      "link",
+      { name: "Engineering" },
+    ),
+  ).toHaveAttribute("data-active", "true");
+  expect(
+    within(screen.getByRole("navigation", { name: "Spaces" })).getByRole(
+      "link",
+      { name: "Exec" },
+    ),
+  ).toHaveAttribute("data-active", "false");
   // Library itself is no longer current while a space is open.
   expect(
     within(screen.getByRole("navigation", { name: "Primary" })).getByRole(
@@ -231,7 +244,7 @@ it("an empty Personal space explains who can see it", async () => {
 it("inside a space the search reads Search Engineering with a chip; removing it searches everywhere", async () => {
   const router = mountHosted(`/?space=${ENG}`);
   const box = await screen.findByRole("searchbox", {
-    name: "Search artifacts",
+    name: "Search in Engineering",
   });
   await waitFor(() =>
     expect(box).toHaveAttribute("placeholder", "Search Engineering"),
@@ -250,12 +263,13 @@ it("inside a space the search reads Search Engineering with a chip; removing it 
     "placeholder",
     "Search titles, content, and agents",
   );
+  expect(box).toHaveAccessibleName("Search artifacts");
 });
 
 it("Backspace on an empty scoped search removes the chip", async () => {
   mountHosted(`/?space=${ENG}`);
   const box = await screen.findByRole("searchbox", {
-    name: "Search artifacts",
+    name: "Search in Engineering",
   });
   await screen.findByText("in Engineering");
   fireEvent.keyDown(box, { key: "Backspace" });
@@ -264,6 +278,7 @@ it("Backspace on an empty scoped search removes the chip", async () => {
     "placeholder",
     "Search titles, content, and agents",
   );
+  expect(box).toHaveAccessibleName("Search artifacts");
 });
 
 it("across spaces there is no chip", async () => {
@@ -315,4 +330,26 @@ it("inside a space, the tabs keep the space; there is no Team tab", async () => 
   expect(
     screen.getByRole("heading", { level: 1, name: "Engineering" }),
   ).toBeVisible();
+});
+
+it("below 640px the chip drops 'in' and the placeholder is just Search", async () => {
+  const real = window.matchMedia;
+  window.matchMedia = ((query: string) => ({
+    ...real(query),
+    matches: query.includes("max-width: 639px"),
+    media: query,
+  })) as typeof window.matchMedia;
+  try {
+    mountHosted(`/?space=${ENG}`);
+    const box = await screen.findByRole("searchbox", {
+      name: "Search in Engineering",
+    });
+    await waitFor(() => expect(box).toHaveAttribute("placeholder", "Search"));
+    expect(
+      screen.getByText("Engineering", { selector: "[data-scope-chip] *" }),
+    ).toBeVisible();
+    expect(screen.queryByText("in Engineering")).toBeNull();
+  } finally {
+    window.matchMedia = real;
+  }
 });

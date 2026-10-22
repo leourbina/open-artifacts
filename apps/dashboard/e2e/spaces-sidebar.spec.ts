@@ -49,20 +49,37 @@ for (const scheme of ["light", "dark"] as const)
         await page
           .getByRole("heading", { level: 1, name: "Library" })
           .waitFor();
-        if (width <= 600)
+        const phone = width <= 600;
+        if (phone) {
           await page.getByRole("button", { name: "Toggle navigation" }).click();
+          // The drawer slides in: let it land before measuring and the shot.
+          await page.waitForFunction(() =>
+            document.getAnimations().every((x) => x.playState !== "running"),
+          );
+        }
         const nav = page.getByRole("navigation", { name: "Spaces" });
         await expect(nav.getByRole("link")).toHaveText([
           "Personal",
           "Engineering",
           "Exec",
         ]);
+        if (phone) {
+          // Fully on screen and full height.
+          const box = await page
+            .locator("[data-mobile=true][data-sidebar=sidebar]")
+            .boundingBox();
+          expect(box?.x).toBe(0);
+          expect(Math.round(box?.height ?? 0)).toBe(900);
+          for (const name of ["Personal", "Engineering", "Exec"])
+            await expect(nav.getByRole("link", { name })).toBeInViewport();
+        }
         const v = await axeRun(page);
         expect(v, v.join("\n")).toEqual([]);
         await noOverflow(page);
         await page.screenshot({
           path: info.outputPath(`sidebar-library-${scheme}-${width}.png`),
-          fullPage: true,
+          // The drawer is fixed to the viewport: shoot what's on screen.
+          fullPage: !phone,
         });
       });
 
@@ -76,9 +93,14 @@ for (const scheme of ["light", "dark"] as const)
         ).toBeVisible();
         await expect(page.getByText("You're a manager")).toBeVisible();
         await expect(
-          page.getByRole("searchbox", { name: "Search artifacts" }),
-        ).toHaveAttribute("placeholder", "Search Engineering");
-        await expect(page.getByText("in Engineering")).toBeVisible();
+          page.getByRole("searchbox", { name: "Search in Engineering" }),
+        ).toHaveAttribute(
+          "placeholder",
+          width < 640 ? "Search" : "Search Engineering",
+        );
+        await expect(page.locator("[data-scope-chip]")).toHaveText(
+          width < 640 ? "Engineering" : "in Engineering",
+        );
         const v = await axeRun(page);
         expect(v, v.join("\n")).toEqual([]);
         await noOverflow(page);
@@ -102,11 +124,16 @@ test("keyboard: reach a space from the sidebar, then search everywhere", async (
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(new RegExp(`space=${ENG}`));
   await expect(eng).toHaveAttribute("aria-current", "page");
-  const box = page.getByRole("searchbox", { name: "Search artifacts" });
+  // Its accessible name follows the scope, so find it by type.
+  const box = page
+    .locator("#oa-main input[type=search], header input[type=search]")
+    .first();
+  await expect(box).toHaveAccessibleName("Search in Engineering");
   await box.focus();
   await page.keyboard.press("Backspace");
   await expect(box).toHaveAttribute(
     "placeholder",
     "Search titles, content, and agents",
   );
+  await expect(box).toHaveAccessibleName("Search artifacts");
 });

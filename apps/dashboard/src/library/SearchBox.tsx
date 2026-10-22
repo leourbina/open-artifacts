@@ -1,9 +1,23 @@
 import { Input } from "@oa/ui/shadcn";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useCurrentSpace } from "../spaces/useCurrentSpace";
 
 export const SEARCH_DEBOUNCE_MS = 250;
+const PHONE = "(max-width: 639px)";
+
+/** Whether `query` matches, following changes. */
+const useMedia = (query: string) => {
+  const [on, setOn] = useState(() => window.matchMedia(query).matches);
+  useEffect(() => {
+    const m = window.matchMedia(query);
+    const sync = () => setOn(m.matches);
+    sync();
+    m.addEventListener("change", sync);
+    return () => m.removeEventListener("change", sync);
+  }, [query]);
+  return on;
+};
 
 export function SearchBox() {
   const navigate = useNavigate();
@@ -26,6 +40,14 @@ export function SearchBox() {
       ? "Personal"
       : scope.name
     : null;
+  // Below 640px the chip drops "in" and the placeholder is just "Search".
+  const phone = useMedia(PHONE);
+  const chip = useRef<HTMLSpanElement>(null);
+  const [inset, setInset] = useState(0);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-measure when the chip's text changes
+  useLayoutEffect(() => {
+    setInset(chip.current ? chip.current.offsetWidth + 10 : 0);
+  }, [scopeName, phone]);
   const [value, setValue] = useState(urlQ);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const input = useRef<HTMLInputElement>(null);
@@ -49,8 +71,14 @@ export function SearchBox() {
   return (
     <div className="relative flex h-[30px] min-w-0 flex-1 items-center">
       {scopeName && (
-        <span className="absolute left-[4px] z-10 inline-flex h-[22px] max-w-[45%] items-center gap-[2px] rounded-sm bg-[var(--oa-surface-2)] pr-[2px] pl-[6px] text-[length:var(--oa-text-xs)] text-muted-foreground">
-          <span className="truncate">in {scopeName}</span>
+        <span
+          ref={chip}
+          data-scope-chip=""
+          className="absolute left-[4px] z-10 inline-flex h-[22px] max-w-[45%] items-center gap-[2px] rounded-sm bg-[var(--oa-surface-2)] pr-[2px] pl-[6px] text-[length:var(--oa-text-xs)] text-muted-foreground"
+        >
+          <span className="truncate">
+            {phone ? scopeName : `in ${scopeName}`}
+          </span>
           <button
             type="button"
             aria-label="Search everywhere"
@@ -75,13 +103,16 @@ export function SearchBox() {
       <Input
         ref={input}
         type="search"
-        aria-label="Search artifacts"
+        aria-label={scopeName ? `Search in ${scopeName}` : "Search artifacts"}
         placeholder={
           scopeName
-            ? `Search ${scopeName}`
+            ? phone
+              ? "Search"
+              : `Search ${scopeName}`
             : "Search titles, content, and agents"
         }
-        className={`h-[30px] min-w-0 flex-1 text-[length:var(--oa-text-sm)] md:text-[length:var(--oa-text-sm)] ${scopeName ? "pl-[calc(4px+min(45%,9rem)+6px)]" : ""}`}
+        style={scopeName && inset ? { paddingLeft: inset } : undefined}
+        className="h-[30px] min-w-0 flex-1 text-[length:var(--oa-text-sm)] md:text-[length:var(--oa-text-sm)]"
         value={value}
         onKeyDown={(e) => {
           if (e.key === "Backspace" && !value && scope) {
