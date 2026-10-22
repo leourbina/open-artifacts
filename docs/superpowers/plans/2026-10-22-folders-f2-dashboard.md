@@ -14,6 +14,8 @@
 
 ## Open questions for the manager
 
+All settled 2026-10-22. The coordinator took each plan default below as written. Build to the defaults.
+
 1. **Trash page.** The dashboard has no Trash today (deletes offer an undo toast). The spec's "restore brings everything back" needs one, so Task 11 adds a Trash page for folders and artifacts. Confirm it's in scope for F2.
 2. **Library home once folders exist.** Today `/` is a flat list of everything you can see. Drive's My Drive shows only the top level (folders, then unfiled files). This is Design's call between options (DF2), but the owner should know the choice changes what `/` shows after the first folder is made; until then `/` stays exactly as today (Global Constraints).
 

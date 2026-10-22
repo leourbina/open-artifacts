@@ -14,6 +14,8 @@
 
 ## Open questions for the manager
 
+All settled 2026-10-22. The coordinator took each plan default below as written (question 7 is the owner's decision). Build to the defaults.
+
 1. **"Editors can't share" reach.** Does the switch on a folder also govern its subfolders and everything below them (plan default: yes, any live ancestor with the switch on blocks inherited editors from sharing), or only that folder and its direct items?
 2. **Space roles and Drive's editor rights (hosted).** Inside a folder in a shared space, does a space *editor* get Drive's folder-editor rights (share, change visibility, move, trash items others created), or only people who are editors through a folder share? Plan default: only folder shares and folder ownership grant those rights; space roles keep P3's table, so folders never widen what a space editor could do.
 3. **Another owner's subfolder in a deleted folder.** The spec moves other owners' *artifacts* to their owners' top level. Plan default for other owners' *subfolders*: the same (the subfolder and its contents move to its owner's top level, keeping its shares).

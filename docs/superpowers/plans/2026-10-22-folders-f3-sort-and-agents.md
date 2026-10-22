@@ -14,6 +14,8 @@
 
 ## Open questions for the manager
 
+All settled 2026-10-22. The coordinator took each plan default below as written. Build to the defaults.
+
 1. **Where the proposal page lives.** Plan default: a dashboard page (`/sort/<id>`) over a server-stored proposal, so approval is a real signed-in action and edits are validated. The alternative is a published artifact with live data that the agent reads back; it is simpler to build but anyone the agent shares it with could approve. Confirm the dashboard page.
 2. **Who can approve.** Plan default: approval needs an interactive browser session (sign-in methods `access`, `google`, `code`, `dev`), never a PAT or an MCP OAuth grant, so an agent can't approve its own proposal. Confirm.
 3. **The person's own artifacts that live in someone else's folder.** They are the person's (ownership doesn't change), but moving them would remove the folder's people from them. Plan default: left out of the sort, and listed on the page as "in folders others own".
