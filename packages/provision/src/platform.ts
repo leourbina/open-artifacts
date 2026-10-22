@@ -184,6 +184,44 @@ FROM installs WHERE rl_ns >= ?8 AND rl_ns < ?10`,
     );
   }
 
+  /** Hosts rows held by another install (any state). */
+  async hostsHeldByOthers(id: string, hosts: [string, string]) {
+    const r = await this.cf.d1Query(
+      this.db.id,
+      "SELECT host, install_id FROM hosts WHERE host IN (?1, ?2) AND install_id <> ?3",
+      [hosts[0], hosts[1], id],
+    );
+    return (r[0]?.results ?? []) as { host: string; install_id: string }[];
+  }
+
+  /**
+   * One batch on resume: re-insert both hosts rows (INSERT OR IGNORE heals a
+   * first batch that was not atomic) and the create.resume audit row.
+   */
+  async resume(r: {
+    id: InstallId;
+    slug: string;
+    appHost: string;
+    contentHost: string;
+  }): Promise<void> {
+    assertOwnResource(this.db.name, this.env);
+    const now = this.now();
+    await this.cf.d1Batch(this.db.id, [
+      {
+        sql: "INSERT OR IGNORE INTO hosts (host, install_id) VALUES (?1, ?2)",
+        params: [r.appHost, r.id],
+      },
+      {
+        sql: "INSERT OR IGNORE INTO hosts (host, install_id) VALUES (?1, ?2)",
+        params: [r.contentHost, r.id],
+      },
+      {
+        sql: "INSERT INTO hosted_audit (at, install_id, action, detail) VALUES (?1, ?2, 'create.resume', ?3)",
+        params: [now, r.id, canonicalJson({ slug: r.slug })],
+      },
+    ]);
+  }
+
   /** Appends an audit row; `detail` must never carry a secret or an email. */
   async audit(
     id: InstallId,

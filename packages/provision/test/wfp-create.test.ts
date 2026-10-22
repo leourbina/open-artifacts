@@ -287,13 +287,20 @@ async function failAtHealth(s: ReturnType<typeof setup>, i = input(), p = s.p) {
 
 const seedRow = (
   s: ReturnType<typeof setup>,
-  r: { id: string; slug: string; app: string; content: string; state: string },
+  r: {
+    id: string;
+    slug: string;
+    app: string;
+    content: string;
+    state: string;
+    rlNs?: number;
+  },
 ) => {
   s.db()
     .prepare(
-      "INSERT INTO installs (id, slug, app_host, content_host, owner_email, inputs_hash, state, rl_ns, created_at, updated_at) VALUES (?, ?, ?, ?, 'x@y.test', 'x', ?, 1000000, 1, 1)",
+      "INSERT INTO installs (id, slug, app_host, content_host, owner_email, inputs_hash, state, rl_ns, created_at, updated_at) VALUES (?, ?, ?, ?, 'x@y.test', 'x', ?, ?, 1, 1)",
     )
-    .run(r.id, r.slug, r.app, r.content, r.state);
+    .run(r.id, r.slug, r.app, r.content, r.state, r.rlNs ?? 1_000_000);
   const h = s
     .db()
     .prepare("INSERT INTO hosts (host, install_id) VALUES (?, ?)");
@@ -511,6 +518,54 @@ describe("WfpProvisioner.create", () => {
           (b: { name: string }) => b.name === "OWNER_EMAIL",
         );
       expect(owner.text).toBe(OWNER);
+    });
+  });
+
+  describe("resume heals the hosts table (N1)", () => {
+    const hostRows = (s: ReturnType<typeof setup>, id: string) =>
+      s
+        .db()
+        .prepare("SELECT host FROM hosts WHERE install_id = ? ORDER BY host")
+        .all(id)
+        .map((r) => (r as { host: string }).host);
+
+    it("a row without its hosts rows resumes, and both hosts rows end up present", async () => {
+      const s = setup();
+      s.fake.inject((m, p) => m === "POST" && p.endsWith("/r2/buckets"));
+      await fails(s.p.create(input()));
+      const [row] = s.rows();
+      s.db().prepare("DELETE FROM hosts WHERE install_id = ?").run(row.id);
+      expect(hostRows(s, row.id)).toEqual([]);
+      await s.p.create(input());
+      expect(hostRows(s, row.id)).toEqual([
+        "finqore.open-artifacts-staging.app",
+        "finqore.open-artifacts-staging.page",
+      ]);
+    });
+
+    it("a resume whose host is held by another install in the hosts table is refused before any write", async () => {
+      const s = setup();
+      s.fake.inject((m, p) => m === "POST" && p.endsWith("/r2/buckets"));
+      await fails(s.p.create(input()));
+      const [row] = s.rows();
+      seedRow(s, {
+        id: "iaaaaaaaaaaa",
+        slug: "other",
+        app: "other.open-artifacts-staging.app",
+        content: "other.open-artifacts-staging.page",
+        state: "active",
+        rlNs: 1_999_992,
+      });
+      s.db().prepare("DELETE FROM hosts WHERE install_id = ?").run(row.id);
+      s.db()
+        .prepare(
+          "INSERT INTO hosts (host, install_id) VALUES (?, 'iaaaaaaaaaaa')",
+        )
+        .run("finqore.open-artifacts-staging.page");
+      const n = s.fake.writes().length;
+      const e = await fails(s.p.create(input()));
+      expect(e.message).toMatch(/taken/);
+      expect(nonReads(s.fake, n)).toEqual([]);
     });
   });
 
@@ -910,6 +965,24 @@ describe("WfpProvisioner.create", () => {
         )
         .get() as { detail: string };
       expect(JSON.parse(audit.detail).sha256).toBe(recordOf("release").sha256);
+    });
+
+    it("a bundle whose bytes change between pre-flight and upload is refused before the upload (N3)", async () => {
+      const good = makeBundle("release");
+      const evil = makeBundle("redline");
+      let reads = 0;
+      const s = setup({
+        bundles: async () => {
+          const b = { ...good };
+          Object.defineProperty(b, "modules", {
+            get: () => (++reads === 1 ? good.modules : evil.modules),
+          });
+          return b;
+        },
+      });
+      const e = await fails(s.p.create(input()));
+      expect(e.message).toMatch(/about to be uploaded/);
+      expect(uploads(s.fake)).toHaveLength(0);
     });
 
     it("bundleSha256 changes with any module byte, name or the main module", () => {

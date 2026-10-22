@@ -500,13 +500,10 @@ export class WfpProvisioner {
         throw new ProvisionRefused(
           `slug ${i.slug} already exists as active install ${row.id}`,
         );
-      if (row.state === "deleted")
-        throw new ProvisionRefused(
-          `slug ${i.slug} belongs to deleted install ${row.id}; its slug and hosts stay held until a purge`,
-        );
+      // Covers deleted too: its slug and hosts stay held until a purge.
       if (row.state !== "creating")
         throw new ProvisionRefused(
-          `install ${row.id} is ${row.state}; only a creating install can be resumed`,
+          `install ${row.id} is ${row.state}; only a creating install can be resumed (a deleted install keeps its slug and hosts until a purge)`,
         );
       if (row.inputs_hash !== hash)
         throw new ProvisionRefused(
@@ -515,6 +512,14 @@ export class WfpProvisioner {
       if (row.app_host !== appHost || row.content_host !== contentHost)
         throw new ProvisionRefused(
           `install ${row.id}: hosts differ from the first run`,
+        );
+      const held = await this.platform.hostsHeldByOthers(row.id, [
+        appHost,
+        contentHost,
+      ]);
+      if (held.length > 0)
+        throw new ProvisionRefused(
+          `host ${held[0]?.host} is already taken by ${held[0]?.install_id}`,
         );
       res = await this.resources(row);
     } else {
@@ -540,7 +545,12 @@ export class WfpProvisioner {
         inputsHash: hash,
       });
     } else {
-      await this.platform.audit(row.id, "create.resume", { slug: i.slug });
+      await this.platform.resume({
+        id: row.id,
+        slug: i.slug,
+        appHost,
+        contentHost,
+      });
     }
     const id = row.id;
     try {
