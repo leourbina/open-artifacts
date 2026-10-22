@@ -151,6 +151,16 @@ describe("admit (Google)", () => {
     expect((await rowOf(uid)).role).toBe("member");
   });
 
+  it("an OWNER_EMAIL first sign-in is a member while an owner row exists", async () => {
+    await seedUser(uniq("owner"), "owner");
+    const boss = uniq("boss");
+    const e = direct({ OWNER_EMAIL: boss });
+    const r = await admit(e, authConfig(e), g({ email: boss }));
+    expect(r).toMatchObject({ ok: true, user: { role: "member" } });
+    if (!r.ok) throw new Error();
+    expect((await rowOf(r.user.id)).role).toBe("member");
+  });
+
   it("a guest row is promoted to member by hd (alias email domain)", async () => {
     const email = uniq("g", "alias.com");
     const uid = await seedUser(email, "guest");
@@ -328,6 +338,25 @@ describe("resetIdentity", () => {
     expect((await rowOf(uid)).e).toBe(1);
     expect(await pats(uid)).toBe(0);
     expect(await grants(uid)).toBe(0);
+  });
+
+  it("a grant (KV) failure fails the reset before D1 changes; a retry completes it", async () => {
+    const email = uniq("kv");
+    const uid = await seedUser(email, "member", { googleSub: `K-${email}` });
+    await createPat(env, uid, "t");
+    const boom = () => {
+      throw new Error("kv down");
+    };
+    const kv = { get: boom, list: boom, put: boom, delete: boom };
+    await expect(
+      resetIdentity({ ...env, OAUTH_KV: kv } as unknown as Env, admin, uid),
+    ).rejects.toThrow("kv down");
+    expect(await subjectOf(uid)).toBe(`K-${email}`);
+    expect((await rowOf(uid)).e).toBe(0);
+    expect(await pats(uid)).toBe(1);
+    await resetIdentity(env, admin, uid);
+    expect(await subjectOf(uid)).toBeNull();
+    expect(await pats(uid)).toBe(0);
   });
 
   it("an owner may reset; a member or guest may not (404, nothing changed)", async () => {

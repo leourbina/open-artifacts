@@ -101,7 +101,9 @@ export function googleLinkStmts(
   return [
     stmt(
       env.DB,
-      `insert into users (id, email, name, role, created_at, last_seen_at) values (?1, ?2, ?3, ?4, ?5, ?5)
+      // One owner: an 'owner' insert while an owner row exists becomes a member.
+      `insert into users (id, email, name, role, created_at, last_seen_at) values (?1, ?2, ?3,
+         case when ?4 = 'owner' and exists (select 1 from users where role = 'owner') then 'member' else ?4 end, ?5, ?5)
        on conflict(email) do update set last_seen_at = excluded.last_seen_at where users.status = 'active'`,
     ).bind(newId(), p.email, p.name ?? defaultName(p.email), p.role, p.now),
     stmt(

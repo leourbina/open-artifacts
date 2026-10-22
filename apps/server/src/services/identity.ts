@@ -209,8 +209,9 @@ const RESETTABLE = `exists (select 1 from identities i join users u on u.id = i.
  * Google link so their next Google sign-in links afresh (clears an
  * identity_conflict). Never the owner's link; 404 when there is none.
  * One D1 transaction revokes their PATs, ends their sessions and deletes the
- * link, each gated on the same predicate, so all happen or none do; OAuth
- * grants (KV) are revoked once the delete is confirmed. A recycled address
+ * link, each gated on the same predicate, so all happen or none do. OAuth
+ * grants (KV) are revoked first, once the link is known to be resettable, so
+ * a KV failure leaves nothing half done. A recycled address
  * that re-links inherits no credential.
  */
 export async function resetIdentity(
@@ -220,6 +221,17 @@ export async function resetIdentity(
 ): Promise<void> {
   if (!orgCan(actor, "members.manage"))
     throw new ApiError("not_found", "Not found");
+  if (
+    !(
+      await stmt(env.DB, `select ${RESETTABLE} as ok`)
+        .bind(userId)
+        .first<{ ok: number }>()
+    )?.ok
+  )
+    throw new ApiError("not_found", "Not found");
+  // Grants (KV) first: idempotent, and a failure leaves D1 untouched so the
+  // admin can retry (as removeMember does).
+  await revokeAllGrants(env, userId);
   const results = await env.DB.batch([
     stmt(
       env.DB,
@@ -236,5 +248,4 @@ export async function resetIdentity(
     ).bind(userId),
   ]);
   if (!results[2]?.results.length) throw new ApiError("not_found", "Not found");
-  await revokeAllGrants(env, userId);
 }
