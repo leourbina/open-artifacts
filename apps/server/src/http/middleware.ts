@@ -1,13 +1,17 @@
 import { inDomains } from "@oa/auth-core";
 import {
   ARTIFACT_SANDBOX_ATTR,
+  AUTH,
   type AuthMethod,
+  type CapReason,
   type Member,
+  SIGN_IN_PAGE,
 } from "@oa/shared";
 import type { Context, MiddlewareHandler } from "hono";
 import { getCookie } from "hono/cookie";
 import { authConfig } from "../auth/config.js";
 import { verifyPat } from "../auth/pat.js";
+import { isGuestRole } from "../auth/policy.js";
 import {
   readSession,
   type Session,
@@ -30,6 +34,12 @@ export type AppVariables = {
   authMethod: AuthMethod | null;
   /** Session expiry (ms) for a cookie session; null otherwise. */
   sessionExp: number | null;
+  /**
+   * Why the caller is capped at viewer (Me.auth.cap), or null: "guest" for a
+   * guest while the guest cap is on, and for any code session outside the
+   * verified domains. P3 adds "restricted".
+   */
+  capReason: CapReason | null;
 };
 export type AppEnv = { Bindings: Env; Variables: AppVariables };
 
@@ -45,6 +55,9 @@ export const COOP_EXEMPT: ReadonlySet<string> = new Set([
   "/auth/login",
   "/auth/callback",
   "/auth/dev-login",
+  SIGN_IN_PAGE,
+  AUTH.loginGoogle,
+  AUTH.callbackGoogle,
 ]);
 
 /**
@@ -52,7 +65,10 @@ export const COOP_EXEMPT: ReadonlySet<string> = new Set([
  * land on (or an error page) must not send it on as a Referer.
  * Exact pathnames only.
  */
-export const NO_REFERRER: ReadonlySet<string> = new Set(["/auth/callback"]);
+export const NO_REFERRER: ReadonlySet<string> = new Set([
+  AUTH.callback,
+  AUTH.callbackGoogle,
+]);
 
 /**
  * `frameAncestors` (a pre-validated source list from frameOpts) replaces
@@ -162,6 +178,10 @@ export function sessionStillValid(
  * session must pass sessionStillValid.
  * `X-OA-Embed: 1` or `?embed=1` (isEmbedRequest) forces anonymous.
  */
+/** A guest while the guest cap is on, however they authenticated (session or PAT). */
+const guestCapped = (env: Env, user: Member): boolean =>
+  isGuestRole(user.role) && authConfig(env).guestsReadOnly;
+
 export const session = (): MiddlewareHandler<AppEnv> => async (c, next) => {
   await resolveSession(c);
   await next();
@@ -176,6 +196,7 @@ export async function resolveSession(c: Context<AppEnv>): Promise<void> {
   c.set("tokenId", null);
   c.set("authMethod", null);
   c.set("sessionExp", null);
+  c.set("capReason", null);
   // Embed mode: anonymous regardless of cookie or Bearer (a downgrade only).
   if (isEmbedRequest(c.req.raw)) return;
   const bearer = BEARER.exec(c.req.header("authorization") ?? "");
@@ -193,6 +214,7 @@ export async function resolveSession(c: Context<AppEnv>): Promise<void> {
       c.set("tokenLabel", pat.label);
       c.set("tokenId", pat.tokenId);
       c.set("authMethod", "pat");
+      if (guestCapped(c.env, user)) c.set("capReason", "guest");
     }
   } else {
     const s = await readSession(c.env, getCookie(c, sessionCookieName(c.env)));
@@ -201,6 +223,8 @@ export async function resolveSession(c: Context<AppEnv>): Promise<void> {
       c.set("user", row.user);
       c.set("authMethod", s.p);
       c.set("sessionExp", s.exp);
+      if ((s.p === "code" && s.t === undefined) || guestCapped(c.env, row.user))
+        c.set("capReason", "guest");
     }
   }
 }

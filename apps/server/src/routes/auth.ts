@@ -1,23 +1,35 @@
 import { normalizeEmail } from "@oa/auth-core";
-import { AUTH, MemberSchema, PAGES, RoleSchema } from "@oa/shared";
+import {
+  AUTH,
+  MemberSchema,
+  PAGES,
+  RoleSchema,
+  SIGN_IN_PAGE,
+  type SignInError,
+} from "@oa/shared";
 import { authConfig } from "../auth/config.js";
 import {
   buildAuthorizeRedirect,
   clearOidcCookie,
   handleCallback,
   logOidcFail,
+  OidcRedeemError,
   OidcStateError,
   pickStateCookie,
   safeNext,
 } from "../auth/oidc.js";
 import { accessProvider } from "../auth/providers/access.js";
+import { googleProvider } from "../auth/providers/google.js";
 import {
   clearSessionCookie,
   sessionCookie,
   signSession,
 } from "../auth/session.js";
+import { signInMode } from "../auth/sign-in.js";
 import { ApiError, toErrorResponse } from "../http/errors.js";
 import { FAVICON_TAGS } from "../http/head.js";
+import { onGoogleSignIn } from "../services/directory.js";
+import { admit } from "../services/identity.js";
 import {
   getUserWithEpoch,
   upsertOnLogin,
@@ -65,11 +77,26 @@ ${FAVICON_TAGS}
 
 const EmailSchema = MemberSchema.shape.email;
 
+/** Every refused redirect sign-in lands here (#359): the SPA shows the reason. */
+const toSignIn = (error: SignInError, next: string, cookies: string[]) =>
+  redirect(
+    `${SIGN_IN_PAGE}?error=${error}&next=${encodeURIComponent(next)}`,
+    cookies,
+  );
+
 export function mountAuth(app: AppType): void {
   app.get(AUTH.login, async (c) => {
-    // Access start exists only while Access sign-in is enabled (the callback
-    // already refuses otherwise).
-    if (!authConfig(c.env).providers.has("access"))
+    const cfg = authConfig(c.env);
+    // Direct sign-in: the SPA chooser; its Access button comes back with via=access.
+    if (
+      signInMode(cfg) === "direct" &&
+      !(cfg.providers.has("access") && c.req.query("via") === "access")
+    )
+      return redirect(
+        `${SIGN_IN_PAGE}?next=${encodeURIComponent(safeNext(c.env, c.req.query("next")))}`,
+        [],
+      );
+    if (!cfg.providers.has("access"))
       throw new ApiError("not_found", "Not found");
     const { location, stateCookie, evict } = await buildAuthorizeRedirect(
       c.env,
@@ -134,6 +161,79 @@ export function mountAuth(app: AppType): void {
       for (const k of clear) res.headers.append("set-cookie", k);
       res.headers.set("cache-control", "no-store");
       return res;
+    }
+  });
+
+  app.get(AUTH.loginGoogle, async (c) => {
+    if (!authConfig(c.env).google) throw new ApiError("not_found", "Not found");
+    const { location, stateCookie, evict } = await buildAuthorizeRedirect(
+      c.env,
+      googleProvider,
+      c.req.query("next") ?? "/",
+      {
+        retry: c.req.query("retry") === "1",
+        cookieHeader: c.req.header("cookie"),
+      },
+    );
+    return redirect(location, [...evict, stateCookie]);
+  });
+
+  app.get(AUTH.callbackGoogle, async (c) => {
+    // Single-use state cookie, as for Access.
+    const picked = await pickStateCookie(
+      c.env,
+      c.req.raw,
+      c.req.query("state") ?? "",
+    );
+    const clear = picked ? [clearOidcCookie(c.env, picked.name)] : [];
+    let next = "/";
+    try {
+      const id = await handleCallback(c.env, googleProvider, c.req.raw);
+      next = id.next;
+      const r = await admit(c.env, authConfig(c.env), id);
+      if (!r.ok) {
+        logOidcFail(r.reason);
+        return toSignIn(r.reason, id.next, clear);
+      }
+      try {
+        await onGoogleSignIn(c.env, r.user);
+      } catch {
+        console.warn(JSON.stringify({ evt: "directory_sync_failed" }));
+      }
+      const row = await getUserWithEpoch(c.env, r.user.id);
+      if (!row) return toSignIn("failed", id.next, clear);
+      const sess = sessionCookie(
+        await signSession(c.env, r.user.id, Date.now(), {
+          provider: "google",
+          tenant: id.tenant ?? undefined,
+          epoch: row.sessionEpoch,
+        }),
+        c.env,
+      );
+      return redirect(id.next, [...clear, sess]);
+    } catch (e) {
+      if (e instanceof OidcStateError) {
+        if (e.retry) return toSignIn("expired", e.next, clear);
+        return redirect(
+          `${AUTH.loginGoogle}?next=${encodeURIComponent(e.next)}&retry=1`,
+          clear,
+        );
+      }
+      if (e instanceof OidcRedeemError)
+        return toSignIn(
+          e.stage === "tenant" ? "tenant" : "failed",
+          e.next,
+          clear,
+        );
+      if (e instanceof ApiError) {
+        const res = toErrorResponse(e);
+        for (const k of clear) res.headers.append("set-cookie", k);
+        res.headers.set("cache-control", "no-store");
+        return res;
+      }
+      // Anything unexpected (D1, signing): the sign-in page, never a 500.
+      logOidcFail("internal");
+      return toSignIn("failed", next, clear);
     }
   });
 

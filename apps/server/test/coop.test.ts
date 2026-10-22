@@ -40,9 +40,12 @@ describe("Cross-Origin-Opener-Policy", () => {
   it("is absent on the sign-in popup pages, and only those", async () => {
     expect([...COOP_EXEMPT].sort()).toEqual([
       "/auth/callback",
+      "/auth/callback/google",
       "/auth/dev-login",
       "/auth/login",
+      "/auth/login/google",
       "/oauth/authorize",
+      "/sign-in",
     ]);
     for (const [p, method] of [
       ["/oauth/authorize?client_id=x&response_type=code", "GET"],

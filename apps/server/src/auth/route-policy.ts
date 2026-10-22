@@ -76,8 +76,13 @@ export const ROUTE_POLICY: Readonly<Record<string, Policy>> = {
   "ALL /robots.txt": { public: "405" },
   "ALL /skill.md": { public: "405" },
   "ALL /upgrade.md": { public: "405" },
+  "GET /auth/providers": {
+    public: "sign-in offering; config only, never D1",
+  },
   "GET /auth/login": { public: "sign-in start" },
   "GET /auth/callback": { public: "sign-in callback" },
+  "GET /auth/login/google": { public: "sign-in start (Google)" },
+  "GET /auth/callback/google": { public: "sign-in callback (Google)" },
   "POST /auth/logout": { public: "sign-out (same-origin, CSRF)" },
   "GET /auth/dev-login": { public: "dev only; refused outside dev" },
   "GET /api/v1/me": { user: "the caller" },
@@ -86,6 +91,8 @@ export const ROUTE_POLICY: Readonly<Record<string, Policy>> = {
   "POST /api/v1/members": { org: "members.manage" },
   "PATCH /api/v1/members/:id": { org: "members.manage" },
   "DELETE /api/v1/members/:id": { org: "members.manage" },
+  // The handler requires a manager and 404s for the owner's own link.
+  "DELETE /api/v1/members/:id/identities/google": { org: "members.manage" },
   "GET /api/v1/settings": { org: "settings.read" },
   "PATCH /api/v1/settings": { org: "settings.manage" },
   "GET /api/v1/artifacts": { user: "list, filtered by listFilterSql" },
