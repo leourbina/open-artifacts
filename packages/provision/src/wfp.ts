@@ -28,7 +28,14 @@ import { join } from "node:path";
 import { newId, newPat } from "@oa/shared";
 import { type Cf, CfError, type Module, type Target } from "./cf.js";
 import {
+  ALLOW_ACCOUNT_TARGET,
+  PROD_UNLOCKED,
+  RELEASE_PUBKEY,
+  RELEASE_PUBKEY_PLACEHOLDER,
+} from "./internal/gates.js";
+import {
   assertSafeMigrations,
+  assertUniqueBindings,
   KNOWN_SECRETS,
   parseTemplate,
   scriptSubdomainSettings,
@@ -55,14 +62,15 @@ import {
   RL_BASE,
 } from "./platform.js";
 import {
+  ASSET_LIMITS,
   assertAssetPath,
   assetEntries,
   type BundleVariant,
   bundleSha256,
+  compareVersions,
+  isReleaseVersion,
   MIGRATION_RE,
   migrationsSha256,
-  RELEASE_PUBKEY,
-  RELEASE_PUBKEY_PLACEHOLDER,
   type ReleaseAsset,
   type ReleaseAssetEntry,
   type ReleaseFile,
@@ -73,6 +81,26 @@ import {
   verifyReleaseSignature,
 } from "./release.js";
 import type { CreateInput, Install, InstallId } from "./types.js";
+
+/** Option names that look like a gate: refused, so no config or spread can try one. */
+const GATE_LIKE =
+  /^(?:__testOnly|prodRecordWriter$|PROD_UNLOCKED$|ALLOW_ACCOUNT_TARGET$|RELEASE_PUBKEY)/;
+
+function deepFreeze<T>(v: T): T {
+  if (v && typeof v === "object") {
+    for (const x of Object.values(v)) deepFreeze(x);
+    Object.freeze(v);
+  }
+  return v;
+}
+
+/** Template vars that would change auth behind the provisioner's back. */
+const TEMPLATE_VARS_REFUSED = [
+  "AUTH_PROVIDERS",
+  "EMAIL_CODE_DOMAIN",
+  "TURNSTILE_SITE_KEY",
+  "TURNSTILE_SECRET",
+];
 
 /** The dispatch namespace of each env (live M1 target). */
 export const NAMESPACES: Record<Env, string> = {
@@ -106,15 +134,6 @@ export interface WfpOptions {
   domains: { app: string; content: string };
   /** The release's signed record and files (R2 in production); never the checkout. */
   release: ReleaseReader;
-  /**
-   * Prod stays locked until the T3b record writer exists. T3b flips this in
-   * code; no CLI flag sets it.
-   */
-  prodRecordWriter?: "t3b";
-  /** Tests only: allow { kind: "account" } (live envs use the namespace). */
-  __testOnlyAllowAccountTarget?: true;
-  /** Tests only: the release public key instead of RELEASE_PUBKEY[env]. */
-  __testOnlyReleasePubkey?: string;
   /**
    * The env's one Turnstile widget (sitekey and secret from the keychain item
    * oa-hosted-<env>-turnstile). Required when codes are on.
@@ -305,6 +324,12 @@ export class WfpProvisioner {
   private registryKv?: { id: string; title: string };
 
   constructor(private readonly o: WfpOptions) {
+    // F1: the gates live in src/internal/gates.ts; an option never opens one.
+    for (const k of Object.keys(o ?? {}))
+      if (GATE_LIKE.test(k))
+        throw new ProvisionRefused(
+          `${JSON.stringify(k)} is not an option; gates are code constants`,
+        );
     this.cf = o.cf;
     this.env = o.env;
     this.target = o.target;
@@ -356,7 +381,7 @@ export class WfpProvisioner {
     const { env, o } = this;
     if (env !== "staging" && env !== "prod") throw new ForeignResource("", env);
     // L2: no prod create before the T3b record writer (a code change).
-    if (env === "prod" && o.prodRecordWriter !== "t3b")
+    if (env === "prod" && PROD_UNLOCKED !== true)
       throw new ProdLocked(
         "prod is locked until the T3b release-record writer exists",
       );
@@ -368,7 +393,7 @@ export class WfpProvisioner {
         );
     } else if (t.kind === "account") {
       // L3: live envs always use the namespace.
-      if (o.__testOnlyAllowAccountTarget !== true)
+      if (ALLOW_ACCOUNT_TARGET !== true)
         throw new ProvisionRefused(
           "the account target is for tests only; live envs use the dispatch namespace",
         );
@@ -415,22 +440,37 @@ export class WfpProvisioner {
   }
 
   private pubkey(): string {
-    return this.o.__testOnlyReleasePubkey ?? RELEASE_PUBKEY[this.env];
+    return RELEASE_PUBKEY[this.env];
   }
 
   /** L2 then M1: the record is trusted only after its signature checks out. */
   private async readRecord(i: WfpCreateInput): Promise<ReleaseRecord> {
     const want = `${i.version} (${i.bundle})`;
-    const signed = await this.o.release.record(i.version, i.bundle);
-    if (!signed)
+    const got = await this.o.release.record(i.version, i.bundle);
+    if (!got)
       throw new ProvisionRefused(
         `no release record for ${want}; the bundle step (T3b) must write one before any create`,
       );
-    if (!verifyReleaseSignature(signed, this.pubkey()))
+    // F4: verify and use a private, frozen copy; the reader keeps nothing.
+    let signed: unknown;
+    try {
+      signed = deepFreeze(structuredClone(got));
+    } catch {
+      signed = null;
+    }
+    if (!verifyReleaseSignature(signed, this.pubkey(), this.env))
       throw new ProvisionRefused(
         `release record ${want}: the signature is missing or does not verify against the ${this.env} release key`,
       );
     const rec = signed.record;
+    if (rec.env !== this.env)
+      throw new ProvisionRefused(
+        `release record ${want} is for env ${String(rec.env)}, not ${this.env}`,
+      );
+    if (!isReleaseVersion(i.version))
+      throw new ProvisionRefused(
+        `version ${i.version} is not a release version`,
+      );
     if (rec.version !== i.version || rec.variant !== i.bundle)
       throw new ProvisionRefused(
         `the release record read for ${want} is for ${String(rec.version)} (${String(rec.variant)})`,
@@ -444,19 +484,33 @@ export class WfpProvisioner {
       throw new ProvisionRefused(
         `release record ${want}: ${TEST_HOOKS_DEFINE} must be ${i.bundle === "redline"}`,
       );
-    for (const k of ["sha256", "templateSha256", "migrationsSha256"] as const)
+    for (const k of [
+      "sha256",
+      "templateSha256",
+      "migrationsSha256",
+      "welcomeSha256",
+    ] as const)
       if (typeof rec[k] !== "string" || !HEX64.test(rec[k]))
         throw new ProvisionRefused(`release record ${want} has no valid ${k}`);
     if (!Array.isArray(rec.assets))
       throw new ProvisionRefused(`release record ${want} has no assets list`);
     try {
+      // F8: limits before any other read, so a huge record fails early.
+      if (rec.assets.length > ASSET_LIMITS.files)
+        throw new Error(`more than ${ASSET_LIMITS.files} assets`);
       let prev = "";
+      let total = 0;
       for (const [n, a] of rec.assets.entries()) {
         assertAssetEntry(a);
+        if (a.size > ASSET_LIMITS.fileBytes)
+          throw new Error(`asset ${a.path} is over 25 MiB`);
+        total += a.size;
         if (n > 0 && !(a.path > prev))
           throw new Error("assets are not sorted by path, or repeat one");
         prev = a.path;
       }
+      if (total > ASSET_LIMITS.totalBytes)
+        throw new Error("assets are over 512 MiB in total");
     } catch (e) {
       throw new ProvisionRefused(
         `release record ${want}: ${(e as Error).message}`,
@@ -514,6 +568,12 @@ export class WfpProvisioner {
     );
     if (sha256Hex(bytes) !== rec.templateSha256) this.refuse(rec, "template");
     const t = parseTemplate(new TextDecoder().decode(bytes));
+    // F6: codes on/off and Turnstile are decided by the provisioner only.
+    for (const k of TEMPLATE_VARS_REFUSED)
+      if (Object.hasOwn(t.vars ?? {}, k))
+        throw new ProvisionRefused(
+          `the release template sets ${k} in vars; only create may set it`,
+        );
     // L5: only additive Durable Object migrations, before any call.
     try {
       assertSafeMigrations(t);
@@ -541,6 +601,14 @@ export class WfpProvisioner {
     return copy.sort((a, b) => (a.name < b.name ? -1 : 1));
   }
 
+  private async readWelcome(rec: ReleaseRecord): Promise<string> {
+    const bytes = new Uint8Array(
+      (await this.o.release.welcome(rec.version, rec.variant)) ?? [],
+    );
+    if (sha256Hex(bytes) !== rec.welcomeSha256) this.refuse(rec, "welcome");
+    return new TextDecoder().decode(bytes);
+  }
+
   /** Pre-flight: the signed record, then every release file against it. */
   private async readRelease(i: WfpCreateInput): Promise<Checked> {
     if (!this.o.release) throw new ProvisionRefused("no release reader");
@@ -549,6 +617,7 @@ export class WfpProvisioner {
     const assets = await this.readAssets(rec);
     const template = await this.readTemplate(rec);
     const migrations = await this.readMigrations(rec);
+    await this.readWelcome(rec);
     return { rec, mainModule, modules, assets, template, migrations };
   }
 
@@ -685,6 +754,11 @@ export class WfpProvisioner {
       if (row.inputs_hash !== hash)
         throw new ProvisionRefused(
           `install ${row.id}: resume inputs differ from the first run (owner, vars or testHooks); use the original inputs`,
+        );
+      // F2/I1: never move an install to an older release.
+      if (row.version && compareVersions(rel.rec.version, row.version) < 0)
+        throw new ProvisionRefused(
+          `install ${row.id} is at ${row.version}; ${rel.rec.version} would be a downgrade`,
         );
       if (row.app_host !== appHost || row.content_host !== contentHost)
         throw new ProvisionRefused(
@@ -884,6 +958,11 @@ export class WfpProvisioner {
       )
     )
       throw new Error("hooks bindings on a non-test install");
+    try {
+      assertUniqueBindings(meta.bindings);
+    } catch (e) {
+      throw new ProvisionRefused((e as Error).message);
+    }
     return meta;
   }
 
@@ -1028,7 +1107,7 @@ export class WfpProvisioner {
 
     await this.health(id, m.appHost, version);
     const patFile = await this.mintPat(d1Id, n.d1, m.ownerEmail, m.appHost);
-    await this.selftest(m.appHost, patFile);
+    await this.selftest(rec, m.appHost, patFile);
 
     await platform.update(id, { state: "active" });
     await platform.audit(id, "create.active", { version });
@@ -1208,7 +1287,11 @@ export class WfpProvisioner {
   }
 
   /** As setup's selftest: publish a private Welcome artifact over MCP and read it back. */
-  private async selftest(appHost: string, patFile: string): Promise<void> {
+  private async selftest(
+    rec: ReleaseRecord,
+    appHost: string,
+    patFile: string,
+  ): Promise<void> {
     const token = readFileSync(patFile, "utf8").trim();
     const url = `https://${appHost}/mcp`;
     const headers = {
@@ -1253,10 +1336,8 @@ export class WfpProvisioner {
     const { tools } = await post("tools/list", {});
     if (!tools?.some((t: { name: string }) => t.name === "publish_artifact"))
       throw new Error("MCP tools/list has no publish_artifact");
-    const content = readFileSync(
-      new URL("../../../scripts/setup/welcome.md", import.meta.url),
-      "utf8",
-    );
+    // F3: the release's text, re-read and re-checked right before publishing.
+    const content = await this.readWelcome(rec);
     const pub = await post("tools/call", {
       name: "publish_artifact",
       arguments: { title: WELCOME_TITLE, format: "markdown", content },

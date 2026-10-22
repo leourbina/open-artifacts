@@ -199,8 +199,8 @@ export interface ResourceMetaInput {
   /** Exactly one of assetsJwt (assets were uploaded) and keepAssets. */
   assetsJwt?: string;
   keepAssets?: boolean;
-  /** Test seam; defaults to apps/server/wrangler.template.jsonc. */
-  template?: Template;
+  /** The release's server template (verified against the signed record). */
+  template: Template;
 }
 
 const ASSET_CONFIG_KEYS = [
@@ -303,7 +303,10 @@ export function userWorkerMetadata(
   r: ResourceMetaInput,
 ): UploadMetadata {
   checkInputs(i, r);
-  const t = r.template ?? loadTemplate();
+  // F5: no fallback to the checkout's template; the caller passes the release's.
+  if (!r.template || typeof r.template !== "object")
+    throw new Error("userWorkerMetadata needs the release template");
+  const t = r.template;
   const n = names(i.id, r.env);
   for (const v of [n.script, n.d1, n.r2, n.kv]) assertOwnResource(v, r.env);
   for (const k of ["d1_databases", "r2_buckets", "kv_namespaces"])
@@ -500,5 +503,16 @@ export function userWorkerMetadata(
   const migrations = migrationsFor(t, r.doMigrationTag);
   if (migrations) meta.migrations = migrations;
   if (missing.length > 0) meta.keep_bindings = ["secret_text", "secret_key"];
+  assertUniqueBindings(meta.bindings);
   return meta;
+}
+
+/** Two bindings with one name would let one silently shadow the other. */
+export function assertUniqueBindings(bindings: readonly Binding[]): void {
+  const seen = new Set<string>();
+  for (const b of bindings) {
+    if (seen.has(b.name))
+      throw new Error(`duplicate binding name ${JSON.stringify(b.name)}`);
+    seen.add(b.name);
+  }
 }

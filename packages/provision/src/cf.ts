@@ -226,9 +226,12 @@ export function cfClient(o: {
         const r = b?.result ?? [];
         const hit = r.find((d) => d.name === name);
         if (hit) return hit.uuid;
+        // Trust total_pages when Cloudflare sends it (a page may be clamped
+        // or short mid-list); only without it does a short page end the list.
         const pages = b?.result_info?.total_pages;
-        if (r.length < per || (typeof pages === "number" && page >= pages))
-          return null;
+        if (typeof pages === "number" && Number.isFinite(pages)) {
+          if (page >= pages) return null;
+        } else if (r.length < per) return null;
       }
       throw new Error("D1 database listing did not end after 100 pages");
     },

@@ -114,8 +114,17 @@ export class FakeCf {
   /** Turnstile widgets by sitekey (read-only for create). */
   readonly turnstile = new Map<
     string,
-    { sitekey: string; name: string; domains: string[]; mode: string }
+    {
+      sitekey: string;
+      name: string;
+      domains: string[];
+      mode: string;
+      secret?: string;
+    }
   >();
+  /** D1 list knobs: clamp per_page, or omit result_info. */
+  d1PerPageCap?: number;
+  d1ResultInfo = true;
   private sessions = new Map<
     string,
     { buckets: string[][]; done: number; completion: string }
@@ -290,7 +299,10 @@ export class FakeCf {
       // Cloudflare's name filter is a substring match; pages of per_page.
       const name = url.searchParams.get("name");
       const page = Number(url.searchParams.get("page") ?? 1);
-      const per = Number(url.searchParams.get("per_page") ?? 1000);
+      const per = Math.min(
+        Number(url.searchParams.get("per_page") ?? 1000),
+        this.d1PerPageCap ?? Number.POSITIVE_INFINITY,
+      );
       const all = [...this.d1.entries()]
         .filter(([, d]) => name === null || d.name.includes(name))
         .map(([uuid, d]) => ({ uuid, name: d.name }));
@@ -301,13 +313,17 @@ export class FakeCf {
           errors: [],
           messages: [],
           result: slice,
-          result_info: {
-            page,
-            per_page: per,
-            count: slice.length,
-            total_count: all.length,
-            total_pages: Math.max(1, Math.ceil(all.length / per)),
-          },
+          ...(this.d1ResultInfo
+            ? {
+                result_info: {
+                  page,
+                  per_page: per,
+                  count: slice.length,
+                  total_count: all.length,
+                  total_pages: Math.max(1, Math.ceil(all.length / per)),
+                },
+              }
+            : {}),
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       );

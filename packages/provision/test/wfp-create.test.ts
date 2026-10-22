@@ -24,20 +24,26 @@ import { DatabaseSync as Sqlite } from "node:sqlite";
 import { isPat } from "@oa/shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { assetHash, CfError, cfClient, type Target } from "../src/cf.js";
+import * as INDEX from "../src/index.js";
+import { RELEASE_PUBKEY_PLACEHOLDER } from "../src/internal/gates.js";
 import {
   HOSTED_ADDED,
   loadTemplate,
   type Template,
   userWorkerMetadata,
 } from "../src/metadata.js";
-import { ENV_PREFIX, type Env, platformNames } from "../src/names.js";
+import {
+  ENV_PREFIX,
+  type Env,
+  hosts as hostsOf0,
+  platformNames,
+} from "../src/names.js";
 import { canonicalJson, inputsHash } from "../src/platform.js";
 import {
   assetEntries,
   bundleSha256,
+  compareVersions,
   migrationsSha256,
-  RELEASE_PUBKEY,
-  RELEASE_PUBKEY_PLACEHOLDER,
   type ReleaseAsset,
   type ReleaseFile,
   type ReleaseReader,
@@ -59,6 +65,9 @@ import {
   WfpProvisioner,
 } from "../src/wfp.js";
 import { type FakeCf as Fake, FakeCf, splitSql } from "./fake-cf.js";
+
+const hostsOf = (slug: string) =>
+  hostsOf0(slug, { app: "app.test", content: "content.test" });
 
 // Every generated secret, PAT and broker private key is captured at the
 // generator, so values that were generated and then discarded (resumes,
@@ -85,6 +94,41 @@ vi.mock("node:fs", async (orig) =>
 vi.mock("node:fs/promises", async (orig) =>
   H.recordReads(await orig(), ["readFile", "readdir", "lstat", "open"]),
 );
+// The sealed gates (src/internal/gates.ts): tests flip them here; no option can.
+const G = vi.hoisted(() => ({
+  PROD_UNLOCKED: true,
+  ALLOW_ACCOUNT_TARGET: true,
+  RELEASE_PUBKEY: { staging: "", prod: "" } as Record<string, string>,
+}));
+vi.mock("../src/internal/gates.js", async (orig) => {
+  const m = await orig<typeof import("../src/internal/gates.js")>();
+  return {
+    ...m,
+    get PROD_UNLOCKED() {
+      return G.PROD_UNLOCKED;
+    },
+    get ALLOW_ACCOUNT_TARGET() {
+      return G.ALLOW_ACCOUNT_TARGET;
+    },
+    get RELEASE_PUBKEY() {
+      return G.RELEASE_PUBKEY;
+    },
+  };
+});
+/** Runs fn with one gate set, then restores it. */
+async function withGate<K extends keyof typeof G>(
+  k: K,
+  v: (typeof G)[K],
+  fn: () => Promise<void>,
+) {
+  const before = G[k];
+  G[k] = v;
+  try {
+    await fn();
+  } finally {
+    G[k] = before;
+  }
+}
 vi.mock("@oa/shared", async (orig) => {
   const m = await orig<typeof import("@oa/shared")>();
   return {
@@ -200,6 +244,8 @@ const ASSETS: ReleaseAsset[] = [
 
 /** Release content; a Template object is serialized to the template bytes. */
 type ReleaseSpec = {
+  env?: Env;
+  welcome?: Uint8Array;
   template?: Template | Uint8Array;
   migrations?: ReleaseFile[];
   assets?: ReleaseAsset[];
@@ -223,16 +269,24 @@ for (const k of [SIGNER, OTHER_SIGNER]) {
 const pubX = (k: { publicKey: KeyObject }) =>
   k.publicKey.export({ format: "jwk" }).x as string;
 const TEST_PUBKEY = pubX(SIGNER);
+// One key for both envs on purpose: domain separation must still hold (F2).
+G.RELEASE_PUBKEY = { staging: TEST_PUBKEY, prod: TEST_PUBKEY };
 
+/** The signed bytes: "oa-release-v1\n" + env + "\n" + canonicalJson(record). */
+const payloadOf = (record: unknown, env: string) =>
+  Buffer.from(`oa-release-v1\n${env}\n${canonicalJson(record)}`);
 const signRecord = (
   record: ReleaseRecord,
   key: KeyObject = SIGNER.privateKey,
+  env: string = record.env,
 ): SignedReleaseRecord => ({
   record,
-  signature: sign(null, Buffer.from(canonicalJson(record)), key).toString(
-    "base64url",
-  ),
+  signature: sign(null, payloadOf(record, env), key).toString("base64url"),
 });
+
+const WELCOME_BYTES = enc(
+  "# Welcome to Open Artifacts\n\nThis text comes from the release (sentinel-from-release).\n",
+);
 
 /** The per-release manifest the bundle step (T3b) will write. */
 const recordOf = (
@@ -240,6 +294,7 @@ const recordOf = (
   version = "0.23.0",
   spec: ReleaseSpec = {},
 ): ReleaseRecord => ({
+  env: spec.env ?? "staging",
   version,
   variant,
   sha256: bundleSha256(makeBundle(variant, version)),
@@ -249,9 +304,18 @@ const recordOf = (
     .update(tplBytes(spec.template))
     .digest("hex"),
   migrationsSha256: migrationsSha256(spec.migrations ?? MIGRATION_FILES),
+  welcomeSha256: createHash("sha256")
+    .update(spec.welcome ?? WELCOME_BYTES)
+    .digest("hex"),
 });
 
-type Kind = "record" | "modules" | "assets" | "template" | "migrations";
+type Kind =
+  | "record"
+  | "modules"
+  | "assets"
+  | "template"
+  | "migrations"
+  | "welcome";
 /** An in-memory release reader that counts reads; `over` replaces any read. */
 function makeRelease(
   spec: ReleaseSpec = {},
@@ -263,6 +327,7 @@ function makeRelease(
     assets: 0,
     template: 0,
     migrations: 0,
+    welcome: 0,
   };
   const base: ReleaseReader = {
     record: async (version, v) => signRecord(recordOf(v, version, spec)),
@@ -278,6 +343,7 @@ function makeRelease(
         ...f,
         bytes: f.bytes.slice(),
       })),
+    welcome: async () => (spec.welcome ?? WELCOME_BYTES).slice(),
   };
   const counted = (k: Kind) =>
     // biome-ignore lint/suspicious/noExplicitAny: forwards each reader's own args
@@ -293,13 +359,18 @@ function makeRelease(
     assets: counted("assets"),
     template: counted("template"),
     migrations: counted("migrations"),
+    welcome: counted("welcome"),
   };
 }
 
-/** The first read is the good one, every later read the other. */
-const swapAfterFirst = <T>(good: () => Promise<T>, evil: () => Promise<T>) => {
+/** The first `after` reads are the good ones, every later read the other. */
+const swapAfterFirst = <T>(
+  good: () => Promise<T>,
+  evil: () => Promise<T>,
+  after = 1,
+) => {
   let n = 0;
-  return () => (++n === 1 ? good() : evil());
+  return () => (++n <= after ? good() : evil());
 };
 
 const TS = {
@@ -336,6 +407,8 @@ function setup(o: SetupOpts = {}) {
       name: platformNames(e).turnstile,
       domains: [HOSTED_DOMAINS[e].app],
       mode: "managed",
+      // The real GET returns the widget secret too.
+      secret: TS[e].secret,
     });
   const target: Target = o.target ?? { kind: "namespace", ns: NAMESPACES[env] };
   fake.dispatch = {
@@ -356,7 +429,7 @@ function setup(o: SetupOpts = {}) {
     fetch: fake.fetch,
     sleep: async () => {},
   });
-  const release = o.release ?? makeRelease();
+  const release = o.release ?? makeRelease({ env });
   const opts = (over: Partial<WfpOptions> = {}): WfpOptions => ({
     cf,
     env,
@@ -369,11 +442,6 @@ function setup(o: SetupOpts = {}) {
     now: clock.now,
     sleep: clock.sleep,
     turnstile: TS[env],
-    __testOnlyReleasePubkey: TEST_PUBKEY,
-    ...(target.kind === "account"
-      ? { __testOnlyAllowAccountTarget: true }
-      : {}),
-    ...(env === "prod" ? { prodRecordWriter: "t3b" as const } : {}),
     ...over,
   });
   const mk = (over: Partial<WfpOptions> = {}) => {
@@ -394,6 +462,7 @@ function setup(o: SetupOpts = {}) {
     env,
     p: mk(),
     mk,
+    opts,
     pdb,
     hostsId,
     regId,
@@ -973,10 +1042,12 @@ describe("WfpProvisioner.create", () => {
     });
     const bad = /\bBROKER_(KID|KEY)\b/;
     for (const r of s.fake.raw) expect(bad.test(r.body)).toBe(false);
-    for (const f of readdirSync(new URL("../src/", import.meta.url)))
+    for (const f of readdirSync(new URL("../src/", import.meta.url), {
+      recursive: true,
+    }).filter((x) => String(x).endsWith(".ts")))
       expect(
         bad.test(readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8")),
-        f,
+        String(f),
       ).toBe(false);
     const meta = metaOf(uploads(s.fake)[0]?.body as string);
     const t = loadTemplate();
@@ -1095,7 +1166,6 @@ describe("WfpProvisioner.create", () => {
       ],
     ])("%s is refused with zero calls", async (_n, rec) => {
       const s = setup({
-        env: "prod",
         release: makeRelease(
           {},
           {
@@ -1230,6 +1300,7 @@ describe("WfpProvisioner.create", () => {
         target: "namespace" as const,
         mode: "update" as const,
         assetsJwt: "jwt",
+        template: loadTemplate(),
         mainModule: "index.js",
       };
       const m = userWorkerMetadata(
@@ -2015,7 +2086,7 @@ describe("release record integrity (H-T4b M1)", () => {
     expect((await fails(readAssetsDir(withLink))).message).toMatch(/symlink/);
   });
 
-  it("the local checkout is never read: sentinel files in apps/server change nothing", async () => {
+  it("the local checkout is never read: sentinel files in apps/server and scripts/setup change nothing", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "oa-t4b-checkout-"));
     const srv = join(cwd, "apps", "server");
     mkdirSync(join(srv, "dist-assets"), { recursive: true });
@@ -2026,7 +2097,15 @@ describe("release record integrity (H-T4b M1)", () => {
       "CREATE TABLE sentinel (x);",
     );
     writeFileSync(join(srv, "wrangler.template.jsonc"), "SENTINEL {");
-    const s = setup();
+    mkdirSync(join(cwd, "scripts", "setup"), { recursive: true });
+    writeFileSync(
+      join(cwd, "scripts", "setup", "welcome.md"),
+      "# Welcome to Open Artifacts\nSENTINEL-from-checkout",
+    );
+    // A release template unlike the checkout's, so a fallback would show.
+    const tpl = structuredClone(loadTemplate());
+    tpl.compatibility_date = "2026-09-30";
+    const s = setup({ release: makeRelease({ template: tpl }) });
     const before = process.cwd();
     H.READS.length = 0;
     process.chdir(cwd);
@@ -2036,13 +2115,19 @@ describe("release record integrity (H-T4b M1)", () => {
     } finally {
       process.chdir(before);
     }
+    // No fs read in the repo or the cwd checkout; only the PAT dir (tmp).
     const local = H.READS.filter(
-      (r) => r.includes("/apps/server") || r.includes("dist-assets"),
+      (r) =>
+        r.startsWith(ROOT_DIR) ||
+        r.startsWith(cwd) ||
+        !r.startsWith("/") ||
+        r.includes("/apps/server") ||
+        r.includes("dist-assets") ||
+        r.includes("welcome.md"),
     );
     expect(local).toEqual([]);
-    expect(
-      H.READS.some((r) => r.startsWith(ROOT_DIR) && r.includes("/apps/")),
-    ).toBe(false);
+    const art = [...s.fake.artifacts.values()][0];
+    expect(art?.content).toBe(new TextDecoder().decode(WELCOME_BYTES));
     const sess = s.fake.raw.find((r) =>
       r.path.endsWith("/assets-upload-session"),
     );
@@ -2056,39 +2141,36 @@ describe("release record integrity (H-T4b M1)", () => {
         .prepare("SELECT name FROM sqlite_master WHERE name = 'sentinel'")
         .all(),
     ).toEqual([]);
-    expect(s.scriptOf(inst.id)?.metadata.compatibility_date).toBe(
-      loadTemplate().compatibility_date,
-    );
+    expect(s.scriptOf(inst.id)?.metadata.compatibility_date).toBe("2026-09-30");
   });
 });
 
 describe("prod lock and signed records (H-T4b L2)", () => {
-  it("prod is refused with ProdLocked and zero calls unless prodRecordWriter is t3b", async () => {
+  it("prod is refused with ProdLocked and zero calls while the PROD_UNLOCKED gate is off", async () => {
     const s = setup({ env: "prod" });
-    const e = await fails(
-      s.mk({ prodRecordWriter: undefined }).create(input()),
-    );
-    expect(e).toBeInstanceOf(ProdLocked);
-    expect(e.name).toBe("ProdLocked");
-    expect(s.fake.log).toEqual([]);
-    // T3b flips it in code; then prod creates like staging.
+    await withGate("PROD_UNLOCKED", false, async () => {
+      const e = await fails(s.p.create(input()));
+      expect(e).toBeInstanceOf(ProdLocked);
+      expect(e.name).toBe("ProdLocked");
+      expect(s.fake.log).toEqual([]);
+    });
+    // T3b flips the gate in code; then prod creates like staging.
     const inst = await s.p.create(input());
     expect(inst.appHost).toBe("finqore.open-artifacts.app");
   });
 
-  it("RELEASE_PUBKEY is the placeholder in every env, and create refuses while it is", async () => {
-    expect(RELEASE_PUBKEY).toEqual({
-      staging: RELEASE_PUBKEY_PLACEHOLDER,
-      prod: RELEASE_PUBKEY_PLACEHOLDER,
-    });
-    expect(RELEASE_PUBKEY_PLACEHOLDER).toMatch(/placeholder/i);
+  it("create refuses while RELEASE_PUBKEY is the placeholder", async () => {
     for (const env of ["staging", "prod"] as const) {
       const s = setup({ env });
-      const e = await fails(
-        s.mk({ __testOnlyReleasePubkey: undefined }).create(input()),
+      await withGate(
+        "RELEASE_PUBKEY",
+        { ...G.RELEASE_PUBKEY, [env]: RELEASE_PUBKEY_PLACEHOLDER },
+        async () => {
+          const e = await fails(s.p.create(input()));
+          expect(e.message).toMatch(/placeholder/i);
+          expect(s.fake.log).toEqual([]);
+        },
       );
-      expect(e.message).toMatch(/placeholder/i);
-      expect(s.fake.log).toEqual([]);
     }
   });
 
@@ -2163,7 +2245,7 @@ describe("prod lock and signed records (H-T4b L2)", () => {
     expect(e.message).not.toMatch(/0\.22\.0/);
   });
 
-  it("a signature verifies over the canonical JSON of the record", () => {
+  it("a signature verifies over the domain-separated canonical JSON of the record", () => {
     const g = good();
     const pub = createPublicKey({
       key: { kty: "OKP", crv: "Ed25519", x: TEST_PUBKEY },
@@ -2172,7 +2254,7 @@ describe("prod lock and signed records (H-T4b L2)", () => {
     expect(
       verify(
         null,
-        Buffer.from(canonicalJson(g.record)),
+        payloadOf(g.record, "staging"),
         pub,
         Buffer.from(g.signature, "base64url"),
       ),
@@ -2181,20 +2263,13 @@ describe("prod lock and signed records (H-T4b L2)", () => {
 });
 
 describe("account target is test-only (H-T4b L3)", () => {
-  it("an account target is refused without __testOnlyAllowAccountTarget, with zero calls", async () => {
+  it("an account target is refused with zero calls while the ALLOW_ACCOUNT_TARGET gate is off", async () => {
     const s = setup({ target: { kind: "account" } });
-    const e = await fails(
-      s.mk({ __testOnlyAllowAccountTarget: undefined }).create(input()),
-    );
-    expect(e.message).toMatch(/account target/);
-    expect(s.fake.log).toEqual([]);
-    const f = await fails(
-      s
-        .mk({ __testOnlyAllowAccountTarget: "true" as unknown as true })
-        .create(input()),
-    );
-    expect(f.message).toMatch(/account target/);
-    expect(s.fake.log).toEqual([]);
+    await withGate("ALLOW_ACCOUNT_TARGET", false, async () => {
+      const e = await fails(s.p.create(input()));
+      expect(e.message).toMatch(/account target/);
+      expect(s.fake.log).toEqual([]);
+    });
   });
 });
 
@@ -2413,6 +2488,422 @@ describe("Turnstile, one widget per env (H-T4b)", () => {
   });
 });
 
+describe("H-T4b round 1", () => {
+  describe("F1: sealed gates, no option reaches them", () => {
+    const keys = [
+      { prodRecordWriter: "t3b" },
+      { __testOnlyReleasePubkey: pubX(OTHER_SIGNER) },
+      { __testOnlyAllowAccountTarget: true },
+      { __testOnlyAnything: 1 },
+      { PROD_UNLOCKED: true },
+      { ALLOW_ACCOUNT_TARGET: true },
+      { RELEASE_PUBKEY: { staging: pubX(OTHER_SIGNER) } },
+    ];
+    it.each(
+      keys.flatMap((k) => [["spread", k] as const, ["JSON", k] as const]),
+    )(
+      "an options object carrying a gate name (%s %j) is refused at construction and unlocks nothing",
+      async (how, k) => {
+        await withGate("PROD_UNLOCKED", false, () =>
+          withGate("ALLOW_ACCOUNT_TARGET", false, () =>
+            withGate(
+              "RELEASE_PUBKEY",
+              {
+                staging: RELEASE_PUBKEY_PLACEHOLDER,
+                prod: RELEASE_PUBKEY_PLACEHOLDER,
+              },
+              async () => {
+                for (const env of ["staging", "prod"] as const) {
+                  const s = setup({ env });
+                  const base = s.opts();
+                  const o =
+                    how === "spread"
+                      ? { ...base, ...k }
+                      : Object.assign({}, base, JSON.parse(JSON.stringify(k)));
+                  let p: WfpProvisioner | undefined;
+                  const e = (() => {
+                    try {
+                      p = new WfpProvisioner(o);
+                    } catch (err) {
+                      return err as Error;
+                    }
+                  })();
+                  expect(e?.message).toMatch(/not an option/);
+                  expect(p).toBeUndefined();
+                  // Without the name, the gates still hold.
+                  const plain = await fails(
+                    new WfpProvisioner(base).create(input()),
+                  );
+                  expect(plain.message).toMatch(
+                    env === "prod" ? /locked/ : /placeholder/,
+                  );
+                  expect(s.fake.log).toEqual([]);
+                }
+              },
+            ),
+          ),
+        );
+      },
+    );
+
+    it("the package index does not export the gates, and the package exports only its index", () => {
+      for (const k of [
+        "PROD_UNLOCKED",
+        "ALLOW_ACCOUNT_TARGET",
+        "RELEASE_PUBKEY",
+        "RELEASE_PUBKEY_PLACEHOLDER",
+      ])
+        expect(Object.keys(INDEX)).not.toContain(k);
+      const pkg = JSON.parse(
+        readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+      );
+      expect(Object.keys(pkg.exports)).toEqual(["."]);
+    });
+
+    it("the real gates are shut: prod locked, no account target, placeholder keys", async () => {
+      const real = await vi.importActual<
+        typeof import("../src/internal/gates.js")
+      >("../src/internal/gates.js");
+      expect(real.PROD_UNLOCKED).toBe(false);
+      expect(real.ALLOW_ACCOUNT_TARGET).toBe(false);
+      expect(real.RELEASE_PUBKEY).toEqual({
+        staging: real.RELEASE_PUBKEY_PLACEHOLDER,
+        prod: real.RELEASE_PUBKEY_PLACEHOLDER,
+      });
+      expect(real.RELEASE_PUBKEY_PLACEHOLDER).toMatch(/placeholder/i);
+      expect(Object.isFrozen(real.RELEASE_PUBKEY)).toBe(true);
+      // Once T3b sets real keys, the envs must not share one.
+      if (real.RELEASE_PUBKEY.staging !== real.RELEASE_PUBKEY_PLACEHOLDER)
+        expect(real.RELEASE_PUBKEY.staging).not.toBe(real.RELEASE_PUBKEY.prod);
+    });
+  });
+
+  describe("F2: records are bound to env and version", () => {
+    it("a staging-signed record is refused in prod, even under the same key", async () => {
+      expect(G.RELEASE_PUBKEY.staging).toBe(G.RELEASE_PUBKEY.prod);
+      const stagingRec = recordOf("release", "0.23.0", { env: "staging" });
+      for (const [n, rec] of [
+        ["staging record, staging signature", signRecord(stagingRec)],
+        [
+          "staging record, prod-domain signature",
+          signRecord(stagingRec, SIGNER.privateKey, "prod"),
+        ],
+        [
+          "prod record, staging-domain signature",
+          signRecord(
+            recordOf("release", "0.23.0", { env: "prod" }),
+            SIGNER.privateKey,
+            "staging",
+          ),
+        ],
+      ] as const) {
+        const s = setup({
+          env: "prod",
+          release: makeRelease({ env: "prod" }, { record: async () => rec }),
+        });
+        const e = await fails(s.p.create(input()));
+        expect(e.message, n).toMatch(/signature|env/);
+        expect(s.fake.log, n).toEqual([]);
+      }
+    });
+
+    it("a signature over the bare record, or a record without env, is refused", async () => {
+      const rec = recordOf("release");
+      const bare = {
+        record: rec,
+        signature: sign(
+          null,
+          Buffer.from(canonicalJson(rec)),
+          SIGNER.privateKey,
+        ).toString("base64url"),
+      };
+      const { env: _e, ...noEnv } = rec;
+      for (const r of [
+        bare,
+        signRecord(noEnv as ReleaseRecord, SIGNER.privateKey, "staging"),
+      ]) {
+        const s = setup({
+          release: makeRelease({}, { record: async () => r }),
+        });
+        const e = await fails(s.p.create(input()));
+        expect(e.message).toMatch(/signature|env/);
+        expect(s.fake.log).toEqual([]);
+      }
+    });
+
+    it("a signed record for another version is refused with zero calls", async () => {
+      const s = setup({
+        release: makeRelease(
+          {},
+          { record: async () => signRecord(recordOf("release", "0.23.1")) },
+        ),
+      });
+      const e = await fails(s.p.create(input()));
+      expect(e.message).toMatch(/is for 0\.23\.1/);
+      expect(s.fake.log).toEqual([]);
+    });
+
+    it("a downgrade below the install's current version is refused before any write", async () => {
+      const s = setup();
+      await failAtHealth(s);
+      const writes = s.fake.writes().length;
+      const e = await fails(
+        s.p.create(input("finqore", { version: "0.22.9" })),
+      );
+      expect(e.message).toMatch(/downgrade/);
+      expect(s.fake.writes().length).toBe(writes);
+      // The same version resumes.
+      await s.p.create(input());
+    });
+
+    it("compareVersions orders releases, prereleases first", () => {
+      expect(compareVersions("0.23.0", "0.22.9")).toBeGreaterThan(0);
+      expect(compareVersions("0.23.0", "0.23.0")).toBe(0);
+      expect(compareVersions("0.23.0-rc.1", "0.23.0")).toBeLessThan(0);
+      expect(compareVersions("0.23.0-rc.2", "0.23.0-rc.10")).toBeLessThan(0);
+      expect(compareVersions("1.0.0", "0.99.99")).toBeGreaterThan(0);
+      expect(() => compareVersions("v1", "1.0.0")).toThrow(/version/);
+    });
+
+    it("the verified record is a private frozen copy: a reader mutating its object later changes nothing", async () => {
+      const signed = signRecord(recordOf("release"));
+      const evil = makeBundle("redline");
+      const s = setup({
+        release: makeRelease(
+          {},
+          {
+            record: async () => signed,
+            modules: async () => {
+              (signed.record as { sha256: string }).sha256 = bundleSha256(evil);
+              return evil;
+            },
+          },
+        ),
+      });
+      const e = await fails(s.p.create(input()));
+      expect(e.message).toMatch(/modules do not match/);
+      expect(s.fake.log).toEqual([]);
+    });
+  });
+
+  describe("F3: the welcome text comes from the release", () => {
+    it("the published Welcome artifact is the release's text", async () => {
+      const s = setup();
+      await s.p.create(input());
+      expect([...s.fake.artifacts.values()][0]?.content).toBe(
+        new TextDecoder().decode(WELCOME_BYTES),
+      );
+    });
+
+    it("a welcome text that differs from the signed record is refused with zero calls", async () => {
+      const s = setup({
+        release: makeRelease(
+          {},
+          { welcome: async () => enc("# Welcome to Open Artifacts\nphish") },
+        ),
+      });
+      const e = await fails(s.p.create(input()));
+      expect(e.message).toMatch(/welcome do not match the signed record/);
+      expect(s.fake.log).toEqual([]);
+    });
+
+    it("a welcome text swapped before publishing is refused, and nothing is published", async () => {
+      const s = setup({
+        release: makeRelease(
+          {},
+          {
+            welcome: swapAfterFirst(
+              async () => WELCOME_BYTES,
+              async () => enc("# Welcome to Open Artifacts\nphish"),
+            ),
+          },
+        ),
+      });
+      const e = await fails(s.p.create(input()));
+      expect(e.message).toMatch(/welcome do not match the signed record/);
+      expect((s.release as ReturnType<typeof makeRelease>).calls.welcome).toBe(
+        2,
+      );
+      expect(s.fake.artifacts.size).toBe(0);
+    });
+  });
+
+  describe("LOWs", () => {
+    it("F5: userWorkerMetadata needs a template (no checkout fallback)", () => {
+      expect(() =>
+        userWorkerMetadata(
+          {
+            id: "iaaaaaaaaaaa",
+            appHost: "a.open-artifacts-staging.app",
+            contentHost: "a.open-artifacts-staging.page",
+            ownerEmail: OWNER,
+            vars: {},
+            testHooks: false,
+          },
+          {
+            d1Id: "00000000-0000-4000-8000-000000000000",
+            kvId: "0".repeat(32),
+            version: "0.23.0",
+            rlNs: 1_000_000,
+            doMigrationTag: null,
+            env: "staging",
+            target: "namespace",
+            mode: "update",
+            mainModule: "index.js",
+            assetsJwt: "j",
+          } as never,
+        ),
+      ).toThrow(/template/);
+    });
+
+    it.each([
+      "AUTH_PROVIDERS",
+      "EMAIL_CODE_DOMAIN",
+      "TURNSTILE_SITE_KEY",
+      "TURNSTILE_SECRET",
+    ])(
+      "F6: a release template that sets %s in vars is refused with zero calls",
+      async (k) => {
+        const t = structuredClone(loadTemplate());
+        t.vars = { ...(t.vars ?? {}), [k]: "email" };
+        const s = setup({ release: makeRelease({ template: t }) });
+        const e = await fails(s.p.create(input()));
+        expect(e.message).toMatch(new RegExp(k));
+        expect(s.fake.log).toEqual([]);
+      },
+    );
+
+    it("F6: a template whose var duplicates a binding name is refused with zero calls", async () => {
+      const t = structuredClone(loadTemplate());
+      t.vars = { ...(t.vars ?? {}), DB: "x" };
+      const s = setup({ release: makeRelease({ template: t }) });
+      const e = await fails(s.p.create(input()));
+      expect(e.message).toMatch(/duplicate binding/);
+      expect(s.fake.log).toEqual([]);
+    });
+
+    it("F7: readAssetsDir refuses an intermediate directory symlink", async () => {
+      const elsewhere = mkdtempSync(join(tmpdir(), "oa-t4b-elsewhere-"));
+      writeFileSync(join(elsewhere, "a.txt"), "secret");
+      const dir = mkdtempSync(join(tmpdir(), "oa-t4b-assets-"));
+      writeFileSync(join(dir, "index.html"), "i");
+      symlinkSync(elsewhere, join(dir, "link-dir"));
+      expect((await fails(readAssetsDir(dir))).message).toMatch(/symlink/);
+    });
+
+    it.each([
+      [
+        "more than 20,000 assets",
+        () =>
+          Array.from({ length: 20_001 }, (_, i) => ({
+            path: `f${String(i).padStart(5, "0")}.txt`,
+            size: 1,
+            sha256: "a".repeat(64),
+          })),
+      ],
+      [
+        "an asset over 25 MiB",
+        () => [
+          {
+            path: "big.bin",
+            size: 25 * 1024 * 1024 + 1,
+            sha256: "a".repeat(64),
+          },
+        ],
+      ],
+      [
+        "assets over 512 MiB in total",
+        () =>
+          Array.from({ length: 21 }, (_, i) => ({
+            path: `b${String(i).padStart(2, "0")}.bin`,
+            size: 25 * 1024 * 1024,
+            sha256: "a".repeat(64),
+          })),
+      ],
+    ])(
+      "F8: a record with %s is refused before any other read",
+      async (_n, assets) => {
+        const s = setup({
+          release: makeRelease(
+            {},
+            {
+              record: async () =>
+                signRecord({ ...recordOf("release"), assets: assets() }),
+            },
+          ),
+        });
+        const e = await fails(s.p.create(input()));
+        expect(e.message).toMatch(/assets|asset/);
+        expect(
+          (s.release as ReturnType<typeof makeRelease>).calls.modules,
+        ).toBe(0);
+        expect(s.fake.log).toEqual([]);
+      },
+    );
+
+    it.each(["%2eenv", "．env", "a b.txt", "café.js", "a?b", "a#b", "a:b"])(
+      "F8: asset path %j is outside the plain charset and refused",
+      async (path) => {
+        const s = setup({
+          release: makeRelease(
+            {},
+            { assets: async () => [...ASSETS, { path, bytes: enc("x") }] },
+          ),
+        });
+        const e = await fails(s.p.create(input()));
+        expect(e.message).toMatch(/asset path/);
+        expect(s.fake.log).toEqual([]);
+      },
+    );
+
+    it("F10: a swap on the 412-probe retry read is refused before the retry upload", async () => {
+      const s = setup({
+        release: makeRelease({
+          template: (() => {
+            const t = structuredClone(loadTemplate());
+            t.migrations = [
+              { tag: "v1", new_sqlite_classes: ["ArtifactRuntime"] },
+              { tag: "v2", new_sqlite_classes: ["C1"] },
+            ];
+            return t;
+          })(),
+        }),
+      });
+      await failAtHealth(s);
+      const [row] = s.rows();
+      s.db()
+        .prepare("UPDATE installs SET do_migration_tag = NULL WHERE id = ?")
+        .run(row.id);
+      const t = structuredClone(loadTemplate());
+      t.migrations = [
+        { tag: "v1", new_sqlite_classes: ["ArtifactRuntime"] },
+        { tag: "v2", new_sqlite_classes: ["C1"] },
+      ];
+      // Reads: 1 pre-flight, 2 the probe upload (412), 3 the retry.
+      const p2 = s.mk({
+        release: makeRelease(
+          { template: t },
+          {
+            modules: swapAfterFirst(
+              async () => makeBundle("release"),
+              async () => makeBundle("redline"),
+              2,
+            ),
+          },
+        ),
+      });
+      const e = await fails(p2.create(input()));
+      expect(e.message).toMatch(/modules do not match the signed record/);
+      expect(uploads(s.fake).map((u) => u.status)).toEqual([200, 412]);
+    });
+
+    it("F10: uppercase punycode is refused too", () => {
+      for (const slug of ["XN--abc", "Xn--abc", "AB--c"])
+        expect(() => hostsOf(slug)).toThrow(/slug/);
+    });
+  });
+});
+
 describe("cfClient", () => {
   const client = () => {
     const fake = new FakeCf();
@@ -2482,6 +2973,42 @@ describe("cfClient", () => {
       .map((e) => new URL(e.path, "https://x").searchParams.get("page"));
     expect(pages).toEqual(["1", "2"]);
     expect(await cf.d1Get("oa-s-nowhere")).toBeNull();
+  });
+
+  it("F9: d1Get trusts total_pages: a full final page, a clamped per_page, and no result_info", async () => {
+    const pagesOf = (fake: Fake) =>
+      fake.log
+        .filter((e) => e.path.includes("/d1/database?"))
+        .map((e) => new URL(e.path, "https://x").searchParams.get("page"));
+    {
+      const { fake, cf } = client();
+      for (let i = 0; i < 100; i++) fake.seedD1(`oa-s-full-copy-${i}`);
+      expect(await cf.d1Get("oa-s-full")).toBeNull();
+      expect(pagesOf(fake)).toEqual(["1"]);
+    }
+    {
+      const { fake, cf } = client();
+      for (let i = 0; i < 199; i++) fake.seedD1(`oa-s-full-copy-${i}`);
+      const id = fake.seedD1("oa-s-full");
+      expect(await cf.d1Get("oa-s-full")).toBe(id);
+      expect(pagesOf(fake)).toEqual(["1", "2"]);
+    }
+    {
+      const { fake, cf } = client();
+      fake.d1PerPageCap = 50;
+      for (let i = 0; i < 120; i++) fake.seedD1(`oa-s-clamp-copy-${i}`);
+      const id = fake.seedD1("oa-s-clamp");
+      expect(await cf.d1Get("oa-s-clamp")).toBe(id);
+      expect(pagesOf(fake)).toEqual(["1", "2", "3"]);
+    }
+    {
+      const { fake, cf } = client();
+      fake.d1ResultInfo = false;
+      for (let i = 0; i < 150; i++) fake.seedD1(`oa-s-noinfo-copy-${i}`);
+      const id = fake.seedD1("oa-s-noinfo");
+      expect(await cf.d1Get("oa-s-noinfo")).toBe(id);
+      expect(await cf.d1Get("oa-s-none")).toBeNull();
+    }
   });
 
   it("d1Batch runs all statements or none", async () => {
