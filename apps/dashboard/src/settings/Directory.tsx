@@ -345,8 +345,8 @@ function StatusHeader({
             </p>
           )}
           <p className={muted}>
-            Nobody loses access while sync is down. After 24 hours, sign-ins
-            last at most 24 hours.
+            Nobody loses access while sync is down. While sync is down, people
+            sign in again every 24 hours.
           </p>
           {tokensUnverified && (
             <p className={muted}>
@@ -591,8 +591,9 @@ function RestrictedRow({ g }: { g: RestrictedGroup }) {
       <td className="py-[var(--oa-space-3)] text-right">
         <Button
           size="sm"
-          variant="ghost"
+          variant="outline"
           className="text-[length:var(--oa-text-sm)]"
+          aria-label={`Lift restriction on ${g.name ?? g.email}`}
           onClick={() => setAsking(true)}
         >
           Lift

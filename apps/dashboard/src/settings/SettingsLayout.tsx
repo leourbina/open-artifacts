@@ -54,7 +54,9 @@ export function SettingsLayout() {
         Settings
       </h1>
       <nav
-        className="mt-[var(--oa-space-3)] mb-[var(--oa-space-5)] flex gap-[var(--oa-space-1)] overflow-x-auto shadow-[inset_0_-1px_0_var(--color-border)] [scrollbar-width:none]"
+        // On phones the row scrolls: the right edge fades so it reads as more to see,
+        // and the end padding lets the last tab scroll clear of the fade.
+        className="mt-[var(--oa-space-3)] mb-[var(--oa-space-5)] flex gap-[var(--oa-space-1)] overflow-x-auto shadow-[inset_0_-1px_0_var(--color-border)] [scrollbar-width:none] max-[600px]:pr-[24px] max-[600px]:[mask-image:linear-gradient(to_right,#000_calc(100%-24px),transparent)]"
         aria-label="Settings sections"
       >
         {TABS.filter(

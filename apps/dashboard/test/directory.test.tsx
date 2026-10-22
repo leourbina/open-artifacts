@@ -86,11 +86,89 @@ it("staleAt is never shown: no deadline, access is frozen as of the last sync", 
     /Access is frozen as of the last sync \(.+\)\. Changes in Google, including people who left, won't apply here until sync recovers\./,
   );
   expect(s).toHaveTextContent(
-    "Nobody loses access while sync is down. After 24 hours, sign-ins last at most 24 hours.",
+    "Nobody loses access while sync is down. While sync is down, people sign in again every 24 hours.",
   );
+  expect(s).not.toHaveTextContent("After 24 hours");
   expect(s).toHaveTextContent("Last error: Google returned 503.");
   expect(document.body.textContent).not.toMatch(
     /Oct 27|lose access by|recover by/,
+  );
+});
+
+/** What a sighted reader sees: the text without the screen-reader-only copies. */
+const seen = (el: HTMLElement) => {
+  const c = el.cloneNode(true) as HTMLElement;
+  for (const n of c.querySelectorAll(".sr-only")) n.remove();
+  return c.textContent ?? "";
+};
+const fmt = (iso: string, o: Intl.DateTimeFormatOptions) =>
+  new Intl.DateTimeFormat("en-US", o).format(new Date(iso));
+
+it("times from another day show the date: frozen as of, failing since", async () => {
+  const day = "2026-10-20T04:44:00.000Z";
+  const since = "2026-10-20T06:10:00.000Z";
+  mountHosted(
+    "/settings/directory",
+    true,
+    undefined,
+    serveStatus({
+      healthy: false,
+      state: "backoff",
+      unhealthySince: since,
+      lastSuccessAt: day,
+    }),
+  );
+  const s = await status();
+  const dayTime = (iso: string) =>
+    fmt(iso, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  expect(seen(s)).toContain(`Failing since ${dayTime(since)} (`);
+  expect(seen(s)).toContain(
+    `Access is frozen as of the last sync (${dayTime(day)}).`,
+  );
+  expect(dayTime(day)).toMatch(/^Oct 20, /);
+});
+
+it("times from today show the time only", async () => {
+  const now = Date.now();
+  const today = new Date(now - 60_000).toISOString();
+  const since = new Date(now - 30_000).toISOString();
+  mountHosted(
+    "/settings/directory",
+    true,
+    undefined,
+    serveStatus({
+      healthy: false,
+      state: "backoff",
+      unhealthySince: since,
+      lastSuccessAt: today,
+    }),
+  );
+  const s = await status();
+  const time = (iso: string) =>
+    fmt(iso, { hour: "numeric", minute: "2-digit" });
+  expect(seen(s)).toContain(`Failing since ${time(since)} (`);
+  expect(seen(s)).toContain(
+    `Access is frozen as of the last sync (${time(today)}).`,
+  );
+  expect(seen(s)).not.toContain(fmt(today, { month: "short", day: "numeric" }));
+});
+
+it("frozen from another day: kept as of the date and time", async () => {
+  const day = "2026-10-20T04:44:00.000Z";
+  mountHosted(
+    "/settings/directory",
+    { directory: "frozen" },
+    undefined,
+    serveStatus({ mode: "frozen", lastSuccessAt: day }),
+  );
+  const s = await status();
+  expect(seen(s)).toContain(
+    `Space memberships were kept as of ${fmt(day, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} and are managed by hand.`,
   );
 });
 
@@ -594,7 +672,11 @@ it("Lift asks first, then DELETEs", async () => {
   const row = await screen.findByRole("row", {
     name: /contractors@example.com/,
   });
-  fireEvent.click(within(row).getByRole("button", { name: "Lift" }));
+  fireEvent.click(
+    within(row).getByRole("button", {
+      name: "Lift restriction on Contractors",
+    }),
+  );
   const d = screen.getByRole("alertdialog");
   expect(d).toHaveTextContent("Lift the Contractors restriction?");
   expect(d).toHaveTextContent(
@@ -608,12 +690,28 @@ it("Lift asks first, then DELETEs", async () => {
   );
 });
 
+it("Lift is a real button styled like Apply", async () => {
+  mountHosted("/settings/directory");
+  const row = await screen.findByRole("row", {
+    name: /contractors@example.com/,
+  });
+  const lift = within(row).getByRole("button", {
+    name: "Lift restriction on Contractors",
+  });
+  const apply = within(await held()).getByRole("button", { name: "Apply" });
+  expect(lift.className).toBe(apply.className);
+});
+
 it("admins manage restricted groups too", async () => {
   mountHosted("/settings/directory", true, asAdmin);
   const row = await screen.findByRole("row", {
     name: /contractors@example.com/,
   });
-  expect(within(row).getByRole("button", { name: "Lift" })).toBeVisible();
+  expect(
+    within(row).getByRole("button", {
+      name: "Lift restriction on Contractors",
+    }),
+  ).toBeVisible();
   expect(
     screen.getByRole("combobox", { name: "Add a restricted group" }),
   ).toBeVisible();
@@ -633,7 +731,11 @@ it("frozen: no new restricted groups, but an existing one can be lifted", async 
       "Adding restricted groups needs group sync (Business). To restrict one person, use Members.",
     ),
   ).toBeVisible();
-  fireEvent.click(within(row).getByRole("button", { name: "Lift" }));
+  fireEvent.click(
+    within(row).getByRole("button", {
+      name: "Lift restriction on Contractors",
+    }),
+  );
   fireEvent.click(
     within(screen.getByRole("alertdialog")).getByRole("button", {
       name: "Lift restriction",
