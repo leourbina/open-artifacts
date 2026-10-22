@@ -103,19 +103,24 @@ const TEMPLATE_VARS_REFUSED = [
 ];
 
 /** The dispatch namespace of each env (live M1 target). */
-export const NAMESPACES: Record<Env, string> = {
+export const NAMESPACES: Readonly<Record<Env, string>> = Object.freeze({
   staging: "oa-staging",
   prod: "oa-prod",
-};
+});
 
 /** The tenant domain pair of each env (user decision, 2026-10-21). */
-export const HOSTED_DOMAINS: Record<Env, { app: string; content: string }> = {
-  staging: {
+export const HOSTED_DOMAINS: Readonly<
+  Record<Env, Readonly<{ app: string; content: string }>>
+> = Object.freeze({
+  staging: Object.freeze({
     app: "open-artifacts-staging.app",
     content: "open-artifacts-staging.page",
-  },
-  prod: { app: "open-artifacts.app", content: "open-artifacts.page" },
-};
+  }),
+  prod: Object.freeze({
+    app: "open-artifacts.app",
+    content: "open-artifacts.page",
+  }),
+});
 
 /** The platform HOSTS KV namespace title (host -> install id). */
 export const hostsKvTitle = (env: Env): string => `${ENV_PREFIX[env]}hosts`;
@@ -636,6 +641,34 @@ export class WfpProvisioner {
       );
   }
 
+  /**
+   * EMAIL_CODE_DOMAIN=on only when the server would honour it (it is silently
+   * off otherwise): email in AUTH_PROVIDERS, google not, Turnstile (checked by
+   * turnstileInput), and AUTH_DOMAINS non-empty. Names the condition, never a value.
+   */
+  private checkEmailCodeDomain(
+    vars: Record<string, string>,
+    stage: "providers" | "domains",
+  ): void {
+    if (vars.EMAIL_CODE_DOMAIN !== "on") return;
+    const providers = (vars.AUTH_PROVIDERS ?? "")
+      .split(",")
+      .map((p) => p.trim());
+    if (stage === "providers") {
+      if (!providers.includes("email"))
+        throw new ProvisionRefused(
+          "EMAIL_CODE_DOMAIN=on needs email in AUTH_PROVIDERS",
+        );
+      if (providers.includes("google"))
+        throw new ProvisionRefused(
+          "EMAIL_CODE_DOMAIN=on needs google out of AUTH_PROVIDERS",
+        );
+    } else if (
+      !(vars.AUTH_DOMAINS ?? "").split(",").some((d) => d.trim() !== "")
+    )
+      throw new ProvisionRefused("EMAIL_CODE_DOMAIN=on needs AUTH_DOMAINS");
+  }
+
   /** Codes on needs the env's Turnstile sitekey and secret; checked before any call. */
   private turnstileInput(
     vars: Record<string, string>,
@@ -695,7 +728,9 @@ export class WfpProvisioner {
     const testHooks = i.testHooks === true;
     const vars = i.vars ?? {};
     this.checkVariant(i, vars);
+    this.checkEmailCodeDomain(vars, "providers");
     const ts = this.turnstileInput(vars);
+    this.checkEmailCodeDomain(vars, "domains");
     const rel = await this.readRelease(i);
 
     // Secrets for a fresh upload; unused (and dropped) when the script exists.

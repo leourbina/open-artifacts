@@ -26,9 +26,9 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { assetHash, CfError, cfClient, type Target } from "../src/cf.js";
 import * as INDEX from "../src/index.js";
 import { RELEASE_PUBKEY_PLACEHOLDER } from "../src/internal/gates.js";
+import { loadTemplate } from "../src/internal/template.js";
 import {
   HOSTED_ADDED,
-  loadTemplate,
   type Template,
   userWorkerMetadata,
 } from "../src/metadata.js";
@@ -2342,7 +2342,14 @@ describe("Durable Object migration safety (H-T4b L5)", () => {
 describe("Turnstile, one widget per env (H-T4b)", () => {
   it.each([
     ["AUTH_PROVIDERS contains email", { AUTH_PROVIDERS: "google, email" }],
-    ["EMAIL_CODE_DOMAIN=on", { EMAIL_CODE_DOMAIN: "on" }],
+    [
+      "EMAIL_CODE_DOMAIN=on",
+      {
+        EMAIL_CODE_DOMAIN: "on",
+        AUTH_PROVIDERS: "email",
+        AUTH_DOMAINS: "finqore.example",
+      },
+    ],
   ])(
     "codes on (%s) with no Turnstile input is refused with zero calls",
     async (_n, vars) => {
@@ -3214,5 +3221,148 @@ describe("no secret in any error or printable output", () => {
     for (const v of SENSITIVE)
       if (v.length >= 8)
         expect(rows.includes(v), "a secret is in a platform row").toBe(false);
+  });
+});
+
+describe("EMAIL_CODE_DOMAIN for the hosted trial (H-ECD)", () => {
+  const GOOD = {
+    EMAIL_CODE_DOMAIN: "on",
+    AUTH_PROVIDERS: "email",
+    AUTH_DOMAINS: "finqore.example",
+  };
+
+  it.each([
+    [
+      "email not in AUTH_PROVIDERS",
+      { ...GOOD, AUTH_PROVIDERS: "" },
+      /AUTH_PROVIDERS/,
+    ],
+    [
+      "AUTH_PROVIDERS absent",
+      { EMAIL_CODE_DOMAIN: "on", AUTH_DOMAINS: "finqore.example" },
+      /AUTH_PROVIDERS/,
+    ],
+    [
+      "google in AUTH_PROVIDERS",
+      { ...GOOD, AUTH_PROVIDERS: "google,email" },
+      /google/,
+    ],
+    [
+      "AUTH_DOMAINS absent",
+      { ...GOOD, AUTH_DOMAINS: undefined },
+      /AUTH_DOMAINS/,
+    ],
+    ["AUTH_DOMAINS empty", { ...GOOD, AUTH_DOMAINS: "" }, /AUTH_DOMAINS/],
+  ])(
+    "%s is refused with zero calls, and the message has no values",
+    async (_n, v, re) => {
+      const vars = Object.fromEntries(
+        Object.entries(v).filter(([, x]) => x !== undefined),
+      ) as Record<string, string>;
+      const s = setup();
+      const e = await fails(s.p.create(input("finqore", { vars })));
+      expect(e.message).toMatch(re);
+      // Only the domain list is a free-form value; it must never be echoed.
+      expect(e.message).not.toContain("finqore.example");
+      expect(s.fake.log).toEqual([]);
+    },
+  );
+
+  it("missing Turnstile input is refused with zero calls", async () => {
+    const s = setup();
+    const e = await fails(
+      s.mk({ turnstile: undefined }).create(input("finqore", { vars: GOOD })),
+    );
+    expect(e.message).toMatch(/Turnstile/);
+    expect(s.fake.log).toEqual([]);
+  });
+
+  it("names the first failing condition when several fail", async () => {
+    const s = setup();
+    const e = await fails(
+      s.mk({ turnstile: undefined }).create(
+        input("finqore", {
+          vars: { EMAIL_CODE_DOMAIN: "on", AUTH_PROVIDERS: "google,email" },
+        }),
+      ),
+    );
+    expect(e.message).toMatch(/google/);
+    expect(s.fake.log).toEqual([]);
+  });
+
+  it.each(["ON", "On", "true", "1", "yes", " on", "on ", ""])(
+    "EMAIL_CODE_DOMAIN=%j is refused with zero calls",
+    async (v) => {
+      const s = setup();
+      await fails(
+        s.p.create(
+          input("finqore", { vars: { ...GOOD, EMAIL_CODE_DOMAIN: v } }),
+        ),
+      );
+      expect(s.fake.log).toEqual([]);
+    },
+  );
+
+  it("all conditions met uploads EMAIL_CODE_DOMAIN=on", async () => {
+    const s = setup();
+    await s.p.create(input("finqore", { vars: GOOD }));
+    const meta = metaOf(uploads(s.fake)[0]?.body as string);
+    expect(bindingOf(meta, "EMAIL_CODE_DOMAIN")).toEqual({
+      type: "plain_text",
+      name: "EMAIL_CODE_DOMAIN",
+      text: "on",
+    });
+    expect(bindingOf(meta, "TURNSTILE_SITE_KEY")?.text).toBe(
+      TS.staging.sitekey,
+    );
+  });
+
+  it('"off" and absent both upload no EMAIL_CODE_DOMAIN', async () => {
+    for (const vars of [
+      {} as Record<string, string>,
+      { EMAIL_CODE_DOMAIN: "off" },
+      { ...CODES, EMAIL_CODE_DOMAIN: "off" },
+      { ...CODES, AUTH_PROVIDERS: "google,email", EMAIL_CODE_DOMAIN: "off" },
+    ]) {
+      const s = setup();
+      await s.p.create(input("finqore", { vars }));
+      const meta = metaOf(uploads(s.fake)[0]?.body as string);
+      expect(bindingOf(meta, "EMAIL_CODE_DOMAIN")).toBeUndefined();
+    }
+  });
+
+  it('"off" behaves exactly like absent (no Turnstile needed)', async () => {
+    const s = setup();
+    await s
+      .mk({ turnstile: undefined })
+      .create(input("finqore", { vars: { EMAIL_CODE_DOMAIN: "off" } }));
+    expect(s.fake.log.some((e) => e.path.includes("/challenges/"))).toBe(false);
+  });
+});
+
+describe("frozen constants (H-ECD)", () => {
+  it("NAMESPACES, HOSTED_DOMAINS and ENV_PREFIX are frozen, deeply", () => {
+    for (const o of [
+      NAMESPACES,
+      HOSTED_DOMAINS,
+      HOSTED_DOMAINS.prod,
+      HOSTED_DOMAINS.staging,
+      ENV_PREFIX,
+    ]) {
+      expect(Object.isFrozen(o)).toBe(true);
+      expect(() => {
+        (o as Record<string, unknown>).prod = "x";
+      }).toThrow(TypeError);
+      expect(() => {
+        (o as Record<string, unknown>).extra = "x";
+      }).toThrow(TypeError);
+    }
+    expect(NAMESPACES.prod).toBe("oa-prod");
+    expect(HOSTED_DOMAINS.prod.app).toBe("open-artifacts.app");
+    expect(ENV_PREFIX.prod).toBe("oa-p-");
+  });
+
+  it("the package index no longer exports loadTemplate", () => {
+    expect("loadTemplate" in INDEX).toBe(false);
   });
 });

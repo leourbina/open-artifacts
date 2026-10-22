@@ -3,7 +3,6 @@
 // Bindings: https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/configuration/bindings/
 // The same metadata works for `/workers/scripts/{name}` (account) and the
 // dispatch-namespace endpoint; only the target URL differs (not decided here).
-import { readFileSync } from "node:fs";
 import { normalizeVar, TUNABLES } from "@oa/shared";
 import { assertOwnResource, isInstallId, names } from "./names.js";
 import type { InstallId } from "./types.js";
@@ -38,17 +37,6 @@ export type Template = Record<string, any>;
 
 export function parseTemplate(text: string): Template {
   return JSON.parse(stripJsonc(text)) as Template;
-}
-
-let cached: Template | undefined;
-export function loadTemplate(): Template {
-  cached ??= parseTemplate(
-    readFileSync(
-      new URL("../../../apps/server/wrangler.template.jsonc", import.meta.url),
-      "utf8",
-    ),
-  );
-  return cached;
 }
 
 /** Template entries hosted does not upload as bindings, each with a reason. */
@@ -127,6 +115,10 @@ export const HOSTED_VARS: Record<string, (v: string) => string | undefined> = {
   // on emails @TEST_DOMAIN.
   TEST_DOMAIN: (v) =>
     HOST_RE.test(v) ? undefined : "expected a lowercase hostname",
+  // "on" or "off" only; the server enables domain codes only when its other
+  // conditions hold too, which create checks (see wfp.ts) before any call.
+  EMAIL_CODE_DOMAIN: (v) =>
+    v === "on" || v === "off" ? undefined : 'expected "on" or "off"',
   NIGHTLY_PUBKEY: (v) =>
     /^[A-Za-z0-9_-]{43}$/.test(v) &&
     Buffer.from(v, "base64url").toString("base64url") === v
@@ -142,6 +134,28 @@ const PASSTHROUGH = [
   "AUTH_BROKER_URL",
   "NIGHTLY_PUBKEY",
 ];
+
+export type Vars = Record<string, string>;
+
+const providersOf = (v: Vars): string[] =>
+  (v.AUTH_PROVIDERS ?? "").split(",").map((p) => p.trim());
+
+/** True when google is in next's AUTH_PROVIDERS and was not in prev's. */
+export function googleNewlyEnabled(prev: Vars, next: Vars): boolean {
+  return (
+    providersOf(next).includes("google") &&
+    !providersOf(prev).includes("google")
+  );
+}
+
+/**
+ * Turning google on later must end every session minted before (domain-code
+ * sessions included). Task 5's var-change path runs this against the install's
+ * D1 whenever googleNewlyEnabled(prev, next) holds.
+ */
+export function epochBumpSql(): string {
+  return "UPDATE users SET session_epoch = session_epoch + 1";
+}
 
 export type Binding = { type: string; name: string; [k: string]: unknown };
 
@@ -399,6 +413,8 @@ export function userWorkerMetadata(
     const v = i.vars[k];
     if (v !== undefined) plain[k] = v;
   }
+  // "off" is the same as absent: nothing is uploaded.
+  if (i.vars.EMAIL_CODE_DOMAIN === "on") plain.EMAIL_CODE_DOMAIN = "on";
   for (const k of Object.keys(TUNABLES)) {
     const v = i.vars[k];
     if (v !== undefined) plain[k] = normalizeVar(k, v);
