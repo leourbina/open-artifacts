@@ -24,7 +24,7 @@
 
 - It mirrors Google Drive; agents never move or re-share anything without the person seeing what will change.
 - Filing rule (spec): MCP publish and update accept a folder (by id or by path such as `open-artifacts/hosted/specs`) and tags. With no folder named, the agent picks the best existing folder from context (the repo or project it's working in, the conversation, where similar artifacts already live), creates one if nothing fits, and uses the top level if it can't guess.
-- Ask first: any agent action that would change who can see something returns a preview and a short-lived token; the agent shows the preview, gets the person's yes, then calls again with the token. Without the token nothing changes. Filing where only the person can see needs no confirmation.
+- Ask first (folder actions only; `share_artifact`, `unshare_artifact` and `set_visibility` stay one-call): any folder action that would change who can see something returns a preview and a short-lived token; the agent shows the preview, gets the person's yes, then calls again with the token. Without the token nothing changes. Filing where only the person can see needs no confirmation.
 - Sort scope: each person sorts only artifacts they own, with their own agent. Artifacts shared with them are out, and nobody sorts another user's library. Hosted: a space manager can run the same flow for a shared space.
 - The proposal is shown before anything moves; the owner approves it, edits it, or rejects it. Nothing is shared more widely as a side effect: every artifact keeps its current access unless the owner approves that change.
 - Agent-facing text is vendor neutral and says "any AI agent"; no em dashes anywhere.
@@ -77,7 +77,7 @@
 - Every artifact is at the top level or in exactly one folder. Folders nest, and sharing a folder shares everything in it, including what is added later.
 - When you publish, pass folderId or folderPath (for example "open-artifacts/hosted/specs") and tags. publish_artifact with an id and a folder moves the artifact.
 - If the person didn't name a folder, pick the best existing one from context: the repo or project you're working in, the conversation, and where similar artifacts already live (list_folders, list_artifacts, search_artifacts). If nothing fits, create one with create_folder. If you can't tell, publish at the top level.
-- Ask first. If a call would change who can see something (publishing into a shared folder, moving into or out of one, sharing a folder or an artifact, changing visibility), it returns status "confirm" with who gains or loses access and a confirmToken. Nothing has changed yet. Show the person the preview, and call again with confirmToken only after they say yes. Filing where only the person can see needs no confirmation.
+- Ask first. If a call would change who can see something (publishing into a shared folder, moving into or out of one, sharing a folder or changing a folder's visibility), it returns status "confirm" with who gains or loses access and a confirmToken. Nothing has changed yet. Show the person the preview, and call again with confirmToken only after they say yes. Filing where only the person can see needs no confirmation.
 - Tags are shared labels across folders: everyone who can see an artifact sees its tags. Reuse the tags you see on similar artifacts; set_tags replaces an artifact's tags.
 - You can't file something shared with you into your own folders.
 ```

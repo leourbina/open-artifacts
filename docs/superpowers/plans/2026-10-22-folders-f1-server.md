@@ -20,7 +20,7 @@
 4. **Restore onto a taken name.** Sibling names are unique, so a restored folder can collide with a live sibling. Plan default: restore under the name with " (1)", " (2)" appended, as Drive names copies.
 5. **"/" in folder names.** Path addressing (`open-artifacts/hosted/specs`) needs a separator, so the plan refuses "/" in names (400). Drive allows it; confirm this second deliberate difference.
 6. **Tag scope when `spaces` is turned on later** (our own install, P3 rollout step 2). Self-hosted tags are per install (`scope_id = "*"`); hosted tags are per space. Plan default: links made before the switch keep their install-scope tags, and new tags use the space scope, so one name can exist in both. Alternative: a one-off job, run when `spaces` turns on, that re-homes each link into its artifact's space. Which?
-7. **Ask-first on the existing tools.** The spec says any agent action that changes who can see something needs confirmation, so the plan also puts `share_artifact`, `unshare_artifact` and `set_visibility` behind the preview and token. That changes today's one-call behaviour for every connected agent. Confirm (or descope to the folder tools only).
+7. **Ask-first on the existing tools. Resolved (owner, 2026-10-22): folder actions only.** `share_artifact`, `unshare_artifact` and `set_visibility` stay one-call and unchanged; only `publish_artifact` with a folder target, `move_artifact`, `move_folder`, `share_folder`, `unshare_folder` and `set_folder_visibility` ask first.
 
 ## Global Constraints
 
@@ -468,7 +468,7 @@ it("unsharing a folder closes Bob's sockets on its artifacts", async () => { /* 
 
 **Files:**
 - Create: `apps/server/src/mcp/tools/folders.ts`
-- Modify: `mcp/tool-defs.ts`, `mcp/server.ts`, `mcp/tools/artifacts.ts` (`publish_artifact` folder and tags; `share_artifact`, `unshare_artifact`, `set_visibility` behind confirmation, per open question 7), `auth/route-policy.ts` (`TOOL_POLICY`), `packages/shared/src/schemas.ts` (tool inputs); regenerated `tool-manifest.json`, `skill.generated.ts`, `upgrade.generated.ts`
+- Modify: `mcp/tool-defs.ts`, `mcp/server.ts`, `mcp/tools/artifacts.ts` (`publish_artifact` folder and tags; `share_artifact`, `unshare_artifact`, `set_visibility` unchanged, per open question 7), `auth/route-policy.ts` (`TOOL_POLICY`), `packages/shared/src/schemas.ts` (tool inputs); regenerated `tool-manifest.json`, `skill.generated.ts`, `upgrade.generated.ts`
 - Test: `apps/server/test/mcp.folders.test.ts`, `test/mcp.tools.test.ts`, `test/mcp.auth.test.ts`, `test/mcp.neutral.test.ts`, `test/smoke/mcp.ts`, `test/route-policy.test.ts`
 
 **Interfaces:**
@@ -486,7 +486,7 @@ it("calling again with confirmToken publishes into the folder", async () => { /*
 it("publish_artifact into a private folder needs no token", async () => { /* done */ });
 it("move_artifact out of a shared folder previews the losses", async () => { /* losses */ });
 it("share_folder with a stale token gets a fresh preview", async () => { /* confirm again */ });
-it("share_artifact now asks first", async () => { /* status confirm */ });
+it("share_artifact still shares in one call (no confirmation)", async () => { /* status done, share exists */ });
 it("create_folder with a path makes missing segments, no confirmation", async () => { /* done; 3 folders */ });
 it("set_tags on a viewer's artifact is not_found", async () => { /* isError */ });
 it("every tool in tool-manifest.json has a TOOL_POLICY entry and vice versa", () => { /* route-policy.test */ });

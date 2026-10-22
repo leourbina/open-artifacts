@@ -74,6 +74,7 @@ The owner runs several things at once (open-artifacts, open-bus, medical, job hu
 - When an agent doesn't name a folder, the instruction to agents is: pick the best existing folder from context (the repo or project it's working in, the conversation, and where similar artifacts already live), and create one if nothing fits. If it can't guess, it uses the top level.
 - New MCP tools let agents list folders, create a folder, move an artifact, and set tags.
 - **Ask first (owner decision).** Any agent action that would change who can see something must be confirmed by the person before it happens. That covers publishing into a shared folder, moving into or out of one, and sharing a folder. The tool first returns a preview (who gains or loses access) and a short-lived confirmation token. The agent shows the preview, gets the person's yes, then calls again with the token. Without the token, nothing changes. Filing into a folder only the person can see needs no confirmation.
+- **Scope of ask first (owner decision): folder actions only.** The existing `share_artifact`, `unshare_artifact` and `set_visibility` tools keep working in one call, as today: a direct share is an explicit request from the person. The token makes sure the agent sees the preview; it doesn't prove the person said yes (that would need an approval click in the dashboard, which is out of scope).
 - The agent-facing docs (llms.txt, the skill) describe the filing rule.
 
 ### Sorting the backlog
