@@ -79,6 +79,7 @@ export function platformNames(env: Env): {
   inventory: string;
   broker: string;
   dispatch: string;
+  turnstile: string;
 } {
   if (!Object.hasOwn(ENV_PREFIX, env)) throw new ForeignResource("", env);
   const p = ENV_PREFIX[env];
@@ -90,6 +91,8 @@ export function platformNames(env: Env): {
     inventory: `${p}inventory`,
     broker: `${p}auth-broker`,
     dispatch: `${p}dispatch`,
+    // The one Turnstile widget of the env (created once by Task 8's init).
+    turnstile: `${p}turnstile`,
   };
 }
 
@@ -97,7 +100,13 @@ export function hosts(
   slug: string,
   domains: { app: string; content: string },
 ): { appHost: string; contentHost: string } {
-  if (!SLUG_RE.test(slug) || RESERVED_SLUGS.includes(slug)) {
+  // "--" at positions 3-4 is IDNA-reserved ("xn--" is punycode): a slug
+  // like that could render as another name (homograph).
+  if (
+    !SLUG_RE.test(slug) ||
+    RESERVED_SLUGS.includes(slug) ||
+    slug.slice(2, 4) === "--"
+  ) {
     throw new Error(`invalid slug: ${slug}`);
   }
   const { app, content } = domains;

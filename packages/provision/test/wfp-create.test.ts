@@ -2,11 +2,14 @@ import {
   createHash,
   createPrivateKey,
   createPublicKey,
+  generateKeyPairSync,
+  type KeyObject,
   sign,
   verify,
 } from "node:crypto";
 import {
   lstatSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -20,35 +23,112 @@ import type { DatabaseSync } from "node:sqlite";
 import { DatabaseSync as Sqlite } from "node:sqlite";
 import { isPat } from "@oa/shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { Bundle } from "../src/bundle.js";
 import { assetHash, CfError, cfClient, type Target } from "../src/cf.js";
+import * as INDEX from "../src/index.js";
+import { RELEASE_PUBKEY_PLACEHOLDER } from "../src/internal/gates.js";
 import {
   HOSTED_ADDED,
   loadTemplate,
+  type Template,
   userWorkerMetadata,
 } from "../src/metadata.js";
-import { ENV_PREFIX, type Env, platformNames } from "../src/names.js";
-import { inputsHash } from "../src/platform.js";
+import {
+  ENV_PREFIX,
+  type Env,
+  hosts as hostsOf0,
+  platformNames,
+} from "../src/names.js";
+import { canonicalJson, inputsHash } from "../src/platform.js";
+import {
+  assetEntries,
+  bundleSha256,
+  compareVersions,
+  migrationsSha256,
+  type ReleaseAsset,
+  type ReleaseFile,
+  type ReleaseReader,
+  type ReleaseRecord,
+  readAssetsDir,
+  type SignedReleaseRecord,
+  TEST_HOOKS_DEFINE,
+} from "../src/release.js";
 import {
   assertBrokerOrigin,
   assertSessionSecret,
   brokerKid,
   brokerOrigin,
-  bundleSha256,
   HOSTED_DOMAINS,
   hostsKvTitle,
   NAMESPACES,
-  type ReleaseRecord,
-  TEST_HOOKS_DEFINE,
+  ProdLocked,
   type WfpOptions,
   WfpProvisioner,
 } from "../src/wfp.js";
 import { type FakeCf as Fake, FakeCf, splitSql } from "./fake-cf.js";
 
+const hostsOf = (slug: string) =>
+  hostsOf0(slug, { app: "app.test", content: "content.test" });
+
 // Every generated secret, PAT and broker private key is captured at the
 // generator, so values that were generated and then discarded (resumes,
 // rotations, superseded PATs) are scanned too.
-const H = vi.hoisted(() => ({ SENSITIVE: new Set<string>() }));
+const H = vi.hoisted(() => {
+  /** Every path read through node:fs, to prove the local checkout is never read. */
+  const READS: string[] = [];
+  // biome-ignore lint/suspicious/noExplicitAny: wraps overloaded fs functions
+  const recordReads = (m: any, fns: string[]) => {
+    // biome-ignore lint/suspicious/noExplicitAny: overloaded
+    const out: Record<string, any> = {};
+    for (const f of fns)
+      out[f] = (p: unknown, ...a: unknown[]) => {
+        READS.push(p instanceof URL ? p.pathname : String(p));
+        return m[f](p, ...a);
+      };
+    return { ...m, ...out, default: { ...m, ...out } };
+  };
+  return { SENSITIVE: new Set<string>(), READS, recordReads };
+});
+vi.mock("node:fs", async (orig) =>
+  H.recordReads(await orig(), ["readFileSync", "readdirSync", "openSync"]),
+);
+vi.mock("node:fs/promises", async (orig) =>
+  H.recordReads(await orig(), ["readFile", "readdir", "lstat", "open"]),
+);
+// The sealed gates (src/internal/gates.ts): tests flip them here; no option can.
+const G = vi.hoisted(() => ({
+  PROD_UNLOCKED: true,
+  ALLOW_ACCOUNT_TARGET: true,
+  RELEASE_PUBKEY: { staging: "", prod: "" } as Record<string, string>,
+}));
+vi.mock("../src/internal/gates.js", async (orig) => {
+  const m = await orig<typeof import("../src/internal/gates.js")>();
+  return {
+    ...m,
+    get PROD_UNLOCKED() {
+      return G.PROD_UNLOCKED;
+    },
+    get ALLOW_ACCOUNT_TARGET() {
+      return G.ALLOW_ACCOUNT_TARGET;
+    },
+    get RELEASE_PUBKEY() {
+      return G.RELEASE_PUBKEY;
+    },
+  };
+});
+/** Runs fn with one gate set, then restores it. */
+async function withGate<K extends keyof typeof G>(
+  k: K,
+  v: (typeof G)[K],
+  fn: () => Promise<void>,
+) {
+  const before = G[k];
+  G[k] = v;
+  try {
+    await fn();
+  } finally {
+    G[k] = before;
+  }
+}
 vi.mock("@oa/shared", async (orig) => {
   const m = await orig<typeof import("@oa/shared")>();
   return {
@@ -126,7 +206,11 @@ const enc = (s: string) => new TextEncoder().encode(s);
 function makeBundle(
   variant: "release" | "redline",
   version = "0.23.0",
-): Bundle {
+): {
+  modules: { name: string; type: "esm" | "wasm"; bytes: Uint8Array }[];
+  mainModule: string;
+  version: string;
+} {
   return {
     modules: [
       {
@@ -138,29 +222,172 @@ function makeBundle(
       },
     ],
     mainModule: "index.js",
-    assetsDir: "",
     version,
   };
 }
+
+// The release's own files (what T3b will put in oa-<p>-releases). Read here
+// once from this checkout as fixtures; create itself must never read them.
+const TEMPLATE_BYTES = new Uint8Array(
+  readFileSync(new URL("apps/server/wrangler.template.jsonc", ROOT)),
+);
+const MIGRATION_FILES: ReleaseFile[] = SERVER_MIGRATIONS.map((name) => ({
+  name,
+  bytes: new Uint8Array(
+    readFileSync(new URL(`apps/server/migrations/${name}`, ROOT)),
+  ),
+}));
+const ASSETS: ReleaseAsset[] = [
+  { path: "index.html", bytes: enc("<!doctype html><p>hi</p>") },
+  { path: "app.js", bytes: enc("console.log(1)") },
+];
+
+/** Release content; a Template object is serialized to the template bytes. */
+type ReleaseSpec = {
+  env?: Env;
+  welcome?: Uint8Array;
+  template?: Template | Uint8Array;
+  migrations?: ReleaseFile[];
+  assets?: ReleaseAsset[];
+};
+const tplBytes = (t: ReleaseSpec["template"]) =>
+  t === undefined
+    ? TEMPLATE_BYTES
+    : t instanceof Uint8Array
+      ? t
+      : enc(JSON.stringify(t, null, 2));
+
+// The release signing keypair of these tests (T3b holds the real one).
+const SIGNER = generateKeyPairSync("ed25519");
+const OTHER_SIGNER = generateKeyPairSync("ed25519");
+for (const k of [SIGNER, OTHER_SIGNER]) {
+  SENSITIVE.add(
+    k.privateKey.export({ format: "der", type: "pkcs8" }).toString("base64url"),
+  );
+  SENSITIVE.add(k.privateKey.export({ format: "jwk" }).d as string);
+}
+const pubX = (k: { publicKey: KeyObject }) =>
+  k.publicKey.export({ format: "jwk" }).x as string;
+const TEST_PUBKEY = pubX(SIGNER);
+// One key for both envs on purpose: domain separation must still hold (F2).
+G.RELEASE_PUBKEY = { staging: TEST_PUBKEY, prod: TEST_PUBKEY };
+
+/** The signed bytes: "oa-release-v1\n" + env + "\n" + canonicalJson(record). */
+const payloadOf = (record: unknown, env: string) =>
+  Buffer.from(`oa-release-v1\n${env}\n${canonicalJson(record)}`);
+const signRecord = (
+  record: ReleaseRecord,
+  key: KeyObject = SIGNER.privateKey,
+  env: string = record.env,
+): SignedReleaseRecord => ({
+  record,
+  signature: sign(null, payloadOf(record, env), key).toString("base64url"),
+});
+
+const WELCOME_BYTES = enc(
+  "# Welcome to Open Artifacts\n\nThis text comes from the release (sentinel-from-release).\n",
+);
 
 /** The per-release manifest the bundle step (T3b) will write. */
 const recordOf = (
   variant: "release" | "redline",
   version = "0.23.0",
+  spec: ReleaseSpec = {},
 ): ReleaseRecord => ({
+  env: spec.env ?? "staging",
   version,
   variant,
   sha256: bundleSha256(makeBundle(variant, version)),
   defines: { [TEST_HOOKS_DEFINE]: variant === "redline" },
+  assets: assetEntries(spec.assets ?? ASSETS),
+  templateSha256: createHash("sha256")
+    .update(tplBytes(spec.template))
+    .digest("hex"),
+  migrationsSha256: migrationsSha256(spec.migrations ?? MIGRATION_FILES),
+  welcomeSha256: createHash("sha256")
+    .update(spec.welcome ?? WELCOME_BYTES)
+    .digest("hex"),
 });
+
+type Kind =
+  | "record"
+  | "modules"
+  | "assets"
+  | "template"
+  | "migrations"
+  | "welcome";
+/** An in-memory release reader that counts reads; `over` replaces any read. */
+function makeRelease(
+  spec: ReleaseSpec = {},
+  over: Partial<ReleaseReader> = {},
+): ReleaseReader & { calls: Record<Kind, number> } {
+  const calls: Record<Kind, number> = {
+    record: 0,
+    modules: 0,
+    assets: 0,
+    template: 0,
+    migrations: 0,
+    welcome: 0,
+  };
+  const base: ReleaseReader = {
+    record: async (version, v) => signRecord(recordOf(v, version, spec)),
+    modules: async (version, v) => {
+      const b = makeBundle(v, version);
+      return { mainModule: b.mainModule, modules: b.modules };
+    },
+    assets: async () =>
+      (spec.assets ?? ASSETS).map((a) => ({ ...a, bytes: a.bytes.slice() })),
+    template: async () => tplBytes(spec.template).slice(),
+    migrations: async () =>
+      (spec.migrations ?? MIGRATION_FILES).map((f) => ({
+        ...f,
+        bytes: f.bytes.slice(),
+      })),
+    welcome: async () => (spec.welcome ?? WELCOME_BYTES).slice(),
+  };
+  const counted = (k: Kind) =>
+    // biome-ignore lint/suspicious/noExplicitAny: forwards each reader's own args
+    (async (...a: any[]) => {
+      calls[k]++;
+      // biome-ignore lint/suspicious/noExplicitAny: forwards each reader's own args
+      return ((over[k] ?? base[k]) as any)(...a);
+    }) as never;
+  return {
+    calls,
+    record: counted("record"),
+    modules: counted("modules"),
+    assets: counted("assets"),
+    template: counted("template"),
+    migrations: counted("migrations"),
+    welcome: counted("welcome"),
+  };
+}
+
+/** The first `after` reads are the good ones, every later read the other. */
+const swapAfterFirst = <T>(
+  good: () => Promise<T>,
+  evil: () => Promise<T>,
+  after = 1,
+) => {
+  let n = 0;
+  return () => (++n <= after ? good() : evil());
+};
+
+const TS = {
+  staging: { sitekey: "0x4AAAAAAAstagingSITEKEY", secret: "" },
+  prod: { sitekey: "0x4AAAAAAAprodSITEKEYxx", secret: "" },
+};
+TS.staging.secret = `0x4AAAAAAAts-secret-${createHash("sha256").update(String(Math.random())).digest("hex").slice(0, 24)}`;
+TS.prod.secret = `0x4AAAAAAAts-secret-${createHash("sha256").update(String(Math.random())).digest("hex").slice(0, 24)}`;
+SENSITIVE.add(TS.staging.secret);
+SENSITIVE.add(TS.prod.secret);
+const CODES = { AUTH_PROVIDERS: "email" };
 
 type SetupOpts = {
   env?: Env;
   target?: Target;
   brokerEnabled?: boolean;
-  template?: WfpOptions["template"];
-  bundles?: WfpOptions["bundles"];
-  releaseRecord?: WfpOptions["releaseRecord"];
+  release?: ReleaseReader;
   seed?: boolean;
 };
 
@@ -173,15 +400,22 @@ function setup(o: SetupOpts = {}) {
   const pdb = seed ? fake.seedD1(platformNames(env).db, PLATFORM_SQL) : "";
   const hostsId = seed ? fake.seedKv(hostsKvTitle(env)) : "";
   const regId = seed ? fake.seedKv(platformNames(env).registry) : "";
+  // The one Turnstile widget of each env (Task 8 creates it once per env).
+  for (const e of ["staging", "prod"] as const)
+    fake.turnstile.set(TS[e].sitekey, {
+      sitekey: TS[e].sitekey,
+      name: platformNames(e).turnstile,
+      domains: [HOSTED_DOMAINS[e].app],
+      mode: "managed",
+      // The real GET returns the widget secret too.
+      secret: TS[e].secret,
+    });
   const target: Target = o.target ?? { kind: "namespace", ns: NAMESPACES[env] };
   fake.dispatch = {
     hostsKvId: hostsId,
     ns: target.kind === "namespace" ? target.ns : null,
   };
   const patDir = mkdtempSync(join(tmpdir(), "oa-t4-pat-"));
-  const assetsDir = mkdtempSync(join(tmpdir(), "oa-t4-assets-"));
-  writeFileSync(join(assetsDir, "index.html"), "<!doctype html><p>hi</p>");
-  writeFileSync(join(assetsDir, "app.js"), "console.log(1)");
   let t = NOW;
   const clock = {
     now: () => t,
@@ -195,22 +429,19 @@ function setup(o: SetupOpts = {}) {
     fetch: fake.fetch,
     sleep: async () => {},
   });
+  const release = o.release ?? makeRelease({ env });
   const opts = (over: Partial<WfpOptions> = {}): WfpOptions => ({
     cf,
     env,
     target,
     domains: HOSTED_DOMAINS[env],
-    bundles:
-      o.bundles ??
-      (async (version, v) => ({ ...makeBundle(v, version), assetsDir })),
-    releaseRecord:
-      o.releaseRecord ?? (async (version, v) => recordOf(v, version)),
+    release,
     patDir,
     brokerEnabled: o.brokerEnabled ?? false,
     fetch: fake.fetch,
     now: clock.now,
     sleep: clock.sleep,
-    ...(o.template ? { template: o.template } : {}),
+    turnstile: TS[env],
     ...over,
   });
   const mk = (over: Partial<WfpOptions> = {}) => {
@@ -231,11 +462,12 @@ function setup(o: SetupOpts = {}) {
     env,
     p: mk(),
     mk,
+    opts,
     pdb,
     hostsId,
     regId,
     patDir,
-    assetsDir,
+    release,
     target,
     db,
     rows,
@@ -810,10 +1042,12 @@ describe("WfpProvisioner.create", () => {
     });
     const bad = /\bBROKER_(KID|KEY)\b/;
     for (const r of s.fake.raw) expect(bad.test(r.body)).toBe(false);
-    for (const f of readdirSync(new URL("../src/", import.meta.url)))
+    for (const f of readdirSync(new URL("../src/", import.meta.url), {
+      recursive: true,
+    }).filter((x) => String(x).endsWith(".ts")))
       expect(
         bad.test(readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8")),
-        f,
+        String(f),
       ).toBe(false);
     const meta = metaOf(uploads(s.fake)[0]?.body as string);
     const t = loadTemplate();
@@ -890,17 +1124,25 @@ describe("WfpProvisioner.create", () => {
 
     it("a mislabelled bundle (redline bytes served as release) is refused with zero calls", async () => {
       const s = setup({
-        bundles: async (version) => makeBundle("redline", version),
+        release: makeRelease(
+          {},
+          {
+            modules: async (version) => makeBundle("redline", version),
+          },
+        ),
       });
       const e = await fails(s.p.create(input()));
-      expect(e.message).toMatch(/release record/);
+      expect(e.message).toMatch(/modules do not match the signed record/);
       expect(s.fake.log).toEqual([]);
     });
 
     it.each(["prod", "staging"] as const)(
       "a missing release record in %s is refused with zero calls",
       async (env) => {
-        const s = setup({ env, releaseRecord: async () => null });
+        const s = setup({
+          env,
+          release: makeRelease({}, { record: async () => null }),
+        });
         const e = await fails(s.p.create(input()));
         expect(e.message).toMatch(/no release record/);
         expect(s.fake.log).toEqual([]);
@@ -924,8 +1166,12 @@ describe("WfpProvisioner.create", () => {
       ],
     ])("%s is refused with zero calls", async (_n, rec) => {
       const s = setup({
-        env: "prod",
-        releaseRecord: async () => rec as unknown as ReleaseRecord,
+        release: makeRelease(
+          {},
+          {
+            record: async () => signRecord(rec as unknown as ReleaseRecord),
+          },
+        ),
       });
       await fails(s.p.create(input()));
       expect(s.fake.log).toEqual([]);
@@ -933,11 +1179,16 @@ describe("WfpProvisioner.create", () => {
 
     it('a redline record with the string "true" is refused as invalid, not treated as true', async () => {
       const s = setup({
-        releaseRecord: async (version, v) =>
-          ({
-            ...recordOf(v, version),
-            defines: { [TEST_HOOKS_DEFINE]: "true" },
-          }) as unknown as ReleaseRecord,
+        release: makeRelease(
+          {},
+          {
+            record: async (version, v) =>
+              signRecord({
+                ...recordOf(v, version),
+                defines: { [TEST_HOOKS_DEFINE]: "true" },
+              } as unknown as ReleaseRecord),
+          },
+        ),
       });
       const e = await fails(s.p.create(hookInput()));
       expect(e.message).toMatch(/boolean/);
@@ -968,20 +1219,19 @@ describe("WfpProvisioner.create", () => {
     });
 
     it("a bundle whose bytes change between pre-flight and upload is refused before the upload (N3)", async () => {
-      const good = makeBundle("release");
-      const evil = makeBundle("redline");
-      let reads = 0;
       const s = setup({
-        bundles: async () => {
-          const b = { ...good };
-          Object.defineProperty(b, "modules", {
-            get: () => (++reads === 1 ? good.modules : evil.modules),
-          });
-          return b;
-        },
+        release: makeRelease(
+          {},
+          {
+            modules: swapAfterFirst(
+              async () => makeBundle("release"),
+              async () => makeBundle("redline"),
+            ),
+          },
+        ),
       });
       const e = await fails(s.p.create(input()));
-      expect(e.message).toMatch(/about to be uploaded/);
+      expect(e.message).toMatch(/modules do not match the signed record/);
       expect(uploads(s.fake)).toHaveLength(0);
     });
 
@@ -1050,6 +1300,7 @@ describe("WfpProvisioner.create", () => {
         target: "namespace" as const,
         mode: "update" as const,
         assetsJwt: "jwt",
+        template: loadTemplate(),
         mainModule: "index.js",
       };
       const m = userWorkerMetadata(
@@ -1287,7 +1538,9 @@ describe("WfpProvisioner.create", () => {
     };
 
     it("the first upload sends the full chain with new_tag and no old_tag; no probe on a missing script", async () => {
-      const s = setup({ template: tpl(["v1", "v2"]) });
+      const s = setup({
+        release: makeRelease({ template: tpl(["v1", "v2"]) }),
+      });
       await s.p.create(input());
       const ups = uploads(s.fake);
       expect(ups).toHaveLength(1);
@@ -1300,7 +1553,9 @@ describe("WfpProvisioner.create", () => {
     });
 
     it("a journal tag set while the script is missing sends the full chain, no old_tag", async () => {
-      const s = setup({ template: tpl(["v1", "v2"]) });
+      const s = setup({
+        release: makeRelease({ template: tpl(["v1", "v2"]) }),
+      });
       await failAtHealth(s);
       const [row] = s.rows();
       s.fake.scripts.delete(`oa-staging/${`oa-s-${row.id}`}`);
@@ -1313,7 +1568,9 @@ describe("WfpProvisioner.create", () => {
     });
 
     it("a rerun at the same tag sends no migrations", async () => {
-      const s = setup({ template: tpl(["v1", "v2"]) });
+      const s = setup({
+        release: makeRelease({ template: tpl(["v1", "v2"]) }),
+      });
       await failAtHealth(s);
       const [row] = s.rows();
       s.scriptOf(row.id)?.secrets.delete("DIRECTORY_TOKEN_KEY");
@@ -1324,7 +1581,9 @@ describe("WfpProvisioner.create", () => {
     });
 
     it("a rerun whose journal is empty probes with a sentinel old_tag, learns the live tag and sends nothing when it is current", async () => {
-      const s = setup({ template: tpl(["v1", "v2"]) });
+      const s = setup({
+        release: makeRelease({ template: tpl(["v1", "v2"]) }),
+      });
       await failAtHealth(s);
       const [row] = s.rows();
       s.db()
@@ -1342,13 +1601,17 @@ describe("WfpProvisioner.create", () => {
     });
 
     it("a rerun whose journal is behind probes and sends only the missing steps", async () => {
-      const s = setup({ template: tpl(["v1", "v2"]) });
+      const s = setup({
+        release: makeRelease({ template: tpl(["v1", "v2"]) }),
+      });
       await failAtHealth(s);
       const [row] = s.rows();
       s.db()
         .prepare("UPDATE installs SET do_migration_tag = 'v1' WHERE id = ?")
         .run(row.id);
-      const p2 = s.mk({ template: tpl(["v1", "v2", "v3"]) });
+      const p2 = s.mk({
+        release: makeRelease({ template: tpl(["v1", "v2", "v3"]) }),
+      });
       await p2.create(input());
       const ups = uploads(s.fake);
       expect(ups.map((u) => u.status)).toEqual([200, 412, 200]);
@@ -1360,13 +1623,19 @@ describe("WfpProvisioner.create", () => {
     });
 
     it("a live tag the release does not know is refused (forward-fix only)", async () => {
-      const s = setup({ template: tpl(["v1", "v2"]) });
+      const s = setup({
+        release: makeRelease({ template: tpl(["v1", "v2"]) }),
+      });
       await failAtHealth(s);
       const [row] = s.rows();
       s.db()
         .prepare("UPDATE installs SET do_migration_tag = NULL WHERE id = ?")
         .run(row.id);
-      const e = await fails(s.mk({ template: tpl(["v1"]) }).create(input()));
+      const e = await fails(
+        s
+          .mk({ release: makeRelease({ template: tpl(["v1"]) }) })
+          .create(input()),
+      );
       expect(e.message).toMatch(/forward-fix/);
       expect(uploads(s.fake).map((u) => u.status)).toEqual([200, 412]);
     });
@@ -1387,7 +1656,7 @@ describe("WfpProvisioner.create", () => {
       for (const v of Object.values(manifest) as { hash: string }[])
         expect(v.hash).toMatch(/^[0-9a-f]{32}$/);
       expect(manifest["/app.js"].hash).toBe(
-        assetHash(readFileSync(join(s.assetsDir, "app.js"))),
+        assetHash(ASSETS[1]?.bytes as Uint8Array),
       );
       const ups = s.fake.log.filter((e) =>
         e.path.includes("/workers/assets/upload"),
@@ -1411,13 +1680,11 @@ describe("WfpProvisioner.create", () => {
         token: fake.token,
         fetch: fake.fetch,
       });
-      const dir = mkdtempSync(join(tmpdir(), "oa-t4-a-"));
-      writeFileSync(join(dir, "a.txt"), "a");
       fake.assetHashes.add(assetHash(enc("a")));
       const r = await cf.assetsUpload(
         { kind: "namespace", ns: "oa-staging" },
         "oa-s-iaaaaaaaaaaa",
-        dir,
+        [{ path: "a.txt", bytes: enc("a") }],
       );
       expect(r.jwt).toMatch(/^jwt-sess-/);
       expect(fake.log.some((e) => e.path.includes("/assets/upload"))).toBe(
@@ -1482,7 +1749,7 @@ describe("WfpProvisioner.create", () => {
       async (_n, edit) => {
         const t = structuredClone(loadTemplate());
         edit(t);
-        const s = setup({ template: t });
+        const s = setup({ release: makeRelease({ template: t }) });
         await fails(s.p.create(input()));
         expect(s.fake.log).toEqual([]);
       },
@@ -1595,6 +1862,1048 @@ describe("WfpProvisioner.create", () => {
   });
 });
 
+const ROOT_DIR = ROOT.pathname.replace(/\/$/, "");
+const bindingOf = (
+  meta: { bindings: { type: string; name: string; text?: string }[] },
+  name: string,
+) => meta.bindings.find((b) => b.name === name);
+const sha = (b: Uint8Array | string) =>
+  createHash("sha256").update(b).digest("hex");
+/** Any write that applies a D1 migration of the install. */
+const migrationWrites = (fake: Fake) =>
+  fake.raw.filter((r) => r.body.includes("INSERT INTO d1_migrations"));
+
+describe("release record integrity (H-T4b M1)", () => {
+  it("the record lists every asset sorted by path, the template bytes and the migrations", () => {
+    const rec = recordOf("release");
+    expect(rec.assets).toEqual([
+      { path: "app.js", size: 14, sha256: sha("console.log(1)") },
+      {
+        path: "index.html",
+        size: 24,
+        sha256: sha("<!doctype html><p>hi</p>"),
+      },
+    ]);
+    expect(rec.templateSha256).toBe(sha(TEMPLATE_BYTES));
+    // A whitespace change in the template file changes the hash: exact bytes.
+    expect(
+      recordOf("release", "0.23.0", {
+        template: enc(`${new TextDecoder().decode(TEMPLATE_BYTES)}\n`),
+      }).templateSha256,
+    ).not.toBe(rec.templateSha256);
+    const want = sha(
+      [...MIGRATION_FILES]
+        .sort((a, b) => (a.name < b.name ? -1 : 1))
+        .map((f) => `${f.name}\0${sha(f.bytes)}`)
+        .join("\n"),
+    );
+    expect(rec.migrationsSha256).toBe(want);
+    expect(migrationsSha256([...MIGRATION_FILES].reverse())).toBe(want);
+  });
+
+  const evil: Record<
+    "modules" | "assets" | "template" | "migrations",
+    Partial<ReleaseReader>
+  > = {
+    modules: {
+      modules: async () => makeBundle("redline"),
+    },
+    assets: {
+      assets: async () => [
+        ASSETS[0] as ReleaseAsset,
+        { path: "app.js", bytes: enc("steal(document.cookie)") },
+      ],
+    },
+    template: {
+      template: async () => {
+        const t = structuredClone(loadTemplate());
+        t.compatibility_date = "2020-01-01";
+        return enc(JSON.stringify(t));
+      },
+    },
+    migrations: {
+      migrations: async () => [
+        ...MIGRATION_FILES,
+        { name: "9999_evil.sql", bytes: enc("DROP TABLE users;") },
+      ],
+    },
+  };
+
+  it.each(Object.keys(evil) as (keyof typeof evil)[])(
+    "release %s that differ from the signed record are refused with zero Cloudflare calls",
+    async (kind) => {
+      const s = setup({ release: makeRelease({}, evil[kind]) });
+      const e = await fails(s.p.create(input()));
+      expect(e.message).toMatch(
+        new RegExp(`${kind} do not match the signed record`),
+      );
+      expect(s.fake.log).toEqual([]);
+    },
+  );
+
+  it.each(Object.keys(evil) as (keyof typeof evil)[])(
+    "release %s swapped between pre-flight and use are refused before the write",
+    async (kind) => {
+      const good = makeRelease();
+      const bad = makeRelease({}, evil[kind]);
+      const s = setup({
+        release: makeRelease(
+          {},
+          {
+            [kind]: swapAfterFirst(
+              () =>
+                (good[kind] as (v: string, b: "release") => Promise<unknown>)(
+                  "0.23.0",
+                  "release",
+                ),
+              () =>
+                (bad[kind] as (v: string, b: "release") => Promise<unknown>)(
+                  "0.23.0",
+                  "release",
+                ),
+            ),
+          },
+        ),
+      });
+      const e = await fails(s.p.create(input()));
+      expect(e.message).toMatch(
+        new RegExp(`${kind} do not match the signed record`),
+      );
+      // Re-read from the release, not the cached pre-flight copy.
+      expect((s.release as ReturnType<typeof makeRelease>).calls[kind]).toBe(2);
+      expect(uploads(s.fake)).toHaveLength(0);
+      expect(
+        s.fake.log.some((x) => x.path.endsWith("/assets-upload-session")),
+      ).toBe(false);
+      if (kind === "migrations")
+        expect(migrationWrites(s.fake)).toHaveLength(0);
+      else expect(migrationWrites(s.fake).length).toBeGreaterThan(0);
+    },
+  );
+
+  it.each([
+    ["an extra asset", [...ASSETS, { path: "x.js", bytes: enc("x") }]],
+    ["a missing asset", [ASSETS[0] as ReleaseAsset]],
+    [
+      "an asset of another size",
+      [
+        ASSETS[0] as ReleaseAsset,
+        { path: "app.js", bytes: enc("console.log(12)") },
+      ],
+    ],
+  ])("%s is refused with zero Cloudflare calls", async (_n, assets) => {
+    const s = setup({
+      release: makeRelease({}, { assets: async () => assets }),
+    });
+    const e = await fails(s.p.create(input()));
+    expect(e.message).toMatch(/assets do not match the signed record/);
+    expect(s.fake.log).toEqual([]);
+  });
+
+  it.each([
+    ".env",
+    ".well-known/x.txt",
+    "a/.git/config",
+    "a/./b",
+    "a/../b",
+    "/abs",
+    "a//b",
+    "a\\b",
+  ])(
+    "an asset path %s in the release is refused, even when the signed record lists it",
+    async (path) => {
+      const assets = [...ASSETS, { path, bytes: enc("secret=1") }];
+      // Built by hand: assetEntries itself refuses the path.
+      const entries = assets
+        .map((a) => ({
+          path: a.path,
+          size: a.bytes.byteLength,
+          sha256: sha(a.bytes),
+        }))
+        .sort((a, b) => (a.path < b.path ? -1 : 1));
+      const s = setup({
+        release: makeRelease(
+          {},
+          {
+            assets: async () => assets,
+            record: async () =>
+              signRecord({ ...recordOf("release"), assets: entries }),
+          },
+        ),
+      });
+      const e = await fails(s.p.create(input()));
+      expect(e.message).toMatch(/asset path/);
+      expect(s.fake.log).toEqual([]);
+      const unlisted = setup({
+        release: makeRelease({}, { assets: async () => assets }),
+      });
+      await fails(unlisted.p.create(input()));
+      expect(unlisted.fake.log).toEqual([]);
+    },
+  );
+
+  it("cf.assetsUpload refuses a dotfile without any call", async () => {
+    const fake = new FakeCf();
+    FAKES.push(fake);
+    SENSITIVE.add(fake.token);
+    const cf = cfClient({
+      accountId: fake.accountId,
+      token: fake.token,
+      fetch: fake.fetch,
+    });
+    const e = await fails(
+      cf.assetsUpload(
+        { kind: "namespace", ns: "oa-staging" },
+        "oa-s-iaaaaaaaaaaa",
+        [{ path: ".dev.vars", bytes: enc("SECRET=1") }],
+      ),
+    );
+    expect(e.message).toMatch(/asset path/);
+    expect(fake.log).toEqual([]);
+  });
+
+  it("readAssetsDir lists files sorted and refuses symlinks, dotfiles and dot-directories", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "oa-t4b-assets-"));
+    mkdirSync(join(dir, "css"));
+    writeFileSync(join(dir, "index.html"), "i");
+    writeFileSync(join(dir, "css", "a.css"), "a");
+    expect((await readAssetsDir(dir)).map((a) => a.path)).toEqual([
+      "css/a.css",
+      "index.html",
+    ]);
+    const withDot = mkdtempSync(join(tmpdir(), "oa-t4b-assets-"));
+    writeFileSync(join(withDot, ".env"), "SECRET=1");
+    expect((await fails(readAssetsDir(withDot))).message).toMatch(/asset path/);
+    const withDotDir = mkdtempSync(join(tmpdir(), "oa-t4b-assets-"));
+    mkdirSync(join(withDotDir, ".git"));
+    writeFileSync(join(withDotDir, ".git", "config"), "x");
+    expect((await fails(readAssetsDir(withDotDir))).message).toMatch(
+      /asset path/,
+    );
+    const withLink = mkdtempSync(join(tmpdir(), "oa-t4b-assets-"));
+    writeFileSync(join(dir, "target.txt"), "t");
+    symlinkSync(join(dir, "target.txt"), join(withLink, "link.txt"));
+    expect((await fails(readAssetsDir(withLink))).message).toMatch(/symlink/);
+  });
+
+  it("the local checkout is never read: sentinel files in apps/server and scripts/setup change nothing", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "oa-t4b-checkout-"));
+    const srv = join(cwd, "apps", "server");
+    mkdirSync(join(srv, "dist-assets"), { recursive: true });
+    mkdirSync(join(srv, "migrations"), { recursive: true });
+    writeFileSync(join(srv, "dist-assets", "sentinel.txt"), "SENTINEL");
+    writeFileSync(
+      join(srv, "migrations", "9999_sentinel.sql"),
+      "CREATE TABLE sentinel (x);",
+    );
+    writeFileSync(join(srv, "wrangler.template.jsonc"), "SENTINEL {");
+    mkdirSync(join(cwd, "scripts", "setup"), { recursive: true });
+    writeFileSync(
+      join(cwd, "scripts", "setup", "welcome.md"),
+      "# Welcome to Open Artifacts\nSENTINEL-from-checkout",
+    );
+    // A release template unlike the checkout's, so a fallback would show.
+    const tpl = structuredClone(loadTemplate());
+    tpl.compatibility_date = "2026-09-30";
+    const s = setup({ release: makeRelease({ template: tpl }) });
+    const before = process.cwd();
+    H.READS.length = 0;
+    process.chdir(cwd);
+    let inst: Awaited<ReturnType<WfpProvisioner["create"]>>;
+    try {
+      inst = await s.p.create(input());
+    } finally {
+      process.chdir(before);
+    }
+    // No fs read in the repo or the cwd checkout; only the PAT dir (tmp).
+    const local = H.READS.filter(
+      (r) =>
+        r.startsWith(ROOT_DIR) ||
+        r.startsWith(cwd) ||
+        !r.startsWith("/") ||
+        r.includes("/apps/server") ||
+        r.includes("dist-assets") ||
+        r.includes("welcome.md"),
+    );
+    expect(local).toEqual([]);
+    const art = [...s.fake.artifacts.values()][0];
+    expect(art?.content).toBe(new TextDecoder().decode(WELCOME_BYTES));
+    const sess = s.fake.raw.find((r) =>
+      r.path.endsWith("/assets-upload-session"),
+    );
+    expect(
+      Object.keys(JSON.parse(sess?.body as string).manifest).sort(),
+    ).toEqual(["/app.js", "/index.html"]);
+    const row = s.rows()[0];
+    const idb = s.fake.d1.get(row.d1_id)?.db as DatabaseSync;
+    expect(
+      idb
+        .prepare("SELECT name FROM sqlite_master WHERE name = 'sentinel'")
+        .all(),
+    ).toEqual([]);
+    expect(s.scriptOf(inst.id)?.metadata.compatibility_date).toBe("2026-09-30");
+  });
+});
+
+describe("prod lock and signed records (H-T4b L2)", () => {
+  it("prod is refused with ProdLocked and zero calls while the PROD_UNLOCKED gate is off", async () => {
+    const s = setup({ env: "prod" });
+    await withGate("PROD_UNLOCKED", false, async () => {
+      const e = await fails(s.p.create(input()));
+      expect(e).toBeInstanceOf(ProdLocked);
+      expect(e.name).toBe("ProdLocked");
+      expect(s.fake.log).toEqual([]);
+    });
+    // T3b flips the gate in code; then prod creates like staging.
+    const inst = await s.p.create(input());
+    expect(inst.appHost).toBe("finqore.open-artifacts.app");
+  });
+
+  it("create refuses while RELEASE_PUBKEY is the placeholder", async () => {
+    for (const env of ["staging", "prod"] as const) {
+      const s = setup({ env });
+      await withGate(
+        "RELEASE_PUBKEY",
+        { ...G.RELEASE_PUBKEY, [env]: RELEASE_PUBKEY_PLACEHOLDER },
+        async () => {
+          const e = await fails(s.p.create(input()));
+          expect(e.message).toMatch(/placeholder/i);
+          expect(s.fake.log).toEqual([]);
+        },
+      );
+    }
+  });
+
+  const good = () => signRecord(recordOf("release"));
+  it.each<[string, () => unknown]>([
+    ["an unsigned record", () => ({ record: recordOf("release") })],
+    ["an empty signature", () => ({ ...good(), signature: "" })],
+    ["a bare record without the envelope", () => recordOf("release")],
+    [
+      "a record signed with another key",
+      () => signRecord(recordOf("release"), OTHER_SIGNER.privateKey),
+    ],
+    [
+      "a tampered record (template hash changed after signing)",
+      () => {
+        const g = good();
+        return {
+          ...g,
+          record: { ...g.record, templateSha256: "0".repeat(64) },
+        };
+      },
+    ],
+    [
+      "a tampered record (variant and define flipped after signing)",
+      () => {
+        const g = good();
+        return {
+          ...g,
+          record: {
+            ...g.record,
+            variant: "redline",
+            defines: { [TEST_HOOKS_DEFINE]: true },
+          },
+        };
+      },
+    ],
+    [
+      "another record's signature",
+      () => ({
+        record: recordOf("release"),
+        signature: signRecord(recordOf("redline")).signature,
+      }),
+    ],
+  ])("%s is refused with zero calls", async (_n, rec) => {
+    const s = setup({
+      release: makeRelease({}, { record: async () => rec() as never }),
+    });
+    const e = await fails(s.p.create(input()));
+    expect(e.message).toMatch(/signature/);
+    expect(s.fake.log).toEqual([]);
+    // Nothing else of the release is read before the signature checks out.
+    const c = (s.release as ReturnType<typeof makeRelease>).calls;
+    expect([c.modules, c.assets, c.template, c.migrations]).toEqual([
+      0, 0, 0, 0,
+    ]);
+  });
+
+  it("the signature is checked before any field: a bad signature on a wrong-version record names the signature", async () => {
+    const rec = { ...recordOf("release", "0.22.0") };
+    const s = setup({
+      release: makeRelease(
+        {},
+        {
+          record: async () => ({
+            ...signRecord(rec, OTHER_SIGNER.privateKey),
+          }),
+        },
+      ),
+    });
+    const e = await fails(s.p.create(input()));
+    expect(e.message).toMatch(/signature/);
+    expect(e.message).not.toMatch(/0\.22\.0/);
+  });
+
+  it("a signature verifies over the domain-separated canonical JSON of the record", () => {
+    const g = good();
+    const pub = createPublicKey({
+      key: { kty: "OKP", crv: "Ed25519", x: TEST_PUBKEY },
+      format: "jwk",
+    });
+    expect(
+      verify(
+        null,
+        payloadOf(g.record, "staging"),
+        pub,
+        Buffer.from(g.signature, "base64url"),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("account target is test-only (H-T4b L3)", () => {
+  it("an account target is refused with zero calls while the ALLOW_ACCOUNT_TARGET gate is off", async () => {
+    const s = setup({ target: { kind: "account" } });
+    await withGate("ALLOW_ACCOUNT_TARGET", false, async () => {
+      const e = await fails(s.p.create(input()));
+      expect(e.message).toMatch(/account target/);
+      expect(s.fake.log).toEqual([]);
+    });
+  });
+});
+
+describe("Durable Object migration safety (H-T4b L5)", () => {
+  const withStep = (step: Record<string, unknown>) => {
+    const t = structuredClone(loadTemplate());
+    t.migrations = [...(t.migrations ?? []), { tag: "v2", ...step }];
+    return t;
+  };
+  it.each([
+    ["deleted_classes", { deleted_classes: ["ArtifactRuntime"] }],
+    [
+      "renamed_classes",
+      { renamed_classes: [{ from: "ArtifactRuntime", to: "X" }] },
+    ],
+    [
+      "transferred_classes",
+      {
+        transferred_classes: [
+          { from: "ArtifactRuntime", from_script: "oa-s-other", to: "X" },
+        ],
+      },
+    ],
+    ["deleted_sqlite_classes", { deleted_sqlite_classes: ["ArtifactRuntime"] }],
+    ["an unknown step key", { new_kv_classes: ["X"] }],
+  ])("a template step with %s is refused with zero calls", async (_n, step) => {
+    const t = withStep(step);
+    const s = setup({ release: makeRelease({ template: t }) });
+    const e = await fails(s.p.create(input()));
+    expect(e.message).toMatch(/migration/);
+    expect(s.fake.log).toEqual([]);
+    expect(() =>
+      userWorkerMetadata(
+        {
+          id: "iaaaaaaaaaaa",
+          appHost: "a.open-artifacts-staging.app",
+          contentHost: "a.open-artifacts-staging.page",
+          ownerEmail: OWNER,
+          vars: {},
+          testHooks: false,
+        },
+        {
+          d1Id: "00000000-0000-4000-8000-000000000000",
+          kvId: "0".repeat(32),
+          version: "0.23.0",
+          rlNs: 1_000_000,
+          doMigrationTag: "v1",
+          env: "staging",
+          target: "namespace",
+          mode: "update",
+          mainModule: "index.js",
+          assetsJwt: "j",
+          template: t,
+        },
+      ),
+    ).toThrow(/migration/);
+  });
+
+  it("new_classes and new_sqlite_classes are allowed", async () => {
+    const s = setup({
+      release: makeRelease({
+        template: withStep({ new_classes: ["A"], new_sqlite_classes: ["B"] }),
+      }),
+    });
+    await s.p.create(input());
+    expect(s.rows()[0].do_migration_tag).toBe("v2");
+  });
+});
+
+describe("Turnstile, one widget per env (H-T4b)", () => {
+  it.each([
+    ["AUTH_PROVIDERS contains email", { AUTH_PROVIDERS: "google, email" }],
+    ["EMAIL_CODE_DOMAIN=on", { EMAIL_CODE_DOMAIN: "on" }],
+  ])(
+    "codes on (%s) with no Turnstile input is refused with zero calls",
+    async (_n, vars) => {
+      for (const ts of [
+        undefined,
+        { sitekey: "", secret: "" },
+        { sitekey: TS.staging.sitekey, secret: "" },
+        { sitekey: "", secret: TS.staging.secret },
+      ]) {
+        const s = setup();
+        const e = await fails(
+          s.mk({ turnstile: ts }).create(input("finqore", { vars })),
+        );
+        expect(e.message).toMatch(/Turnstile/);
+        expect(s.fake.log).toEqual([]);
+      }
+    },
+  );
+
+  it.each([
+    ["the content domain", ["open-artifacts-staging.page"]],
+    ["an extra hostname", ["open-artifacts-staging.app", "evil.example"]],
+    ["no hostname", []],
+    ["a subdomain only", ["finqore.open-artifacts-staging.app"]],
+  ])(
+    "a widget whose domains are %s is refused before any write",
+    async (_n, domains) => {
+      const s = setup();
+      (
+        s.fake.turnstile.get(TS.staging.sitekey) as { domains: string[] }
+      ).domains = domains;
+      const e = await fails(s.p.create(input("finqore", { vars: CODES })));
+      expect(e.message).toMatch(/Turnstile widget/);
+      expect(s.fake.writes()).toEqual([]);
+    },
+  );
+
+  it("a widget for the other env is refused before any write", async () => {
+    const s = setup();
+    const e = await fails(
+      s.mk({ turnstile: TS.prod }).create(input("finqore", { vars: CODES })),
+    );
+    expect(e.message).toMatch(/Turnstile widget/);
+    expect(s.fake.writes()).toEqual([]);
+  });
+
+  it("a widget with the env's domain but another name, or a missing widget, is refused before any write", async () => {
+    const s = setup();
+    (s.fake.turnstile.get(TS.staging.sitekey) as { name: string }).name =
+      "someone-elses-widget";
+    await fails(s.p.create(input("finqore", { vars: CODES })));
+    s.fake.turnstile.clear();
+    const e = await fails(s.p.create(input("finqore", { vars: CODES })));
+    expect(e.message).toMatch(/Turnstile widget/);
+    expect(s.fake.writes()).toEqual([]);
+  });
+
+  it("codes on uploads TURNSTILE_SITE_KEY as a var and TURNSTILE_SECRET as secret_text, after a read-only widget check", async () => {
+    const s = setup();
+    const inst = await s.p.create(input("finqore", { vars: CODES }));
+    const meta = metaOf(uploads(s.fake)[0]?.body as string);
+    expect(bindingOf(meta, "TURNSTILE_SITE_KEY")).toEqual({
+      type: "plain_text",
+      name: "TURNSTILE_SITE_KEY",
+      text: TS.staging.sitekey,
+    });
+    expect(bindingOf(meta, "TURNSTILE_SECRET")).toEqual({
+      type: "secret_text",
+      name: "TURNSTILE_SECRET",
+      text: TS.staging.secret,
+    });
+    expect(s.scriptOf(inst.id)?.secrets.get("TURNSTILE_SECRET")).toBe(
+      TS.staging.secret,
+    );
+    const widgetCalls = s.fake.log.filter((e) =>
+      e.path.includes("/challenges/widgets"),
+    );
+    expect(widgetCalls.map((e) => e.method)).toEqual(["GET"]);
+    expect(widgetCalls[0]?.path).toBe(
+      `/accounts/${s.fake.accountId}/challenges/widgets/${TS.staging.sitekey}`,
+    );
+  });
+
+  it("a resume of a codes-on install that lost TURNSTILE_SECRET sends it again", async () => {
+    const s = setup();
+    await failAtHealth(s, input("finqore", { vars: CODES }));
+    const [row] = s.rows();
+    s.scriptOf(row.id)?.secrets.delete("TURNSTILE_SECRET");
+    await s.p.create(input("finqore", { vars: CODES }));
+    const ups = uploads(s.fake);
+    expect(secretBindings(metaOf(ups[1]?.body as string))).toEqual([
+      "TURNSTILE_SECRET",
+    ]);
+  });
+
+  it("codes off sets neither and never reads the widget", async () => {
+    const s = setup();
+    const inst = await s.p.create(input());
+    const meta = metaOf(uploads(s.fake)[0]?.body as string);
+    expect(bindingOf(meta, "TURNSTILE_SITE_KEY")).toBeUndefined();
+    expect(bindingOf(meta, "TURNSTILE_SECRET")).toBeUndefined();
+    expect(s.scriptOf(inst.id)?.secrets.has("TURNSTILE_SECRET")).toBe(false);
+    expect(s.fake.log.some((e) => e.path.includes("/challenges/"))).toBe(false);
+  });
+
+  it.each(["TURNSTILE_SITE_KEY", "TURNSTILE_SECRET"])(
+    "%s passed in vars is refused with zero calls",
+    async (k) => {
+      const s = setup();
+      await fails(
+        s.p.create(
+          input("finqore", { vars: { ...CODES, [k]: TS.staging.sitekey } }),
+        ),
+      );
+      expect(s.fake.log).toEqual([]);
+    },
+  );
+
+  it("the Turnstile secret never leaks into vars, notes, audit rows, platform rows or errors", async () => {
+    const s = setup();
+    s.fake.inject((m, p) => m === "PUT" && /\/scripts\/[^/]+$/.test(p), {
+      message: `upload refused: ${TS.staging.secret}`,
+    });
+    const e = await fails(s.p.create(input("finqore", { vars: CODES })));
+    expect(JSON.stringify(e)).not.toContain(TS.staging.secret);
+    expect(e.message).not.toContain(TS.staging.secret);
+    expect(String(e.stack)).not.toContain(TS.staging.secret);
+    const inst = await s.p.create(input("finqore", { vars: CODES }));
+    const meta = s.scriptOf(inst.id)?.metadata;
+    expect(
+      meta.bindings
+        .filter((b: { type: string }) => b.type === "plain_text")
+        .map((b: { text: string }) => b.text),
+    ).not.toContain(TS.staging.secret);
+    const all = JSON.stringify([
+      s.p.notes,
+      s.db().prepare("SELECT * FROM hosted_audit").all(),
+      s.rows(),
+      s.fake.log,
+    ]);
+    expect(all).not.toContain(TS.staging.secret);
+    expect(SENSITIVE.has(TS.staging.secret)).toBe(true);
+  });
+});
+
+describe("H-T4b round 1", () => {
+  describe("F1: sealed gates, no option reaches them", () => {
+    const keys = [
+      { prodRecordWriter: "t3b" },
+      { __testOnlyReleasePubkey: pubX(OTHER_SIGNER) },
+      { __testOnlyAllowAccountTarget: true },
+      { __testOnlyAnything: 1 },
+      { PROD_UNLOCKED: true },
+      { ALLOW_ACCOUNT_TARGET: true },
+      { RELEASE_PUBKEY: { staging: pubX(OTHER_SIGNER) } },
+    ];
+    it.each(
+      keys.flatMap((k) => [["spread", k] as const, ["JSON", k] as const]),
+    )(
+      "an options object carrying a gate name (%s %j) is refused at construction and unlocks nothing",
+      async (how, k) => {
+        await withGate("PROD_UNLOCKED", false, () =>
+          withGate("ALLOW_ACCOUNT_TARGET", false, () =>
+            withGate(
+              "RELEASE_PUBKEY",
+              {
+                staging: RELEASE_PUBKEY_PLACEHOLDER,
+                prod: RELEASE_PUBKEY_PLACEHOLDER,
+              },
+              async () => {
+                for (const env of ["staging", "prod"] as const) {
+                  const s = setup({ env });
+                  const base = s.opts();
+                  const o =
+                    how === "spread"
+                      ? { ...base, ...k }
+                      : Object.assign({}, base, JSON.parse(JSON.stringify(k)));
+                  let p: WfpProvisioner | undefined;
+                  const e = (() => {
+                    try {
+                      p = new WfpProvisioner(o);
+                    } catch (err) {
+                      return err as Error;
+                    }
+                  })();
+                  expect(e?.message).toMatch(/not an option/);
+                  expect(p).toBeUndefined();
+                  // Without the name, the gates still hold.
+                  const plain = await fails(
+                    new WfpProvisioner(base).create(input()),
+                  );
+                  expect(plain.message).toMatch(
+                    env === "prod" ? /locked/ : /placeholder/,
+                  );
+                  expect(s.fake.log).toEqual([]);
+                }
+              },
+            ),
+          ),
+        );
+      },
+    );
+
+    it("the package index does not export the gates, and the package exports only its index", () => {
+      for (const k of [
+        "PROD_UNLOCKED",
+        "ALLOW_ACCOUNT_TARGET",
+        "RELEASE_PUBKEY",
+        "RELEASE_PUBKEY_PLACEHOLDER",
+      ])
+        expect(Object.keys(INDEX)).not.toContain(k);
+      const pkg = JSON.parse(
+        readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+      );
+      expect(Object.keys(pkg.exports)).toEqual(["."]);
+    });
+
+    it("the real gates are shut: prod locked, no account target, placeholder keys", async () => {
+      const real = await vi.importActual<
+        typeof import("../src/internal/gates.js")
+      >("../src/internal/gates.js");
+      expect(real.PROD_UNLOCKED).toBe(false);
+      expect(real.ALLOW_ACCOUNT_TARGET).toBe(false);
+      expect(real.RELEASE_PUBKEY).toEqual({
+        staging: real.RELEASE_PUBKEY_PLACEHOLDER,
+        prod: real.RELEASE_PUBKEY_PLACEHOLDER,
+      });
+      expect(real.RELEASE_PUBKEY_PLACEHOLDER).toMatch(/placeholder/i);
+      expect(Object.isFrozen(real.RELEASE_PUBKEY)).toBe(true);
+      // Once T3b sets real keys, the envs must not share one.
+      if (real.RELEASE_PUBKEY.staging !== real.RELEASE_PUBKEY_PLACEHOLDER)
+        expect(real.RELEASE_PUBKEY.staging).not.toBe(real.RELEASE_PUBKEY.prod);
+    });
+  });
+
+  describe("F2: records are bound to env and version", () => {
+    it("a staging-signed record is refused in prod, even under the same key", async () => {
+      expect(G.RELEASE_PUBKEY.staging).toBe(G.RELEASE_PUBKEY.prod);
+      const stagingRec = recordOf("release", "0.23.0", { env: "staging" });
+      for (const [n, rec] of [
+        ["staging record, staging signature", signRecord(stagingRec)],
+        [
+          "staging record, prod-domain signature",
+          signRecord(stagingRec, SIGNER.privateKey, "prod"),
+        ],
+        [
+          "prod record, staging-domain signature",
+          signRecord(
+            recordOf("release", "0.23.0", { env: "prod" }),
+            SIGNER.privateKey,
+            "staging",
+          ),
+        ],
+      ] as const) {
+        const s = setup({
+          env: "prod",
+          release: makeRelease({ env: "prod" }, { record: async () => rec }),
+        });
+        const e = await fails(s.p.create(input()));
+        expect(e.message, n).toMatch(/signature|env/);
+        expect(s.fake.log, n).toEqual([]);
+      }
+    });
+
+    it("a signature over the bare record, or a record without env, is refused", async () => {
+      const rec = recordOf("release");
+      const bare = {
+        record: rec,
+        signature: sign(
+          null,
+          Buffer.from(canonicalJson(rec)),
+          SIGNER.privateKey,
+        ).toString("base64url"),
+      };
+      const { env: _e, ...noEnv } = rec;
+      for (const r of [
+        bare,
+        signRecord(noEnv as ReleaseRecord, SIGNER.privateKey, "staging"),
+      ]) {
+        const s = setup({
+          release: makeRelease({}, { record: async () => r }),
+        });
+        const e = await fails(s.p.create(input()));
+        expect(e.message).toMatch(/signature|env/);
+        expect(s.fake.log).toEqual([]);
+      }
+    });
+
+    it("a signed record for another version is refused with zero calls", async () => {
+      const s = setup({
+        release: makeRelease(
+          {},
+          { record: async () => signRecord(recordOf("release", "0.23.1")) },
+        ),
+      });
+      const e = await fails(s.p.create(input()));
+      expect(e.message).toMatch(/is for 0\.23\.1/);
+      expect(s.fake.log).toEqual([]);
+    });
+
+    it("a downgrade below the install's current version is refused before any write", async () => {
+      const s = setup();
+      await failAtHealth(s);
+      const writes = s.fake.writes().length;
+      const e = await fails(
+        s.p.create(input("finqore", { version: "0.22.9" })),
+      );
+      expect(e.message).toMatch(/downgrade/);
+      expect(s.fake.writes().length).toBe(writes);
+      // The same version resumes.
+      await s.p.create(input());
+    });
+
+    it("compareVersions orders releases, prereleases first", () => {
+      expect(compareVersions("0.23.0", "0.22.9")).toBeGreaterThan(0);
+      expect(compareVersions("0.23.0", "0.23.0")).toBe(0);
+      expect(compareVersions("0.23.0-rc.1", "0.23.0")).toBeLessThan(0);
+      expect(compareVersions("0.23.0-rc.2", "0.23.0-rc.10")).toBeLessThan(0);
+      expect(compareVersions("1.0.0", "0.99.99")).toBeGreaterThan(0);
+      expect(() => compareVersions("v1", "1.0.0")).toThrow(/version/);
+    });
+
+    it("the verified record is a private frozen copy: a reader mutating its object later changes nothing", async () => {
+      const signed = signRecord(recordOf("release"));
+      const evil = makeBundle("redline");
+      const s = setup({
+        release: makeRelease(
+          {},
+          {
+            record: async () => signed,
+            modules: async () => {
+              (signed.record as { sha256: string }).sha256 = bundleSha256(evil);
+              return evil;
+            },
+          },
+        ),
+      });
+      const e = await fails(s.p.create(input()));
+      expect(e.message).toMatch(/modules do not match/);
+      expect(s.fake.log).toEqual([]);
+    });
+  });
+
+  describe("F3: the welcome text comes from the release", () => {
+    it("the published Welcome artifact is the release's text", async () => {
+      const s = setup();
+      await s.p.create(input());
+      expect([...s.fake.artifacts.values()][0]?.content).toBe(
+        new TextDecoder().decode(WELCOME_BYTES),
+      );
+    });
+
+    it("a welcome text that differs from the signed record is refused with zero calls", async () => {
+      const s = setup({
+        release: makeRelease(
+          {},
+          { welcome: async () => enc("# Welcome to Open Artifacts\nphish") },
+        ),
+      });
+      const e = await fails(s.p.create(input()));
+      expect(e.message).toMatch(/welcome do not match the signed record/);
+      expect(s.fake.log).toEqual([]);
+    });
+
+    it("a welcome text swapped before publishing is refused, and nothing is published", async () => {
+      const s = setup({
+        release: makeRelease(
+          {},
+          {
+            welcome: swapAfterFirst(
+              async () => WELCOME_BYTES,
+              async () => enc("# Welcome to Open Artifacts\nphish"),
+            ),
+          },
+        ),
+      });
+      const e = await fails(s.p.create(input()));
+      expect(e.message).toMatch(/welcome do not match the signed record/);
+      expect((s.release as ReturnType<typeof makeRelease>).calls.welcome).toBe(
+        2,
+      );
+      expect(s.fake.artifacts.size).toBe(0);
+    });
+  });
+
+  describe("LOWs", () => {
+    it("F5: userWorkerMetadata needs a template (no checkout fallback)", () => {
+      expect(() =>
+        userWorkerMetadata(
+          {
+            id: "iaaaaaaaaaaa",
+            appHost: "a.open-artifacts-staging.app",
+            contentHost: "a.open-artifacts-staging.page",
+            ownerEmail: OWNER,
+            vars: {},
+            testHooks: false,
+          },
+          {
+            d1Id: "00000000-0000-4000-8000-000000000000",
+            kvId: "0".repeat(32),
+            version: "0.23.0",
+            rlNs: 1_000_000,
+            doMigrationTag: null,
+            env: "staging",
+            target: "namespace",
+            mode: "update",
+            mainModule: "index.js",
+            assetsJwt: "j",
+          } as never,
+        ),
+      ).toThrow(/template/);
+    });
+
+    it.each([
+      "AUTH_PROVIDERS",
+      "EMAIL_CODE_DOMAIN",
+      "TURNSTILE_SITE_KEY",
+      "TURNSTILE_SECRET",
+    ])(
+      "F6: a release template that sets %s in vars is refused with zero calls",
+      async (k) => {
+        const t = structuredClone(loadTemplate());
+        t.vars = { ...(t.vars ?? {}), [k]: "email" };
+        const s = setup({ release: makeRelease({ template: t }) });
+        const e = await fails(s.p.create(input()));
+        expect(e.message).toMatch(new RegExp(k));
+        expect(s.fake.log).toEqual([]);
+      },
+    );
+
+    it("F6: a template whose var duplicates a binding name is refused with zero calls", async () => {
+      const t = structuredClone(loadTemplate());
+      t.vars = { ...(t.vars ?? {}), DB: "x" };
+      const s = setup({ release: makeRelease({ template: t }) });
+      const e = await fails(s.p.create(input()));
+      expect(e.message).toMatch(/duplicate binding/);
+      expect(s.fake.log).toEqual([]);
+    });
+
+    it("F7: readAssetsDir refuses an intermediate directory symlink", async () => {
+      const elsewhere = mkdtempSync(join(tmpdir(), "oa-t4b-elsewhere-"));
+      writeFileSync(join(elsewhere, "a.txt"), "secret");
+      const dir = mkdtempSync(join(tmpdir(), "oa-t4b-assets-"));
+      writeFileSync(join(dir, "index.html"), "i");
+      symlinkSync(elsewhere, join(dir, "link-dir"));
+      expect((await fails(readAssetsDir(dir))).message).toMatch(/symlink/);
+    });
+
+    it.each([
+      [
+        "more than 20,000 assets",
+        () =>
+          Array.from({ length: 20_001 }, (_, i) => ({
+            path: `f${String(i).padStart(5, "0")}.txt`,
+            size: 1,
+            sha256: "a".repeat(64),
+          })),
+      ],
+      [
+        "an asset over 25 MiB",
+        () => [
+          {
+            path: "big.bin",
+            size: 25 * 1024 * 1024 + 1,
+            sha256: "a".repeat(64),
+          },
+        ],
+      ],
+      [
+        "assets over 512 MiB in total",
+        () =>
+          Array.from({ length: 21 }, (_, i) => ({
+            path: `b${String(i).padStart(2, "0")}.bin`,
+            size: 25 * 1024 * 1024,
+            sha256: "a".repeat(64),
+          })),
+      ],
+    ])(
+      "F8: a record with %s is refused before any other read",
+      async (_n, assets) => {
+        const s = setup({
+          release: makeRelease(
+            {},
+            {
+              record: async () =>
+                signRecord({ ...recordOf("release"), assets: assets() }),
+            },
+          ),
+        });
+        const e = await fails(s.p.create(input()));
+        expect(e.message).toMatch(/assets|asset/);
+        expect(
+          (s.release as ReturnType<typeof makeRelease>).calls.modules,
+        ).toBe(0);
+        expect(s.fake.log).toEqual([]);
+      },
+    );
+
+    it.each(["%2eenv", "．env", "a b.txt", "café.js", "a?b", "a#b", "a:b"])(
+      "F8: asset path %j is outside the plain charset and refused",
+      async (path) => {
+        const s = setup({
+          release: makeRelease(
+            {},
+            { assets: async () => [...ASSETS, { path, bytes: enc("x") }] },
+          ),
+        });
+        const e = await fails(s.p.create(input()));
+        expect(e.message).toMatch(/asset path/);
+        expect(s.fake.log).toEqual([]);
+      },
+    );
+
+    it("F10: a swap on the 412-probe retry read is refused before the retry upload", async () => {
+      const s = setup({
+        release: makeRelease({
+          template: (() => {
+            const t = structuredClone(loadTemplate());
+            t.migrations = [
+              { tag: "v1", new_sqlite_classes: ["ArtifactRuntime"] },
+              { tag: "v2", new_sqlite_classes: ["C1"] },
+            ];
+            return t;
+          })(),
+        }),
+      });
+      await failAtHealth(s);
+      const [row] = s.rows();
+      s.db()
+        .prepare("UPDATE installs SET do_migration_tag = NULL WHERE id = ?")
+        .run(row.id);
+      const t = structuredClone(loadTemplate());
+      t.migrations = [
+        { tag: "v1", new_sqlite_classes: ["ArtifactRuntime"] },
+        { tag: "v2", new_sqlite_classes: ["C1"] },
+      ];
+      // Reads: 1 pre-flight, 2 the probe upload (412), 3 the retry.
+      const p2 = s.mk({
+        release: makeRelease(
+          { template: t },
+          {
+            modules: swapAfterFirst(
+              async () => makeBundle("release"),
+              async () => makeBundle("redline"),
+              2,
+            ),
+          },
+        ),
+      });
+      const e = await fails(p2.create(input()));
+      expect(e.message).toMatch(/modules do not match the signed record/);
+      expect(uploads(s.fake).map((u) => u.status)).toEqual([200, 412]);
+    });
+
+    it("F10: uppercase punycode is refused too", () => {
+      for (const slug of ["XN--abc", "Xn--abc", "AB--c"])
+        expect(() => hostsOf(slug)).toThrow(/slug/);
+    });
+  });
+});
+
 describe("cfClient", () => {
   const client = () => {
     const fake = new FakeCf();
@@ -1652,6 +2961,54 @@ describe("cfClient", () => {
     expect(await cf.kvGet(id, "nope.example")).toBeNull();
     const e = await fails(cf.kvGet("f".repeat(32), "nope.example"));
     expect((e as CfError).status).toBe(404);
+  });
+
+  it("d1Get pages through the D1 list until it finds the name (H-T4b L6)", async () => {
+    const { fake, cf } = client();
+    for (let i = 0; i < 150; i++) fake.seedD1(`oa-s-paged-copy-${i}`);
+    const id = fake.seedD1("oa-s-paged");
+    expect(await cf.d1Get("oa-s-paged")).toBe(id);
+    const pages = fake.log
+      .filter((e) => e.path.includes("/d1/database?"))
+      .map((e) => new URL(e.path, "https://x").searchParams.get("page"));
+    expect(pages).toEqual(["1", "2"]);
+    expect(await cf.d1Get("oa-s-nowhere")).toBeNull();
+  });
+
+  it("F9: d1Get trusts total_pages: a full final page, a clamped per_page, and no result_info", async () => {
+    const pagesOf = (fake: Fake) =>
+      fake.log
+        .filter((e) => e.path.includes("/d1/database?"))
+        .map((e) => new URL(e.path, "https://x").searchParams.get("page"));
+    {
+      const { fake, cf } = client();
+      for (let i = 0; i < 100; i++) fake.seedD1(`oa-s-full-copy-${i}`);
+      expect(await cf.d1Get("oa-s-full")).toBeNull();
+      expect(pagesOf(fake)).toEqual(["1"]);
+    }
+    {
+      const { fake, cf } = client();
+      for (let i = 0; i < 199; i++) fake.seedD1(`oa-s-full-copy-${i}`);
+      const id = fake.seedD1("oa-s-full");
+      expect(await cf.d1Get("oa-s-full")).toBe(id);
+      expect(pagesOf(fake)).toEqual(["1", "2"]);
+    }
+    {
+      const { fake, cf } = client();
+      fake.d1PerPageCap = 50;
+      for (let i = 0; i < 120; i++) fake.seedD1(`oa-s-clamp-copy-${i}`);
+      const id = fake.seedD1("oa-s-clamp");
+      expect(await cf.d1Get("oa-s-clamp")).toBe(id);
+      expect(pagesOf(fake)).toEqual(["1", "2", "3"]);
+    }
+    {
+      const { fake, cf } = client();
+      fake.d1ResultInfo = false;
+      for (let i = 0; i < 150; i++) fake.seedD1(`oa-s-noinfo-copy-${i}`);
+      const id = fake.seedD1("oa-s-noinfo");
+      expect(await cf.d1Get("oa-s-noinfo")).toBe(id);
+      expect(await cf.d1Get("oa-s-none")).toBeNull();
+    }
   });
 
   it("d1Batch runs all statements or none", async () => {

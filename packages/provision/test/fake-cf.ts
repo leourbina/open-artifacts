@@ -111,6 +111,20 @@ export class FakeCf {
   readonly scripts = new Map<string, FakeScript>();
   readonly namespaces = new Set(["oa-staging", "oa-prod"]);
   readonly assetHashes = new Set<string>();
+  /** Turnstile widgets by sitekey (read-only for create). */
+  readonly turnstile = new Map<
+    string,
+    {
+      sitekey: string;
+      name: string;
+      domains: string[];
+      mode: string;
+      secret?: string;
+    }
+  >();
+  /** D1 list knobs: clamp per_page, or omit result_info. */
+  d1PerPageCap?: number;
+  d1ResultInfo = true;
   private sessions = new Map<
     string,
     { buckets: string[][]; done: number; completion: string }
@@ -282,12 +296,45 @@ export class FakeCf {
       return env({ uuid: this.seedD1(name), name });
     }
     if (r === "/d1/database" && req.method === "GET") {
+      // Cloudflare's name filter is a substring match; pages of per_page.
       const name = url.searchParams.get("name");
-      return env(
-        [...this.d1.entries()]
-          .filter(([, d]) => name === null || d.name.includes(name))
-          .map(([uuid, d]) => ({ uuid, name: d.name })),
+      const page = Number(url.searchParams.get("page") ?? 1);
+      const per = Math.min(
+        Number(url.searchParams.get("per_page") ?? 1000),
+        this.d1PerPageCap ?? Number.POSITIVE_INFINITY,
       );
+      const all = [...this.d1.entries()]
+        .filter(([, d]) => name === null || d.name.includes(name))
+        .map(([uuid, d]) => ({ uuid, name: d.name }));
+      const slice = all.slice((page - 1) * per, page * per);
+      return new Response(
+        JSON.stringify({
+          success: true,
+          errors: [],
+          messages: [],
+          result: slice,
+          ...(this.d1ResultInfo
+            ? {
+                result_info: {
+                  page,
+                  per_page: per,
+                  count: slice.length,
+                  total_count: all.length,
+                  total_pages: Math.max(1, Math.ceil(all.length / per)),
+                },
+              }
+            : {}),
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    // Turnstile widgets (read-only here; Task 8 creates the one per env)
+    m = r.match(/^\/challenges\/widgets\/([^/]+)$/);
+    if (m && req.method === "GET") {
+      const w = this.turnstile.get(decodeURIComponent(m[1] as string));
+      if (!w) return fail(404, "widget not found", 10404);
+      return env({ ...w, created_on: "2026-10-01T00:00:00Z" });
     }
     m = r.match(/^\/d1\/database\/([^/]+)\/query$/);
     if (m) {

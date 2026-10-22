@@ -45,6 +45,7 @@ const res = (o: Partial<ResourceMetaInput> = {}): ResourceMetaInput => ({
   assetsJwt: "jwt",
   mainModule: "index.js",
   secrets: { SESSION_SECRET: "s", CONTENT_SIGNING_KEY: "c" },
+  template: tpl,
   ...o,
 });
 const text = (b: Binding[], name: string) =>

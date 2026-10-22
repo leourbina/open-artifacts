@@ -199,8 +199,8 @@ export interface ResourceMetaInput {
   /** Exactly one of assetsJwt (assets were uploaded) and keepAssets. */
   assetsJwt?: string;
   keepAssets?: boolean;
-  /** Test seam; defaults to apps/server/wrangler.template.jsonc. */
-  template?: Template;
+  /** The release's server template (verified against the signed record). */
+  template: Template;
 }
 
 const ASSET_CONFIG_KEYS = [
@@ -209,10 +209,43 @@ const ASSET_CONFIG_KEYS = [
   "html_handling",
 ];
 
+/** Durable Object migration steps that lose or move data: never sent. */
+export const DO_MIGRATION_REFUSED = [
+  "deleted_classes",
+  "renamed_classes",
+  "transferred_classes",
+  "deleted_sqlite_classes",
+] as const;
+/** The only step keys a hosted upload sends (besides tag). */
+export const DO_MIGRATION_ALLOWED = ["new_sqlite_classes", "new_classes"];
+
+/** Refuses any template migration step that is not purely additive. */
+export function assertSafeMigrations(template: Template): void {
+  const all = template.migrations ?? [];
+  if (!Array.isArray(all))
+    throw new Error("template migrations must be an array");
+  for (const m of all as Record<string, unknown>[]) {
+    if (!m || typeof m !== "object" || typeof m.tag !== "string" || !m.tag)
+      throw new Error("every Durable Object migration step needs a tag");
+    for (const k of Object.keys(m)) {
+      if (k === "tag") continue;
+      if ((DO_MIGRATION_REFUSED as readonly string[]).includes(k))
+        throw new Error(
+          `Durable Object migration ${m.tag} has ${k}; hosted only applies new_sqlite_classes and new_classes`,
+        );
+      if (!DO_MIGRATION_ALLOWED.includes(k))
+        throw new Error(
+          `Durable Object migration ${m.tag} has unknown key ${JSON.stringify(k)}`,
+        );
+    }
+  }
+}
+
 function migrationsFor(
   template: Template,
   current: string | null,
 ): UploadMetadata["migrations"] {
+  assertSafeMigrations(template);
   const all = (template.migrations ?? []) as {
     tag: string;
     [k: string]: unknown;
@@ -270,7 +303,10 @@ export function userWorkerMetadata(
   r: ResourceMetaInput,
 ): UploadMetadata {
   checkInputs(i, r);
-  const t = r.template ?? loadTemplate();
+  // F5: no fallback to the checkout's template; the caller passes the release's.
+  if (!r.template || typeof r.template !== "object")
+    throw new Error("userWorkerMetadata needs the release template");
+  const t = r.template;
   const n = names(i.id, r.env);
   for (const v of [n.script, n.d1, n.r2, n.kv]) assertOwnResource(v, r.env);
   for (const k of ["d1_databases", "r2_buckets", "kv_namespaces"])
@@ -467,5 +503,16 @@ export function userWorkerMetadata(
   const migrations = migrationsFor(t, r.doMigrationTag);
   if (migrations) meta.migrations = migrations;
   if (missing.length > 0) meta.keep_bindings = ["secret_text", "secret_key"];
+  assertUniqueBindings(meta.bindings);
   return meta;
+}
+
+/** Two bindings with one name would let one silently shadow the other. */
+export function assertUniqueBindings(bindings: readonly Binding[]): void {
+  const seen = new Set<string>();
+  for (const b of bindings) {
+    if (seen.has(b.name))
+      throw new Error(`duplicate binding name ${JSON.stringify(b.name)}`);
+    seen.add(b.name);
+  }
 }

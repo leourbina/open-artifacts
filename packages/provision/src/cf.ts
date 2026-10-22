@@ -3,9 +3,8 @@
 // from an install id. Errors carry method, route, status and Cloudflare's own
 // error text, never a request body, header or token.
 import { createHash } from "node:crypto";
-import { readdir, readFile } from "node:fs/promises";
-import { join, relative, sep } from "node:path";
 import type { UploadMetadata } from "./metadata.js";
+import { assertAssetPath } from "./release.js";
 
 const API = "https://api.cloudflare.com/client/v4";
 const TRIES = 3;
@@ -43,6 +42,13 @@ export interface TokenInfo {
   status?: string;
   not_before?: string;
   expires_on?: string;
+}
+
+export interface TurnstileWidget {
+  sitekey: string;
+  name: string;
+  domains: string[];
+  mode?: string;
 }
 
 export interface Cf {
@@ -88,12 +94,18 @@ export interface Cf {
     script: string,
     body: { enabled: boolean; previews_enabled: boolean },
   ): Promise<void>;
-  /** Upload session on the target's route, buckets on the account route; returns the completion jwt. */
+  /**
+   * Upload session on the target's route, buckets on the account route;
+   * returns the completion jwt. Paths are relative; a dotfile, dot-directory
+   * or other unsafe path is refused before any call.
+   */
   assetsUpload(
     t: Target,
     script: string,
-    dir: string,
+    files: readonly { path: string; bytes: Uint8Array }[],
   ): Promise<{ jwt: string }>;
+  /** GET a Turnstile widget by sitekey (read-only); null when there is none. */
+  turnstileWidget(sitekey: string): Promise<TurnstileWidget | null>;
 }
 
 /** Manifest hash: the first 32 hex characters of SHA-256 (64 is rejected). */
@@ -108,16 +120,6 @@ function scriptBase(t: Target, script: string): string {
   if (t.kind === "namespace" && typeof t.ns === "string" && t.ns !== "")
     return `/workers/dispatch/namespaces/${seg(t.ns)}/scripts/${seg(script)}`;
   throw new Error("invalid script target");
-}
-
-async function walk(dir: string): Promise<string[]> {
-  const out: string[] = [];
-  for (const e of await readdir(dir, { withFileTypes: true })) {
-    const p = join(dir, e.name);
-    if (e.isDirectory()) out.push(...(await walk(p)));
-    else if (e.isFile()) out.push(p);
-  }
-  return out.sort();
 }
 
 function describeErrors(body: unknown): string {
@@ -210,11 +212,28 @@ export function cfClient(o: {
       return r.uuid;
     },
     async d1Get(name) {
-      const r = await result<{ uuid: string; name: string }[]>(
-        "GET",
-        `${acct}/d1/database?name=${seg(name)}&per_page=100`,
-      );
-      return r.find((d) => d.name === name)?.uuid ?? null;
+      // The name filter is a substring match: page until found or exhausted.
+      const per = 100;
+      for (let page = 1; page <= 100; page++) {
+        const { body } = await call(
+          "GET",
+          `${acct}/d1/database?name=${seg(name)}&per_page=${per}&page=${page}`,
+        );
+        const b = body as {
+          result?: { uuid: string; name: string }[];
+          result_info?: { total_pages?: number };
+        };
+        const r = b?.result ?? [];
+        const hit = r.find((d) => d.name === name);
+        if (hit) return hit.uuid;
+        // Trust total_pages when Cloudflare sends it (a page may be clamped
+        // or short mid-list); only without it does a short page end the list.
+        const pages = b?.result_info?.total_pages;
+        if (typeof pages === "number" && Number.isFinite(pages)) {
+          if (page >= pages) return null;
+        } else if (r.length < per) return null;
+      }
+      throw new Error("D1 database listing did not end after 100 pages");
     },
     d1Query: (id, sql, params = []) =>
       result<D1Result[]>("POST", `${acct}/d1/database/${seg(id)}/query`, {
@@ -324,16 +343,17 @@ export function cfClient(o: {
         json: body,
       });
     },
-    async assetsUpload(t, script, dir) {
+    async assetsUpload(t, script, list) {
       const files = new Map<string, Uint8Array>();
       const manifest: Record<string, { hash: string; size: number }> = {};
-      for (const p of await walk(dir)) {
-        const bytes = new Uint8Array(await readFile(p));
+      for (const f of list) {
+        assertAssetPath(f?.path);
+        const key = `/${f.path}`;
+        if (Object.hasOwn(manifest, key))
+          throw new Error(`asset path ${f.path} appears twice`);
+        const bytes = f.bytes;
         const hash = assetHash(bytes);
-        manifest[`/${relative(dir, p).split(sep).join("/")}`] = {
-          hash,
-          size: bytes.byteLength,
-        };
+        manifest[key] = { hash, size: bytes.byteLength };
         files.set(hash, bytes);
       }
       const sess = await result<{ jwt: string; buckets?: string[][] }>(
@@ -373,6 +393,17 @@ export function cfClient(o: {
         if (next) jwt = next;
       }
       return { jwt };
+    },
+    async turnstileWidget(sitekey) {
+      const r = await call(
+        "GET",
+        `${acct}/challenges/widgets/${seg(sitekey)}`,
+        {},
+        [404],
+      );
+      if (r.status === 404) return null;
+      return ((r.body as { result?: TurnstileWidget })?.result ??
+        null) as TurnstileWidget | null;
     },
   };
 }
