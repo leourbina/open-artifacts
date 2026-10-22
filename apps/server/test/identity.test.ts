@@ -385,6 +385,15 @@ describe("resetIdentity", () => {
     expect(await subjectOf(uid)).toBeNull();
   });
 
+  it("revokes the member's PATs", async () => {
+    const email = uniq("resetpat");
+    const uid = await seedUser(email, "member", { googleSub: `RP-${email}` });
+    await createPat(env, uid, "t");
+    await resetIdentity(env, admin, uid);
+    expect(
+      await count("tokens where user_id = ? and revoked_at is null", uid),
+    ).toBe(0);
+  });
   it("never the owner's link; 404 when there is no link; no epoch bump or PAT revoke then", async () => {
     const email = uniq("owner");
     const uid = await seedUser(email, "owner", { googleSub: `O-${email}` });

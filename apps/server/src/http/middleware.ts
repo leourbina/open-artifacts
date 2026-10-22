@@ -11,6 +11,7 @@ import type { Context, MiddlewareHandler } from "hono";
 import { getCookie } from "hono/cookie";
 import { authConfig } from "../auth/config.js";
 import { verifyPat } from "../auth/pat.js";
+import { isGuestRole } from "../auth/policy.js";
 import {
   readSession,
   type Session,
@@ -177,6 +178,10 @@ export function sessionStillValid(
  * session must pass sessionStillValid.
  * `X-OA-Embed: 1` or `?embed=1` (isEmbedRequest) forces anonymous.
  */
+/** A guest while the guest cap is on, however they authenticated (session or PAT). */
+const guestCapped = (env: Env, user: Member): boolean =>
+  isGuestRole(user.role) && authConfig(env).guestsReadOnly;
+
 export const session = (): MiddlewareHandler<AppEnv> => async (c, next) => {
   await resolveSession(c);
   await next();
@@ -209,6 +214,7 @@ export async function resolveSession(c: Context<AppEnv>): Promise<void> {
       c.set("tokenLabel", pat.label);
       c.set("tokenId", pat.tokenId);
       c.set("authMethod", "pat");
+      if (guestCapped(c.env, user)) c.set("capReason", "guest");
     }
   } else {
     const s = await readSession(c.env, getCookie(c, sessionCookieName(c.env)));
@@ -217,10 +223,7 @@ export async function resolveSession(c: Context<AppEnv>): Promise<void> {
       c.set("user", row.user);
       c.set("authMethod", s.p);
       c.set("sessionExp", s.exp);
-      if (
-        (s.p === "code" && s.t === undefined) ||
-        (row.user.role === "guest" && authConfig(c.env).guestsReadOnly)
-      )
+      if ((s.p === "code" && s.t === undefined) || guestCapped(c.env, row.user))
         c.set("capReason", "guest");
     }
   }

@@ -18,6 +18,18 @@ export const signInMode = (cfg: AuthConfig): "access" | "direct" =>
     ? "direct"
     : "access";
 
+/**
+ * Google is offered only on a complete transport: direct with its client
+ * secret, or the broker with its URL, install id and signing key. (config.ts
+ * already fails closed; this keeps a half-configured Google off the list.)
+ */
+export function googleOffered(cfg: AuthConfig): boolean {
+  const t = cfg.google?.transport;
+  if (!t) return false;
+  if (t.kind === "direct") return t.secret.length > 0;
+  return t.url.length > 0 && t.installId.length > 0 && t.signingKey.length > 0;
+}
+
 /** #359 AuthProvidersSchema: only enabled, fully configured providers. */
 export function authProviders(env: Env): AuthProviders {
   const cfg = authConfig(env);
@@ -28,7 +40,7 @@ export function authProviders(env: Env): AuthProviders {
       id: "access",
       start: mode === "access" ? AUTH.login : ACCESS_START,
     });
-  if (cfg.google)
+  if (googleOffered(cfg))
     providers.push({
       id: "google",
       start: AUTH.loginGoogle,

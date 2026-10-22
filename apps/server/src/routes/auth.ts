@@ -186,8 +186,10 @@ export function mountAuth(app: AppType): void {
       c.req.query("state") ?? "",
     );
     const clear = picked ? [clearOidcCookie(c.env, picked.name)] : [];
+    let next = "/";
     try {
       const id = await handleCallback(c.env, googleProvider, c.req.raw);
+      next = id.next;
       const r = await admit(c.env, authConfig(c.env), id);
       if (!r.ok) {
         logOidcFail(r.reason);
@@ -223,7 +225,15 @@ export function mountAuth(app: AppType): void {
           e.next,
           clear,
         );
-      throw e;
+      if (e instanceof ApiError) {
+        const res = toErrorResponse(e);
+        for (const k of clear) res.headers.append("set-cookie", k);
+        res.headers.set("cache-control", "no-store");
+        return res;
+      }
+      // Anything unexpected (D1, signing): the sign-in page, never a 500.
+      logOidcFail("internal");
+      return toSignIn("failed", next, clear);
     }
   });
 

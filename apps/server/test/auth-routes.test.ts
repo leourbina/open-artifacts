@@ -11,7 +11,9 @@ import { createApp } from "../src/app.js";
 import { createPat } from "../src/auth/pat.js";
 import { readSession, sessionCookieName } from "../src/auth/session.js";
 import type { Env } from "../src/env.js";
+import * as oauthApi from "../src/mcp/oauth-api.js";
 import * as directory from "../src/services/directory.js";
+import * as identity from "../src/services/identity.js";
 import {
   direct,
   seedUser,
@@ -56,8 +58,8 @@ beforeEach(async () => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-/** Runs /auth/login/google → fake Google → /auth/callback/google. */
-async function googleRoundTrip(
+/** Starts a Google sign-in and mints a code; returns the callback path and cookie. */
+async function googleCallback(
   e: Env,
   claims: Record<string, unknown> = {},
   next = "/a/x",
@@ -75,12 +77,27 @@ async function googleRoundTrip(
     { nonce: u.searchParams.get("nonce"), ...claims },
     u.searchParams.get("code_challenge") as string,
   );
-  return get(
-    `${AUTH.callbackGoogle}?state=${u.searchParams.get("state")}&code=${code}`,
-    e,
+  return {
+    path: `${AUTH.callbackGoogle}?state=${u.searchParams.get("state")}&code=${code}`,
     stateCookie,
-  );
+  };
 }
+
+/** Runs /auth/login/google → fake Google → /auth/callback/google. */
+async function googleRoundTrip(
+  e: Env,
+  claims: Record<string, unknown> = {},
+  next = "/a/x",
+) {
+  const cb = await googleCallback(e, claims, next);
+  return get(cb.path, e, cb.stateCookie);
+}
+
+/** Whether the response clears an oa_oidc_ state cookie. */
+const clearsState = (r: Response) =>
+  r.headers
+    .getSetCookie()
+    .some((c) => /^oa_oidc_[^=]*=;/.test(c) && /Max-Age=0/i.test(c));
 
 describe("GET /auth/providers", () => {
   it("access-only: just access, and /auth/login still goes to Access", async () => {
@@ -124,6 +141,33 @@ describe("GET /auth/providers", () => {
       ["email"],
     );
     expect(text).not.toContain("problem");
+  });
+
+  const ids = async (e: Env) =>
+    (
+      (await (await get(AUTH.providers, e)).json()) as {
+        providers: { id: string }[];
+      }
+    ).providers.map((p) => p.id);
+  const broker = (over: Partial<Env> = {}) =>
+    direct({
+      AUTH_BROKER_URL: "https://auth.h.test",
+      BROKER_SIGNING_KEY: TEST_BROKER_KEY,
+      GOOGLE_CLIENT_SECRET: "",
+      ...over,
+    });
+
+  it.each([
+    ["no INSTALL_ID", { INSTALL_ID: "" }],
+    ["no signing key", { BROKER_SIGNING_KEY: "" }],
+    ["a bad signing key", { BROKER_SIGNING_KEY: "nope" }],
+    ["a non-https broker", { AUTH_BROKER_URL: "http://auth.h.test" }],
+  ])("a half-configured broker (%s) never lists Google", async (_, over) => {
+    expect(await ids(broker(over))).toEqual(["email"]);
+  });
+
+  it("a fully configured broker lists Google", async () => {
+    expect(await ids(broker())).toEqual(["google", "email"]);
   });
 
   it("does no D1 work, even with a session cookie", async () => {
@@ -253,6 +297,62 @@ describe("direct-mode sign-in routes", () => {
     ).toBe("/a/x");
   });
 
+  it("a non-ApiError in the callback lands on failed and clears the state cookie", async () => {
+    vi.spyOn(identity, "admit").mockRejectedValue(new Error("d1 down"));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const r = await googleRoundTrip(direct(), { email: uniq("boom") });
+    expect(r.status).toBe(302);
+    expect(loc(r)).toBe(`${SIGN_IN_PAGE}?error=failed&next=%2Fa%2Fx`);
+    expect(clearsState(r)).toBe(true);
+    expect(cookieVal(r, SESSION)).toBeUndefined();
+  });
+
+  it("a non-zero epoch round trips: the session carries it and is accepted", async () => {
+    const e = direct();
+    const email = uniq("ep");
+    const uid = await seedUser(email, "member", { googleSub: `ep-${email}` });
+    await env.DB.prepare("update users set session_epoch = 3 where id = ?")
+      .bind(uid)
+      .run();
+    const r = await googleRoundTrip(e, { email, sub: `ep-${email}` });
+    expect(loc(r)).toBe("/a/x");
+    expect(await readSession(e, cookieVal(r, SESSION))).toMatchObject({
+      uid,
+      e: 3,
+    });
+    expect(
+      (await get(R.me, e, `${SESSION}=${cookieVal(r, SESSION)}`)).status,
+    ).toBe(200);
+  });
+
+  it("a replayed callback is refused: no second session", async () => {
+    const e = direct();
+    const email = uniq("replay");
+    const cb = await googleCallback(e, { email, sub: `rp-${email}` });
+    const first = await get(cb.path, e, cb.stateCookie);
+    expect(cookieVal(first, SESSION)).toBeDefined();
+    const again = await get(cb.path, e, cb.stateCookie);
+    expect(loc(again)).toBe(`${SIGN_IN_PAGE}?error=failed&next=%2Fa%2Fx`);
+    expect(cookieVal(again, SESSION)).toBeUndefined();
+    expect(clearsState(again)).toBe(true);
+  });
+
+  it.each(["removed", "suspended"])(
+    "a %s user's Google sign-in lands on error=removed (linked or not)",
+    async (status) => {
+      const a = uniq(`na-${status}`);
+      await seedUser(a, "member", { status, googleSub: `na-${a}` });
+      expect(
+        loc(await googleRoundTrip(direct(), { email: a, sub: `na-${a}` })),
+      ).toBe(`${SIGN_IN_PAGE}?error=removed&next=%2Fa%2Fx`);
+      const b = uniq(`nb-${status}`);
+      await seedUser(b, "member", { status });
+      const r = await googleRoundTrip(direct(), { email: b, sub: `nb-${b}` });
+      expect(loc(r)).toBe(`${SIGN_IN_PAGE}?error=removed&next=%2Fa%2Fx`);
+      expect(cookieVal(r, SESSION)).toBeUndefined();
+    },
+  );
+
   it("broker transport isn't offered yet (T11)", async () => {
     const e = direct({
       AUTH_BROKER_URL: "https://auth.h.test",
@@ -313,6 +413,18 @@ describe("Me sign-in fields", () => {
       cap: "guest",
     });
   });
+
+  it("a guest's PAT is capped too", async () => {
+    const e = direct();
+    const { userId } = await login(uniq("gpat", "x.com"), "guest");
+    const pat = await createPat(e, userId, "t");
+    expect((await me(e, pat.token)).auth).toEqual({
+      method: "pat",
+      readOnly: true,
+      cap: "guest",
+      expiresAt: null,
+    });
+  });
 });
 
 describe("DELETE R.memberIdentity", () => {
@@ -338,5 +450,40 @@ describe("DELETE R.memberIdentity", () => {
     expect(
       (await del(R.memberIdentity(owner, "google"), e, admin.cookie)).status,
     ).toBe(404);
+  });
+
+  it("ends the target's sessions (epoch bump) and revokes their PATs and OAuth grants", async () => {
+    const e = direct();
+    const admin = await login(uniq("adm2"), "admin");
+    const email = uniq("tgt2");
+    const target = await seedUser(email, "member", {
+      googleSub: `t2-${email}`,
+    });
+    const signedIn = await googleRoundTrip(e, { email, sub: `t2-${email}` });
+    const cookie = `${SESSION}=${cookieVal(signedIn, SESSION)}`;
+    const pat = await createPat(e, target, "t");
+    const bearer = (t: string) =>
+      app.fetch(
+        new Request(`${APP}${R.me}`, {
+          headers: { authorization: `Bearer ${t}` },
+        }),
+        e,
+        ctx,
+      );
+    expect((await get(R.me, e, cookie)).status).toBe(200);
+    expect((await bearer(pat.token)).status).toBe(200);
+    const grants = vi.spyOn(oauthApi, "revokeAllGrants");
+    expect(
+      (await del(R.memberIdentity(target, "google"), e, admin.cookie)).status,
+    ).toBe(204);
+    const row = await env.DB.prepare(
+      "select session_epoch e from users where id = ?",
+    )
+      .bind(target)
+      .first<{ e: number }>();
+    expect(row?.e).toBe(1);
+    expect((await get(R.me, e, cookie)).status).toBe(401);
+    expect((await bearer(pat.token)).status).toBe(401);
+    expect(grants).toHaveBeenCalledWith(expect.anything(), target);
   });
 });
