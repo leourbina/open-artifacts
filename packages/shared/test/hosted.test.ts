@@ -1207,3 +1207,28 @@ describe("hosted contract: space People", () => {
     ]);
   });
 });
+
+describe("hosted mocks: list by space", () => {
+  it("scope=space lists one space; scope=spaces lists shared spaces; scope=space without spaceId is 400", async () => {
+    fresh({ hosted: true });
+    const me = Strict.Me.parse(await json(await call("GET", R.me)));
+    const eng = me.spaces?.find((s) => s.name === "Engineering")?.id as string;
+    const pub = await call("POST", R.artifacts, {
+      title: "in eng",
+      format: "html",
+      content: "x",
+      spaceId: eng,
+    });
+    expect(pub.status).toBe(201);
+    const inEng = (await json(
+      await call("GET", `${R.artifacts}?scope=space&spaceId=${eng}&limit=100`),
+    )) as { items: { title: string; space?: { id: string } }[] };
+    expect(inEng.items.map((a) => a.title)).toContain("in eng");
+    expect(inEng.items.every((a) => a.space?.id === eng)).toBe(true);
+    const shared = (await json(
+      await call("GET", `${R.artifacts}?scope=spaces&limit=100`),
+    )) as { items: { space?: { kind: string } }[] };
+    expect(shared.items.every((a) => a.space?.kind === "shared")).toBe(true);
+    expect((await call("GET", `${R.artifacts}?scope=space`)).status).toBe(400);
+  });
+});

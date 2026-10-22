@@ -1540,6 +1540,26 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
     ),
   ];
 
+  /**
+   * The hosted list scopes (HostedListQuerySchema): "space" lists one shared
+   * space, or the caller's own personal space; "spaces" lists every shared
+   * space. Another user's personal space is refused (400 space_personal).
+   */
+  const listScope = (
+    scope: string,
+    spaceId: string | undefined,
+  ):
+    | Response
+    | ((space: { id: string; kind: string } | null | undefined) => boolean)
+    | null => {
+    if (scope === "spaces") return (sp) => sp?.kind === "shared";
+    if (scope !== "space") return null;
+    const sp = findSpace(spaceId);
+    if (sp?.kind === "personal" && sp.id !== me.user.id)
+      return err("space_personal", "Pick a shared space");
+    return (a) => a?.id === spaceId;
+  };
+
   return {
     handlers,
     refresh,
@@ -1548,5 +1568,6 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
     placeNew,
     refuseCappedCreate,
     refusePublic,
+    listScope,
   };
 }

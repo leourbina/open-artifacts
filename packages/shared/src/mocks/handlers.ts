@@ -25,6 +25,7 @@ import { delay, type HttpHandler, HttpResponse, http } from "msw";
 import type { z } from "zod";
 import { type ErrorCode, QUOTA_MESSAGE, STATUS_FOR } from "../errors.js";
 import type { Format } from "../formats.js";
+import { HostedListQuerySchema } from "../hosted/artifacts.js";
 import { newId, newPat } from "../ids.js";
 import {
   INLINE_TOO_LARGE_MESSAGE,
@@ -343,6 +344,11 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
     });
   };
 
+  const withScope = (q: URLSearchParams, scope: string) => {
+    const c = new URLSearchParams(q);
+    c.set("scope", scope);
+    return c;
+  };
   const matches = (a: ArtifactSummary, q: URLSearchParams) => {
     const needle = (q.get("q") ?? "").toLowerCase();
     const scope = q.get("scope") ?? "all";
@@ -447,12 +453,18 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
       if (isAnon(request))
         return err("unauthorized", "Authentication required");
       const q = new URL(request.url).searchParams;
-      const p = ListQuerySchema.safeParse(params(q));
+      // Hosted mocks accept the hosted scopes ("space", "spaces") like the server.
+      const p = (h ? HostedListQuerySchema : ListQuerySchema).safeParse(
+        params(q),
+      );
       if (!p.success)
         return err("bad_request", "Invalid query", p.error.issues);
+      const inSpace = h?.listScope(p.data.scope, q.get("spaceId") ?? undefined);
+      if (inSpace instanceof Response) return inSpace;
       return paginate(
         artifacts
-          .filter((a) => matches(a, q))
+          .filter((a) => (inSpace ? inSpace(a.space) : matches(a, q)))
+          .filter((a) => !inSpace || matches(a, withScope(q, "all")))
           .map((a) => redactArt(a, request)),
         q,
       );
