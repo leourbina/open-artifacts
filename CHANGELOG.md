@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.27.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.26.1...v0.27.0) (2026-10-22)
+
+
+### Features
+
+* **auth:** admission, linking and code eligibility (P2 T5) ([#375](https://github.com/open-artifacts-ai/open-artifacts/issues/375)) ([8a34089](https://github.com/open-artifacts-ai/open-artifacts/commit/8a34089b1f3bb0d3a700be43180db0cbff6579b8))
+* **dashboard:** Google directory page, held sweeps and restricted groups (P4 Tasks 17, 18) ([#437](https://github.com/open-artifacts-ai/open-artifacts/issues/437)) ([70f7439](https://github.com/open-artifacts-ai/open-artifacts/commit/70f74396fe81045d771030ca17c77312f14db995))
+* **dashboard:** restricted members, badge plus row menu (P4 Task 15) ([#439](https://github.com/open-artifacts-ai/open-artifacts/issues/439)) ([393103b](https://github.com/open-artifacts-ai/open-artifacts/commit/393103b668aa930b3adaf84bae5143c729e77191))
+
 ## [0.26.1](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.26.0...v0.26.1) (2026-10-22)
 
 
