@@ -1,3 +1,4 @@
+import { normalizeEmail } from "@oa/auth-core";
 import { AUTH, MemberSchema, PAGES, RoleSchema } from "@oa/shared";
 import { authConfig } from "../auth/config.js";
 import {
@@ -15,7 +16,6 @@ import {
   sessionCookie,
   signSession,
 } from "../auth/session.js";
-import { normEmail } from "../db/email.js";
 import { ApiError, toErrorResponse } from "../http/errors.js";
 import { FAVICON_TAGS } from "../http/head.js";
 import {
@@ -149,7 +149,7 @@ export function mountAuth(app: AppType): void {
       throw new ApiError("not_found", "Not found");
     const email = EmailSchema.safeParse((c.req.query("email") ?? "").trim());
     const role = RoleSchema.safeParse(c.req.query("role") ?? "member");
-    if (!email.success || normEmail(email.data) === null)
+    if (!email.success || normalizeEmail(email.data) === null)
       throw new ApiError("bad_request", "Invalid email");
     if (!role.success) throw new ApiError("bad_request", "Invalid role");
     const user = await upsertWithRole(c.env, email.data, role.data);

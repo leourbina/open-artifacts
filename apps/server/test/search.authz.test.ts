@@ -1,10 +1,10 @@
 import { env } from "cloudflare:workers";
+import { normalizeEmail } from "@oa/auth-core";
 import { type Member, newId, PageSchema, R, SearchHitSchema } from "@oa/shared";
 import { and, eq } from "drizzle-orm";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { getDb } from "../src/db/client.js";
-import { normEmail } from "../src/db/email.js";
 import { shares } from "../src/db/schema.js";
 import { publish, softDelete, undelete } from "../src/services/artifacts.js";
 import { getUser } from "../src/services/users.js";
@@ -48,7 +48,7 @@ const ids = async (u: U) => {
     .sort();
 };
 
-const e = (u: U) => normEmail(u.email) ?? u.email;
+const e = (u: U) => normalizeEmail(u.email) ?? u.email;
 
 beforeAll(async () => {
   owner = await mk("sa-owner");

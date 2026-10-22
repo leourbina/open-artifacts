@@ -1,3 +1,4 @@
+import { normalizeEmail } from "@oa/auth-core";
 import {
   type Member,
   type MemberInvite,
@@ -9,7 +10,6 @@ import {
 } from "@oa/shared";
 import { and, asc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { getDb } from "../db/client.js";
-import { normEmail } from "../db/email.js";
 import {
   artifacts,
   identities,
@@ -48,7 +48,7 @@ export async function inviteMember(
   inviter: Member,
   input: MemberInvite,
 ): Promise<MemberInviteResult> {
-  const email = normEmail(input.email);
+  const email = normalizeEmail(input.email);
   if (!email) throw new ApiError("bad_request", "Invalid email");
   const [row] = await getDb(env)
     .insert(users)
@@ -77,7 +77,7 @@ export async function inviteMember(
           recipient: email,
           appHost: env.APP_HOST,
         }),
-      { kind: "invite", replyTo: normEmail(inviter.email) ?? undefined },
+      { kind: "invite", replyTo: normalizeEmail(inviter.email) ?? undefined },
     );
   }
   return { ...toMember(row), emailed };

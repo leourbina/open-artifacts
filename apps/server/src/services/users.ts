@@ -1,8 +1,8 @@
+import { normalizeEmail } from "@oa/auth-core";
 import { type Member, newId, type Role, type UserRef } from "@oa/shared";
 import { eq } from "drizzle-orm";
 import { withCap } from "../auth/authz.js";
 import { getDb } from "../db/client.js";
-import { normEmail } from "../db/email.js";
 import { shares, users } from "../db/schema.js";
 import { stmt } from "../db/stmt.js";
 import type { Env } from "../env.js";
@@ -46,7 +46,7 @@ export function toMember(
     "id" | "email" | "name" | "displayName" | "role" | "lastSeenAt"
   >,
 ): Member {
-  const email = normEmail(r.email) ?? r.email;
+  const email = normalizeEmail(r.email) ?? r.email;
   return {
     id: r.id,
     email,
@@ -93,9 +93,9 @@ export async function upsertOnLogin(
   name: string | null,
 ): Promise<Member | null> {
   // Non-ASCII / malformed emails are no-access: never folded onto an account.
-  const e = normEmail(email);
+  const e = normalizeEmail(email);
   if (!e) return null;
-  const owner = normEmail(env.OWNER_EMAIL ?? "");
+  const owner = normalizeEmail(env.OWNER_EMAIL ?? "");
   if (owner && e === owner)
     return toMember(await upsert(env, e, name, "owner", true));
 
@@ -133,7 +133,7 @@ export async function upsertWithRole(
   email: string,
   role: Role,
 ): Promise<Member> {
-  const e = normEmail(email);
+  const e = normalizeEmail(email);
   if (!e) throw new Error("invalid email");
   return toMember(await upsert(env, e, null, role, true));
 }
