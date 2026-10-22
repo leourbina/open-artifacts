@@ -84,3 +84,34 @@ export async function seedShare(email: string): Promise<string> {
     .run();
   return art;
 }
+
+export type SentMail = {
+  to: string;
+  subject: string;
+  text: string;
+  html: string;
+};
+
+/** A fake `send_email` binding plus EMAIL_FROM; `codeFor` reads the last code sent to an address. */
+export function mailer(fail = false) {
+  const sent: SentMail[] = [];
+  return {
+    sent,
+    env: {
+      EMAIL_FROM: "noreply@mail.example.com",
+      EMAIL: {
+        async send(m: SentMail) {
+          if (fail) throw new Error("E_SEND_FAILED");
+          sent.push(m);
+          return { messageId: `m${sent.length}` };
+        },
+      } as unknown as SendEmail,
+    },
+    codeFor(to: string): string {
+      const m = [...sent].reverse().find((x) => x.to === to);
+      const digits = m?.text.match(/\b(\d{4}) (\d{4})\b/);
+      if (!digits) throw new Error(`no code sent to ${to}`);
+      return `${digits[1]}${digits[2]}`;
+    },
+  };
+}

@@ -22,6 +22,7 @@ export const ERROR_CODES = [
   "directory_sync_off",
   "turnstile_failed",
   "turnstile_required",
+  "code_unavailable",
   "reauth_required",
   "restrict_admin",
   "directory_mapping_off",
@@ -68,6 +69,8 @@ export const STATUS_FOR: Record<ErrorCode, number> = {
   turnstile_failed: 403,
   /** POST AUTH.codeRequest without a token while Turnstile is configured; details { field: "turnstile", required: true }. */
   turnstile_required: 400,
+  /** Code sign-in can't run on this install: SESSION_SECRET is under 32 characters, so the code keys can't be derived. */
+  code_unavailable: 503,
   /** Break-glass directory routes: the stale org owner needs a fresh Google sign-in (10 min). */
   reauth_required: 401,
   /** PUT R.memberRestricted(id) on an org owner or admin: they can't be restricted. */
