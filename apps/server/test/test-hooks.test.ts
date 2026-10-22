@@ -19,7 +19,40 @@ import { direct, mailer, seedUser, uniq } from "./auth-helpers.js";
 
 // P2 Task 14: test hooks for P5's cross-tenant suite.
 const KEY = "k".repeat(32);
-const ON = { TEST_HOOKS: "1", TEST_HOOK_KEY: KEY };
+const TD = "p5.test";
+type RlCall = { key: string };
+const rlCalls: RlCall[] = [];
+const passRl = {
+  limit: async (o: RlCall) => (rlCalls.push(o), { success: true }),
+} as unknown as RateLimit;
+const ON = {
+  TEST_HOOKS: "1",
+  TEST_HOOK_KEY: KEY,
+  TEST_DOMAIN: TD,
+  RL_ANON: passRl,
+};
+const tu = (local: string) => uniq(local, TD);
+const auditRows = async (since: number) =>
+  (
+    await env.DB.prepare(
+      "select actor_kind, action, target_type, target_id, detail from audit_events where at >= ? and actor_kind = 'test_hook' order by at",
+    )
+      .bind(since)
+      .all<{
+        actor_kind: string;
+        action: string;
+        target_type: string;
+        target_id: string;
+        detail: string;
+      }>()
+  ).results.map((r) => ({ ...r, detail: JSON.parse(r.detail) }));
+/** The standard 404 (hooks off), byte for byte. */
+async function same404(r: Response) {
+  const ref = await call(env, TEST_HOOKS.session, { body: {} });
+  expect(r.status).toBe(404);
+  expect(await r.text()).toBe(await ref.text());
+  expect(r.headers.get("content-type")).toBe(ref.headers.get("content-type"));
+}
 afterEach(() => vi.restoreAllMocks());
 
 async function call(
@@ -102,37 +135,48 @@ describe("activation", () => {
 
   it("on with a 31-char key is still off", async () => {
     const short = "s".repeat(31);
+    await same404(
+      await hook(
+        on({ TEST_HOOK_KEY: short }),
+        TEST_HOOKS.session,
+        { email: tu("a"), role: "member" },
+        short,
+      ),
+    );
+  });
+
+  it("without TEST_DOMAIN the hooks are off", async () => {
+    for (const d of [undefined, ""])
+      await same404(
+        await hook(on({ TEST_DOMAIN: d }), TEST_HOOKS.session, {
+          email: tu("nd"),
+          role: "member",
+        }),
+      );
     expect(
-      (
-        await hook(
-          on({ TEST_HOOK_KEY: short }),
-          TEST_HOOKS.session,
-          { email: "a@a.com", role: "member" },
-          short,
-        )
-      ).status,
-    ).toBe(404);
+      HealthzSchema.parse(
+        await (
+          await call(on({ TEST_DOMAIN: undefined }), "/healthz", {
+            method: "GET",
+          })
+        ).json(),
+      ).testHooks,
+    ).toBeUndefined();
   });
 
   it("a wrong or missing key gets the identical 404", async () => {
-    const ref = await call(env, TEST_HOOKS.session, { body: {} });
-    const refBody = await ref.text();
-    for (const key of ["x".repeat(32), undefined]) {
-      const r = await call(on(), TEST_HOOKS.session, {
-        body: { email: "a@a.com", role: "member" },
-        key,
-      });
-      expect(r.status).toBe(404);
-      expect(await r.text()).toBe(refBody);
-      expect(r.headers.get("content-type")).toBe(
-        ref.headers.get("content-type"),
+    for (const key of ["x".repeat(32), undefined])
+      await same404(
+        await call(on(), TEST_HOOKS.session, {
+          body: { email: tu("a"), role: "member" },
+          key,
+        }),
       );
-    }
   });
 
   it("the content host is 404 even with the key", async () => {
     const r = await call(on(), TEST_HOOKS.session, {
-      body: { email: "a@a.com", role: "member" },
+      body: { email: tu("a"), role: "member" },
       key: KEY,
       host: env.CONTENT_HOST,
     });
@@ -146,41 +190,199 @@ describe("activation", () => {
     expect(d).not.toHaveBeenCalled();
     expect(k).not.toHaveBeenCalled();
   });
+});
 
-  it("over RL_ANON (test:<install>:<ip>) is 404 too", async () => {
-    const keys: string[] = [];
-    const rl = {
+describe("rate limit first", () => {
+  const failRl = (keys: string[]) =>
+    ({
       limit: async ({ key }: { key: string }) => (
         keys.push(key), { success: false }
       ),
-    } as unknown as RateLimit;
-    const r = await hook(on({ RL_ANON: rl }), TEST_HOOKS.session, {
-      email: "a@a.com",
-      role: "member",
-    });
-    expect(r.status).toBe(404);
-    expect(keys).toEqual([`test:${env.APP_HOST}:198.51.100.200`]);
+    }) as unknown as RateLimit;
+
+  it("over RL_ANON (test:<install>:<ip>) is the 404, before the key compare or D1", async () => {
+    const keys: string[] = [];
+    const digest = vi.spyOn(crypto.subtle, "digest");
+    const d = vi.spyOn(env.DB, "prepare");
+    for (const key of [KEY, "x".repeat(32)])
+      await same404(
+        await hook(
+          on({ RL_ANON: failRl(keys) }),
+          TEST_HOOKS.session,
+          { email: tu("rl"), role: "member" },
+          key,
+        ),
+      );
+    expect(keys).toEqual([
+      `test:${env.APP_HOST}:198.51.100.200`,
+      `test:${env.APP_HOST}:198.51.100.200`,
+    ]);
+    expect(digest).not.toHaveBeenCalled();
+    expect(d).not.toHaveBeenCalled();
   });
 
-  it("each call logs one test_hook event with no key, email or cookie", async () => {
+  it("a wrong key still spends the limiter", async () => {
+    rlCalls.length = 0;
+    await call(on(), TEST_HOOKS.session, { body: {}, key: "x".repeat(32) });
+    expect(rlCalls).toHaveLength(1);
+  });
+
+  it("RL_ANON unbound: the 404 even with the right key", async () => {
+    const d = vi.spyOn(env.DB, "prepare");
+    await same404(
+      await hook(on({ RL_ANON: undefined }), TEST_HOOKS.session, {
+        email: tu("unb"),
+        role: "member",
+      }),
+    );
+    expect(d).not.toHaveBeenCalled();
+  });
+});
+
+describe("audit", () => {
+  it("each call writes one audit row (hook, IP, domain) and one log line; never the key, email or cookie", async () => {
     const lines: string[] = [];
     vi.spyOn(console, "log").mockImplementation((s: unknown) => {
       lines.push(String(s));
     });
-    vi.spyOn(console, "warn").mockImplementation((s: unknown) => {
-      lines.push(String(s));
-    });
-    const email = uniq("log");
+    const since = Date.now();
+    const email = tu("log");
     const r = await hook(on(), TEST_HOOKS.session, { email, role: "member" });
     const { cookie } = TestSessionResultSchema.parse(await r.json());
-    await call(on(), TEST_HOOKS.session, { body: {}, key: "x".repeat(32) });
+    await call(on(), TEST_HOOKS.otpLatest, {
+      body: {},
+      key: "x".repeat(32),
+    });
+    await hook(on(), TEST_HOOKS.session, {
+      email: uniq("other", "a.com"),
+      role: "member",
+    });
+    const rows = await auditRows(since);
+    expect(rows).toHaveLength(3);
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        {
+          actor_kind: "test_hook",
+          action: "test_hook.session",
+          target_type: "test_hook",
+          target_id: "session",
+          detail: {
+            hook: "session",
+            ip: "198.51.100.200",
+            outcome: "ok",
+            domain: TD,
+          },
+        },
+        {
+          actor_kind: "test_hook",
+          action: "test_hook.otp_latest",
+          target_type: "test_hook",
+          target_id: "otp_latest",
+          detail: {
+            hook: "otp_latest",
+            ip: "198.51.100.200",
+            outcome: "denied",
+          },
+        },
+        {
+          actor_kind: "test_hook",
+          action: "test_hook.session",
+          target_type: "test_hook",
+          target_id: "session",
+          detail: {
+            hook: "session",
+            ip: "198.51.100.200",
+            outcome: "refused",
+            domain: "a.com",
+          },
+        },
+      ]),
+    );
     const ev = lines.filter((l) => l.includes("test_hook"));
     expect(ev.map((l) => JSON.parse(l).evt)).toEqual([
       "test_hook.session",
       "test_hook.denied",
+      "test_hook.refused",
     ]);
-    const all = lines.join("\n");
-    for (const s of [KEY, email, cookie]) expect(all).not.toContain(s);
+    const all = lines.join("\n") + JSON.stringify(rows);
+    for (const s of [KEY, email, email.split("@")[0], cookie])
+      expect(all).not.toContain(s);
+  });
+});
+
+describe("TEST_DOMAIN and refusals", () => {
+  it("session: only an exact TEST_DOMAIN address; everything else the identical 404", async () => {
+    for (const email of [
+      uniq("x", "a.com"),
+      uniq("x", `sub.${TD}`),
+      uniq("x", `${TD}.evil.com`),
+      uniq("x", `evil${TD}`),
+    ])
+      await same404(
+        await hook(on(), TEST_HOOKS.session, { email, role: "member" }),
+      );
+    expect(
+      (
+        await hook(on(), TEST_HOOKS.session, {
+          email: tu("ok"),
+          role: "member",
+        })
+      ).status,
+    ).toBe(200);
+  });
+
+  it("session: the owner email is refused", async () => {
+    const owner = tu("owner");
+    await same404(
+      await hook(on({ OWNER_EMAIL: owner }), TEST_HOOKS.session, {
+        email: owner.toUpperCase(),
+        role: "owner",
+      }),
+    );
+    expect(
+      await env.DB.prepare("select id from users where email = ?")
+        .bind(owner)
+        .first(),
+    ).toBeNull();
+  });
+
+  it("session: an existing user's role is never changed; the same role is fine", async () => {
+    const email = tu("exist");
+    await seedUser(email, "member");
+    await same404(
+      await hook(on(), TEST_HOOKS.session, { email, role: "admin" }),
+    );
+    expect(
+      await env.DB.prepare("select role from users where email = ?")
+        .bind(email)
+        .first("role"),
+    ).toBe("member");
+    expect(
+      (await hook(on(), TEST_HOOKS.session, { email, role: "member" })).status,
+    ).toBe(200);
+  });
+
+  it("session: bad input and spaces are the identical 404", async () => {
+    await same404(
+      await hook(on(), TEST_HOOKS.session, { email: "nope", role: "member" }),
+    );
+    await same404(
+      await hook(on(), TEST_HOOKS.session, {
+        email: tu("sp"),
+        role: "member",
+        spaces: [{ spaceId: "s", role: "viewer" }],
+      }),
+    );
+    await same404(await call(on(), "/__test/x", { body: {}, key: KEY }));
+    await same404(
+      await call(on(), TEST_HOOKS.session, { method: "GET", key: KEY }),
+    );
+  });
+
+  it("otp/latest: an address outside TEST_DOMAIN is the identical 404", async () => {
+    await same404(
+      await hook(on(), TEST_HOOKS.otpLatest, { email: uniq("o", "a.com") }),
+    );
   });
 });
 
@@ -193,7 +395,7 @@ describe("hooks", () => {
       GOOGLE_CLIENT_SECRET: "s",
     });
     const r = await hook(e, TEST_HOOKS.session, {
-      email: uniq("adm"),
+      email: tu("adm"),
       role: "admin",
     });
     expect(r.status).toBe(200);
@@ -210,25 +412,14 @@ describe("hooks", () => {
     expect(me.auth?.method).toBe("test");
   });
 
-  it("session: bad input is 400; spaces are refused until P3", async () => {
-    expect(
-      (await hook(on(), TEST_HOOKS.session, { email: "nope", role: "member" }))
-        .status,
-    ).toBe(400);
-    expect(
-      (
-        await hook(on(), TEST_HOOKS.session, {
-          email: uniq("sp"),
-          role: "member",
-          spaces: [{ spaceId: "s", role: "viewer" }],
-        })
-      ).status,
-    ).toBe(400);
-  });
-
   it("otp/latest: the code just sent; it verifies; then the hook 404s", async () => {
     const m = mailer();
-    const e = { ...direct(), ...ON, ...m.env } as Env;
+    const e = {
+      ...direct(),
+      ...ON,
+      TEST_DOMAIN: "x.com",
+      ...m.env,
+    } as Env;
     const guest = uniq("g", "x.com");
     await seedUser(guest, "guest");
     const req = await call(e, AUTH.codeRequest, {
@@ -259,6 +450,22 @@ describe("hooks", () => {
     );
   });
 
+  it("on, but a code outside TEST_DOMAIN: no plaintext copy", async () => {
+    const m = mailer();
+    const e = { ...direct(), ...ON, ...m.env } as Env;
+    const guest = uniq("g", "x.com");
+    await seedUser(guest, "guest");
+    const puts = vi.spyOn(env.OAUTH_KV, "put");
+    await call(e, AUTH.codeRequest, {
+      body: { email: guest },
+      headers: { "x-oa-request": "1", "sec-fetch-site": "same-origin" },
+    });
+    expect(m.codeFor(guest)).toBeTruthy();
+    expect(puts.mock.calls.map((c) => c[0])).not.toContainEqual(
+      expect.stringMatching(/^test:otp:/),
+    );
+  });
+
   it("off: a full code flow writes no plaintext anywhere", async () => {
     const m = mailer();
     const e = { ...direct(), ...m.env } as Env;
@@ -282,7 +489,7 @@ describe("hooks", () => {
     expect(rows).not.toContain(guest);
   });
 
-  it("oauth-client: a real grant that works on /mcp and is revocable", async () => {
+  it("oauth-client: a real grant for p5-oauth@TEST_DOMAIN that works on /mcp and is revocable", async () => {
     const e = on();
     const r = await hook(e, TEST_HOOKS.oauthClient);
     expect(r.status).toBe(200);
@@ -302,7 +509,7 @@ describe("hooks", () => {
     expect((await mcp(accessToken)).status).toBe(200);
     const uid = (
       await env.DB.prepare("select id from users where email = ?")
-        .bind(`p5-oauth@${env.APP_HOST}`)
+        .bind(`p5-oauth@${TD}`)
         .first<{ id: string }>()
     )?.id;
     await revokeAllGrants(e, uid as string);

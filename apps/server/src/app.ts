@@ -25,6 +25,12 @@ import { publicHome, withInstanceMeta } from "./routes/shell.js";
 import { mountTestHooks, testHooksOn } from "./test-hooks/index.js";
 import { VERSION } from "./version.gen.js";
 
+// Folds to `false` at bundle time in release builds (build-flags.d.ts), which
+// leaves no reference to test-hooks/, so esbuild drops the module. (A
+// non-minified bundle keeps `if (false)` bodies, so gate the reference.)
+const hooks = typeof __OA_TEST_HOOKS_ALLOWED__ !== "undefined" &&
+  __OA_TEST_HOOKS_ALLOWED__ === true && { mountTestHooks, testHooksOn };
+
 export const ROBOTS = "User-agent: *\nDisallow: /";
 
 export const methodNotAllowed = () =>
@@ -97,14 +103,14 @@ export function createApp(
       version: VERSION,
       // Only where hooks are on (the redline bundle); absent means off, so
       // production's /healthz bytes are unchanged.
-      ...(testHooksOn(c.env) ? { testHooks: true } : {}),
+      ...(hooks && hooks.testHooksOn(c.env) ? { testHooks: true } : {}),
       ...(installId ? { installId } : {}),
     });
   });
   app.get("/robots.txt", (c) => c.text(ROBOTS));
   // Public, outside SESSION_PATHS: no session read, no D1.
   // /__test/* (P5 hooks): before any session read; 404 unless enabled.
-  mountTestHooks(app);
+  if (hooks) hooks.mountTestHooks(app);
   app.get(SKILL_PATH, serveSkill);
   app.get(UPGRADE_PATH, serveUpgrade);
   // Public sign-in offering (#359 AuthProviders): config only, before the

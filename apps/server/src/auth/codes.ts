@@ -55,6 +55,12 @@ export const CODE_LIMITS = {
   failsPerIpPerHour: 30,
 } as const;
 
+// `false` in release builds (build-flags.d.ts): no reference to test-hooks/.
+const recordOtp =
+  typeof __OA_TEST_HOOKS_ALLOWED__ !== "undefined" &&
+  __OA_TEST_HOOKS_ALLOWED__ === true &&
+  recordTestOtp;
+
 const TTL_MS = CODE_POLICY.ttlSec * 1000;
 const MAX_U32_UNBIASED = 4_200_000_000; // largest multiple of 10^8 below 2^32
 // Compared when no row matched, so the work is the same either way.
@@ -351,7 +357,7 @@ export async function deliverCode(
       }),
     { kind: "code", now, caps: [] },
   );
-  if (sent) await recordTestOtp(env, ek, code);
+  if (recordOtp && sent) await recordOtp(env, to, ek, code);
   if (!sent) {
     await stmt(
       env.DB,

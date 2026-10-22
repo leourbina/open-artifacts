@@ -95,6 +95,8 @@ export interface Env {
   CODE_EMAILS_PER_DAY?: string;
   /** "1" turns the /__test/* hooks on (staging only; also needs the build flag and the key). */
   TEST_HOOKS?: string;
+  /** The only email domain /__test/* acts on, compared exactly (lowercase). Unset: hooks off. */
+  TEST_DOMAIN?: string;
   /** Invite and share emails per UTC day, instance-wide (1..100000, default 100); set per install by Platform. */
   EMAIL_DAILY_CAP?: string;
   /** "1" on hosted installs (Me.instance.hosted). */
