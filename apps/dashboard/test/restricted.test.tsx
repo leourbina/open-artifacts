@@ -88,6 +88,18 @@ it("Dan shows the badge and the reason, and the group cause can't be cleared her
   ).toBeVisible();
 });
 
+it("the Restricted badge uses the warning-soft tone, not the role badge's outline", async () => {
+  mountHosted("/settings/members");
+  const badges = within(await row("Dan Contractor")).getAllByText("Restricted");
+  const owner = within(await row("Ada Lovelace")).getByText("Owner");
+  for (const b of badges) {
+    expect(b).toHaveAttribute("data-tone", "warning");
+    expect(b.className).toContain("bg-[var(--oa-warning-soft)]");
+    expect(b.className).toContain("text-[var(--oa-warning)]");
+    expect(b.className).not.toBe(owner.className);
+  }
+});
+
 it("an admin restricts Bob by hand: confirm, then PUT, then the badge", async () => {
   const seen = calls("PUT");
   mountHosted("/settings/members");

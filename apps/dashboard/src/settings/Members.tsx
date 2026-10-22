@@ -215,6 +215,10 @@ const lastSeen = (iso: string | null) => {
 const ROW =
   "grid min-h-[52px] grid-cols-[minmax(0,1fr)_112px_136px_72px] items-center gap-[10px] border-0 border-t border-border py-[var(--oa-space-2)] max-[600px]:grid-cols-[minmax(0,1fr)_112px]";
 
+/** The Restricted badge: warning-soft, unlike the neutral role badges. */
+const RESTRICTED_BADGE =
+  "border-transparent bg-[var(--oa-warning-soft)] text-[var(--oa-warning)]";
+
 /** "Bob" from "Bob Builder", else the email's local part. */
 const firstName = (m: Member) =>
   m.name?.trim().split(/\s+/)[0] || m.email.split("@")[0];
@@ -244,7 +248,11 @@ function Row({ m, you, hosted }: { m: Member; you: boolean; hosted: boolean }) {
             <span className="truncate">{label}</span>
             {you && <span className="text-muted-foreground"> (you)</span>}
             {why && (
-              <Badge variant="outline" className="flex-none max-[600px]:hidden">
+              <Badge
+                variant="outline"
+                data-tone="warning"
+                className={`flex-none max-[600px]:hidden ${RESTRICTED_BADGE}`}
+              >
                 Restricted
               </Badge>
             )}
@@ -277,7 +285,14 @@ function Row({ m, you, hosted }: { m: Member; you: boolean; hosted: boolean }) {
       <span className={muted}>
         {why && (
           <span className="mb-[4px] hidden items-center gap-[6px] max-[600px]:flex">
-            <Badge variant="outline">Restricted</Badge> {why}
+            <Badge
+              variant="outline"
+              data-tone="warning"
+              className={RESTRICTED_BADGE}
+            >
+              Restricted
+            </Badge>{" "}
+            {why}
           </span>
         )}
         {lastSeen(m.lastSeenAt)}
