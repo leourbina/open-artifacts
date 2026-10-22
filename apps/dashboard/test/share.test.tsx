@@ -273,6 +273,41 @@ describe("share panel review fixes", () => {
     await waitFor(() => expect(bodies).toEqual([{ visibility: "public" }]));
   });
 
+  // #418: making an artifact public must not turn anonymous writes off.
+  it("making a private artifact with anonymous writes public keeps them on", async () => {
+    const owned = fixtures.artifacts.find((a) => a.id === OWNED);
+    server.use(
+      http.get(`*${R.artifact(OWNED)}`, () =>
+        HttpResponse.json({ ...owned, allowAnonymousWrites: true }),
+      ),
+    );
+    const bodies = patches();
+    mount(panel(OWNED));
+    const group = await screen.findByRole("radiogroup", { name: "Visibility" });
+    fireEvent.click(within(group).getByRole("radio", { name: "Public" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save visibility" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Make public" }));
+    await waitFor(() => expect(bodies).toEqual([{ visibility: "public" }]));
+  });
+
+  it("leaving public still turns anonymous writes off", async () => {
+    const bodies = patches();
+    mount(panel(POLL));
+    const group = await screen.findByRole("radiogroup", { name: "Visibility" });
+    await waitFor(() =>
+      expect(
+        screen.getByRole("checkbox", { name: "Allow anonymous writes" }),
+      ).toBeChecked(),
+    );
+    fireEvent.click(within(group).getByRole("radio", { name: "Team" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save visibility" }));
+    await waitFor(() =>
+      expect(bodies).toEqual([
+        { visibility: "team", allowAnonymousWrites: false },
+      ]),
+    );
+  });
+
   it("a denied or missing clipboard toasts Couldn't copy with the link", async () => {
     Object.defineProperty(navigator, "clipboard", {
       value: { writeText: () => Promise.reject(new Error("denied")) },
