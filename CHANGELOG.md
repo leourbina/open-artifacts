@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.36.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.35.0...v0.36.0) (2026-10-23)
+
+
+### Features
+
+* **dashboard:** reset a member's Google link (P4 Task 16) ([#452](https://github.com/open-artifacts-ai/open-artifacts/issues/452)) ([0b3595e](https://github.com/open-artifacts-ai/open-artifacts/commit/0b3595edf3c86932f11b7cb153e62112577413e7))
+* **dashboard:** say access is gone on a space-scoped 404 ([#491](https://github.com/open-artifacts-ai/open-artifacts/issues/491)) ([9a0e93b](https://github.com/open-artifacts-ai/open-artifacts/commit/9a0e93b4feff65477fbb6ac49e3dd21922b8e85f))
+
+
+### Bug Fixes
+
+* **copy:** say manually, not by hand ([#487](https://github.com/open-artifacts-ai/open-artifacts/issues/487)) ([d0c0905](https://github.com/open-artifacts-ai/open-artifacts/commit/d0c090567970f6e8a3192e4d74540a925247f556))
+* **release:** deploy-prod's test-hooks check gets its temp dir under --ci; hosted signing skips before the key ceremony ([#495](https://github.com/open-artifacts-ai/open-artifacts/issues/495)) ([ea3db24](https://github.com/open-artifacts-ai/open-artifacts/commit/ea3db24f5a213a189418b9c81a58d0093d8384b7))
+* **shared:** Google-linked hosted mock members have a lastSeenAt ([#496](https://github.com/open-artifacts-ai/open-artifacts/issues/496)) ([c26a40a](https://github.com/open-artifacts-ai/open-artifacts/commit/c26a40a25e548deaee636f1e5c0bc9b6d80ceeb2))
+
 ## [0.35.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.34.0...v0.35.0) (2026-10-23)
 
 
