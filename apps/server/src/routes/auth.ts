@@ -29,7 +29,6 @@ import {
 import { signInMode } from "../auth/sign-in.js";
 import { ApiError, toErrorResponse } from "../http/errors.js";
 import { FAVICON_TAGS } from "../http/head.js";
-import { signInAudit } from "../services/audit.js";
 import { onGoogleSignIn } from "../services/directory.js";
 import { admit } from "../services/identity.js";
 import {
@@ -136,7 +135,10 @@ export function mountAuth(app: AppType): void {
         accessProvider,
         c.req.raw,
       );
-      const user = await upsertOnLogin(c.env, email, name);
+      // The admission and its auth.signin audit row commit in one batch.
+      const user = await upsertOnLogin(c.env, email, name, {
+        provider: "access",
+      });
       if (!user) {
         logOidcFail("no_access");
         logAuth({ provider: "access", outcome: "refused", stage: "no_access" });
@@ -158,9 +160,6 @@ export function mountAuth(app: AppType): void {
         }),
         c.env,
       );
-      // upsertOnLogin (users.ts) is the Access admission; its audit row
-      // follows it here, before the session is handed out.
-      await signInAudit(c.env, user.id, "access").run();
       logAuth({ provider: "access", outcome: "ok", uid: user.id });
       return redirect(next, [...clear, sess]);
     } catch (e) {

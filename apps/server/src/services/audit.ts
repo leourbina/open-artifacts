@@ -8,7 +8,10 @@ import {
   newId,
   type Page,
 } from "@oa/shared";
+import { sql } from "drizzle-orm";
 import { deriveKey } from "../auth/keys.js";
+import { getDb } from "../db/client.js";
+import { auditEvents } from "../db/schema.js";
 import { stmt } from "../db/stmt.js";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
@@ -90,6 +93,21 @@ export const signInAudit = (
   audit(env, "auth.signin", { type: "user", id: userId }, userActor(userId), {
     detail: { provider, ...(tenant ? { tenant } : {}) },
   });
+
+/**
+ * signInAudit keyed by the (normalized) email, for an admission that writes
+ * the user row in the same batch and so has no id yet (Access's
+ * upsertOnLogin): the subselect reads the row the batch just wrote. A drizzle
+ * insert (drizzle's raw `run` can't join a D1 batch with parameters), in the
+ * table's column order.
+ */
+export const signInAuditByEmail = (env: Env, email: string, provider: string) =>
+  getDb(env)
+    .insert(auditEvents)
+    .select(
+      sql`select ${newId()}, ${Date.now()}, 'user', u.id, 'auth.signin', 'user', u.id, null, ${JSON.stringify({ provider })}
+        from users u where u.email = ${email}`,
+    );
 
 // ------------------------------------------------------------------- read
 
@@ -194,15 +212,22 @@ type Cursor = { a: number; i: string };
  */
 export type CursorScope = { kind: "list" | "export"; filters: string };
 
+/** Query params that narrow the audit listings. None yet; a filter added later joins this list. */
+export const AUDIT_FILTER_KEYS: readonly string[] = [];
+
 /**
- * Every query param that narrows a listing, in a canonical order: all of them
- * but `cursor` and `limit` (page size, not a filter). Sorted by name, values
- * in request order, so `?a=1&b=2` and `?b=2&a=1` bind the same cursor.
+ * The request's filters in a canonical order: only known filter names (others,
+ * such as a cache-buster, are ignored, so they never break page 2). Sorted by
+ * name, values in request order, so `?a=1&b=2` and `?b=2&a=1` bind the same
+ * cursor.
  */
-export function auditFilters(q: Record<string, string[]>): string {
+export function auditFilters(
+  q: Record<string, string[]>,
+  keys: readonly string[] = AUDIT_FILTER_KEYS,
+): string {
   return JSON.stringify(
     Object.keys(q)
-      .filter((k) => k !== "cursor" && k !== "limit")
+      .filter((k) => keys.includes(k))
       .sort()
       .map((k) => [k, q[k] ?? []]),
   );

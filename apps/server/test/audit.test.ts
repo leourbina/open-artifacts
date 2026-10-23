@@ -447,6 +447,20 @@ describe("R.audit and R.auditExport", () => {
     expect((await api(app, R.auditExport, null)).status).toBe(401);
   });
 
+  it("a restricted (capped) admin gets 404 on /audit and /audit/export", async () => {
+    const capped = await login(uniq("cappedadmin"), "admin");
+    await env.DB.prepare("update users set restricted_manual = 1 where id = ?")
+      .bind(capped.userId)
+      .run();
+    expect((await api(app, R.audit, capped.cookie)).status).toBe(404);
+    expect((await api(app, R.auditExport, capped.cookie)).status).toBe(404);
+    // The same admin uncapped reads it.
+    await env.DB.prepare("update users set restricted_manual = 0 where id = ?")
+      .bind(capped.userId)
+      .run();
+    expect((await api(app, R.audit, capped.cookie)).status).toBe(200);
+  });
+
   it("owners and admins page newest first with a cursor", async () => {
     const tag = uniq("page");
     const base = Date.now() + 10_000_000;
@@ -560,19 +574,22 @@ describe("audit cursors are opaque and bound", () => {
     expect((await listAudit(env, c, 1)).items).toHaveLength(1);
   });
 
-  it("a cursor replayed with different filters, or on the other listing, is 400", async () => {
+  it("a cursor binds known filters only, and is 400 on the other listing", async () => {
     const c = await firstCursor();
-    expect(
-      await status(`${R.audit}?limit=1&action=auth.signin&cursor=${c}`),
-    ).toBe(400);
     expect(await status(`${R.auditExport}?cursor=${c}`)).toBe(400);
-    const f = await firstCursor(`${R.audit}?limit=1&b=2&a=1`);
-    // Canonical order: the same filters in another order still verify.
-    expect(await status(`${R.audit}?a=1&limit=1&b=2&cursor=${f}`)).toBe(200);
-    expect(await status(`${R.audit}?limit=1&cursor=${f}`)).toBe(400);
+    // Unknown params (a cache-buster) are not filters: page 2 still works.
+    expect(await status(`${R.audit}?limit=1&_=123&cursor=${c}`)).toBe(200);
+    // Known filters bind in a canonical order; a change is a different scope.
+    const keys = ["a", "b"];
     expect(
-      auditFilters({ b: ["2"], a: ["1"], cursor: ["x"], limit: ["1"] }),
-    ).toBe(auditFilters({ a: ["1"], b: ["2"] }));
+      auditFilters({ b: ["2"], a: ["1"], cursor: ["x"], limit: ["1"] }, keys),
+    ).toBe(auditFilters({ a: ["1"], b: ["2"] }, keys));
+    expect(auditFilters({ a: ["1"] }, keys)).not.toBe(
+      auditFilters({ a: ["2"] }, keys),
+    );
+    expect(auditFilters({ _: ["123"], a: ["1"] }, keys)).toBe(
+      auditFilters({ a: ["1"] }, keys),
+    );
   });
 
   it("a tampered cursor is 400", async () => {
