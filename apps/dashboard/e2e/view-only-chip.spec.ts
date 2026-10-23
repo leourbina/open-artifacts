@@ -22,19 +22,25 @@ for (const scheme of ["light", "dark"] as const)
           await page.getByRole("heading", { name: "Q4 report" }).waitFor();
           const chip = page.getByText("View only", { exact: true });
           if (dataWrite) await expect(chip).toHaveCount(0);
-          else {
-            await chip.focus();
-            await expect(
-              page.getByRole("tooltip", {
-                name: "You can view this. Ask a space manager to make you an editor.",
-              }),
-            ).toBeVisible();
-          }
+          else await expect(chip).toBeVisible();
           await expect(page.getByRole("button", { name: "Share" })).toHaveCount(
             0,
           );
           await page.screenshot({
             path: info.outputPath(`view-only-${who}-${scheme}-${width}.png`),
+          });
+          if (dataWrite) return;
+          await chip.focus();
+          await expect(
+            page.getByRole("tooltip", {
+              name: "You can view this. Ask a space manager to make you an editor.",
+            }),
+          ).toBeVisible();
+          await page.waitForFunction(() =>
+            document.getAnimations().every((x) => x.playState !== "running"),
+          );
+          await page.screenshot({
+            path: info.outputPath(`view-only-tooltip-${scheme}-${width}.png`),
           });
         });
     });
