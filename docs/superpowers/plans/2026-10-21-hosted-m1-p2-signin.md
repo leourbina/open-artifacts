@@ -1259,9 +1259,9 @@ Rollback: `oa:setup --auth access` (vars only).
 ## Needs user
 
 1. Pick the hosted domain.
-2. Create the Google Cloud project, the multi-tenant sign-in client (basic scopes, redirect `https://auth.<hosted>/google/callback`) and a staging client.
-3. Consent screen and brand verification (name, logo, homepage, privacy and terms URLs; domain proven in Search Console).
-4. A **separate Google client for P3's Directory API** scopes, so sign-in stays on basic scopes (D5).
+2. Create **two Google Cloud projects, staging and prod** (not one project with a staging client). In each, a multi-tenant sign-in client with basic scopes. Redirects: staging `https://auth.open-artifacts-staging.app/google/callback`, prod `https://auth.open-artifacts.app/google/callback`.
+3. Consent screen per project. **Staging** stays in Testing mode with the test users listed, so it needs no verification. **Prod** gets brand verification (name, logo, homepage, privacy and terms URLs; domain proven in Search Console).
+4. In each project, a **separate Directory API client** for P3's scopes, so sign-in stays on basic scopes (D5).
 5. DNS: `auth.<hosted>`, the Search Console TXT record, Email Service SPF/DKIM/DMARC.
 6. **Turnstile widget** for the hosted domain (site key and secret) for domain codes (D2).
 7. **Public Suffix List submission** for the hosted domain and the content domain (M4).
