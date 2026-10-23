@@ -301,8 +301,10 @@ function Viewer({
             explicitVersion={explicitVersion}
             authed={authed}
             onShare={() => setPanel(true, "share")}
-            panelOpen={panelOpen}
-            onPanel={() => setPanel(!panelOpen)}
+            versionsOpen={panelOpen && tab === "versions"}
+            onVersions={() =>
+              setPanel(!(panelOpen && tab === "versions"), "versions")
+            }
             live={slot}
             newer={newer}
             gone={gone !== null}
@@ -360,6 +362,7 @@ function Viewer({
         {panelOpen && authed && !chromeless && (
           <SidePanel
             artifact={artifact}
+            version={version}
             tab={tab}
             onTab={(t) => setPanel(true, t)}
             onClose={() => setPanel(false)}

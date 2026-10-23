@@ -227,7 +227,7 @@ for (const width of [1280, 390])
         ).toBeVisible();
         if (width >= 640) {
           await expect(
-            page.getByRole("button", { name: "Versions" }),
+            page.getByRole("button", { name: /^Version: v/ }),
           ).toBeDisabled();
           await expect(
             page.getByRole("button", { name: "Full screen" }),

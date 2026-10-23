@@ -1,10 +1,4 @@
-import {
-  type ArtifactSummary,
-  AUTH,
-  R,
-  type UserRef,
-  viewerPath,
-} from "@oa/shared";
+import { type ArtifactSummary, AUTH, R, viewerPath } from "@oa/shared";
 import { Button, Dialog, FormatIcon } from "@oa/ui";
 import {
   Badge,
@@ -30,11 +24,12 @@ import {
   useDeleteArtifact,
   usePatchArtifact,
   useVersionInfo,
-  useVersions,
 } from "../api/queries";
 import { accessLabel, useCan, useHosted } from "../auth/permissions";
 import { toast } from "../layout/toast";
+import { relativeTime } from "../library/time";
 import { VersionsDot } from "./LiveChip";
+import { VERSIONS_PANEL_ID } from "./panels/Versions";
 import { fullPath } from "./paths";
 import { ICON, LINK_BTN, SM, TXT, VisibilityBadge } from "./ui";
 import { useOfferUndo } from "./useOfferUndo";
@@ -43,7 +38,6 @@ const TITLE_MAX = 200;
 /** The page h1: Design's 20/600. */
 const H1 =
   "min-w-0 truncate text-[length:var(--oa-text-xl)] leading-tight font-semibold";
-const who = (u: UserRef) => u.name ?? u.email ?? "Unknown";
 
 function EditableTitle({ artifact }: { artifact: ArtifactSummary }) {
   const patch = usePatchArtifact(artifact.id);
@@ -125,8 +119,8 @@ export function TitleBar({
   explicitVersion,
   authed,
   onShare,
-  panelOpen,
-  onPanel,
+  versionsOpen,
+  onVersions,
   live,
   newer = false,
   gone = false,
@@ -136,18 +130,19 @@ export function TitleBar({
   explicitVersion: boolean;
   authed: boolean;
   onShare: () => void;
-  panelOpen: boolean;
-  onPanel: () => void;
-  /** The live-version chip, right after the version picker. */
+  /** The Versions panel is open (the chip's aria-expanded). */
+  versionsOpen: boolean;
+  /** The chip and ••• Versions: open the Versions panel, or close it. */
+  onVersions: () => void;
+  /** The live-version chip, right after the version chip. */
   live?: ReactNode;
-  /** A newer version exists and isn't shown: a dot on Versions (••• on phones). */
+  /** A newer version exists and isn't shown: a dot on the version chip. */
   newer?: boolean;
   /** Deleted or no access: Full screen, Versions and Share are disabled. */
   gone?: boolean;
 }) {
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const versions = useVersions(artifact.id, { enabled: authed });
   const del = useDeleteArtifact(artifact.id);
   const offerUndo = useOfferUndo();
   const [confirm, setConfirm] = useState(false);
@@ -180,7 +175,14 @@ export function TitleBar({
   const next = viewerPath(artifact.id, explicitVersion ? version : undefined);
   const full = fullPath(artifact.id);
   const openFull = () => window.open(full, "_blank", "noopener");
-  const label = `v${version}${version === artifact.currentVersion ? " · Current" : ""}`;
+  // "v24 · Current" following the latest; "v21 · 1 day ago" pinned to an older one.
+  const suffix =
+    version === artifact.currentVersion
+      ? "Current"
+      : info
+        ? relativeTime(info.createdAt)
+        : "";
+  const label = `v${version}${suffix ? ` · ${suffix}` : ""}`;
   const items: (
     | "separator"
     | { label: string; danger?: boolean; onSelect: () => void }
@@ -260,38 +262,24 @@ export function TitleBar({
       </div>
       <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2 max-[600px]:flex-[1_1_100%]">
         {authed && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <ShButton
-                variant="outline"
-                size="xs"
-                className={SM}
-                aria-label={`Version: ${label}`}
-              >
-                {label}
-              </ShButton>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className={TXT}>
-              {(versions.data ?? []).map((x) => (
-                <DropdownMenuItem
-                  key={x.version}
-                  // Picking Current follows it again (live updates swap in).
-                  onSelect={() =>
-                    go(
-                      viewerPath(
-                        artifact.id,
-                        x.version === artifact.currentVersion
-                          ? undefined
-                          : x.version,
-                      ),
-                    )
-                  }
-                >
-                  {`v${x.version}${x.version === artifact.currentVersion ? " (current)" : ""} · ${x.agent?.name ?? who(x.createdBy)}`}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <ShButton
+            variant="outline"
+            size="xs"
+            className={SM}
+            aria-label={`Version: ${label}`}
+            aria-expanded={versionsOpen}
+            aria-controls={versionsOpen ? VERSIONS_PANEL_ID : undefined}
+            data-versions-chip
+            disabled={gone}
+            onClick={onVersions}
+          >
+            v{version}
+            {/* Phones show the number alone. */}
+            {suffix && (
+              <span className="-ml-1 whitespace-pre max-[600px]:hidden">{` · ${suffix}`}</span>
+            )}
+            {newer && !gone && <VersionsDot />}
+          </ShButton>
         )}
         {live}
         {/* On phones it moves into the ••• menu, which only signed-in
@@ -319,19 +307,6 @@ export function TitleBar({
             </a>
           </ShButton>
         )}
-        {authed && (
-          <ShButton
-            variant="outline"
-            size="xs"
-            className={`${SM} max-[600px]:hidden`}
-            aria-expanded={panelOpen}
-            disabled={gone}
-            onClick={onPanel}
-          >
-            Versions
-            {newer && !gone && <VersionsDot />}
-          </ShButton>
-        )}
         {canShare && (
           <ShButton size="xs" className={SM} disabled={gone} onClick={onShare}>
             Share
@@ -350,11 +325,6 @@ export function TitleBar({
                       aria-label="More actions"
                     >
                       •••
-                      {newer && !gone && (
-                        <span className="min-[601px]:hidden">
-                          <VersionsDot />
-                        </span>
-                      )}
                     </ShButton>
                   </DropdownMenuTrigger>
                 </TooltipTrigger>
@@ -372,7 +342,7 @@ export function TitleBar({
                 <DropdownMenuItem
                   className="min-[601px]:hidden"
                   disabled={gone}
-                  onSelect={onPanel}
+                  onSelect={onVersions}
                 >
                   Versions
                 </DropdownMenuItem>

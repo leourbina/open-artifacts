@@ -107,7 +107,8 @@ describe("one request per submit", () => {
 
   it("Versions restore", async () => {
     const count = track();
-    const router = mount(`${viewerPath(OWNED)}?panel=open&tab=versions`);
+    // Restore sits on the viewed row.
+    const router = mount(`${viewerPath(OWNED, 1)}?panel=open&tab=versions`);
     await screen.findByText("Initial version");
     fireEvent.click(screen.getByRole("button", { name: "Restore" }));
     const confirm = await screen.findByRole("button", {

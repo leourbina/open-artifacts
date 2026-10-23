@@ -100,12 +100,14 @@ test("detail: xs buttons (24px) at 1280, 32px and a More menu at 390", async ({
   await expect(share).toBeVisible();
   expect((await share.boundingBox())?.height).toBe(24);
   await expect(page.getByRole("link", { name: "Full screen" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Versions" })).toBeVisible();
+  // The version chip is the only versions control (#471).
+  await expect(page.getByRole("button", { name: /^Version: / })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Versions" })).toHaveCount(0);
 
   await page.setViewportSize(MOBILE);
   expect((await share.boundingBox())?.height).toBe(32);
   await expect(page.getByRole("link", { name: "Full screen" })).toBeHidden();
-  await expect(page.getByRole("button", { name: "Versions" })).toBeHidden();
+  await expect(page.getByRole("button", { name: /^Version: / })).toBeVisible();
   // One row: the version picker, Share and More share a line.
   const ys = await Promise.all(
     [/^Version:/, /^Share$/, /^More actions$/].map(async (name) =>
@@ -157,9 +159,9 @@ test("panel: no ring on the container, the active tab holds the focus, 1px borde
 }) => {
   await page.setViewportSize(DESKTOP);
   await page.goto(`/a/${ID}`);
-  await page.getByRole("button", { name: "Versions" }).click();
+  await page.getByRole("button", { name: "Share" }).click();
   const panel = page.getByRole("complementary", { name: "Side panel" });
-  const tab = page.getByRole("tab", { name: "Versions" });
+  const tab = page.getByRole("tab", { name: "Share" });
   await expect(tab).toBeFocused();
   const ring = (el: import("@playwright/test").Locator) =>
     el.evaluate((n) => {

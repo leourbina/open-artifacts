@@ -135,10 +135,8 @@ describe("viewer shell", () => {
   it("version picker navigates to /a/$id/v/$v", async () => {
     const router = mount(viewerPath(OWNED));
     await frame();
-    fireEvent.keyDown(screen.getByRole("button", { name: /^Version:/ }), {
-      key: "Enter",
-    });
-    fireEvent.click(await screen.findByRole("menuitem", { name: /^v1 / }));
+    fireEvent.click(screen.getByRole("button", { name: /^Version:/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^v1, / }));
     await waitFor(() =>
       expect(router.state.location.pathname).toBe(viewerPath(OWNED, 1)),
     );
