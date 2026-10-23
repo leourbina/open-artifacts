@@ -7,8 +7,11 @@ import {
   TabsList,
   TabsTrigger,
 } from "@oa/ui/shadcn";
+import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { ApiClientError } from "../api/client";
+import { qk } from "../api/queries";
 import { useHosted } from "../auth/permissions";
 import { useMe } from "../auth/useMe";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
@@ -117,6 +120,36 @@ export function Library({ scope }: { scope: Scope }) {
     agent: s.agent,
     space: space?.id,
   });
+  // A space-scoped 404: the caller's role in it is gone (or the space is), and
+  // /me is stale. Refetch /me so it leaves the sidebar; the notice outlives the
+  // param it clears, until Back to Library.
+  const qc = useQueryClient();
+  const [revoked, setRevoked] = useState<{ id: string; name: string } | null>(
+    null,
+  );
+  const gone =
+    space !== null &&
+    q.error instanceof ApiClientError &&
+    q.error.status === 404;
+  const spaceId = space?.id;
+  const spaceNameNow = space?.name ?? "";
+  useEffect(() => {
+    if (!gone || !spaceId) return;
+    setRevoked((r) =>
+      r?.id === spaceId ? r : { id: spaceId, name: spaceNameNow },
+    );
+  }, [gone, spaceId, spaceNameNow]);
+  // One /me refetch per revoked space, not one per re-render of it.
+  const refetchedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!revoked || refetchedFor.current === revoked.id) return;
+    refetchedFor.current = revoked.id;
+    void qc.invalidateQueries({ queryKey: qk.me });
+  }, [revoked, qc]);
+  useEffect(() => {
+    if (spaceId && revoked && spaceId !== revoked.id) setRevoked(null);
+  }, [spaceId, revoked]);
+  const showRevoked = gone || revoked !== null;
   const items = uniqueItems(q.data?.pages);
   // Remember agents seen so far so others stay selectable while one is filtered.
   const seenAgents = useRef(new Set<string>());
@@ -181,7 +214,7 @@ export function Library({ scope }: { scope: Scope }) {
           set({ view: v });
         }}
       />
-      {q.isError && (
+      {q.isError && !showRevoked && (
         <div className={ALERT} role="alert">
           <span className="flex-1">
             <strong>Couldn't load the library.</strong> Your artifacts are safe;
@@ -241,6 +274,28 @@ export function Library({ scope }: { scope: Scope }) {
     </>
   );
 
+  const revokedName = revoked?.name || space?.name || "this space";
+  const revokedPanel = (
+    <Empty
+      icon={<LibraryIcon />}
+      title={`You no longer have access to ${revokedName}.`}
+      description="Your role in it changed or the space was deleted. Ask a space manager if you think this is a mistake."
+      action={
+        <Button
+          size="sm"
+          variant="outline"
+          className="text-[length:var(--oa-text-sm)]"
+          onClick={() => {
+            setRevoked(null);
+            go("/", {});
+          }}
+        >
+          Back to Library
+        </Button>
+      }
+    />
+  );
+
   return (
     <section className={PAGE}>
       <div className={BAR}>
@@ -292,7 +347,7 @@ export function Library({ scope }: { scope: Scope }) {
         )}
         {/* Not a tab stop: Tab goes from the tabs straight to the filters. */}
         <TabsContent value={scope} tabIndex={-1} className={PAGE}>
-          {results}
+          {showRevoked ? revokedPanel : results}
         </TabsContent>
       </Tabs>
     </section>

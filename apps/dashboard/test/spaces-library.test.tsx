@@ -1,10 +1,12 @@
 // Hosted P4 Task 5: the library's space filter, in the URL and in the query.
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { HttpResponse, http } from "msw";
 import { expect, it } from "vitest";
 import { calls, installHarness, mount, mountHosted } from "./harness";
 
 installHarness();
 
+const PERSONAL = "Ab3dEfGhJk4mNpQr";
 const listCalls = (seen: { path: string; search: URLSearchParams }[]) =>
   seen.filter((c) => c.path === "/api/v1/artifacts");
 
@@ -82,4 +84,78 @@ it("off the library, ?space= belongs to the page: it's never cleared (the header
   expect(
     screen.queryByRole("button", { name: "Search everywhere" }),
   ).toBeNull();
+});
+
+// -- a space-scoped 404 (the role is gone, /me is stale)
+
+const ENG = "SpEngNpQrSt2uVwX";
+const notFound = http.get("*/api/v1/artifacts", ({ request }) =>
+  new URL(request.url).searchParams.has("spaceId")
+    ? HttpResponse.json(
+        { error: { code: "not_found", message: "Space not found" } },
+        { status: 404 },
+      )
+    : undefined,
+);
+const serverError = http.get("*/api/v1/artifacts", ({ request }) =>
+  new URL(request.url).searchParams.has("spaceId")
+    ? HttpResponse.json(
+        { error: { code: "internal", message: "Boom" } },
+        { status: 500 },
+      )
+    : undefined,
+);
+const REVOKED =
+  "Your role in it changed or the space was deleted. Ask a space manager if you think this is a mistake.";
+
+it("a 404 on a space-scoped list says access is gone, with Back to Library", async () => {
+  const router = mountHosted(`/?space=${ENG}`, true, undefined, [notFound]);
+  expect(
+    await screen.findByText("You no longer have access to Engineering."),
+  ).toBeVisible();
+  expect(screen.getByText(REVOKED)).toBeVisible();
+  expect(screen.queryByText("Couldn't load the library.")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Back to Library" }));
+  await screen.findAllByText("Q4 report");
+  expect(router.state.location.search).toEqual({});
+  expect(
+    screen.queryByText("You no longer have access to Engineering."),
+  ).toBeNull();
+});
+
+it("the 404 refetches /me", async () => {
+  const seen = calls("GET");
+  mountHosted(`/?space=${ENG}`, true, undefined, [notFound]);
+  await screen.findByText("You no longer have access to Engineering.");
+  await waitFor(() =>
+    expect(seen.filter((c) => c.path === "/api/v1/me").length).toBeGreaterThan(
+      1,
+    ),
+  );
+});
+
+it("without a space name the notice says this space", async () => {
+  mountHosted(
+    `/?space=${PERSONAL}`,
+    true,
+    (m) => ({ ...m, user: { ...m.user, name: null } }),
+    // Personal reads as scope=mine with no spaceId: 404 every list.
+    [
+      http.get("*/api/v1/artifacts", () =>
+        HttpResponse.json(
+          { error: { code: "not_found", message: "Space not found" } },
+          { status: 404 },
+        ),
+      ),
+    ],
+  );
+  expect(
+    await screen.findByText("You no longer have access to this space."),
+  ).toBeVisible();
+});
+
+it("other errors keep Couldn't load the library", async () => {
+  mountHosted(`/?space=${ENG}`, true, undefined, [serverError]);
+  expect(await screen.findByText("Couldn't load the library.")).toBeVisible();
+  expect(screen.queryByText(/You no longer have access/)).toBeNull();
 });
