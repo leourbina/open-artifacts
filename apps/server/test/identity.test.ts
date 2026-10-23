@@ -385,6 +385,72 @@ describe("resetIdentity", () => {
     expect(await subjectOf(uid)).toBeNull();
   });
 
+  it("admin → admin: 403 owner_only, nothing changed", async () => {
+    const email = uniq("peer");
+    const uid = await seedUser(email, "admin", { googleSub: `P-${email}` });
+    await createPat(env, uid, "t");
+    await grant(uid);
+    await expect(resetIdentity(env, admin, uid)).rejects.toMatchObject({
+      code: "owner_only",
+    });
+    expect(await subjectOf(uid)).toBe(`P-${email}`);
+    expect((await rowOf(uid)).e).toBe(0);
+    expect(await pats(uid)).toBe(1);
+    expect(await grants(uid)).toBe(1);
+  });
+
+  it("owner → admin: resets", async () => {
+    const email = uniq("adm");
+    const uid = await seedUser(email, "admin", { googleSub: `A-${email}` });
+    await createPat(env, uid, "t");
+    await resetIdentity(env, { id: "o", role: "owner" } as Member, uid);
+    expect(await subjectOf(uid)).toBeNull();
+    expect((await rowOf(uid)).e).toBe(1);
+    expect(await pats(uid)).toBe(0);
+  });
+
+  it("admin → member: resets", async () => {
+    const email = uniq("mem");
+    const uid = await seedUser(email, "member", { googleSub: `M-${email}` });
+    await resetIdentity(env, admin, uid);
+    expect(await subjectOf(uid)).toBeNull();
+  });
+
+  it("admin → admin without a link: 404, not owner_only", async () => {
+    const uid = await seedUser(uniq("bareadm"), "admin");
+    await expect(resetIdentity(env, admin, uid)).rejects.toMatchObject({
+      code: "not_found",
+    });
+  });
+
+  it("target promoted to admin between the precheck and the batch: 404, D1 unchanged", async () => {
+    const email = uniq("race");
+    const uid = await seedUser(email, "member", { googleSub: `Q-${email}` });
+    await createPat(env, uid, "t");
+    // revokeAllGrants (KV) runs between the precheck and the D1 batch.
+    const promote = () =>
+      env.DB.prepare("update users set role = 'admin' where id = ?")
+        .bind(uid)
+        .run();
+    const kv = new Proxy(env.OAUTH_KV, {
+      get(t, k) {
+        const v = Reflect.get(t, k);
+        if (k !== "list" || typeof v !== "function") return v;
+        return async (...a: unknown[]) => {
+          await promote();
+          return v.apply(t, a);
+        };
+      },
+    });
+    await expect(
+      resetIdentity({ ...env, OAUTH_KV: kv } as Env, admin, uid),
+    ).rejects.toMatchObject({ code: "not_found" });
+    expect((await rowOf(uid)).role).toBe("admin");
+    expect(await subjectOf(uid)).toBe(`Q-${email}`);
+    expect((await rowOf(uid)).e).toBe(0);
+    expect(await pats(uid)).toBe(1);
+  });
+
   it("revokes the member's PATs", async () => {
     const email = uniq("resetpat");
     const uid = await seedUser(email, "member", { googleSub: `RP-${email}` });
