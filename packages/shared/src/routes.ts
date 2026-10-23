@@ -198,9 +198,16 @@ export const R = {
     `/api/v1/members/${seg(id)}/identities/${seg(provider)}`,
   /** GET ?cursor&limit -> Page<AuditEvent> (org owner, admin). */
   audit: "/api/v1/audit",
-  /** GET -> NDJSON of AuditEvent. */
+  /**
+   * GET ?cursor -> NDJSON of AuditEvent, newest first, at most 5000 events
+   * (10 pages of 500) per request. When more remain, the response carries
+   * AUDIT_NEXT_CURSOR_HEADER; pass it back as ?cursor to continue.
+   */
   auditExport: "/api/v1/audit/export",
 } as const;
+
+/** R.auditExport response header naming the cursor of the next request (absent when done). */
+export const AUDIT_NEXT_CURSOR_HEADER = "X-OA-Next-Cursor";
 
 export const AUTH = {
   login: "/auth/login",

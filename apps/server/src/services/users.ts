@@ -1,6 +1,7 @@
 import { normalizeEmail } from "@oa/auth-core";
 import { type Member, newId, type Role, type UserRef } from "@oa/shared";
 import { eq } from "drizzle-orm";
+import type { BatchItem } from "drizzle-orm/batch";
 import { withCap } from "../auth/authz.js";
 import { authConfig } from "../auth/config.js";
 import { capOf } from "../auth/policy.js";
@@ -8,6 +9,7 @@ import { getDb } from "../db/client.js";
 import { shares, users } from "../db/schema.js";
 import { stmt } from "../db/stmt.js";
 import type { Env } from "../env.js";
+import { signInAuditByEmail } from "./audit.js";
 
 type UserRow = typeof users.$inferSelect;
 type NameFields = Pick<UserRow, "email" | "name" | "displayName">;
@@ -125,26 +127,47 @@ export function googleLinkStmts(
 }
 
 /** Insert, or on email conflict force `role` (if given) and refresh name/last_seen_at. */
+/**
+ * The write plus, when given, the auth.signin audit statement in one D1
+ * batch: both commit or neither does.
+ */
+type AuditItem = ReturnType<typeof signInAuditByEmail>;
+
+async function withAudit<T>(
+  env: Env,
+  q: BatchItem<"sqlite"> & PromiseLike<T>,
+  auditQ: AuditItem | null,
+): Promise<T> {
+  if (!auditQ) return await q;
+  const [out] = await getDb(env).batch([q, auditQ]);
+  return out as T;
+}
+
 async function upsert(
   env: Env,
   email: string,
   name: string | null,
   role: Role,
   forceRole: boolean,
+  auditQ: AuditItem | null = null,
 ): Promise<UserRow> {
   const now = Date.now();
   const set: Partial<UserRow> = { lastSeenAt: now };
   if (name !== null) set.name = name;
   if (forceRole) set.role = role;
-  const [row] = await insertUser(env, {
-    email,
-    name: name ?? defaultName(email),
-    role,
-    createdAt: now,
-    lastSeenAt: now,
-  })
-    .onConflictDoUpdate({ target: users.email, set })
-    .returning();
+  const [row] = await withAudit(
+    env,
+    insertUser(env, {
+      email,
+      name: name ?? defaultName(email),
+      role,
+      createdAt: now,
+      lastSeenAt: now,
+    })
+      .onConflictDoUpdate({ target: users.email, set })
+      .returning(),
+    auditQ,
+  );
   if (!row) throw new Error("user upsert returned no row");
   return row;
 }
@@ -153,13 +176,17 @@ export async function upsertOnLogin(
   env: Env,
   email: string,
   name: string | null,
+  /** Audit the sign-in (auth.signin) in the same batch as each admitting write. */
+  signIn?: { provider: string },
 ): Promise<Member | null> {
   // Non-ASCII / malformed emails are no-access: never folded onto an account.
   const e = normalizeEmail(email);
   if (!e) return null;
+  // Only the admitting writes below carry it: a refusal writes nothing.
+  const auditQ = signIn ? signInAuditByEmail(env, e, signIn.provider) : null;
   const owner = normalizeEmail(env.OWNER_EMAIL ?? "");
   if (owner && e === owner)
-    return toMember(await upsert(env, e, name, "owner", true));
+    return toMember(await upsert(env, e, name, "owner", true, auditQ));
 
   const db = getDb(env);
   const existing = (
@@ -171,11 +198,11 @@ export async function upsertOnLogin(
     if (existing.status !== "active") return null;
     const set: Partial<UserRow> = { lastSeenAt: Date.now() };
     if (name !== null) set.name = name;
-    const [row] = await db
-      .update(users)
-      .set(set)
-      .where(eq(users.id, existing.id))
-      .returning();
+    const [row] = await withAudit(
+      env,
+      db.update(users).set(set).where(eq(users.id, existing.id)).returning(),
+      auditQ,
+    );
     return row ? toMember(row) : null;
   }
 
@@ -186,7 +213,7 @@ export async function upsertOnLogin(
     .limit(1);
   if (shared.length === 0) return null;
   // Concurrent first logins race on the unique email: the loser just refreshes.
-  return toMember(await upsert(env, e, name, "guest", false));
+  return toMember(await upsert(env, e, name, "guest", false, auditQ));
 }
 
 /** Dev-only: create or update the user with exactly this role. */

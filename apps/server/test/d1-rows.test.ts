@@ -4,7 +4,10 @@ import { env } from "cloudflare:workers";
 import { R } from "@oa/shared";
 import { beforeAll, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
+import { authConfig } from "../src/auth/config.js";
+import { admit } from "../src/services/identity.js";
 import { indexVersionOrThrow } from "../src/services/search.js";
+import { direct, seedUser, uniq } from "./auth-helpers.js";
 import { api, login } from "./helpers.js";
 
 /** env.DB whose run/batch results add their meta.rows_written to `rows.n`. */
@@ -70,4 +73,21 @@ it("publish, new version and index alarm write the #248 row counts", async () =>
     .bind(id)
     .first<{ body: string }>();
   expect(hit?.body).toContain("beta");
+});
+
+it("a Google sign-in writes the user touch plus the auth.signin audit row", async () => {
+  const sub = `sub-${crypto.randomUUID()}`;
+  const email = uniq("rows-signin");
+  await seedUser(email, "member", { googleSub: sub });
+  rows.n = 0;
+  const r = await admit(counted, authConfig(direct()), {
+    provider: "google",
+    subject: sub,
+    email,
+    name: "R",
+    tenant: "a.com",
+  });
+  expect(r.ok).toBe(true);
+  // users touch 1 + audit_events 2 (table, audit_events_at_idx).
+  expect(rows.n).toBe(3);
 });
