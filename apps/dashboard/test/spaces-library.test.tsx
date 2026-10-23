@@ -71,3 +71,15 @@ it("search carries spaceId", async () => {
     ).toBe(true),
   );
 });
+
+it("off the library, ?space= belongs to the page: it's never cleared (the header search mounts everywhere)", async () => {
+  // /settings/spaces?space=<id> names a space the admin may have no role in.
+  const router = mountHosted("/settings/profile?space=SpCliNpQrSt4uVwX");
+  // /me has answered once the sidebar's Spaces section shows.
+  await screen.findByRole("navigation", { name: "Spaces" });
+  expect(router.state.location.search).toEqual({ space: "SpCliNpQrSt4uVwX" });
+  // The header search isn't scoped there either.
+  expect(
+    screen.queryByRole("button", { name: "Search everywhere" }),
+  ).toBeNull();
+});

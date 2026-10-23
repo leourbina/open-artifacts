@@ -29,7 +29,7 @@ mode="${1:-}"
 EMAIL_SWITCH=(--team --yes-paid --email-domain mail.leourbina.com)
 case "$mode" in
   install) mode_args=(--ci "${EMAIL_SWITCH[@]}" --browser --plan paid) ;;
-  preflight) mode_args=(--check --strict --upgrade "${EMAIL_SWITCH[@]}" --browser --plan paid) ;; # read-only; fails if absent or drifted
+  preflight) mode_args=(--check --strict --upgrade "${EMAIL_SWITCH[@]}" --browser --plan paid) ;; # read-only; skips if not installed, fails if drifted or partial
   upgrade) mode_args=(--ci --upgrade "${EMAIL_SWITCH[@]}" --browser --plan paid) ;;
   cleanup) mode_args=(--ci --revoke-ci-tokens) ;;
   demo-install) mode_args=(--ci --json --solo --no-email --yes-paid) ;;
@@ -70,6 +70,11 @@ leaks() {
   [[ -n "$an_trim" && "$1" == *"$an_trim"* ]] || [[ -n "${an_raw//[[:space:]]/}" && "$1" == *"$an_raw"* ]]
 }
 bad=0
+# preflight only: "not installed" (no D1, R2 and KV, and no Worker) is told apart
+# from drift or a partial install by the check lines setup already emits
+# (resources: "missing: D1 .., R2 .., KV .."; deploy: "Worker .. never deployed").
+# The wrapper owns the call: setup reports per step and has no whole-instance verdict.
+all_missing=0 no_worker=0 step_err=0
 {
   echo "| step | status |"
   echo "|---|---|"
@@ -85,7 +90,30 @@ while IFS= read -r line; do
   status=$(jq -r '.status // empty' <<<"$line" 2>/dev/null || true)
   [[ -z "$status" ]] && continue
   echo "| $step | $status |" >>"$summary"
-  case "$status" in error | action_required) bad=1 ;; esac
+  case "$status" in error | action_required)
+    bad=1
+    [[ "$step" == setup-exit ]] || step_err=1 # strict's exit 2 alone is not a step error
+    ;;
+  esac
+  if [[ "$step" == resources && "$status" == todo ]]; then
+    msg=$(jq -r '.message // ""' <<<"$line" 2>/dev/null || true)
+    [[ "$msg" == *"missing: D1 "*", R2 "*", KV "* ]] && all_missing=1
+  fi
+  if [[ "$step" == deploy && "$status" == todo ]]; then
+    msg=$(jq -r '.message // ""' <<<"$line" 2>/dev/null || true)
+    [[ "$msg" == *"never deployed"* ]] && no_worker=1
+  fi
 done < <(run_setup)
 
+if [[ "$mode" == preflight ]]; then
+  if ((all_missing && no_worker && !step_err)); then
+    msg="not installed: run the Ops - prod install workflow first"
+    echo "{\"step\":\"preflight\",\"status\":\"skipped\",\"message\":\"$msg\"}"
+    echo "| preflight | skipped ($msg) |" >>"$summary"
+    echo "::notice::prod $PROD_NAME $msg; skipping upgrade and cleanup"
+    echo "installed=false" >>"${GITHUB_OUTPUT:-/dev/null}"
+    exit 0
+  fi
+  echo "installed=true" >>"${GITHUB_OUTPUT:-/dev/null}"
+fi
 exit "$bad"

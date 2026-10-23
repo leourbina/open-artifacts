@@ -1,4 +1,4 @@
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useNavigate, useRouterState, useSearch } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo } from "react";
 import type { SpaceRef } from "../api/contract";
 import { useHosted } from "../auth/permissions";
@@ -16,13 +16,22 @@ export interface CurrentSpace {
  * `/me` (`personalSpaceId` and `spaces`): an id that is neither the caller's
  * personal space nor one of their shared spaces is cleared from the URL, with
  * no lookup request. Nothing is resolved while the `spaces` feature is off.
+ *
+ * Only on the library's routes: elsewhere `?space=` belongs to that page
+ * (/settings/spaces?space=<id> names spaces the caller may have no role in),
+ * and the header search, mounted everywhere, must leave it alone.
  */
+const LIBRARY = new Set(["/", "/mine", "/shared", "/team", "/search"]);
+
 export const useCurrentSpace = (): CurrentSpace => {
   const { features, spaces, personalSpaceId } = useHosted();
   const me = useMe();
   const raw = useSearch({ strict: false }) as { space?: string };
   const navigate = useNavigate();
-  const id = raw.space;
+  const path = useRouterState({ select: (s) => s.location.pathname });
+  const id = LIBRARY.has(path.toLowerCase().replace(/\/+$/, "") || "/")
+    ? raw.space
+    : undefined;
 
   const space = useMemo((): SpaceRef | null => {
     if (!id || !features.includes("spaces")) return null;

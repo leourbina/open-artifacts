@@ -230,7 +230,8 @@ jobs:
   # generated temp config), never staging.
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Queue runs take 10.5 to 13.5 min, and 15 cancelled passing suites. Sharding is the real fix.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:

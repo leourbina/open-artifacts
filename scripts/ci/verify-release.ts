@@ -1,6 +1,6 @@
 // After a release deploys: prod /healthz and the landing's oa-version meta must
 // both show the released version, else open a `blocker` issue and fail.
-// Usage: node --experimental-strip-types scripts/ci/verify-release.ts --tag vX.Y.Z --repo owner/name [--demo-url URL]
+// Usage: node --experimental-strip-types scripts/ci/verify-release.ts --tag vX.Y.Z --repo owner/name [--demo-url URL] [--skip-prod]
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
@@ -98,6 +98,8 @@ export async function verifyRelease(
   o: Deps & {
     tag: string;
     demoUrl?: string;
+    /** deploy-prod skipped because prod is not installed: do not check it. */
+    skipProd?: boolean;
     timeoutMs?: number;
     intervalMs?: number;
   },
@@ -106,7 +108,12 @@ export async function verifyRelease(
     throw new Error(`tag must look like vX.Y.Z, got ${JSON.stringify(o.tag)}`);
   const want = o.tag.slice(1);
   const checks: [string, () => Promise<string | undefined>][] = [
-    ["prod", () => healthVersion(o, PROD, "prod", want)],
+    ...(o.skipProd
+      ? []
+      : ([["prod", () => healthVersion(o, PROD, "prod", want)]] as [
+          string,
+          () => Promise<string | undefined>,
+        ][])),
     ["landing", () => landingVersion(o, want)],
     ...(o.demoUrl
       ? ([
@@ -280,13 +287,14 @@ async function main(argv: string[]) {
   const repo = arg("--repo");
   if (!tag || !repo) {
     console.error(
-      "usage: verify-release.ts --tag vX.Y.Z --repo owner/name [--demo-url URL]",
+      "usage: verify-release.ts --tag vX.Y.Z --repo owner/name [--demo-url URL] [--skip-prod]",
     );
     return 2;
   }
   const r = await verifyRelease({
     tag,
     demoUrl: arg("--demo-url"),
+    skipProd: argv.includes("--skip-prod"),
     fetch,
     sleep: (ms) => new Promise((res) => setTimeout(res, ms)),
     now: Date.now,

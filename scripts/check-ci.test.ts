@@ -97,7 +97,7 @@ describe("ci.yml", () => {
   it("e2e job runs both Playwright suites locally, with cached browsers", () => {
     const job = w.jobs.e2e;
     expect(job["timeout-minutes"]).toBeGreaterThan(0);
-    expect(job["timeout-minutes"]).toBeLessThanOrEqual(20);
+    expect(job["timeout-minutes"]).toBeLessThanOrEqual(25);
     // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
     const steps: any[] = job.steps;
     const runs = steps.map((s) => s.run ?? "");

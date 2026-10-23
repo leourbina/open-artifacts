@@ -71,6 +71,18 @@ describe("verifyRelease", () => {
     expect(w.hits).toContain(SITE);
   });
 
+  it("skipProd (prod not installed) never touches prod and still checks the landing", async () => {
+    const w = world({
+      prod: () => new Error("must not be called"),
+      site: () => ({ body: page("0.5.0") }),
+    });
+    expect(
+      await verifyRelease({ tag: "v0.5.0", skipProd: true, ...w.deps }),
+    ).toEqual({ ok: true, problems: [] });
+    expect(w.hits).not.toContain(`${PROD}/healthz`);
+    expect(w.hits).toContain(SITE);
+  });
+
   it("polls healthz until the version arrives (within 3 minutes)", async () => {
     const w = world({
       prod: (t) => ({ body: { version: t >= 60_000 ? "0.5.0" : "0.4.0" } }),
