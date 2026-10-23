@@ -39,8 +39,10 @@ import { isEmbed, isFullPath } from "../embed";
 import { SearchBox } from "../library/SearchBox";
 import { EdgePanel } from "../pages/Edge";
 import { NotPublic } from "../pages/NotPublic";
+import { useDeparted } from "../settings/departed";
 import { MEASURE } from "../settings/ui";
 import { SpaceSwitcher } from "../spaces/SpaceSwitcher";
+import { ATTENTION, AttentionDot } from "./AttentionDot";
 import { CpuBanner } from "./CpuBanner";
 import { DisplayNamePrompt } from "./DisplayNamePrompt";
 import { QuotaBanner } from "./QuotaBanner";
@@ -273,11 +275,14 @@ function Link({
   active,
   icon,
   label,
+  attention = false,
 }: {
   to: string;
   active: boolean;
   icon: ReactNode;
   label: string;
+  /** A lasting dot: something there needs an admin. */
+  attention?: boolean;
 }) {
   const go = useGo();
   return (
@@ -286,10 +291,12 @@ function Link({
         <a
           href={to}
           aria-current={active ? "page" : undefined}
+          aria-label={attention ? `${label}${ATTENTION}` : undefined}
           onClick={(e) => go(e, to)}
         >
           {icon}
           <span>{label}</span>
+          {attention && <AttentionDot />}
         </a>
       </SidebarMenuButton>
     </SidebarMenuItem>
@@ -305,6 +312,8 @@ function Sidebar({ me, path }: { me: Me | null; path: string }) {
   const { space } = useSearch({ strict: false }) as { space?: string };
   const inSpace = Boolean(space) && hasFeature(me, "spaces");
   const update = instanceUpdate(me);
+  // Departed people with artifacts to transfer (org admins, hosted).
+  const departed = useDeparted(me);
   return (
     <ShSidebar variant="inset">
       <SidebarHeader
@@ -373,6 +382,7 @@ function Sidebar({ me, path }: { me: Me | null; path: string }) {
                         }
                         icon={I.gear}
                         label="Settings"
+                        attention={departed.length > 0}
                       />
                     )}
                   </>

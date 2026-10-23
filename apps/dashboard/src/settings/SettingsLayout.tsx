@@ -2,7 +2,9 @@ import type { Role } from "@oa/shared";
 import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { type ReactNode, useEffect } from "react";
 import { useMe } from "../auth/useMe";
+import { ATTENTION, AttentionDot } from "../layout/AttentionDot";
 import { AppLink } from "../library/AppLink";
+import { useDeparted } from "./departed";
 import { canAdminSpaces } from "./spaces/access";
 import { MEASURE } from "./ui";
 
@@ -55,6 +57,8 @@ export function SettingsLayout() {
   const directory = me?.instance.directory;
   // Compare the normalized path: the router matches case-insensitively, ignoring a trailing slash.
   const here = path.toLowerCase().replace(/\/+$/, "");
+  // Departed people with artifacts to transfer light the Members tab.
+  const departed = useDeparted(state.status === "authed" ? state.me : null);
   if (role === "guest") return <Outlet />; // no chrome; the gate redirects
   return (
     // The 880px measure, centered in the shell gutter.
@@ -78,10 +82,18 @@ export function SettingsLayout() {
           <AppLink
             key={t.to}
             href={t.to}
-            className={TAB}
+            className={`${TAB} gap-[6px]`}
             aria-current={here === t.to ? "page" : undefined}
+            aria-label={
+              t.to === "/settings/members" && departed.length > 0
+                ? `${t.label}${ATTENTION}`
+                : undefined
+            }
           >
             {t.label}
+            {t.to === "/settings/members" && departed.length > 0 && (
+              <AttentionDot />
+            )}
           </AppLink>
         ))}
       </nav>
