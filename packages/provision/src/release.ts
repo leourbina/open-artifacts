@@ -500,12 +500,38 @@ export function openReleaseRecord(
   exactKeys(d, [TEST_HOOKS_DEFINE], "defines");
   if (typeof d[TEST_HOOKS_DEFINE] !== "boolean")
     throw new Error(`${TEST_HOOKS_DEFINE} must be a boolean literal`);
+  // N6: the record's own invariants, here, so no caller can forget them.
+  if (r.env !== env)
+    throw new Error(
+      `the release record is for env ${String(r.env)}, not ${env}`,
+    );
+  if (r.variant !== "release" && r.variant !== "redline")
+    throw new Error("the release record has no valid variant");
+  if (d[TEST_HOOKS_DEFINE] !== (r.variant === "redline"))
+    throw new Error(
+      `${TEST_HOOKS_DEFINE} must be ${r.variant === "redline"} for the ${r.variant} variant`,
+    );
+  if (!isReleaseVersion(r.version))
+    throw new Error("the release record has no valid version");
+  for (const k of [
+    "sha256",
+    "templateSha256",
+    "migrationsSha256",
+    "welcomeSha256",
+  ] as const)
+    if (typeof r[k] !== "string" || !/^[0-9a-f]{64}$/.test(r[k] as string))
+      throw new Error(`the release record has no valid ${k}`);
   if (!Array.isArray(r.assets))
     throw new Error("the release record has no assets list");
   for (const a of r.assets) {
     if (!a || typeof a !== "object" || Array.isArray(a))
       throw new Error("an assets entry is not an object");
     exactKeys(a, ["path", "sha256", "size"], "an assets entry");
+    assertAssetPath(a.path);
+    if (!Number.isSafeInteger(a.size) || a.size < 0)
+      throw new Error(`asset ${a.path} has no valid size`);
+    if (typeof a.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(a.sha256))
+      throw new Error(`asset ${a.path} has no valid sha256`);
   }
   return r as unknown as ReleaseRecord;
 }
@@ -649,6 +675,9 @@ export async function readTreeHardened(
           continue;
         }
         if (!e.isFile()) throw new Error(`${r} is not a regular file`);
+        // N4: opened by full path, so an intermediate directory swapped
+        // after its listing is not seen here; the second walk's directory
+        // and file stamps (dev, ino, size) are what catch it. Keep both walks.
         const q = join(root, r);
         const fh = await openNoFollow(q, r, constants.O_NONBLOCK);
         try {

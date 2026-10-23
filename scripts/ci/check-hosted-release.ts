@@ -6,6 +6,7 @@
 import { resolve } from "node:path";
 import {
   assertNoHookRoutes,
+  assertSameConfigButDefine,
   bundleSha256,
   readArtifact,
 } from "./release-artifact.ts";
@@ -19,6 +20,7 @@ async function main(): Promise<void> {
   const a = await readArtifact(resolve(dir));
   // The real build tree-shakes the hooks out of release: no route string left.
   assertNoHookRoutes(a.release);
+  assertSameConfigButDefine(a.configs.release, a.configs.redline);
   const b = bundleSha256({
     mainModule: a.manifest.mainModule,
     modules: a.release,

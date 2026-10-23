@@ -63,19 +63,20 @@ Namespace `oa-spike-staging`, dispatch Worker `oa-s-spike-dispatch` (account scr
 ## Hosted release files (T3b)
 
 - The stored record is `{ "record": "<canonicalJson(record)>", "signature": "<base64url>" }`. The signature covers `"oa-release-v1\n" + env + "\n" + record` (the exact string). Readers verify that string, parse it refusing duplicate keys (objects built with a null prototype), and require it to re-serialize byte for byte.
-- CI signs and never uploads to Cloudflare. On a stable release, `release-please.yml` runs `hosted-guard` (tag to one commit on `main`, equal to `package.json`), `hosted-build` (both variants and the release files, `manifest.json`), `hosted-check` (every hash, `check-no-test-hooks` on the release bundle), `hosted-sign` (a matrix over `hosted-staging` and `hosted-prod`; no install, node only, key on stdin) and `hosted-attach` (the tars and `.sig.json` files on the GitHub release).
-- `publishRelease` (laptop, provisioning token; Task 8 wires the CLI) verifies a tar and its `.sig.json` against `RELEASE_PUBKEY[env]` and copies exactly those bytes to `oa-<p>-releases/releases/<version>/<variant>/`, every object `If-None-Match: *`. A version is never overwritten.
+- CI signs and never uploads to Cloudflare. On a stable release, `release-please.yml` runs `hosted-guard` (tag to one commit on `main`, equal to `package.json`), `hosted-build` (both variants and the release files, `manifest.json`), `hosted-check` (every hash, `check-no-test-hooks` on the release bundle), `hosted-sign-staging` and `hosted-sign-prod` (environments `hosted-staging` and `hosted-prod`; checkout, setup-node at an exact 22.x.y and download-artifact only, no install, key on stdin) and `hosted-attach-staging` / `hosted-attach-prod` (each rebuilds its env's tars and `.sig.json` files, verifies them and attaches them to the GitHub release; refused if that env's assets are already there).
+- `publishRelease` (laptop, provisioning token; Task 8 wires the CLI) verifies a tar and its `.sig.json` against `RELEASE_PUBKEY[env]` and copies exactly those bytes to `oa-<p>-releases/releases/<version>/<variant>/`, every object `If-None-Match: *`. A version is never overwritten; a partial one (objects byte-identical to the tar, no record) is resumed. `publishRelease` and `publishFloor` first need `probeR2Conditionals(cf, env)` to pass in the same process (it proves the REST object routes enforce `If-None-Match` and `If-Match`).
+- The key ceremony's one-line PR sets the public keys in both `packages/provision/src/internal/gates.ts` and `scripts/ci/release-pubkeys.ts` (a test pins them equal); the key jobs then refuse a signing key that is not the pinned one.
 - The signed floor `releases/floor.json` (`{ env, seq, minVersion, revoked }`, signed over `"oa-release-floor-v1\n" + env + "\n"` plus the record) gates `create`. The platform D1 `release_floor.floor_seq` is only a cache (raised with `MAX`); the anchor is `FLOOR_MIN_SEQ[env]`. `publishFloor` needs a higher `seq`, the same or a higher `minVersion` and a superset of `revoked`, and writes with `If-Match`.
 
 ### First-create checklist (per env)
 
 1. Apply every platform D1 migration to `oa-<p>-platform`, in order: `apps/platform-db/migrations/0001_installs.sql`, then `0002_release_floor.sql` (the `release_floor` cache). Without 0002, create fails closed on the floor_seq read.
 2. Key ceremony done: `RELEASE_PUBKEY[env]` set in gates.ts (and `PROD_UNLOCKED` for prod).
-3. `publishFloor` the env's first signed floor (`seq` >= `FLOOR_MIN_SEQ[env]`).
+3. Sign the env's first floor with the `hosted-floor` workflow (dispatch on `main`: `env`, `seq` >= `FLOOR_MIN_SEQ[env]`, `min_version`, `revoked`), download its `floor-<env>-<seq>` artifact, and `publishFloor` it.
 4. `publishRelease` the signed tar and `.sig.json` from the GitHub release for each variant the env takes.
 
 ### Release checklist: revoking a version or raising the floor
 
-1. Sign the new floor (next `seq`, `minVersion`, `revoked` keeping every earlier entry) and run `publishFloor` for each env.
+1. For each env, dispatch the `hosted-floor` workflow on `main` (next `seq`, `min_version`, `revoked` keeping every earlier entry), download the `floor-<env>-<seq>` artifact and run `publishFloor` with it.
 2. In the same change, bump `FLOOR_MIN_SEQ[env]` in `packages/provision/src/internal/gates.ts` to the new `seq`, so a replayed older floor is refused even if the D1 cache was reset.
 3. Merge and release; creates refuse any floor below the new anchor.

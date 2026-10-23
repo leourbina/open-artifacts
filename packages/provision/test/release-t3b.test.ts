@@ -21,6 +21,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   assertNoHookRoutes,
   assertSameConfigButDefine,
+  readTreeHardened as libReadTree,
   packUstar,
 } from "../../../scripts/ci/release-artifact.ts";
 import { buildBundle } from "../src/bundle.js";
@@ -30,6 +31,7 @@ import { canonicalJson } from "../src/platform.js";
 import {
   FLOOR_KEY,
   PublishRefused,
+  probeR2Conditionals,
   publishFloor,
   publishRelease,
   r2ReleaseReader,
@@ -242,6 +244,15 @@ function setup() {
   return { fake, cf, bucket };
 }
 
+/** M2: publishRelease and publishFloor need a passed probe for this cf and env. */
+async function probed<T extends ReturnType<typeof setup>>(s: T): Promise<T> {
+  await probeR2Conditionals(s.cf, "staging");
+  await probeR2Conditionals(s.cf, "prod");
+  s.fake.log.length = 0;
+  s.fake.r2Log.length = 0;
+  return s;
+}
+
 const floorOf = (o: Partial<FloorRecord> = {}): FloorRecord => ({
   env: "staging",
   seq: 1,
@@ -265,7 +276,12 @@ const r2Writes = (fake: FakeCf) =>
 
 // ---------- A: the hardened reader ----------
 
-describe("A: readTreeHardened", () => {
+// M3: the same fixtures against both readers (provision's and the signer's
+// node:* copy), with the same outcome.
+describe.each([
+  ["provision readTreeHardened", readTreeHardened],
+  ["scripts/ci copy", libReadTree],
+] as const)("A: %s", (_impl, readTree) => {
   const tree = () => {
     const d = mkdtempSync(join(tmpdir(), "oa-hard-"));
     mkdirSync(join(d, "sub"));
@@ -275,7 +291,7 @@ describe("A: readTreeHardened", () => {
   };
 
   it("reads regular files, sorted, with their bytes", async () => {
-    const got = await readTreeHardened(tree());
+    const got = await readTree(tree());
     expect(got.map((f) => [f.path, new TextDecoder().decode(f.bytes)])).toEqual(
       [
         ["a.txt", "a"],
@@ -287,15 +303,15 @@ describe("A: readTreeHardened", () => {
   it("refuses a symlink to a file and to a directory", async () => {
     const d = tree();
     symlinkSync(join(d, "a.txt"), join(d, "link.txt"));
-    expect((await fails(readTreeHardened(d))).message).toMatch(/symlink/);
+    expect((await fails(readTree(d))).message).toMatch(/symlink/);
     const d2 = tree();
     symlinkSync(join(d2, "sub"), join(d2, "subl"));
-    expect((await fails(readTreeHardened(d2))).message).toMatch(/symlink/);
+    expect((await fails(readTree(d2))).message).toMatch(/symlink/);
     const out = mkdtempSync(join(tmpdir(), "oa-out-"));
     writeFileSync(join(out, "secret"), "s");
     const d3 = tree();
     symlinkSync(out, join(d3, "escape"));
-    expect((await fails(readTreeHardened(d3))).message).toMatch(/symlink/);
+    expect((await fails(readTree(d3))).message).toMatch(/symlink/);
   });
 
   it("refuses a hardlink (nlink > 1)", async () => {
@@ -303,13 +319,13 @@ describe("A: readTreeHardened", () => {
     const other = mkdtempSync(join(tmpdir(), "oa-hl-"));
     writeFileSync(join(other, "x"), "outside");
     linkSync(join(other, "x"), join(d, "x.txt"));
-    expect((await fails(readTreeHardened(d))).message).toMatch(/hardlink/);
+    expect((await fails(readTree(d))).message).toMatch(/hardlink/);
   });
 
   it("refuses a file swapped between the two walks", async () => {
     const d = tree();
     const e = await fails(
-      readTreeHardened(d, {
+      readTree(d, {
         // A new inode with the same name, size and bytes.
         afterRead: async () => {
           writeFileSync(join(d, "a.tmp"), "a");
@@ -323,7 +339,7 @@ describe("A: readTreeHardened", () => {
   it("refuses a file grown between the two walks", async () => {
     const d = tree();
     const e = await fails(
-      readTreeHardened(d, {
+      readTree(d, {
         afterRead: async () => writeFileSync(join(d, "a.txt"), "aaaa"),
       }),
     );
@@ -333,7 +349,7 @@ describe("A: readTreeHardened", () => {
   it("refuses a directory swapped between the two walks", async () => {
     const d = tree();
     const e = await fails(
-      readTreeHardened(d, {
+      readTree(d, {
         // A new directory inode with the same name and contents.
         afterRead: async () => {
           mkdirSync(join(d, "new"));
@@ -350,7 +366,7 @@ describe("A: readTreeHardened", () => {
   it("refuses a file added between the two walks", async () => {
     const d = tree();
     const e = await fails(
-      readTreeHardened(d, {
+      readTree(d, {
         afterRead: async () => writeFileSync(join(d, "new.txt"), "n"),
       }),
     );
@@ -360,7 +376,7 @@ describe("A: readTreeHardened", () => {
   it("refuses dotfiles and dot-directories through the path check", async () => {
     const d = tree();
     writeFileSync(join(d, ".env"), "x");
-    expect((await fails(readTreeHardened(d))).message).toMatch(/asset path/);
+    expect((await fails(readTree(d))).message).toMatch(/asset path/);
   });
 });
 
@@ -488,7 +504,8 @@ describe("A: buildBundle builds both variants from one dry-run config", () => {
   // byte-identical; check-no-test-hooks is the behavioural proof. Needs the
   // server's generated files (`pnpm --filter @oa/server run gen`), else skipped.
   const GENERATED = existsSync(new URL("apps/server/src/version.gen.ts", ROOT));
-  it.skipIf(!GENERATED)(
+  // N5: the no-test-hooks CI job sets OA_REQUIRE_REAL_BUILD=1, so it never skips there.
+  it.skipIf(!GENERATED && process.env.OA_REQUIRE_REAL_BUILD !== "1")(
     "real build: the bundles differ and release holds no hook route string",
     async () => {
       const root = new URL(".", ROOT).pathname;
@@ -878,7 +895,7 @@ describe("D: publishRelease", () => {
   });
 
   it("uploads exactly the verified bytes under releases/<version>/<variant>/, each If-None-Match: *, the record last", async () => {
-    const s = setup();
+    const s = await probed(setup());
     seedFloor(s);
     const files = good();
     await publishRelease({
@@ -908,7 +925,7 @@ describe("D: publishRelease", () => {
   });
 
   it("a second publish of the same version is refused with zero writes", async () => {
-    const s = setup();
+    const s = await probed(setup());
     seedFloor(s);
     await publishRelease({
       cf: s.cf,
@@ -931,12 +948,13 @@ describe("D: publishRelease", () => {
   });
 
   it("an object written concurrently is never overwritten (If-None-Match)", async () => {
-    const s = setup();
+    const s = await probed(setup());
     seedFloor(s);
     const cf = {
       ...s.cf,
       r2ObjectList: async () => ({ objects: [], truncated: false }),
     };
+    await probeR2Conditionals(cf, "staging");
     s.fake.r2Seed(
       s.bucket,
       "releases/0.34.0/release/welcome/welcome.md",
@@ -957,7 +975,7 @@ describe("D: publishRelease", () => {
   });
 
   it("staging takes redline; prod refuses it", async () => {
-    const s = setup();
+    const s = await probed(setup());
     seedFloor(s);
     await publishRelease({
       cf: s.cf,
@@ -1190,7 +1208,7 @@ describe("D: publishRelease", () => {
     ],
   ];
   it.each(refusals)("refuses %s with zero writes", async (_n, mk, re) => {
-    const s = setup();
+    const s = await probed(setup());
     seedFloor(s);
     seedFloor(s, signFloor(floorOf({ env: "prod" })), "prod");
     const o = mk();
@@ -1207,7 +1225,7 @@ describe("D: publishRelease", () => {
   });
 
   it("refuses a record over ASSET_LIMITS before reading the tar", async () => {
-    const s = setup();
+    const s = await probed(setup());
     seedFloor(s);
     const rec = {
       ...recordOf(),
@@ -1232,7 +1250,7 @@ describe("D: publishRelease", () => {
   });
 
   it("refuses while RELEASE_PUBKEY is the placeholder", async () => {
-    const s = setup();
+    const s = await probed(setup());
     seedFloor(s);
     const before = G.RELEASE_PUBKEY;
     const { RELEASE_PUBKEY_PLACEHOLDER } = await vi.importActual<
@@ -1282,7 +1300,7 @@ describe("D: publishRelease", () => {
       /revoked/,
     ],
   ])("checks the floor: refuses %s", async (_n, seed, re) => {
-    const s = setup();
+    const s = await probed(setup());
     seed(s);
     const e = await fails(
       publishRelease({
@@ -1297,7 +1315,7 @@ describe("D: publishRelease", () => {
   });
 
   it("refuses a floor below FLOOR_MIN_SEQ (valid signature)", async () => {
-    const s = setup();
+    const s = await probed(setup());
     seedFloor(s, signFloor(floorOf({ seq: 2 })));
     G.FLOOR_MIN_SEQ = { staging: 3, prod: 1 };
     try {
@@ -1365,7 +1383,7 @@ describe("E: the signed floor", () => {
   });
 
   it("publishFloor writes the first floor with If-None-Match: *", async () => {
-    const s = setup();
+    const s = await probed(setup());
     await publishFloor({
       cf: s.cf,
       env: "staging",
@@ -1377,7 +1395,7 @@ describe("E: the signed floor", () => {
   });
 
   it("publishFloor replaces with If-Match: <etag> and needs a higher seq, a same-or-higher minVersion and a revoked superset", async () => {
-    const s = setup();
+    const s = await probed(setup());
     const first = floorOf({
       seq: 2,
       minVersion: "0.30.0",
@@ -1434,7 +1452,7 @@ describe("E: the signed floor", () => {
   });
 
   it("publishFloor refuses a seq below FLOOR_MIN_SEQ", async () => {
-    const s = setup();
+    const s = await probed(setup());
     G.FLOOR_MIN_SEQ = { staging: 4, prod: 1 };
     try {
       const e = await fails(
@@ -1451,7 +1469,7 @@ describe("E: the signed floor", () => {
   });
 
   it("a concurrent floor change fails the If-Match", async () => {
-    const s = setup();
+    const s = await probed(setup());
     seedFloor(s, signFloor(floorOf({ seq: 1 })));
     const cf = {
       ...s.cf,
@@ -1465,6 +1483,7 @@ describe("E: the signed floor", () => {
         return r;
       },
     };
+    await probeR2Conditionals(cf, "staging");
     const e = await fails(
       publishFloor({
         cf,
@@ -1480,7 +1499,7 @@ describe("E: the signed floor", () => {
 
 describe("F: r2ReleaseReader", () => {
   async function published(perPage?: number) {
-    const s = setup();
+    const s = await probed(setup());
     seedFloor(s);
     await publishRelease({
       cf: s.cf,
@@ -1526,14 +1545,14 @@ describe("F: r2ReleaseReader", () => {
   });
 
   it("a missing record or floor is null", async () => {
-    const s = setup();
+    const s = await probed(setup());
     const r = r2ReleaseReader(s.cf, "staging");
     expect(await r.record("0.34.0", "release")).toBeNull();
     expect(await r.floor()).toBeNull();
   });
 
   it("refuses a malformed version or variant before any call", async () => {
-    const s = setup();
+    const s = await probed(setup());
     const r = r2ReleaseReader(s.cf, "staging");
     for (const [v, b] of [
       ["../x", "release"],
@@ -1610,7 +1629,7 @@ describe("F: r2ReleaseReader", () => {
   }, 60_000);
 
   it("refuses an R2 object call outside an env's releases bucket", async () => {
-    const s = setup();
+    const s = await probed(setup());
     await expect(s.cf.r2ObjectGet("oa-s-iabc", "k")).rejects.toThrow(
       /releases/,
     );
@@ -1621,7 +1640,7 @@ describe("F: r2ReleaseReader", () => {
   });
 
   it("r2ObjectPut sends If-None-Match / If-Match and surfaces 412", async () => {
-    const s = setup();
+    const s = await probed(setup());
     await s.cf.r2ObjectPut(s.bucket, "k", enc("1"), { ifNoneMatch: "*" });
     const e = await fails(
       s.cf.r2ObjectPut(s.bucket, "k", enc("2"), { ifNoneMatch: "*" }),
@@ -1682,5 +1701,291 @@ describe("G: gates", () => {
     expect(
       readdirSync(new URL("../src/", import.meta.url)).includes("internal"),
     ).toBe(true);
+  });
+});
+
+// ---------- fix round 2 ----------
+
+describe("M2: R2 conditionals, retries and resume", () => {
+  const good = () => ({
+    tar: packUstar(tarEntries()),
+    sig: sigBytes(signRec(recordOf())),
+  });
+  const publish = (cf: ReturnType<typeof setup>["cf"]) =>
+    publishRelease({ cf, env: "staging", version: "0.34.0", files: good() });
+
+  it("probeR2Conditionals passes on honest R2 and leaves nothing behind", async () => {
+    const s = setup();
+    await probeR2Conditionals(s.cf, "staging");
+    const puts = s.fake.r2Log.filter((e) => e.method === "PUT");
+    expect(puts.map((p) => p.status)).toEqual([200, 412, 412, 200]);
+    expect(puts.every((p) => p.key.startsWith("probe/"))).toBe(true);
+    expect([...(s.fake.r2Objects.get(s.bucket)?.keys() ?? [])]).toEqual([]);
+  });
+
+  it("publishRelease and publishFloor refuse to run without a passed probe for that cf and env", async () => {
+    const s = setup();
+    seedFloor(s);
+    expect((await fails(publish(s.cf))).message).toMatch(/probeR2Conditionals/);
+    expect(
+      (
+        await fails(
+          publishFloor({
+            cf: s.cf,
+            env: "staging",
+            floor: sigBytes(signFloor(floorOf())),
+          }),
+        )
+      ).message,
+    ).toMatch(/probeR2Conditionals/);
+    // A probe for prod does not cover staging.
+    await probeR2Conditionals(s.cf, "prod");
+    expect((await fails(publish(s.cf))).message).toMatch(/probeR2Conditionals/);
+    expect(r2Writes(s.fake).filter((e) => !e.path.includes("probe"))).toEqual(
+      [],
+    );
+  });
+
+  it("an R2 that ignores conditional headers fails the probe, and publish stays refused", async () => {
+    const s = setup();
+    seedFloor(s);
+    s.fake.r2IgnoreConditionals = true;
+    expect((await fails(probeR2Conditionals(s.cf, "staging"))).message).toMatch(
+      /If-None-Match|If-Match|conditional/,
+    );
+    expect((await fails(publish(s.cf))).message).toMatch(/probeR2Conditionals/);
+    expect(
+      [...(s.fake.r2Objects.get(s.bucket)?.keys() ?? [])].filter((k) =>
+        k.startsWith("probe/"),
+      ),
+    ).toEqual([]);
+  });
+
+  it("a conditional PUT that landed but answered 5xx: the retry's 412 is accepted only for identical bytes", async () => {
+    const s = await probed(setup());
+    seedFloor(s);
+    // Every first PUT of a key stores the object, then answers 500.
+    s.fake.r2PutLandsThen500 = true;
+    await publish(s.cf);
+    expect(
+      s.fake.r2Object(s.bucket, "releases/0.34.0/release/record.sig.json"),
+    ).toBeDefined();
+    const retried = s.fake.r2Log.filter(
+      (e) => e.method === "PUT" && e.status === 412,
+    );
+    expect(retried.length).toBeGreaterThan(0);
+  });
+
+  it("a 412 on a retry with different bytes in R2 is refused", async () => {
+    const s = await probed(setup());
+    s.fake.r2PutLandsThen500 = true;
+    s.fake.r2OnPut = (key) =>
+      key === "k"
+        ? s.fake.r2Seed(s.bucket, "k", enc("someone else"))
+        : undefined;
+    const e = await fails(
+      s.cf.r2ObjectPut(s.bucket, "k", enc("mine"), { ifNoneMatch: "*" }),
+    );
+    expect((e as CfError).status).toBe(412);
+  });
+
+  it("a 412 on the first attempt is never treated as success", async () => {
+    const s = await probed(setup());
+    s.fake.r2Seed(s.bucket, "k", enc("same"));
+    const e = await fails(
+      s.cf.r2ObjectPut(s.bucket, "k", enc("same"), { ifNoneMatch: "*" }),
+    );
+    expect((e as CfError).status).toBe(412);
+  });
+
+  it("resumes a partial version: present objects byte-identical, no record", async () => {
+    const s = await probed(setup());
+    seedFloor(s);
+    const entries = tarEntries();
+    for (const e of entries.slice(0, 3))
+      s.fake.r2Seed(s.bucket, `releases/0.34.0/release/${e.path}`, e.bytes);
+    await publish(s.cf);
+    const puts = s.fake.r2Log
+      .filter((e) => e.method === "PUT")
+      .map((e) => e.key);
+    for (const e of entries.slice(0, 3))
+      expect(puts).not.toContain(`releases/0.34.0/release/${e.path}`);
+    expect(puts.at(-1)).toBe("releases/0.34.0/release/record.sig.json");
+    expect(puts).toHaveLength(entries.length - 3 + 1);
+  });
+
+  it.each<[string, (s: ReturnType<typeof setup>) => void, RegExp]>([
+    [
+      "a present object with other bytes",
+      (s) =>
+        s.fake.r2Seed(
+          s.bucket,
+          "releases/0.34.0/release/welcome/welcome.md",
+          enc("evil"),
+        ),
+      /differs/,
+    ],
+    [
+      "a present object the tar does not have",
+      (s) =>
+        s.fake.r2Seed(
+          s.bucket,
+          "releases/0.34.0/release/assets/extra.js",
+          enc("x"),
+        ),
+      /not in the tar/,
+    ],
+    [
+      "a present record",
+      (s) =>
+        s.fake.r2Seed(
+          s.bucket,
+          "releases/0.34.0/release/record.sig.json",
+          enc("{}"),
+        ),
+      /already published/,
+    ],
+  ])("refuses to resume over %s, with zero writes", async (_n, seed, re) => {
+    const s = await probed(setup());
+    seedFloor(s);
+    seed(s);
+    const e = await fails(publish(s.cf));
+    expect(e.message).toMatch(re);
+    expect(r2Writes(s.fake)).toEqual([]);
+  });
+
+  it("N2: publishFloor caps the current floor's size", async () => {
+    const s = await probed(setup());
+    s.fake.r2Seed(s.bucket, FLOOR_KEY, new Uint8Array(16 * 1024 * 1024 + 1));
+    const e = await fails(
+      publishFloor({
+        cf: s.cf,
+        env: "staging",
+        floor: sigBytes(signFloor(floorOf({ seq: 2 }))),
+      }),
+    );
+    expect(e.message).toMatch(/size|large/);
+  });
+});
+
+describe("L6, L7: r2ReleaseReader caps and binds", () => {
+  async function published() {
+    const s = await probed(setup());
+    seedFloor(s);
+    await publishRelease({
+      cf: s.cf,
+      env: "staging",
+      version: "0.34.0",
+      files: {
+        tar: packUstar(tarEntries()),
+        sig: sigBytes(signRec(recordOf())),
+      },
+    });
+    return s;
+  }
+
+  it("L6: caps the total listed module bytes before any download", async () => {
+    const s = await published();
+    const big = new Uint8Array(ASSET_LIMITS.fileBytes);
+    for (let i = 0; i < 21; i++)
+      s.fake.r2Seed(s.bucket, `releases/0.34.0/release/modules/m${i}.js`, big);
+    s.fake.r2Log.length = 0;
+    const e = await fails(
+      r2ReleaseReader(s.cf, "staging").modules("0.34.0", "release"),
+    );
+    expect(e.message).toMatch(/total|limit/);
+    expect(
+      s.fake.r2Log.filter(
+        (x) => x.method === "GET" && x.key.includes("/modules/"),
+      ),
+    ).toEqual([]);
+  }, 60_000);
+
+  it("L6: a GET whose body exceeds the listed size is aborted", async () => {
+    const s = await published();
+    s.fake.r2Serve = (key, bytes) =>
+      key.endsWith("modules/index.js")
+        ? concat(bytes, new Uint8Array(1024))
+        : bytes;
+    const e = await fails(
+      r2ReleaseReader(s.cf, "staging").modules("0.34.0", "release"),
+    );
+    expect(e.message).toMatch(/size|over/);
+  });
+
+  it("L7: assets refuses a record of another version or variant copied to this path", async () => {
+    const s = await published();
+    s.fake.r2Seed(
+      s.bucket,
+      "releases/0.34.0/release/record.sig.json",
+      sigBytes(signRec(recordOf({ version: "0.34.1" }))),
+    );
+    const e = await fails(
+      r2ReleaseReader(s.cf, "staging").assets("0.34.0", "release"),
+    );
+    expect(e.message).toMatch(/version|record/);
+  });
+});
+
+describe("N3: ustar headers are canonical", () => {
+  it.each<[string, Uint8Array, RegExp]>([
+    [
+      "a directory entry",
+      rawTar([{ name: "assets", o: { type: "5" } }]),
+      /director/,
+    ],
+    [
+      "bytes after the NUL in the name",
+      (() => {
+        const t = rawTar([{ name: "a", data: enc("x") }]);
+        t[60] = 0x41;
+        let sum = 0;
+        for (let i = 0; i < 512; i++)
+          sum += i >= 148 && i < 156 ? 32 : (t[i] as number);
+        t.set(enc(`${sum.toString(8).padStart(6, "0")}\0 `), 148);
+        return t;
+      })(),
+      /name|NUL|canonical/,
+    ],
+    [
+      "bytes after the NUL in the prefix",
+      (() => {
+        const t = rawTar([{ name: "b", data: enc("x"), o: { prefix: "a" } }]);
+        t[400] = 0x41;
+        let sum = 0;
+        for (let i = 0; i < 512; i++)
+          sum += i >= 148 && i < 156 ? 32 : (t[i] as number);
+        t.set(enc(`${sum.toString(8).padStart(6, "0")}\0 `), 148);
+        return t;
+      })(),
+      /prefix|NUL|canonical/,
+    ],
+  ])("parseUstar refuses %s", (_n, tar, re) => {
+    expect(() => parseUstar(tar)).toThrow(re);
+  });
+});
+
+describe("N6: openReleaseRecord checks the record itself", () => {
+  const pub = () => G.RELEASE_PUBKEY.staging as string;
+  it.each<[string, Record<string, unknown>, RegExp]>([
+    ["another env inside the record", { env: "prod" }, /env/],
+    ["an unknown variant", { variant: "evil" }, /variant/],
+    [
+      "defines that do not match the variant",
+      { defines: { [TEST_HOOKS_DEFINE]: true } },
+      /variant|define/,
+    ],
+    ["a non-hex sha256", { sha256: "x".repeat(64) }, /sha256/],
+    ["a non-semver version", { version: "latest" }, /version/],
+    [
+      "an asset entry without a valid size",
+      { assets: [{ path: "a", size: -1, sha256: "0".repeat(64) }] },
+      /size/,
+    ],
+  ])("refuses %s (signed)", (_n, over, re) => {
+    const rec = { ...JSON.parse(canonicalJson(recordOf())), ...over };
+    expect(() =>
+      openReleaseRecord(signRec(rec, "staging"), pub(), "staging"),
+    ).toThrow(re);
   });
 });

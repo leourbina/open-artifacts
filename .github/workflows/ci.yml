@@ -219,6 +219,13 @@ jobs:
       - name: No test hooks in the release bundle
         if: ${{ steps.ro.outputs.release_only != 'true' }}
         run: pnpm check-no-test-hooks "$RUNNER_TEMP/release-bundle"
+      # T3b N5: the real-build pin (the variants' bundles differ; release holds
+      # no hook route). Required here, so it never skips.
+      - name: Real-build pin test
+        if: ${{ steps.ro.outputs.release_only != 'true' }}
+        env:
+          OA_REQUIRE_REAL_BUILD: "1"
+        run: pnpm --filter @oa/provision exec vitest run test/release-t3b.test.ts -t "real build"
   # No secrets: the real suite runs a local `wrangler dev` (ENVIRONMENT=dev in a
   # generated temp config), never staging.
   e2e:

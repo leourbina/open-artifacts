@@ -29,6 +29,11 @@ export type Migration = { name: string; bytes: Uint8Array };
 export const MANIFEST = "manifest.json";
 export const TEMPLATE_FILE = "template/wrangler.template.jsonc";
 export const WELCOME_FILE = "welcome/welcome.md";
+/** M1: the rendered dry-run configs, covered by manifest.json. */
+export const CONFIG_FILE = {
+  release: "config/release.json",
+  redline: "config/redline.json",
+} as const;
 export const TEST_HOOKS_DEFINE = "__OA_TEST_HOOKS_ALLOWED__";
 export const ASSET_LIMITS = {
   files: 20_000,
@@ -146,6 +151,11 @@ export function buildRecord(i: {
   template: Uint8Array;
   migrations: readonly Migration[];
   welcome: Uint8Array;
+  /**
+   * M1: the __OA_TEST_HOOKS_ALLOWED__ value read from the variant's rendered
+   * config (testHooksOf); it must agree with the variant. Default: the variant.
+   */
+  testHooks?: boolean;
 }) {
   if (i.env !== "staging" && i.env !== "prod")
     throw new Error(
@@ -177,12 +187,17 @@ export function buildRecord(i: {
     if (!ustarFits(`modules/${m.name}`))
       throw new Error(`module ${m.name} does not fit a plain ustar header`);
   }
+  const hooks = i.testHooks ?? i.variant === "redline";
+  if (hooks !== (i.variant === "redline"))
+    throw new Error(
+      `the ${i.variant} config defines ${TEST_HOOKS_DEFINE} ${hooks}; it must be ${i.variant === "redline"}`,
+    );
   return {
     env: i.env,
     version: i.version,
     variant: i.variant,
     sha256: bundleSha256(i),
-    defines: { [TEST_HOOKS_DEFINE]: i.variant === "redline" },
+    defines: { [TEST_HOOKS_DEFINE]: hooks },
     assets,
     templateSha256: sha256Hex(i.template),
     migrationsSha256: migrationsSha256(i.migrations),
@@ -236,15 +251,41 @@ export function assertSameConfigButDefine(
 export const HOOK_PREFIX = "/__test/";
 export const HOOK_DOC_KEY = '"ALL /__test/*"';
 
-/** Throws if any release module's bytes contain /__test/ beyond the doc key. */
+/**
+ * Throws if any release module's bytes contain /__test/ beyond the doc key,
+ * or if the doc key itself appears more than once across all modules (L2).
+ */
 export function assertNoHookRoutes(release: readonly Mod[]): void {
+  let keys = 0;
   for (const m of release) {
-    const text = Buffer.from(m.bytes).toString("latin1");
-    if (text.split(HOOK_DOC_KEY).join("").includes(HOOK_PREFIX))
+    const parts = Buffer.from(m.bytes).toString("latin1").split(HOOK_DOC_KEY);
+    keys += parts.length - 1;
+    if (parts.join("").includes(HOOK_PREFIX))
       throw new Error(
         `release module ${m.name} contains a hook route (${HOOK_PREFIX})`,
       );
   }
+  if (keys > 1)
+    throw new Error(
+      `the release bundle has ${keys} ${HOOK_DOC_KEY} entries; at most once is allowed`,
+    );
+}
+
+/** M1: the test-hooks define of a rendered config: "false" -> false, "true" -> true. */
+export function testHooksOf(config: string): boolean {
+  let v: unknown;
+  try {
+    v = (JSON.parse(config) as { define?: Record<string, unknown> }).define?.[
+      TEST_HOOKS_DEFINE
+    ];
+  } catch {
+    throw new Error("a rendered config is not JSON");
+  }
+  if (v === "false") return false;
+  if (v === "true") return true;
+  throw new Error(
+    `a rendered config has no "true"/"false" ${TEST_HOOKS_DEFINE} define`,
+  );
 }
 
 // ---------- plain ustar, from in-memory bytes ----------
@@ -324,7 +365,12 @@ const dirStamp = (st: Stats) => `d:${st.dev}:${st.ino}`;
 
 export async function readTreeHardened(
   dir: string,
-  o: { check?: (rel: string) => void; pick?: (rel: string) => boolean } = {},
+  o: {
+    check?: (rel: string) => void;
+    pick?: (rel: string) => boolean;
+    /** Runs between the two walks (tests). */
+    afterRead?: () => Promise<void>;
+  } = {},
 ): Promise<File[]> {
   const check = o.check ?? assertAssetPath;
   const root = await realpath(dir);
@@ -341,6 +387,7 @@ export async function readTreeHardened(
       const code = (err as { code?: string }).code;
       if (code === "ELOOP" || code === "EMLINK")
         throw new Error(`${rel} is a symlink; refusing to follow it`);
+      if (code === "ENOTDIR") throw new Error(`${rel} is not a directory`);
       throw err;
     }
   };
@@ -373,6 +420,9 @@ export async function readTreeHardened(
           continue;
         }
         if (!e.isFile()) throw new Error(`${r} is not a regular file`);
+        // N4: opened by full path, so an intermediate directory swapped
+        // after its listing is not seen here; the second walk's directory
+        // and file stamps (dev, ino, size) are what catch it. Keep both walks.
         const q = join(root, r);
         const fh = await openNoFollow(q, r, constants.O_NONBLOCK);
         try {
@@ -399,6 +449,7 @@ export async function readTreeHardened(
     return { seen, out };
   };
   const first = await walk(true);
+  await o.afterRead?.();
   const second = await walk(false);
   const same =
     first.seen.size === second.seen.size &&
@@ -434,6 +485,8 @@ export interface Artifact {
   template: Uint8Array;
   migrations: Migration[];
   welcome: Uint8Array;
+  /** The rendered dry-run configs (buildBundle `config`), per variant. */
+  configs: Record<Variant, string>;
 }
 
 const modType = (name: string): Mod["type"] => {
@@ -455,6 +508,7 @@ export async function writeArtifact(
     migrations: readonly Migration[];
     welcome: Uint8Array;
     built: Record<Variant, { commit: string; lockfileSha256: string }>;
+    configs: Record<Variant, string>;
   },
 ): Promise<{ manifestSha256: string; bundleSha256: Record<Variant, string> }> {
   const files: File[] = [
@@ -467,6 +521,8 @@ export async function writeArtifact(
       bytes: f.bytes,
     })),
     { path: WELCOME_FILE, bytes: a.welcome },
+    { path: CONFIG_FILE.release, bytes: utf8.encode(a.configs.release) },
+    { path: CONFIG_FILE.redline, bytes: utf8.encode(a.configs.redline) },
   ];
   for (const f of files) {
     assertAssetPath(f.path);
@@ -525,6 +581,7 @@ export async function readArtifact(dir: string): Promise<Artifact> {
     template: new Uint8Array(),
     migrations: [],
     welcome: new Uint8Array(),
+    configs: { release: "", redline: "" },
   };
   let template = false;
   let welcome = false;
@@ -545,6 +602,12 @@ export async function readArtifact(dir: string): Promise<Artifact> {
     } else if (f.path === WELCOME_FILE) {
       a.welcome = f.bytes;
       welcome = true;
+    } else if (
+      f.path === CONFIG_FILE.release ||
+      f.path === CONFIG_FILE.redline
+    ) {
+      const v = f.path === CONFIG_FILE.release ? "release" : "redline";
+      a.configs[v] = new TextDecoder("utf-8", { fatal: true }).decode(f.bytes);
     } else if ((top === "release" || top === "redline") && name)
       a[top].push({ name, type: modType(name), bytes: f.bytes });
     else if (top === "assets" && name)
@@ -555,6 +618,8 @@ export async function readArtifact(dir: string): Promise<Artifact> {
   }
   if (!template || !welcome)
     throw new Error("the artifact has no template or welcome");
+  if (!a.configs.release || !a.configs.redline)
+    throw new Error("the artifact has no rendered configs");
   for (const v of ["release", "redline"] as const) {
     const info = manifest.variants?.[v];
     if (
@@ -636,6 +701,9 @@ export function prepare(
       "the builds' lockfile is not the checked-out pnpm-lock.yaml",
     );
   assertNoHookRoutes(a.release);
+  // M1: the configs the bundles were built from, re-checked here; defines
+  // come from their define value, never from the directory label.
+  assertSameConfigButDefine(a.configs.release, a.configs.redline);
   const variants: Variant[] =
     o.env === "prod" ? ["release"] : ["release", "redline"];
   return variants.map((variant) => {
@@ -650,11 +718,8 @@ export function prepare(
       template: a.template,
       migrations: a.migrations,
       welcome: a.welcome,
+      testHooks: testHooksOf(a.configs[variant]),
     });
-    if (record.defines[TEST_HOOKS_DEFINE] !== (variant === "redline"))
-      throw new Error(
-        `${TEST_HOOKS_DEFINE} must be ${variant === "redline"} for ${variant}`,
-      );
     const recordString = canonicalJson(record);
     // Packed from the bytes just hashed into the record, never re-read.
     const tar = packUstar([

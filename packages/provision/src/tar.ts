@@ -29,6 +29,17 @@ const field = (h: Uint8Array, off: number, len: number): string => {
   );
 };
 
+/** A name or prefix field: canonical, so every byte after its NUL is NUL too. */
+const pathField = (h: Uint8Array, off: number, len: number, what: string) => {
+  const f = h.subarray(off, off + len);
+  const end = f.indexOf(0);
+  if (end >= 0 && !f.subarray(end).every((b) => b === 0))
+    throw new Error(
+      `tar: bytes after the NUL in the ${what} field (not canonical)`,
+    );
+  return field(h, off, len);
+};
+
 /** A NUL- or space-terminated octal field; anything else is refused. */
 function octal(h: Uint8Array, off: number, len: number, what: string): number {
   const s = String.fromCharCode(...h.subarray(off, off + len));
@@ -40,9 +51,10 @@ function octal(h: Uint8Array, off: number, len: number, what: string): number {
 }
 
 /**
- * The regular files of a plain ustar archive. Refuses symlinks, hardlinks
- * and every type other than a regular file or a directory (pax and GNU
- * headers included), a non-ustar magic, a bad checksum, an absolute path,
+ * The regular files of a plain ustar archive, as the packer writes it.
+ * Refuses symlinks, hardlinks, directory entries and every type other than
+ * a regular file (pax and GNU headers included), a non-canonical name or
+ * prefix field, a non-ustar magic, a bad checksum, an absolute path,
  * "..", an empty or dot segment, a duplicate name, a file over 25 MiB, more
  * entries than ASSET_LIMITS allows, a truncated entry, a missing end of
  * archive and anything but zero padding after it.
@@ -80,15 +92,18 @@ export function parseUstar(tar: Uint8Array): ReleaseAsset[] {
     const type = String.fromCharCode(h[156] as number);
     if (type === "x" || type === "g" || type === "L" || type === "K")
       throw new Error(`tar: pax or GNU header (type ${type}) refused`);
-    if (type !== "0" && type !== "\0" && type !== "5")
+    if (type === "5")
       throw new Error(
-        `tar: entry type ${JSON.stringify(type)} refused (regular files and directories only)`,
+        "tar: directory entries are refused (the packer writes none)",
+      );
+    if (type !== "0" && type !== "\0")
+      throw new Error(
+        `tar: entry type ${JSON.stringify(type)} refused (regular files only)`,
       );
     const size = octal(h, 124, 12, "size");
-    const prefix = field(h, 345, 155);
-    const name = field(h, 0, 100);
-    let path = prefix ? `${prefix}/${name}` : name;
-    if (type === "5") path = path.replace(/\/$/, "");
+    const prefix = pathField(h, 345, 155, "prefix");
+    const name = pathField(h, 0, 100, "name");
+    const path = prefix ? `${prefix}/${name}` : name;
     try {
       assertAssetPath(path);
     } catch {
@@ -100,11 +115,6 @@ export function parseUstar(tar: Uint8Array): ReleaseAsset[] {
     names.add(path);
     if (names.size > ASSET_LIMITS.files + 1000)
       throw new Error("tar: more entries than ASSET_LIMITS allows");
-    if (type === "5") {
-      if (size !== 0) throw new Error(`tar: directory ${path} has a size`);
-      off += BLOCK;
-      continue;
-    }
     if (size > ASSET_LIMITS.fileBytes)
       throw new Error(`tar: ${path} is over the 25 MiB limit`);
     total += size;

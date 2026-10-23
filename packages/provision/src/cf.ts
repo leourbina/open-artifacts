@@ -122,12 +122,17 @@ export interface Cf {
   r2ObjectGet(
     bucket: string,
     key: string,
+    opts?: { maxBytes?: number },
   ): Promise<{ bytes: Uint8Array; etag: string } | null>;
+  r2ObjectDelete(bucket: string, key: string): Promise<void>;
   r2ObjectHead(
     bucket: string,
     key: string,
   ): Promise<{ size: number; etag: string } | null>;
-  /** A conditional PUT; a failed condition is a CfError with status 412. */
+  /**
+   * A conditional PUT; a failed condition is a CfError with status 412. A
+   * 412 on a retry is accepted only when the object holds exactly `bytes`.
+   */
   r2ObjectPut(
     bucket: string,
     key: string,
@@ -176,7 +181,44 @@ type CallInit = {
   headers?: Record<string, string>;
   /** Keep the raw body bytes (R2 objects are not JSON). */
   binary?: boolean;
+  /** With binary: abort (no retry) once the body exceeds this many bytes. */
+  maxBytes?: number;
 };
+
+/** The body, refused as soon as it passes `max` bytes (content-length or streamed). */
+async function readCapped(
+  res: Response,
+  max: number,
+  route: string,
+): Promise<Uint8Array> {
+  const over = () =>
+    new Error(
+      `R2 object ${route}: the body is over its size limit (${max} bytes)`,
+    );
+  const len = res.headers.get("content-length");
+  if (len !== null && Number(len) > max) throw over();
+  const reader = res.body?.getReader();
+  if (!reader) return new Uint8Array();
+  const chunks: Uint8Array[] = [];
+  let n = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    n += value.length;
+    if (n > max) {
+      await reader.cancel();
+      throw over();
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(n);
+  let o = 0;
+  for (const c of chunks) {
+    out.set(c, o);
+    o += c.length;
+  }
+  return out;
+}
 
 export function cfClient(o: {
   accountId: string;
@@ -203,6 +245,8 @@ export function cfClient(o: {
     text: string;
     bytes?: Uint8Array;
     headers: Headers;
+    /** 0 for the first try; a later value means an earlier try was lost. */
+    attempt: number;
   }> {
     const route = path.split("?")[0] as string;
     const headers: Record<string, string> = {
@@ -226,7 +270,9 @@ export function cfClient(o: {
       }
       const bytes =
         init.binary && res.ok
-          ? new Uint8Array(await res.arrayBuffer())
+          ? init.maxBytes !== undefined
+            ? await readCapped(res, init.maxBytes, route)
+            : new Uint8Array(await res.arrayBuffer())
           : undefined;
       const text = bytes ? "" : await res.text();
       let parsed: unknown;
@@ -242,6 +288,7 @@ export function cfClient(o: {
           text,
           bytes,
           headers: res.headers,
+          attempt: i,
         };
       last = new CfError(method, route, res.status, describeErrors(parsed));
       if (res.status !== 429 && res.status < 500) throw last;
@@ -466,10 +513,18 @@ export function cfClient(o: {
       }
       return { jwt };
     },
-    async r2ObjectGet(bucket, key) {
-      const r = await call("GET", r2Path(bucket, key), { binary: true }, [404]);
+    async r2ObjectGet(bucket, key, opts) {
+      const r = await call(
+        "GET",
+        r2Path(bucket, key),
+        { binary: true, maxBytes: opts?.maxBytes },
+        [404],
+      );
       if (r.status === 404) return null;
       return { bytes: r.bytes ?? new Uint8Array(), etag: etagOf(r.headers) };
+    },
+    async r2ObjectDelete(bucket, key) {
+      await call("DELETE", r2Path(bucket, key), {}, [404]);
     },
     async r2ObjectHead(bucket, key) {
       const r = await call("HEAD", r2Path(bucket, key), {}, [404]);
@@ -490,10 +545,39 @@ export function cfClient(o: {
             : (() => {
                 throw new Error("an R2 put needs If-None-Match: * or If-Match");
               })();
-      await call("PUT", r2Path(bucket, key), {
-        body: bytes as BodyInit,
-        headers: { ...headers, "content-type": "application/octet-stream" },
-      });
+      const path = r2Path(bucket, key);
+      const r = await call(
+        "PUT",
+        path,
+        {
+          body: bytes as BodyInit,
+          headers: { ...headers, "content-type": "application/octet-stream" },
+        },
+        [412],
+      );
+      if (r.status !== 412) return;
+      // M2: a 412 on a retry may be our own lost write. Accept it only when
+      // the object now holds exactly these bytes; a first-try 412 never is.
+      if (r.attempt > 0) {
+        const cur = await call(
+          "GET",
+          path,
+          { binary: true, maxBytes: bytes.length },
+          [404],
+        ).catch(() => null);
+        if (
+          cur?.status === 200 &&
+          cur.bytes &&
+          Buffer.from(cur.bytes).equals(Buffer.from(bytes))
+        )
+          return;
+      }
+      throw new CfError(
+        "PUT",
+        path.split("?")[0] as string,
+        412,
+        "precondition failed",
+      );
     },
     async r2ObjectList(bucket, prefix, cursor) {
       if (!RELEASES_BUCKET.test(bucket))

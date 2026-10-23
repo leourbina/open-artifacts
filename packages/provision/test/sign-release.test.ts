@@ -14,15 +14,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import * as LIB from "../../../scripts/ci/release-artifact.ts";
+import * as PUBKEYS from "../../../scripts/ci/release-pubkeys.ts";
 import { cfClient } from "../src/cf.js";
 import { platformNames } from "../src/names.js";
 import { canonicalJson } from "../src/platform.js";
-import { FLOOR_KEY, publishRelease, r2ReleaseReader } from "../src/publish.js";
+import {
+  FLOOR_KEY,
+  probeR2Conditionals,
+  publishRelease,
+  r2ReleaseReader,
+} from "../src/publish.js";
 import {
   assetEntries,
   buildReleaseRecord,
   bundleSha256,
   migrationsSha256,
+  openFloor,
   openReleaseRecord,
   TEST_HOOKS_DEFINE,
 } from "../src/release.js";
@@ -44,6 +51,7 @@ vi.mock("../src/internal/gates.js", async (orig) => {
 const ROOT = new URL("../../../", import.meta.url).pathname;
 const SIGN = join(ROOT, "scripts/ci/sign-release.ts");
 const ASSEMBLE = join(ROOT, "scripts/ci/assemble-release.ts");
+const SIGN_FLOOR = join(ROOT, "scripts/ci/sign-floor.ts");
 const CHECK = join(ROOT, "scripts/ci/check-hosted-release.ts");
 const enc = (s: string) => new TextEncoder().encode(s);
 
@@ -89,6 +97,17 @@ const FIX = {
   built: {
     release: { commit: "", lockfileSha256: "" },
     redline: { commit: "", lockfileSha256: "" },
+  },
+  // M1: the rendered dry-run configs travel in the artifact.
+  configs: {
+    release: JSON.stringify({
+      main: "src/index.ts",
+      define: { [TEST_HOOKS_DEFINE]: "false" },
+    }),
+    redline: JSON.stringify({
+      main: "src/index.ts",
+      define: { [TEST_HOOKS_DEFINE]: "true" },
+    }),
   },
 };
 // hosted-guard's commit, and the lockfile the sign job checks out (this repo's).
@@ -356,6 +375,7 @@ describe("sign-release.ts", () => {
       fetch: fake.fetch,
       sleep: async () => {},
     });
+    await probeR2Conditionals(cf, "staging");
     for (const v of ["release", "redline"] as const)
       await publishRelease({
         cf,
@@ -638,3 +658,273 @@ function swap(args: string[], flag: string, value: string): string[] {
   out[i + 1] = value;
   return out;
 }
+
+// ---------- fix round 2 ----------
+
+/** Sign with hosted-check's real outputs for this artifact; returns the run. */
+async function signArtifact(
+  over: Partial<typeof FIX>,
+  env: "staging" | "prod" = "staging",
+) {
+  const a = await artifact(over);
+  const ck = run(CHECK, [a.dir]);
+  const c =
+    ck.code === 0
+      ? outputs(ck.stdout)
+      : {
+          manifest_sha256: a.manifestSha256,
+          bundle_sha256: a.bundleSha256.release,
+        };
+  const out = mkdtempSync(join(tmpdir(), "oa-signed-"));
+  const r = run(
+    SIGN,
+    [
+      "--dir",
+      a.dir,
+      "--env",
+      env,
+      "--version",
+      "0.34.0",
+      "--manifest-sha256",
+      c.manifest_sha256 as string,
+      "--bundle-sha256",
+      c.bundle_sha256 as string,
+      "--commit",
+      GUARD,
+      "--lockfile",
+      LOCK,
+      "--out",
+      out,
+    ],
+    pem(env),
+  );
+  return { r, out };
+}
+
+describe("M1: defines come from the rendered configs in the artifact", () => {
+  const cfg = (v: string, extra = {}) =>
+    JSON.stringify({
+      main: "src/index.ts",
+      define: { [TEST_HOOKS_DEFINE]: v },
+      ...extra,
+    });
+  it("manifest.json covers config/release.json and config/redline.json", async () => {
+    const a = await artifact();
+    const m = JSON.parse(readFileSync(join(a.dir, "manifest.json"), "utf8"));
+    const paths = m.files.map((f: { path: string }) => f.path);
+    expect(paths).toEqual(
+      expect.arrayContaining(["config/release.json", "config/redline.json"]),
+    );
+    writeFileSync(join(a.dir, "config/release.json"), cfg("true"));
+    expect(run(CHECK, [a.dir]).code).toBe(1);
+  });
+  it.each<[string, { release: string; redline: string }, RegExp]>([
+    [
+      "both variants hooks-on",
+      { release: cfg("true"), redline: cfg("true") },
+      /define/,
+    ],
+    [
+      "swapped configs",
+      { release: cfg("true"), redline: cfg("false") },
+      /define/,
+    ],
+    [
+      "configs that differ in another key",
+      { release: cfg("false"), redline: cfg("true", { vars: { A: "1" } }) },
+      /differ/,
+    ],
+  ])("refuses %s", async (_n, configs, re) => {
+    const { r, out } = await signArtifact({ configs });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(re);
+    expect(readdirSync(out)).toEqual([]);
+  });
+  it("derives defines from the config value: the parsed define, not the label", () => {
+    expect(LIB.testHooksOf(cfg("false"))).toBe(false);
+    expect(LIB.testHooksOf(cfg("true"))).toBe(true);
+    for (const bad of [
+      cfg("1"),
+      cfg("TRUE"),
+      JSON.stringify({ define: {} }),
+      "{",
+    ])
+      expect(() => LIB.testHooksOf(bad), bad).toThrow();
+  });
+});
+
+describe("L2: the route-policy doc key may appear once across release", () => {
+  it("refuses two occurrences", async () => {
+    const twice = [
+      {
+        name: "index.js",
+        type: "esm" as const,
+        bytes: enc('const a = { "ALL /__test/*": 1 }; const hooks = false;'),
+      },
+      {
+        name: "b.js",
+        type: "esm" as const,
+        bytes: enc('const b = { "ALL /__test/*": 2 };'),
+      },
+    ];
+    expect(() => LIB.assertNoHookRoutes(twice)).toThrow(/once|ALL/);
+    expect(() => LIB.assertNoHookRoutes(twice.slice(0, 1))).not.toThrow();
+  });
+});
+
+describe("L11: pinned public keys in the node:* copy", () => {
+  it("equal gates.ts RELEASE_PUBKEY and its placeholder (parity)", async () => {
+    const real = await vi.importActual<
+      typeof import("../src/internal/gates.js")
+    >("../src/internal/gates.js");
+    expect(PUBKEYS.RELEASE_PUBKEY_PLACEHOLDER).toBe(
+      real.RELEASE_PUBKEY_PLACEHOLDER,
+    );
+    expect({ ...PUBKEYS.RELEASE_PUBKEY }).toEqual({ ...real.RELEASE_PUBKEY });
+  });
+  const x = (e: "staging" | "prod") => pubX(KEYS[e]);
+  it("checkSigningKey: refuses a key that is not the pinned one, skips while a placeholder", () => {
+    const pinned = { staging: x("staging"), prod: x("prod") };
+    expect(PUBKEYS.checkSigningKey("staging", x("staging"), pinned)).toBe(
+      "verified",
+    );
+    expect(() => PUBKEYS.checkSigningKey("prod", x("staging"), pinned)).toThrow(
+      /not the pinned/,
+    );
+    const ph = {
+      staging: PUBKEYS.RELEASE_PUBKEY_PLACEHOLDER,
+      prod: PUBKEYS.RELEASE_PUBKEY_PLACEHOLDER,
+    };
+    expect(PUBKEYS.checkSigningKey("prod", x("staging"), ph)).toBe("skipped");
+  });
+  it("verifySignature: refuses an invalid signature once the key is real, skips while a placeholder", async () => {
+    const { sign } = await import("node:crypto");
+    const payload = Buffer.from("oa-release-v1\nstaging\n{}");
+    const good = sign(null, payload, KEYS.staging.privateKey).toString(
+      "base64url",
+    );
+    const bad = sign(null, payload, KEYS.prod.privateKey).toString("base64url");
+    const pinned = { staging: x("staging"), prod: x("prod") };
+    expect(PUBKEYS.verifySignature("staging", payload, good, pinned)).toBe(
+      "verified",
+    );
+    expect(() =>
+      PUBKEYS.verifySignature("staging", payload, bad, pinned),
+    ).toThrow(/does not verify/);
+    const ph = {
+      staging: PUBKEYS.RELEASE_PUBKEY_PLACEHOLDER,
+      prod: PUBKEYS.RELEASE_PUBKEY_PLACEHOLDER,
+    };
+    expect(PUBKEYS.verifySignature("staging", payload, bad, ph)).toBe(
+      "skipped",
+    );
+  });
+  it("assemble logs loudly that it skipped verification while the pubkey is a placeholder", async () => {
+    const s = await signed("prod");
+    const out = mkdtempSync(join(tmpdir(), "oa-asm-"));
+    const r = run(ASSEMBLE, [
+      ...swap(s.args, "--out", out),
+      "--release",
+      `${s.o.prod_release_signature}:${s.o.prod_release_tar_sha256}:${s.o.prod_release_record_sha256}`,
+    ]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).toMatch(/WARNING.*placeholder.*NOT verified/);
+  });
+});
+
+describe("H1: sign-floor.ts", () => {
+  const args = (env: string, o: Record<string, string> = {}) => {
+    const out = mkdtempSync(join(tmpdir(), "oa-floor-"));
+    const a = {
+      "--env": env,
+      "--seq": "3",
+      "--min-version": "0.30.0",
+      "--revoked": "0.31.0,0.32.1",
+      "--out": out,
+      ...o,
+    };
+    return { out, argv: Object.entries(a).flat() };
+  };
+  it("signs a floor whose bytes open with provision's openFloor, and prints only outputs", () => {
+    const { out, argv } = args("staging");
+    const r = run(SIGN_FLOOR, argv, pem("staging"));
+    expect(r.code, r.stderr).toBe(0);
+    expect(readdirSync(out)).toEqual(["floor-staging-3.sig.json"]);
+    const bytes = readFileSync(join(out, "floor-staging-3.sig.json"), "utf8");
+    const f = openFloor(JSON.parse(bytes), pubX(KEYS.staging), "staging");
+    expect(f).toMatchObject({
+      env: "staging",
+      seq: 3,
+      minVersion: "0.30.0",
+      revoked: ["0.31.0", "0.32.1"],
+    });
+    expect(Object.keys(outputs(r.stdout)).sort()).toEqual([
+      "floor_record_sha256",
+      "floor_signature",
+    ]);
+    expect(r.stdout + r.stderr).not.toContain("PRIVATE KEY");
+    // An empty revoked list.
+    const e = args("prod", { "--revoked": "" });
+    expect(run(SIGN_FLOOR, e.argv, pem("prod")).code).toBe(0);
+    expect(
+      openFloor(
+        JSON.parse(readFileSync(join(e.out, "floor-prod-3.sig.json"), "utf8")),
+        pubX(KEYS.prod),
+        "prod",
+      ).revoked,
+    ).toEqual([]);
+  });
+  it("--assemble rebuilds the identical file from the signature and the record sha256, with no key", () => {
+    const s = args("staging");
+    const r = run(SIGN_FLOOR, s.argv, pem("staging"));
+    const o = outputs(r.stdout);
+    const a = args("staging");
+    const r2 = run(SIGN_FLOOR, [
+      ...a.argv,
+      "--assemble",
+      "--signature",
+      o.floor_signature as string,
+      "--record-sha256",
+      o.floor_record_sha256 as string,
+    ]);
+    expect(r2.code, r2.stderr).toBe(0);
+    expect(readFileSync(join(a.out, "floor-staging-3.sig.json"))).toEqual(
+      readFileSync(join(s.out, "floor-staging-3.sig.json")),
+    );
+    const bad = args("staging", { "--seq": "4" });
+    expect(
+      run(SIGN_FLOOR, [
+        ...bad.argv,
+        "--assemble",
+        "--signature",
+        o.floor_signature as string,
+        "--record-sha256",
+        o.floor_record_sha256 as string,
+      ]).code,
+    ).toBe(1);
+    expect(readdirSync(bad.out)).toEqual([]);
+  });
+  it.each<[string, Record<string, string>]>([
+    ["seq 0", { "--seq": "0" }],
+    ["a non-integer seq", { "--seq": "1.5" }],
+    ["a huge seq", { "--seq": "99999999999999999" }],
+    ["a non-semver minVersion", { "--min-version": "v1" }],
+    ["a non-semver revoked entry", { "--revoked": "0.31.0,latest" }],
+    ["a duplicate revoked entry", { "--revoked": "0.31.0,0.31.0" }],
+    ["a revoked list with spaces", { "--revoked": "0.31.0, 0.32.0" }],
+    ["an unknown env", { "--env": "dev" }],
+  ])("refuses %s", (_n, o) => {
+    const { out, argv } = args("staging", o);
+    const r = run(SIGN_FLOOR, argv, pem("staging"));
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(readdirSync(out)).toEqual([]);
+  });
+  it("refuses a key in argv and an empty stdin", () => {
+    const { argv } = args("staging");
+    expect(run(SIGN_FLOOR, [...argv, "--key", "x"], pem("staging")).code).toBe(
+      1,
+    );
+    expect(run(SIGN_FLOOR, argv, "").code).toBe(1);
+  });
+});

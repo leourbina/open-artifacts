@@ -12,8 +12,9 @@
 //   releases/<version>/<variant>/migrations/<name>
 //   releases/<version>/<variant>/welcome/welcome.md
 //   releases/floor.json                               (the signed floor)
+import { randomBytes } from "node:crypto";
 import { basename, extname } from "node:path";
-import type { Cf, Module } from "./cf.js";
+import { type Cf, CfError, type Module } from "./cf.js";
 import {
   FLOOR_MIN_SEQ,
   RELEASE_PUBKEY,
@@ -117,6 +118,86 @@ function bucketOf(env: Env): string {
   return bucket;
 }
 
+const same = (a: Uint8Array, b: Uint8Array) =>
+  Buffer.from(a).equals(Buffer.from(b));
+
+/** Every object under `prefix`, paginated, refused past `max`. */
+async function listAll(cf: Cf, bucket: string, prefix: string, max: number) {
+  const out: { key: string; size: number; name: string }[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page <= Math.ceil(max / 1000) + 1; page++) {
+    const r = await cf.r2ObjectList(bucket, prefix, cursor);
+    for (const x of r.objects) {
+      if (!x.key.startsWith(prefix))
+        throw new Error(`R2 listing for ${prefix} returned ${x.key}`);
+      out.push({ ...x, name: x.key.slice(prefix.length) });
+    }
+    if (out.length > max)
+      throw new Error(`more than ${max} objects under ${prefix} (limit)`);
+    if (!r.truncated) return out;
+    cursor = r.cursor;
+  }
+  throw new Error(`R2 listing for ${prefix} did not end`);
+}
+
+/** cf objects whose R2 conditionals passed probeR2Conditionals, per env (this process only). */
+const PROBED = new WeakMap<Cf, Set<Env>>();
+
+/**
+ * M2: the api.cloudflare.com R2 object routes are not the documented S3 API,
+ * so prove the conditional headers are enforced before relying on them: on a
+ * throwaway key, a second If-None-Match: * PUT and a stale If-Match PUT must
+ * both answer 412, and a current If-Match PUT must land. Cleans up the key.
+ * publishRelease and publishFloor refuse to run unless this passed for the
+ * same cf and env in this process.
+ */
+export async function probeR2Conditionals(cf: Cf, env: Env): Promise<void> {
+  const bucket = bucketOf(env);
+  const key = `probe/${randomBytes(16).toString("hex")}`;
+  const one = new TextEncoder().encode("oa-probe-1");
+  const two = new TextEncoder().encode("oa-probe-2");
+  const must412 = async (what: string, put: () => Promise<void>) => {
+    try {
+      await put();
+    } catch (e) {
+      if (e instanceof CfError && e.status === 412) return;
+      throw e;
+    }
+    throw new PublishRefused(
+      `R2 ignored ${what} on ${bucket}: conditional writes are not enforced, so publishing is refused`,
+    );
+  };
+  try {
+    await cf.r2ObjectPut(bucket, key, one, { ifNoneMatch: "*" });
+    await must412("If-None-Match: *", () =>
+      cf.r2ObjectPut(bucket, key, two, { ifNoneMatch: "*" }),
+    );
+    const head = await cf.r2ObjectHead(bucket, key);
+    if (!head?.etag) throw new PublishRefused(`R2 probe: ${key} has no etag`);
+    const stale =
+      head.etag === "0".repeat(32) ? "1".repeat(32) : "0".repeat(32);
+    await must412("a stale If-Match", () =>
+      cf.r2ObjectPut(bucket, key, two, { ifMatch: stale }),
+    );
+    await cf.r2ObjectPut(bucket, key, two, { ifMatch: head.etag });
+    const got = await cf.r2ObjectGet(bucket, key, { maxBytes: 64 });
+    if (!got || !same(got.bytes, two))
+      throw new PublishRefused("R2 probe: the If-Match write did not land");
+  } finally {
+    await cf.r2ObjectDelete(bucket, key).catch(() => {});
+  }
+  const s = PROBED.get(cf) ?? new Set<Env>();
+  s.add(env);
+  PROBED.set(cf, s);
+}
+
+function assertProbed(cf: Cf, env: Env): void {
+  if (!PROBED.get(cf)?.has(env))
+    throw new PublishRefused(
+      `run probeR2Conditionals(cf, "${env}") first: R2 conditional writes must be proven in this process before publishing`,
+    );
+}
+
 /** The env's floor, verified, checked against FLOOR_MIN_SEQ and for `version`. */
 async function checkFloor(
   cf: Cf,
@@ -124,7 +205,7 @@ async function checkFloor(
   bucket: string,
   version: string,
 ): Promise<FloorRecord> {
-  const got = await cf.r2ObjectGet(bucket, FLOOR_KEY);
+  const got = await cf.r2ObjectGet(bucket, FLOOR_KEY, { maxBytes: SMALL_MAX });
   if (!got)
     throw new PublishRefused(
       `the ${env} release floor (${FLOOR_KEY}) is missing; publishFloor first`,
@@ -151,7 +232,9 @@ async function checkFloor(
  * not by RELEASE_PUBKEY[env], another env, version or variant, redline for
  * prod, a tar with anything but plain regular files, a file set other than
  * exactly the record's, a version under the floor, and a version that is
- * already published.
+ * already published (its record exists). A partial version (objects present
+ * and byte-identical to the tar, no record) is resumed; any other object
+ * there is refused. Needs probeR2Conditionals first.
  */
 export async function publishRelease(o: {
   cf: Cf;
@@ -161,6 +244,7 @@ export async function publishRelease(o: {
 }): Promise<{ variant: BundleVariant; keys: string[] }> {
   const { cf, env, version } = o;
   const bucket = bucketOf(env);
+  assertProbed(cf, env);
   if (!isReleaseVersion(version))
     throw new PublishRefused(`version ${version} is not a release version`);
   const pubkey = pubkeyOf(env);
@@ -265,18 +349,39 @@ export async function publishRelease(o: {
 
   await checkFloor(cf, env, bucket, version);
 
-  // Never overwrite: an existing version (any object under it) is refused.
+  // Never overwrite. A record means published; anything else present must be
+  // a byte-identical object of this tar (a resumed partial publish).
   const prefix = releaseKey(version, variant, "");
-  const existing = await cf.r2ObjectList(bucket, prefix);
-  if (existing.objects.length > 0)
+  const present = await listAll(cf, bucket, prefix, ASSET_LIMITS.files + 2000);
+  if (present.some((x) => x.name === RECORD_FILE))
     throw new PublishRefused(
       `release ${version} (${variant}) is already published to ${bucket}; a version is never overwritten`,
     );
+  const byName = new Map(files.map((f) => [f.path, f]));
+  const done = new Set<string>();
+  for (const x of present) {
+    const f = byName.get(x.name);
+    if (!f)
+      throw new PublishRefused(
+        `release ${version} (${variant}): ${x.key} is in ${bucket} but not in the tar; refusing to resume`,
+      );
+    let cur: { bytes: Uint8Array } | null = null;
+    if (x.size === f.bytes.length)
+      cur = await cf
+        .r2ObjectGet(bucket, x.key, { maxBytes: f.bytes.length })
+        .catch(() => null);
+    if (!cur || !same(cur.bytes, f.bytes))
+      throw new PublishRefused(
+        `release ${version} (${variant}): ${x.key} differs from the tar; refusing to resume`,
+      );
+    done.add(f.path);
+  }
   const keys: string[] = [];
   for (const f of [...files].sort((a, b) => (a.path < b.path ? -1 : 1))) {
-    await cf.r2ObjectPut(bucket, prefix + f.path, f.bytes, {
-      ifNoneMatch: "*",
-    });
+    if (!done.has(f.path))
+      await cf.r2ObjectPut(bucket, prefix + f.path, f.bytes, {
+        ifNoneMatch: "*",
+      });
     keys.push(prefix + f.path);
   }
   // The record last: a reader that finds it finds every file.
@@ -292,6 +397,7 @@ export async function publishRelease(o: {
  * there is none, else If-Match on the current etag). The new floor must
  * verify for `env`, have seq >= FLOOR_MIN_SEQ[env] and above the current
  * seq, a minVersion the same or higher, and keep every revoked version.
+ * Needs probeR2Conditionals first.
  */
 export async function publishFloor(o: {
   cf: Cf;
@@ -300,6 +406,7 @@ export async function publishFloor(o: {
 }): Promise<FloorRecord> {
   const { cf, env } = o;
   const bucket = bucketOf(env);
+  assertProbed(cf, env);
   const pubkey = pubkeyOf(env);
   let next: FloorRecord;
   try {
@@ -313,7 +420,7 @@ export async function publishFloor(o: {
     throw new PublishRefused(
       `the new ${env} floor seq ${next.seq} is below FLOOR_MIN_SEQ ${FLOOR_MIN_SEQ[env]}`,
     );
-  const cur = await cf.r2ObjectGet(bucket, FLOOR_KEY);
+  const cur = await cf.r2ObjectGet(bucket, FLOOR_KEY, { maxBytes: SMALL_MAX });
   if (!cur) {
     await cf.r2ObjectPut(bucket, FLOOR_KEY, o.floor, { ifNoneMatch: "*" });
     return next;
@@ -351,36 +458,18 @@ export async function publishFloor(o: {
  */
 export function r2ReleaseReader(cf: Cf, env: Env): ReleaseReader {
   const bucket = bucketOf(env);
+  /** L6: the GET is aborted as soon as the body passes `max` (the listed or record size). */
   const get = async (key: string, max: number): Promise<Uint8Array> => {
-    const o = await cf.r2ObjectGet(bucket, key);
+    const o = await cf.r2ObjectGet(bucket, key, { maxBytes: max });
     if (!o) throw new Error(`release object ${key} is missing from ${bucket}`);
-    if (o.bytes.length > max)
-      throw new Error(`release object ${key} is over its size limit`);
     return o.bytes;
   };
-  const list = async (prefix: string, max: number) => {
-    const out: { key: string; size: number; name: string }[] = [];
-    let cursor: string | undefined;
-    for (let page = 0; page <= Math.ceil(max / 1000) + 1; page++) {
-      const r = await cf.r2ObjectList(bucket, prefix, cursor);
-      for (const x of r.objects) {
-        if (!x.key.startsWith(prefix))
-          throw new Error(`R2 listing for ${prefix} returned ${x.key}`);
-        out.push({ ...x, name: x.key.slice(prefix.length) });
-      }
-      if (out.length > max)
-        throw new Error(`more than ${max} objects under ${prefix} (limit)`);
-      if (!r.truncated) return out;
-      cursor = r.cursor;
-    }
-    throw new Error(`R2 listing for ${prefix} did not end`);
-  };
+  const list = (prefix: string, max: number) =>
+    listAll(cf, bucket, prefix, max);
   const record = async (version: string, variant: BundleVariant) => {
     const key = releaseKey(version, variant, RECORD_FILE);
-    const o = await cf.r2ObjectGet(bucket, key);
+    const o = await cf.r2ObjectGet(bucket, key, { maxBytes: SMALL_MAX });
     if (!o) return null;
-    if (o.bytes.length > SMALL_MAX)
-      throw new Error(`release object ${key} is over its size limit`);
     return parseStored(o.bytes);
   };
   const template = (version: string, variant: BundleVariant) =>
@@ -393,13 +482,18 @@ export function r2ReleaseReader(cf: Cf, env: Env): ReleaseReader {
     async modules(version, variant) {
       const prefix = releaseKey(version, variant, "modules/");
       const listed = await list(prefix, 1000);
-      for (const x of listed)
+      let total = 0;
+      for (const x of listed) {
         if (x.size > ASSET_LIMITS.fileBytes)
           throw new Error(`module ${x.name} is over 25 MiB`);
+        total += x.size;
+      }
+      if (total > ASSET_LIMITS.totalBytes)
+        throw new Error("modules are over the 512 MiB total limit");
       const mainModule = mainModuleOf(await template(version, variant));
       const modules: Module[] = [];
       for (const x of listed) {
-        const bytes = await get(x.key, ASSET_LIMITS.fileBytes);
+        const bytes = await get(x.key, x.size);
         if (bytes.length !== x.size)
           throw new Error(
             `module ${x.name}: size ${bytes.length}, listed ${x.size}`,
@@ -413,6 +507,11 @@ export function r2ReleaseReader(cf: Cf, env: Env): ReleaseReader {
       if (!signed)
         throw new Error(`no release record for ${version} (${variant})`);
       const rec = openReleaseRecord(signed, pubkeyOf(env), env);
+      // L7: the record at this path must be for this version and variant.
+      if (rec.version !== version || rec.variant !== variant)
+        throw new Error(
+          `the release record at ${version} (${variant}) is for ${rec.version} (${rec.variant})`,
+        );
       assertAssetLimits(rec.assets);
       const prefix = releaseKey(version, variant, "assets/");
       const listed = await list(prefix, ASSET_LIMITS.files);
@@ -426,7 +525,7 @@ export function r2ReleaseReader(cf: Cf, env: Env): ReleaseReader {
         );
       const out: ReleaseAsset[] = [];
       for (const a of rec.assets) {
-        const bytes = await get(prefix + a.path, ASSET_LIMITS.fileBytes);
+        const bytes = await get(prefix + a.path, a.size);
         if (bytes.length !== a.size)
           throw new Error(
             `asset ${a.path}: size ${bytes.length}, the record says ${a.size}`,
@@ -446,20 +545,17 @@ export function r2ReleaseReader(cf: Cf, env: Env): ReleaseReader {
           throw new Error(`unexpected migration ${x.name}`);
         if (x.size > ASSET_LIMITS.fileBytes)
           throw new Error(`migration ${x.name} is over 25 MiB`);
-        out.push({
-          name: x.name,
-          bytes: await get(x.key, ASSET_LIMITS.fileBytes),
-        });
+        out.push({ name: x.name, bytes: await get(x.key, x.size) });
       }
       return out;
     },
     welcome: (version, variant) =>
       get(releaseKey(version, variant, WELCOME_FILE), SMALL_MAX),
     async floor() {
-      const o = await cf.r2ObjectGet(bucket, FLOOR_KEY);
+      const o = await cf.r2ObjectGet(bucket, FLOOR_KEY, {
+        maxBytes: SMALL_MAX,
+      });
       if (!o) return null;
-      if (o.bytes.length > SMALL_MAX)
-        throw new Error(`${FLOOR_KEY} is over its size limit`);
       return parseStored(o.bytes);
     },
   };

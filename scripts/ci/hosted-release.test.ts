@@ -1,6 +1,8 @@
 // T3b: the hosted release jobs in release-please.yml (guard, build, check,
-// sign, attach). The signing key never shares a job with installed code.
-import { readFileSync } from "node:fs";
+// sign and attach per env) and hosted-floor.yml. The signing key never
+// shares a job with installed code.
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -10,32 +12,91 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const read = (p: string) => readFileSync(join(root, p), "utf8");
 // biome-ignore lint/suspicious/noExplicitAny: workflow YAML is untyped
 const w: any = parse(read(".github/workflows/release-please.yml"));
+// biome-ignore lint/suspicious/noExplicitAny: workflow YAML is untyped
+const fw: any = parse(read(".github/workflows/hosted-floor.yml"));
+const ENVS = ["staging", "prod"] as const;
 const HOSTED = [
   "hosted-guard",
   "hosted-build",
   "hosted-check",
-  "hosted-sign",
-  "hosted-attach",
+  "hosted-sign-staging",
+  "hosted-sign-prod",
+  "hosted-attach-staging",
+  "hosted-attach-prod",
 ];
 // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
 type Step = Record<string, any>;
-const steps = (job: string): Step[] => w.jobs[job].steps;
+// biome-ignore lint/suspicious/noExplicitAny: untyped YAML
+const stepsOf = (wf: any, job: string): Step[] => wf.jobs[job].steps;
+const steps = (job: string) => stepsOf(w, job);
 const needs = (job: string): string[] => [w.jobs[job].needs ?? []].flat();
+const runOf = (st: Step[]) => st.map((s) => s.run ?? "").join("\n");
 const SHA_PIN =
   /^(actions\/(checkout|download-artifact|upload-artifact|setup-node)|pnpm\/action-setup)@[0-9a-f]{40}$/;
 // biome-ignore lint/suspicious/noTemplateCurlyInString: literal workflow expression
 const GUARD_SHA = "${{ needs.hosted-guard.outputs.sha }}";
+// biome-ignore lint/suspicious/noTemplateCurlyInString: literal workflow expression
+const TAG = "${{ needs.hosted-guard.outputs.tag }}";
+const NVMRC_MAJOR = read(".nvmrc").trim().split(".")[0];
+// Any invocation (the lockfile path "pnpm-lock.yaml" is not one).
+const INSTALL = /(^|[\s;|&(`])(pnpm|npm|npx|corepack|yarn)(?=$|[\s;|&)`])/m;
+
+/**
+ * Decision 4 as amended (fix round 2, L1): a key job runs only checkout,
+ * setup-node and (for sign) download-artifact, all pinned by SHA; setup-node
+ * takes an EXACT 22.x.y literal matching .nvmrc's major, no version file.
+ */
+function keyJobShape(st: Step[], o: { download: boolean; script: string }) {
+  const uses = st.map((s) => s.uses).filter(Boolean) as string[];
+  expect(uses.map((u) => u.split("@")[0])).toEqual([
+    "actions/checkout",
+    "actions/setup-node",
+    ...(o.download ? ["actions/download-artifact"] : []),
+  ]);
+  for (const u of uses)
+    expect(u).toMatch(
+      /^actions\/(checkout|setup-node|download-artifact)@[0-9a-f]{40}$/,
+    );
+  expect(st).toHaveLength(uses.length + 1);
+  expect(st[0]?.with?.["persist-credentials"]).toBe(false);
+  const node = st[1]?.with ?? {};
+  expect(Object.keys(node)).toEqual(["node-version"]);
+  expect(String(node["node-version"])).toMatch(/^\d+\.\d+\.\d+$/);
+  expect(String(node["node-version"]).split(".")[0]).toBe(NVMRC_MAJOR);
+  const last = st.at(-1) as Step;
+  expect(last.uses).toBeUndefined();
+  for (const s of st) expect(s.run ?? "").not.toMatch(INSTALL);
+  const withKey = st.filter((s) =>
+    JSON.stringify(s).includes("RELEASE_SIGNING_KEY"),
+  );
+  expect(withKey).toEqual([last]);
+  expect(last.env?.RELEASE_SIGNING_KEY).toBe(
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal workflow expression
+    "${{ secrets.RELEASE_SIGNING_KEY }}",
+  );
+  const run = String(last.run);
+  expect(run).toMatch(
+    new RegExp(
+      `printf '%s' "\\$RELEASE_SIGNING_KEY" \\| node --experimental-strip-types scripts/ci/${o.script} `,
+    ),
+  );
+  expect(run.match(/RELEASE_SIGNING_KEY/g)).toHaveLength(1);
+  expect(run).not.toMatch(/set -x|set -o xtrace|--key/);
+  expect(JSON.stringify(st.slice(0, -1))).not.toContain("secrets.");
+  expect(JSON.stringify(st)).not.toMatch(/CLOUDFLARE_/);
+}
 
 describe("release-please.yml hosted jobs", () => {
-  it("has the five hosted jobs", () => {
+  it("has the hosted jobs, sign and attach split per env (no matrix merge)", () => {
     expect(Object.keys(w.jobs)).toEqual(expect.arrayContaining(HOSTED));
+    for (const n of Object.keys(w.jobs))
+      if (n.startsWith("hosted-")) expect(HOSTED, n).toContain(n);
+    for (const n of HOSTED) expect(w.jobs[n].strategy, n).toBeUndefined();
   });
 
   describe("hosted-guard", () => {
     const job = w.jobs["hosted-guard"];
-    const run = steps("hosted-guard")
-      .map((s) => s.run ?? "")
-      .join("\n");
+    const run = runOf(steps("hosted-guard"));
     it("runs only on a release-please release from a push to main, or a dispatch on main", () => {
       expect(job.if).toContain("github.ref == 'refs/heads/main'");
       expect(job.if).toContain(
@@ -49,17 +110,26 @@ describe("release-please.yml hosted jobs", () => {
       expect(JSON.stringify(job)).not.toContain("actions/checkout");
       expect(job.permissions).toEqual({ contents: "read" });
     });
-    it("resolves the tag to a commit once, requires it behind or identical to main and the package.json version", () => {
+    it("resolves the tag to a commit once, behind or identical to main's branch SHA, matching package.json", () => {
       expect(run.match(/git\/ref\/tags\//g)).toHaveLength(1);
-      expect(run).toContain("compare/main...$sha");
+      // L4: main is read as the branch ref, never the bare (tag-shadowable) name.
+      expect(run).toContain('gh api "repos/$REPO/git/ref/heads/main"');
+      expect(run).toContain('compare/$main_sha...$sha"');
+      expect(run).not.toContain("compare/main...");
       expect(run).toMatch(/behind\|identical|identical\|behind/);
       expect(run).toContain("contents/package.json?ref=$sha");
       // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell expansion
       expect(run).toContain('"${TAG#v}"');
       expect(run).toContain("isPrerelease");
-      // The tag reaches the script as an env var, never as an expression.
       expect(run).not.toContain("${{");
       expect(job.outputs.sha).toMatch(/steps\.\w+\.outputs\.sha/);
+    });
+    it("L5: the SHA is the release commit (target_commitish when a SHA, and package.json's version changed in it)", () => {
+      expect(run).toContain('releases/tags/$TAG"');
+      expect(run).toContain("target_commitish");
+      expect(run).toContain(".parents[0].sha");
+      expect(run).toContain("contents/package.json?ref=$parent");
+      expect(run).toMatch(/\[ "\$prev" != "\$version" \]/);
     });
   });
 
@@ -86,11 +156,7 @@ describe("release-please.yml hosted jobs", () => {
     const job = w.jobs["hosted-build"];
     expect(JSON.stringify(job)).not.toContain("secrets.");
     expect(job.permissions).toEqual({ contents: "read" });
-    const run = steps("hosted-build")
-      .map((s) => s.run ?? "")
-      .join("\n");
-    expect(run).toContain("scripts/ci/build-hosted-release.ts");
-    // Each variant's manifest entry records the guard's commit.
+    const run = runOf(steps("hosted-build"));
     expect(run).toMatch(
       /build-hosted-release\.ts "\$RUNNER_TEMP\/hosted" --commit "\$GUARD_SHA"/,
     );
@@ -110,9 +176,7 @@ describe("release-please.yml hosted jobs", () => {
     expect(JSON.stringify(job)).not.toContain("secrets.");
     expect(job.permissions).toEqual({ contents: "read" });
     expect(needs("hosted-check")).toContain("hosted-build");
-    const run = steps("hosted-check")
-      .map((s) => s.run ?? "")
-      .join("\n");
+    const run = runOf(steps("hosted-check"));
     expect(run).toContain("scripts/ci/check-hosted-release.ts");
     expect(run).toMatch(
       /pnpm check-no-test-hooks "\$RUNNER_TEMP\/hosted\/release"/,
@@ -123,150 +187,201 @@ describe("release-please.yml hosted jobs", () => {
     ]);
   });
 
-  describe("hosted-sign", () => {
-    const job = w.jobs["hosted-sign"];
-    const st = steps("hosted-sign");
-    it("is a matrix over env with environment hosted-<env>, needing build and check", () => {
-      expect(job.strategy.matrix.env).toEqual(["staging", "prod"]);
-      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal workflow expression
-      expect(job.environment).toBe("hosted-${{ matrix.env }}");
-      expect(needs("hosted-sign")).toEqual(
+  for (const env of ENVS)
+    describe(`hosted-sign-${env}`, () => {
+      const name = `hosted-sign-${env}`;
+      const job = w.jobs[name];
+      const st = steps(name);
+      it(`runs in environment hosted-${env}, needing build and check, read-only, serialized per tag`, () => {
+        expect(job.environment).toBe(`hosted-${env}`);
+        expect(needs(name)).toEqual(
+          expect.arrayContaining([
+            "hosted-guard",
+            "hosted-build",
+            "hosted-check",
+          ]),
+        );
+        expect(job.permissions).toEqual({ contents: "read" });
+        expect(job.concurrency).toEqual({
+          group: `hosted-sign-${env}-${TAG}`,
+          "cancel-in-progress": false,
+        });
+        expect(job.env).toBeUndefined();
+      });
+      it("has the key-job shape: checkout, exact setup-node, download-artifact, node sign-release.ts", () => {
+        keyJobShape(st, { download: true, script: "sign-release.ts" });
+      });
+      it("signs only its own env and outputs only its own names", () => {
+        const env2 = st.at(-1)?.env ?? {};
+        expect(env2.SIGN_ENV).toBe(env);
+        expect(env2.GUARD_SHA).toBe(GUARD_SHA);
+        expect(String(st.at(-1)?.run)).toContain(
+          '--commit "$GUARD_SHA" --lockfile pnpm-lock.yaml',
+        );
+        expect(env2.MANIFEST_SHA256).toBe(
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: literal workflow expression
+          "${{ needs.hosted-check.outputs.manifest_sha256 }}",
+        );
+        expect(env2.BUNDLE_SHA256).toBe(
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: literal workflow expression
+          "${{ needs.hosted-check.outputs.bundle_sha256 }}",
+        );
+        const variants = env === "prod" ? ["release"] : ["release", "redline"];
+        expect(Object.keys(job.outputs).sort()).toEqual(
+          variants
+            .flatMap((v) =>
+              ["signature", "tar_sha256", "record_sha256"].map(
+                (k) => `${env}_${v}_${k}`,
+              ),
+            )
+            .sort(),
+        );
+      });
+    });
+
+  for (const env of ENVS)
+    it(`hosted-attach-${env}: contents: write, no key, only its own sign job's outputs, refuses existing assets`, () => {
+      const name = `hosted-attach-${env}`;
+      const job = w.jobs[name];
+      const other = env === "prod" ? "staging" : "prod";
+      expect(job.permissions).toEqual({ contents: "write" });
+      expect(JSON.stringify(job)).not.toContain("RELEASE_SIGNING_KEY");
+      expect(JSON.stringify(job)).not.toContain("secrets.");
+      expect(needs(name)).toEqual(
         expect.arrayContaining([
           "hosted-guard",
-          "hosted-build",
           "hosted-check",
+          `hosted-sign-${env}`,
         ]),
       );
-      expect(job.permissions).toEqual({ contents: "read" });
+      expect(needs(name)).not.toContain(`hosted-sign-${other}`);
+      expect(JSON.stringify(job)).not.toContain(`hosted-sign-${other}`);
+      expect(job.concurrency).toEqual({
+        group: `hosted-attach-${env}-${TAG}`,
+        "cancel-in-progress": false,
+      });
+      const st = steps(name);
+      const run = runOf(st);
+      expect(run).toContain("scripts/ci/assemble-release.ts");
+      expect(run).toContain(`--env ${env}`);
+      expect(run).toContain('--commit "$GUARD_SHA" --lockfile pnpm-lock.yaml');
+      // L8: refuses when any of this env's assets is already on the release.
+      expect(run).toContain("gh release view");
+      expect(run).toContain(`oa-release-${env}-`);
+      expect(run.indexOf("gh release view")).toBeLessThan(
+        run.indexOf("gh release upload"),
+      );
+      expect(run).toContain("gh release upload");
+      expect(run).not.toContain("--clobber");
+      const node = st.filter((x) =>
+        String(x.uses ?? "").startsWith("actions/setup-node@"),
+      );
+      expect(node).toHaveLength(1);
     });
-    it("has exactly four steps: checkout (no credentials), setup-node (.nvmrc, no cache), download-artifact, node sign-release.ts", () => {
-      expect(st).toHaveLength(4);
-      expect(st[0]?.uses).toMatch(/^actions\/checkout@[0-9a-f]{40}$/);
-      expect(st[0]?.with?.["persist-credentials"]).toBe(false);
-      // ubuntu-latest's default node (20) has no --experimental-strip-types.
-      expect(st[1]?.uses).toMatch(/^actions\/setup-node@[0-9a-f]{40}$/);
-      expect(st[1]?.with).toEqual({ "node-version-file": ".nvmrc" });
-      expect(st[2]?.uses).toMatch(/^actions\/download-artifact@[0-9a-f]{40}$/);
-      expect(st[3]?.uses).toBeUndefined();
-      expect(st[3]?.run).toContain(
-        "node --experimental-strip-types scripts/ci/sign-release.ts",
-      );
-    });
-    it("uses exactly checkout, setup-node and download-artifact", () => {
-      const uses = st.map((s) => s.uses).filter(Boolean);
-      expect(uses.map((u) => String(u).split("@")[0])).toEqual([
-        "actions/checkout",
-        "actions/setup-node",
-        "actions/download-artifact",
-      ]);
-      for (const u of uses)
-        expect(u).toMatch(
-          /^actions\/(checkout|setup-node|download-artifact)@[0-9a-f]{40}$/,
-        );
-    });
-    it("installs nothing: no pnpm, npm, npx or corepack", () => {
-      // Any invocation (the lockfile path "pnpm-lock.yaml" is not one).
-      const cmd = /(^|[\s;|&(`])(pnpm|npm|npx|corepack|yarn)(?=$|[\s;|&)`])/m;
-      for (const s of st) expect(s.run ?? "").not.toMatch(cmd);
-      expect(cmd.test("x && pnpm install")).toBe(true);
-      expect(cmd.test("npx foo")).toBe(true);
-      expect(cmd.test("--lockfile pnpm-lock.yaml")).toBe(false);
-    });
-    it("has no Cloudflare secret", () => {
-      expect(JSON.stringify(job)).not.toMatch(/CLOUDFLARE_/);
-    });
-    it("reads the key only through the printf pipe on stdin", () => {
-      const withKey = st.filter((s) =>
-        JSON.stringify(s).includes("RELEASE_SIGNING_KEY"),
-      );
-      expect(withKey).toEqual([st[3]]);
-      expect(st[3]?.env?.RELEASE_SIGNING_KEY).toBe(
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: literal workflow expression
-        "${{ secrets.RELEASE_SIGNING_KEY }}",
-      );
-      const run = String(st[3]?.run);
-      expect(run).toMatch(
-        /printf '%s' "\$RELEASE_SIGNING_KEY" \| node --experimental-strip-types scripts\/ci\/sign-release\.ts /,
-      );
-      expect(run.match(/RELEASE_SIGNING_KEY/g)).toHaveLength(1);
-      expect(run).not.toMatch(/set -x|set -o xtrace|--key/);
-      expect(JSON.stringify(job.env ?? {})).not.toContain(
-        "RELEASE_SIGNING_KEY",
-      );
-      expect(Object.keys(job).filter((k) => k === "env")).toEqual([]);
-      // The only secret in the run is the signing key, in this step.
-      expect(JSON.stringify(st.slice(0, 3))).not.toContain("secrets.");
-    });
-    it("passes hosted-check's hashes, the guard's commit and the checked-out lockfile to the signer", () => {
-      const env = st[3]?.env ?? {};
-      expect(env.GUARD_SHA).toBe(GUARD_SHA);
-      expect(String(st[3]?.run)).toContain(
-        '--commit "$GUARD_SHA" --lockfile pnpm-lock.yaml',
-      );
-      expect(env.MANIFEST_SHA256).toBe(
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: literal workflow expression
-        "${{ needs.hosted-check.outputs.manifest_sha256 }}",
-      );
-      expect(env.BUNDLE_SHA256).toBe(
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: literal workflow expression
-        "${{ needs.hosted-check.outputs.bundle_sha256 }}",
-      );
-    });
-  });
 
-  it("hosted-attach has contents: write, no key, and never overwrites a release asset", () => {
-    const job = w.jobs["hosted-attach"];
-    expect(job.permissions).toEqual({ contents: "write" });
-    expect(JSON.stringify(job)).not.toContain("RELEASE_SIGNING_KEY");
-    expect(JSON.stringify(job)).not.toContain("secrets.");
-    expect(needs("hosted-attach")).toEqual(
-      expect.arrayContaining(["hosted-guard", "hosted-check", "hosted-sign"]),
-    );
-    const run = steps("hosted-attach")
-      .map((s) => s.run ?? "")
-      .join("\n");
-    expect(run).toContain("scripts/ci/assemble-release.ts");
-    // It runs .ts too: setup-node from .nvmrc, no cache.
-    const nodeStep = steps("hosted-attach").filter((x) =>
-      String(x.uses ?? "").startsWith("actions/setup-node@"),
-    );
-    expect(nodeStep).toHaveLength(1);
-    expect(nodeStep[0]?.with).toEqual({ "node-version-file": ".nvmrc" });
-    expect(run).toContain('--commit "$GUARD_SHA" --lockfile pnpm-lock.yaml');
-    expect(run).toContain("gh release upload");
-    expect(run).not.toContain("--clobber");
-  });
-
-  it("no job in the run has actions: write; every job sets permissions; only hosted-attach has contents: write", () => {
+  it("no job in the run has actions: write; every job sets permissions; only the attach jobs have contents: write", () => {
     expect(w.permissions ?? {}).toEqual({});
     for (const [name, job] of Object.entries(w.jobs) as [string, Step][]) {
       expect(job.permissions, name).toBeDefined();
       expect(job.permissions?.actions, name).not.toBe("write");
       expect(job.permissions?.contents === "write", name).toBe(
-        name === "hosted-attach",
+        name.startsWith("hosted-attach-"),
       );
     }
   });
 });
 
-describe("sign-release.ts imports only node:*", () => {
-  const importsOf = (file: string): string[] =>
+describe("hosted-floor.yml (H1)", () => {
+  it("is dispatch-only with validated-shape inputs and no workflow-wide grant", () => {
+    expect(Object.keys(fw.on)).toEqual(["workflow_dispatch"]);
+    const inp = fw.on.workflow_dispatch.inputs;
+    expect(inp.env.type).toBe("choice");
+    expect(inp.env.options).toEqual(["staging", "prod"]);
+    for (const k of ["seq", "min_version", "revoked"])
+      expect(inp[k], k).toBeDefined();
+    expect(fw.permissions).toEqual({});
+  });
+  it("floor-guard: main only, branch SHA, no secrets, read-only", () => {
+    const job = fw.jobs["floor-guard"];
+    expect(job.if).toContain("github.ref == 'refs/heads/main'");
+    expect(job.if).toContain("github.event_name == 'workflow_dispatch'");
+    expect(job.permissions).toEqual({ contents: "read" });
+    expect(JSON.stringify(job)).not.toContain("secrets.");
+    const run = runOf(stepsOf(fw, "floor-guard"));
+    expect(run).toContain('gh api "repos/$REPO/git/ref/heads/main"');
+    expect(run).not.toContain("${{");
+    expect(job.outputs.sha).toMatch(/steps\.\w+\.outputs\.sha/);
+  });
+  it("hosted-floor: the key-job shape, environment hosted-<env>, no install", () => {
+    const job = fw.jobs["hosted-floor"];
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal workflow expression
+    expect(job.environment).toBe("hosted-${{ inputs.env }}");
+    expect([job.needs].flat()).toEqual(["floor-guard"]);
+    expect(job.permissions).toEqual({ contents: "read" });
+    const st = stepsOf(fw, "hosted-floor");
+    keyJobShape(st, { download: false, script: "sign-floor.ts" });
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal workflow expression
+    expect(st[0]?.with?.ref).toBe("${{ needs.floor-guard.outputs.sha }}");
+    const run = String(st.at(-1)?.run);
+    expect(run).not.toContain("${{");
+    for (const f of ["--env", "--seq", "--min-version", "--revoked"])
+      expect(run).toContain(f);
+    expect(Object.keys(job.outputs).sort()).toEqual([
+      "floor_record_sha256",
+      "floor_signature",
+    ]);
+  });
+  it("hosted-floor-upload: no key, rebuilds with --assemble, uploads a workflow artifact, never a release asset", () => {
+    const job = fw.jobs["hosted-floor-upload"];
+    expect(job.permissions).toEqual({ contents: "read" });
+    expect(JSON.stringify(job)).not.toContain("secrets.");
+    expect([job.needs].flat()).toEqual(
+      expect.arrayContaining(["floor-guard", "hosted-floor"]),
+    );
+    const st = stepsOf(fw, "hosted-floor-upload");
+    for (const s of st) if (s.uses) expect(s.uses).toMatch(SHA_PIN);
+    const run = runOf(st);
+    expect(run).toContain("scripts/ci/sign-floor.ts");
+    expect(run).toContain("--assemble");
+    expect(run).not.toContain("gh release");
+    const up = st.filter((s) =>
+      String(s.uses ?? "").startsWith("actions/upload-artifact"),
+    );
+    expect(up).toHaveLength(1);
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal workflow expression
+    expect(up[0]?.with?.name).toBe("floor-${{ inputs.env }}-${{ inputs.seq }}");
+  });
+  it("docs/ops/hosted.md names the hosted-floor job in the checklists", () => {
+    const doc = read("docs/ops/hosted.md");
+    const first = doc.slice(doc.indexOf("### First-create checklist"));
+    expect(first).toContain("hosted-floor");
+    const rev = doc.slice(doc.indexOf("### Release checklist"));
+    expect(rev).toContain("hosted-floor");
+  });
+});
+
+describe("the key jobs' scripts import only node:* (L3: no dynamic loading)", () => {
+  const FORBIDDEN =
+    /\bimport\s*\(\s*[^"'\s)]|\bcreateRequire\b|\brequire\s*\(|["']node:(child_process|module|worker_threads|vm)["']|\bprocess\.dlopen\b/;
+  const importsOf = (src: string): string[] =>
     [
-      ...readFileSync(file, "utf8").matchAll(
-        /\b(?:import|export)\b[^;]*?\bfrom\s*["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']|\bimport\s+["']([^"']+)["']|\brequire\s*\(\s*["']([^"']+)["']/g,
+      ...src.matchAll(
+        /\b(?:import|export)\b[^;]*?\bfrom\s*["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']|\bimport\s+["']([^"']+)["']/g,
       ),
-    ].map((m) => (m[1] ?? m[2] ?? m[3] ?? m[4]) as string);
+    ].map((m) => (m[1] ?? m[2] ?? m[3]) as string);
   const closure = (entry: string) => {
     const seen = new Set<string>();
     const bad: string[] = [];
     const visit = (f: string) => {
       if (seen.has(f)) return;
       seen.add(f);
-      for (const spec of importsOf(f)) {
+      const src = readFileSync(f, "utf8");
+      const hit = FORBIDDEN.exec(src);
+      if (hit) bad.push(`${f}: ${hit[0]}`);
+      for (const spec of importsOf(src)) {
         if (spec.startsWith("node:")) continue;
         if (/^\.\.?\//.test(spec) && spec.endsWith(".ts")) {
           const p = resolve(dirname(f), spec);
-          // Local imports stay inside scripts/ci.
           if (!p.startsWith(join(root, "scripts/ci/")))
             bad.push(`${f}: ${spec}`);
           else visit(p);
@@ -276,19 +391,39 @@ describe("sign-release.ts imports only node:*", () => {
     visit(entry);
     return { seen: [...seen], bad };
   };
-  for (const entry of ["sign-release.ts", "assemble-release.ts"])
+  for (const entry of [
+    "sign-release.ts",
+    "assemble-release.ts",
+    "sign-floor.ts",
+  ])
     it(entry, () => {
       const { seen, bad } = closure(join(root, "scripts/ci", entry));
       expect(bad).toEqual([]);
       expect(seen.length).toBeGreaterThan(1);
     });
-  it("the scan catches a package import", () => {
+  it("the scan flags a package import, a dynamic import, require and child_process", () => {
+    const d = mkdtempSync(join(tmpdir(), "oa-scan-"));
+    for (const [n, src] of [
+      ["pkg.ts", 'import { parse } from "yaml";\n'],
+      ["dyn.ts", "const m = await import(spec);\n"],
+      ["req.ts", 'import { createRequire } from "node:module";\n'],
+      ["cjs.ts", 'const x = require("fs");\n'],
+      ["cp.ts", 'import { spawn } from "node:child_process";\n'],
+      ["dl.ts", "process.dlopen(m, p);\n"],
+      ["local.ts", 'import { x } from "./pkg.ts";\n'],
+    ] as const) {
+      writeFileSync(join(d, n), src);
+      expect(closure(join(d, n)).bad.length, n).toBeGreaterThan(0);
+    }
+    writeFileSync(
+      join(d, "ok.ts"),
+      'import { createHash } from "node:crypto";\n',
+    );
+    expect(closure(join(d, "ok.ts")).bad).toEqual([]);
+    // build-release-bundle.ts loads a package dynamically: flagged.
     expect(
-      importsOf(join(root, "scripts/ci/build-release-bundle.ts")).some(
-        (s) => !s.startsWith("node:"),
-      ),
-    ).toBe(false);
-    expect(importsOf(join(root, "scripts/check-ci.test.ts"))).toContain("yaml");
+      closure(join(root, "scripts/ci/build-release-bundle.ts")).bad.length,
+    ).toBeGreaterThan(0);
   });
 });
 
@@ -320,6 +455,38 @@ describe("deploy-prod checks the release bundle before Upgrade", () => {
     }
     expect(st[build]?.run).toContain("--variant release");
   });
+  it("L10: the upgrade itself runs check-no-test-hooks on the bundle it deploys", () => {
+    const up = st[at("prod-setup.sh upgrade")];
+    expect(up?.env?.OA_CHECK_NO_TEST_HOOKS).toBe("1");
+  });
+});
+
+describe("ci.yml no-test-hooks job", () => {
+  // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
+  const ci: any = parse(read(".github/workflows/ci.yml"));
+  const st: Step[] = ci.jobs["no-test-hooks"].steps;
+  it("keeps its name and behavior", () => {
+    const runs = runOf(st);
+    expect(runs).toContain(
+      'node --experimental-strip-types scripts/ci/build-release-bundle.ts "$RUNNER_TEMP/release-bundle"',
+    );
+    expect(runs).toContain(
+      'pnpm check-no-test-hooks "$RUNNER_TEMP/release-bundle"',
+    );
+  });
+  it("N5: runs the real-build pin test, required (never skipped), behind the same release-only gate", () => {
+    const pin = st.find((s) => (s.run ?? "").includes('-t "real build"'));
+    expect(pin?.run).toContain(
+      "pnpm --filter @oa/provision exec vitest run test/release-t3b.test.ts",
+    );
+    expect(pin?.env?.OA_REQUIRE_REAL_BUILD).toBe("1");
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal workflow expression
+    expect(pin?.if).toBe("${{ steps.ro.outputs.release_only != 'true' }}");
+    const check = st.findIndex((s) =>
+      (s.run ?? "").includes("pnpm check-no-test-hooks"),
+    );
+    expect(st.indexOf(pin as Step)).toBeGreaterThan(check);
+  });
 });
 
 describe("build-release-bundle.ts", () => {
@@ -328,18 +495,5 @@ describe("build-release-bundle.ts", () => {
     expect(src).toContain("--variant");
     expect(src).toMatch(/"release"/);
     expect(src).toMatch(/"redline"/);
-  });
-  it("the no-test-hooks CI job keeps its name and behavior", () => {
-    // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
-    const ci: any = parse(read(".github/workflows/ci.yml"));
-    const runs = ci.jobs["no-test-hooks"].steps
-      .map((s: Step) => s.run ?? "")
-      .join("\n");
-    expect(runs).toContain(
-      'node --experimental-strip-types scripts/ci/build-release-bundle.ts "$RUNNER_TEMP/release-bundle"',
-    );
-    expect(runs).toContain(
-      'pnpm check-no-test-hooks "$RUNNER_TEMP/release-bundle"',
-    );
   });
 });

@@ -25,6 +25,7 @@ import {
   recordPayload,
   sigJson,
 } from "./release-artifact.ts";
+import { checkSigningKey, SKIPPED } from "./release-pubkeys.ts";
 
 const NAME = "sign-release";
 const ARGS = [
@@ -70,6 +71,12 @@ async function main(): Promise<void> {
   if (key.asymmetricKeyType !== "ed25519")
     throw new Error("the signing key is not Ed25519");
   const pub = createPublicKey(key);
+  // L11: a wrong or swapped Environment secret is refused here, not at publish.
+  if (
+    checkSigningKey(env, pub.export({ format: "jwk" }).x as string) ===
+    "skipped"
+  )
+    process.stderr.write(SKIPPED(env, "signing key"));
   const art = await readArtifact(resolve(a.dir as string));
   const prepared = prepare(art, {
     env,

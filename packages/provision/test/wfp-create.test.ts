@@ -40,7 +40,12 @@ import {
   platformNames,
 } from "../src/names.js";
 import { canonicalJson, inputsHash } from "../src/platform.js";
-import { FLOOR_KEY, publishRelease, r2ReleaseReader } from "../src/publish.js";
+import {
+  FLOOR_KEY,
+  probeR2Conditionals,
+  publishRelease,
+  r2ReleaseReader,
+} from "../src/publish.js";
 import {
   assetEntries,
   bundleSha256,
@@ -3488,6 +3493,18 @@ describe("T3b E: the signed floor gates create", () => {
     expect(s.rows()).toEqual([]);
   });
 
+  it("N1: a non-integer floor_seq in D1 is refused, not read as 0", async () => {
+    const s = setup({
+      release: makeRelease({ floor: signFloor(floorOf({ seq: 4 })) }),
+    });
+    s.db()
+      .prepare("INSERT INTO release_floor (id, floor_seq) VALUES (1, 'x')")
+      .run();
+    const e = await fails(s.p.create(input()));
+    expect(e.message).toMatch(/floor_seq/);
+    expect(nonReads(s.fake)).toEqual([]);
+  });
+
   it("create raises floor_seq to the floor's seq with MAX, never lowering it", async () => {
     const s = setup({
       release: makeRelease({ floor: signFloor(floorOf({ seq: 7 })) }),
@@ -3527,6 +3544,7 @@ describe("T3b E: the signed floor gates create", () => {
       })),
       { path: "welcome/welcome.md", bytes: WELCOME_BYTES },
     ];
+    await probeR2Conditionals(cf, "staging");
     await publishRelease({
       cf,
       env: "staging",

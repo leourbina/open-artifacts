@@ -90,6 +90,7 @@ const r = await writeArtifact(resolve(out), {
     })
   ).map((f) => ({ name: f.path, bytes: f.bytes })),
   welcome: await one("scripts/setup", "welcome.md"),
+  configs: { release: release.config, redline: redline.config },
   built: {
     release: { commit, lockfileSha256: lockRelease },
     redline: { commit, lockfileSha256: lockRedline },

@@ -229,8 +229,15 @@ FROM installs WHERE rl_ns >= ?8 AND rl_ns < ?10`,
       "SELECT floor_seq FROM release_floor WHERE id = 1",
       [],
     );
-    const v = r[0]?.results?.[0]?.floor_seq;
-    return typeof v === "number" ? v : 0;
+    const row = r[0]?.results?.[0];
+    if (!row) return 0;
+    // N1: a row that is not a whole number is refused, never read as 0.
+    const v = row.floor_seq;
+    if (!Number.isSafeInteger(v) || (v as number) < 0)
+      throw new Error(
+        "platform D1 release_floor.floor_seq is not a whole number",
+      );
+    return v as number;
   }
 
   /** Raises the floor_seq cache; MAX, so it never goes down. */

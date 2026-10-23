@@ -122,6 +122,13 @@ export class FakeCf {
   r2PerPage?: number;
   /** Rewrites the bytes a GET serves (the listing keeps the stored size). */
   r2Serve?: (key: string, bytes: Uint8Array) => Uint8Array;
+  /** An R2 that ignores If-None-Match / If-Match (M2: the probe must catch it). */
+  r2IgnoreConditionals = false;
+  /** The first PUT of each key stores the object, then answers 500 (a lost reply). */
+  r2PutLandsThen500 = false;
+  private r2Landed = new Set<string>();
+  /** Runs after a PUT stored its object (e.g. another writer racing in). */
+  r2OnPut?: (key: string) => void;
   readonly kv = new Map<
     string,
     { title: string; values: Map<string, string> }
@@ -460,9 +467,10 @@ export class FakeCf {
       };
       if (req.method === "PUT") {
         if (
-          (ifNoneMatch === "*" && cur) ||
-          (ifMatch !== undefined &&
-            cur?.etag !== ifMatch.replace(/^"(.*)"$/, "$1"))
+          !this.r2IgnoreConditionals &&
+          ((ifNoneMatch === "*" && cur) ||
+            (ifMatch !== undefined &&
+              cur?.etag !== ifMatch.replace(/^"(.*)"$/, "$1")))
         ) {
           log(412);
           return fail(412, "PreconditionFailed", 10031);
@@ -470,8 +478,19 @@ export class FakeCf {
         const bytes = new Uint8Array(await req.arrayBuffer());
         const etag = randomBytes(16).toString("hex");
         objs.set(key, { bytes, etag });
+        this.r2OnPut?.(key);
+        if (this.r2PutLandsThen500 && !this.r2Landed.has(`${bucket}/${key}`)) {
+          this.r2Landed.add(`${bucket}/${key}`);
+          log(500);
+          return fail(500, "internal error (the write landed)");
+        }
         log(200);
         return env({ key, size: bytes.length, etag });
+      }
+      if (req.method === "DELETE") {
+        objs.delete(key);
+        log(200);
+        return env(null);
       }
       if (req.method === "GET" || req.method === "HEAD") {
         if (!cur) {

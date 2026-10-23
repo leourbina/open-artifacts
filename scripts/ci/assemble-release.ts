@@ -16,8 +16,10 @@ import {
   parseArgs,
   prepare,
   readArtifact,
+  recordPayload,
   sigJson,
 } from "./release-artifact.ts";
+import { SKIPPED, verifySignature } from "./release-pubkeys.ts";
 
 const NAME = "assemble-release";
 const REQUIRED = [
@@ -66,6 +68,15 @@ async function main(): Promise<void> {
       throw new Error(
         `the ${p.variant} record is not the one hosted-sign signed`,
       );
+    // L11: verified against the pinned key before anything is written.
+    if (
+      verifySignature(
+        env,
+        recordPayload(env, p.recordString),
+        m[1] as string,
+      ) === "skipped"
+    )
+      process.stderr.write(SKIPPED(env, `${p.variant} signature`));
     return { p, signature: m[1] as string };
   });
   const out = resolve(a.out as string);
