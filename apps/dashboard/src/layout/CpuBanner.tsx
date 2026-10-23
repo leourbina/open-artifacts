@@ -53,14 +53,21 @@ const GaugeIcon = (
 export function CpuBanner({
   role,
   plan,
+  usageOff = false,
   className = "",
 }: {
   role: Me["user"]["role"] | undefined;
   plan: Me["instance"]["plan"] | undefined;
+  /** Hosted with usage_off: no usage read, no View usage. */
+  usageOff?: boolean;
   /** The page's content column, so the banner's edges line up with it. */
   className?: string;
 }) {
-  const { admin, hits, recent, today, paid } = useCpuSignals(role, plan);
+  const { admin, hits, recent, today, paid } = useCpuSignals(
+    role,
+    plan,
+    usageOff,
+  );
   const [dismissed, setDismissed] = useState(read);
   const n = hits ?? 0;
   if (role === "guest" || dismissed === today || !(n >= 3 || recent))
@@ -95,7 +102,7 @@ export function CpuBanner({
             keeps happening, please report it so we can fix it.
           </p>
           <div className="oa-cpu-acts">
-            {admin && (
+            {admin && !usageOff && (
               <AppLink
                 className="oa-btn oa-sm oa-primary"
                 href="/settings/usage"

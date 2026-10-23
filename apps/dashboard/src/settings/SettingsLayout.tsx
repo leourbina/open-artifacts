@@ -3,6 +3,7 @@ import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { type ReactNode, useEffect } from "react";
 import { useMe } from "../auth/useMe";
 import { ATTENTION, AttentionDot } from "../layout/AttentionDot";
+import { SyncDot, syncDot } from "../layout/SyncBanner";
 import { AppLink } from "../library/AppLink";
 import { useDeparted } from "./departed";
 import { canAdminSpaces } from "./spaces/access";
@@ -55,6 +56,7 @@ export function SettingsLayout() {
   const role = state.status === "authed" ? state.me.user.role : null;
   const me = state.status === "authed" ? state.me : null;
   const directory = me?.instance.directory;
+  const sync = syncDot(me);
   // Compare the normalized path: the router matches case-insensitively, ignoring a trailing slash.
   const here = path.toLowerCase().replace(/\/+$/, "");
   // Departed people with artifacts to transfer light the Members tab.
@@ -85,7 +87,8 @@ export function SettingsLayout() {
             className={`${TAB} gap-[6px]`}
             aria-current={here === t.to ? "page" : undefined}
             aria-label={
-              t.to === "/settings/members" && departed.length > 0
+              (t.to === "/settings/members" && departed.length > 0) ||
+              (t.directory && sync)
                 ? `${t.label}${ATTENTION}`
                 : undefined
             }
@@ -94,6 +97,7 @@ export function SettingsLayout() {
             {t.to === "/settings/members" && departed.length > 0 && (
               <AttentionDot />
             )}
+            {t.directory && sync && <SyncDot tone={sync} small />}
           </AppLink>
         ))}
       </nav>

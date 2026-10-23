@@ -30,11 +30,16 @@ export const utcDay = (t = Date.now()) =>
 export function useCpuSignals(
   role: Role | null | undefined,
   plan: Me["instance"]["plan"] | undefined,
+  /** Hosted with usage_off: R.usage is 404, so never ask. */
+  usageOff = false,
 ) {
   // `role` comes from the caller: a fresh useMe observer here would refetch an
   // errored /me on mount and flip the caller back to loading.
   const admin = role === "owner" || role === "admin";
-  const usage = useUsage({ enabled: admin, staleTime: USAGE_STALE_MS });
+  const usage = useUsage({
+    enabled: admin && !usageOff,
+    staleTime: USAGE_STALE_MS,
+  });
   const at = useSyncExternalStore(
     subscribeCpuLimit,
     lastCpuLimitAt,
@@ -42,7 +47,7 @@ export function useCpuSignals(
   );
   const now = Date.now();
   const today = utcDay(now);
-  const data = admin ? usage.data : undefined;
+  const data = admin && !usageOff ? usage.data : undefined;
   const hits =
     data?.available && data.date === today
       ? (data.metrics.find((m) => m.key === "cpu_limit_hits")?.used ?? null)

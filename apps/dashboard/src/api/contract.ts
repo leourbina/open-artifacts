@@ -65,6 +65,7 @@ export {
   SpaceSchema,
   type SpacesQuery,
   SpacesQuerySchema,
+  type SyncState,
   type SyncStatus,
   SyncStatusSchema,
   type Tier,

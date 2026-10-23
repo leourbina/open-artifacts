@@ -7,6 +7,7 @@ import {
   useParams,
   useSearch,
 } from "@tanstack/react-router";
+import { hasFeature } from "./api/contract";
 import { useMe } from "./auth/useMe";
 import { AppLayout } from "./layout/AppLayout";
 import { useDocumentTitle } from "./layout/useDocumentTitle";
@@ -159,14 +160,32 @@ const settings = createRoute({
   id: "settings",
   component: SettingsLayout,
 });
+/** Hosted with `usage_off`: the Usage page is 404 server side, so it goes to Profile. */
+function UsageRoute() {
+  const state = useMe();
+  const off = state.status === "authed" && hasFeature(state.me, "usage_off");
+  return (
+    <Gate
+      allow={off ? [] : ADMINS}
+      redirects={
+        off
+          ? {
+              guest: "/shared",
+              member: "/",
+              owner: "/settings/profile",
+              admin: "/settings/profile",
+            }
+          : { guest: "/shared", member: "/" }
+      }
+    >
+      <Usage />
+    </Gate>
+  );
+}
 const usage = createRoute({
   getParentRoute: () => root,
   path: "/settings/usage",
-  component: () => (
-    <Gate allow={ADMINS} redirects={{ guest: "/shared", member: "/" }}>
-      <Usage />
-    </Gate>
-  ),
+  component: UsageRoute,
 });
 
 const routeTree = root.addChildren([
