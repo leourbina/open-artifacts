@@ -13,6 +13,7 @@
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import type { Response } from "@playwright/test";
 import {
   APP,
   artifactFrame,
@@ -247,12 +248,43 @@ test("5. public with anonymous writes; the anon write limit is enforced", async 
     .toMatch(/voted tabs|rate.?limit|too many/i);
   // The limiter's window is minute-aligned, so 31 clicks can straddle a
   // window reset and never hit the limit. Two windows of 30 plus one (61)
-  // always do: click until the limit shows.
-  const limited = async () =>
-    /rate.?limit|too many/i.test((await err.textContent()) ?? "");
-  // Responses land asynchronously; extra clicks after the limit are harmless.
-  for (let i = 2; i <= 61 && !(await limited()); i++) await vote.click();
-  await expect(err).toContainText(/rate.?limit|too many/i, { timeout: 10_000 });
+  // always do. Every click clears #err, and once a window resets later votes
+  // pass again, so the message can be gone by the time it is read (#482).
+  // So: the proof is the first 429 on the network, clicking stops there, and
+  // a MutationObserver records that the page did show the limit message.
+  const LIMIT = /rate.?limit|too many/i;
+  const isLimited = (r: Response) =>
+    r.status() === 429 &&
+    r.request().method() === "PUT" &&
+    r.url().includes("/data/votes/");
+  let limited = false;
+  const first429 = anon
+    .waitForResponse(isLimited, { timeout: 60_000 })
+    .then((r) => {
+      limited = true;
+      return r;
+    });
+  await err.evaluate((el, src) => {
+    const re = new RegExp(src, "i");
+    const w = window as unknown as { __oaSawLimit?: boolean };
+    w.__oaSawLimit = re.test(el.textContent ?? "");
+    new MutationObserver(() => {
+      if (re.test(el.textContent ?? "")) w.__oaSawLimit = true;
+    }).observe(el, { childList: true, characterData: true, subtree: true });
+  }, LIMIT.source);
+  for (let i = 2; i <= 61 && !limited; i++) await vote.click();
+  expect((await first429).status()).toBe(429);
+  await expect
+    .poll(
+      () =>
+        err.evaluate(
+          () =>
+            (window as unknown as { __oaSawLimit?: boolean }).__oaSawLimit ===
+            true,
+        ),
+      { timeout: 10_000 },
+    )
+    .toBe(true);
   await anonCtx.close();
 });
 
