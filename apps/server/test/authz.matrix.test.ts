@@ -269,7 +269,11 @@ describe("listFilterSql", () => {
         .bind(...q.params)
         .all<{ detail: string }>();
       const details = plan.results.map((r) => r.detail);
-      expect(details.join("\n")).not.toMatch(/CORRELATED|SCAN artifacts/);
+      // The team branch's public-links probe is a correlated PK lookup per
+      // public row (P3 T4); the share IN must stay uncorrelated.
+      expect(details.join("\n")).not.toMatch(
+        /CORRELATED LIST SUBQUERY|SCAN artifacts/,
+      );
       expect(details.some((d) => d.includes("shares_email_idx"))).toBe(true);
     });
   }

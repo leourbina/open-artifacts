@@ -29,11 +29,12 @@ hosted off.
 - **Identity linking** is `identities(provider = "google", subject)`; the
   Google sign-in `sub` equals `DirUser.id`. No shape carries `users.directory_id`.
 - **`instance.hosted` exists once**, on `Me.instance`.
-- **Query and publish extensions are separate schemas** for now
-  (`HostedListQuerySchema`, `HostedSearchQuerySchema`, `HostedPublishInputSchema`).
-  `ListQuerySchema`, `SearchQuerySchema` and `PublishInputSchema` also define
-  the MCP tool inputs and the generated skill, so P3 folds the extensions in,
-  and regenerates the skill, in the PR that implements them.
+- **The list and search extensions are folded in** (P3 T4): `ListQuerySchema`
+  and `SearchQuerySchema` carry the space scopes and `spaceId`, so the MCP
+  `list_artifacts` and `search_artifacts` inputs and the generated skill have
+  them too. **The publish extension is still separate** (`HostedPublishInputSchema`);
+  `PublishInputSchema` also defines the MCP tool input and the generated skill,
+  so P3 folds it in, and regenerates the skill, in the PR that implements it.
 
 ## FEATURES flags (`FeatureFlagSchema`, `Me.instance.features`)
 
@@ -172,8 +173,8 @@ line, never twice. A non-null `cap` still limits access to viewer.
 
 | Route | Body → response | Rules |
 |---|---|---|
-| `GET R.artifacts` | `HostedListQuery` | `scope` adds `space` (needs `spaceId`) and `spaces`; `mine` = personal space; `spaceId` narrows any scope |
-| `GET R.search` | `HostedSearchQuery` | optional `spaceId` |
+| `GET R.artifacts` | `ListQuery` | `scope` adds `space` (needs `spaceId`) and `spaces`; `mine` = personal space; `spaceId` narrows any scope (another user's personal space: 400 `space_personal`; unknown: 404) |
+| `GET R.search` | `SearchQuery` | optional `spaceId`, as the list's |
 | `POST R.artifacts` | `HostedPublishInput` | `spaceId` on create only (existing id: 400 `use_move`); default personal space; not allowed: 403 `space_forbidden` (also any create by a capped caller); `visibility: "public"` where the space's publicLinks is off: 403 `public_links_off` |
 | `PATCH R.artifact(id)` | `ArtifactPatch` | `visibility: "public"` where publicLinks is off: 403 `public_links_off` |
 | `POST R.moveArtifact(id)` | `MoveArtifactInput {spaceId}` → `ArtifactSummary` | manager/owner on the artifact (else 404); shared target only (400 `space_personal`); editor+ in target (else 403 `space_forbidden`). A public artifact moved into a space with publicLinks off becomes `team` in the same batch and its anonymous sockets close (as the publicLinks toggle-off); the returned summary shows `visibility: "team"` |

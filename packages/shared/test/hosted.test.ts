@@ -17,8 +17,8 @@ import {
   ERROR_CODES,
   GroupMappingSchema,
   HealthzSchema,
-  HostedListQuerySchema,
   HostedPublishInputSchema,
+  ListQuerySchema,
   MemberSchema,
   MembersQuerySchema,
   MeSchema,
@@ -29,6 +29,7 @@ import {
   R,
   RestrictedGroupSchema,
   SearchHitSchema,
+  SearchQuerySchema,
   SettingsPatchSchema,
   SettingsSchema,
   SPACE_MANAGER_MAPPING_ROLES,
@@ -156,12 +157,12 @@ describe("hosted contract schemas", () => {
     expect(MembersQuerySchema.safeParse({ status: "gone" }).success).toBe(
       false,
     );
-    expect(HostedListQuerySchema.safeParse({ scope: "space" }).success).toBe(
-      false,
-    );
+    expect(ListQuerySchema.safeParse({ scope: "space" }).success).toBe(false);
     expect(
-      HostedListQuerySchema.parse({ scope: "space", spaceId: "s" }).spaceId,
+      ListQuerySchema.parse({ scope: "space", spaceId: "s" }).spaceId,
     ).toBe("s");
+    expect(ListQuerySchema.parse({ scope: "spaces" }).scope).toBe("spaces");
+    expect(SearchQuerySchema.parse({ q: "x", spaceId: "s" }).spaceId).toBe("s");
     expect(
       TestSessionInputSchema.parse({
         email: "a@b.co",

@@ -5,10 +5,10 @@ import { and, eq } from "drizzle-orm";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { getDb } from "../src/db/client.js";
-import { shares } from "../src/db/schema.js";
+import { artifacts, shares, spaceMembers, spaces } from "../src/db/schema.js";
 import { publish, softDelete, undelete } from "../src/services/artifacts.js";
 import { getUser } from "../src/services/users.js";
-import { api, login, runIndex } from "./helpers.js";
+import { api, errOf, login, runIndex } from "./helpers.js";
 
 // Review Focus #3: search never leaks what the caller can't see.
 const app = createApp();
@@ -19,6 +19,7 @@ type U = { cookie: string; userId: string; member: Member; email: string };
 let owner: U;
 let guest: U;
 let member: U;
+let admin: U;
 
 async function mk(prefix: string, role: Member["role"] = "member"): Promise<U> {
   const email = `${prefix}-${tag}@x.com`;
@@ -54,6 +55,7 @@ beforeAll(async () => {
   owner = await mk("sa-owner");
   guest = await mk("sa-guest", "guest");
   member = await mk("sa-member");
+  admin = await mk("sa-admin", "admin");
 });
 
 describe("search authz", () => {
@@ -103,5 +105,64 @@ describe("search authz", () => {
     await undelete(env, owner.member, team.id);
     await runIndex(team.id);
     expect(await ids(member)).toEqual([team.id, pubA.id].sort());
+  });
+});
+
+describe("search with spaces (P3 T4)", () => {
+  const w2 = `spaceword${tag}`;
+  const pub2 = async (title: string, visibility: string) => {
+    const r = await publish(
+      env,
+      owner.member,
+      { title, visibility, format: "markdown", content: w2 } as never,
+      null,
+    );
+    await runIndex(r.id);
+    return r;
+  };
+  const hits = async (u: U, extra = "") => {
+    const r = await api(app, `${R.search}?q=${w2}&limit=100${extra}`, u.cookie);
+    expect(r.status).toBe(200);
+    return Hits.parse(await r.json()).items;
+  };
+
+  it("search never returns another user's personal artifact to an admin", async () => {
+    const priv = await pub2("personal", "private");
+    expect((await hits(owner)).map((h) => h.id)).toEqual([priv.id]);
+    expect(await hits(admin)).toEqual([]);
+  });
+
+  it("levels per hit come from the space role; spaceId narrows", async () => {
+    const sid = newId();
+    const db = getDb(env);
+    await db.insert(spaces).values({
+      id: sid,
+      kind: "shared",
+      name: `s-${tag}`,
+      createdAt: Date.now(),
+    });
+    await db.insert(spaceMembers).values({
+      spaceId: sid,
+      userId: admin.userId,
+      role: "manager",
+      source: "manual",
+      createdAt: Date.now(),
+    });
+    const inSpace = await pub2("in space", "private");
+    await db
+      .update(artifacts)
+      .set({ spaceId: sid })
+      .where(eq(artifacts.id, inSpace.id));
+    const got = await hits(admin, `&spaceId=${sid}`);
+    expect(got.map((h) => [h.id, h.access])).toEqual([[inSpace.id, "manager"]]);
+    // The creator has no role in the space: it left their personal space.
+    expect((await hits(owner)).map((h) => h.id)).not.toContain(inSpace.id);
+    const personal = await api(
+      app,
+      `${R.search}?q=${w2}&spaceId=${owner.userId}`,
+      admin.cookie,
+    );
+    expect(personal.status).toBe(400);
+    expect((await errOf(personal)).code).toBe("space_personal");
   });
 });

@@ -222,18 +222,32 @@ export const VersionInfoSchema = z.object({
 });
 export type VersionInfo = z.infer<typeof VersionInfoSchema>;
 
-export const ListQuerySchema = z.object({
-  scope: z.enum(["mine", "shared", "team", "all"]).default("all"),
-  format: FormatSchema.optional(),
-  visibility: VisibilitySchema.optional(),
-  owner: z.string().optional(),
-  agent: z.string().optional(),
-  q: z.string().optional(),
-  updatedSince: z.string().optional(),
-  cursor: z.string().optional(),
-  limit: z.coerce.number().int().min(1).max(100).default(25),
-  includeDeleted: z.union([z.boolean(), z.stringbool()]).default(false),
-});
+/**
+ * GET R.artifacts. scope "mine" = the caller's personal space; "space" = one
+ * space (needs spaceId, 400 without); "spaces" = every shared space the
+ * caller has a role in. spaceId narrows any scope; another user's personal
+ * space is 400 space_personal.
+ */
+export const ListQuerySchema = z
+  .object({
+    scope: z
+      .enum(["mine", "shared", "team", "all", "space", "spaces"])
+      .default("all"),
+    spaceId: z.string().optional(),
+    format: FormatSchema.optional(),
+    visibility: VisibilitySchema.optional(),
+    owner: z.string().optional(),
+    agent: z.string().optional(),
+    q: z.string().optional(),
+    updatedSince: z.string().optional(),
+    cursor: z.string().optional(),
+    limit: z.coerce.number().int().min(1).max(100).default(25),
+    includeDeleted: z.union([z.boolean(), z.stringbool()]).default(false),
+  })
+  .refine((q) => q.scope !== "space" || q.spaceId !== undefined, {
+    message: 'scope "space" requires spaceId',
+    path: ["spaceId"],
+  });
 export type ListQuery = z.infer<typeof ListQuerySchema>;
 export type ListQueryInput = z.input<typeof ListQuerySchema>;
 
@@ -739,10 +753,12 @@ export const GetArtifactInputSchema = z.strictObject({
 export type GetArtifactInput = z.infer<typeof GetArtifactInputSchema>;
 export type GetArtifactInputInput = z.input<typeof GetArtifactInputSchema>;
 
+/** GET R.search. spaceId narrows the hits to one space (as the list's). */
 export const SearchQuerySchema = z.strictObject({
   q: z.string().trim().min(1).max(500),
   cursor: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(25),
+  spaceId: z.string().optional(),
 });
 export type SearchQuery = z.infer<typeof SearchQuerySchema>;
 export type SearchQueryInput = z.input<typeof SearchQuerySchema>;

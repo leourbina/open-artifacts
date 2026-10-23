@@ -1,39 +1,13 @@
 // Hosted M1 artifact additions (P3): space-aware list/search/publish, move,
 // transfer, departed-person bulk transfer, member status filter.
 //
-// The query and publish extensions are separate schemas here, not yet folded
-// into ListQuerySchema / SearchQuerySchema / PublishInputSchema: those also
-// define the MCP tool inputs and the generated skill, so P3 folds them in
-// (and regenerates the skill) in the PR that implements them.
+// The list and search scopes are folded into ListQuerySchema and
+// SearchQuerySchema (P3 T4). The publish extension is still separate here:
+// PublishInputSchema also defines the MCP tool input and the generated skill,
+// so P3 folds it in (and regenerates the skill) in the PR that implements it.
 import { z } from "zod";
-import {
-  ListQuerySchema,
-  PublishInputSchema,
-  SearchQuerySchema,
-} from "../schemas.js";
+import { PublishInputSchema } from "../schemas.js";
 import { MemberStatusSchema } from "./core.js";
-
-/**
- * GET R.artifacts with spaces on. scope "space" = one space (needs spaceId,
- * 400 without); "spaces" = every shared space the caller has a role in;
- * "mine" = the caller's personal space. spaceId also narrows other scopes.
- */
-export const HostedListQuerySchema = ListQuerySchema.extend({
-  scope: z
-    .enum(["mine", "shared", "team", "all", "space", "spaces"])
-    .default("all"),
-  spaceId: z.string().optional(),
-}).refine((q) => q.scope !== "space" || q.spaceId !== undefined, {
-  message: 'scope "space" requires spaceId',
-  path: ["spaceId"],
-});
-export type HostedListQuery = z.infer<typeof HostedListQuerySchema>;
-
-/** GET R.search with spaces on: optional spaceId. */
-export const HostedSearchQuerySchema = SearchQuerySchema.extend({
-  spaceId: z.string().optional(),
-});
-export type HostedSearchQuery = z.infer<typeof HostedSearchQuerySchema>;
 
 /** The field PublishInput gains: create only; default the caller's personal space. */
 export const PublishSpaceFieldSchema = z.strictObject({

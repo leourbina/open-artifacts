@@ -40,21 +40,38 @@ const transfer = (deleted: boolean) =>
     .toSQL();
 
 const OWNER = "artifacts_owner_updated_live_idx";
+const SPACE = "artifacts_space_live_idx";
 const VIS = "artifacts_visibility_updated_live_idx";
 const TRASH = "artifacts_owner_deleted_idx";
 const s = (...parts: string[]) => new RegExp(parts.join("[\\s\\S]*"));
-/** MULTI-INDEX OR over mine, shared-with-me and team. */
+/** The spaces branches: role rows, then allMembersRole and Every-space spaces. */
+const SPACES = [
+  "SEARCH sm USING COVERING INDEX space_members_user_idx",
+  `SEARCH artifacts USING INDEX ${SPACE}`,
+  `SEARCH artifacts USING INDEX ${SPACE}`,
+];
+/** MULTI-INDEX OR over mine, shared-with-me, team and spaces (P3 T4). */
 const ALL = s(
-  `SEARCH artifacts USING INDEX ${OWNER}`,
+  "MULTI-INDEX OR",
+  `SEARCH artifacts USING INDEX ${SPACE}`,
   "SEARCH artifacts USING INDEX sqlite_autoindex_artifacts_1",
   `SEARCH artifacts USING INDEX ${VIS}`,
+  ...SPACES,
 );
 
 /** name → query, and what its plan must contain. */
 const queries: Record<string, { q: () => Q; plan: RegExp }> = {
   "list mine": {
     q: () => list({ scope: "mine" }),
-    plan: s(`SEARCH artifacts USING INDEX ${OWNER}`),
+    plan: s(`SEARCH artifacts USING INDEX ${SPACE}`),
+  },
+  "list spaces": {
+    q: () => list({ scope: "spaces" }),
+    plan: s("MULTI-INDEX OR", ...SPACES),
+  },
+  "list space": {
+    q: () => list({ scope: "space", spaceId: "s" }),
+    plan: s(`SEARCH artifacts USING INDEX ${SPACE}`),
   },
   "list team": {
     q: () => list({ scope: "team" }),
@@ -84,7 +101,8 @@ const queries: Record<string, { q: () => Q; plan: RegExp }> = {
   "trash: list mine, includeDeleted": {
     q: () => list({ scope: "mine", includeDeleted: true }),
     plan: s(
-      `SEARCH artifacts USING INDEX ${OWNER}`,
+      "MULTI-INDEX OR",
+      `SEARCH artifacts USING INDEX ${SPACE}`,
       `SEARCH artifacts USING INDEX ${TRASH}`,
     ),
   },
@@ -98,9 +116,11 @@ const queries: Record<string, { q: () => Q; plan: RegExp }> = {
   "trash: list all, includeDeleted": {
     q: () => list({ scope: "all", includeDeleted: true }),
     plan: s(
-      `SEARCH artifacts USING INDEX ${OWNER}`,
+      "MULTI-INDEX OR",
+      `SEARCH artifacts USING INDEX ${SPACE}`,
       "sqlite_autoindex_artifacts_1",
       `SEARCH artifacts USING INDEX ${VIS}`,
+      ...SPACES,
       `SEARCH artifacts USING INDEX ${TRASH}`,
     ),
   },
