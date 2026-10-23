@@ -1639,6 +1639,36 @@ describe("F: r2ReleaseReader", () => {
     expect(s.fake.log).toEqual([]);
   });
 
+  it("R-N1: r2ObjectDelete deletes only probe/ keys; a release key and floor.json are refused before any call", async () => {
+    const s = await probed(setup());
+    s.fake.r2Seed(
+      s.bucket,
+      "releases/0.34.0/release/record.sig.json",
+      enc("r"),
+    );
+    s.fake.r2Seed(s.bucket, FLOOR_KEY, enc("f"));
+    for (const k of [
+      "releases/0.34.0/release/record.sig.json",
+      FLOOR_KEY,
+      "probe/../releases/floor.json",
+      "probe/",
+      "probe/x",
+      `probe/${"a".repeat(32)}/more`,
+    ])
+      await expect(s.cf.r2ObjectDelete(s.bucket, k), k).rejects.toThrow(
+        /probe/,
+      );
+    expect(s.fake.log).toEqual([]);
+    expect(s.fake.r2Object(s.bucket, FLOOR_KEY)).toBeDefined();
+    expect(
+      s.fake.r2Object(s.bucket, "releases/0.34.0/release/record.sig.json"),
+    ).toBeDefined();
+    const probeKey = `probe/${"a".repeat(32)}`;
+    s.fake.r2Seed(s.bucket, probeKey, enc("p"));
+    await s.cf.r2ObjectDelete(s.bucket, probeKey);
+    expect(s.fake.r2Object(s.bucket, probeKey)).toBeUndefined();
+  });
+
   it("r2ObjectPut sends If-None-Match / If-Match and surfaces 412", async () => {
     const s = await probed(setup());
     await s.cf.r2ObjectPut(s.bucket, "k", enc("1"), { ifNoneMatch: "*" });

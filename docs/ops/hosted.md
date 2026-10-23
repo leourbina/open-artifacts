@@ -68,6 +68,12 @@ Namespace `oa-spike-staging`, dispatch Worker `oa-s-spike-dispatch` (account scr
 - The key ceremony's one-line PR sets the public keys in both `packages/provision/src/internal/gates.ts` and `scripts/ci/release-pubkeys.ts` (a test pins them equal); the key jobs then refuse a signing key that is not the pinned one.
 - The signed floor `releases/floor.json` (`{ env, seq, minVersion, revoked }`, signed over `"oa-release-floor-v1\n" + env + "\n"` plus the record) gates `create`. The platform D1 `release_floor.floor_seq` is only a cache (raised with `MAX`); the anchor is `FLOOR_MIN_SEQ[env]`. `publishFloor` needs a higher `seq`, the same or a higher `minVersion` and a superset of `revoked`, and writes with `If-Match`.
 
+### Key-ceremony checklist (per env, with the user's OK)
+
+1. Confirm that the GitHub Environment `hosted-<env>` limits deployment branches to `main` only (a custom branch policy that is exactly the branch `main`, not protected branches, not a pattern) and has a required reviewer. This branch policy is the real control against a `workflow_dispatch` from another ref reaching the key. Check it with `gh api repos/{repo}/environments/hosted-<env>` and `gh api repos/{repo}/environments/hosted-<env>/deployment-branch-policies`.
+2. Generate the Ed25519 keypair locally and pipe the private key straight into `scripts/ops/hosted-set-signing-key.sh <env>` (never onto disk). The script runs the two `gh api` reads above and refuses the upload unless deployment branches are `main` only and a reviewer is required; only then does it `gh secret set RELEASE_SIGNING_KEY --env hosted-<env>` from stdin.
+3. Put the public key (JWK `x`) in both `packages/provision/src/internal/gates.ts` and `scripts/ci/release-pubkeys.mjs` in one PR (a test pins them equal); flip `PROD_UNLOCKED` there for prod.
+
 ### First-create checklist (per env)
 
 1. Apply every platform D1 migration to `oa-<p>-platform`, in order: `apps/platform-db/migrations/0001_installs.sql`, then `0002_release_floor.sql` (the `release_floor` cache). Without 0002, create fails closed on the floor_seq read.

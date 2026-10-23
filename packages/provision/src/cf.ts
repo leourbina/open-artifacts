@@ -124,6 +124,7 @@ export interface Cf {
     key: string,
     opts?: { maxBytes?: number },
   ): Promise<{ bytes: Uint8Array; etag: string } | null>;
+  /** Deletes a probe/<32 hex> key only (probeR2Conditionals); any other key is refused. */
   r2ObjectDelete(bucket: string, key: string): Promise<void>;
   r2ObjectHead(
     bucket: string,
@@ -146,6 +147,9 @@ export interface Cf {
     cursor?: string,
   ): Promise<{ objects: R2ObjectInfo[]; cursor?: string; truncated: boolean }>;
 }
+
+/** The only keys r2ObjectDelete may delete: probeR2Conditionals' throwaway keys. */
+const PROBE_KEY = /^probe\/[0-9a-f]{32}$/;
 
 /** The only buckets the R2 object calls touch: the releases bucket of an env. */
 const RELEASES_BUCKET = /^oa-[sp]-releases$/;
@@ -524,6 +528,12 @@ export function cfClient(o: {
       return { bytes: r.bytes ?? new Uint8Array(), etag: etagOf(r.headers) };
     },
     async r2ObjectDelete(bucket, key) {
+      // R-N1: only probeR2Conditionals' throwaway keys; a release object or
+      // floor.json is never deleted through this client.
+      if (typeof key !== "string" || !PROBE_KEY.test(key))
+        throw new Error(
+          "r2ObjectDelete only deletes the R2 probe's throwaway keys (probe/<32 hex>)",
+        );
       await call("DELETE", r2Path(bucket, key), {}, [404]);
     },
     async r2ObjectHead(bucket, key) {
