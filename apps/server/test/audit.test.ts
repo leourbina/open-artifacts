@@ -12,7 +12,12 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { authConfig } from "../src/auth/config.js";
 import type { Env } from "../src/env.js";
-import { audit, EXPORT_PAGES } from "../src/services/audit.js";
+import {
+  audit,
+  auditFilters,
+  EXPORT_PAGES,
+  listAudit,
+} from "../src/services/audit.js";
 import { admit, resetIdentity } from "../src/services/identity.js";
 import { direct, mailer, seedUser, uniq } from "./auth-helpers.js";
 import { api, login } from "./helpers.js";
@@ -517,5 +522,93 @@ describe("R.audit and R.auditExport", () => {
     expect(
       (await api(app, `${R.auditExport}?cursor=nope!`, owner.cookie)).status,
     ).toBe(400);
+  });
+});
+
+describe("audit cursors are opaque and bound", () => {
+  const firstCursor = async (path = `${R.audit}?limit=1`) => {
+    const r = await api(app, path, owner.cookie);
+    expect(r.status).toBe(200);
+    const c = ((await r.json()) as { nextCursor: string | null }).nextCursor;
+    expect(c).toBeTruthy();
+    return c as string;
+  };
+  const status = async (path: string) =>
+    (await api(app, path, owner.cookie)).status;
+
+  it("a cursor is not plain b64url JSON (it carries a MAC)", async () => {
+    const c = await firstCursor();
+    expect(c.split(".")).toHaveLength(2);
+    expect(await status(`${R.audit}?limit=1&cursor=${c}`)).toBe(200);
+  });
+
+  it("a cursor from install A is rejected at install B", async () => {
+    const page = await listAudit(env, undefined, 1);
+    const c = page.nextCursor as string;
+    const otherInstall = { ...(env as object), INSTALL_ID: "install-b" } as Env;
+    await expect(listAudit(otherInstall, c, 1)).rejects.toMatchObject({
+      code: "bad_request",
+    });
+    const otherSecret = {
+      ...(env as object),
+      SESSION_SECRET: "z".repeat(48),
+    } as Env;
+    await expect(listAudit(otherSecret, c, 1)).rejects.toMatchObject({
+      code: "bad_request",
+    });
+    // The same install still accepts it.
+    expect((await listAudit(env, c, 1)).items).toHaveLength(1);
+  });
+
+  it("a cursor replayed with different filters, or on the other listing, is 400", async () => {
+    const c = await firstCursor();
+    expect(
+      await status(`${R.audit}?limit=1&action=auth.signin&cursor=${c}`),
+    ).toBe(400);
+    expect(await status(`${R.auditExport}?cursor=${c}`)).toBe(400);
+    const f = await firstCursor(`${R.audit}?limit=1&b=2&a=1`);
+    // Canonical order: the same filters in another order still verify.
+    expect(await status(`${R.audit}?a=1&limit=1&b=2&cursor=${f}`)).toBe(200);
+    expect(await status(`${R.audit}?limit=1&cursor=${f}`)).toBe(400);
+    expect(
+      auditFilters({ b: ["2"], a: ["1"], cursor: ["x"], limit: ["1"] }),
+    ).toBe(auditFilters({ a: ["1"], b: ["2"] }));
+  });
+
+  it("a tampered cursor is 400", async () => {
+    const c = await firstCursor();
+    const [body, sig] = c.split(".") as [string, string];
+    const flip = (x: string) => (x[0] === "A" ? "B" : "A") + x.slice(1);
+    expect(await status(`${R.audit}?cursor=${flip(body)}.${sig}`)).toBe(400);
+    expect(await status(`${R.audit}?cursor=${body}.${flip(sig)}`)).toBe(400);
+    expect(await status(`${R.audit}?cursor=${body}`)).toBe(400);
+    // A plain b64url JSON position (the old format) is refused.
+    const plain = btoa(JSON.stringify({ a: Date.now(), i: newId() }))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+    expect(await status(`${R.audit}?cursor=${plain}`)).toBe(400);
+  });
+
+  it("the paged round trip returns every row exactly once", async () => {
+    const total = await count("actor_kind in ('user', 'sync', 'system')");
+    const ids: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const r = await api(
+        app,
+        `${R.audit}?limit=100${cursor ? `&cursor=${cursor}` : ""}`,
+        admin.cookie,
+      );
+      expect(r.status).toBe(200);
+      const b = (await r.json()) as {
+        items: AuditEvent[];
+        nextCursor: string | null;
+      };
+      ids.push(...b.items.map((e) => e.id));
+      cursor = b.nextCursor;
+    } while (cursor);
+    expect(ids).toHaveLength(total);
+    expect(new Set(ids).size).toBe(total);
   });
 });

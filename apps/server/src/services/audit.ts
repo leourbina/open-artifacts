@@ -8,9 +8,11 @@ import {
   newId,
   type Page,
 } from "@oa/shared";
+import { deriveKey } from "../auth/keys.js";
 import { stmt } from "../db/stmt.js";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
+import { hmacSign, hmacVerify } from "../util/crypto.js";
 
 // The audit log (P3 T8). audit() is a statement, never a write: callers put it
 // in the same D1 batch as the change it records, so both commit or neither
@@ -185,40 +187,110 @@ function toEvent(r: Row): AuditEvent | null {
 }
 
 type Cursor = { a: number; i: string };
-const B64URL = /^[A-Za-z0-9_-]+$/;
 
-const encodeCursor = (c: Cursor): string =>
-  btoa(JSON.stringify(c))
+/**
+ * Where a cursor may be used: which listing, and the request's filters in
+ * canonical form (auditFilters). A cursor only verifies for the same scope.
+ */
+export type CursorScope = { kind: "list" | "export"; filters: string };
+
+/**
+ * Every query param that narrows a listing, in a canonical order: all of them
+ * but `cursor` and `limit` (page size, not a filter). Sorted by name, values
+ * in request order, so `?a=1&b=2` and `?b=2&a=1` bind the same cursor.
+ */
+export function auditFilters(q: Record<string, string[]>): string {
+  return JSON.stringify(
+    Object.keys(q)
+      .filter((k) => k !== "cursor" && k !== "limit")
+      .sort()
+      .map((k) => [k, q[k] ?? []]),
+  );
+}
+
+const B64URL = /^[A-Za-z0-9_-]+$/;
+const b64url = (s: string) =>
+  btoa(String.fromCharCode(...new TextEncoder().encode(s)))
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/, "");
+const unb64url = (s: string) =>
+  new TextDecoder().decode(
+    Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) =>
+      c.charCodeAt(0),
+    ),
+  );
 
-/** Strict: anything but b64url JSON `{a: int, i: id}` is 400. */
-function decodeCursor(s: string): Cursor {
+const installOf = (env: Env) => env.INSTALL_ID?.trim() ?? "";
+const cursorKey = (env: Env) => deriveKey(env, "oa:audit-cursor");
+
+/**
+ * Opaque: b64url(JSON { p: position, n: installId, k: kind, f: filters })
+ * "." HMAC (oa:audit-cursor, from SESSION_SECRET). Bound to this install and
+ * to the scope it was issued for.
+ */
+async function encodeCursor(
+  env: Env,
+  c: Cursor,
+  scope: CursorScope,
+): Promise<string> {
+  const body = b64url(
+    JSON.stringify({
+      p: [c.a, c.i],
+      n: installOf(env),
+      k: scope.kind,
+      f: scope.filters,
+    }),
+  );
+  return `${body}.${await hmacSign(await cursorKey(env), body)}`;
+}
+
+/**
+ * Anything that does not verify (bad MAC, another install or secret, another
+ * listing or other filters, a malformed position) is 400. The MAC check is
+ * constant-time (hmacVerify) and runs before the payload is parsed.
+ */
+async function decodeCursor(
+  env: Env,
+  s: string,
+  scope: CursorScope,
+): Promise<Cursor> {
   const invalid = () =>
     new ApiError("bad_request", "Invalid cursor", {
       path: "cursor",
       reason: "invalid",
     });
-  if (!B64URL.test(s) || s.length > 200) throw invalid();
-  let v: unknown;
+  const [body, sig, extra] = s.split(".");
+  if (
+    extra !== undefined ||
+    !body ||
+    !sig ||
+    s.length > 2048 ||
+    !B64URL.test(body)
+  )
+    throw invalid();
+  if (!(await hmacVerify(await cursorKey(env), body, sig))) throw invalid();
+  let v: { p?: unknown; n?: unknown; k?: unknown; f?: unknown };
   try {
-    v = JSON.parse(atob(s.replace(/-/g, "+").replace(/_/g, "/")));
+    v = JSON.parse(unb64url(body));
   } catch {
     throw invalid();
   }
-  const c = v as Cursor;
+  const p = v?.p;
   if (
     !v ||
     typeof v !== "object" ||
-    Array.isArray(v) ||
-    Object.keys(v).length !== 2 ||
-    !Number.isSafeInteger(c.a) ||
-    typeof c.i !== "string" ||
-    !isId(c.i)
+    v.n !== installOf(env) ||
+    v.k !== scope.kind ||
+    v.f !== scope.filters ||
+    !Array.isArray(p) ||
+    p.length !== 2 ||
+    !Number.isSafeInteger(p[0]) ||
+    typeof p[1] !== "string" ||
+    !isId(p[1])
   )
     throw invalid();
-  return { a: c.a, i: c.i };
+  return { a: p[0] as number, i: p[1] };
 }
 
 export const AUDIT_PAGE_MAX = 100;
@@ -228,8 +300,10 @@ export async function listAudit(
   env: Env,
   cursor: string | undefined,
   limit: number,
+  filters = auditFilters({}),
 ): Promise<Page<AuditEvent>> {
-  const after = cursor ? decodeCursor(cursor) : null;
+  const scope: CursorScope = { kind: "list", filters };
+  const after = cursor ? await decodeCursor(env, cursor, scope) : null;
   const q = stmt(env.DB, PAGE_SQL(after ? "<" : null));
   const { results } = await (after
     ? q.bind(limit + 1, after.a, after.i)
@@ -240,7 +314,10 @@ export async function listAudit(
   const last = rows[rows.length - 1];
   return {
     items: rows.map(toEvent).filter((e): e is AuditEvent => e !== null),
-    nextCursor: more && last ? encodeCursor({ a: last.at, i: last.id }) : null,
+    nextCursor:
+      more && last
+        ? await encodeCursor(env, { a: last.at, i: last.id }, scope)
+        : null,
   };
 }
 
@@ -262,8 +339,10 @@ const atOrBefore = (r: Cursor, k: Cursor) =>
 export async function exportAudit(
   env: Env,
   cursor: string | undefined,
+  filters = auditFilters({}),
 ): Promise<{ stream: ReadableStream<Uint8Array>; nextCursor: string | null }> {
-  const after = cursor ? decodeCursor(cursor) : null;
+  const scope: CursorScope = { kind: "export", filters };
+  const after = cursor ? await decodeCursor(env, cursor, scope) : null;
   const n = EXPORT_CHUNK * EXPORT_PAGES;
   const keys = (limit: number, offset: number) => {
     const q = stmt(env.DB, KEYS_SQL(after ? "<" : null));
@@ -278,7 +357,9 @@ export async function exportAudit(
   const top = first?.results[0];
   const end = edge?.results[0] ?? null;
   const nextCursor =
-    end && (edge?.results.length ?? 0) > 1 ? encodeCursor(end) : null;
+    end && (edge?.results.length ?? 0) > 1
+      ? await encodeCursor(env, end, scope)
+      : null;
   const enc = new TextEncoder();
   // The first page starts at `top` (inclusive), later pages after the last row.
   let from: { k: Cursor; op: "<" | "<=" } | null = top

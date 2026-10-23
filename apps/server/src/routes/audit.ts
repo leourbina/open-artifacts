@@ -4,7 +4,12 @@ import { caller, capOfCaller, requireUser } from "../auth/authz.js";
 import { orgCan } from "../auth/policy.js";
 import { ApiError } from "../http/errors.js";
 import type { AppEnv } from "../http/middleware.js";
-import { AUDIT_PAGE_MAX, exportAudit, listAudit } from "../services/audit.js";
+import {
+  AUDIT_PAGE_MAX,
+  auditFilters,
+  exportAudit,
+  listAudit,
+} from "../services/audit.js";
 import type { AppType } from "./index.js";
 
 const DEFAULT_LIMIT = 50;
@@ -41,6 +46,7 @@ export function mountAudit(app: AppType): void {
         c.env,
         c.req.query("cursor"),
         limitOf(c.req.query("limit")),
+        auditFilters(c.req.queries()),
       ),
     );
   });
@@ -51,6 +57,7 @@ export function mountAudit(app: AppType): void {
     const { stream, nextCursor } = await exportAudit(
       c.env,
       c.req.query("cursor"),
+      auditFilters(c.req.queries()),
     );
     const headers: Record<string, string> = {
       "content-type": "application/x-ndjson; charset=utf-8",

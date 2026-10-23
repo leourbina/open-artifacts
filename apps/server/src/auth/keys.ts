@@ -13,6 +13,7 @@ export const KEY_LABELS = [
   "oa:code-cookie",
   "oa:login-codes",
   "oa:code-email",
+  "oa:audit-cursor",
 ] as const;
 export type KeyLabel = (typeof KEY_LABELS)[number];
 
