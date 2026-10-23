@@ -503,7 +503,9 @@ describe("release-please", () => {
     // T3b: no workflow-wide grant. release-please writes with the release
     // App's token, so its GITHUB_TOKEN only reads; only hosted-attach writes.
     expect(w.permissions).toEqual({});
-    expect(w.jobs["release-please"].permissions).toEqual({ contents: "read" });
+    // release-please uses the App token (token: steps.app.outputs.token) and
+    // nothing uses GITHUB_TOKEN, so it gets none.
+    expect(w.jobs["release-please"].permissions).toEqual({});
     expect(read(".github/workflows/release-please.yml")).toMatch(
       /googleapis\/release-please-action@v\d+/,
     );

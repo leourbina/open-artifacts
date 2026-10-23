@@ -14,9 +14,9 @@ permissions: {}
 jobs:
   release-please:
     if: ${{ github.event_name == 'push' }}
-    # Writes (release PR, tags, releases) use the release App's token below.
-    permissions:
-      contents: read
+    # Every write (release PR, tags, releases) uses the release App's token
+    # (token: below); nothing here uses GITHUB_TOKEN, so it gets no scope.
+    permissions: {}
     # Back-to-back pushes queue instead of racing on the release PR ("Error updating ref").
     concurrency:
       group: release-please
@@ -386,6 +386,10 @@ jobs:
         with:
           ref: ${{ needs.hosted-guard.outputs.sha }}
           persist-credentials: false
+      # The image's default node (20) has no --experimental-strip-types. No cache.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: hosted-release

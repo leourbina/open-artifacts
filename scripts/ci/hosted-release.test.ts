@@ -139,21 +139,29 @@ describe("release-please.yml hosted jobs", () => {
       );
       expect(job.permissions).toEqual({ contents: "read" });
     });
-    it("has exactly three steps: checkout (no credentials), download-artifact, node sign-release.ts", () => {
-      expect(st).toHaveLength(3);
+    it("has exactly four steps: checkout (no credentials), setup-node (.nvmrc, no cache), download-artifact, node sign-release.ts", () => {
+      expect(st).toHaveLength(4);
       expect(st[0]?.uses).toMatch(/^actions\/checkout@[0-9a-f]{40}$/);
       expect(st[0]?.with?.["persist-credentials"]).toBe(false);
-      expect(st[1]?.uses).toMatch(/^actions\/download-artifact@[0-9a-f]{40}$/);
-      expect(st[2]?.uses).toBeUndefined();
-      expect(st[2]?.run).toContain(
+      // ubuntu-latest's default node (20) has no --experimental-strip-types.
+      expect(st[1]?.uses).toMatch(/^actions\/setup-node@[0-9a-f]{40}$/);
+      expect(st[1]?.with).toEqual({ "node-version-file": ".nvmrc" });
+      expect(st[2]?.uses).toMatch(/^actions\/download-artifact@[0-9a-f]{40}$/);
+      expect(st[3]?.uses).toBeUndefined();
+      expect(st[3]?.run).toContain(
         "node --experimental-strip-types scripts/ci/sign-release.ts",
       );
     });
-    it("uses only checkout and download-artifact", () => {
+    it("uses exactly checkout, setup-node and download-artifact", () => {
       const uses = st.map((s) => s.uses).filter(Boolean);
+      expect(uses.map((u) => String(u).split("@")[0])).toEqual([
+        "actions/checkout",
+        "actions/setup-node",
+        "actions/download-artifact",
+      ]);
       for (const u of uses)
         expect(u).toMatch(
-          /^actions\/(checkout|download-artifact)@[0-9a-f]{40}$/,
+          /^actions\/(checkout|setup-node|download-artifact)@[0-9a-f]{40}$/,
         );
     });
     it("installs nothing: no pnpm, npm, npx or corepack", () => {
@@ -171,12 +179,12 @@ describe("release-please.yml hosted jobs", () => {
       const withKey = st.filter((s) =>
         JSON.stringify(s).includes("RELEASE_SIGNING_KEY"),
       );
-      expect(withKey).toEqual([st[2]]);
-      expect(st[2]?.env?.RELEASE_SIGNING_KEY).toBe(
+      expect(withKey).toEqual([st[3]]);
+      expect(st[3]?.env?.RELEASE_SIGNING_KEY).toBe(
         // biome-ignore lint/suspicious/noTemplateCurlyInString: literal workflow expression
         "${{ secrets.RELEASE_SIGNING_KEY }}",
       );
-      const run = String(st[2]?.run);
+      const run = String(st[3]?.run);
       expect(run).toMatch(
         /printf '%s' "\$RELEASE_SIGNING_KEY" \| node --experimental-strip-types scripts\/ci\/sign-release\.ts /,
       );
@@ -187,12 +195,12 @@ describe("release-please.yml hosted jobs", () => {
       );
       expect(Object.keys(job).filter((k) => k === "env")).toEqual([]);
       // The only secret in the run is the signing key, in this step.
-      expect(JSON.stringify(st.slice(0, 2))).not.toContain("secrets.");
+      expect(JSON.stringify(st.slice(0, 3))).not.toContain("secrets.");
     });
     it("passes hosted-check's hashes, the guard's commit and the checked-out lockfile to the signer", () => {
-      const env = st[2]?.env ?? {};
+      const env = st[3]?.env ?? {};
       expect(env.GUARD_SHA).toBe(GUARD_SHA);
-      expect(String(st[2]?.run)).toContain(
+      expect(String(st[3]?.run)).toContain(
         '--commit "$GUARD_SHA" --lockfile pnpm-lock.yaml',
       );
       expect(env.MANIFEST_SHA256).toBe(
@@ -218,6 +226,12 @@ describe("release-please.yml hosted jobs", () => {
       .map((s) => s.run ?? "")
       .join("\n");
     expect(run).toContain("scripts/ci/assemble-release.ts");
+    // It runs .ts too: setup-node from .nvmrc, no cache.
+    const nodeStep = steps("hosted-attach").filter((x) =>
+      String(x.uses ?? "").startsWith("actions/setup-node@"),
+    );
+    expect(nodeStep).toHaveLength(1);
+    expect(nodeStep[0]?.with).toEqual({ "node-version-file": ".nvmrc" });
     expect(run).toContain('--commit "$GUARD_SHA" --lockfile pnpm-lock.yaml');
     expect(run).toContain("gh release upload");
     expect(run).not.toContain("--clobber");
@@ -275,6 +289,17 @@ describe("sign-release.ts imports only node:*", () => {
       ),
     ).toBe(false);
     expect(importsOf(join(root, "scripts/check-ci.test.ts"))).toContain("yaml");
+  });
+});
+
+describe("docs/ops/hosted.md first-create checklist", () => {
+  it("applies the platform D1 migrations, the floor one included, before the first create", () => {
+    const doc = read("docs/ops/hosted.md");
+    const at = doc.indexOf("### First-create checklist");
+    expect(at).toBeGreaterThan(-1);
+    const section = doc.slice(at, doc.indexOf("\n## ", at) >>> 0 || undefined);
+    expect(section).toContain("0001_installs.sql");
+    expect(section).toContain("0002_release_floor.sql");
   });
 });
 

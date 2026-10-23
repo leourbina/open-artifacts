@@ -510,7 +510,8 @@ describe("A: buildBundle builds both variants from one dry-run config", () => {
         expect(main(rel).includes(r), r).toBe(false);
         expect(main(red).includes(r), r).toBe(true);
       }
-      // Only the route-policy table's doc entry keeps the bare prefix.
+      // Only the route-policy table's doc key keeps the bare prefix; nothing
+      // else in release may contain /__test/ (assertNoHookRoutes).
       expect(
         main(rel)
           .toString()

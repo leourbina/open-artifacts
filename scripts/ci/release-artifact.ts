@@ -228,25 +228,23 @@ export function assertSameConfigButDefine(
 }
 
 /**
- * The mounted hook routes (keep in sync with @oa/shared TEST_HOOKS, as
- * check-no-test-hooks.ts). The release bundle must contain none of them: the
- * real build tree-shakes the hook modules out. ("/__test/" alone does stay,
- * as the route-policy table's "ALL /__test/*" entry.)
+ * No /__test/ string may appear in the release bundle: the real build
+ * tree-shakes the hook modules out. The one exception is the route-policy
+ * table's doc key "ALL /__test/*" (apps/server/src/auth/route-policy.ts),
+ * which is not a route; it is removed before the search.
  */
-export const HOOK_ROUTES = [
-  "/__test/session",
-  "/__test/otp/latest",
-  "/__test/oauth-client",
-] as const;
+export const HOOK_PREFIX = "/__test/";
+export const HOOK_DOC_KEY = '"ALL /__test/*"';
 
-/** Throws if any release module's bytes contain a hook route string. */
+/** Throws if any release module's bytes contain /__test/ beyond the doc key. */
 export function assertNoHookRoutes(release: readonly Mod[]): void {
-  for (const m of release)
-    for (const r of HOOK_ROUTES)
-      if (Buffer.from(m.bytes).includes(r))
-        throw new Error(
-          `release module ${m.name} contains the hook route ${r}`,
-        );
+  for (const m of release) {
+    const text = Buffer.from(m.bytes).toString("latin1");
+    if (text.split(HOOK_DOC_KEY).join("").includes(HOOK_PREFIX))
+      throw new Error(
+        `release module ${m.name} contains a hook route (${HOOK_PREFIX})`,
+      );
+  }
 }
 
 // ---------- plain ustar, from in-memory bytes ----------

@@ -509,6 +509,20 @@ describe("sign-release.ts", () => {
       [],
       /hook route/,
     ],
+    [
+      "a release bundle with any other /__test/ string",
+      {
+        release: [
+          {
+            name: "index.js",
+            type: "esm",
+            bytes: enc('app.get("/__test/new-hook", h); const hooks = false;'),
+          },
+        ],
+      },
+      [],
+      /hook route/,
+    ],
   ])("refuses %s", async (_n, over, extra, re) => {
     const a = await artifact(over);
     const ck = run(CHECK, [a.dir]);
