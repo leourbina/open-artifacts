@@ -23,12 +23,14 @@ import {
   useMembers,
   usePatchMember,
   useRemoveMember,
+  useResetIdentity,
   useSetRestricted,
 } from "../api/queries";
 import { emailEnabled } from "../auth/emailEnabled";
 import { useMe } from "../auth/useMe";
 import { CopyLink } from "../layout/CopyLink";
 import { Modal } from "../layout/Modal";
+import { toast } from "../layout/toast";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { relativeTime } from "../library/time";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -225,13 +227,37 @@ const RESTRICTED_BADGE =
 const firstName = (m: Member) =>
   m.name?.trim().split(/\s+/)[0] || m.email.split("@")[0];
 
-function Row({ m, you, hosted }: { m: Member; you: boolean; hosted: boolean }) {
+/**
+ * Who may reset `m`'s Google link: linked to Google, never the owner, never
+ * yourself. Only the owner resets another admin (the server enforces it too:
+ * 403); that last rule is the one line to drop if it moves server-side only.
+ */
+const mayResetGoogle = (m: Member, you: boolean, viewer: Role | undefined) =>
+  (m.identities ?? []).includes("google") &&
+  m.role !== "owner" &&
+  !you &&
+  (m.role !== "admin" || viewer === "owner");
+
+function Row({
+  m,
+  you,
+  hosted,
+  viewer,
+}: {
+  m: Member;
+  you: boolean;
+  hosted: boolean;
+  viewer: Role | undefined;
+}) {
   const patch = usePatchMember();
   const [confirm, setConfirm] = useState(false);
   const [restricting, setRestricting] = useState(false);
   const [lifting, setLifting] = useState(false);
   const remove = useRemoveMember();
   const setRestricted = useSetRestricted();
+  const resetGoogle = useResetIdentity();
+  const [resetting, setResetting] = useState(false);
+  const canResetGoogle = hosted && mayResetGoogle(m, you, viewer);
   const label = displayName(m);
   const locked = m.role === "owner" || you;
   const why = hosted ? restrictionReason(m.restriction) : null;
@@ -348,6 +374,11 @@ function Row({ m, you, hosted }: { m: Member; you: boolean; hosted: boolean }) {
               </DropdownMenuItem>
             )}
             {(canRestrict || groups.length > 0) && <DropdownMenuSeparator />}
+            {canResetGoogle && (
+              <DropdownMenuItem onSelect={() => setResetting(true)}>
+                Reset Google link…
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem onSelect={() => setConfirm(true)}>
               Remove…
             </DropdownMenuItem>
@@ -364,6 +395,44 @@ function Row({ m, you, hosted }: { m: Member; you: boolean; hosted: boolean }) {
           Remove
         </Button>
       )}
+      <ConfirmDialog
+        open={resetting}
+        onClose={() => setResetting(false)}
+        title={`Reset Google link for ${label}?`}
+        body={
+          <p>
+            {label} stays a member with the same roles but is signed out
+            everywhere. Their next Google sign-in links their account again. Use
+            this if they changed Google accounts or the link points to the wrong
+            one.
+          </p>
+        }
+        confirm="Reset link"
+        onConfirm={() =>
+          resetGoogle.mutate(m.id, {
+            onSuccess: () =>
+              toast({
+                title: `Google link reset for ${label}. They're signed out and link again at their next Google sign-in.`,
+                tone: "success",
+              }),
+            onError: (e) => {
+              const code = e instanceof ApiClientError ? e.code : "";
+              const status = e instanceof ApiClientError ? e.status : 0;
+              if (status === 404)
+                toast({
+                  title: `No Google sign-in is linked to ${label}, so there's nothing to reset.`,
+                  tone: "danger",
+                });
+              else if (code === "owner_only" || status === 403)
+                toast({
+                  title:
+                    "Only the owner can reset another admin's Google link.",
+                  tone: "danger",
+                });
+            },
+          })
+        }
+      />
       <ConfirmDialog
         open={restricting}
         onClose={() => setRestricting(false)}
@@ -453,7 +522,13 @@ export function Members() {
         ) : (
           <ul className="grid p-0">
             {q.data?.map((m) => (
-              <Row key={m.id} m={m} you={m.id === me?.id} hosted={hosted} />
+              <Row
+                key={m.id}
+                m={m}
+                you={m.id === me?.id}
+                hosted={hosted}
+                viewer={me?.role}
+              />
             ))}
           </ul>
         )}
