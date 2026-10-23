@@ -84,6 +84,18 @@ export function verifySignature(
 }
 
 /**
+ * Before the key ceremony (this env's pinned key is still the placeholder) a
+ * release has no signing key yet: the sign job skips with a notice instead of
+ * failing every release (v0.35.0). Once pinned, a missing key fails.
+ * @param {Env} env
+ * @param {string} stdin
+ * @param {Readonly<Record<Env, string>>} [pinned]
+ * @returns {boolean}
+ */
+export const skipUnsigned = (env, stdin, pinned = RELEASE_PUBKEY) =>
+  stdin.trim() === "" && pinnedOf(env, pinned) === null;
+
+/**
  * The line a key job prints while a pubkey is still the placeholder.
  * @param {Env} env
  * @param {string} what

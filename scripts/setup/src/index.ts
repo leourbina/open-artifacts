@@ -460,12 +460,17 @@ export async function run(
     return ar ? 2 : 1;
   }
   // --ci never writes state.json (an ephemeral runner; ownerTokenId is meaningless once revoked).
+  // tempDir and removeTree stay: deploy's OA_CHECK_NO_TEST_HOOKS check needs a
+  // scratch dir (v0.35.0's deploy-prod refused without one). hashTree stays
+  // off, as before, so --ci never skips a deploy as unchanged.
   if (opts.ci)
     fs = {
       read: rawFs.read,
       write: (p, d) => {
         if (p !== statePath(root)) rawFs.write(p, d);
       },
+      tempDir: rawFs.tempDir,
+      removeTree: rawFs.removeTree,
     };
   const { name, appHost, contentHost, ownerEmail } = opts;
   const prev = {
