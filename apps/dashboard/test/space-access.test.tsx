@@ -163,7 +163,7 @@ it("frozen: the mapping shows, but no control adds or changes one", async () => 
   ).toBeNull();
   expect(
     screen.getByText(
-      "Group sync is off, so mappings can't change. Edit people by hand under People.",
+      "Group sync is off, so mappings can't change. Edit people manually under People.",
     ),
   ).toBeVisible();
 });

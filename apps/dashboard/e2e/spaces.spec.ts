@@ -132,3 +132,77 @@ test("keyboard: open a space from the list, add a group, change its role", async
   await page.keyboard.press("Enter");
   await expect(role).toHaveText("Editor");
 });
+
+// Hosted P4 Task 12 (D6): the People card on Engineering (and frozen), with
+// the Add people dialog, at 1280 and 390, light and dark.
+for (const scheme of ["light", "dark"] as const)
+  for (const width of [1280, 390])
+    test.describe(`people ${scheme} ${width}`, () => {
+      test.use({ colorScheme: scheme, viewport: { width, height: 900 } });
+
+      for (const [name, hosted] of [
+        ["people", "1"],
+        ["people-frozen", "frozen"],
+      ] as const)
+        test(`${name}: axe, no sideways scroll`, async ({ page }, info) => {
+          await page.goto(
+            `/settings/spaces?hosted=${hosted}&space=SpEngNpQrSt2uVwX`,
+          );
+          await page.waitForLoadState("networkidle");
+          const card = page.getByRole("region", { name: "People" });
+          await expect(card.getByText("Bob Builder")).toBeVisible();
+          await card.scrollIntoViewIfNeeded();
+          const v = await axeRun(page);
+          expect(v, v.join("\n")).toEqual([]);
+          await noOverflow(page);
+          // Viewport, not fullPage: a full-page capture paints the sticky top
+          // bar mid-page. The card is scrolled into view above.
+          await page.screenshot({
+            path: info.outputPath(`${name}-${scheme}-${width}.png`),
+          });
+        });
+
+      test("frozen: Edit people filters People to the group", async ({
+        page,
+      }, info) => {
+        await page.goto(
+          "/settings/spaces?hosted=frozen&space=SpEngNpQrSt2uVwX",
+        );
+        await page.waitForLoadState("networkidle");
+        await page
+          .getByRole("button", { name: "Edit people from eng@example.com" })
+          .click();
+        const card = page.getByRole("region", { name: "People" });
+        await expect(
+          card.getByText(/^1 person from eng@ as of .+ · Editor$/),
+        ).toBeVisible();
+        await expect(card.getByText("Bob Builder")).toBeVisible();
+        await expect(card.getByText("Ada Lovelace")).toHaveCount(0);
+        await card.scrollIntoViewIfNeeded();
+        await page.screenshot({
+          path: info.outputPath(
+            `people-frozen-filtered-${scheme}-${width}.png`,
+          ),
+        });
+      });
+
+      test("add people dialog", async ({ page }, info) => {
+        await page.goto("/settings/spaces?hosted=1&space=SpEngNpQrSt2uVwX");
+        await page.waitForLoadState("networkidle");
+        await page
+          .getByRole("region", { name: "People" })
+          .getByRole("button", { name: "Add people" })
+          .click();
+        const d = page.getByRole("dialog", {
+          name: "Add people to Engineering",
+        });
+        await d.getByRole("combobox", { name: "People" }).fill("da");
+        await page.getByRole("option", { name: /Dan Contractor/ }).click();
+        await settle(page);
+        const v = await axeRun(page);
+        expect(v, v.join("\n")).toEqual([]);
+        await page.screenshot({
+          path: info.outputPath(`people-add-${scheme}-${width}.png`),
+        });
+      });
+    });

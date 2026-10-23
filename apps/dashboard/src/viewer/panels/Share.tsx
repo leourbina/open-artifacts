@@ -34,6 +34,7 @@ import { useMe } from "../../auth/useMe";
 import { CopyLink } from "../../layout/CopyLink";
 import { Modal } from "../../layout/Modal";
 import { toast } from "../../layout/toast";
+import { visibilityHint } from "../../spaces/SpaceMarker";
 
 const VIS: { value: Visibility; label: string }[] = [
   { value: "private", label: "Private" },
@@ -149,6 +150,7 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
     emailed: boolean;
   } | null>(null);
   const state = useMe();
+  const install = state.status === "authed" ? state.me.instance.name : "";
   const sends = emailEnabled(state.status === "authed" ? state.me : null);
 
   const save = (p: ArtifactPatch) =>
@@ -259,7 +261,8 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
           <VisibilityBadge visibility={artifact.visibility} />
         )}
         <p className={`oa-vis-note mt-[var(--oa-space-2)] ${MUTED}`}>
-          {NOTE[staged]}
+          {/* Hosted: the help text names the space or the org (D6 section 9). */}
+          {visibilityHint(staged, artifact.space, install) ?? NOTE[staged]}
         </p>
         {space?.publicLinks === false && (
           <p

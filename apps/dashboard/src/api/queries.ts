@@ -42,6 +42,7 @@ import {
   RestrictedGroupSchema,
   type SpaceCreateInput,
   SpaceMemberSchema,
+  SpaceMembersPageSchema,
   type SpacePatchInput,
   type SpaceRole,
   SpaceSchema,
@@ -84,7 +85,10 @@ export const qk = {
   usage: ["usage"] as const,
   spaces: (q?: SpacesQueryInput) => ["spaces", q ?? {}] as const,
   space: (id: string) => ["spaces", id] as const,
+  /** Every list of a space's people (any q/group) starts with this prefix. */
   spaceMembers: (id: string) => ["spaces", id, "members"] as const,
+  spaceMemberList: (id: string, q: string, group: string) =>
+    ["spaces", id, "members", { q, group }] as const,
   spaceMappings: (id: string) => ["spaces", id, "mappings"] as const,
   directory: ["directory"] as const,
   restrictedGroups: ["directory", "restricted"] as const,
@@ -390,7 +394,6 @@ export const useUpdateSettings = () => {
 // Hosted M1 (packages/shared/HOSTED_CONTRACT.md). Only hosted pages call these.
 
 const SpacePage = PageSchema(SpaceSchema);
-const SpaceMemberPage = PageSchema(SpaceMemberSchema);
 const DirectoryGroupPage = PageSchema(DirectoryGroupSchema);
 const GroupMappingPage = PageSchema(GroupMappingSchema);
 
@@ -436,18 +439,34 @@ export const useDeleteSpace = () =>
     "Couldn't delete the space.",
     (e) => e.code === "space_not_empty",
   );
-export const useSpaceMembers = (id: string) =>
+/** A space's people: `q` (name or email prefix) and `group` narrow it; pages carry `total`. */
+export const useSpaceMembers = (
+  id: string,
+  { q = "", group = "" }: { q?: string; group?: string } = {},
+  enabled = true,
+) =>
   useInfiniteQuery({
-    queryKey: qk.spaceMembers(id),
+    enabled,
+    queryKey: qk.spaceMemberList(id, q.trim(), group),
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam, signal }) =>
       api.get(
-        withQuery(R.spaceMembers(id), { cursor: pageParam }),
-        SpaceMemberPage,
+        withQuery(R.spaceMembers(id), {
+          q: q.trim() || undefined,
+          group: group || undefined,
+          limit: 50,
+          cursor: pageParam,
+        }),
+        SpaceMembersPageSchema,
         signal,
       ),
     getNextPageParam: (last) => last.nextCursor ?? undefined,
   });
+/** The People card shows member refusals by the row, and snaps the role back. */
+const memberInline = (e: ApiClientError) =>
+  e.code === "space_forbidden" ||
+  e.code === "member_synced" ||
+  e.code === "not_found";
 const spaceMemberKeys = (id: string) => () => [
   qk.spaceMembers(id),
   qk.space(id),
@@ -463,6 +482,7 @@ export const usePutSpaceMember = (id: string) =>
       ),
     spaceMemberKeys(id),
     "Couldn't change access.",
+    memberInline,
   );
 export const useDeleteSpaceMember = (id: string) =>
   useInvalidating(
@@ -470,6 +490,7 @@ export const useDeleteSpaceMember = (id: string) =>
       api.send("DELETE", R.spaceMember(id, userId), undefined),
     spaceMemberKeys(id),
     "Couldn't change access.",
+    memberInline,
   );
 /** An org admin adds themselves to a shared space (audited; managers are notified). */
 export const useAddSelfToSpace = (id: string) =>
