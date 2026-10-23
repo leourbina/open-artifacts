@@ -16,6 +16,7 @@
 //   template re-read and re-checked; secret_text bindings, DO tag probe)
 //   -> subdomain off (account only) -> broker keypair (flag) -> HOSTS
 //   -> /healthz -> owner PAT (0600) -> MCP selftest -> active.
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, generateKeyPairSync, type KeyObject } from "node:crypto";
 import {
   closeSync,
@@ -456,6 +457,19 @@ export interface DeleteResult {
   state: "deleted";
 }
 
+/** An operation's lock on its install (M3). */
+interface Held {
+  id: InstallId;
+  lease: string;
+  op: string;
+}
+
+/** R2-L1: what one operation owns, kept per call (AsyncLocalStorage). */
+interface OpContext {
+  sensitive: Set<string>;
+  held: Held | null;
+}
+
 /** A pending session cut and the vars it was minted against. */
 interface Cut {
   id: string;
@@ -494,7 +508,16 @@ export interface InstallStatus {
   previous_version: string | null;
   lease_until: number | null;
   leaseLive: boolean;
-  sessionCut: { pending: true; owed: boolean } | null;
+  /**
+   * R2-N1: `pending` is the alarm (a cut is owed or must be settled by the
+   * next upload). `owedRelativeToRecordedVars` compares installs.vars with the
+   * cut's base; after a crash between an upload and its vars write it can
+   * read false while google is live.
+   */
+  sessionCut: {
+    pending: true;
+    owedRelativeToRecordedVars: boolean;
+  } | null;
 }
 
 /**
@@ -513,8 +536,13 @@ export class WfpProvisioner {
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly http: typeof fetch;
-  /** Values this run must never print; scrubbed from every thrown error. */
-  private sensitive = new Set<string>();
+  /**
+   * R2-L1: each operation's own state (its redaction set and lock), per call
+   * and never on the instance, so nothing else that runs reaches it.
+   */
+  private readonly ctx = new AsyncLocalStorage<OpContext>();
+  /** R2-L1: one operation per instance at a time; a second one is refused. */
+  private inFlight = false;
   // Resolved by name per run (never taken from the caller).
   private platform!: PlatformDb;
   private hostsKv!: { id: string; title: string };
@@ -537,20 +565,30 @@ export class WfpProvisioner {
   }
 
   async create(i: WfpCreateInput): Promise<Install> {
-    this.sensitive = new Set();
-    if (typeof i?.ownerEmail === "string" && i.ownerEmail) {
-      this.sensitive.add(i.ownerEmail);
-      this.sensitive.add(i.ownerEmail.trim());
-      this.sensitive.add(i.ownerEmail.trim().toLowerCase());
-    }
-    this.held = null;
-    try {
-      return await this.run(i);
-    } catch (e) {
-      throw this.scrub(e);
-    } finally {
-      this.held = null;
-    }
+    return this.guarded(() => {
+      if (typeof i?.ownerEmail === "string" && i.ownerEmail) {
+        this.sensitive.add(i.ownerEmail);
+        this.sensitive.add(i.ownerEmail.trim());
+        this.sensitive.add(i.ownerEmail.trim().toLowerCase());
+      }
+      return this.run(i);
+    });
+  }
+
+  /** Values this operation must never print; scrubbed from every thrown error. */
+  private get sensitive(): Set<string> {
+    return this.ctx.getStore()?.sensitive ?? new Set();
+  }
+
+  /** The operation in progress: its install, lock and audit prefix (M3). */
+  private get held(): Held | null {
+    return this.ctx.getStore()?.held ?? null;
+  }
+
+  private set held(h: Held | null) {
+    const c = this.ctx.getStore();
+    if (!c) throw new Error("no operation context");
+    c.held = h;
   }
 
   /** Scrubs every own string property (message, stack, Cloudflare text, route). */
@@ -1540,19 +1578,30 @@ export class WfpProvisioner {
 
   // ---------- lifecycle: upgrade, rollback, var changes, delete ----------
 
-  /** The operation in progress: its install, lock and audit prefix (M3). */
-  private held: { id: InstallId; lease: string; op: string } | null = null;
-
-  /** One lifecycle operation: a fresh redaction set, every error scrubbed. */
+  /**
+   * One operation: refused while another runs on this instance (R2-L1), with
+   * its own redaction set and lock in a per-call context, every error
+   * scrubbed.
+   */
   private async guarded<T>(fn: () => Promise<T>): Promise<T> {
-    this.sensitive = new Set();
-    this.held = null;
+    if (this.inFlight)
+      throw new ProvisionRefused(
+        "this provisioner is already running an operation; use one instance per concurrent operation",
+      );
+    this.inFlight = true;
     try {
-      return await fn();
-    } catch (e) {
-      throw this.scrub(e);
+      return await this.ctx.run(
+        { sensitive: new Set(), held: null },
+        async () => {
+          try {
+            return await fn();
+          } catch (e) {
+            throw this.scrub(e);
+          }
+        },
+      );
     } finally {
-      this.held = null;
+      this.inFlight = false;
     }
   }
 
@@ -1875,12 +1924,22 @@ export class WfpProvisioner {
    * versions, the lock and any session cut still owed.
    */
   async status(id: InstallId): Promise<InstallStatus> {
-    return this.guarded(async () => {
+    // R2-L1: not an operation: no re-entry check, and it never touches an
+    // operation's lock or redaction set. It reads through its own PlatformDb.
+    {
       if (!isInstallId(id)) throw new ProvisionRefused("not an install id");
       if (this.env !== "staging" && this.env !== "prod")
         throw new ForeignResource("", this.env);
-      await this.resolvePlatform();
-      const row = await this.platform.byId(id);
+      const dbName = platformNames(this.env).db;
+      const dbId = await this.cf.d1Get(dbName);
+      if (!dbId) throw new ProvisionRefused(`platform D1 ${dbName} not found`);
+      const platform = new PlatformDb(
+        this.cf,
+        { id: dbId, name: dbName },
+        this.env,
+        this.now,
+      );
+      const row = await platform.byId(id);
       if (!row) throw new ProvisionRefused(`install ${id} not found`);
       const cut = this.pendingCut(row);
       return {
@@ -1895,13 +1954,12 @@ export class WfpProvisioner {
             ? null
             : {
                 pending: true,
-                // Whether the live vars still have google newly on relative to the base.
-                owed:
+                owedRelativeToRecordedVars:
                   row.vars !== null &&
                   googleNewlyEnabled(cut.base, JSON.parse(row.vars)),
               },
       };
-    });
+    }
   }
 
   /** The install's D1 and script, both present, and every secret create sends. */
