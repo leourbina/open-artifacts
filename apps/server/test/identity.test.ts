@@ -385,6 +385,44 @@ describe("resetIdentity", () => {
     expect(await subjectOf(uid)).toBeNull();
   });
 
+  it("admin → admin: 403 owner_only, nothing changed", async () => {
+    const email = uniq("peer");
+    const uid = await seedUser(email, "admin", { googleSub: `P-${email}` });
+    await createPat(env, uid, "t");
+    await grant(uid);
+    await expect(resetIdentity(env, admin, uid)).rejects.toMatchObject({
+      code: "owner_only",
+    });
+    expect(await subjectOf(uid)).toBe(`P-${email}`);
+    expect((await rowOf(uid)).e).toBe(0);
+    expect(await pats(uid)).toBe(1);
+    expect(await grants(uid)).toBe(1);
+  });
+
+  it("owner → admin: resets", async () => {
+    const email = uniq("adm");
+    const uid = await seedUser(email, "admin", { googleSub: `A-${email}` });
+    await createPat(env, uid, "t");
+    await resetIdentity(env, { id: "o", role: "owner" } as Member, uid);
+    expect(await subjectOf(uid)).toBeNull();
+    expect((await rowOf(uid)).e).toBe(1);
+    expect(await pats(uid)).toBe(0);
+  });
+
+  it("admin → member: resets", async () => {
+    const email = uniq("mem");
+    const uid = await seedUser(email, "member", { googleSub: `M-${email}` });
+    await resetIdentity(env, admin, uid);
+    expect(await subjectOf(uid)).toBeNull();
+  });
+
+  it("admin → admin without a link: 404, not owner_only", async () => {
+    const uid = await seedUser(uniq("bareadm"), "admin");
+    await expect(resetIdentity(env, admin, uid)).rejects.toMatchObject({
+      code: "not_found",
+    });
+  });
+
   it("revokes the member's PATs", async () => {
     const email = uniq("resetpat");
     const uid = await seedUser(email, "member", { googleSub: `RP-${email}` });
