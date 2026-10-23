@@ -19,7 +19,7 @@ import { makeQueryClient, QUOTA_KEY } from "../src/api/queryClient";
 import { RedirectProvider } from "../src/auth/redirect";
 import { createAppRouter } from "../src/router";
 import { useContentUrl } from "../src/viewer/useContentUrl";
-import { arts, installHarness, server } from "./harness";
+import { arts, installHarness, intersect, server } from "./harness";
 
 vi.mock("../src/viewer/bridge", () => ({
   createBridge: () => ({
@@ -269,19 +269,19 @@ describe("M1 versions paging (contract C2)", () => {
     mount(`/a/${SCRIPT}?panel=open&tab=versions`);
     await screen.findByText("Update 25");
     expect(screen.queryByText("Update 18")).toBeNull();
-    const more = () =>
-      screen.findByRole("button", { name: "Load older versions" });
-    fireEvent.click(await more());
+    // Older pages load as the end of the list scrolls into view.
+    intersect();
     await screen.findByText("Update 18");
-    fireEvent.click(await more());
+    intersect();
     await screen.findByText("Update 11");
-    fireEvent.click(await more());
+    intersect();
     await screen.findByText("Update 4");
     // v4–v1 is short too; only the empty page after it ends the timeline.
-    fireEvent.click(await more());
+    intersect();
+    await waitFor(() => expect(befores).toContain("1"));
     await waitFor(() =>
       expect(
-        screen.queryByRole("button", { name: "Load older versions" }),
+        document.querySelector("[aria-busy]:not([aria-busy=false])"),
       ).toBeNull(),
     );
     expect(befores).toContain("1");

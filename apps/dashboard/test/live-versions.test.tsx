@@ -283,7 +283,7 @@ describe("live versions: gone", () => {
       "disabled",
       true,
     );
-    expect(screen.getByRole("button", { name: "Versions" })).toHaveProperty(
+    expect(screen.getByRole("button", { name: /^Version: v/ })).toHaveProperty(
       "disabled",
       true,
     );
