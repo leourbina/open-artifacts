@@ -46,7 +46,9 @@ const env = (
 const pol = (b: { name: string; type?: string }[]) =>
   JSON.stringify({ total_count: b.length, branch_policies: b });
 const GOOD_POL = pol([{ name: "main", type: "branch" }]);
-// The release-please App's id (RELEASE_APP_ID), and its v* tag ruleset.
+// The release-please App's id (RELEASE_APP_ID), and the two v* tag rulesets:
+// A blocks creation with only the App as bypass; B blocks update and deletion
+// with no bypass at all, so not even the App can move or delete a release tag.
 const APP = "424242";
 const appBypass = {
   actor_id: Number(APP),
@@ -56,17 +58,39 @@ const appBypass = {
 const tagRuleset = (o: Record<string, unknown> = {}) =>
   JSON.stringify({
     id: 7,
-    name: "release tags",
+    name: "release tags: creation",
     target: "tag",
     enforcement: "active",
     conditions: { ref_name: { include: ["refs/tags/v*"], exclude: [] } },
-    rules: [{ type: "creation" }, { type: "update" }, { type: "deletion" }],
+    rules: [{ type: "creation" }],
     bypass_actors: [appBypass],
+    ...o,
+  });
+const lockRuleset = (o: Record<string, unknown> = {}) =>
+  JSON.stringify({
+    id: 8,
+    name: "release tags: no update or delete",
+    target: "tag",
+    enforcement: "active",
+    conditions: { ref_name: { include: ["refs/tags/v*"], exclude: [] } },
+    rules: [{ type: "update" }, { type: "deletion" }],
+    bypass_actors: [],
     ...o,
   });
 const RULESETS = JSON.stringify([
   { id: 3, name: "main", target: "branch", enforcement: "active" },
-  { id: 7, name: "release tags", target: "tag", enforcement: "active" },
+  {
+    id: 7,
+    name: "release tags: creation",
+    target: "tag",
+    enforcement: "active",
+  },
+  {
+    id: 8,
+    name: "release tags: no update or delete",
+    target: "tag",
+    enforcement: "active",
+  },
 ]);
 
 type Opts = {
@@ -76,6 +100,7 @@ type Opts = {
   input?: string;
   rulesets?: string;
   ruleset7?: string;
+  ruleset8?: string;
   appId?: string | null;
 };
 
@@ -99,6 +124,7 @@ function run(o: Opts = {}) {
         rules: [],
       }),
       RULESET_7: o.ruleset7 ?? tagRuleset(),
+      RULESET_8: o.ruleset8 ?? lockRuleset(),
       SECRET_OUT: out,
       ...(o.appId === null ? {} : { RELEASE_APP_ID: o.appId ?? APP }),
     },
@@ -126,6 +152,7 @@ describe("hosted-set-signing-key.sh", () => {
       "gh api repos/o/r/rulesets?includes_parents=true",
     );
     expect(r.calls).toContain("gh api repos/o/r/rulesets/7");
+    expect(r.calls).toContain("gh api repos/o/r/rulesets/8");
     expect(r.calls).toContain(
       "gh secret set RELEASE_SIGNING_KEY --env hosted-staging --repo o/r",
     );
@@ -217,31 +244,11 @@ describe("hosted-set-signing-key.sh", () => {
       },
     ],
     [
-      "no creation rule",
-      {
-        ruleset7: tagRuleset({
-          rules: [{ type: "update" }, { type: "deletion" }],
-        }),
-      },
+      "no creation rule in A",
+      { ruleset7: tagRuleset({ rules: [{ type: "update" }] }) },
     ],
     [
-      "updates not blocked",
-      {
-        ruleset7: tagRuleset({
-          rules: [{ type: "creation" }, { type: "deletion" }],
-        }),
-      },
-    ],
-    [
-      "deletion not blocked",
-      {
-        ruleset7: tagRuleset({
-          rules: [{ type: "creation" }, { type: "update" }],
-        }),
-      },
-    ],
-    [
-      "a bypass for another app",
+      "a creation bypass for another app",
       {
         ruleset7: tagRuleset({
           bypass_actors: [{ ...appBypass, actor_id: 1 }],
@@ -249,7 +256,7 @@ describe("hosted-set-signing-key.sh", () => {
       },
     ],
     [
-      "a bypass for admins as well",
+      "a creation bypass for admins as well",
       {
         ruleset7: tagRuleset({
           bypass_actors: [
@@ -264,8 +271,61 @@ describe("hosted-set-signing-key.sh", () => {
       },
     ],
     [
-      "no bypass at all (the app could not tag)",
+      "no creation bypass at all (the app could not tag)",
       { ruleset7: tagRuleset({ bypass_actors: [] }) },
+    ],
+    // Manager (T3b, stricter): B blocks update and deletion with no bypass.
+    [
+      "no ruleset B (one combined ruleset with the App as bypass)",
+      {
+        rulesets: JSON.stringify([
+          { id: 7, name: "release tags", target: "tag", enforcement: "active" },
+        ]),
+        ruleset7: tagRuleset({
+          rules: [
+            { type: "creation" },
+            { type: "update" },
+            { type: "deletion" },
+          ],
+        }),
+      },
+    ],
+    [
+      "B lets the App bypass update and deletion",
+      { ruleset8: lockRuleset({ bypass_actors: [appBypass] }) },
+    ],
+    [
+      "B lets admins bypass",
+      {
+        ruleset8: lockRuleset({
+          bypass_actors: [
+            {
+              actor_id: 5,
+              actor_type: "RepositoryRole",
+              bypass_mode: "always",
+            },
+          ],
+        }),
+      },
+    ],
+    [
+      "B does not block updates",
+      { ruleset8: lockRuleset({ rules: [{ type: "deletion" }] }) },
+    ],
+    [
+      "B does not block deletion",
+      { ruleset8: lockRuleset({ rules: [{ type: "update" }] }) },
+    ],
+    ["B is not active", { ruleset8: lockRuleset({ enforcement: "evaluate" }) }],
+    [
+      "B excludes some v* tags",
+      {
+        ruleset8: lockRuleset({
+          conditions: {
+            ref_name: { include: ["refs/tags/v*"], exclude: ["refs/tags/v0*"] },
+          },
+        }),
+      },
     ],
     ["no RELEASE_APP_ID given", { appId: null }],
     ["a non-numeric RELEASE_APP_ID", { appId: "release-please" }],
