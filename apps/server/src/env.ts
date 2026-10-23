@@ -10,6 +10,8 @@ export interface Env {
   RL_ANON?: RateLimit;
   /** Sign-in code limiter, keyed `${installKey}:${ip}`; unbound in the test pool. */
   RL_AUTH?: RateLimit;
+  /** Optional service binding to the hosted auth broker (else AUTH_BROKER_URL over HTTPS). */
+  BROKER?: Fetcher;
   /** Browser Run, for server-side thumbnails (services/thumbs.ts); optional. */
   BROWSER?: Fetcher;
   /** Optional Email Service send binding; invite/share emails are off without it. */

@@ -17,6 +17,7 @@ export function ConfirmDialog({
   title,
   body,
   confirm,
+  danger,
   onConfirm,
 }: {
   open: boolean;
@@ -24,6 +25,8 @@ export function ConfirmDialog({
   title: string;
   body: ReactNode;
   confirm: string;
+  /** The action destroys something: the danger button. */
+  danger?: boolean;
   onConfirm: () => void;
 }) {
   const opener = useRef<HTMLElement | null>(null);
@@ -53,6 +56,7 @@ export function ConfirmDialog({
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           <Button
+            variant={danger ? "destructive" : "default"}
             onClick={() => {
               onClose();
               onConfirm();

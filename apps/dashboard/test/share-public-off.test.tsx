@@ -166,3 +166,27 @@ it("an editor without share or setVisibility gets no Share button", async () => 
   await screen.findByRole("heading", { name: art.title });
   expect(screen.queryByRole("button", { name: "Share" })).toBeNull();
 });
+
+it("hosted help text names the space on Private and the org on Team (D6 section 9)", async () => {
+  open([
+    serve({ access: "manager", space: eng, can: full, visibility: "private" }),
+  ]);
+  const g = await group();
+  expect(
+    screen.getByText("People with access to Engineering, and anyone you add"),
+  ).toBeVisible();
+  fireEvent.click(within(g).getByRole("radio", { name: "Team" }));
+  expect(screen.getByText("Everyone at Acme Artifacts")).toBeVisible();
+  fireEvent.click(within(g).getByRole("radio", { name: "Public" }));
+  expect(screen.getByText("Anyone with the link, no sign-in")).toBeVisible();
+});
+
+it("self-hosted help text is unchanged", async () => {
+  open();
+  await group();
+  expect(
+    screen.getByText(
+      /Only you and the people below can open it\.|Everyone in the workspace can open it\.|Anyone with the link can view\./,
+    ),
+  ).toBeVisible();
+});

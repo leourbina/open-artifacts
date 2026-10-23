@@ -60,6 +60,7 @@ export type OrgAction =
   | "directory.manage"
   | "audit.read"
   | "members.manage"
+  | "members.manageAdmins"
   | "settings.read"
   | "settings.manage"
   | "usage.read"
@@ -292,6 +293,8 @@ export function orgCan(
     case "settings.read":
       return TEAM_ROLES.includes(m.role);
     case "directory.manage":
+    // Acting on a peer admin (e.g. resetting their Google link): owner only.
+    case "members.manageAdmins":
       return m.role === "owner" && !capped;
     case "tokens.create":
     case "mcp.connect":

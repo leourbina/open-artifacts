@@ -403,6 +403,7 @@ export async function handleCallback(
       code,
       verifier: st.verifier,
       nonce: st.nonce,
+      bstate: q.get("bstate") ?? undefined,
     });
     return { ...id, next };
   } catch (e) {

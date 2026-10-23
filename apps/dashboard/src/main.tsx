@@ -109,6 +109,50 @@ async function startMocks() {
       "https://github.com/open-artifacts-ai/open-artifacts/releases/tag/v0.15.0",
     checkedAt,
   };
+  // ?mock=guest-live (with ?hosted=1): every artifact is a live-data (db) viewer share the
+  // caller can't write; ?mock=viewer-live: the same for an employee viewer (data writes allowed);
+  // ?mock=contractor-live: a restricted member (chip); ?mock=guest-static: a guest on an artifact without live data.
+  const live = params.get("mock");
+  if (
+    live === "guest-live" ||
+    live === "viewer-live" ||
+    live === "contractor-live" ||
+    live === "guest-static"
+  )
+    extra.push(
+      http.get("*/api/v1/artifacts/:id", ({ params: p }) => {
+        const a = fixtures.artifacts.find((x) => x.id === p.id);
+        if (!a) return;
+        return HttpResponse.json({
+          ...a,
+          access: "viewer",
+          // Employees and contractors see it through a space; a guest, by link.
+          space:
+            live === "viewer-live" || live === "contractor-live"
+              ? {
+                  id: "SpEngNpQrSt2uVwX",
+                  kind: "shared",
+                  name: "Engineering",
+                  publicLinks: true,
+                }
+              : undefined,
+          can: {
+            edit: false,
+            share: false,
+            setVisibility: false,
+            delete: false,
+            transfer: false,
+            move: false,
+            dataWrite: live === "viewer-live",
+          },
+          capabilities: {
+            db: live !== "guest-static",
+            viewer: false,
+            storage: false,
+          },
+        });
+      }),
+    );
   // ?mock=cpu: 4 CPU-limit hits today, and the first two library requests get a 1102 (the first may be aborted).
   if (params.get("mock") === "cpu") {
     let hits = 0;

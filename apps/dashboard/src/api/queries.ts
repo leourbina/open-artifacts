@@ -42,6 +42,7 @@ import {
   RestrictedGroupSchema,
   type SpaceCreateInput,
   SpaceMemberSchema,
+  SpaceMembersPageSchema,
   type SpacePatchInput,
   type SpaceRole,
   SpaceSchema,
@@ -84,10 +85,14 @@ export const qk = {
   usage: ["usage"] as const,
   spaces: (q?: SpacesQueryInput) => ["spaces", q ?? {}] as const,
   space: (id: string) => ["spaces", id] as const,
+  /** Every list of a space's people (any q/group) starts with this prefix. */
   spaceMembers: (id: string) => ["spaces", id, "members"] as const,
+  spaceMemberList: (id: string, q: string, group: string) =>
+    ["spaces", id, "members", { q, group }] as const,
   spaceMappings: (id: string) => ["spaces", id, "mappings"] as const,
   directory: ["directory"] as const,
   restrictedGroups: ["directory", "restricted"] as const,
+  orgMappings: ["directory", "org-mappings"] as const,
   directoryGroups: (q: string) => ["directory", "groups", q] as const,
 };
 
@@ -389,8 +394,8 @@ export const useUpdateSettings = () => {
 // Hosted M1 (packages/shared/HOSTED_CONTRACT.md). Only hosted pages call these.
 
 const SpacePage = PageSchema(SpaceSchema);
-const SpaceMemberPage = PageSchema(SpaceMemberSchema);
 const DirectoryGroupPage = PageSchema(DirectoryGroupSchema);
+const GroupMappingPage = PageSchema(GroupMappingSchema);
 
 export const useSpaces = (q?: SpacesQueryInput, enabled = true) =>
   useInfiniteQuery({
@@ -426,24 +431,42 @@ export const usePatchSpace = (id: string) =>
     () => [["spaces"], qk.me, ["artifacts"]],
     "Couldn't save the space.",
   );
+/** The page shows space_not_empty itself (the server is the authority for delete). */
 export const useDeleteSpace = () =>
   useInvalidating(
     (id: string) => api.send("DELETE", R.space(id), undefined),
     () => [["spaces"], qk.me],
     "Couldn't delete the space.",
+    (e) => e.code === "space_not_empty",
   );
-export const useSpaceMembers = (id: string) =>
+/** A space's people: `q` (name or email prefix) and `group` narrow it; pages carry `total`. */
+export const useSpaceMembers = (
+  id: string,
+  { q = "", group = "" }: { q?: string; group?: string } = {},
+  enabled = true,
+) =>
   useInfiniteQuery({
-    queryKey: qk.spaceMembers(id),
+    enabled,
+    queryKey: qk.spaceMemberList(id, q.trim(), group),
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam, signal }) =>
       api.get(
-        withQuery(R.spaceMembers(id), { cursor: pageParam }),
-        SpaceMemberPage,
+        withQuery(R.spaceMembers(id), {
+          q: q.trim() || undefined,
+          group: group || undefined,
+          limit: 50,
+          cursor: pageParam,
+        }),
+        SpaceMembersPageSchema,
         signal,
       ),
     getNextPageParam: (last) => last.nextCursor ?? undefined,
   });
+/** The People card shows member refusals by the row, and snaps the role back. */
+const memberInline = (e: ApiClientError) =>
+  e.code === "space_forbidden" ||
+  e.code === "member_synced" ||
+  e.code === "not_found";
 const spaceMemberKeys = (id: string) => () => [
   qk.spaceMembers(id),
   qk.space(id),
@@ -459,6 +482,7 @@ export const usePutSpaceMember = (id: string) =>
       ),
     spaceMemberKeys(id),
     "Couldn't change access.",
+    memberInline,
   );
 export const useDeleteSpaceMember = (id: string) =>
   useInvalidating(
@@ -466,6 +490,7 @@ export const useDeleteSpaceMember = (id: string) =>
       api.send("DELETE", R.spaceMember(id, userId), undefined),
     spaceMemberKeys(id),
     "Couldn't change access.",
+    memberInline,
   );
 /** An org admin adds themselves to a shared space (audited; managers are notified). */
 export const useAddSelfToSpace = (id: string) =>
@@ -481,6 +506,11 @@ export const useSpaceMappings = (id: string) =>
     queryFn: ({ signal }) =>
       api.get(R.spaceMappings(id), z.array(GroupMappingSchema), signal),
   });
+/** The access table shows these itself, by the row, and snaps the role back. */
+const mappingInline = (e: ApiClientError) =>
+  e.code === "directory_sync_off" ||
+  e.code === "directory_mapping_off" ||
+  e.code === "space_forbidden";
 const mappingKeys = (id: string) => () => [
   qk.spaceMappings(id),
   qk.spaceMembers(id),
@@ -496,6 +526,7 @@ export const usePutMapping = (id: string) =>
       ),
     mappingKeys(id),
     "Couldn't change access.",
+    mappingInline,
   );
 export const useDeleteMapping = (id: string) =>
   useInvalidating(
@@ -503,6 +534,39 @@ export const useDeleteMapping = (id: string) =>
       api.send("DELETE", R.spaceMapping(id, groupId), undefined),
     mappingKeys(id),
     "Couldn't change access.",
+    mappingInline,
+  );
+/** "Every space" mappings (org admin): one row per group, never per-space rows. */
+export const useOrgMappings = (enabled = true) =>
+  useQuery({
+    enabled,
+    queryKey: qk.orgMappings,
+    queryFn: ({ signal }) =>
+      api
+        .get(withQuery(R.orgMappings, { limit: 200 }), GroupMappingPage, signal)
+        .then((p) => p.items),
+  });
+/** Every-space rows reach every shared space's members, so those refresh too. */
+const orgMappingKeys = () => [qk.orgMappings, ["spaces"]];
+export const usePutOrgMapping = () =>
+  useInvalidating(
+    (v: { groupId: string; role: SpaceRole }) =>
+      api.send(
+        "PUT",
+        R.orgMapping(v.groupId),
+        { role: v.role },
+        GroupMappingSchema,
+      ),
+    orgMappingKeys,
+    "Couldn't change access.",
+    mappingInline,
+  );
+export const useDeleteOrgMapping = () =>
+  useInvalidating(
+    (groupId: string) => api.send("DELETE", R.orgMapping(groupId), undefined),
+    orgMappingKeys,
+    "Couldn't change access.",
+    mappingInline,
   );
 /** The Directory page shows these itself: sync is off (409), or the directory wants a fresh Google sign-in. */
 const directoryInline = (e: ApiClientError) =>

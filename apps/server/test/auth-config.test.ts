@@ -112,6 +112,38 @@ describe("authConfig", () => {
       expect(authConfig({ ...ok, ...over } as Env).google).toBeNull();
   });
 
+  test("HOSTED=1 fails closed unless the broker transport is configured", () => {
+    const hostedDirect = authConfig(direct({ HOSTED: "1" }));
+    expect(hostedDirect.google).toBeNull();
+    expect(hostedDirect.problems).toContain(
+      "google: HOSTED=1 requires the broker transport (AUTH_BROKER_URL)",
+    );
+
+    // A tenant-supplied shared secret is never accepted on a hosted install:
+    // only the broker transport is allowed.
+    const hostedBroker = authConfig(
+      direct({
+        HOSTED: "1",
+        GOOGLE_CLIENT_SECRET: "tenant-supplied",
+        AUTH_BROKER_URL: "https://auth.h.test",
+        BROKER_SIGNING_KEY: TEST_BROKER_KEY,
+      }),
+    );
+    expect(hostedBroker.google?.transport).toMatchObject({ kind: "broker" });
+
+    // A broken broker URL still refuses direct.
+    for (const url of ["http://auth.h.test", "not a url"]) {
+      const c = authConfig(
+        direct({
+          HOSTED: "1",
+          AUTH_BROKER_URL: url,
+          BROKER_SIGNING_KEY: TEST_BROKER_KEY,
+        }),
+      );
+      expect(c.google).toBeNull();
+    }
+  });
+
   test("code email pool: 1..10000, default 200", () => {
     expect(authConfig(direct()).codeEmailsPerDay).toBe(200);
     expect(

@@ -1,0 +1,31 @@
+// Hosted auth broker (P2 T11): one Worker on auth.<hosted domain>, deployed by
+// Platform. It holds the multi-tenant Google client secret and nothing else
+// secret; the registry (written by P1 provisioning) holds public keys only.
+// Placeholders are filled at deploy time.
+{
+  "name": "oa-auth-broker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-01",
+  "kv_namespaces": [
+    { "binding": "BROKER_REGISTRY", "id": "{{BROKER_REGISTRY_ID}}" }
+  ],
+  "ratelimits": [
+    {
+      "name": "RL_BROKER_IP",
+      "namespace_id": "1101",
+      "simple": { "limit": 60, "period": 60 }
+    },
+    {
+      "name": "RL_BROKER_INSTALL",
+      "namespace_id": "1102",
+      "simple": { "limit": 300, "period": 60 }
+    }
+  ],
+  "vars": {
+    "GOOGLE_CLIENT_ID": "{{GOOGLE_CLIENT_ID}}",
+    "BROKER_ORIGIN": "{{BROKER_ORIGIN}}"
+  }
+  // Secrets: GOOGLE_CLIENT_SECRET, BROKER_STATE_KEY (32+ random bytes).
+  // BROKER_ORIGIN is the fixed public origin (https://auth.<hosted>); the
+  // redirect_uri is built from it, never the request Host.
+}

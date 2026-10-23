@@ -1030,7 +1030,7 @@ describe("hosted contract: space People", () => {
     expect(SpaceForbiddenDetailsSchema.parse({ target: "mapping" })).toEqual({
       target: "mapping",
     });
-    expect(ERROR_CODES.at(-1)).toBe("member_synced");
+    expect(ERROR_CODES).toContain("member_synced");
     expect(STATUS_FOR.member_synced).toBe(409);
     expect(Object.keys(SpaceMemberSchema.shape).at(-1)).toBe("allMembers");
     expect(Object.keys(SpaceMemberSchema.shape)).not.toContain("lastSeenAt");
@@ -1230,5 +1230,48 @@ describe("hosted mocks: list by space", () => {
     )) as { items: { space?: { kind: string } }[] };
     expect(shared.items.every((a) => a.space?.kind === "shared")).toBe(true);
     expect((await call("GET", `${R.artifacts}?scope=space`)).status).toBe(400);
+  });
+});
+
+describe("hosted mocks: reset a Google link", () => {
+  const byEmail = async (email: string) =>
+    (
+      (await json(await call("GET", R.members))) as {
+        id: string;
+        email: string;
+        identities?: string[];
+      }[]
+    ).find((m) => m.email === email);
+
+  it("the owner resets an active member's and an admin's link", async () => {
+    fresh({ hosted: true });
+    const bob = await byEmail("bob@example.com");
+    const erin = await byEmail("erin@example.com");
+    expect(bob?.identities).toEqual(["google"]);
+    expect(erin?.identities).toEqual(["google"]);
+    expect(
+      (await call("DELETE", R.memberIdentity(bob?.id as string, "google")))
+        .status,
+    ).toBe(204);
+    expect(
+      (await call("DELETE", R.memberIdentity(erin?.id as string, "google")))
+        .status,
+    ).toBe(204);
+  });
+
+  it("an admin can't reset a peer admin (owner_only) but can reset a member", async () => {
+    fresh({ hosted: { actAs: "admin" } });
+    const bob = await byEmail("bob@example.com");
+    const erin = await byEmail("erin@example.com");
+    const r = await call(
+      "DELETE",
+      R.memberIdentity(erin?.id as string, "google"),
+    );
+    expect(r.status).toBe(403);
+    expect((await errCode(r)).code).toBe("owner_only");
+    expect(
+      (await call("DELETE", R.memberIdentity(bob?.id as string, "google")))
+        .status,
+    ).toBe(204);
   });
 });
