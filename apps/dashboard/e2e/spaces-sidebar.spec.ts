@@ -137,3 +137,66 @@ test("keyboard: reach a space from the sidebar, then search everywhere", async (
   );
   await expect(box).toHaveAccessibleName("Search artifacts");
 });
+
+for (const [width, shown] of [
+  [1280, true],
+  [640, true],
+  [639, false],
+  [390, false],
+] as const)
+  test(`header email at ${width}px: ${shown ? "shown" : "avatar only"}`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`/?hosted=1&space=${ENG}`);
+    await page.waitForLoadState("networkidle");
+    const email = page.locator("[data-header-email]");
+    if (shown) await expect(email).toBeVisible();
+    else await expect(email).toBeHidden();
+    // The avatar still opens the account menu.
+    await page.getByRole("button", { name: "Account menu" }).click();
+    await expect(
+      page.getByRole("menuitem", { name: "Sign out" }),
+    ).toBeVisible();
+  });
+
+for (const scheme of ["light", "dark"] as const)
+  for (const width of [1280, 390])
+    test(`upload dialog with the Space select at ${width}px ${scheme}`, async ({
+      page,
+    }, info) => {
+      await page.emulateMedia({ colorScheme: scheme });
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`/?hosted=1&space=${ENG}`);
+      await page.waitForLoadState("networkidle");
+      await page.getByTestId("upload-files").setInputFiles({
+        name: "notes.md",
+        mimeType: "text/markdown",
+        buffer: Buffer.from("# x"),
+      });
+      const d = page.getByRole("dialog", { name: "Create artifact" });
+      await expect(d.getByRole("combobox", { name: "Space" })).toHaveText(
+        /Engineering/,
+      );
+      await expect(
+        d.getByText("People in this space get access by their role."),
+      ).toBeVisible();
+      await page.waitForFunction(() =>
+        document.getAnimations().every((x) => x.playState !== "running"),
+      );
+      const v = await axeRun(page);
+      expect(v, v.join("\n")).toEqual([]);
+      await page.screenshot({
+        path: info.outputPath(`upload-space-${scheme}-${width}.png`),
+      });
+    });
+
+test("account menu shows the signed-in email as a label", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto("/?hosted=1");
+  await page.waitForLoadState("networkidle");
+  await page.getByRole("button", { name: "Account menu" }).click();
+  const menu = page.getByRole("menu");
+  await expect(menu.getByText("ada@example.com")).toBeVisible();
+  await expect(menu.getByRole("menuitem")).toHaveText(["Sign out"]);
+});

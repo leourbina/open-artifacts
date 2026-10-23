@@ -87,6 +87,18 @@ The user enabled Workers for Platforms on the account (`GET /accounts/{id}/worke
 - **Durable Object migration tag.** The settings API does not expose it (`migration_tag` is null for account and namespace scripts alike). Read it with the 412 probe: send the upload with a deliberately empty or wrong `old_tag` and parse `expected tag is '<tag>'` from `Actor migration tag precondition failed` (the upload is rejected, nothing changes). Alternatively record the tag in `installs` on our own uploads and reconcile it with the same probe on resume. Either way: **send no `migrations` when the live tag already equals the target** (re-sending an applied migration fails 400/412).
 - **Limits.** Scripts per dispatch namespace are unlimited, so the account's 500-script cap and the "refuse under 50 free slots" rule are gone. D1 50,000 DBs / 1 TB per account, R2 no constraint, **KV 1,000 namespaces per account stays the ~1,000-install cap** (M2: the D1-backed KV shim). Rate limiting counts per Cloudflare location, so a tenant can exceed its own limit across colos.
 
+## Test-hook bundles (agreed with Backend, 2026-10-21; #393)
+
+Backend's test hooks are guarded at build time by the define `__OA_TEST_HOOKS_ALLOWED__` (the template sets `"false"`). So each release has **two bundles from one dry-run config**, differing only in that define:
+- `release` (`false`): uploaded to every install, prod and staging alike, except the red-line pair.
+- `redline` (`true`): uploaded only to `rl-a` and `rl-b`, the only installs with `test_hooks = 1` (staging only). `stg-a`, `stg-b` and self-hosted staging get no hooks; `wrangler.staging.jsonc` is unchanged.
+
+Safeguards, each pinned by a test:
+1. `buildBundle` emits both variants. A test normalizes the one define literal and fails if the two bundles differ in anything else. (The hook code is present in both; only the literal differs.)
+2. A mandatory CI check runs the **release** bundle with `TEST_HOOKS=1` and a valid key and asserts 404 on every `/__test/*` path. This is the real proof that release is inert.
+3. The provisioner refuses to upload `redline` to any install unless `test_hooks = 1` and the env is staging; it refuses `release` on an install with test hooks too, so the red-line pair never silently loses its hooks.
+4. `/healthz` reports `testHooks: true` only when hooks are on; the field is absent otherwise. P5's prod check asserts `testHooks !== true`, and the secret and settings check stays the real proof.
+
 ## Global Constraints
 
 - Same product, same code: the user Worker is the normal `apps/server` build. No hosted-only branches in `apps/server/src`.

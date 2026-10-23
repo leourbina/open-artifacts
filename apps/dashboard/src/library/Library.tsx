@@ -13,6 +13,7 @@ import { useHosted } from "../auth/permissions";
 import { useMe } from "../auth/useMe";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { copyText } from "../settings/ui";
+import { useUploadSpace } from "../spaces/SpacePicker";
 import { useCurrentSpace } from "../spaces/useCurrentSpace";
 import { DropZone } from "../upload/DropZone";
 import { AppLink } from "./AppLink";
@@ -133,6 +134,7 @@ export function Library({ scope }: { scope: Scope }) {
   const filtered = Boolean(s.format || s.agent);
   const canPublishHere =
     personal || myRole === "editor" || myRole === "manager";
+  const uploadSpace = useUploadSpace(space?.id);
   const [emptyTitle, emptyText] =
     space && scope === "all"
       ? personal
@@ -251,8 +253,10 @@ export function Library({ scope }: { scope: Scope }) {
           )}
         </div>
         <span className="flex-1" />
-        {/* Uploading into a space waits for its picker (Task 7). */}
-        {!space && <DropZone button allowed={canCreate} />}
+        {/* No Upload inside a space you can only view (Design D4). */}
+        {(!space || canPublishHere) && (
+          <DropZone button allowed={canCreate} spaceId={uploadSpace} />
+        )}
       </div>
       {/* One tree whether or not /me has loaded: the results never remount
           when the tabs appear (a remount detaches every card mid-use). */}

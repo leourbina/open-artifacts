@@ -1,6 +1,12 @@
 import { AUTH, type Me } from "@oa/shared";
-import { Avatar, Button, Menu } from "@oa/ui";
+import { Avatar, Button } from "@oa/ui";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
   Sidebar as ShSidebar,
   SidebarBrand,
   SidebarContent,
@@ -404,9 +410,13 @@ function TopBar({ me }: { me: Me | null }) {
           alignItems: "center",
         }}
       >
-        <span>{me.user.email}</span>
-        <Menu
-          trigger={
+        {/* Below 640px the avatar alone (it opens the account menu), so the
+            search and its space chip get the room. */}
+        <span data-header-email="" className="max-[640px]:hidden">
+          {me.user.email}
+        </span>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
               title="Account menu"
@@ -421,9 +431,19 @@ function TopBar({ me }: { me: Me | null }) {
                 />
               </span>
             </Button>
-          }
-          items={[{ label: "Sign out", onSelect: signOut }]}
-        />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            className="min-w-[200px] text-[length:var(--oa-text-sm)]"
+          >
+            {/* Who's signed in: a label, not an item (the header hides it on phones). */}
+            <DropdownMenuLabel className="truncate font-normal text-muted-foreground">
+              {me.user.email}
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={signOut}>Sign out</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </>
   );

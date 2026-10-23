@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.33.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.32.0...v0.33.0) (2026-10-22)
+
+
+### Features
+
+* **dashboard:** choose a space when uploading (P4 Task 7) ([#451](https://github.com/open-artifacts-ai/open-artifacts/issues/451)) ([32354a7](https://github.com/open-artifacts-ai/open-artifacts/commit/32354a788b22e11dfc7bea9f6f3af5bea9b2c8f0))
+
+## [0.32.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.31.0...v0.32.0) (2026-10-22)
+
+
+### Features
+
+* **test-hooks:** gated /__test/* hooks for the cross-tenant suite (P2 T14) ([#393](https://github.com/open-artifacts-ai/open-artifacts/issues/393)) ([de85313](https://github.com/open-artifacts-ai/open-artifacts/commit/de8531398886bfc43d1f0348a7875a73d936aaac))
+
 ## [0.31.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.30.0...v0.31.0) (2026-10-22)
 
 

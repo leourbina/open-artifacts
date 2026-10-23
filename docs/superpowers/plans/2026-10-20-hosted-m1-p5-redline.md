@@ -50,6 +50,7 @@
   - Hooks are rate-limited (an `RL_ANON` bucket prefixed `test:`) and every call writes an audit event `test_hook.*`.
   - `otp/latest`: codes stay hashed. Only while hooks are on, the send path also writes the plaintext to the install's KV under `test:otp:<install>:<email>` with a 10-minute TTL.
   - `session` takes `spaces?: [{id, role}]` once P3 lands.
+- Build-time guard (Backend #393): hooks also need `__OA_TEST_HOOKS_ALLOWED__` compiled `true`, so `rl-a`/`rl-b` run P1's `redline` bundle; every other install runs `release`. P1 pins that the two differ only in that literal, and CI proves the release bundle 404s every `/__test/*` even with `TEST_HOOKS=1` and a key.
 - [ ] **Step 1:** Write the contract doc with the amendments above. The suite adds three checks: a wrong key gets a 404, hooks on the content host get a 404, and a hook call shows up in `audit_events`.
 - [ ] **Step 2:** Commit `docs: red-line test-hook contract`.
 
@@ -63,7 +64,7 @@
 - Produces:
   - `loadTargets(): { a: Target; b: Target; prod: ProdProbe }` from `REDLINE_TARGETS` (JSON) with `Target = { name; installId: string; app: string; content: string; patFile: string; hookKeyFile: string }` and `ProdProbe = { inventoryUrl: string; inventoryKeyFile: string; scriptsTokenFile: string; accountId: string }` (P1 Task 7b's inventory Worker for ids and hosts, and a token with only Workers Scripts Read for secret names and settings; no D1 token in CI); reads secrets from the files.
   - `crossCheck(req: (cred: Cred, host: Target) => Request, o: { a: Target; b: Target; credA: Cred; credB: Cred; ok?: (r: Response) => boolean }): Promise<void>`: asserts `ok(fetch(req(credB, b)))` and `ok(fetch(req(credA, a)))` (default `ok` is 2xx or 101), then `expectRefused(fetch(req(credA, b)), b)`. Every cross-tenant case in Tasks 4–6 uses it.
-  - `prodClean(p: ProdProbe): Promise<void>`: for every install the prod inventory Worker returns (`testHooks` must be false there too), `/healthz.testHooks === false`, `/healthz.installId === row.id`, and the script's secret list and settings contain neither `TEST_HOOK_KEY` nor `TEST_HOOKS`.
+  - `prodClean(p: ProdProbe): Promise<void>`: for every install the prod inventory Worker returns (`testHooks` must be false there too), `/healthz.testHooks !== true` (the field is absent unless hooks are on), `/healthz.installId === row.id`, and the script's secret list and settings contain neither `TEST_HOOK_KEY` nor `TEST_HOOKS`.
   - `hook(t: Target, path: string, body): Promise<unknown>`.
   - `asA/asB` helpers that build `fetch` init with a credential and `redirect: "manual"`.
   - `expectRefused(res: Response, b: Target): Promise<void>`: status in 401, 403, 404, or a 3xx without `set-cookie` whose `location` is B's own sign-in; body (when present) contains none of the marker strings seeded into B (Task 2 seeds a private artifact on each install whose title and content include `REDLINE-<install>-<random>`).

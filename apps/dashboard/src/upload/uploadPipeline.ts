@@ -15,6 +15,8 @@ export type UploadInput = {
   title: string;
   message?: string;
   entry?: string;
+  /** Hosted: the shared space to create it in (create only); omitted, the caller's personal space. */
+  spaceId?: string;
 };
 export type Progress = { done: number; total: number };
 
@@ -178,7 +180,12 @@ export async function uploadArtifact(
   return api.send(
     "POST",
     R.artifacts,
-    { ...body, id: reserved, title: input.title.trim() },
+    {
+      ...body,
+      id: reserved,
+      title: input.title.trim(),
+      ...(input.spaceId ? { spaceId: input.spaceId } : {}),
+    },
     PublishResultSchema,
     signal,
   );
