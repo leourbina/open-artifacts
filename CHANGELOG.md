@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.33.1](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.33.0...v0.33.1) (2026-10-23)
+
+
+### Bug Fixes
+
+* **ci:** skip deploy-prod with a notice when prod isn't installed ([#172](https://github.com/open-artifacts-ai/open-artifacts/issues/172)) ([#404](https://github.com/open-artifacts-ai/open-artifacts/issues/404)) ([05deecd](https://github.com/open-artifacts-ai/open-artifacts/commit/05deecd069238a9e5832ff02eae4529e3518cd72))
+* **library:** ?space= is the library's only on library routes ([#464](https://github.com/open-artifacts-ai/open-artifacts/issues/464)) ([25cd366](https://github.com/open-artifacts-ai/open-artifacts/commit/25cd36686187690dd66ea657d3835189be61ca2d))
+* **shared:** hosted mocks list by space (scope=space and spaces) ([#449](https://github.com/open-artifacts-ai/open-artifacts/issues/449)) ([97ef69a](https://github.com/open-artifacts-ai/open-artifacts/commit/97ef69ac9aff01a0661d673bc76adf31594ba5cb))
+
 ## [0.33.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.32.0...v0.33.0) (2026-10-22)
 
 
