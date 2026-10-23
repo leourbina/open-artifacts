@@ -2086,6 +2086,23 @@ describe("fix round 4", () => {
     });
   });
 
+  it("R2-N2: re-running delete on a deleted install removes a HOSTS entry a stalled create put back", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    await s.p.delete(inst.id, inst.id);
+    // The TOCTOU window: a stalled create's HOSTS put lands after the delete.
+    s.fake.kvValues(s.hostsId).set(inst.appHost, inst.id);
+    s.fake.kvValues(s.hostsId).set(inst.contentHost, "iother0000000");
+    const r = keep(await s.p.delete(inst.id, inst.id));
+    expect(r).toEqual({ id: inst.id, ok: true, state: "deleted" });
+    expect(s.fake.kvValues(s.hostsId).has(inst.appHost)).toBe(false);
+    // Another install's entry is never touched.
+    expect(s.fake.kvValues(s.hostsId).get(inst.contentHost)).toBe(
+      "iother0000000",
+    );
+    expect(s.audit(inst.id)).toContain("delete.unmap_stale");
+  });
+
   it("R2-N1: status reports a pending cut as the alarm, with owed relative to the recorded vars", async () => {
     const s = setup();
     const inst = keep(await s.p.create(input("finqore", { vars: CODES })));
