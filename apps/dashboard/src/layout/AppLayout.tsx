@@ -202,21 +202,25 @@ function Layout() {
   );
 }
 
-/** Opens/collapses the sidebar. On phones, an update (Design's A) or sync
-    trouble (D13 B) puts a dot on it. */
+/** Opens/collapses the sidebar. On phones, an update (Design's A) puts a dot
+    on it; so does anything that lights Settings: sync trouble (D13 B) or
+    departed people with artifacts to transfer. */
 function MenuTrigger({ me }: { me: Me | null }) {
   const { isMobile } = useSidebar();
   const update = instanceUpdate(me);
   const sync = syncDot(me);
+  const departed = useDeparted(me).length > 0;
   const dot = isMobile && shouldNudge(update);
-  const syncTone = isMobile && !dot ? sync : null;
+  // A sync tone wins; departed people alone get the accent.
+  const settingsTone =
+    isMobile && !dot ? (sync ?? (departed ? "accent" : null)) : null;
   return (
     <span className="relative inline-flex">
-      {/* Sync trouble keeps the trigger's name and describes it instead:
-          a held sweep can sit for days. */}
+      {/* Settings' dot keeps the trigger's name and describes it instead:
+          its causes (a held sweep, a departed person) can sit for days. */}
       <SidebarTrigger
         aria-label={dot ? "Open menu, update available" : "Toggle navigation"}
-        aria-describedby={syncTone ? "oa-menu-sync" : undefined}
+        aria-describedby={settingsTone ? "oa-menu-settings" : undefined}
       />
       {dot && (
         <UpdateDot
@@ -225,17 +229,17 @@ function MenuTrigger({ me }: { me: Me | null }) {
           className="pointer-events-none absolute top-[6px] right-[5px]"
         />
       )}
-      {syncTone && (
-        <span id="oa-menu-sync" hidden>
+      {settingsTone && (
+        <span id="oa-menu-settings" hidden>
           Settings needs attention
         </span>
       )}
-      {syncTone && (
+      {settingsTone && (
         <span
           aria-hidden="true"
           className="pointer-events-none absolute top-[6px] right-[5px] block size-2 rounded-full"
           style={{
-            background: `var(--oa-${syncTone})`,
+            background: `var(--oa-${settingsTone})`,
             boxShadow: "0 0 0 2px var(--oa-bg)",
           }}
         />
