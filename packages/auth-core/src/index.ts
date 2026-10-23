@@ -1,4 +1,13 @@
 export { inDomains, parseDomains } from "./domains.js";
+export {
+  brokerNonce,
+  flowHash,
+  keyId,
+  publicFromPkcs8,
+  redeemTranscript,
+  signRedeem,
+  verifyRedeem,
+} from "./ed25519.js";
 export { isAsciiEmail, normalizeEmail } from "./email.js";
 export {
   GOOGLE_AUTHORIZE_URL,

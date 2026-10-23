@@ -1,35 +1,125 @@
 import {
+  brokerNonce,
+  flowHash,
   GOOGLE_AUTHORIZE_URL,
   GOOGLE_TOKEN_URL,
   GoogleTokenError,
+  keyId,
+  publicFromPkcs8,
+  signRedeem,
   verifyGoogleIdToken,
 } from "@oa/auth-core";
 import { AUTH } from "@oa/shared";
 import type { Env } from "../../env.js";
 import { ApiError, appOrigin } from "../../http/errors.js";
-import { type AuthConfig, authConfig } from "../config.js";
+import { b64urlEncode } from "../../util/crypto.js";
+import { authConfig, type GoogleTransport } from "../config.js";
 import { fail } from "../oidc.js";
 import type { OidcProvider, VerifiedIdentity } from "./types.js";
 
 // Sign in with Google. The install verifies the ID token itself (signature,
 // iss, aud, azp, exp, its own nonce, email_verified, hd in AUTH_DOMAINS),
-// whichever transport fetched it. Direct transport: this install holds its
-// own Google client secret (self-hosted, or a dedicated client). The hosted
-// broker transport arrives with the auth broker (P2 T11).
+// whichever transport fetched it:
+// - direct: this install holds its own client secret (self-hosted, or a
+//   dedicated client) and exchanges the code itself;
+// - broker (hosted): the shared client's secret lives only in the auth
+//   broker. Google redirects to the broker, the broker relays the code to this
+//   install's registered origin, and this install trades it for Google's raw
+//   ID token through a request signed with its own Ed25519 key.
 
 const redirectUri = (env: Env) => `${appOrigin(env)}${AUTH.callbackGoogle}`;
 
-/** The Google config for the direct transport, or 404 (sign-in not offered). */
-function directConfig(env: Env): {
-  google: NonNullable<AuthConfig["google"]>;
-  secret: string;
-  domains: readonly string[];
-} {
+/** The Google config, or 404 (sign-in not offered). */
+function googleConfig(env: Env) {
   const cfg = authConfig(env);
-  const google = cfg.google;
-  if (!google || google.transport.kind !== "direct")
-    throw new ApiError("not_found", "Not found");
-  return { google, secret: google.transport.secret, domains: cfg.domains };
+  if (!cfg.google) throw new ApiError("not_found", "Not found");
+  return { ...cfg.google, domains: cfg.domains };
+}
+
+const kids = new Map<string, Promise<string>>();
+/** This install's key id: derived from its public key, never configured (N3). */
+const kidOf = (signingKey: string) => {
+  let k = kids.get(signingKey);
+  if (!k) {
+    k = publicFromPkcs8(signingKey).then(keyId);
+    k.catch(() => kids.delete(signingKey));
+    kids.set(signingKey, k);
+  }
+  return k;
+};
+
+/** The PKCE S256 challenge of `verifier`. */
+const s256 = async (verifier: string) =>
+  b64urlEncode(
+    new Uint8Array(
+      await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)),
+    ),
+  );
+
+/** Google's raw ID token for `code`, by this install's transport. */
+async function exchange(
+  env: Env,
+  clientId: string,
+  t: GoogleTransport,
+  a: { code: string; verifier: string; nonce: string; bstate?: string },
+): Promise<string> {
+  let res: Response;
+  if (t.kind === "direct") {
+    res = await fetch(GOOGLE_TOKEN_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        accept: "application/json",
+      },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code: a.code,
+        redirect_uri: redirectUri(env),
+        client_id: clientId,
+        client_secret: t.secret,
+        code_verifier: a.verifier,
+      }),
+      redirect: "manual",
+    });
+  } else {
+    const body = JSON.stringify({
+      install: t.installId,
+      code: a.code,
+      verifier: a.verifier,
+      ts: Date.now(),
+      // The broker refuses unless its state binds this exact flow.
+      bstate: a.bstate ?? "",
+      h: await flowHash(a.nonce, await s256(a.verifier)),
+    });
+    const kid = await kidOf(t.signingKey);
+    const req = new Request(`${t.url}/google/redeem`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-oa-kid": kid,
+        "x-oa-sig": await signRedeem(t.signingKey, kid, body),
+      },
+      body,
+      redirect: "manual",
+    });
+    // A service binding when bound (same account), else public HTTPS; the
+    // request is signed either way.
+    res = await (env.BROKER ? env.BROKER.fetch(req) : fetch(req));
+  }
+  if (!res.ok) {
+    await res.body?.cancel();
+    return fail(
+      `${t.kind === "direct" ? "token" : "broker"}_http_${res.status}`,
+    );
+  }
+  let out: unknown;
+  try {
+    out = await res.json();
+  } catch {
+    return fail("token_bad_json");
+  }
+  const idToken = (out as { id_token?: unknown } | null)?.id_token;
+  return typeof idToken === "string" ? idToken : fail("no_id_token");
 }
 
 export const googleProvider: OidcProvider = {
@@ -37,10 +127,20 @@ export const googleProvider: OidcProvider = {
   callbackPath: AUTH.callbackGoogle,
 
   authorizeUrl(env, a) {
-    const { google, domains } = directConfig(env);
+    const g = googleConfig(env);
+    if (g.transport.kind === "broker") {
+      const u = new URL(`${g.transport.url}/google/authorize`);
+      u.search = new URLSearchParams({
+        install: g.transport.installId,
+        state: a.state,
+        nonce: a.nonce,
+        code_challenge: a.challenge,
+      }).toString();
+      return u.toString();
+    }
     const u = new URL(GOOGLE_AUTHORIZE_URL);
     u.search = new URLSearchParams({
-      client_id: google.clientId,
+      client_id: g.clientId,
       redirect_uri: redirectUri(env),
       response_type: "code",
       scope: "openid email profile",
@@ -50,52 +150,33 @@ export const googleProvider: OidcProvider = {
       code_challenge_method: "S256",
       prompt: "select_account",
       // A hint for the account chooser only; the hd claim is what's checked.
-      hd: domains[0] as string,
+      hd: g.domains[0] as string,
     }).toString();
     return u.toString();
   },
 
   async redeem(env, a): Promise<VerifiedIdentity> {
-    const { google, secret, domains } = directConfig(env);
-    let idToken: unknown;
+    const g = googleConfig(env);
+    let idToken: string;
     try {
-      const res = await fetch(GOOGLE_TOKEN_URL, {
-        method: "POST",
-        headers: {
-          "content-type": "application/x-www-form-urlencoded",
-          accept: "application/json",
-        },
-        body: new URLSearchParams({
-          grant_type: "authorization_code",
-          code: a.code,
-          redirect_uri: redirectUri(env),
-          client_id: google.clientId,
-          client_secret: secret,
-          code_verifier: a.verifier,
-        }),
-        redirect: "manual",
-      });
-      if (!res.ok) {
-        await res.body?.cancel();
-        return fail(`token_http_${res.status}`);
-      }
-      let body: unknown;
-      try {
-        body = await res.json();
-      } catch {
-        return fail("token_bad_json");
-      }
-      idToken = (body as { id_token?: unknown } | null)?.id_token;
+      idToken = await exchange(env, g.clientId, g.transport, a);
     } catch (e) {
       if (e instanceof ApiError) throw e;
       return fail("token_fetch");
     }
-    if (typeof idToken !== "string") return fail("no_id_token");
     try {
+      // On the broker transport Google saw the install-derived nonce, not the
+      // client nonce this flow generated. Recompute it with this install's id:
+      // a token minted through another install (even with this flow's client
+      // nonce) can't satisfy it.
+      const expectNonce =
+        g.transport.kind === "broker"
+          ? await brokerNonce(g.transport.installId, a.nonce)
+          : a.nonce;
       const id = await verifyGoogleIdToken(
-        { clientId: google.clientId, domains },
+        { clientId: g.clientId, domains: g.domains },
         idToken,
-        a.nonce,
+        expectNonce,
       );
       return {
         provider: "google",

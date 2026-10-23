@@ -369,12 +369,17 @@ describe("direct-mode sign-in routes", () => {
     },
   );
 
-  it("broker transport isn't offered yet (T11)", async () => {
+  it("broker transport: login goes to the broker with this install's id", async () => {
     const e = direct({
       AUTH_BROKER_URL: "https://auth.h.test",
       BROKER_SIGNING_KEY: TEST_BROKER_KEY,
     });
-    expect((await get(AUTH.loginGoogle, e)).status).toBe(404);
+    const u = new URL(loc(await get(AUTH.loginGoogle, e)));
+    expect(`${u.origin}${u.pathname}`).toBe(
+      "https://auth.h.test/google/authorize",
+    );
+    expect(u.searchParams.get("install")).toBe("inst-a");
+    expect(u.searchParams.get("client_id")).toBeNull();
   });
 });
 
@@ -399,7 +404,12 @@ describe("Me sign-in fields", () => {
   });
 
   it("direct: auth for a session and a PAT, signIn, features, hosted", async () => {
-    const e = direct({ HOSTED: "1", FEATURES: "spaces" });
+    const e = direct({
+      HOSTED: "1",
+      FEATURES: "spaces",
+      AUTH_BROKER_URL: "https://auth.h.test",
+      BROKER_SIGNING_KEY: TEST_BROKER_KEY,
+    });
     const { cookie, userId } = await login(uniq("me"));
     const m = await me(e, cookie);
     expect(m.auth).toMatchObject({

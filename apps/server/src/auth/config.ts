@@ -87,6 +87,11 @@ function googleConfig(
   if (!nonEmpty(env.GOOGLE_CLIENT_ID)) return fail("GOOGLE_CLIENT_ID is empty");
   if (domains.length === 0) return fail("AUTH_DOMAINS is empty");
   const clientId = env.GOOGLE_CLIENT_ID.trim();
+  // Hosted installs never hold the shared Google client secret: the broker
+  // alone does the code exchange. Fail closed, and never fall back to direct
+  // or honour a tenant-supplied GOOGLE_CLIENT_SECRET.
+  if (env.HOSTED === "1" && !nonEmpty(env.AUTH_BROKER_URL))
+    return fail("HOSTED=1 requires the broker transport (AUTH_BROKER_URL)");
   if (nonEmpty(env.AUTH_BROKER_URL)) {
     let url: URL;
     try {

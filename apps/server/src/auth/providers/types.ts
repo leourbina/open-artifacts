@@ -30,6 +30,12 @@ export interface OidcProvider {
    */
   redeem(
     env: Env,
-    a: { code: string; verifier: string; nonce: string },
+    a: {
+      code: string;
+      verifier: string;
+      nonce: string;
+      /** The broker's own state, relayed back by the hosted broker. */
+      bstate?: string;
+    },
   ): Promise<VerifiedIdentity>;
 }
