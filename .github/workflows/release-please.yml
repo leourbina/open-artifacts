@@ -228,7 +228,7 @@ jobs:
           node-version-file: .nvmrc
       - name: Verify the release is live
         if: ${{ vars.DEMO_ENABLED != 'true' }}
-        run: node --experimental-strip-types scripts/ci/verify-release.ts --tag "$TAG" --repo "$GITHUB_REPOSITORY" $SKIP_PROD
+        run: node --experimental-strip-types scripts/ci/verify-release.ts --tag "$TAG" --repo "$GITHUB_REPOSITORY" ${SKIP_PROD:+"$SKIP_PROD"}
       - name: Verify the release is live (with the demo)
         if: ${{ vars.DEMO_ENABLED == 'true' }}
-        run: node --experimental-strip-types scripts/ci/verify-release.ts --tag "$TAG" --repo "$GITHUB_REPOSITORY" --demo-url https://demo.open-artifacts.com $SKIP_PROD
+        run: node --experimental-strip-types scripts/ci/verify-release.ts --tag "$TAG" --repo "$GITHUB_REPOSITORY" --demo-url https://demo.open-artifacts.com ${SKIP_PROD:+"$SKIP_PROD"}
