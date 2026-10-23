@@ -1,0 +1,1214 @@
+// P1 Task 5: upgrade, rollback, updateVars, rotateTurnstileSecret and delete,
+// against the in-memory Cloudflare (fake-cf.ts). Harness pieces mirror
+// wfp-create.test.ts (gates mocked, every generated secret captured).
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
+import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { DatabaseSync } from "node:sqlite";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { cfClient, type Target } from "../src/cf.js";
+import { epochBumpSql, type Template } from "../src/metadata.js";
+import { ENV_PREFIX, type Env, platformNames } from "../src/names.js";
+import { canonicalJson } from "../src/platform.js";
+import {
+  assetEntries,
+  bundleSha256,
+  migrationsSha256,
+  type ReleaseAsset,
+  type ReleaseFile,
+  type ReleaseReader,
+  type ReleaseRecord,
+  TEST_HOOKS_DEFINE,
+} from "../src/release.js";
+import {
+  HOSTED_DOMAINS,
+  hostsKvTitle,
+  NAMESPACES,
+  ProdLocked,
+  ProvisionRefused,
+  type WfpOptions,
+  WfpProvisioner,
+} from "../src/wfp.js";
+import { type FakeCf as Fake, FakeCf } from "./fake-cf.js";
+
+const H = vi.hoisted(() => ({ SENSITIVE: new Set<string>() }));
+const G = vi.hoisted(() => ({
+  PROD_UNLOCKED: true,
+  ALLOW_ACCOUNT_TARGET: true,
+  RELEASE_PUBKEY: { staging: "", prod: "" } as Record<string, string>,
+  FLOOR_MIN_SEQ: { staging: 1, prod: 1 } as Record<string, number>,
+}));
+vi.mock("../src/internal/gates.js", async (orig) => {
+  const m = await orig<typeof import("../src/internal/gates.js")>();
+  return {
+    ...m,
+    get PROD_UNLOCKED() {
+      return G.PROD_UNLOCKED;
+    },
+    get ALLOW_ACCOUNT_TARGET() {
+      return G.ALLOW_ACCOUNT_TARGET;
+    },
+    get RELEASE_PUBKEY() {
+      return G.RELEASE_PUBKEY;
+    },
+    get FLOOR_MIN_SEQ() {
+      return G.FLOOR_MIN_SEQ;
+    },
+  };
+});
+vi.mock("@oa/shared", async (orig) => {
+  const m = await orig<typeof import("@oa/shared")>();
+  return {
+    ...m,
+    newPat: () => {
+      const v = m.newPat();
+      H.SENSITIVE.add(v);
+      return v;
+    },
+  };
+});
+const SENSITIVE = H.SENSITIVE;
+beforeAll(() => {
+  const real = crypto.getRandomValues.bind(crypto);
+  vi.spyOn(globalThis.crypto, "getRandomValues").mockImplementation(
+    <T extends ArrayBufferView | null>(a: T): T => {
+      const r = real(a as unknown as Uint8Array) as unknown as T;
+      const v = a as unknown as Uint8Array;
+      if (v && v.byteLength === 48)
+        SENSITIVE.add(
+          Buffer.from(v.buffer, v.byteOffset, v.byteLength).toString(
+            "base64url",
+          ),
+        );
+      return r;
+    },
+  );
+});
+
+const NOW = Date.parse("2026-10-23T00:00:00Z");
+const ROOT = new URL("../../../", import.meta.url);
+const PLATFORM_SQL = readdirSync(new URL("apps/platform-db/migrations/", ROOT))
+  .filter((f) => f.endsWith(".sql"))
+  .sort()
+  .map((f) =>
+    readFileSync(new URL(`apps/platform-db/migrations/${f}`, ROOT), "utf8"),
+  )
+  .join("\n");
+const SERVER_MIGRATIONS = readdirSync(new URL("apps/server/migrations/", ROOT))
+  .filter((f) => f.endsWith(".sql"))
+  .sort();
+const OWNER = "owner@finqore.test";
+const EMAILS = new Set([OWNER]);
+
+const THROWN: string[] = [];
+const PRINTABLE: string[] = [];
+const FAKES: Fake[] = [];
+const PROVS: WfpProvisioner[] = [];
+
+async function fails(p: Promise<unknown>): Promise<Error> {
+  try {
+    await p;
+  } catch (e) {
+    THROWN.push(String((e as Error).message), String(e), JSON.stringify(e));
+    return e as Error;
+  }
+  throw new Error("expected a failure");
+}
+const keep = <T>(v: T): T => {
+  PRINTABLE.push(JSON.stringify(v));
+  return v;
+};
+
+const enc = (s: string) => new TextEncoder().encode(s);
+
+const bundleOf = (variant: "release" | "redline", version: string) => ({
+  modules: [
+    {
+      name: "index.js",
+      type: "esm" as const,
+      bytes: enc(
+        `const hooksAllowed = ${variant === "redline"};\n// ${version}\nexport default { fetch() { return new Response(String(hooksAllowed)); } };\n`,
+      ),
+    },
+  ],
+  mainModule: "index.js",
+  version,
+});
+
+const TEMPLATE_BYTES = new Uint8Array(
+  readFileSync(new URL("apps/server/wrangler.template.jsonc", ROOT)),
+);
+const BASE_TEMPLATE: Template = JSON.parse(
+  new TextDecoder()
+    .decode(TEMPLATE_BYTES)
+    .replace(/\/\/[^\n]*/g, "")
+    .replace(/,(\s*[}\]])/g, "$1"),
+);
+const MIGRATION_FILES: ReleaseFile[] = SERVER_MIGRATIONS.map((name) => ({
+  name,
+  bytes: new Uint8Array(
+    readFileSync(new URL(`apps/server/migrations/${name}`, ROOT)),
+  ),
+}));
+const NEW_MIGRATION: ReleaseFile = {
+  name: "9001_t5_lifecycle.sql",
+  bytes: enc("CREATE TABLE t5_probe (id INTEGER PRIMARY KEY);"),
+};
+const ASSETS: ReleaseAsset[] = [
+  { path: "index.html", bytes: enc("<!doctype html><p>hi</p>") },
+  { path: "app.js", bytes: enc("console.log(1)") },
+];
+const ASSETS_24: ReleaseAsset[] = [
+  { path: "index.html", bytes: enc("<!doctype html><p>hi v24</p>") },
+  { path: "app.js", bytes: enc("console.log(24)") },
+];
+const WELCOME = enc("# Welcome to Open Artifacts\n\nFrom the release.\n");
+
+/** Release content of one version; a Template object is serialized. */
+type Spec = {
+  template?: Template;
+  migrations?: ReleaseFile[];
+  assets?: ReleaseAsset[];
+};
+const tplBytes = (t?: Template) =>
+  t === undefined ? TEMPLATE_BYTES : enc(JSON.stringify(t, null, 2));
+
+const SIGNER = generateKeyPairSync("ed25519");
+SENSITIVE.add(
+  SIGNER.privateKey
+    .export({ format: "der", type: "pkcs8" })
+    .toString("base64url"),
+);
+const PUB = SIGNER.publicKey.export({ format: "jwk" }).x as string;
+G.RELEASE_PUBKEY = { staging: PUB, prod: PUB };
+
+const signed = (domain: string, env: string, v: unknown) => {
+  const s = canonicalJson(v);
+  return {
+    record: s,
+    signature: sign(
+      null,
+      Buffer.from(`${domain}\n${env}\n${s}`),
+      SIGNER.privateKey,
+    ).toString("base64url"),
+  };
+};
+type Floor = { seq: number; minVersion: string; revoked: string[] };
+const signFloor = (env: Env, f: Partial<Floor> = {}) =>
+  signed("oa-release-floor-v1", env, {
+    env,
+    seq: 1,
+    minVersion: "0.1.0",
+    revoked: [],
+    ...f,
+  });
+
+const recordOf = (
+  env: Env,
+  variant: "release" | "redline",
+  version: string,
+  spec: Spec,
+): ReleaseRecord => ({
+  env,
+  version,
+  variant,
+  sha256: bundleSha256(bundleOf(variant, version)),
+  defines: { [TEST_HOOKS_DEFINE]: variant === "redline" },
+  assets: assetEntries(spec.assets ?? ASSETS),
+  templateSha256: createHash("sha256")
+    .update(tplBytes(spec.template))
+    .digest("hex"),
+  migrationsSha256: migrationsSha256(spec.migrations ?? MIGRATION_FILES),
+  welcomeSha256: createHash("sha256").update(WELCOME).digest("hex"),
+});
+
+/** A signed, multi-version release store; `floor` is mutable per test. */
+function makeReleases(env: Env, specs: Record<string, Spec> = {}) {
+  const st = {
+    floor: signFloor(env) as unknown,
+    specs: { ...specs } as Record<string, Spec>,
+    records: [] as { version: string; variant: string }[],
+  };
+  const spec = (v: string) => st.specs[v] ?? {};
+  const reader: ReleaseReader = {
+    record: async (version, variant) => {
+      st.records.push({ version, variant });
+      return signed(
+        "oa-release-v1",
+        env,
+        recordOf(env, variant, version, spec(version)),
+      );
+    },
+    modules: async (version, variant) => {
+      const b = bundleOf(variant, version);
+      return { mainModule: b.mainModule, modules: b.modules };
+    },
+    assets: async (version) =>
+      (spec(version).assets ?? ASSETS).map((a) => ({
+        ...a,
+        bytes: a.bytes.slice(),
+      })),
+    template: async (version) => tplBytes(spec(version).template).slice(),
+    migrations: async (version) =>
+      (spec(version).migrations ?? MIGRATION_FILES).map((f) => ({
+        ...f,
+        bytes: f.bytes.slice(),
+      })),
+    welcome: async () => WELCOME.slice(),
+    floor: async () => st.floor,
+  };
+  return { st, reader };
+}
+
+/** 0.24.0 adds one D1 migration and new assets; same DO tag as 0.23.0. */
+const V24: Spec = {
+  migrations: [...MIGRATION_FILES, NEW_MIGRATION],
+  assets: ASSETS_24,
+};
+/** 0.25.0 adds a DO class (tag v2) without binding it: allowed. */
+const V25_TAG: Spec = {
+  template: {
+    ...BASE_TEMPLATE,
+    migrations: [
+      ...BASE_TEMPLATE.migrations,
+      { tag: "v2", new_sqlite_classes: ["Ledger"] },
+    ],
+  },
+};
+/** 0.26.0 adds a DO class and binds it in the same release: refused. */
+const V26_BOUND: Spec = {
+  template: {
+    ...BASE_TEMPLATE,
+    durable_objects: {
+      bindings: [
+        ...BASE_TEMPLATE.durable_objects.bindings,
+        { name: "LEDGER", class_name: "Ledger" },
+      ],
+    },
+    migrations: [
+      ...BASE_TEMPLATE.migrations,
+      { tag: "v2", new_sqlite_classes: ["Ledger"] },
+    ],
+  },
+};
+
+const TS = {
+  sitekey: "0x4AAAAAAAstagingSITEKEY",
+  secret: `0x4AAAAAAAts-secret-${createHash("sha256").update(String(Math.random())).digest("hex").slice(0, 24)}`,
+};
+const TS_NEXT = `0x4AAAAAAAts-rotated-${createHash("sha256").update(String(Math.random())).digest("hex").slice(0, 24)}`;
+SENSITIVE.add(TS.secret);
+SENSITIVE.add(TS_NEXT);
+const CODES = { AUTH_PROVIDERS: "email" };
+const HOOK_VARS = { TEST_DOMAIN: "redline.test" };
+
+function setup(o: { env?: Env; specs?: Record<string, Spec> } = {}) {
+  const fake = new FakeCf({ now: NOW });
+  FAKES.push(fake);
+  SENSITIVE.add(fake.token);
+  const env = o.env ?? "staging";
+  const pdb = fake.seedD1(platformNames(env).db, PLATFORM_SQL);
+  const hostsId = fake.seedKv(hostsKvTitle(env));
+  const regId = fake.seedKv(platformNames(env).registry);
+  fake.turnstile.set(TS.sitekey, {
+    sitekey: TS.sitekey,
+    name: platformNames(env).turnstile,
+    domains: [HOSTED_DOMAINS[env].app],
+    mode: "managed",
+  });
+  const target: Target = { kind: "namespace", ns: NAMESPACES[env] };
+  fake.dispatch = { hostsKvId: hostsId, ns: target.ns };
+  const patDir = mkdtempSync(join(tmpdir(), "oa-t5-pat-"));
+  let t = NOW;
+  const clock = {
+    now: () => t,
+    sleep: async (ms: number) => {
+      t += ms;
+    },
+  };
+  const rel = makeReleases(env, {
+    "0.24.0": V24,
+    "0.25.0": V25_TAG,
+    "0.26.0": V26_BOUND,
+    ...o.specs,
+  });
+  const cfWith = (f: typeof fetch = fake.fetch) =>
+    cfClient({
+      accountId: fake.accountId,
+      token: fake.token,
+      fetch: f,
+      sleep: async () => {},
+    });
+  const opts = (over: Partial<WfpOptions> = {}): WfpOptions => ({
+    cf: cfWith(),
+    env,
+    target,
+    domains: HOSTED_DOMAINS[env],
+    release: rel.reader,
+    patDir,
+    fetch: fake.fetch,
+    now: clock.now,
+    sleep: clock.sleep,
+    healthTimeoutMs: 10_000,
+    turnstile: TS,
+    ...over,
+  });
+  const mk = (over: Partial<WfpOptions> = {}) => {
+    const p = new WfpProvisioner(opts(over));
+    PROVS.push(p);
+    return p;
+  };
+  const db = () => (fake.d1.get(pdb) as { db: DatabaseSync }).db;
+  const row = (id: string) =>
+    // biome-ignore lint/suspicious/noExplicitAny: test rows
+    db().prepare("SELECT * FROM installs WHERE id = ?").get(id) as any;
+  const audit = (id: string) =>
+    db()
+      .prepare(
+        "SELECT action FROM hosted_audit WHERE install_id = ? ORDER BY id",
+      )
+      .all(id)
+      .map((r) => (r as { action: string }).action);
+  const stored = (id: string, version: string) =>
+    db()
+      .prepare(
+        "SELECT * FROM install_versions WHERE install_id = ? AND version = ?",
+      )
+      .get(id, version) as
+      | {
+          metadata: string;
+          vars: string;
+          do_migration_tag: string | null;
+        }
+      | undefined;
+  const scriptOf = (id: string) =>
+    fake.script(target.ns, `${ENV_PREFIX[env]}${id}`);
+  const installDb = (id: string) =>
+    (fake.d1.get(row(id).d1_id) as { db: DatabaseSync }).db;
+  return {
+    fake,
+    env,
+    p: mk(),
+    mk,
+    cfWith,
+    opts,
+    pdb,
+    hostsId,
+    regId,
+    rel,
+    target,
+    db,
+    row,
+    audit,
+    stored,
+    scriptOf,
+    installDb,
+    clock,
+  };
+}
+type S = ReturnType<typeof setup>;
+
+const input = (
+  slug = "finqore",
+  o: Partial<Parameters<WfpProvisioner["create"]>[0]> = {},
+): Parameters<WfpProvisioner["create"]>[0] => ({
+  slug,
+  ownerEmail: OWNER,
+  plan: "paid",
+  vars: {},
+  bundle: "release",
+  version: "0.23.0",
+  ...o,
+});
+
+const uploads = (fake: Fake, from = 0) =>
+  fake.log
+    .map((e, i) => ({ ...e, i, body: fake.raw[i]?.body ?? "" }))
+    .slice(from)
+    .filter((e) => e.method === "PUT" && /\/scripts\/[^/?]+$/.test(e.path));
+
+function metaOf(body: string) {
+  const m = body.match(
+    /name="metadata"[^\n]*\r?\n(?:[^\n]*\r?\n)*?\r?\n(\{.*\})\r?\n/,
+  );
+  if (!m) throw new Error("no metadata part");
+  return JSON.parse(m[1] as string);
+}
+
+/** Index of every call (from `from`) whose path matches. */
+const callsTo = (fake: Fake, re: RegExp, from = 0) =>
+  fake.log
+    .map((e, i) => ({ e, i }))
+    .slice(from)
+    .filter(({ e }) => re.test(`${e.method} ${e.path}`))
+    .map(({ i }) => i);
+
+const unhealthyAt = (s: S, version: string) => {
+  s.fake.health = (sc) =>
+    (sc.metadata.tags as string[]).includes(`v${version}`)
+      ? { ok: false }
+      : undefined;
+};
+
+const modulesText = (s: S, id: string) =>
+  new TextDecoder().decode(s.scriptOf(id)?.modules.get("index.js")?.bytes);
+
+describe("create stores per-version metadata", () => {
+  it("each successful upload stores the rendered metadata (no secret values) keyed by install and version", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    const st = s.stored(inst.id, "0.23.0");
+    expect(st).toBeDefined();
+    expect(st?.do_migration_tag).toBe("v1");
+    const m = JSON.parse(st?.metadata as string);
+    expect(m.main_module).toBe("index.js");
+    expect(m.compatibility_date).toBe(BASE_TEMPLATE.compatibility_date);
+    expect(m.tags).toEqual([inst.id, "v0.23.0"]);
+    expect(m.keep_bindings).toEqual(["secret_text", "secret_key"]);
+    expect(m.assets.jwt).toBeUndefined();
+    expect(m.migrations).toBeUndefined();
+    expect(
+      m.bindings.filter((b: { type: string }) => b.type.startsWith("secret")),
+    ).toEqual([]);
+    expect(JSON.parse(st?.vars as string)).toEqual({});
+  });
+});
+
+describe("upgrade", () => {
+  it("upgrade applies only new migrations and keeps bindings", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    const before = s.scriptOf(inst.id);
+    const secretsBefore = new Map(before?.secrets);
+    const from = s.fake.log.length;
+    const r = keep(await s.p.upgrade(inst.id, "0.24.0"));
+    expect(r).toEqual({
+      id: inst.id,
+      from: "0.23.0",
+      to: "0.24.0",
+      ok: true,
+      rolledBack: false,
+    });
+    // Only the new migration file ran against the install's D1.
+    const applied = s
+      .installDb(inst.id)
+      .prepare("SELECT name FROM d1_migrations ORDER BY id")
+      .all()
+      .map((x) => (x as { name: string }).name);
+    expect(applied).toEqual([...SERVER_MIGRATIONS, NEW_MIGRATION.name]);
+    const migCalls = s.fake.raw
+      .slice(from)
+      .filter((x) => x.body.includes("INSERT INTO d1_migrations"));
+    expect(migCalls).toHaveLength(1);
+    expect(migCalls[0]?.body).toContain(NEW_MIGRATION.name);
+    // One upload: keep_bindings, no secret value, no migrations (same tag).
+    const up = uploads(s.fake, from);
+    expect(up).toHaveLength(1);
+    const meta = metaOf(up[0]?.body as string);
+    expect(meta.keep_bindings).toEqual(["secret_text", "secret_key"]);
+    expect(
+      meta.bindings.filter((b: { type: string }) => b.type === "secret_text"),
+    ).toEqual([]);
+    expect(meta.migrations).toBeUndefined();
+    expect(meta.tags).toEqual([inst.id, "v0.24.0"]);
+    expect(s.scriptOf(inst.id)?.secrets).toEqual(secretsBefore);
+    expect(modulesText(s, inst.id)).toContain("0.24.0");
+    expect(s.row(inst.id)).toMatchObject({
+      state: "active",
+      version: "0.24.0",
+      previous_version: "0.23.0",
+      do_migration_tag: "v1",
+      lease: null,
+    });
+    expect(s.stored(inst.id, "0.24.0")).toBeDefined();
+    expect(s.audit(inst.id)).toEqual(
+      expect.arrayContaining(["upgrade.start", "upgrade.done"]),
+    );
+  });
+
+  it("a failed healthcheck after upgrade rolls back to the previous bundle and reports it, leaving other installs alone", async () => {
+    const s = setup();
+    const a = keep(await s.p.create(input("alpha")));
+    const b = keep(await s.p.create(input("beta")));
+    const bUploads = s.scriptOf(b.id)?.uploads;
+    unhealthyAt(s, "0.24.0");
+    const r = keep(await s.p.upgrade(a.id, "0.24.0"));
+    expect(r).toMatchObject({
+      id: a.id,
+      from: "0.23.0",
+      to: "0.24.0",
+      ok: false,
+      rolledBack: true,
+    });
+    expect(r.reason).toMatch(/healthz/);
+    expect(modulesText(s, a.id)).toContain("0.23.0");
+    expect(s.scriptOf(a.id)?.metadata.tags).toEqual([a.id, "v0.23.0"]);
+    expect(s.row(a.id)).toMatchObject({
+      state: "active",
+      version: "0.23.0",
+      previous_version: "0.24.0",
+      do_migration_tag: "v1",
+    });
+    expect(s.audit(a.id)).toEqual(
+      expect.arrayContaining(["upgrade.failed", "rollback.done"]),
+    );
+    expect(s.scriptOf(b.id)?.uploads).toBe(bUploads);
+    expect(s.row(b.id)).toMatchObject({ version: "0.23.0", state: "active" });
+  });
+
+  it("upgrade to an older version, or to the installed one, is refused before any write", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    const w = s.fake.writes().length;
+    const older = await fails(s.p.upgrade(inst.id, "0.22.0"));
+    expect(older).toBeInstanceOf(ProvisionRefused);
+    expect(older.message).toMatch(/downgrade/);
+    const same = await fails(s.p.upgrade(inst.id, "0.23.0"));
+    expect(same.message).toMatch(/already at 0\.23\.0/);
+    expect(s.fake.writes().length).toBe(w);
+    expect(s.row(inst.id)).toMatchObject({ state: "active", lease: null });
+  });
+
+  it("an upgrade whose release adds a DO class and first uses it in the same version is refused", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    const w = s.fake.writes().length;
+    const e = await fails(s.p.upgrade(inst.id, "0.26.0"));
+    expect(e).toBeInstanceOf(ProvisionRefused);
+    expect(e.message).toMatch(/Ledger/);
+    expect(e.message).toMatch(/one release before/);
+    expect(s.fake.writes().length).toBe(w);
+    // The same class, added unbound one release earlier, is fine.
+    const r = keep(await s.p.upgrade(inst.id, "0.25.0"));
+    expect(r.ok).toBe(true);
+    expect(s.row(inst.id).do_migration_tag).toBe("v2");
+  });
+
+  it("sends migrations only when the target tag differs from the live one", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    const from = s.fake.log.length;
+    await s.p.upgrade(inst.id, "0.25.0");
+    const meta = metaOf(uploads(s.fake, from)[0]?.body as string);
+    expect(meta.migrations).toEqual({
+      old_tag: "v1",
+      new_tag: "v2",
+      steps: [{ new_sqlite_classes: ["Ledger"] }],
+    });
+    expect(s.scriptOf(inst.id)?.migrationTag).toBe("v2");
+    expect(s.stored(inst.id, "0.25.0")?.do_migration_tag).toBe("v2");
+  });
+
+  it("a release below the floor's minVersion, or revoked, is refused on upgrade", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    const w = s.fake.writes().length;
+    s.rel.st.floor = signFloor("staging", { seq: 2, minVersion: "0.25.0" });
+    const low = await fails(s.p.upgrade(inst.id, "0.24.0"));
+    expect(low.message).toMatch(/below the release floor/);
+    s.rel.st.floor = signFloor("staging", { seq: 2, revoked: ["0.24.0"] });
+    const rev = await fails(s.p.upgrade(inst.id, "0.24.0"));
+    expect(rev.message).toMatch(/revoked/);
+    expect(s.fake.writes().length).toBe(w);
+  });
+
+  it("upgrade runs checkFloorSeq: a floor below the env's cached seq is refused, a higher one raises it", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    s.db().prepare("UPDATE release_floor SET floor_seq = 5").run();
+    const e = await fails(s.p.upgrade(inst.id, "0.24.0"));
+    expect(e.message).toMatch(/below 5/);
+    s.rel.st.floor = signFloor("staging", { seq: 7 });
+    await s.p.upgrade(inst.id, "0.24.0");
+    expect(s.db().prepare("SELECT floor_seq FROM release_floor").get()).toEqual(
+      { floor_seq: 7 },
+    );
+  });
+
+  it("a test-hook install gets only redline and a release install only release", async () => {
+    const s = setup();
+    const red = keep(
+      await s.p.create(
+        input("redqa", { testHooks: true, bundle: "redline", vars: HOOK_VARS }),
+      ),
+    );
+    const rel = keep(await s.p.create(input("plain")));
+    s.rel.st.records.length = 0;
+    expect((await s.p.upgrade(red.id, "0.24.0")).ok).toBe(true);
+    expect(new Set(s.rel.st.records.map((x) => x.variant))).toEqual(
+      new Set(["redline"]),
+    );
+    expect(modulesText(s, red.id)).toContain("hooksAllowed = true");
+    s.rel.st.records.length = 0;
+    expect((await s.p.upgrade(rel.id, "0.24.0")).ok).toBe(true);
+    expect(new Set(s.rel.st.records.map((x) => x.variant))).toEqual(
+      new Set(["release"]),
+    );
+    expect(modulesText(s, rel.id)).toContain("hooksAllowed = false");
+  });
+
+  it("every operation keeps ProdLocked", async () => {
+    const s = setup({ env: "prod" });
+    const inst = keep(await s.p.create(input()));
+    await withGate(false, async () => {
+      for (const op of [
+        () => s.p.upgrade(inst.id, "0.24.0"),
+        () => s.p.rollback(inst.id),
+        () => s.p.updateVars(inst.id, {}),
+        () => s.p.rotateTurnstileSecret("prod"),
+        () => s.p.delete(inst.id, inst.id),
+      ])
+        expect(await fails(op())).toBeInstanceOf(ProdLocked);
+    });
+    expect(s.row(inst.id).state).toBe("active");
+  });
+});
+
+async function withGate(v: boolean, fn: () => Promise<void>) {
+  const before = G.PROD_UNLOCKED;
+  G.PROD_UNLOCKED = v;
+  try {
+    await fn();
+  } finally {
+    G.PROD_UNLOCKED = before;
+  }
+}
+
+describe("rollback", () => {
+  it("rollback with no previous version is a clear error, not a re-upload", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    const from = s.fake.log.length;
+    const e = await fails(s.p.rollback(inst.id));
+    expect(e).toBeInstanceOf(ProvisionRefused);
+    expect(e.message).toMatch(/no previous version/);
+    expect(uploads(s.fake, from)).toHaveLength(0);
+    expect(s.row(inst.id)).toMatchObject({ state: "active", lease: null });
+  });
+
+  it("rollback across a Durable Object migration tag is refused, and a failed upgrade across one reports forward-fix instead of rolling back", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    unhealthyAt(s, "0.25.0");
+    const r = keep(await s.p.upgrade(inst.id, "0.25.0"));
+    expect(r).toMatchObject({
+      ok: false,
+      rolledBack: false,
+      forwardFix: true,
+    });
+    expect(r.reason).toMatch(/healthz/);
+    expect(s.row(inst.id)).toMatchObject({
+      state: "active",
+      version: "0.25.0",
+      previous_version: "0.23.0",
+      do_migration_tag: "v2",
+    });
+    expect(s.audit(inst.id)).toContain("upgrade.forward_fix");
+    s.fake.health = undefined;
+    const from = s.fake.log.length;
+    const e = await fails(s.p.rollback(inst.id));
+    expect(e).toBeInstanceOf(ProvisionRefused);
+    expect(e.message).toMatch(/forward-fix only/);
+    expect(uploads(s.fake, from)).toHaveLength(0);
+  });
+
+  it("rollback uploads exactly the stored metadata of the previous version", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input("finqore", { vars: CODES })));
+    await s.p.upgrade(inst.id, "0.24.0");
+    const stored = JSON.parse(s.stored(inst.id, "0.23.0")?.metadata as string);
+    const from = s.fake.log.length;
+    const r = keep(await s.p.rollback(inst.id));
+    expect(r).toEqual({
+      id: inst.id,
+      from: "0.24.0",
+      to: "0.23.0",
+      ok: true,
+      rolledBack: true,
+    });
+    const up = uploads(s.fake, from);
+    expect(up).toHaveLength(1);
+    const { jwt, ...assets } = metaOf(up[0]?.body as string).assets;
+    expect(typeof jwt).toBe("string");
+    expect({ ...metaOf(up[0]?.body as string), assets }).toEqual(stored);
+    // The previous release's verified bytes, and no D1 rollback.
+    expect(modulesText(s, inst.id)).toContain("0.23.0");
+    expect(
+      s
+        .installDb(inst.id)
+        .prepare("SELECT name FROM d1_migrations WHERE name = ?")
+        .get(NEW_MIGRATION.name),
+    ).toBeDefined();
+    expect(
+      s.fake.raw
+        .slice(from)
+        .some((x) => /DROP|DELETE FROM d1_migrations/i.test(x.body)),
+    ).toBe(false);
+    expect(s.row(inst.id)).toMatchObject({
+      version: "0.23.0",
+      previous_version: "0.24.0",
+      state: "active",
+    });
+  });
+
+  it("rollback refuses a previous version below the floor or revoked", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    await s.p.upgrade(inst.id, "0.24.0");
+    const from = s.fake.log.length;
+    s.rel.st.floor = signFloor("staging", { seq: 2, revoked: ["0.23.0"] });
+    expect((await fails(s.p.rollback(inst.id))).message).toMatch(/revoked/);
+    s.rel.st.floor = signFloor("staging", { seq: 3, minVersion: "0.24.0" });
+    expect((await fails(s.p.rollback(inst.id))).message).toMatch(
+      /below the release floor/,
+    );
+    expect(uploads(s.fake, from)).toHaveLength(0);
+    expect(s.row(inst.id)).toMatchObject({
+      version: "0.24.0",
+      state: "active",
+    });
+  });
+
+  it("a failed upgrade whose previous version is revoked stays on the new version and reports forward-fix", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    s.rel.st.floor = signFloor("staging", { seq: 2, revoked: ["0.23.0"] });
+    unhealthyAt(s, "0.24.0");
+    const r = keep(await s.p.upgrade(inst.id, "0.24.0"));
+    expect(r).toMatchObject({ ok: false, rolledBack: false, forwardFix: true });
+    expect(r.reason).toMatch(/revoked/);
+    expect(s.row(inst.id)).toMatchObject({
+      version: "0.24.0",
+      state: "active",
+    });
+  });
+});
+
+describe("concurrency", () => {
+  it("a second concurrent upgrade or delete is refused (compare-and-swap on the row state)", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    const second: Error[] = [];
+    let fired = false;
+    const p2 = s.mk();
+    const p1 = s.mk({
+      fetch: (async (u: RequestInfo | URL, init?: RequestInit) => {
+        if (!fired && String(u).endsWith("/healthz")) {
+          fired = true;
+          second.push(await fails(p2.upgrade(inst.id, "0.24.0")));
+          second.push(await fails(p2.delete(inst.id, inst.id)));
+          second.push(await fails(p2.rollback(inst.id)));
+          second.push(await fails(p2.updateVars(inst.id, {})));
+        }
+        return s.fake.fetch(u, init);
+      }) as typeof fetch,
+    });
+    const r = keep(await p1.upgrade(inst.id, "0.24.0"));
+    expect(r.ok).toBe(true);
+    expect(second).toHaveLength(4);
+    for (const e of second) {
+      expect(e).toBeInstanceOf(ProvisionRefused);
+      expect(e.message).toMatch(/upgrading|busy/);
+    }
+    expect(s.row(inst.id)).toMatchObject({ state: "active", lease: null });
+  });
+
+  it("a second delete while one is running is refused; a delete left by a crash resumes once its lease is cleared", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    const second: Error[] = [];
+    let fired = false;
+    const p2 = s.mk();
+    const p1 = s.mk({
+      cf: s.cfWith((async (u: RequestInfo | URL, init?: RequestInit) => {
+        const req = new Request(u, init);
+        if (
+          !fired &&
+          req.method === "DELETE" &&
+          /\/scripts\/oa-s-/.test(req.url)
+        ) {
+          fired = true;
+          second.push(await fails(p2.delete(inst.id, inst.id)));
+          second.push(await fails(p2.upgrade(inst.id, "0.24.0")));
+        }
+        return s.fake.fetch(u, init);
+      }) as typeof fetch),
+    });
+    keep(await p1.delete(inst.id, inst.id));
+    expect(second).toHaveLength(2);
+    for (const e of second) expect(e).toBeInstanceOf(ProvisionRefused);
+    expect(second[0]?.message).toMatch(/busy/);
+    expect(s.row(inst.id).state).toBe("deleted");
+  });
+});
+
+describe("updateVars and the session cut", () => {
+  it("re-validates vars exactly as create does", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    const w = s.fake.writes().length;
+    expect(
+      (await fails(s.p.updateVars(inst.id, { NOPE: "1" }))).message,
+    ).toMatch(/unknown var/);
+    expect(
+      (
+        await fails(
+          s.p.updateVars(inst.id, {
+            AUTH_PROVIDERS: "email,google",
+            EMAIL_CODE_DOMAIN: "on",
+            AUTH_DOMAINS: "finqore.test",
+          }),
+        )
+      ).message,
+    ).toMatch(/google out of AUTH_PROVIDERS/);
+    expect(
+      (
+        await fails(
+          s.p.updateVars(inst.id, {
+            AUTH_PROVIDERS: "email",
+            EMAIL_CODE_DOMAIN: "on",
+          }),
+        )
+      ).message,
+    ).toMatch(/needs AUTH_DOMAINS/);
+    const noTs = s.mk({ turnstile: undefined });
+    expect((await fails(noTs.updateVars(inst.id, CODES))).message).toMatch(
+      /Turnstile sitekey and secret are missing/,
+    );
+    expect(
+      (await fails(s.p.updateVars(inst.id, { TEST_DOMAIN: "x.test" }))).message,
+    ).toMatch(/TEST_DOMAIN/);
+    expect(s.fake.writes().length).toBe(w);
+    expect(s.row(inst.id)).toMatchObject({ state: "active", lease: null });
+  });
+
+  it("turning google on bumps the epoch in the install's own D1 after the new vars are live, once per enablement", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input("finqore", { vars: CODES })));
+    const idb = s.installDb(inst.id);
+    const epoch = () =>
+      (
+        idb
+          .prepare("SELECT session_epoch FROM users WHERE email = ?")
+          .get(OWNER) as { session_epoch: number }
+      ).session_epoch;
+    expect(epoch()).toBe(0);
+    const next = { AUTH_PROVIDERS: "email,google" };
+    const from = s.fake.log.length;
+    keep(await s.p.updateVars(inst.id, next));
+    expect(epoch()).toBe(1);
+    // Ordering: upload, then /healthz, then the bump on the install's D1.
+    const d1 = s.row(inst.id).d1_id as string;
+    const bump = s.fake.raw
+      .map((x, i) => ({ x, i }))
+      .slice(from)
+      .filter(
+        ({ x }) =>
+          x.path.includes(`/d1/database/${d1}/`) &&
+          x.body.includes(epochBumpSql()),
+      )
+      .map(({ i }) => i);
+    expect(bump).toHaveLength(1);
+    const up = uploads(s.fake, from).map((x) => x.i);
+    const health = callsTo(s.fake, /GET .*\/healthz$/, from);
+    expect(up).toHaveLength(1);
+    expect(up[0]).toBeLessThan(bump[0] as number);
+    expect(
+      health.some((h) => h > (up[0] as number) && h < (bump[0] as number)),
+    ).toBe(true);
+    const plain = metaOf(
+      uploads(s.fake, from)[0]?.body as string,
+    ).bindings.find((b: { name: string }) => b.name === "AUTH_PROVIDERS");
+    expect(plain.text).toBe("email,google");
+    expect(s.audit(inst.id)).toContain("vars.session_cut");
+    expect(JSON.parse(s.stored(inst.id, "0.23.0")?.vars as string)).toEqual(
+      next,
+    );
+    // A rerun with google already on does not bump again.
+    await s.p.updateVars(inst.id, next);
+    expect(epoch()).toBe(1);
+    // A crash after the bump but before the platform cleared its marker:
+    // the rerun finds the marker in the install's D1 and does not bump twice.
+    const cut = (
+      idb.prepare("SELECT id FROM oa_session_cuts").get() as { id: string }
+    ).id;
+    s.db()
+      .prepare("UPDATE installs SET session_cut = ? WHERE id = ?")
+      .run(cut, inst.id);
+    await s.p.updateVars(inst.id, next);
+    expect(epoch()).toBe(1);
+    expect(s.row(inst.id).session_cut).toBeNull();
+    // Off, then on again: a second enablement, a second bump.
+    await s.p.updateVars(inst.id, CODES);
+    expect(epoch()).toBe(1);
+    await s.p.updateVars(inst.id, next);
+    expect(epoch()).toBe(2);
+  });
+
+  it("a var change that fails before the bump keeps the cut pending, and the rerun bumps exactly once", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input("finqore", { vars: CODES })));
+    const idb = s.installDb(inst.id);
+    const epoch = () =>
+      (
+        idb
+          .prepare("SELECT session_epoch FROM users WHERE email = ?")
+          .get(OWNER) as { session_epoch: number }
+      ).session_epoch;
+    const next = { AUTH_PROVIDERS: "email,google" };
+    s.fake.health = () => ({ ok: false });
+    await fails(s.p.updateVars(inst.id, next));
+    expect(epoch()).toBe(0);
+    expect(s.row(inst.id)).toMatchObject({ state: "active", lease: null });
+    expect(s.row(inst.id).session_cut).toMatch(/^[0-9a-f]{32}$/);
+    s.fake.health = undefined;
+    await s.p.updateVars(inst.id, next);
+    expect(epoch()).toBe(1);
+    expect(s.row(inst.id).session_cut).toBeNull();
+    await s.p.updateVars(inst.id, next);
+    expect(epoch()).toBe(1);
+  });
+
+  it("codes newly on sends only TURNSTILE_SECRET, with keep_bindings", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    const from = s.fake.log.length;
+    await s.p.updateVars(inst.id, CODES);
+    const meta = metaOf(uploads(s.fake, from)[0]?.body as string);
+    expect(
+      meta.bindings
+        .filter((b: { type: string }) => b.type === "secret_text")
+        .map((b: { name: string }) => b.name),
+    ).toEqual(["TURNSTILE_SECRET"]);
+    expect(meta.keep_bindings).toEqual(["secret_text", "secret_key"]);
+    expect(s.scriptOf(inst.id)?.secrets.get("TURNSTILE_SECRET")).toBe(
+      TS.secret,
+    );
+  });
+});
+
+describe("rotateTurnstileSecret", () => {
+  it("re-uploads TURNSTILE_SECRET to every active codes-on install of the env and reports per install", async () => {
+    const s = setup();
+    const a = keep(await s.p.create(input("alpha", { vars: CODES })));
+    const b = keep(await s.p.create(input("beta", { vars: CODES })));
+    const off = keep(await s.p.create(input("gamma")));
+    const c = keep(await s.p.create(input("delta", { vars: CODES })));
+    s.db()
+      .prepare("UPDATE installs SET state = 'upgrading' WHERE id = ?")
+      .run(c.id);
+    const p = s.mk({ turnstile: { sitekey: TS.sitekey, secret: TS_NEXT } });
+    const out = keep(await p.rotateTurnstileSecret("staging"));
+    const byId = Object.fromEntries(out.map((x) => [x.id, x]));
+    expect(byId[a.id]).toMatchObject({ ok: true, rotated: true });
+    expect(byId[b.id]).toMatchObject({ ok: true, rotated: true });
+    expect(byId[off.id]).toMatchObject({ ok: true, rotated: false });
+    expect(byId[c.id]?.ok).toBe(false);
+    expect(byId[c.id]?.reason).toMatch(/upgrading/);
+    expect(s.scriptOf(a.id)?.secrets.get("TURNSTILE_SECRET")).toBe(TS_NEXT);
+    expect(s.scriptOf(b.id)?.secrets.get("TURNSTILE_SECRET")).toBe(TS_NEXT);
+    expect(s.scriptOf(off.id)?.secrets.has("TURNSTILE_SECRET")).toBe(false);
+    expect(s.scriptOf(c.id)?.secrets.get("TURNSTILE_SECRET")).toBe(TS.secret);
+    expect(s.audit(a.id)).toContain("turnstile.rotate");
+    expect(JSON.stringify(out)).not.toContain(TS_NEXT);
+    expect(JSON.stringify(p.notes)).not.toContain(TS_NEXT);
+    expect(
+      JSON.stringify(s.db().prepare("SELECT * FROM hosted_audit").all()),
+    ).not.toContain(TS_NEXT);
+    expect(s.row(a.id).lease).toBeNull();
+  });
+
+  it("refuses another env", async () => {
+    const s = setup();
+    expect(
+      await fails(s.p.rotateTurnstileSecret("prod" as Env)),
+    ).toBeInstanceOf(ProvisionRefused);
+  });
+});
+
+describe("delete", () => {
+  it("delete requires confirm === id and unmaps hosts before anything else", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    const w = s.fake.log.length;
+    for (const bad of ["", "finqore", `${inst.id} `, inst.id.toUpperCase()])
+      expect((await fails(s.p.delete(inst.id, bad))).message).toMatch(
+        /confirm/,
+      );
+    expect(s.fake.log.length).toBe(w);
+    // Objects in the install's bucket, more than one list page.
+    const bucket = `oa-s-${inst.id}`;
+    for (let k = 0; k < 5; k++) s.fake.r2Seed(bucket, `files/${k}`, enc("x"));
+    s.fake.r2PerPage = 2;
+    const from = s.fake.log.length;
+    const r = keep(await s.p.delete(inst.id, inst.id));
+    expect(r).toEqual({ id: inst.id, ok: true, state: "deleted" });
+    const order = s.fake.log
+      .slice(from)
+      .filter((e) => e.method === "DELETE")
+      .map((e) => e.path);
+    const hostsDel = order.findIndex((p) =>
+      p.includes(`/storage/kv/namespaces/${s.hostsId}/values/`),
+    );
+    expect(hostsDel).toBe(0);
+    expect(order[1]).toContain(`/storage/kv/namespaces/${s.hostsId}/values/`);
+    // The platform hosts rows go before any resource delete too.
+    const hostsRows = s.fake.raw
+      .map((x, i) => ({ x, i }))
+      .slice(from)
+      .find(({ x }) => x.body.includes("DELETE FROM hosts"))?.i as number;
+    const firstResource = s.fake.log.findIndex(
+      (e, i) =>
+        i >= from &&
+        e.method === "DELETE" &&
+        !e.path.includes(`/storage/kv/namespaces/${s.hostsId}/values/`),
+    );
+    expect(hostsRows).toBeLessThan(firstResource);
+    const seq = order
+      .slice(2)
+      .map((p) =>
+        p.includes(`/namespaces/${s.regId}/values/`)
+          ? "registry"
+          : /\/scripts\//.test(p)
+            ? "script"
+            : /\/storage\/kv\/namespaces\/[^/]+$/.test(p)
+              ? "kv"
+              : /\/r2\/buckets\/[^/]+\/objects\//.test(p)
+                ? "r2-object"
+                : /\/r2\/buckets\/[^/]+$/.test(p)
+                  ? "r2"
+                  : /\/d1\/database\/[^/]+$/.test(p)
+                    ? "d1"
+                    : p,
+      );
+    expect(seq).toEqual([
+      "registry",
+      "script",
+      "kv",
+      ...Array(5).fill("r2-object"),
+      "r2",
+      "d1",
+    ]);
+    expect(s.fake.kvValues(s.hostsId).size).toBe(0);
+    expect(s.scriptOf(inst.id)).toBeUndefined();
+    expect(s.fake.r2.has(bucket)).toBe(false);
+    expect([...s.fake.d1.values()].some((d) => d.name === bucket)).toBe(false);
+    expect(
+      [...s.fake.kv.values()].some((k) => k.title === `${bucket}-oauth`),
+    ).toBe(false);
+    // The row stays, terminal, and keeps the slug held.
+    expect(s.row(inst.id)).toMatchObject({ state: "deleted", lease: null });
+    expect(
+      s.db().prepare("SELECT * FROM hosts WHERE install_id = ?").all(inst.id),
+    ).toEqual([]);
+    expect(s.audit(inst.id)).toEqual(
+      expect.arrayContaining(["delete.start", "delete.done"]),
+    );
+    const again = await fails(s.p.create(input()));
+    expect(again.message).toMatch(/deleted|taken/);
+  });
+
+  it("delete is idempotent after a partial failure at any step", async () => {
+    const steps: [string, (m: string, p: string) => boolean][] = [
+      ["hosts", (m, p) => m === "DELETE" && p.includes("/values/")],
+      ["script", (m, p) => m === "DELETE" && /\/scripts\/oa-s-/.test(p)],
+      [
+        "kv",
+        (m, p) => m === "DELETE" && /\/storage\/kv\/namespaces\/[^/]+$/.test(p),
+      ],
+      ["r2-object", (m, p) => m === "DELETE" && /\/objects\//.test(p)],
+      ["r2", (m, p) => m === "DELETE" && /\/r2\/buckets\/[^/]+$/.test(p)],
+      ["d1", (m, p) => m === "DELETE" && /\/d1\/database\/[^/]+$/.test(p)],
+    ];
+    for (const [name, when] of steps) {
+      const s = setup();
+      const inst = keep(await s.p.create(input()));
+      s.fake.r2Seed(`oa-s-${inst.id}`, "files/a", enc("x"));
+      s.fake.inject(when, { status: 400, message: `boom ${name}` });
+      const e = await fails(s.p.delete(inst.id, inst.id));
+      expect(e.message, name).toMatch(/boom/);
+      expect(s.row(inst.id), name).toMatchObject({
+        state: "deleting",
+        lease: null,
+      });
+      const r = keep(await s.p.delete(inst.id, inst.id));
+      expect(r, name).toEqual({ id: inst.id, ok: true, state: "deleted" });
+      expect(s.fake.kvValues(s.hostsId).size, name).toBe(0);
+      expect(s.scriptOf(inst.id), name).toBeUndefined();
+      expect(s.fake.r2.has(`oa-s-${inst.id}`), name).toBe(false);
+      // A third call is a no-op.
+      const n = s.fake.writes().length;
+      const r3 = keep(await s.p.delete(inst.id, inst.id));
+      expect(r3, name).toEqual({ id: inst.id, ok: true, state: "deleted" });
+      expect(s.fake.writes().length, name).toBe(n);
+    }
+  });
+
+  it("refuses to delete anything whose name isn't names(id)", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    // The row's kv_id points at the platform HOSTS namespace.
+    s.db()
+      .prepare("UPDATE installs SET kv_id = ? WHERE id = ?")
+      .run(s.hostsId, inst.id);
+    const w = s.fake.writes().length;
+    const e = await fails(s.p.delete(inst.id, inst.id));
+    expect(e).toBeInstanceOf(ProvisionRefused);
+    expect(e.message).toMatch(/refusing to touch another/);
+    expect(s.fake.writes().length).toBe(w);
+    expect(s.fake.kvValues(s.hostsId).size).toBe(2);
+    expect(s.row(inst.id).state).toBe("active");
+    // An id that is not an install id never reaches Cloudflare.
+    const n = s.fake.log.length;
+    expect(await fails(s.p.delete("platform", "platform"))).toBeInstanceOf(
+      ProvisionRefused,
+    );
+    expect(s.fake.log.length).toBe(n);
+  });
+});
+
+function haystacks(): { all: string; rows: string } {
+  const parts = [...THROWN, ...PRINTABLE];
+  const rows: string[] = [];
+  for (const f of FAKES) {
+    parts.push(JSON.stringify(f.log));
+    for (const [, d] of f.d1) {
+      if (!d.name.endsWith("platform")) continue;
+      parts.push(
+        JSON.stringify(d.db.prepare("SELECT * FROM hosted_audit").all()),
+      );
+      for (const t of ["installs", "hosts", "install_versions"])
+        rows.push(JSON.stringify(d.db.prepare(`SELECT * FROM ${t}`).all()));
+    }
+  }
+  for (const p of PROVS) parts.push(JSON.stringify(p.notes));
+  return { all: parts.join("\n"), rows: rows.join("\n") };
+}
+
+describe("no secret in any error, result, audit row or platform row", () => {
+  it("collected values", () => {
+    expect(SENSITIVE.size).toBeGreaterThan(20);
+    const { all, rows } = haystacks();
+    for (const v of [...SENSITIVE, ...EMAILS])
+      if (v.length >= 8)
+        expect(all.includes(v), "a sensitive value leaked").toBe(false);
+    for (const v of SENSITIVE)
+      if (v.length >= 8)
+        expect(rows.includes(v), "a secret is in a platform row").toBe(false);
+  });
+});
+
+afterAll(() => {
+  const { all, rows } = haystacks();
+  const leaks = [...SENSITIVE, ...EMAILS].filter(
+    (v) => v.length >= 8 && all.includes(v),
+  );
+  const rowLeaks = [...SENSITIVE].filter(
+    (v) => v.length >= 8 && rows.includes(v),
+  );
+  if (leaks.length + rowLeaks.length > 0)
+    throw new Error(
+      `${leaks.length + rowLeaks.length} sensitive value(s) leaked into errors, logs, notes or platform rows`,
+    );
+});

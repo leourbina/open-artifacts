@@ -530,7 +530,17 @@ export class FakeCf {
       const name = decodeURIComponent(m[1] as string);
       if (!this.r2.has(name))
         return fail(404, "The specified bucket does not exist.", 10006);
-      if (req.method === "DELETE") this.r2.delete(name);
+      if (req.method === "DELETE") {
+        // Cloudflare refuses to delete a bucket that still holds objects.
+        if ((this.r2Objects.get(name)?.size ?? 0) > 0)
+          return fail(
+            409,
+            "The bucket you tried to delete is not empty.",
+            10008,
+          );
+        this.r2.delete(name);
+        this.r2Objects.delete(name);
+      }
       return env({ name });
     }
 

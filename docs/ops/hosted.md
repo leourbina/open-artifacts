@@ -79,7 +79,7 @@ Namespace `oa-spike-staging`, dispatch Worker `oa-s-spike-dispatch` (account scr
 
 ### First-create checklist (per env)
 
-1. Apply every platform D1 migration to `oa-<p>-platform`, in order: `apps/platform-db/migrations/0001_installs.sql`, then `0002_release_floor.sql` (the `release_floor` cache). Without 0002, create fails closed on the floor_seq read.
+1. Apply every platform D1 migration to `oa-<p>-platform`, in order: `apps/platform-db/migrations/0001_installs.sql`, then `0002_release_floor.sql` (the `release_floor` cache), then `0003_lifecycle.sql` (per-version metadata, the operation lock and the session-cut journal). Without 0002, create fails closed on the floor_seq read; without 0003, create fails closed on its first metadata write.
 2. Key ceremony done: `RELEASE_PUBKEY[env]` set in gates.ts (and `PROD_UNLOCKED` for prod).
 3. Sign the env's first floor with the `hosted-floor` workflow (dispatch on `main`: `env`, `seq` >= `FLOOR_MIN_SEQ[env]`, `min_version`, `revoked`), download its `floor-<env>-<seq>` artifact, and `publishFloor` it.
 4. `publishRelease` the signed tar and `.sig.json` from the GitHub release for each variant the env takes.

@@ -146,6 +146,10 @@ export interface Cf {
     prefix: string,
     cursor?: string,
   ): Promise<{ objects: R2ObjectInfo[]; cursor?: string; truncated: boolean }>;
+  /** The first page of keys in an install's own bucket (oa-<s|p>-<install id>); delete empties it. */
+  r2InstallKeys(bucket: string): Promise<string[]>;
+  /** Deletes one object from an install's own bucket; any other bucket is refused. */
+  r2InstallDeleteObject(bucket: string, key: string): Promise<void>;
 }
 
 /** The only keys r2ObjectDelete may delete: probeR2Conditionals' throwaway keys. */
@@ -153,6 +157,16 @@ const PROBE_KEY = /^probe\/[0-9a-f]{32}$/;
 
 /** The only buckets the R2 object calls touch: the releases bucket of an env. */
 const RELEASES_BUCKET = /^oa-[sp]-releases$/;
+
+/** An install's own bucket (names(id).r2): the only bucket delete may empty. */
+const INSTALL_BUCKET = /^oa-[sp]-i[a-z0-9]{11}$/;
+const installBucket = (bucket: string) => {
+  if (typeof bucket !== "string" || !INSTALL_BUCKET.test(bucket))
+    throw new Error(
+      `install object calls are for an install's own bucket only, not ${JSON.stringify(bucket).slice(0, 60)}`,
+    );
+  return bucket;
+};
 
 /** Manifest hash: the first 32 hex characters of SHA-256 (64 is rejected). */
 export function assetHash(bytes: Uint8Array): string {
@@ -626,6 +640,29 @@ export function cfClient(o: {
       if (truncated && !next)
         throw new Error("R2 listing is truncated but has no cursor");
       return { objects, cursor: next, truncated };
+    },
+    async r2InstallKeys(bucket) {
+      const { body } = await call(
+        "GET",
+        `${acct}/r2/buckets/${seg(installBucket(bucket))}/objects?per_page=1000`,
+      );
+      return ((body as { result?: { key?: unknown }[] })?.result ?? []).map(
+        (x) => {
+          if (typeof x?.key !== "string" || x.key === "")
+            throw new Error("R2 listing has a malformed entry");
+          return x.key;
+        },
+      );
+    },
+    async r2InstallDeleteObject(bucket, key) {
+      if (typeof key !== "string" || key === "" || key.length > 1024)
+        throw new Error("invalid R2 object key");
+      await call(
+        "DELETE",
+        `${acct}/r2/buckets/${seg(installBucket(bucket))}/objects/${seg(key)}`,
+        {},
+        [404],
+      );
     },
     async turnstileWidget(sitekey) {
       const r = await call(

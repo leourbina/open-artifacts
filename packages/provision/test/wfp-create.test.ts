@@ -3146,6 +3146,10 @@ describe("platform D1 migration (decisions 10, M1, M3)", () => {
       "state",
       "created_at",
       "updated_at",
+      // 0003 (Task 5): the operation lock and a session cut still owed.
+      "lease",
+      "lease_until",
+      "session_cut",
     ]);
   });
 

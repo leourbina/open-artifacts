@@ -29,6 +29,8 @@ export interface UpgradeResult {
   to: string;
   ok: boolean;
   rolledBack: boolean;
+  /** A failed upgrade that could not roll back (a DO tag changed, or the previous version is refused): it stays on `to`. */
+  forwardFix?: boolean;
   reason?: string;
 }
 

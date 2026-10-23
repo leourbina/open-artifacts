@@ -20,6 +20,7 @@ import { createHash, generateKeyPairSync, type KeyObject } from "node:crypto";
 import {
   closeSync,
   constants,
+  existsSync,
   fchmodSync,
   mkdirSync,
   openSync,
@@ -39,6 +40,8 @@ import {
 import {
   assertSafeMigrations,
   assertUniqueBindings,
+  epochBumpSql,
+  googleNewlyEnabled,
   KNOWN_SECRETS,
   parseTemplate,
   scriptSubdomainSettings,
@@ -60,9 +63,11 @@ import {
 import {
   canonicalJson,
   type InstallRow,
+  type InstallState,
   inputsHash,
   PlatformDb,
   RL_BASE,
+  type StoredVersion,
 } from "./platform.js";
 import {
   ASSET_LIMITS,
@@ -86,7 +91,12 @@ import {
   sha256Hex,
   TEST_HOOKS_DEFINE,
 } from "./release.js";
-import type { CreateInput, Install, InstallId } from "./types.js";
+import type {
+  CreateInput,
+  Install,
+  InstallId,
+  UpgradeResult,
+} from "./types.js";
 
 /** Option names that look like a gate: refused, so no config or spread can try one. */
 const GATE_LIKE =
@@ -321,6 +331,98 @@ type Meta = {
   sitekey: string | null;
 };
 
+/** How long a lifecycle operation holds the row's lock (installs.lease_until). */
+const LEASE_MS = 30 * 60_000;
+const HEX32 = /^[0-9a-f]{32}$/;
+const hex16 = () =>
+  Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString("hex");
+
+/**
+ * What install_versions keeps of an upload: no secret value (secrets stay on
+ * the script through keep_bindings), no assets jwt (one per upload) and no DO
+ * migration step (a rollback never crosses a tag).
+ */
+export function storedMetadata(meta: UploadMetadata): Record<string, unknown> {
+  const { migrations: _m, keep_assets: _k, ...rest } = meta;
+  return {
+    ...rest,
+    bindings: meta.bindings.filter((b) => !b.type.startsWith("secret")),
+    assets: { config: meta.assets.config },
+    keep_bindings: ["secret_text", "secret_key"],
+  };
+}
+
+const tagsOf = (t: Template): string[] =>
+  ((t.migrations ?? []) as { tag: string }[]).map((x) => x.tag);
+
+/**
+ * Constraints: a Durable Object class ships one release before the code that
+ * binds it. Read from the release template (verified against the signed
+ * record's templateSha256): the classes its migrations add after `live`
+ * (new_classes, new_sqlite_classes; L5 refuses every other step) must not be
+ * in its durable_objects.bindings.
+ */
+export function assertDoClassesShipFirst(
+  t: Template,
+  live: string | null,
+): void {
+  const all = (t.migrations ?? []) as Record<string, unknown>[];
+  const at = live === null ? -1 : tagsOf(t).indexOf(live);
+  if (live !== null && at < 0)
+    throw new Error(
+      `the live Durable Object migration tag ${live} is not in this release; forward-fix only`,
+    );
+  const added = all
+    .slice(at + 1)
+    .flatMap((m) => [
+      ...((m.new_classes ?? []) as string[]),
+      ...((m.new_sqlite_classes ?? []) as string[]),
+    ]);
+  const bound = (
+    (t.durable_objects?.bindings ?? []) as { class_name: string }[]
+  ).map((b) => b.class_name);
+  const both = added.filter((c) => bound.includes(c));
+  if (both.length > 0)
+    throw new Error(
+      `this release adds Durable Object class ${both.join(", ")} and binds it in the same version; a class ships one release before the code that uses it`,
+    );
+}
+
+export interface VarsResult {
+  id: InstallId;
+  version: string;
+  ok: true;
+  /** The epoch bump ran (google newly on, or a cut owed from an earlier run). */
+  sessionCut: boolean;
+}
+
+export interface RotationResult {
+  id: InstallId;
+  ok: boolean;
+  /** False for an install with codes off (nothing to rotate). */
+  rotated: boolean;
+  reason?: string;
+}
+
+export interface DeleteResult {
+  id: InstallId;
+  ok: true;
+  state: "deleted";
+}
+
+/** A checked rollback, planned before any write. */
+interface RollbackPlan {
+  row: InstallRow;
+  from: string;
+  to: string;
+  stored: StoredVersion;
+  m: Meta;
+  rel: Checked;
+  d1Id: string;
+  patFile: string;
+  raiseFloor: boolean;
+}
+
 export class WfpProvisioner {
   readonly notes: string[] = [];
   private readonly cf: Cf;
@@ -423,7 +525,10 @@ export class WfpProvisioner {
   }
 
   /** Decision 8 and TEST_DOMAIN: which bundle and vars may go where. */
-  private checkVariant(i: WfpCreateInput, vars: Record<string, string>): void {
+  private checkVariant(
+    i: { bundle: BundleVariant; testHooks?: boolean },
+    vars: Record<string, string>,
+  ): void {
     const hooks = i.testHooks === true;
     const stagingNs =
       this.env === "staging" &&
@@ -457,7 +562,10 @@ export class WfpProvisioner {
   }
 
   /** L2 then M1: the record is trusted only after its signature checks out. */
-  private async readRecord(i: WfpCreateInput): Promise<ReleaseRecord> {
+  private async readRecord(i: {
+    version: string;
+    bundle: BundleVariant;
+  }): Promise<ReleaseRecord> {
     const want = `${i.version} (${i.bundle})`;
     const got = await this.o.release.record(i.version, i.bundle);
     if (!got)
@@ -541,9 +649,8 @@ export class WfpProvisioner {
    * E (T3b): the env's signed floor, verified against the release key, at or
    * above FLOOR_MIN_SEQ[env] (the code anchor), and not below minVersion or
    * revoked for this version. The D1 floor_seq cache is checked after the
-   * platform DB resolves (checkFloorSeq).
-   * TODO(Task 5): upgrade must run the same floor check (and checkFloorSeq)
-   * for its target version.
+   * platform DB resolves (checkFloorSeq). Every lifecycle operation runs both
+   * for the version it uploads (upgrade's target, rollback's previous).
    */
   private async readFloor(rec: ReleaseRecord): Promise<FloorRecord> {
     const got = await this.o.release.floor();
@@ -669,7 +776,10 @@ export class WfpProvisioner {
   }
 
   /** Pre-flight: the signed record, then every release file against it. */
-  private async readRelease(i: WfpCreateInput): Promise<Checked> {
+  private async readRelease(i: {
+    version: string;
+    bundle: BundleVariant;
+  }): Promise<Checked> {
     if (!this.o.release) throw new ProvisionRefused("no release reader");
     const rec = await this.readRecord(i);
     const floor = await this.readFloor(rec);
@@ -934,15 +1044,17 @@ export class WfpProvisioner {
   /** H1: an install's D1 and KV are resolved by name; a row id that disagrees is refused. */
   private async resources(
     row: InstallRow,
+    /** delete: a resource already gone is fine; another id is still refused. */
+    allowGone = false,
   ): Promise<{ d1: string | null; kv: string | null }> {
     const n = names(row.id, this.env);
     const d1 = await this.cf.d1Get(n.d1);
-    if (row.d1_id !== null && row.d1_id !== d1)
+    if (row.d1_id !== null && row.d1_id !== d1 && !(allowGone && d1 === null))
       throw new ProvisionRefused(
         `install ${row.id}: installs.d1_id is not the id of D1 ${n.d1}; refusing to touch another database`,
       );
     const kv = await this.cf.kvFind(n.kv);
-    if (row.kv_id !== null && row.kv_id !== kv)
+    if (row.kv_id !== null && row.kv_id !== kv && !(allowGone && kv === null))
       throw new ProvisionRefused(
         `install ${row.id}: installs.kv_id is not the id of KV ${n.kv}; refusing to touch another namespace`,
       );
@@ -1123,52 +1235,26 @@ export class WfpProvisioner {
           );
         }
       }
-      const upload = async (tag: string | null, probe = false) => {
-        this.assertHooksAllowed(rec.variant, testHooks);
-        // M1: re-read from the release and re-check right before the write;
-        // what is uploaded is exactly what was just checked.
-        const mods = await this.readModules(rec);
-        const assets = await this.readAssets(rec);
-        const template = await this.readTemplate(rec);
-        const { jwt } = await cf.assetsUpload(target, n.script, assets);
-        const meta = this.metadata(
-          id,
-          m,
-          { rec, mainModule: mods.mainModule, template },
-          {
-            d1Id: d1Id as string,
-            kvId: kvId as string,
-            rlNs: row.rl_ns,
-            tag,
-            mode: exists ? "update" : "create",
-            secrets: send,
-            assetsJwt: jwt,
-          },
-        );
-        if (probe && meta.migrations) meta.migrations.old_tag = PROBE_TAG;
-        assertOwnResource(n.script, env);
-        await cf.scriptUpload(target, n.script, meta, mods.modules);
-      };
-      // Decision 5: the settings API never reports the tag. The journal is
-      // checked by uploading: a 412 names the live tag and changes nothing.
-      // An existing script with an empty journal is probed with a tag it
-      // cannot have; a missing script is never probed.
-      const journal = exists ? row.do_migration_tag : null;
-      try {
-        await upload(journal, exists && journal === null);
-      } catch (e) {
-        const live =
-          exists && e instanceof CfError && e.status === 412
-            ? /expected tag is '([^']*)'/.exec(e.cfMessage)?.[1]
-            : undefined;
-        if (live === undefined) throw e;
-        if (live !== "" && !tags.includes(live))
-          throw new Error(
-            `live Durable Object migration tag ${live} is not in this release; forward-fix only`,
-          );
-        this.notes.push(`probe: live migration tag is ${live || "none"}`);
-        await upload(live === "" ? null : live);
-      }
+      const sent = await this.uploadRelease({
+        id,
+        script: n.script,
+        rec,
+        m,
+        d1Id,
+        kvId,
+        rlNs: row.rl_ns,
+        exists,
+        journal: row.do_migration_tag,
+        tags,
+        send,
+      });
+      // Stored before the row moves on: a rerun that finds the row current
+      // skips the upload, so the version's render must already be kept.
+      await platform.putVersion(id, version, {
+        vars: m.vars,
+        metadata: storedMetadata(sent),
+        do_migration_tag: latest,
+      });
       await platform.update(id, {
         version,
         do_migration_tag: latest,
@@ -1213,6 +1299,737 @@ export class WfpProvisioner {
     };
   }
 
+  /**
+   * Uploads a checked release: modules, assets and template are re-read and
+   * re-checked right before the write (M1), and the metadata sent is
+   * returned. Decision 5: the settings API never reports the tag, so the
+   * journal is checked by uploading: a 412 names the live tag and changes
+   * nothing. An existing script with an empty journal is probed with a tag
+   * it cannot have; a missing script is never probed.
+   */
+  private async uploadRelease(u: {
+    id: InstallId;
+    script: string;
+    rec: ReleaseRecord;
+    m: Meta;
+    d1Id: string;
+    kvId: string;
+    rlNs: number;
+    exists: boolean;
+    journal: string | null;
+    tags: string[];
+    send: Record<string, string>;
+  }): Promise<UploadMetadata> {
+    const { cf, env, target } = this;
+    let sent: UploadMetadata | undefined;
+    const upload = async (tag: string | null, probe = false) => {
+      this.assertHooksAllowed(u.rec.variant, u.m.testHooks);
+      const mods = await this.readModules(u.rec);
+      const assets = await this.readAssets(u.rec);
+      const template = await this.readTemplate(u.rec);
+      const { jwt } = await cf.assetsUpload(target, u.script, assets);
+      const meta = this.metadata(
+        u.id,
+        u.m,
+        { rec: u.rec, mainModule: mods.mainModule, template },
+        {
+          d1Id: u.d1Id,
+          kvId: u.kvId,
+          rlNs: u.rlNs,
+          tag,
+          mode: u.exists ? "update" : "create",
+          secrets: u.send,
+          assetsJwt: jwt,
+        },
+      );
+      if (probe && meta.migrations) meta.migrations.old_tag = PROBE_TAG;
+      assertOwnResource(u.script, env);
+      await cf.scriptUpload(target, u.script, meta, mods.modules);
+      sent = meta;
+    };
+    const journal = u.exists ? u.journal : null;
+    try {
+      await upload(journal, u.exists && journal === null);
+    } catch (e) {
+      const live =
+        u.exists && e instanceof CfError && e.status === 412
+          ? /expected tag is '([^']*)'/.exec(e.cfMessage)?.[1]
+          : undefined;
+      if (live === undefined) throw e;
+      if (live !== "" && !u.tags.includes(live))
+        throw new Error(
+          `live Durable Object migration tag ${live} is not in this release; forward-fix only`,
+        );
+      this.notes.push(`probe: live migration tag is ${live || "none"}`);
+      await upload(live === "" ? null : live);
+    }
+    return sent as UploadMetadata;
+  }
+
+  // ---------- lifecycle: upgrade, rollback, var changes, delete ----------
+
+  /** One lifecycle operation: a fresh redaction set, every error scrubbed. */
+  private async guarded<T>(fn: () => Promise<T>): Promise<T> {
+    this.sensitive = new Set();
+    try {
+      return await fn();
+    } catch (e) {
+      throw this.scrub(e);
+    }
+  }
+
+  private reasonOf(e: unknown): string {
+    const x = this.scrub(e);
+    return x instanceof Error ? x.message : "failed";
+  }
+
+  /** Pre-flight shared by every lifecycle operation; the CAS re-checks the state. */
+  private async openInstall(
+    id: InstallId,
+    states: InstallState[],
+  ): Promise<InstallRow> {
+    if (!isInstallId(id)) throw new ProvisionRefused("not an install id");
+    this.checkOptions();
+    await this.checkToken();
+    await this.resolvePlatform();
+    const row = await this.platform.byId(id);
+    if (!row) throw new ProvisionRefused(`install ${id} not found`);
+    if (!states.includes(row.state))
+      throw new ProvisionRefused(
+        `install ${id} is ${row.state}; this operation needs ${states.join(" or ")}`,
+      );
+    if (typeof row.owner_email === "string")
+      this.sensitive.add(row.owner_email);
+    return row;
+  }
+
+  /** Concurrency: the row moves state and takes the lock in one compare-and-swap. */
+  private async claim(
+    row: InstallRow,
+    from: InstallState[],
+    to: InstallState,
+  ): Promise<string> {
+    const lease = hex16();
+    if (
+      await this.platform.claim(row.id, from, to, lease, this.now() + LEASE_MS)
+    )
+      return lease;
+    const cur = await this.platform.byId(row.id);
+    if (cur && !from.includes(cur.state))
+      throw new ProvisionRefused(
+        `install ${row.id} is ${cur.state}; another operation got there first`,
+      );
+    throw new ProvisionRefused(
+      `install ${row.id} is busy: another operation holds it`,
+    );
+  }
+
+  /** Create's checks on an install's render inputs: variant, codes and Turnstile. */
+  private renderInputs(row: InstallRow, vars: Record<string, string>): Meta {
+    if (
+      !vars ||
+      typeof vars !== "object" ||
+      Array.isArray(vars) ||
+      Object.values(vars).some((v) => typeof v !== "string")
+    )
+      throw new ProvisionRefused("vars must map names to strings");
+    const testHooks = row.test_hooks === 1;
+    this.checkVariant(
+      { bundle: testHooks ? "redline" : "release", testHooks },
+      vars,
+    );
+    this.checkEmailCodeDomain(vars, "providers");
+    const ts = this.turnstileInput(vars);
+    this.checkEmailCodeDomain(vars, "domains");
+    const ownerEmail = normOwnerEmail(row.owner_email ?? "");
+    if (!ownerEmail)
+      throw new ProvisionRefused(`install ${row.id} has no valid owner email`);
+    this.sensitive.add(ownerEmail);
+    return {
+      appHost: row.app_host,
+      contentHost: row.content_host,
+      ownerEmail,
+      vars,
+      testHooks,
+      sitekey: ts?.sitekey ?? null,
+    };
+  }
+
+  private async storedOf(
+    row: InstallRow,
+    version: string,
+  ): Promise<StoredVersion> {
+    const v = await this.platform.version(row.id, version);
+    if (!v)
+      throw new ProvisionRefused(
+        `install ${row.id}: no stored metadata for ${version}`,
+      );
+    return v;
+  }
+
+  /** The owner PAT create saved; the selftest uses it, and nothing re-mints it. */
+  private patFileOf(appHost: string): string {
+    const f = join(this.o.patDir, `${appHost}-pat-token`);
+    if (!existsSync(f))
+      throw new ProvisionRefused(
+        `the owner token file ${f} is missing; the selftest needs it`,
+      );
+    return f;
+  }
+
+  /** The install's D1 and script, both present, and every secret create sends. */
+  private async liveInstall(
+    row: InstallRow,
+    m: Meta,
+  ): Promise<{ d1Id: string; kvId: string }> {
+    const res = await this.resources(row);
+    if (!res.d1 || !res.kv)
+      throw new ProvisionRefused(`install ${row.id} has no D1 or KV`);
+    const script = names(row.id, this.env).script;
+    if (!(await this.cf.scriptExists(this.target, script)))
+      throw new ProvisionRefused(`install ${row.id} has no script`);
+    const have = await this.cf.secretList(this.target, script);
+    const missing = [
+      ...CREATE_SECRETS,
+      ...(m.testHooks ? ["TEST_HOOK_KEY"] : []),
+    ].filter((k) => !have.includes(k));
+    if (missing.length > 0)
+      throw new ProvisionRefused(
+        `install ${row.id} is missing secret ${missing.join(", ")}; repair it first`,
+      );
+    return { d1Id: res.d1, kvId: res.kv };
+  }
+
+  /**
+   * active -> upgrading -> new D1 migrations -> upload (keep_bindings, no
+   * secret value) -> /healthz and the MCP selftest -> active. A failed check
+   * rolls back, unless the DO tag moved (forward-fix only).
+   */
+  async upgrade(id: InstallId, toVersion: string): Promise<UpgradeResult> {
+    return this.guarded(() => this.runUpgrade(id, toVersion));
+  }
+
+  private async runUpgrade(id: InstallId, to: string): Promise<UpgradeResult> {
+    const row = await this.openInstall(id, ["active"]);
+    const from = row.version;
+    if (!from) throw new ProvisionRefused(`install ${id} has no version`);
+    if (!isReleaseVersion(to))
+      throw new ProvisionRefused(`version ${to} is not a release version`);
+    // Constraints: never --allow-downgrade.
+    const c = compareVersions(to, from);
+    if (c < 0)
+      throw new ProvisionRefused(
+        `install ${id} is at ${from}; ${to} would be a downgrade`,
+      );
+    if (c === 0)
+      throw new ProvisionRefused(`install ${id} is already at ${to}`);
+    const cur = await this.storedOf(row, from);
+    const m = this.renderInputs(row, cur.vars);
+    const rel = await this.readRelease({
+      version: to,
+      bundle: m.testHooks ? "redline" : "release",
+    });
+    try {
+      assertDoClassesShipFirst(rel.template, row.do_migration_tag);
+    } catch (e) {
+      throw new ProvisionRefused((e as Error).message);
+    }
+    const patFile = this.patFileOf(m.appHost);
+    const { d1Id, kvId } = await this.liveInstall(row, m);
+    const n = names(id, this.env);
+    this.metadata(id, m, rel, {
+      d1Id,
+      kvId,
+      rlNs: row.rl_ns,
+      tag: row.do_migration_tag,
+      mode: "update",
+      secrets: {},
+      assetsJwt: "dry-run",
+    });
+    const raiseFloor = await this.checkFloorSeq(rel.floor);
+    if (m.sitekey !== null) await this.checkWidget(m.sitekey);
+
+    const lease = await this.claim(row, ["active"], "upgrading");
+    try {
+      if (raiseFloor) await this.platform.raiseFloorSeq(rel.floor.seq);
+      await this.platform.audit(id, "upgrade.start", { from, to });
+      await this.migrate(rel.rec, d1Id, n.d1);
+      const tags = tagsOf(rel.template);
+      const reached = tags.length ? (tags[tags.length - 1] as string) : null;
+      const sent = await this.uploadRelease({
+        id,
+        script: n.script,
+        rec: rel.rec,
+        m,
+        d1Id,
+        kvId,
+        rlNs: row.rl_ns,
+        exists: true,
+        journal: row.do_migration_tag,
+        tags,
+        send: {},
+      });
+      await this.platform.putVersion(id, to, {
+        vars: cur.vars,
+        metadata: storedMetadata(sent),
+        do_migration_tag: reached,
+      });
+      await this.platform.update(id, {
+        version: to,
+        previous_version: from,
+        do_migration_tag: reached,
+      });
+      try {
+        await this.health(id, m.appHost, to, "the upgrade did not take");
+        await this.selftest(rel.rec, m.appHost, patFile);
+      } catch (e) {
+        const reason = this.reasonOf(e);
+        await this.platform.audit(id, "upgrade.failed", { from, to });
+        const done = await this.afterFailedUpgrade(
+          {
+            ...row,
+            version: to,
+            previous_version: from,
+            do_migration_tag: reached,
+          },
+          from,
+          to,
+          reason,
+        );
+        await this.platform.finish(id, lease, "active");
+        return done;
+      }
+      await this.platform.finish(id, lease, "active");
+      await this.platform.audit(id, "upgrade.done", { from, to });
+      return { id, from, to, ok: true, rolledBack: false };
+    } catch (e) {
+      await this.platform.finish(id, lease, "active").catch(() => {});
+      throw e;
+    }
+  }
+
+  /** Review Focus 3: roll back, unless the DO tag moved or the previous version is refused. */
+  private async afterFailedUpgrade(
+    row: InstallRow,
+    from: string,
+    to: string,
+    reason: string,
+  ): Promise<UpgradeResult> {
+    const forwardFix = async (why: string) => {
+      await this.platform.audit(row.id, "upgrade.forward_fix", { from, to });
+      return {
+        id: row.id,
+        from,
+        to,
+        ok: false,
+        rolledBack: false,
+        forwardFix: true,
+        reason: why,
+      };
+    };
+    let plan: RollbackPlan;
+    try {
+      plan = await this.planRollback(row);
+    } catch (e) {
+      if (!(e instanceof ProvisionRefused)) throw e;
+      return forwardFix(`${reason}; no rollback: ${this.reasonOf(e)}`);
+    }
+    const back = await this.applyRollback(plan);
+    return {
+      id: row.id,
+      from,
+      to,
+      ok: false,
+      rolledBack: true,
+      reason: back.ok ? reason : `${reason}; ${back.reason}`,
+    };
+  }
+
+  /**
+   * Re-uploads the previous version's verified bytes with exactly the
+   * metadata stored for it, and swaps version and previous_version. Never
+   * rolls back D1 (forward-only) and never crosses a DO tag.
+   */
+  async rollback(id: InstallId): Promise<UpgradeResult> {
+    return this.guarded(async () => {
+      const row = await this.openInstall(id, ["active"]);
+      const plan = await this.planRollback(row);
+      const lease = await this.claim(row, ["active"], "upgrading");
+      try {
+        const r = await this.applyRollback(plan);
+        await this.platform.finish(id, lease, "active");
+        return {
+          id,
+          from: plan.from,
+          to: plan.to,
+          ok: r.ok,
+          rolledBack: true,
+          ...(r.ok ? {} : { reason: r.reason }),
+        };
+      } catch (e) {
+        await this.platform.finish(id, lease, "active").catch(() => {});
+        throw e;
+      }
+    });
+  }
+
+  /** Every rollback refusal, before any write. */
+  private async planRollback(row: InstallRow): Promise<RollbackPlan> {
+    const id = row.id;
+    const from = row.version;
+    const to = row.previous_version;
+    if (!from || !to)
+      throw new ProvisionRefused(
+        `install ${id} has no previous version to roll back to`,
+      );
+    const stored = await this.storedOf(row, to);
+    if (stored.do_migration_tag !== row.do_migration_tag)
+      throw new ProvisionRefused(
+        `install ${id}: the Durable Object migration tag moved from ${String(stored.do_migration_tag)} (${to}) to ${String(row.do_migration_tag)} (${from}); rollback is refused (forward-fix only)`,
+      );
+    const m = this.renderInputs(row, stored.vars);
+    const rel = await this.readRelease({
+      version: to,
+      bundle: m.testHooks ? "redline" : "release",
+    });
+    const meta = stored.metadata as unknown as UploadMetadata;
+    if (
+      meta.main_module !== rel.mainModule ||
+      canonicalJson(meta.tags) !== canonicalJson([id, `v${to}`]) ||
+      !Array.isArray(meta.bindings) ||
+      meta.bindings.some((b) => String(b?.type).startsWith("secret")) ||
+      meta.migrations !== undefined
+    )
+      throw new ProvisionRefused(
+        `install ${id}: the stored metadata for ${to} is not a render of that release`,
+      );
+    const patFile = this.patFileOf(m.appHost);
+    const { d1Id } = await this.liveInstall(row, m);
+    const raiseFloor = await this.checkFloorSeq(rel.floor);
+    if (m.sitekey !== null) await this.checkWidget(m.sitekey);
+    return { row, from, to, stored, m, rel, d1Id, patFile, raiseFloor };
+  }
+
+  private async applyRollback(
+    p: RollbackPlan,
+  ): Promise<{ ok: boolean; reason?: string }> {
+    const { row, from, to, rel } = p;
+    const id = row.id;
+    const n = names(id, this.env);
+    if (p.raiseFloor) await this.platform.raiseFloorSeq(rel.floor.seq);
+    await this.platform.audit(id, "rollback.start", { from, to });
+    this.assertHooksAllowed(rel.rec.variant, p.m.testHooks);
+    const mods = await this.readModules(rel.rec);
+    const assets = await this.readAssets(rel.rec);
+    const { jwt } = await this.cf.assetsUpload(this.target, n.script, assets);
+    const stored = p.stored.metadata as unknown as UploadMetadata;
+    const meta: UploadMetadata = {
+      ...stored,
+      assets: { ...stored.assets, jwt },
+    };
+    try {
+      assertUniqueBindings(meta.bindings);
+    } catch (e) {
+      throw new ProvisionRefused((e as Error).message);
+    }
+    assertOwnResource(n.script, this.env);
+    await this.cf.scriptUpload(this.target, n.script, meta, mods.modules);
+    await this.platform.update(id, { version: to, previous_version: from });
+    try {
+      await this.health(id, p.m.appHost, to, "the rollback did not take");
+      await this.selftest(rel.rec, p.m.appHost, p.patFile);
+    } catch (e) {
+      await this.platform.audit(id, "rollback.unhealthy", { from, to });
+      return { ok: false, reason: `after the rollback: ${this.reasonOf(e)}` };
+    }
+    await this.platform.audit(id, "rollback.done", { from, to });
+    return { ok: true };
+  }
+
+  /**
+   * A var change on the live version, with create's checks. When google is
+   * newly on (#442) the install's own D1 gets epochBumpSql(), after the new
+   * vars are live, once per enablement: the cut id is journaled on the row
+   * before the upload and recorded in the install's D1 with the bump.
+   */
+  async updateVars(
+    id: InstallId,
+    nextVars: Record<string, string>,
+  ): Promise<VarsResult> {
+    return this.guarded(async () => {
+      const row = await this.openInstall(id, ["active"]);
+      const version = row.version;
+      if (!version) throw new ProvisionRefused(`install ${id} has no version`);
+      const cur = await this.storedOf(row, version);
+      const vars = { ...nextVars };
+      const m = this.renderInputs(row, vars);
+      const rel = await this.readRelease({
+        version,
+        bundle: m.testHooks ? "redline" : "release",
+      });
+      const patFile = this.patFileOf(m.appHost);
+      const { d1Id, kvId } = await this.liveInstall(row, m);
+      const n = names(id, this.env);
+      const have = await this.cf.secretList(this.target, n.script);
+      // Codes newly on: the env's widget secret goes up with the vars.
+      const send: Record<string, string> =
+        m.sitekey !== null && !have.includes("TURNSTILE_SECRET")
+          ? {
+              TURNSTILE_SECRET: (this.o.turnstile as { secret: string }).secret,
+            }
+          : {};
+      this.metadata(id, m, rel, {
+        d1Id,
+        kvId,
+        rlNs: row.rl_ns,
+        tag: row.do_migration_tag,
+        mode: "update",
+        secrets: send,
+        assetsJwt: "dry-run",
+      });
+      const raiseFloor = await this.checkFloorSeq(rel.floor);
+      if (m.sitekey !== null) await this.checkWidget(m.sitekey);
+      const enabled = googleNewlyEnabled(cur.vars, vars);
+
+      const lease = await this.claim(row, ["active"], "upgrading");
+      try {
+        if (raiseFloor) await this.platform.raiseFloorSeq(rel.floor.seq);
+        let cut = row.session_cut;
+        if (enabled && cut === null) {
+          cut = hex16();
+          await this.platform.update(id, { session_cut: cut });
+        }
+        const changed = [
+          ...new Set([...Object.keys(cur.vars), ...Object.keys(vars)]),
+        ]
+          .filter((k) => cur.vars[k] !== vars[k])
+          .sort();
+        await this.platform.audit(id, "vars.start", {
+          version,
+          changed: changed.join(","),
+        });
+        const tags = tagsOf(rel.template);
+        const sent = await this.uploadRelease({
+          id,
+          script: n.script,
+          rec: rel.rec,
+          m,
+          d1Id,
+          kvId,
+          rlNs: row.rl_ns,
+          exists: true,
+          journal: row.do_migration_tag,
+          tags,
+          send,
+        });
+        await this.platform.putVersion(id, version, {
+          vars,
+          metadata: storedMetadata(sent),
+          do_migration_tag: tags.length
+            ? (tags[tags.length - 1] as string)
+            : null,
+        });
+        // The new vars are live once /healthz and the selftest pass.
+        await this.health(id, m.appHost, version, "rerun the var change");
+        await this.selftest(rel.rec, m.appHost, patFile);
+        if (cut !== null) {
+          await this.sessionCut(d1Id, n.d1, cut);
+          await this.platform.update(id, { session_cut: null });
+          await this.platform.audit(id, "vars.session_cut", { version });
+        }
+        await this.platform.finish(id, lease, "active");
+        await this.platform.audit(id, "vars.done", { version });
+        return { id, version, ok: true, sessionCut: cut !== null };
+      } catch (e) {
+        await this.platform.finish(id, lease, "active").catch(() => {});
+        throw e;
+      }
+    });
+  }
+
+  /**
+   * epochBumpSql() once per cut id: the id lands in the install's D1 in the
+   * same batch as the bump, so a rerun after a lost reply never bumps twice.
+   */
+  private async sessionCut(
+    d1Id: string,
+    d1Name: string,
+    cut: string,
+  ): Promise<void> {
+    if (!HEX32.test(cut)) throw new Error("the session cut id is malformed");
+    assertOwnResource(d1Name, this.env);
+    await this.cf.d1Query(
+      d1Id,
+      "CREATE TABLE IF NOT EXISTS oa_session_cuts (id TEXT PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL)",
+    );
+    const r = await this.cf.d1Query(
+      d1Id,
+      "SELECT id FROM oa_session_cuts WHERE id = ?1",
+      [cut],
+    );
+    if (r[0]?.results?.length) return;
+    assertOwnResource(d1Name, this.env);
+    await this.cf.d1Batch(d1Id, [
+      { sql: "INSERT INTO oa_session_cuts (id) VALUES (?1)", params: [cut] },
+      { sql: epochBumpSql() },
+    ]);
+  }
+
+  /**
+   * Puts the env's current Turnstile secret (options.turnstile, from the
+   * keychain) on every active install of `env` with codes on. One result per
+   * install; an install that is not active is reported, not skipped silently.
+   */
+  async rotateTurnstileSecret(env: Env): Promise<RotationResult[]> {
+    return this.guarded(async () => {
+      this.checkOptions();
+      if (env !== this.env)
+        throw new ProvisionRefused(
+          `this provisioner is for ${this.env}, not ${String(env)}`,
+        );
+      // The pair codes-on needs, checked as create checks it.
+      const ts = this.turnstileInput({ AUTH_PROVIDERS: "email" });
+      if (!ts) throw new Error("unreachable");
+      await this.checkToken();
+      await this.resolvePlatform();
+      await this.checkWidget(ts.sitekey);
+      const out: RotationResult[] = [];
+      for (const row of await this.platform.inStates([
+        "creating",
+        "active",
+        "upgrading",
+      ])) {
+        try {
+          if (row.state !== "active")
+            throw new ProvisionRefused(
+              `install ${row.id} is ${row.state}; rerun the rotation once it is active`,
+            );
+          const cur = await this.storedOf(row, row.version as string);
+          if (!codesOn(cur.vars)) {
+            out.push({ id: row.id, ok: true, rotated: false });
+            continue;
+          }
+          const site = (
+            (cur.metadata.bindings ?? []) as { name: string; text?: string }[]
+          ).find((b) => b.name === "TURNSTILE_SITE_KEY")?.text;
+          if (site !== ts.sitekey)
+            throw new ProvisionRefused(
+              `install ${row.id} uses another Turnstile sitekey; a var change sets the new one`,
+            );
+          const lease = await this.claim(row, ["active"], "active");
+          try {
+            const script = names(row.id, this.env).script;
+            assertOwnResource(script, this.env);
+            await this.cf.secretPut(
+              this.target,
+              script,
+              "TURNSTILE_SECRET",
+              ts.secret,
+            );
+            await this.platform.audit(row.id, "turnstile.rotate", {
+              sitekey: ts.sitekey,
+            });
+          } finally {
+            await this.platform.finish(row.id, lease, "active");
+          }
+          out.push({ id: row.id, ok: true, rotated: true });
+        } catch (e) {
+          out.push({
+            id: row.id,
+            ok: false,
+            rotated: false,
+            reason: this.reasonOf(e),
+          });
+        }
+      }
+      return out;
+    });
+  }
+
+  /** Throws unless `name` is one of names(id) in this env. */
+  private assertInstallName(id: InstallId, name: string): void {
+    assertOwnResource(name, this.env);
+    if (!Object.values(names(id, this.env)).includes(name))
+      throw new ForeignResource(name, this.env);
+  }
+
+  /**
+   * Review Focus 4: confirm must equal the id. Unmaps first (HOSTS, then the
+   * hosts rows), so the dispatch Worker 404s at once; then the registry
+   * entry, the script, KV, R2 (emptied first) and D1. The row ends deleted
+   * and stays, holding the slug. Each step checks first, so a rerun after a
+   * partial failure finishes the job.
+   */
+  async delete(id: InstallId, confirm: string): Promise<DeleteResult> {
+    return this.guarded(async () => {
+      if (typeof confirm !== "string" || confirm !== id)
+        throw new ProvisionRefused(
+          "delete needs confirm to be exactly the install id",
+        );
+      const row = await this.openInstall(id, ["active", "deleting", "deleted"]);
+      if (row.state === "deleted") return { id, ok: true, state: "deleted" };
+      const { cf, env, target } = this;
+      const n = names(id, env);
+      const res = await this.resources(row, true);
+      const regTitle = platformNames(env).registry;
+      const regId = await cf.kvFind(regTitle);
+
+      const lease = await this.claim(row, ["active", "deleting"], "deleting");
+      try {
+        await this.platform.audit(id, "delete.start", {});
+        for (const h of [row.app_host, row.content_host]) {
+          const cur = await cf.kvGet(this.hostsKv.id, h);
+          if (cur === null) continue;
+          if (cur !== id) {
+            this.notes.push(`HOSTS ${h} maps to ${cur}, not ${id}; left alone`);
+            continue;
+          }
+          assertOwnResource(this.hostsKv.title, env);
+          await cf.kvDeleteKey(this.hostsKv.id, h);
+        }
+        await this.platform.unmapHosts(id);
+        if (regId) {
+          assertOwnResource(regTitle, env);
+          await cf.kvDeleteKey(regId, id);
+        }
+        if (await cf.scriptExists(target, n.script)) {
+          this.assertInstallName(id, n.script);
+          await cf.scriptDelete(target, n.script);
+        }
+        if (res.kv) {
+          this.assertInstallName(id, n.kv);
+          await cf.kvDelete(res.kv);
+        }
+        if (await cf.r2Exists(n.r2)) {
+          this.assertInstallName(id, n.r2);
+          await this.emptyBucket(n.r2);
+          await cf.r2Delete(n.r2);
+        }
+        if (res.d1) {
+          this.assertInstallName(id, n.d1);
+          await cf.d1Delete(res.d1);
+        }
+        await this.platform.finish(id, lease, "deleted");
+        await this.platform.audit(id, "delete.done", {});
+        return { id, ok: true, state: "deleted" };
+      } catch (e) {
+        // Stays deleting; the lock goes so a rerun can resume at once.
+        await this.platform.finish(id, lease, "deleting").catch(() => {});
+        throw e;
+      }
+    });
+  }
+
+  /** Deletes every object, a listing page at a time, until a listing comes back empty. */
+  private async emptyBucket(bucket: string): Promise<void> {
+    for (let page = 0; page < 100_000; page++) {
+      const keys = await this.cf.r2InstallKeys(bucket);
+      if (keys.length === 0) return;
+      for (const k of keys) await this.cf.r2InstallDeleteObject(bucket, k);
+    }
+    throw new Error(`R2 bucket ${bucket} did not empty`);
+  }
+
   /** The release's D1 migrations in order, recorded in d1_migrations as wrangler does. */
   private async migrate(
     rec: ReleaseRecord,
@@ -1228,6 +2045,12 @@ export class WfpProvisioner {
     );
     const r = await this.cf.d1Query(d1Id, "SELECT name FROM d1_migrations");
     const done = new Set((r[0]?.results ?? []).map((x) => String(x.name)));
+    // Forward only: an install that has a migration this release lacks is ahead of it.
+    const ahead = [...done].filter((x) => !files.some((f) => f.name === x));
+    if (ahead.length > 0)
+      throw new ProvisionRefused(
+        `the install's D1 has migration ${ahead[0]}, which release ${rec.version} does not; forward-fix only`,
+      );
     for (const f of files) {
       if (done.has(f.name)) continue;
       if (!MIGRATION_RE.test(f.name))
@@ -1295,6 +2118,7 @@ export class WfpProvisioner {
     id: InstallId,
     appHost: string,
     version: string,
+    again = "rerun create to resume",
   ): Promise<void> {
     const timeout = this.o.healthTimeoutMs ?? HEALTH_TIMEOUT_MS;
     const start = this.now();
@@ -1317,7 +2141,7 @@ export class WfpProvisioner {
       }
       if (this.now() - start >= timeout)
         throw new Error(
-          `/healthz on ${appHost} was not healthy within ${Math.round(timeout / 1000)} s (last: ${last}); rerun create to resume`,
+          `/healthz on ${appHost} was not healthy within ${Math.round(timeout / 1000)} s (last: ${last}); ${again}`,
         );
       await this.sleep(HEALTH_INTERVAL_MS);
     }
