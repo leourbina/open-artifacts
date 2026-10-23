@@ -53,17 +53,20 @@ const SPACES = [
 /** MULTI-INDEX OR over mine, shared-with-me, team and spaces (P3 T4). */
 const ALL = s(
   "MULTI-INDEX OR",
-  `SEARCH artifacts USING INDEX ${SPACE}`,
+  `SEARCH artifacts USING INDEX ${OWNER}`,
   "SEARCH artifacts USING INDEX sqlite_autoindex_artifacts_1",
   `SEARCH artifacts USING INDEX ${VIS}`,
   ...SPACES,
 );
 
 /** name → query, and what its plan must contain. */
-const queries: Record<string, { q: () => Q; plan: RegExp }> = {
+const queries: Record<string, { q: () => Q; plan: RegExp; not?: RegExp }> = {
+  // Walks the ordered index and stops at the limit: no full sort (only the
+  // id tiebreak, "FOR LAST TERM OF ORDER BY", as before spaces).
   "list mine": {
     q: () => list({ scope: "mine" }),
-    plan: s(`SEARCH artifacts USING INDEX ${SPACE}`),
+    plan: s(`SEARCH artifacts USING INDEX ${OWNER}`),
+    not: /TEMP B-TREE FOR ORDER BY/,
   },
   "list spaces": {
     q: () => list({ scope: "spaces" }),
@@ -102,7 +105,7 @@ const queries: Record<string, { q: () => Q; plan: RegExp }> = {
     q: () => list({ scope: "mine", includeDeleted: true }),
     plan: s(
       "MULTI-INDEX OR",
-      `SEARCH artifacts USING INDEX ${SPACE}`,
+      `SEARCH artifacts USING INDEX ${OWNER}`,
       `SEARCH artifacts USING INDEX ${TRASH}`,
     ),
   },
@@ -117,7 +120,7 @@ const queries: Record<string, { q: () => Q; plan: RegExp }> = {
     q: () => list({ scope: "all", includeDeleted: true }),
     plan: s(
       "MULTI-INDEX OR",
-      `SEARCH artifacts USING INDEX ${SPACE}`,
+      `SEARCH artifacts USING INDEX ${OWNER}`,
       "sqlite_autoindex_artifacts_1",
       `SEARCH artifacts USING INDEX ${VIS}`,
       ...SPACES,
@@ -168,12 +171,13 @@ describe("artifacts query plans (#248)", () => {
     member = (await getUser(env, userId)) as Member;
   });
 
-  for (const [name, { q, plan: want }] of Object.entries(queries)) {
+  for (const [name, { q, plan: want, not }] of Object.entries(queries)) {
     it(name, async () => {
       const p = await plan(q());
       // A bare "SCAN artifacts" (or its alias a) reads the whole table.
       expect(p).not.toMatch(/^SCAN (artifacts|a)$/m);
       expect(p).toMatch(want);
+      if (not) expect(p).not.toMatch(not);
     });
   }
 });

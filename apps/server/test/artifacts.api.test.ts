@@ -177,8 +177,7 @@ describe("list", () => {
         .all<{ detail: string }>();
       return results.map((r) => r.detail).join("\n");
     };
-    // mine is the caller's personal space (P3 T4).
-    expect(await plan("mine")).toMatch(/artifacts_space_live_idx/);
+    expect(await plan("mine")).toMatch(/artifacts_owner_updated_live_idx/);
     expect(await plan("team")).toMatch(/artifacts_visibility_updated_live_idx/);
   });
 });

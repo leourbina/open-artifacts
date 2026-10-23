@@ -391,7 +391,7 @@ export async function requireAccess(
 /**
  * WHERE fragment over `artifacts` for list/search, consistent with authorize
  * (levelSql gives each row's level):
- * - mine: in the caller's personal space.
+ * - mine: in the caller's personal space (and theirs by owner_id).
  * - shared: a share for the caller's email, outside their personal space.
  * - team: visibility team or public, for uncapped owner/admin/members (a
  *   space's public-links toggle only refuses new public links).
@@ -415,7 +415,14 @@ export function listFilterSql(
   const { user } = c;
   const capped = capOfCaller(c) != null;
   const email = callerEmail(user);
-  const mine = eq(artifacts.spaceId, user.id);
+  // owner_id too: a personal space's artifacts are its owner's (create,
+  // transfer and member removal move both). The unary + keeps SQLite off
+  // artifacts_space_live_idx, so mine walks the ordered
+  // owner_updated_live_idx and a page stops at its limit with no sort.
+  const mine = and(
+    eq(artifacts.ownerId, user.id),
+    sql`+${artifacts.spaceId} = ${user.id}`,
+  ) as SQL;
   const sharedWithMe = email
     ? and(ne(artifacts.spaceId, user.id), sharedIds(email))
     : undefined;
@@ -458,7 +465,6 @@ export function listFilterSql(
     branches.push(
       and(
         isNotNull(artifacts.deletedAt),
-        eq(artifacts.ownerId, user.id),
         mine,
         ...(present.includes(mine) ? [] : [or(...present)]),
       ),

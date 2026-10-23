@@ -201,7 +201,7 @@ export async function upsertWithRole(
 }
 
 const USER_BY_ID =
-  "select id, email, name, display_name as displayName, role, last_seen_at as lastSeenAt, session_epoch as sessionEpoch from users where id = ? and status = 'active' limit 1";
+  "select id, email, name, display_name as displayName, role, last_seen_at as lastSeenAt, session_epoch as sessionEpoch, restricted_manual as restrictedManual, restricted_sync as restrictedSync from users where id = ? and status = 'active' limit 1";
 
 /**
  * Every authenticated request: one prepared D1 statement, no ORM mapping.
@@ -225,12 +225,13 @@ export async function getUserWithEpoch(
         | "role"
         | "lastSeenAt"
         | "sessionEpoch"
+        | "restrictedManual"
+        | "restrictedSync"
       >
     >();
   // Every request's user comes through here (session, PAT, OAuth), so the cap
   // is set once (P3's capOf: the one source authz's CAP reads). Sources: P2's
-  // authConfig.guestsReadOnly and P3's restriction columns (0009; until they
-  // land nobody is restricted).
+  // authConfig.guestsReadOnly and P3's restriction columns (0009).
   if (!row) return null;
   return {
     user: withCap(
@@ -238,8 +239,8 @@ export async function getUserWithEpoch(
       capOf(
         {
           role: row.role as Role,
-          restrictedManual: false,
-          restrictedSync: false,
+          restrictedManual: row.restrictedManual === 1,
+          restrictedSync: row.restrictedSync === 1,
         },
         authConfig(env),
       ),
