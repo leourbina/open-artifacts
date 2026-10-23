@@ -298,3 +298,165 @@ describe("prod-setup.sh demo modes", () => {
     });
   });
 });
+
+describe("prod-setup.sh preflight: not installed vs drifted (#172)", () => {
+  const line = (step: string, status: string, message?: string) =>
+    JSON.stringify({ step, status, ...(message ? { message } : {}) });
+  const NAME = "open-artifacts-prod";
+  const resourcesAllMissing = line(
+    "resources",
+    "todo",
+    `todo: missing: D1 ${NAME}, R2 ${NAME}, KV ${NAME}`,
+  );
+  const neverDeployed = line(
+    "deploy",
+    "todo",
+    `todo: Worker ${NAME} never deployed`,
+  );
+  const preflight = (lines: string[], exit = 2) => {
+    const sb = sandbox({
+      pnpm: `cat <<'EOF_FIXTURE'\n${lines.join("\n")}\nEOF_FIXTURE\nexit ${exit}`,
+    });
+    const summary = join(sb.dir, "summary.md");
+    const output = join(sb.dir, "output.txt");
+    const r = sb.run(["bash", script("prod-setup.sh"), "preflight"], {
+      env: {
+        GITHUB_STEP_SUMMARY: summary,
+        GITHUB_OUTPUT: output,
+        PROD_NAME: NAME,
+        PROD_APP_HOST: "app.example.com",
+        PROD_CONTENT_HOST: "content.example.com",
+        PROD_OWNER_EMAIL: "o@example.com",
+      },
+    });
+    const read = (f: string) => {
+      try {
+        return readFileSync(f, "utf8");
+      } catch {
+        return "";
+      }
+    };
+    return { ...r, sum: read(summary), outputs: read(output) };
+  };
+
+  it("nothing exists: notice, installed=false, exit 0", () => {
+    const r = preflight([
+      line("prereqs", "done"),
+      resourcesAllMissing,
+      line("access", "todo"),
+      neverDeployed,
+      line("state", "ok"),
+    ]);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain(
+      '{"step":"preflight","status":"skipped","message":"not installed: run the Ops - prod install workflow first"}',
+    );
+    expect(r.out).toContain("::notice::");
+    expect(r.sum).toContain("not installed");
+    expect(r.outputs).toContain("installed=false");
+    expect(r.outputs).not.toContain("installed=true");
+  });
+  it("partially installed (resources exist, Worker missing): fails, installed=true", () => {
+    const r = preflight([
+      line("resources", "done"),
+      line("access", "todo"),
+      neverDeployed,
+    ]);
+    expect(r.code).not.toBe(0);
+    expect(r.out).not.toContain("not installed");
+    expect(r.outputs).toContain("installed=true");
+  });
+  it("partially installed (Worker exists, a resource missing): fails", () => {
+    const r = preflight([
+      line("resources", "todo", `todo: missing: KV ${NAME}`),
+      line("deploy", "todo", "todo: version drift"),
+    ]);
+    expect(r.code).not.toBe(0);
+    expect(r.out).not.toContain("not installed");
+  });
+  it("some resources missing and no Worker is partial, not absent: fails", () => {
+    const r = preflight([
+      line("resources", "todo", `todo: missing: D1 ${NAME}, R2 ${NAME}`),
+      neverDeployed,
+    ]);
+    expect(r.code).not.toBe(0);
+    expect(r.outputs).toContain("installed=true");
+  });
+  it("drifted: fails, installed=true", () => {
+    const r = preflight([
+      line("resources", "done"),
+      line("deploy", "todo", "todo: vars drift"),
+    ]);
+    expect(r.code).not.toBe(0);
+    expect(r.outputs).toContain("installed=true");
+  });
+  it("fully installed and clean: exit 0, installed=true, no notice", () => {
+    const r = preflight([line("resources", "done"), line("state", "ok")], 0);
+    expect(r.code).toBe(0);
+    expect(r.out).not.toContain("not installed");
+    expect(r.outputs).toContain("installed=true");
+  });
+  it("a real error is never read as not installed", () => {
+    const r = preflight([
+      resourcesAllMissing,
+      neverDeployed,
+      line("access", "error", "boom"),
+    ]);
+    expect(r.code).not.toBe(0);
+    expect(r.out).not.toContain("not installed");
+  });
+  it("demo modes ignore the not-installed detection", () => {
+    const sb = sandbox({
+      pnpm: `cat <<'EOF_FIXTURE'\n${resourcesAllMissing}\n${neverDeployed}\nEOF_FIXTURE\nexit 2`,
+    });
+    const r = sb.run(["bash", script("prod-setup.sh"), "demo-upgrade"], {
+      env: {
+        GITHUB_STEP_SUMMARY: join(sb.dir, "s.md"),
+        DEMO_NAME: "d",
+        DEMO_APP_HOST: "d.example.com",
+        DEMO_CONTENT_HOST: "dc.example.com",
+        DEMO_OWNER_EMAIL: "o@example.com",
+      },
+    });
+    expect(r.code).not.toBe(0);
+    expect(r.out).not.toContain("not installed");
+  });
+});
+
+describe("release-please.yml deploy-prod invariants (#172)", () => {
+  const yml = readFileSync(
+    join(import.meta.dirname, "../../.github/workflows/release-please.yml"),
+    "utf8",
+  );
+  const job = (name: string) => {
+    const m = yml.match(
+      new RegExp(`\\n  ${name}:\\n([\\s\\S]*?)(?=\\n  [a-z-]+:\\n|$)`),
+    );
+    return m?.[1] ?? "";
+  };
+  const step = (body: string, run: string) => {
+    const parts = body.split(/\n {6}- /);
+    return parts.find((p) => p.includes(run)) ?? "";
+  };
+  const deploy = job("deploy-prod");
+  it("the preflight step has an id", () => {
+    expect(step(deploy, "prod-setup.sh preflight")).toMatch(/id: preflight/);
+  });
+  it("upgrade and cleanup are gated on the preflight's installed output", () => {
+    for (const mode of ["upgrade", "cleanup"]) {
+      const s = step(deploy, `prod-setup.sh ${mode}`);
+      expect(s, mode).toContain("steps.preflight.outputs.installed");
+      expect(s, mode).toContain("steps.guard.outputs.deploy == 'true'");
+    }
+  });
+  it("verify-release tolerates a skipped deploy-prod (always(), no result gate)", () => {
+    const v = job("verify-release");
+    expect(v).toContain("deploy-prod");
+    expect(v).toMatch(/if: \$\{\{ always\(\)/);
+    expect(v).not.toMatch(/needs\.deploy-prod\.result/);
+  });
+  it("verify-release skips the prod check when prod is not installed", () => {
+    const v = job("verify-release");
+    expect(v).toContain("needs.deploy-prod.outputs.installed");
+  });
+});
