@@ -502,8 +502,12 @@ describe("A: buildBundle builds both variants from one dry-run config", () => {
   // Real-build finding (T3b ruling, option 2): with the define false, esbuild
   // tree-shakes the hook modules out of release, so the bundles are NOT
   // byte-identical; check-no-test-hooks is the behavioural proof. Needs the
-  // server's generated files (`pnpm --filter @oa/server run gen`), else skipped.
-  const GENERATED = existsSync(new URL("apps/server/src/version.gen.ts", ROOT));
+  // server's generated files (`pnpm --filter @oa/server run gen`) and an
+  // apps/server/dist-assets directory, else skipped. CI's test job has the
+  // first without the second.
+  const GENERATED =
+    existsSync(new URL("apps/server/src/version.gen.ts", ROOT)) &&
+    existsSync(new URL("apps/server/dist-assets", ROOT));
   // N5: the no-test-hooks CI job sets OA_REQUIRE_REAL_BUILD=1, so it never skips there.
   it.skipIf(!GENERATED && process.env.OA_REQUIRE_REAL_BUILD !== "1")(
     "real build: the bundles differ and release holds no hook route string",

@@ -291,7 +291,10 @@ jobs:
             sha=$(jq -r .object.sha <<< "$obj")
             type=$(jq -r .object.type <<< "$obj")
           done
-          [ "$type" = commit ] && [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "$TAG does not resolve to a commit"; exit 1; }
+          if [ "$type" != commit ] || ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "$TAG does not resolve to a commit"
+            exit 1
+          fi
           # L4: main's branch SHA, never the bare name (a tag named main would win).
           main_sha=$(gh api "repos/$REPO/git/ref/heads/main" -q .object.sha)
           [[ "$main_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "could not read main"; exit 1; }
