@@ -695,12 +695,24 @@ export const useRunTransfer = (memberId: string) =>
     // The transfer dialog reports every failure inline, with Retry.
     () => true,
   );
-export const useResetIdentity = () =>
-  useInvalidating(
-    (memberId: string) =>
+export const useResetIdentity = () => {
+  const qc = useQueryClient();
+  const refresh = () =>
+    Promise.all([
+      qc.invalidateQueries({ queryKey: qk.members }),
+      // A 403 means your role changed under the page: Reset leaves admins' rows.
+      qc.invalidateQueries({ queryKey: qk.me }),
+    ]);
+  return useMutation({
+    mutationFn: (memberId: string) =>
       api.send("DELETE", R.memberIdentity(memberId, "google"), undefined),
-    () => [qk.members],
-    "Couldn't reset the sign-in.",
-    // The Members row says these itself, naming the person.
-    (e) => e.status === 404 || e.status === 403,
-  );
+    onError: (e: unknown) => {
+      if (e instanceof ApiClientError && e.status === 403) void refresh();
+      // The Members row says these itself, naming the person.
+      if (e instanceof ApiClientError && (e.status === 404 || e.status === 403))
+        return;
+      failureToast(qc, "Couldn't reset the sign-in.", e);
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.members }),
+  });
+};

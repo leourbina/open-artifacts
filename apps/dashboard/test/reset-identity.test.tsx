@@ -170,6 +170,39 @@ it("owner_only: only the owner can reset another admin's link", async () => {
   expect(screen.queryByText("server text")).toBeNull();
 });
 
+it("after owner_only, members and you refetch, so Reset leaves that row", async () => {
+  // The page thinks you're the owner; the server knows you're an admin now.
+  let demoted = false;
+  mountHosted("/settings/members", true, (m) => (demoted ? asAdmin(m) : m), [
+    withAdminBob,
+    http.delete("*/api/v1/members/:id/identities/google", () => {
+      demoted = true;
+      return HttpResponse.json(
+        { error: { code: "owner_only", message: "server text" } },
+        { status: 403 },
+      );
+    }),
+  ]);
+  fireEvent.click(
+    within(await openMenu("Bob Builder")).getByRole("menuitem", {
+      name: "Reset Google link…",
+    }),
+  );
+  fireEvent.click(
+    within(screen.getByRole("alertdialog")).getByRole("button", {
+      name: "Reset link",
+    }),
+  );
+  await screen.findByText(
+    "Only the owner can reset another admin's Google link.",
+  );
+  await waitFor(async () => {
+    const menu = await openMenu("Bob Builder");
+    expect(within(menu).queryByRole("menuitem", { name: ITEM })).toBeNull();
+    fireEvent.keyDown(menu, { key: "Escape" });
+  });
+});
+
 it("any other 403 falls back to the owner copy", async () => {
   mountHosted("/settings/members", true, undefined, [
     withAdminBob,
