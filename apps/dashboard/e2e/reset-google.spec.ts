@@ -18,30 +18,6 @@ const settle = (page: Page) =>
     document.getAnimations().every((x) => x.playState !== "running"),
   );
 
-// Bob is Google-linked, so he has signed in: show him active (the shared
-// fixture says "Never signed in"). The mocks run in a service worker, so the
-// members list is rewritten before fetch reaches it.
-test.beforeEach(async ({ page }) => {
-  await page.addInitScript(() => {
-    const real = window.fetch.bind(window);
-    window.fetch = async (input, init) => {
-      const res = await real(input, init);
-      const r = new Request(input, init);
-      if (r.method !== "GET" || !new URL(r.url).pathname.endsWith("/members"))
-        return res;
-      const body = await res.clone().json();
-      if (!Array.isArray(body)) return res;
-      const seen = new Date(Date.now() - 2 * 86_400_000).toISOString();
-      return Response.json(
-        body.map((m: { email?: string }) =>
-          m.email === "bob@example.com" ? { ...m, lastSeenAt: seen } : m,
-        ),
-        { status: res.status, headers: res.headers },
-      );
-    };
-  });
-});
-
 for (const scheme of ["light", "dark"] as const)
   for (const width of [1280, 390])
     test.describe(`reset ${scheme} ${width}`, () => {
@@ -51,9 +27,10 @@ for (const scheme of ["light", "dark"] as const)
 
       test("the owner resets Bob's Google link", async ({ page }, info) => {
         await open(page);
-        await expect(
-          page.locator("li", { hasText: "Bob Builder" }),
-        ).toContainText("Active 2 days ago");
+        // Google-linked, so he has signed in (the shared fixture, #496).
+        const bob = page.locator("li", { hasText: "Bob Builder" });
+        await expect(bob).toContainText(/Active .+ ago/);
+        await expect(bob).not.toContainText("Never signed in");
         const menu = await menuFor(page, "Bob Builder");
         await settle(page);
         await shot(page, info.outputPath(`reset-menu-${scheme}-${width}.png`));
