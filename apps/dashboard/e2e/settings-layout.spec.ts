@@ -113,3 +113,20 @@ for (const tab of TABS)
           contentType: "image/png",
         });
       });
+
+test("hosted: the Spaces tab sits after Members", async ({ page }) => {
+  await page.goto("/settings/profile?hosted=1");
+  const nav = page.getByRole("navigation", { name: "Settings sections" });
+  await expect(nav.getByRole("link", { name: "Spaces" })).toHaveAttribute(
+    "href",
+    "/settings/spaces",
+  );
+  await expect(nav.getByRole("link")).toHaveText([
+    "Profile",
+    "Members",
+    "Spaces",
+    "Directory",
+    "Agents",
+    "Instance",
+  ]);
+});

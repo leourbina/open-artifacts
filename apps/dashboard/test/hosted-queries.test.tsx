@@ -53,33 +53,40 @@ it("move invalidates the artifact, the library and spaces", async () => {
   );
 });
 
-it("a mapping 409 toasts the title and the mapped copy", async () => {
+// The access tables show a mapping refusal by the row, with the Directory link
+// (space-access.test.tsx), so the hooks don't also toast it.
+it("a mapping 409 is left to the page: no toast", async () => {
   mountHosted("/", { directory: "frozen" });
   const { result } = renderHook(() => usePutMapping("SpEngNpQrSt2uVwX"), {
     wrapper,
   });
-  await result.current
+  const err = await result.current
     .mutateAsync({ groupId: "gEng01", role: "manager" })
-    .catch(() => {});
-  expect(await screen.findByText("Couldn't change access.")).toBeVisible();
+    .catch((e: unknown) => e);
+  expect(err).toMatchObject({ code: "directory_sync_off" });
+  await waitFor(() => expect(result.current.isError).toBe(true));
+  expect(screen.queryByText("Couldn't change access.")).toBeNull();
   expect(
-    screen.getByText(
-      "Directory sync is off, so this isn't available right now.",
-    ),
-  ).toBeVisible();
+    screen.queryByRole("button", { name: "Open directory settings" }),
+  ).toBeNull();
 });
 
-it("off the Directory page, a sync-off toast links to directory settings", async () => {
-  mountHosted("/", { directory: "frozen" });
+it("a mapping failure the page doesn't handle still toasts", async () => {
+  mountHosted("/", true, undefined, [
+    http.put("*/api/v1/spaces/:id/mappings/:g", () =>
+      HttpResponse.json(
+        { error: { code: "internal", message: "boom" } },
+        { status: 500 },
+      ),
+    ),
+  ]);
   const { result } = renderHook(() => usePutMapping("SpEngNpQrSt2uVwX"), {
     wrapper,
   });
   await result.current
-    .mutateAsync({ groupId: "gEng01", role: "manager" })
+    .mutateAsync({ groupId: "gEng01", role: "viewer" })
     .catch(() => {});
-  expect(
-    await screen.findByRole("button", { name: "Open directory settings" }),
-  ).toBeVisible();
+  expect(await screen.findByText("Couldn't change access.")).toBeVisible();
 });
 
 it("a capped caller's refused move says their account can only view", async () => {

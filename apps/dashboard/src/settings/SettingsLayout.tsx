@@ -3,6 +3,7 @@ import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { type ReactNode, useEffect } from "react";
 import { useMe } from "../auth/useMe";
 import { AppLink } from "../library/AppLink";
+import { canAdminSpaces } from "./spaces/access";
 import { MEASURE } from "./ui";
 
 /** Route links styled as shadcn's line tabs: the hairline is an inset
@@ -17,6 +18,8 @@ const TABS: {
   roles: Role[];
   /** Only where the instance reports a directory (hosted). */
   directory?: true;
+  /** Hosted spaces admin: org admins, and members who manage a space. */
+  spaces?: true;
 }[] = [
   {
     to: "/settings/profile",
@@ -24,6 +27,12 @@ const TABS: {
     roles: ["owner", "admin", "member"],
   },
   { to: "/settings/members", label: "Members", roles: ["owner", "admin"] },
+  {
+    to: "/settings/spaces",
+    label: "Spaces",
+    roles: ["owner", "admin", "member"],
+    spaces: true,
+  },
   {
     to: "/settings/directory",
     label: "Directory",
@@ -42,8 +51,8 @@ export function SettingsLayout() {
   const state = useMe();
   const path = useRouterState({ select: (s) => s.location.pathname });
   const role = state.status === "authed" ? state.me.user.role : null;
-  const directory =
-    state.status === "authed" ? state.me.instance.directory : undefined;
+  const me = state.status === "authed" ? state.me : null;
+  const directory = me?.instance.directory;
   // Compare the normalized path: the router matches case-insensitively, ignoring a trailing slash.
   const here = path.toLowerCase().replace(/\/+$/, "");
   if (role === "guest") return <Outlet />; // no chrome; the gate redirects
@@ -60,7 +69,11 @@ export function SettingsLayout() {
         aria-label="Settings sections"
       >
         {TABS.filter(
-          (t) => role && t.roles.includes(role) && (!t.directory || directory),
+          (t) =>
+            role &&
+            t.roles.includes(role) &&
+            (!t.directory || directory) &&
+            (!t.spaces || canAdminSpaces(me)),
         ).map((t) => (
           <AppLink
             key={t.to}

@@ -88,6 +88,7 @@ export const qk = {
   spaceMappings: (id: string) => ["spaces", id, "mappings"] as const,
   directory: ["directory"] as const,
   restrictedGroups: ["directory", "restricted"] as const,
+  orgMappings: ["directory", "org-mappings"] as const,
   directoryGroups: (q: string) => ["directory", "groups", q] as const,
 };
 
@@ -391,6 +392,7 @@ export const useUpdateSettings = () => {
 const SpacePage = PageSchema(SpaceSchema);
 const SpaceMemberPage = PageSchema(SpaceMemberSchema);
 const DirectoryGroupPage = PageSchema(DirectoryGroupSchema);
+const GroupMappingPage = PageSchema(GroupMappingSchema);
 
 export const useSpaces = (q?: SpacesQueryInput, enabled = true) =>
   useInfiniteQuery({
@@ -426,11 +428,13 @@ export const usePatchSpace = (id: string) =>
     () => [["spaces"], qk.me, ["artifacts"]],
     "Couldn't save the space.",
   );
+/** The page shows space_not_empty itself (the server is the authority for delete). */
 export const useDeleteSpace = () =>
   useInvalidating(
     (id: string) => api.send("DELETE", R.space(id), undefined),
     () => [["spaces"], qk.me],
     "Couldn't delete the space.",
+    (e) => e.code === "space_not_empty",
   );
 export const useSpaceMembers = (id: string) =>
   useInfiniteQuery({
@@ -481,6 +485,11 @@ export const useSpaceMappings = (id: string) =>
     queryFn: ({ signal }) =>
       api.get(R.spaceMappings(id), z.array(GroupMappingSchema), signal),
   });
+/** The access table shows these itself, by the row, and snaps the role back. */
+const mappingInline = (e: ApiClientError) =>
+  e.code === "directory_sync_off" ||
+  e.code === "directory_mapping_off" ||
+  e.code === "space_forbidden";
 const mappingKeys = (id: string) => () => [
   qk.spaceMappings(id),
   qk.spaceMembers(id),
@@ -496,6 +505,7 @@ export const usePutMapping = (id: string) =>
       ),
     mappingKeys(id),
     "Couldn't change access.",
+    mappingInline,
   );
 export const useDeleteMapping = (id: string) =>
   useInvalidating(
@@ -503,6 +513,39 @@ export const useDeleteMapping = (id: string) =>
       api.send("DELETE", R.spaceMapping(id, groupId), undefined),
     mappingKeys(id),
     "Couldn't change access.",
+    mappingInline,
+  );
+/** "Every space" mappings (org admin): one row per group, never per-space rows. */
+export const useOrgMappings = (enabled = true) =>
+  useQuery({
+    enabled,
+    queryKey: qk.orgMappings,
+    queryFn: ({ signal }) =>
+      api
+        .get(withQuery(R.orgMappings, { limit: 200 }), GroupMappingPage, signal)
+        .then((p) => p.items),
+  });
+/** Every-space rows reach every shared space's members, so those refresh too. */
+const orgMappingKeys = () => [qk.orgMappings, ["spaces"]];
+export const usePutOrgMapping = () =>
+  useInvalidating(
+    (v: { groupId: string; role: SpaceRole }) =>
+      api.send(
+        "PUT",
+        R.orgMapping(v.groupId),
+        { role: v.role },
+        GroupMappingSchema,
+      ),
+    orgMappingKeys,
+    "Couldn't change access.",
+    mappingInline,
+  );
+export const useDeleteOrgMapping = () =>
+  useInvalidating(
+    (groupId: string) => api.send("DELETE", R.orgMapping(groupId), undefined),
+    orgMappingKeys,
+    "Couldn't change access.",
+    mappingInline,
   );
 /** The Directory page shows these itself: sync is off (409), or the directory wants a fresh Google sign-in. */
 const directoryInline = (e: ApiClientError) =>

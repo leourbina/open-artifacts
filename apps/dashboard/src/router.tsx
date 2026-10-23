@@ -7,6 +7,7 @@ import {
   useParams,
   useSearch,
 } from "@tanstack/react-router";
+import { useMe } from "./auth/useMe";
 import { AppLayout } from "./layout/AppLayout";
 import { useDocumentTitle } from "./layout/useDocumentTitle";
 import { Library } from "./library/Library";
@@ -21,6 +22,8 @@ import { Instance } from "./settings/Instance";
 import { Members } from "./settings/Members";
 import { Profile } from "./settings/Profile";
 import { Gate, SettingsLayout } from "./settings/SettingsLayout";
+import { canAdminSpaces } from "./settings/spaces/access";
+import { Spaces } from "./settings/spaces/Spaces";
 import { Usage } from "./settings/Usage";
 import { Diff } from "./viewer/Diff";
 import { Shell } from "./viewer/Shell";
@@ -131,6 +134,26 @@ const gated = (
       </Gate>
     ),
   });
+/** Hosted only; org admins and members who manage a space. Guests go to /shared. */
+function SpacesRoute() {
+  const state = useMe();
+  if (state.status !== "authed") return null;
+  const role = state.me.user.role;
+  const ok = canAdminSpaces(state.me);
+  return (
+    <Gate
+      allow={ok ? [role] : []}
+      redirects={{
+        guest: "/shared",
+        member: "/settings/agents",
+        owner: "/settings/agents",
+        admin: "/settings/agents",
+      }}
+    >
+      <Spaces />
+    </Gate>
+  );
+}
 const settings = createRoute({
   getParentRoute: () => root,
   id: "settings",
@@ -159,6 +182,11 @@ const routeTree = root.addChildren([
   settings.addChildren([
     gated("/settings/profile", [...ADMINS, "member"], "/", Profile),
     gated("/settings/members", ADMINS, "/settings/agents", Members),
+    createRoute({
+      getParentRoute: () => settings,
+      path: "/settings/spaces",
+      component: SpacesRoute,
+    }),
     gated("/settings/directory", ADMINS, "/settings/agents", Directory),
     gated("/settings/agents", [...ADMINS, "member"], "/", Agents),
     gated("/settings/instance", ADMINS, "/settings/agents", Instance),
