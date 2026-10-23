@@ -126,7 +126,7 @@ it("create trims the name and sends the defaults", async () => {
   fireEvent.click(await screen.findByRole("button", { name: "New space" }));
   const d = screen.getByRole("dialog", { name: "New space" });
   expect(d).toHaveTextContent(
-    "Everyone at Acme Artifacts gets this role. Leave None to give access by group or by hand.",
+    "Everyone at Acme Artifacts gets this role. Leave None to give access through groups or by adding people manually.",
   );
   fireEvent.change(within(d).getByRole("textbox", { name: "Name" }), {
     target: { value: "  Design  " },

@@ -6,9 +6,10 @@
 #   dispatch from another ref;
 # - it has a required reviewer, and admins cannot bypass it
 #   (can_admins_bypass is false);
-# - an active ruleset targets refs/tags/v* (nothing excluded) with creation,
-#   update and deletion all restricted, and the only bypass actor is the
-#   release App (RELEASE_APP_ID, its numeric App id).
+# - two active rulesets target refs/tags/v* (nothing excluded): A restricts
+#   creation with the release App (RELEASE_APP_ID, its numeric App id) as the
+#   only bypass actor; B restricts update and deletion with no bypass at all,
+#   so not even the App can move or delete a release tag.
 # The upload is refused otherwise. The PEM key comes on stdin and goes to
 # `gh secret set` on stdin: never in argv, a file or the output.
 # Usage: <generate key> | RELEASE_APP_ID=<id> scripts/ops/hosted-set-signing-key.sh staging|prod
@@ -71,24 +72,29 @@ const reason = (() => {
     return "no required reviewer";
   if (e.can_admins_bypass !== false)
     return "admins can bypass the environment (can_admins_bypass is not false)";
-  const ok = rs.some((r) => {
+  // An active tag ruleset on all of refs/tags/v* that restricts every rule in `need`.
+  const covers = (r, need) => {
     const inc = r?.conditions?.ref_name?.include ?? [];
     const exc = r?.conditions?.ref_name?.exclude ?? [];
     const types = new Set((r?.rules ?? []).map((x) => x?.type));
-    const by = r?.bypass_actors ?? [];
     return (
       r?.target === "tag" &&
       r?.enforcement === "active" &&
       inc.includes("refs/tags/v*") &&
       exc.length === 0 &&
-      ["creation", "update", "deletion"].every((t) => types.has(t)) &&
-      by.length === 1 &&
-      by[0]?.actor_type === "Integration" &&
-      by[0]?.actor_id === app
+      need.every((t) => types.has(t))
     );
-  });
-  if (!ok)
-    return "no active ruleset on refs/tags/v* that restricts creation, update and deletion with only the release App (RELEASE_APP_ID) as bypass";
+  };
+  const onlyApp = (by) =>
+    by.length === 1 && by[0]?.actor_type === "Integration" && by[0]?.actor_id === app;
+  const hasA = rs.some((r) => covers(r, ["creation"]) && onlyApp(r?.bypass_actors ?? []));
+  if (!hasA)
+    return "no active ruleset on refs/tags/v* that restricts creation with only the release App (RELEASE_APP_ID) as bypass (ruleset A)";
+  const hasB = rs.some(
+    (r) => covers(r, ["update", "deletion"]) && (r?.bypass_actors ?? []).length === 0,
+  );
+  if (!hasB)
+    return "no active ruleset on refs/tags/v* that restricts update and deletion with no bypass at all (ruleset B)";
   return "";
 })();
 if (reason) console.log(reason);')
@@ -97,4 +103,4 @@ if [ -n "$why" ]; then
   exit 1
 fi
 printf '%s\n' "$key" | gh secret set RELEASE_SIGNING_KEY --env "$name" --repo "$repo"
-echo "set RELEASE_SIGNING_KEY in $name ($repo): main-only deployments, required reviewer, no admin bypass, v* tags restricted to App $app"
+echo "set RELEASE_SIGNING_KEY in $name ($repo): main-only deployments, required reviewer, no admin bypass, v* creation only by App $app, v* update and delete blocked"

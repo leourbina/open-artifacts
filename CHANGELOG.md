@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.35.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.34.0...v0.35.0) (2026-10-23)
+
+
+### Features
+
+* **dashboard:** transfer a departed person's artifacts (P4 Task 13) ([#457](https://github.com/open-artifacts-ai/open-artifacts/issues/457)) ([d8c15a5](https://github.com/open-artifacts-ai/open-artifacts/commit/d8c15a51432c5d1af5ef7cb8b6d905a4fadf4cdf))
+* **provision:** release signer, R2 release reader, signed floor (T3b) ([#468](https://github.com/open-artifacts-ai/open-artifacts/issues/468)) ([64396fb](https://github.com/open-artifacts-ai/open-artifacts/commit/64396fbd906bfbbe3c851f1d30c9df185dbbfc47))
+* **server:** space-aware list and search with SQL levels (P3 T4) ([#481](https://github.com/open-artifacts-ai/open-artifacts/issues/481)) ([96f9c6c](https://github.com/open-artifacts-ai/open-artifacts/commit/96f9c6c93a554e6017200e970a1fcb62ef4978e5))
+
 ## [0.34.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.33.1...v0.34.0) (2026-10-23)
 
 

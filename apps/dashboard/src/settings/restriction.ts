@@ -7,8 +7,8 @@ const listOf = (names: string[]) =>
     : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 
 /**
- * Why someone is restricted, as the row shows it under the email: "by hand",
- * "via Contractors", "by hand and via Contractors". Null when they aren't.
+ * Why someone is restricted, as the row shows it under the email: "manually",
+ * "via Contractors", "manually and via Contractors". Null when they aren't.
  */
 export const restrictionReason = (
   r: Restriction | null | undefined,
@@ -17,7 +17,7 @@ export const restrictionReason = (
   const via = r.groups.length
     ? `via ${listOf(r.groups.map((g) => g.name ?? g.email))}`
     : null;
-  if (r.manual) return via ? `by hand and ${via}` : "by hand";
+  if (r.manual) return via ? `manually and ${via}` : "manually";
   return via;
 };
 

@@ -164,8 +164,9 @@ export const useSearch = (q: SearchQuery) =>
     enabled: q.q.length > 0,
   });
 /** Active members by default; `status` (a comma list) is hosted, so the default sends none. */
-export const useMembers = (status?: string) =>
+export const useMembers = (status?: string, enabled = true) =>
   useQuery({
+    enabled,
     queryKey: qk.memberList(status),
     queryFn: ({ signal }) =>
       api.get(withQuery(R.members, { status }), z.array(MemberSchema), signal),
@@ -691,6 +692,8 @@ export const useRunTransfer = (memberId: string) =>
       api.send("POST", R.memberTransfer(memberId), input, TransferResultSchema),
     () => [qk.memberTransfer(memberId)],
     "Couldn't transfer the artifacts.",
+    // The transfer dialog reports every failure inline, with Retry.
+    () => true,
   );
 export const useResetIdentity = () =>
   useInvalidating(
