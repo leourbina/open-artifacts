@@ -239,8 +239,9 @@ export async function getUserWithEpoch(
       capOf(
         {
           role: row.role as Role,
-          restrictedManual: row.restrictedManual === 1,
-          restrictedSync: row.restrictedSync === 1,
+          // Fail closed: any non-zero flag restricts.
+          restrictedManual: row.restrictedManual !== 0,
+          restrictedSync: row.restrictedSync !== 0,
         },
         authConfig(env),
       ),
