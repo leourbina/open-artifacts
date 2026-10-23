@@ -1,9 +1,8 @@
 // Hosted P4 Task 6: spaces in the sidebar and the space marker (Design D1 to
 // D3: Spaces A, G68RE4oKC9pH3cgr v7, plus Design's answers of 2026-10-22).
 import type { Me, MySpace } from "@oa/shared";
-import { createHandlers } from "@oa/shared/mocks";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { getResponse, HttpResponse, http } from "msw";
+import { HttpResponse, http } from "msw";
 import { expect, it } from "vitest";
 import { visibilityHint } from "../src/spaces/SpaceMarker";
 import { installHarness, mount, mountHosted } from "./harness";
@@ -25,28 +24,6 @@ const card = async (title: string) =>
   (await screen.findByText(title, { selector: "a" })).closest(
     "article",
   ) as HTMLElement;
-/**
- * The hosted mock's list ignores spaceId: answer scope=space from a second,
- * read-only hosted store, keeping the artifacts whose space matches.
- */
-const spaceList = http.get("*/api/v1/artifacts", async ({ request }) => {
-  const url = new URL(request.url);
-  const sid = url.searchParams.get("spaceId");
-  if (!sid) return undefined;
-  url.searchParams.set("scope", "all");
-  url.searchParams.delete("spaceId");
-  const res = await getResponse(
-    createHandlers({ hosted: true }),
-    new Request(url, { headers: request.headers }),
-  );
-  const page = (await res?.json()) as {
-    items: { space?: { id: string } }[];
-  };
-  return HttpResponse.json({
-    items: page.items.filter((a) => a.space?.id === sid),
-    nextCursor: null,
-  });
-});
 const empty = http.get("*/api/v1/artifacts", () =>
   HttpResponse.json({ items: [], nextCursor: null }),
 );
@@ -179,7 +156,7 @@ it("across spaces, each card shows its space: the name, or Personal for mine", a
 });
 
 it("inside a space: its name and your role; tabs and format filter stay; no chip; Upload where you can publish", async () => {
-  mountHosted(`/?space=${ENG}`, true, undefined, [spaceList]);
+  mountHosted(`/?space=${ENG}`);
   expect(
     await screen.findByRole("heading", { level: 1, name: "Engineering" }),
   ).toBeVisible();
@@ -328,7 +305,7 @@ it("hovering Team on a card shows Everyone at <install name>", async () => {
 });
 
 it("inside a space, the tabs keep the space; there is no Team tab", async () => {
-  const router = mountHosted(`/?space=${ENG}`, true, undefined, [spaceList]);
+  const router = mountHosted(`/?space=${ENG}`);
   await screen.findByRole("heading", { level: 1, name: "Engineering" });
   expect(screen.queryByRole("tab", { name: "Team" })).toBeNull();
   fireEvent.mouseDown(screen.getByRole("tab", { name: "Mine" }));
