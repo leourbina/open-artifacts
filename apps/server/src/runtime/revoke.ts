@@ -1,6 +1,7 @@
 import type { Env } from "../env.js";
 import { logError } from "../log.js";
 import { type GoneReason, runtimeStub } from "./do.js";
+import { presenceStub } from "./presence.js";
 
 type Ctx = Pick<ExecutionContext, "waitUntil">;
 
@@ -31,4 +32,37 @@ export async function closeRuntimeSockets(
   });
   if (ctx) ctx.waitUntil(all);
   else await all;
+}
+
+/**
+ * Closes every live socket `userId` holds (data and events, 4403) after
+ * their access was cut: status change, membership or mapping narrowing,
+ * sync, member removal, transfer, customer mismatch. UserPresence sets
+ * revokedAt first, so a socket racing the revocation is refused too; failed
+ * closes are retried by its alarm. Runs in waitUntil when a context is
+ * given. Never throws.
+ */
+export async function revokeUserLive(
+  env: Pick<Env, "USER_PRESENCE">,
+  userId: string,
+  reason: string,
+  ctx?: Ctx,
+): Promise<void> {
+  const run = (async () => {
+    const p = presenceStub(env, userId);
+    if (!p) {
+      logError("presence_unbound", new Error("USER_PRESENCE is not bound"));
+      return;
+    }
+    await p.closeAll(reason);
+  })().catch((e) => logError("revoke_user_live_failed", e));
+  if (ctx) {
+    try {
+      ctx.waitUntil(run);
+      return;
+    } catch (e) {
+      logError("revoke_user_live_failed", e);
+    }
+  }
+  await run;
 }

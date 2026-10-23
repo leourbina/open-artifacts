@@ -11,7 +11,17 @@ The content host sends `Content-Security-Policy: sandbox allow-scripts allow-for
 
 ## Live sockets and access revocation
 
-Open live sockets (data subscribe and the `R.events` version feed) are authorized when they connect. Deletes, visibility and capability changes, and revoked shares close them at once (`gone`, then 4403 on `R.events`). Removing a member closes only their sockets on artifacts shared with them by email. Their sockets on team-visible artifacts stay open until the next TTL rotation (4408), and the reconnect is refused. So **access revocation reaches open live sockets within at most 10 minutes (`LIMITS.signedUrlTtlSec`); deletes and visibility changes are immediate.** Closing by actor on every team artifact's DO would cost one RPC per artifact for each removal.
+Open live sockets (data subscribe and the `R.events` version feed) are authorized when they connect. Deletes, visibility and capability changes, and revoked shares close them at once (`gone`, then 4403 on `R.events`).
+
+Revoking a person (suspend, remove, a narrowed space role or mapping, a directory change) closes every live socket they hold, on every artifact, **within 1 second of detection**, through their `UserPresence` Durable Object (one per user):
+
+- Every signed-in socket accept awaits `touch(artifactId, authzAt)`, which records the artifact. `authzAt` is when the route's access check ran.
+- `revokeUserLive` calls `closeAll`, which writes `revokedAt` first and then closes that person's sockets (tag `a:u:{id}`, 4403) on each recorded artifact.
+- A socket whose access check ran at or before `revokedAt` but accepted after it is refused by `touch` and closed with 4403, so no socket can slip in between the status write and the close.
+- A failed close is kept in the DO's own storage and retried by alarm with backoff until it is 11 minutes old, by which time the socket's TTL has closed it anyway.
+- If `touch` fails, the socket is closed (fail closed).
+
+The former 10 minute ceiling for team-visible artifacts is retired. The socket TTL (`LIMITS.signedUrlTtlSec`, 4408 then a re-checked reconnect) remains only as a backstop, and is the only ceiling on an install without the `USER_PRESENCE` binding (logged as `presence_unbound`).
 
 `R.events` sockets have their own per-DO budgets, apart from data sockets: 200 for signed-in viewers, 100 for anonymous viewers, and 3 per anonymous actor (an IPv4 address or an IPv6 /56). Anonymous sockets can't starve live data or members.
 
