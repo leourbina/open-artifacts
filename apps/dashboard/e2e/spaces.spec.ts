@@ -108,7 +108,11 @@ test("keyboard: open a space from the list, add a group, change its role", async
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/settings/spaces?hosted=1");
   await page.waitForLoadState("networkidle");
-  await page.getByRole("link", { name: /Engineering/ }).focus();
+  // The sidebar's Spaces section also has an Engineering link: use the page's list.
+  await page
+    .getByRole("list", { name: "Spaces" })
+    .getByRole("link", { name: /Engineering/ })
+    .focus();
   await page.keyboard.press("Enter");
   await page.getByRole("heading", { level: 2, name: "Engineering" }).waitFor();
   const box = page.getByRole("combobox", { name: "Add a group" });
