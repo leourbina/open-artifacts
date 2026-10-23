@@ -27,6 +27,7 @@ export const ERROR_CODES = [
   "restrict_admin",
   "directory_mapping_off",
   "member_synced",
+  "owner_only",
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
@@ -80,6 +81,8 @@ export const STATUS_FOR: Record<ErrorCode, number> = {
   directory_mapping_off: 403,
   /** DELETE R.spaceMember on a synced-only row while directory sync is live: remove them from the Google group, or change their role. */
   member_synced: 409,
+  /** Resetting or unlinking an org admin's Google identity: only the org owner may (it signs a peer admin out). */
+  owner_only: 403,
 };
 
 export const QUOTA_MESSAGE =

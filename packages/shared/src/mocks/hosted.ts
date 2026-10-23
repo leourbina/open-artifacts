@@ -103,6 +103,8 @@ export type HostedMockOptions = {
     | "scope_missing";
   /** Sync unhealthy for 2 h: banner and tokensUnverified (default false). */
   unhealthy?: boolean;
+  /** Act as the owner (default) or as an admin, e.g. to test owner-only actions. */
+  actAs?: "owner" | "admin";
   /** Extra FEATURES flags beyond the defaults (spaces, content_revocation, usage_off, plus the sync flag). guests_read_only is ignored: it is reported from the sign-in config (on when google or email is enabled). */
   features?: FeatureFlag[];
 };
@@ -178,8 +180,18 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
   // ---- members: status, identities, a departed member --------------------
   for (const m of members) {
     m.status = "active";
-    m.identities = m.role === "owner" ? ["google"] : [];
+    // Owners and active members are Google-linked, so reset can be shown.
+    m.identities = m.role === "guest" ? [] : ["google"];
   }
+  const erin: Member = {
+    id: "Er9vQrStUv0wXyZa",
+    email: "erin@example.com",
+    name: "Erin Admin",
+    role: "admin",
+    lastSeenAt: "2026-01-02T09:00:00.000Z",
+    status: "active",
+    identities: ["google"],
+  };
   const carol: Member = {
     id: "Cr7tNpQrSt8uVwXy",
     email: "carol@example.com",
@@ -198,7 +210,8 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
     status: "active",
     identities: [],
   };
-  members.push(carol, dan);
+  members.push(carol, dan, erin);
+  if (o.actAs === "admin") me.user.role = "admin";
   /** Departed members' personal artifacts, counts only (admins never see titles). */
   const departed = new Map([[carol.id, { live: 2, deleted: 1 }]]);
 
@@ -960,6 +973,9 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
           !m.identities?.includes("google")
         )
           return notFound();
+        // Resetting an admin's link signs a peer admin out: owner only.
+        if (m.role === "admin" && me.user.role !== "owner")
+          return err("owner_only", "Only the owner can reset an admin's link");
         m.identities = m.identities.filter((x) => x !== "google");
         log("identity.reset", { type: "user", id: m.id });
         return noContent();
