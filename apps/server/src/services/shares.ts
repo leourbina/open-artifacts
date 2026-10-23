@@ -80,6 +80,8 @@ const shareAudit = (
     },
   );
 
+const SAME_SHARE =
+  "SELECT email, role, created_at AS createdAt FROM shares WHERE artifact_id = ? AND email = ? AND role = ?";
 const IS_USER = "select 1 as x from users where email = ? limit 1";
 const REACTIVATE_GUEST =
   "update users set status = 'active' where email = ? and role = 'guest' and status = 'removed'";
@@ -101,9 +103,10 @@ export async function putShare(
     throw new ApiError("bad_request", "Cannot share with yourself");
   const now = Date.now();
   // One atomic statement: a new email is inserted only while under the cap;
-  // updating an existing share bypasses it.
+  // updating an existing share bypasses it, and the same role is a no-op.
   // The audit row rides in the same batch, written only when the upsert
-  // landed (a share refused at the cap writes neither).
+  // changed a row (a share refused at the cap, or a re-share at the same
+  // role, writes none).
   const [res] = await env.DB.batch<{
     email: string;
     role: string;
@@ -115,11 +118,17 @@ export async function putShare(
        WHERE (SELECT count(*) FROM shares WHERE artifact_id = ?1) < ?6
           OR EXISTS (SELECT 1 FROM shares WHERE artifact_id = ?1 AND email = ?2)
        ON CONFLICT (artifact_id, email) DO UPDATE SET role = excluded.role
+         WHERE shares.role <> excluded.role
        RETURNING email, role, created_at AS createdAt`,
     ).bind(id, email, s.role, user.id, now, MAX_SHARES),
     shareAudit(env, "artifact.share", user, artifact, { role: s.role }),
   ]);
-  const row = res?.results[0];
+  // No row back: unchanged (already at this role) or refused at the cap.
+  const row =
+    res?.results[0] ??
+    (await stmt(env.DB, SAME_SHARE)
+      .bind(id, email, s.role)
+      .first<{ email: string; role: string; createdAt: number }>());
   if (!row)
     throw new ApiError(
       "bad_request",

@@ -1,11 +1,20 @@
 import { env } from "cloudflare:workers";
-import { type AuditEvent, type Member, newId, R } from "@oa/shared";
+import {
+  AUDIT_NEXT_CURSOR_HEADER,
+  AUTH,
+  type AuditEvent,
+  type Member,
+  newId,
+  R,
+  UploadCreatedSchema,
+} from "@oa/shared";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { authConfig } from "../src/auth/config.js";
-import { audit } from "../src/services/audit.js";
+import type { Env } from "../src/env.js";
+import { audit, EXPORT_PAGES } from "../src/services/audit.js";
 import { admit, resetIdentity } from "../src/services/identity.js";
-import { direct, seedUser, uniq } from "./auth-helpers.js";
+import { direct, mailer, seedUser, uniq } from "./auth-helpers.js";
 import { api, login } from "./helpers.js";
 
 // P3 Task 8: audit rows commit in the same batch as the change they record.
@@ -93,6 +102,20 @@ describe("audit()", () => {
   });
 });
 
+describe("audit() guards", () => {
+  it("throws when detail carries reason (pass extra.reason)", () => {
+    expect(() =>
+      audit(
+        env,
+        "user.status",
+        { type: "user", id: "u" },
+        { kind: "system", id: null },
+        { detail: { reason: "admin_suspend" } },
+      ),
+    ).toThrow(/extra.reason/);
+  });
+});
+
 describe("shares", () => {
   it("artifact.share writes one audit row in the share batch", async () => {
     const art = await publish(owner.cookie);
@@ -111,6 +134,22 @@ describe("shares", () => {
     // Never the grantee's address.
     expect(r?.detail).not.toContain("@");
     expect(JSON.parse(r?.detail ?? "")).toEqual({ role: "viewer" });
+  });
+
+  it("re-sharing at the same role writes no row; a role change writes one", async () => {
+    const art = await publish(owner.cookie);
+    expect((await share(owner.cookie, art, "same@y.com")).status).toBe(200);
+    const again = await share(owner.cookie, art, "same@y.com");
+    expect(again.status).toBe(200);
+    expect(await again.json()).toMatchObject({
+      role: "viewer",
+      emailed: false,
+    });
+    expect(await rowsFor(art)).toHaveLength(1);
+    await share(owner.cookie, art, "same@y.com", "editor");
+    const rows = await rowsFor(art);
+    expect(rows).toHaveLength(2);
+    expect(JSON.parse(rows[1]?.detail ?? "")).toEqual({ role: "editor" });
   });
 
   it("a share refused at the cap writes no audit row", async () => {
@@ -207,6 +246,62 @@ describe("visibility", () => {
     });
   });
 
+  it("a publish whose uploads guard fails writes no visibility row", async () => {
+    const art = await publish(owner.cookie, "private");
+    const c = await api(app, R.uploads, owner.cookie, {
+      method: "POST",
+      body: { path: "a.txt", size: 3, artifactId: art },
+    });
+    expect(c.status).toBe(201);
+    const up = UploadCreatedSchema.parse(await c.json());
+    const u = new URL(up.url);
+    const put = await app.fetch(
+      new Request(`http://app.localhost${u.pathname}${u.search}`, {
+        method: "PUT",
+        body: "abc",
+        headers: { "content-length": "3" },
+      }),
+      env,
+      { waitUntil() {}, passThroughOnException() {} } as never,
+    );
+    expect(put.status).toBe(204);
+    // A concurrent publish consumes the upload just before this batch runs.
+    const DB = new Proxy(env.DB, {
+      get(t, p) {
+        if (p === "batch")
+          return async (ss: D1PreparedStatement[]) => {
+            await t
+              .prepare("update uploads set consumed = 1 where id = ?")
+              .bind(up.uploadId)
+              .run();
+            return t.batch(ss);
+          };
+        const v = Reflect.get(t, p);
+        return typeof v === "function" ? v.bind(t) : v;
+      },
+    });
+    const raced = { ...(env as object), DB } as typeof env;
+    const A = {
+      fetch: (r: Request, _e: unknown, x: never) => app.fetch(r, raced, x),
+    };
+    const r = await api(A as never, R.versions(art), owner.cookie, {
+      method: "POST",
+      body: {
+        visibility: "team",
+        entry: "index.html",
+        files: { "index.html": "# v2", "a.txt": { uploadId: up.uploadId } },
+      },
+    });
+    expect(r.status).toBe(409);
+    expect(await rowsFor(art)).toHaveLength(0);
+    const a = await env.DB.prepare(
+      "select visibility v from artifacts where id = ?",
+    )
+      .bind(art)
+      .first<{ v: string }>();
+    expect(a?.v).toBe("private");
+  });
+
   it("a failing audit insert rolls the visibility change back", async () => {
     const art = await publish(owner.cookie, "private");
     await failAudit();
@@ -242,6 +337,47 @@ describe("sign-in and identity", () => {
     });
   });
 
+  it("code sign-in is audited as auth.signin (provider code, no tenant for guests)", async () => {
+    const email = uniq("codeguest", "x.com");
+    const uid = await seedUser(email, "guest");
+    const m = mailer();
+    const e = { ...direct(), ...m.env } as Env;
+    const post = async (path: string, body: unknown, cookie?: string) => {
+      const waits: Promise<unknown>[] = [];
+      const r = await app.fetch(
+        new Request(`http://app.localhost${path}`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-oa-request": "1",
+            "sec-fetch-site": "same-origin",
+            "cf-connecting-ip": "198.51.100.78",
+            ...(cookie ? { cookie } : {}),
+          },
+          body: JSON.stringify(body),
+        }),
+        e,
+        {
+          waitUntil: (p: Promise<unknown>) => waits.push(p),
+          passThroughOnException() {},
+        } as never,
+      );
+      await Promise.all(waits);
+      return r;
+    };
+    const req = await post(AUTH.codeRequest, { email });
+    const pending = req.headers
+      .getSetCookie()
+      .find((c) => c.startsWith("oa_code="))
+      ?.split(";")[0];
+    const v = await post(AUTH.codeVerify, { code: m.codeFor(email) }, pending);
+    expect(v.status).toBe(200);
+    const rows = (await rowsFor(uid)).filter((r) => r.action === "auth.signin");
+    expect(rows).toHaveLength(1);
+    expect(JSON.parse(rows[0]?.detail ?? "")).toEqual({ provider: "code" });
+    expect(rows[0]?.detail).not.toContain("@");
+  });
+
   it("a failing audit insert fails the sign-in", async () => {
     await failAudit();
     await expect(
@@ -267,6 +403,19 @@ describe("sign-in and identity", () => {
     });
   });
 
+  it("the owner resetting an admin writes exactly one identity.reset row", async () => {
+    const uid = await seedUser(uniq("linkedadmin"), "admin", {
+      googleSub: `sub-${crypto.randomUUID()}`,
+    });
+    const actor = { id: owner.userId, role: "owner" } as Member;
+    await resetIdentity(env, actor, uid);
+    const rows = (await rowsFor(uid)).filter(
+      (r) => r.action === "identity.reset",
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ actor_id: owner.userId });
+  });
+
   it("a failing audit insert keeps the Google link", async () => {
     const uid = await seedUser(uniq("linked"), "member", {
       googleSub: `sub-${crypto.randomUUID()}`,
@@ -290,6 +439,7 @@ describe("R.audit and R.auditExport", () => {
       expect((await api(app, R.auditExport, who.cookie)).status).toBe(404);
     }
     expect((await api(app, R.audit, null)).status).toBe(401);
+    expect((await api(app, R.auditExport, null)).status).toBe(401);
   });
 
   it("owners and admins page newest first with a cursor", async () => {
@@ -336,5 +486,36 @@ describe("R.audit and R.auditExport", () => {
     const lines = (await r.text()).split("\n").filter(Boolean);
     expect(lines.length).toBe(n);
     for (const l of lines) expect(JSON.parse(l)).toHaveProperty("action");
+    expect(r.headers.get(AUDIT_NEXT_CURSOR_HEADER)).toBeNull();
+  });
+
+  it("export stops at 10 pages and the header continues it", async () => {
+    const cap = EXPORT_PAGES * 500;
+    // More than one request's worth, newest of all (future timestamps).
+    await env.DB.prepare(
+      `with recursive n(x) as (select 1 union all select x + 1 from n where x < ?1)
+       insert into audit_events (id, at, actor_kind, actor_id, action, target_type, target_id, detail)
+       select 'Exprt' || replace(printf('%011d', x), '0', 'z'), ?2 + x, 'system', null,
+         'directory.sync', 'directory', 'exp-' || x, '{}' from n`,
+    )
+      .bind(cap + 120, Date.now() + 20_000_000)
+      .run();
+    const total = await count("actor_kind in ('user', 'sync', 'system')");
+    const r1 = await api(app, R.auditExport, owner.cookie);
+    const next = r1.headers.get(AUDIT_NEXT_CURSOR_HEADER);
+    expect(next).toBeTruthy();
+    const l1 = (await r1.text()).split("\n").filter(Boolean);
+    expect(l1).toHaveLength(cap);
+    const r2 = await api(app, `${R.auditExport}?cursor=${next}`, owner.cookie);
+    expect(r2.headers.get(AUDIT_NEXT_CURSOR_HEADER)).toBeNull();
+    const l2 = (await r2.text()).split("\n").filter(Boolean);
+    expect(l1.length + l2.length).toBe(total);
+    const ids = new Set(
+      [...l1, ...l2].map((l) => (JSON.parse(l) as AuditEvent).id),
+    );
+    expect(ids.size).toBe(total);
+    expect(
+      (await api(app, `${R.auditExport}?cursor=nope!`, owner.cookie)).status,
+    ).toBe(400);
   });
 });

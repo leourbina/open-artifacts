@@ -267,7 +267,8 @@ export async function resetIdentity(
       env.DB,
       `update users set session_epoch = session_epoch + 1 where id = ?1 and ${RESETTABLE}`,
     ).bind(userId, null, owner),
-    // Before the delete, on the same predicate: audited only when it resets.
+    // Directly after the session_epoch update (gated on RESETTABLE): audited
+    // only when that update changed the row, i.e. the reset happens.
     audit(
       env,
       "identity.reset",
@@ -275,7 +276,7 @@ export async function resetIdentity(
       userActor(actor.id),
       {
         detail: { provider: "google" },
-        when: { sql: RESETTABLE.replaceAll("?1", "?"), args: [userId] },
+        when: { sql: "changes() > 0", args: [] },
       },
     ),
     stmt(

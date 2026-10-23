@@ -1,7 +1,9 @@
-import { R } from "@oa/shared";
-import { requireUser } from "../auth/authz.js";
+import { AUDIT_NEXT_CURSOR_HEADER, type Member, R } from "@oa/shared";
+import type { Context } from "hono";
+import { caller, capOfCaller, requireUser } from "../auth/authz.js";
 import { orgCan } from "../auth/policy.js";
 import { ApiError } from "../http/errors.js";
+import type { AppEnv } from "../http/middleware.js";
 import { AUDIT_PAGE_MAX, exportAudit, listAudit } from "../services/audit.js";
 import type { AppType } from "./index.js";
 
@@ -19,14 +21,21 @@ function limitOf(raw: string | undefined): number {
   return n;
 }
 
-// Org owners and admins only (audit.read); everyone else 404. The route
-// policy gate enforces the same rule first; these checks keep the handler
-// safe on its own.
+/**
+ * Org owners and admins only (audit.read; a cap drops it); everyone else
+ * 404. The route policy gate enforces the same rule first; this keeps the
+ * handler safe on its own.
+ */
+function requireAuditor(c: Context<AppEnv>): Member {
+  const user = requireUser(c);
+  if (!orgCan(user, "audit.read", { cap: capOfCaller(caller(c)) }))
+    throw new ApiError("not_found", "Not found");
+  return user;
+}
+
 export function mountAudit(app: AppType): void {
   app.get(R.audit, async (c) => {
-    const user = requireUser(c);
-    if (!orgCan(user, "audit.read"))
-      throw new ApiError("not_found", "Not found");
+    requireAuditor(c);
     return c.json(
       await listAudit(
         c.env,
@@ -36,16 +45,19 @@ export function mountAudit(app: AppType): void {
     );
   });
 
-  app.get(R.auditExport, (c) => {
-    const user = requireUser(c);
-    if (!orgCan(user, "audit.read"))
-      throw new ApiError("not_found", "Not found");
-    return new Response(exportAudit(c.env), {
-      headers: {
-        "content-type": "application/x-ndjson; charset=utf-8",
-        "content-disposition": 'attachment; filename="audit.ndjson"',
-        "cache-control": "no-store",
-      },
-    });
+  // Bounded per request (exportAudit); the header continues it.
+  app.get(R.auditExport, async (c) => {
+    requireAuditor(c);
+    const { stream, nextCursor } = await exportAudit(
+      c.env,
+      c.req.query("cursor"),
+    );
+    const headers: Record<string, string> = {
+      "content-type": "application/x-ndjson; charset=utf-8",
+      "content-disposition": 'attachment; filename="audit.ndjson"',
+      "cache-control": "no-store",
+    };
+    if (nextCursor) headers[AUDIT_NEXT_CURSOR_HEADER] = nextCursor;
+    return new Response(stream, { headers });
   });
 }

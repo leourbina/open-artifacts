@@ -48,6 +48,9 @@ export function audit(
   actor: AuditActor,
   extra: AuditExtra = {},
 ): D1PreparedStatement {
+  // `reason` is stored inside detail; a caller's own key would shadow it.
+  if (extra.detail && "reason" in extra.detail)
+    throw new Error("audit: pass reason as extra.reason, not in detail");
   const detail = {
     ...extra.detail,
     ...(extra.reason && { reason: extra.reason }),
@@ -72,7 +75,9 @@ export const userActor = (id: string): AuditActor => ({ kind: "user", id });
 
 /**
  * auth.signin for P2's admission seam: the provider and, when verified, the
- * tenant domain. Never the address.
+ * tenant domain. Never the address. It records the admission (the user row
+ * touched on sign-in) and commits with it; the session cookie is issued after
+ * the batch, so a sign-in that never reaches the browser can still have a row.
  */
 export const signInAudit = (
   env: Env,
@@ -115,17 +120,23 @@ const TARGETS = new Set([
  * the index carries id). Only contract rows: P2's test-hook rows
  * (actor_kind 'test_hook') are not AuditEvents and stay out.
  */
+const KINDS = "e.actor_kind in ('user', 'sync', 'system')";
+/** Keyset bound: rows after (`<`) or from (`<=`) the key (?2, ?3). */
+const bound = (op: "<" | "<=" | null) =>
+  op ? ` and (e.at < ?2 or (e.at = ?2 and e.id ${op} ?3))` : "";
 const PAGE_SQL = (
-  after: boolean,
+  op: "<" | "<=" | null,
 ) => `select e.id, e.at, e.actor_kind as actorKind,
     e.actor_id as actorId, u.email as actorEmail, e.action,
     e.target_type as targetType, e.target_id as targetId,
     e.space_id as spaceId, e.detail
   from audit_events e left join users u on u.id = e.actor_id
-  where e.actor_kind in ('user', 'sync', 'system')${
-    after ? " and (e.at < ?2 or (e.at = ?2 and e.id < ?3))" : ""
-  }
+  where ${KINDS}${bound(op)}
   order by e.at desc, e.id desc limit ?1`;
+/** Keys only, at an offset: the export's range ends (?1 limit, ?4 offset). */
+const KEYS_SQL = (op: "<" | null) => `select e.at as a, e.id as i
+  from audit_events e where ${KINDS}${bound(op)}
+  order by e.at desc, e.id desc limit ?1 offset ?4`;
 
 function parseDetail(s: string): {
   reason: AuditReason | null;
@@ -219,7 +230,7 @@ export async function listAudit(
   limit: number,
 ): Promise<Page<AuditEvent>> {
   const after = cursor ? decodeCursor(cursor) : null;
-  const q = stmt(env.DB, PAGE_SQL(after !== null));
+  const q = stmt(env.DB, PAGE_SQL(after ? "<" : null));
   const { results } = await (after
     ? q.bind(limit + 1, after.a, after.i)
     : q.bind(limit + 1)
@@ -234,36 +245,72 @@ export async function listAudit(
 }
 
 const EXPORT_CHUNK = 500;
+/** Pages per export request; past it the response names the next cursor. */
+export const EXPORT_PAGES = 10;
+
+/** (at, id) order, newest first: true when `r` sorts before or at `k`. */
+const atOrBefore = (r: Cursor, k: Cursor) =>
+  r.a > k.a || (r.a === k.a && r.i >= k.i);
 
 /**
- * Every event as NDJSON, newest first, read one keyset page per pull so the
- * whole log is never in memory.
+ * Up to EXPORT_PAGES pages of events as NDJSON, newest first, from `cursor`
+ * (exclusive). The range is fixed before streaming: one batch reads its
+ * first key and the keys at N and N+1 (N = EXPORT_PAGES * EXPORT_CHUNK), so
+ * the request reads at most N rows, one keyset page per pull, and
+ * `nextCursor` (the N-th key, when an N+1-th exists) continues it.
  */
-export function exportAudit(env: Env): ReadableStream<Uint8Array> {
+export async function exportAudit(
+  env: Env,
+  cursor: string | undefined,
+): Promise<{ stream: ReadableStream<Uint8Array>; nextCursor: string | null }> {
+  const after = cursor ? decodeCursor(cursor) : null;
+  const n = EXPORT_CHUNK * EXPORT_PAGES;
+  const keys = (limit: number, offset: number) => {
+    const q = stmt(env.DB, KEYS_SQL(after ? "<" : null));
+    return after
+      ? q.bind(limit, after.a, after.i, offset)
+      : q.bind(limit, null, null, offset);
+  };
+  const [first, edge] = await env.DB.batch<Cursor>([
+    keys(1, 0),
+    keys(2, n - 1),
+  ]);
+  const top = first?.results[0];
+  const end = edge?.results[0] ?? null;
+  const nextCursor =
+    end && (edge?.results.length ?? 0) > 1 ? encodeCursor(end) : null;
   const enc = new TextEncoder();
-  let after: Cursor | null = null;
-  let done = false;
-  return new ReadableStream<Uint8Array>({
+  // The first page starts at `top` (inclusive), later pages after the last row.
+  let from: { k: Cursor; op: "<" | "<=" } | null = top
+    ? { k: top, op: "<=" }
+    : null;
+  const stream = new ReadableStream<Uint8Array>({
     async pull(controller) {
-      if (done) return;
-      const q = stmt(env.DB, PAGE_SQL(after !== null));
-      const { results } = await (after
-        ? q.bind(EXPORT_CHUNK, after.a, after.i)
-        : q.bind(EXPORT_CHUNK)
-      ).all<Row>();
-      const last = results[results.length - 1];
-      let out = "";
-      for (const r of results) {
-        const e = toEvent(r);
-        if (e) out += `${JSON.stringify(e)}\n`;
-      }
-      if (out) controller.enqueue(enc.encode(out));
-      if (results.length < EXPORT_CHUNK || !last) {
-        done = true;
+      if (!from) {
         controller.close();
         return;
       }
-      after = { a: last.at, i: last.id };
+      const { results } = await stmt(env.DB, PAGE_SQL(from.op))
+        .bind(EXPORT_CHUNK, from.k.a, from.k.i)
+        .all<Row>();
+      let out = "";
+      let reached = results.length < EXPORT_CHUNK;
+      for (const r of results) {
+        const k = { a: r.at, i: r.id };
+        if (end && !atOrBefore(k, end)) {
+          reached = true;
+          break;
+        }
+        const e = toEvent(r);
+        if (e) out += `${JSON.stringify(e)}\n`;
+        if (end && k.a === end.a && k.i === end.i) reached = true;
+      }
+      if (out) controller.enqueue(enc.encode(out));
+      const last = results[results.length - 1];
+      from =
+        reached || !last ? null : { k: { a: last.at, i: last.id }, op: "<" };
+      if (!from) controller.close();
     },
   });
+  return { stream, nextCursor };
 }
