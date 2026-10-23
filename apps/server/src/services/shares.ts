@@ -7,7 +7,7 @@ import {
   type ShareRole,
   viewerPath,
 } from "@oa/shared";
-import { and, asc, eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { authorize, callerOf } from "../auth/authz.js";
 import { getDb } from "../db/client.js";
 import { shares } from "../db/schema.js";
@@ -19,6 +19,7 @@ import { ApiError } from "../http/errors.js";
 import { logInfo, logWarn } from "../log.js";
 import { revokeAllGrants } from "../mcp/oauth-api.js";
 import { closeRuntimeSockets } from "../runtime/revoke.js";
+import { audit, userActor } from "./audit.js";
 import { getSettings } from "./members.js";
 
 export const MAX_SHARES = 200;
@@ -55,6 +56,30 @@ export async function listShares(
   return rows.map(toShare);
 }
 
+/**
+ * artifact.share / artifact.unshare for the change's batch, placed right
+ * after it: written only when that statement changed a row. The grantee's
+ * address is never recorded.
+ */
+const shareAudit = (
+  env: Env,
+  action: "artifact.share" | "artifact.unshare",
+  user: Member,
+  artifact: { id: string; spaceId: string | null },
+  detail: Record<string, unknown>,
+) =>
+  audit(
+    env,
+    action,
+    { type: "artifact", id: artifact.id },
+    userActor(user.id),
+    {
+      spaceId: artifact.spaceId,
+      detail,
+      when: { sql: "changes() > 0", args: [] },
+    },
+  );
+
 const IS_USER = "select 1 as x from users where email = ? limit 1";
 const REACTIVATE_GUEST =
   "update users set status = 'active' where email = ? and role = 'guest' and status = 'removed'";
@@ -77,16 +102,24 @@ export async function putShare(
   const now = Date.now();
   // One atomic statement: a new email is inserted only while under the cap;
   // updating an existing share bypasses it.
-  const row = await env.DB.prepare(
-    `INSERT INTO shares (artifact_id, email, role, created_by, created_at)
-     SELECT ?1, ?2, ?3, ?4, ?5
-     WHERE (SELECT count(*) FROM shares WHERE artifact_id = ?1) < ?6
-        OR EXISTS (SELECT 1 FROM shares WHERE artifact_id = ?1 AND email = ?2)
-     ON CONFLICT (artifact_id, email) DO UPDATE SET role = excluded.role
-     RETURNING email, role, created_at AS createdAt`,
-  )
-    .bind(id, email, s.role, user.id, now, MAX_SHARES)
-    .first<{ email: string; role: string; createdAt: number }>();
+  // The audit row rides in the same batch, written only when the upsert
+  // landed (a share refused at the cap writes neither).
+  const [res] = await env.DB.batch<{
+    email: string;
+    role: string;
+    createdAt: number;
+  }>([
+    env.DB.prepare(
+      `INSERT INTO shares (artifact_id, email, role, created_by, created_at)
+       SELECT ?1, ?2, ?3, ?4, ?5
+       WHERE (SELECT count(*) FROM shares WHERE artifact_id = ?1) < ?6
+          OR EXISTS (SELECT 1 FROM shares WHERE artifact_id = ?1 AND email = ?2)
+       ON CONFLICT (artifact_id, email) DO UPDATE SET role = excluded.role
+       RETURNING email, role, created_at AS createdAt`,
+    ).bind(id, email, s.role, user.id, now, MAX_SHARES),
+    shareAudit(env, "artifact.share", user, artifact, { role: s.role }),
+  ]);
+  const row = res?.results[0];
   if (!row)
     throw new ApiError(
       "bad_request",
@@ -151,14 +184,17 @@ export async function deleteShare(
   email: string,
   ctx?: Pick<ExecutionContext, "waitUntil">,
 ): Promise<void> {
-  await ownerOnly(env, user, id, "unshare");
+  const artifact = await ownerOnly(env, user, id, "unshare");
   const e = normalizeEmail(email);
   if (!e) throw new ApiError("not_found", "Not found");
-  const out = await getDb(env)
-    .delete(shares)
-    .where(and(eq(shares.artifactId, id), eq(shares.email, e)))
-    .returning({ e: shares.email });
-  if (out.length === 0) throw new ApiError("not_found", "Not found");
+  const [out] = await env.DB.batch([
+    stmt(
+      env.DB,
+      "DELETE FROM shares WHERE artifact_id = ? AND email = ? RETURNING email",
+    ).bind(id, e),
+    shareAudit(env, "artifact.unshare", user, artifact, {}),
+  ]);
+  if (!out?.results.length) throw new ApiError("not_found", "Not found");
   await closeRuntimeSockets(env, [id], "share revoked", ctx);
   // Best effort: the share is already gone, and that is what the caller asked.
   // The deleted share's sockets were closed above; with no share left there

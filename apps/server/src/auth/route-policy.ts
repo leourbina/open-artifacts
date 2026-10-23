@@ -152,6 +152,8 @@ export const ROUTE_POLICY: Readonly<Record<string, Policy>> = {
   "POST /api/v1/tokens": { org: "tokens.create" },
   "DELETE /api/v1/tokens/:id": { user: "the caller's tokens" },
   "GET /api/v1/usage": { org: "usage.read" },
+  "GET /api/v1/audit": { org: "audit.read" },
+  "GET /api/v1/audit/export": { org: "audit.read" },
   "GET /oauth/authorize": {
     public: "consent page; redirects to sign-in, checks mcp.connect",
   },

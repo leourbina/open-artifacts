@@ -8,6 +8,7 @@ import { stmt } from "../db/stmt.js";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
 import { revokeAllGrants } from "../mcp/oauth-api.js";
+import { audit, signInAudit, userActor } from "./audit.js";
 import { googleLinkStmts, toMember } from "./users.js";
 
 // Admission and account linking for direct sign-in (P2). identities
@@ -55,15 +56,18 @@ async function touch(
   const owner = normalizeEmail(env.OWNER_EMAIL ?? "");
   const role = promotedRole(row.role as Role);
   // OWNER_EMAIL becomes owner only while no owner row exists (one owner).
-  const out = await stmt(
-    env.DB,
-    `update users set last_seen_at = ?1, name = coalesce(?2, name),
-       role = case when ?5 = 1 and not exists (select 1 from users where role = 'owner') then 'owner' else ?3 end
-     where id = ?4
-     returning id, email, name, display_name as displayName, role, last_seen_at as lastSeenAt, status`,
-  )
-    .bind(now, id.name, role, row.id, owner && row.email === owner ? 1 : 0)
-    .first<UserRow>();
+  // The admission and its auth.signin audit row commit together.
+  const [res] = await env.DB.batch<UserRow>([
+    stmt(
+      env.DB,
+      `update users set last_seen_at = ?1, name = coalesce(?2, name),
+         role = case when ?5 = 1 and not exists (select 1 from users where role = 'owner') then 'owner' else ?3 end
+       where id = ?4
+       returning id, email, name, display_name as displayName, role, last_seen_at as lastSeenAt, status`,
+    ).bind(now, id.name, role, row.id, owner && row.email === owner ? 1 : 0),
+    signInAudit(env, row.id, id.provider, id.tenant),
+  ]);
+  const out = res?.results[0];
   return member(out ?? { ...row, role });
 }
 
@@ -263,11 +267,22 @@ export async function resetIdentity(
       env.DB,
       `update users set session_epoch = session_epoch + 1 where id = ?1 and ${RESETTABLE}`,
     ).bind(userId, null, owner),
+    // Before the delete, on the same predicate: audited only when it resets.
+    audit(
+      env,
+      "identity.reset",
+      { type: "user", id: userId },
+      userActor(actor.id),
+      {
+        detail: { provider: "google" },
+        when: { sql: RESETTABLE.replaceAll("?1", "?"), args: [userId] },
+      },
+    ),
     stmt(
       env.DB,
       `delete from identities where provider = 'google'
        and user_id = (select u.id from users u where u.id = ?1 and ${TARGET_OK}) returning 1`,
     ).bind(userId, null, owner),
   ]);
-  if (!results[2]?.results.length) throw new ApiError("not_found", "Not found");
+  if (!results[3]?.results.length) throw new ApiError("not_found", "Not found");
 }
