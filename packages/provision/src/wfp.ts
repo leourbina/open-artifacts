@@ -2649,7 +2649,21 @@ export class WfpProvisioner {
         "deleting",
         "deleted",
       ]);
-      if (row.state === "deleted") return { id, ok: true, state: "deleted" };
+      if (row.state === "deleted") {
+        // R2-N2: a HOSTS put that landed in the lease's TOCTOU window (a
+        // stalled create) still maps a host to this deleted id; clear it.
+        // deleted is terminal, so no operation can claim the row meanwhile.
+        let stale = 0;
+        for (const h of [row.app_host, row.content_host]) {
+          if ((await this.cf.kvGet(this.hostsKv.id, h)) !== id) continue;
+          assertOwnResource(this.hostsKv.title, this.env);
+          await this.cf.kvDeleteKey(this.hostsKv.id, h);
+          stale++;
+        }
+        if (stale > 0)
+          await this.platform.audit(id, "delete.unmap_stale", { hosts: stale });
+        return { id, ok: true, state: "deleted" };
+      }
       // L2, R-M1: a creating row only once its create lease has expired (or
       // was released by a failed create); the claim's CAS settles a race.
       if (
