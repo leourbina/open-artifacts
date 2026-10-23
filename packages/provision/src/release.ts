@@ -574,61 +574,6 @@ export function floorRefusal(
   return null;
 }
 
-// "false" and "true", as bytes, for the define comparison.
-const FALSE = [102, 97, 108, 115, 101];
-const TRUE = [116, 114, 117, 101];
-const IDENT = /[A-Za-z0-9_$]/;
-const at = (b: Uint8Array, i: number, lit: number[]) =>
-  lit.every((c, k) => b[i + k] === c) &&
-  !IDENT.test(String.fromCharCode(b[i - 1] ?? 32)) &&
-  !IDENT.test(String.fromCharCode(b[i + lit.length] ?? 32));
-
-/** Bytes equal except where `a` has the token false and `b` true; the swap count, or null. */
-function defineSwaps(a: Uint8Array, b: Uint8Array): number | null {
-  let i = 0;
-  let j = 0;
-  let n = 0;
-  while (i < a.length && j < b.length) {
-    if (a[i] === b[j]) {
-      i++;
-      j++;
-    } else if (at(a, i, FALSE) && at(b, j, TRUE)) {
-      i += FALSE.length;
-      j += TRUE.length;
-      n++;
-    } else return null;
-  }
-  return i === a.length && j === b.length ? n : null;
-}
-
-/**
- * Throws unless the redline modules equal the release modules (names, types
- * and bytes) once the one define literal is normalized: every difference is
- * the token `false` in release where redline has `true`, at least once.
- */
-export function assertSameButTestHooksDefine(
-  release: readonly Module[],
-  redline: readonly Module[],
-): void {
-  const fail = (why: string): never => {
-    throw new Error(
-      `the redline bundle differs from release beyond the ${TEST_HOOKS_DEFINE} define (${why})`,
-    );
-  };
-  const sorted = (m: readonly Module[]) =>
-    [...m].sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
-  const a = sorted(release);
-  const b = sorted(redline);
-  if (a.length !== b.length) fail("module list");
-  let swaps = 0;
-  for (const [k, x] of a.entries()) {
-    const y = b[k] as Module;
-    if (x.name !== y.name || x.type !== y.type) fail(`module ${x.name}`);
-    swaps += defineSwaps(x.bytes, y.bytes) ?? fail(`module ${x.name} bytes`);
-  }
-  if (swaps === 0) fail("no define literal differs");
-}
-
 const fileStamp = (st: Stats) => `f:${st.dev}:${st.ino}:${st.size}:${st.nlink}`;
 const dirStamp = (st: Stats) => `d:${st.dev}:${st.ino}`;
 

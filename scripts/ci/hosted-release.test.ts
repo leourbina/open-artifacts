@@ -90,6 +90,14 @@ describe("release-please.yml hosted jobs", () => {
       .map((s) => s.run ?? "")
       .join("\n");
     expect(run).toContain("scripts/ci/build-hosted-release.ts");
+    // Each variant's manifest entry records the guard's commit.
+    expect(run).toMatch(
+      /build-hosted-release\.ts "\$RUNNER_TEMP\/hosted" --commit "\$GUARD_SHA"/,
+    );
+    const st = steps("hosted-build").find((x) =>
+      (x.run ?? "").includes("build-hosted-release"),
+    );
+    expect(st?.env?.GUARD_SHA).toBe(GUARD_SHA);
     const up = steps("hosted-build").filter((s) =>
       String(s.uses ?? "").startsWith("actions/upload-artifact"),
     );
@@ -149,8 +157,12 @@ describe("release-please.yml hosted jobs", () => {
         );
     });
     it("installs nothing: no pnpm, npm, npx or corepack", () => {
-      for (const s of st)
-        expect(s.run ?? "").not.toMatch(/\b(pnpm|npm|npx|corepack|yarn)\b/);
+      // Any invocation (the lockfile path "pnpm-lock.yaml" is not one).
+      const cmd = /(^|[\s;|&(`])(pnpm|npm|npx|corepack|yarn)(?=$|[\s;|&)`])/m;
+      for (const s of st) expect(s.run ?? "").not.toMatch(cmd);
+      expect(cmd.test("x && pnpm install")).toBe(true);
+      expect(cmd.test("npx foo")).toBe(true);
+      expect(cmd.test("--lockfile pnpm-lock.yaml")).toBe(false);
     });
     it("has no Cloudflare secret", () => {
       expect(JSON.stringify(job)).not.toMatch(/CLOUDFLARE_/);
@@ -177,8 +189,12 @@ describe("release-please.yml hosted jobs", () => {
       // The only secret in the run is the signing key, in this step.
       expect(JSON.stringify(st.slice(0, 2))).not.toContain("secrets.");
     });
-    it("passes hosted-check's hashes to the signer", () => {
+    it("passes hosted-check's hashes, the guard's commit and the checked-out lockfile to the signer", () => {
       const env = st[2]?.env ?? {};
+      expect(env.GUARD_SHA).toBe(GUARD_SHA);
+      expect(String(st[2]?.run)).toContain(
+        '--commit "$GUARD_SHA" --lockfile pnpm-lock.yaml',
+      );
       expect(env.MANIFEST_SHA256).toBe(
         // biome-ignore lint/suspicious/noTemplateCurlyInString: literal workflow expression
         "${{ needs.hosted-check.outputs.manifest_sha256 }}",
@@ -202,6 +218,7 @@ describe("release-please.yml hosted jobs", () => {
       .map((s) => s.run ?? "")
       .join("\n");
     expect(run).toContain("scripts/ci/assemble-release.ts");
+    expect(run).toContain('--commit "$GUARD_SHA" --lockfile pnpm-lock.yaml');
     expect(run).toContain("gh release upload");
     expect(run).not.toContain("--clobber");
   });

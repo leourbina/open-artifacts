@@ -2,7 +2,7 @@
 // @oa/provision. Its canonicalJson and record builder must produce the same
 // bytes; its output must pass publishRelease. The key goes in on stdin only.
 import { spawnSync } from "node:child_process";
-import { generateKeyPairSync, type KeyObject } from "node:crypto";
+import { createHash, generateKeyPairSync, type KeyObject } from "node:crypto";
 import {
   mkdtempSync,
   readdirSync,
@@ -86,6 +86,18 @@ const FIX = {
   template: TEMPLATE,
   migrations: [{ name: "0000_init.sql", bytes: enc("CREATE TABLE a (x);\n") }],
   welcome: enc("# Welcome\n"),
+  built: {
+    release: { commit: "", lockfileSha256: "" },
+    redline: { commit: "", lockfileSha256: "" },
+  },
+};
+// hosted-guard's commit, and the lockfile the sign job checks out (this repo's).
+const GUARD = "a".repeat(40);
+const LOCK = join(ROOT, "pnpm-lock.yaml");
+const LOCK_SHA = createHash("sha256").update(readFileSync(LOCK)).digest("hex");
+FIX.built = {
+  release: { commit: GUARD, lockfileSha256: LOCK_SHA },
+  redline: { commit: GUARD, lockfileSha256: LOCK_SHA },
 };
 
 async function artifact(over: Partial<typeof FIX> = {}) {
@@ -120,8 +132,11 @@ const outputs = (stdout: string) =>
       .map((l) => l.split("=") as [string, string]),
   );
 
-async function signed(env: "staging" | "prod" = "staging") {
-  const a = await artifact();
+async function signed(
+  env: "staging" | "prod" = "staging",
+  over: Partial<typeof FIX> = {},
+) {
+  const a = await artifact(over);
   const check = run(CHECK, [a.dir]);
   expect(check.code, check.stderr).toBe(0);
   const c = outputs(check.stdout);
@@ -137,6 +152,10 @@ async function signed(env: "staging" | "prod" = "staging") {
     c.manifest_sha256 as string,
     "--bundle-sha256",
     c.bundle_sha256 as string,
+    "--commit",
+    GUARD,
+    "--lockfile",
+    LOCK,
     "--out",
     out,
   ];
@@ -407,37 +426,161 @@ describe("sign-release.ts", () => {
     expect(readdirSync(out)).toEqual([]);
   });
 
-  it("refuses a redline that differs from release beyond the define literal", async () => {
+  // T3b ruling (option 2): the bundles may differ (esbuild tree-shakes the
+  // hooks out of release); the configs are compared in hosted-build instead.
+  it("signs a redline whose bytes differ from release beyond the define", async () => {
     const red = mods(true);
     red[0] = {
       ...red[0],
-      bytes: enc(
-        "const t = true;\nconst hooks = true === true && t;\nexport default { evil: 1 };\n",
-      ),
+      bytes: enc("const hooks = true;\nexport default { hooks };\n"),
     } as (typeof red)[0];
-    const a = await artifact({ redline: red });
-    const c = outputs(run(CHECK, [a.dir]).stdout);
+    const s = await signed("staging", { redline: red });
+    expect(s.r.code, s.r.stderr).toBe(0);
+    for (const v of ["release", "redline"] as const) {
+      const stored = JSON.parse(
+        readFileSync(
+          join(s.out, `oa-release-staging-${v}-0.34.0.sig.json`),
+          "utf8",
+        ),
+      );
+      expect(
+        openReleaseRecord(stored, G.RELEASE_PUBKEY.staging as string, "staging")
+          .defines,
+      ).toEqual({
+        [TEST_HOOKS_DEFINE]: v === "redline",
+      });
+    }
+  });
+
+  const built = (
+    r: Partial<{ commit: string; lockfileSha256: string }>,
+    d: Partial<{ commit: string; lockfileSha256: string }>,
+  ) => ({
+    built: {
+      release: { commit: GUARD, lockfileSha256: LOCK_SHA, ...r },
+      redline: { commit: GUARD, lockfileSha256: LOCK_SHA, ...d },
+    },
+  });
+  it.each<[string, Partial<typeof FIX>, string[], RegExp]>([
+    [
+      "release and redline from different commits",
+      built({}, { commit: "b".repeat(40) }),
+      [],
+      /different commits/,
+    ],
+    [
+      "release and redline with different lockfiles",
+      built({}, { lockfileSha256: "0".repeat(64) }),
+      [],
+      /different lockfiles/,
+    ],
+    [
+      "a commit other than hosted-guard's",
+      {},
+      ["--commit", "c".repeat(40)],
+      /hosted-guard/,
+    ],
+    [
+      "both builds from another commit than the guard's",
+      built({ commit: "d".repeat(40) }, { commit: "d".repeat(40) }),
+      [],
+      /hosted-guard/,
+    ],
+    [
+      "a lockfile other than the checked-out one",
+      built(
+        { lockfileSha256: "1".repeat(64) },
+        { lockfileSha256: "1".repeat(64) },
+      ),
+      [],
+      /lockfile/,
+    ],
+    [
+      "a release bundle with a hook route",
+      {
+        release: [
+          {
+            name: "index.js",
+            type: "esm",
+            bytes: enc('app.get("/__test/session", h); const hooks = false;'),
+          },
+        ],
+      },
+      [],
+      /hook route/,
+    ],
+  ])("refuses %s", async (_n, over, extra, re) => {
+    const a = await artifact(over);
+    const ck = run(CHECK, [a.dir]);
+    const c =
+      ck.code === 0
+        ? outputs(ck.stdout)
+        : {
+            manifest_sha256: a.manifestSha256,
+            bundle_sha256: a.bundleSha256.release,
+          };
     const out = mkdtempSync(join(tmpdir(), "oa-signed-"));
+    const args = [
+      "--dir",
+      a.dir,
+      "--env",
+      "staging",
+      "--version",
+      "0.34.0",
+      "--manifest-sha256",
+      c.manifest_sha256 as string,
+      "--bundle-sha256",
+      c.bundle_sha256 as string,
+      "--commit",
+      GUARD,
+      "--lockfile",
+      LOCK,
+      "--out",
+      out,
+    ];
     const r = run(
       SIGN,
-      [
-        "--dir",
-        a.dir,
-        "--env",
-        "staging",
-        "--version",
-        "0.34.0",
-        "--manifest-sha256",
-        c.manifest_sha256 as string,
-        "--bundle-sha256",
-        c.bundle_sha256 as string,
-        "--out",
-        out,
-      ],
+      extra.length ? swap(args, extra[0] as string, extra[1] as string) : args,
       pem("staging"),
     );
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/define/);
+    expect(r.stderr).toMatch(re);
+    expect(readdirSync(out)).toEqual([]);
+  });
+
+  it("check-hosted-release refuses a release bundle with a hook route", async () => {
+    const a = await artifact({
+      release: [
+        { name: "index.js", type: "esm", bytes: enc('"/__test/otp/latest"') },
+      ],
+    });
+    const r = run(CHECK, [a.dir]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/hook route/);
+  });
+
+  it("assertSameConfigButDefine: only the define value may differ", () => {
+    const cfg = (v: string, extra = {}) =>
+      JSON.stringify({
+        main: "x",
+        define: { [TEST_HOOKS_DEFINE]: v },
+        ...extra,
+      });
+    expect(() =>
+      LIB.assertSameConfigButDefine(cfg("false"), cfg("true")),
+    ).not.toThrow();
+    expect(() =>
+      LIB.assertSameConfigButDefine(
+        cfg("false"),
+        cfg("true", { vars: { A: "1" } }),
+      ),
+    ).toThrow(/differ/);
+    expect(() =>
+      LIB.assertSameConfigButDefine(cfg("true"), cfg("false")),
+    ).toThrow(/define/);
+    expect(() =>
+      LIB.assertSameConfigButDefine(cfg("false"), cfg("false")),
+    ).toThrow(/define/);
   });
 });
 

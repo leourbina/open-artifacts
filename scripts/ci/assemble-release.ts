@@ -6,12 +6,13 @@
 // node:* imports only (and ./release-artifact.ts).
 // Usage: node --experimental-strip-types scripts/ci/assemble-release.ts
 //   --dir <artifact> --env <env> --version <v> --manifest-sha256 <h>
-//   --bundle-sha256 <h> --out <dir> --release <sig>:<tar sha256>:<record sha256>
+//   --bundle-sha256 <h> --commit <sha> --lockfile pnpm-lock.yaml --out <dir> --release <sig>:<tar sha256>:<record sha256>
 //   [--redline <sig>:<tar sha256>:<record sha256>]
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
   type Env,
+  fileSha256,
   parseArgs,
   prepare,
   readArtifact,
@@ -25,6 +26,8 @@ const REQUIRED = [
   "version",
   "manifest-sha256",
   "bundle-sha256",
+  "commit",
+  "lockfile",
   "out",
 ];
 
@@ -42,6 +45,8 @@ async function main(): Promise<void> {
     version: a.version as string,
     manifestSha256: a["manifest-sha256"] as string,
     bundleSha256: a["bundle-sha256"] as string,
+    commit: a.commit as string,
+    lockfileSha256: await fileSha256(resolve(a.lockfile as string)),
   });
   const variants = new Set(prepared.map((p) => p.variant));
   for (const v of ["release", "redline"] as const)

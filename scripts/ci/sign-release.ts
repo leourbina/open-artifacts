@@ -4,9 +4,11 @@
 // a file or a log:
 //   printf '%s' "$RELEASE_SIGNING_KEY" | node --experimental-strip-types \
 //     scripts/ci/sign-release.ts --dir <artifact> --env staging|prod \
-//     --version <v> --manifest-sha256 <h> --bundle-sha256 <h> --out <dir>
+//     --version <v> --manifest-sha256 <h> --bundle-sha256 <h> \
+//     --commit <hosted-guard sha> --lockfile pnpm-lock.yaml --out <dir>
 // Re-hashes every file against manifest.json, requires hosted-check's two
-// hashes, requires redline == release but for the define literal, then
+// hashes, both variants built from the guard's commit with the checked-out
+// lockfile, no /__test/ route in release and the defines per variant, then
 // signs each variant (staging: release and redline; prod: release) and writes
 // oa-release-<env>-<variant>-<version>.tar and .sig.json. Prints only
 // GITHUB_OUTPUT lines (<env>_<variant>_signature, _tar_sha256,
@@ -16,6 +18,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
   type Env,
+  fileSha256,
   parseArgs,
   prepare,
   readArtifact,
@@ -30,6 +33,8 @@ const ARGS = [
   "version",
   "manifest-sha256",
   "bundle-sha256",
+  "commit",
+  "lockfile",
   "out",
 ];
 
@@ -71,6 +76,8 @@ async function main(): Promise<void> {
     version: a.version as string,
     manifestSha256: a["manifest-sha256"] as string,
     bundleSha256: a["bundle-sha256"] as string,
+    commit: a.commit as string,
+    lockfileSha256: await fileSha256(resolve(a.lockfile as string)),
   });
   const signed = prepared.map((p) => {
     const payload = recordPayload(p.env, p.recordString);

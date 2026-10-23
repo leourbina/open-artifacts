@@ -4,7 +4,11 @@
 // and the sha256 of manifest.json. hosted-sign requires both.
 // Usage: node --experimental-strip-types scripts/ci/check-hosted-release.ts <artifact-dir>
 import { resolve } from "node:path";
-import { bundleSha256, readArtifact } from "./release-artifact.ts";
+import {
+  assertNoHookRoutes,
+  bundleSha256,
+  readArtifact,
+} from "./release-artifact.ts";
 
 const NAME = "check-hosted-release";
 
@@ -13,6 +17,8 @@ async function main(): Promise<void> {
   if (!dir || process.argv.length > 3)
     throw new Error("usage: check-hosted-release.ts <artifact-dir>");
   const a = await readArtifact(resolve(dir));
+  // The real build tree-shakes the hooks out of release: no route string left.
+  assertNoHookRoutes(a.release);
   const b = bundleSha256({
     mainModule: a.manifest.mainModule,
     modules: a.release,

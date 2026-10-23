@@ -27,6 +27,11 @@ export interface Bundle {
   assetsDir: string;
   version: string;
   variant: BundleVariant;
+  /**
+   * The exact dry-run config wrangler built from (JSON). hosted-build requires
+   * the two variants' configs to be byte-identical but for the define value.
+   */
+  config: string;
 }
 
 const ZERO_UUID = "00000000-0000-0000-0000-000000000000";
@@ -74,7 +79,8 @@ export async function buildBundle(
       [TEST_HOOKS_DEFINE]: variant === "redline" ? "true" : "false",
     };
     const config = join(tmp, "wrangler.json");
-    await writeFile(config, JSON.stringify(dummy));
+    const rendered = JSON.stringify(dummy);
+    await writeFile(config, rendered);
     const outdir = join(tmp, "out");
     await mkdir(outdir, { recursive: true });
     await exec(
@@ -125,6 +131,7 @@ export async function buildBundle(
       assetsDir: "apps/server/dist-assets",
       version: pkg.version,
       variant,
+      config: rendered,
     };
   } finally {
     await rm(tmp, { recursive: true, force: true });

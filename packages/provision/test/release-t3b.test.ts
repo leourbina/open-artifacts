@@ -3,6 +3,7 @@
 // the R2 ReleaseReader. Everything runs against FakeCf and test keys.
 import { generateKeyPairSync, type KeyObject, sign } from "node:crypto";
 import {
+  existsSync,
   linkSync,
   mkdirSync,
   mkdtempSync,
@@ -17,7 +18,11 @@ import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { packUstar } from "../../../scripts/ci/release-artifact.ts";
+import {
+  assertNoHookRoutes,
+  assertSameConfigButDefine,
+  packUstar,
+} from "../../../scripts/ci/release-artifact.ts";
 import { buildBundle } from "../src/bundle.js";
 import { CfError, cfClient } from "../src/cf.js";
 import { platformNames } from "../src/names.js";
@@ -32,7 +37,6 @@ import {
 } from "../src/publish.js";
 import {
   ASSET_LIMITS,
-  assertSameButTestHooksDefine,
   buildReleaseRecord,
   bundleSha256,
   type FloorRecord,
@@ -391,7 +395,7 @@ describe("A: buildBundle builds both variants from one dry-run config", () => {
     await writeFile(join(out, "chunks/a.mjs"), "export const x = false;\n");
   };
 
-  it("differs only in the define literal (normalized: byte-identical)", async () => {
+  it("renders configs that differ only in the define value (normalized: byte-identical)", async () => {
     configs.length = 0;
     const root = await fixtureRoot();
     const rel = await buildBundle(root, { variant: "release", exec });
@@ -411,15 +415,12 @@ describe("A: buildBundle builds both variants from one dry-run config", () => {
     expect(rel.modules.map((m) => [m.name, m.type])).toEqual(
       red.modules.map((m) => [m.name, m.type]),
     );
+    // The exact configs wrangler built from: identical but the define value.
+    expect(rel.config).toBe(JSON.stringify(a));
+    expect(red.config).toBe(JSON.stringify(b));
     expect(() =>
-      assertSameButTestHooksDefine(rel.modules, red.modules),
+      assertSameConfigButDefine(rel.config, red.config),
     ).not.toThrow();
-    // Normalizing the one literal makes the bytes identical.
-    const norm = (s: Uint8Array) =>
-      new TextDecoder().decode(s).replace("hooks = true", "hooks = false");
-    expect(rel.modules.map((m) => norm(m.bytes))).toEqual(
-      red.modules.map((m) => norm(m.bytes)),
-    );
   });
 
   it("defaults to release and leaves wrangler.staging.jsonc untouched", async () => {
@@ -453,30 +454,74 @@ describe("A: buildBundle builds both variants from one dry-run config", () => {
     expect(e.message).toMatch(/symlink/);
   });
 
-  it("assertSameButTestHooksDefine refuses any other difference", () => {
-    const a = [
-      { name: "index.js", type: "esm" as const, bytes: enc("x=false;y=1") },
-    ];
-    const ok = [
-      { name: "index.js", type: "esm" as const, bytes: enc("x=true;y=1") },
-    ];
-    expect(() => assertSameButTestHooksDefine(a, ok)).not.toThrow();
-    for (const bad of [
-      [{ name: "index.js", type: "esm" as const, bytes: enc("x=true;y=2") }],
-      [{ name: "index.js", type: "esm" as const, bytes: enc("x=false;y=1") }],
-      [{ name: "other.js", type: "esm" as const, bytes: enc("x=true;y=1") }],
-      [{ name: "index.js", type: "wasm" as const, bytes: enc("x=true;y=1") }],
-      [...ok, { name: "b.js", type: "esm" as const, bytes: enc("") }],
+  it("assertSameConfigButDefine refuses a config that differs in another key", async () => {
+    configs.length = 0;
+    const root = await fixtureRoot();
+    const rel = (await buildBundle(root, { variant: "release", exec })).config;
+    const red = (await buildBundle(root, { variant: "redline", exec })).config;
+    const other = JSON.stringify({
+      ...JSON.parse(red),
+      compatibility_date: "2020-01-01",
+    });
+    const extraDefine = JSON.stringify({
+      ...JSON.parse(red),
+      define: { ...JSON.parse(red).define, OTHER: "1" },
+    });
+    for (const [n, a, b] of [
+      ["another key", rel, other],
+      ["another define", rel, extraDefine],
+      ["the same variant twice", rel, rel],
+      ["swapped variants", red, rel],
       [
-        {
-          name: "index.js",
-          type: "esm" as const,
-          bytes: enc("x=false;y=1;true"),
-        },
+        "key order",
+        rel,
+        JSON.stringify(
+          Object.fromEntries(Object.entries(JSON.parse(red)).reverse()),
+        ),
       ],
-    ])
-      expect(() => assertSameButTestHooksDefine(a, bad)).toThrow(/define/);
+    ] as const)
+      expect(() => assertSameConfigButDefine(a, b), n).toThrow(/define|differ/);
   });
+
+  // Real-build finding (T3b ruling, option 2): with the define false, esbuild
+  // tree-shakes the hook modules out of release, so the bundles are NOT
+  // byte-identical; check-no-test-hooks is the behavioural proof. Needs the
+  // server's generated files (`pnpm --filter @oa/server run gen`), else skipped.
+  const GENERATED = existsSync(new URL("apps/server/src/version.gen.ts", ROOT));
+  it.skipIf(!GENERATED)(
+    "real build: the bundles differ and release holds no hook route string",
+    async () => {
+      const root = new URL(".", ROOT).pathname;
+      const rel = await buildBundle(root, { variant: "release" });
+      const red = await buildBundle(root, { variant: "redline" });
+      expect(() =>
+        assertSameConfigButDefine(rel.config, red.config),
+      ).not.toThrow();
+      const main = (b: typeof rel) =>
+        Buffer.from(
+          b.modules.find((m) => m.name === b.mainModule)?.bytes ?? [],
+        );
+      expect(main(rel).equals(main(red))).toBe(false);
+      for (const r of [
+        "/__test/session",
+        "/__test/otp/latest",
+        "/__test/oauth-client",
+      ]) {
+        expect(main(rel).includes(r), r).toBe(false);
+        expect(main(red).includes(r), r).toBe(true);
+      }
+      // Only the route-policy table's doc entry keeps the bare prefix.
+      expect(
+        main(rel)
+          .toString()
+          .match(/\/__test\//g),
+      ).toHaveLength(1);
+      expect(main(rel).includes('"ALL /__test/*"')).toBe(true);
+      expect(() => assertNoHookRoutes(rel.modules)).not.toThrow();
+      expect(() => assertNoHookRoutes(red.modules)).toThrow(/__test/);
+    },
+    300_000,
+  );
 });
 
 // ---------- C: the stored signature format ----------

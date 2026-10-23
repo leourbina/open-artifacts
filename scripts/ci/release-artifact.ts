@@ -18,7 +18,7 @@ import {
   realpath,
   writeFile,
 } from "node:fs/promises";
-import { dirname, join, sep } from "node:path";
+import { basename, dirname, join, sep } from "node:path";
 
 export type Env = "staging" | "prod";
 export type Variant = "release" | "redline";
@@ -194,55 +194,59 @@ export function buildRecord(i: {
 export const recordPayload = (env: Env, record: string): Buffer =>
   Buffer.from(`oa-release-v1\n${env}\n${record}`);
 
-// ---------- the define comparison (as @oa/provision) ----------
+// ---------- the two variants ----------
 
-const FALSE = [102, 97, 108, 115, 101];
-const TRUE = [116, 114, 117, 101];
-const IDENT = /[A-Za-z0-9_$]/;
-const at = (b: Uint8Array, i: number, lit: number[]) =>
-  lit.every((c, k) => b[i + k] === c) &&
-  !IDENT.test(String.fromCharCode(b[i - 1] ?? 32)) &&
-  !IDENT.test(String.fromCharCode(b[i + lit.length] ?? 32));
+const DEFINE_ENTRY = (v: "true" | "false") =>
+  `${JSON.stringify(TEST_HOOKS_DEFINE)}:${JSON.stringify(v)}`;
 
-function defineSwaps(a: Uint8Array, b: Uint8Array): number | null {
-  let i = 0;
-  let j = 0;
-  let n = 0;
-  while (i < a.length && j < b.length) {
-    if (a[i] === b[j]) {
-      i++;
-      j++;
-    } else if (at(a, i, FALSE) && at(b, j, TRUE)) {
-      i += FALSE.length;
-      j += TRUE.length;
-      n++;
-    } else return null;
-  }
-  return i === a.length && j === b.length ? n : null;
+/**
+ * hosted-build: the two rendered dry-run configs (buildBundle `config`) must
+ * be byte-identical once the one define value is normalized: release has
+ * the define "false" and redline "true", each exactly once, and nothing else
+ * differs. (The bundles themselves differ: esbuild tree-shakes the hooks out
+ * of release.)
+ */
+export function assertSameConfigButDefine(
+  release: string,
+  redline: string,
+): void {
+  const count = (s: string, x: string) => s.split(x).length - 1;
+  const r = DEFINE_ENTRY("false");
+  const d = DEFINE_ENTRY("true");
+  if (count(release, r) !== 1 || count(release, d) !== 0)
+    throw new Error(
+      `the release config must define ${TEST_HOOKS_DEFINE} "false" once`,
+    );
+  if (count(redline, d) !== 1 || count(redline, r) !== 0)
+    throw new Error(
+      `the redline config must define ${TEST_HOOKS_DEFINE} "true" once`,
+    );
+  if (release.replace(r, d) !== redline)
+    throw new Error(
+      `the release and redline configs differ beyond the ${TEST_HOOKS_DEFINE} define`,
+    );
 }
 
-/** redline must equal release once the one define literal is normalized. */
-export function assertSameButDefine(
-  release: readonly Mod[],
-  redline: readonly Mod[],
-): void {
-  const fail = (why: string): never => {
-    throw new Error(
-      `the redline bundle differs from release beyond the ${TEST_HOOKS_DEFINE} define (${why})`,
-    );
-  };
-  const sorted = (m: readonly Mod[]) =>
-    [...m].sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
-  const a = sorted(release);
-  const b = sorted(redline);
-  if (a.length !== b.length) fail("module list");
-  let swaps = 0;
-  for (const [k, x] of a.entries()) {
-    const y = b[k] as Mod;
-    if (x.name !== y.name || x.type !== y.type) fail(`module ${x.name}`);
-    swaps += defineSwaps(x.bytes, y.bytes) ?? fail(`module ${x.name} bytes`);
-  }
-  if (swaps === 0) fail("no define literal differs");
+/**
+ * The mounted hook routes (keep in sync with @oa/shared TEST_HOOKS, as
+ * check-no-test-hooks.ts). The release bundle must contain none of them: the
+ * real build tree-shakes the hook modules out. ("/__test/" alone does stay,
+ * as the route-policy table's "ALL /__test/*" entry.)
+ */
+export const HOOK_ROUTES = [
+  "/__test/session",
+  "/__test/otp/latest",
+  "/__test/oauth-client",
+] as const;
+
+/** Throws if any release module's bytes contain a hook route string. */
+export function assertNoHookRoutes(release: readonly Mod[]): void {
+  for (const m of release)
+    for (const r of HOOK_ROUTES)
+      if (Buffer.from(m.bytes).includes(r))
+        throw new Error(
+          `release module ${m.name} contains the hook route ${r}`,
+        );
 }
 
 // ---------- plain ustar, from in-memory bytes ----------
@@ -322,7 +326,7 @@ const dirStamp = (st: Stats) => `d:${st.dev}:${st.ino}`;
 
 export async function readTreeHardened(
   dir: string,
-  o: { check?: (rel: string) => void } = {},
+  o: { check?: (rel: string) => void; pick?: (rel: string) => boolean } = {},
 ): Promise<File[]> {
   const check = o.check ?? assertAssetPath;
   const root = await realpath(dir);
@@ -362,6 +366,7 @@ export async function readTreeHardened(
       }
       for (const e of entries) {
         const r = rel ? `${rel}/${e.name}` : e.name;
+        if (o.pick && !o.pick(r)) continue;
         check(r);
         if (e.isSymbolicLink())
           throw new Error(`${r} is a symlink; refusing to follow it`);
@@ -406,11 +411,20 @@ export async function readTreeHardened(
 
 // ---------- the artifact ----------
 
+/** What each variant was built from (hosted-guard's commit, the lockfile). */
+export interface VariantInfo {
+  bundleSha256: string;
+  /** The hosted-guard commit SHA the build ran on. */
+  commit: string;
+  /** sha256 of pnpm-lock.yaml at that build. */
+  lockfileSha256: string;
+}
+
 export interface Manifest {
   version: string;
   mainModule: string;
   files: { path: string; size: number; sha256: string }[];
-  bundleSha256: Record<Variant, string>;
+  variants: Record<Variant, VariantInfo>;
 }
 
 export interface Artifact {
@@ -442,6 +456,7 @@ export async function writeArtifact(
     template: Uint8Array;
     migrations: readonly Migration[];
     welcome: Uint8Array;
+    built: Record<Variant, { commit: string; lockfileSha256: string }>;
   },
 ): Promise<{ manifestSha256: string; bundleSha256: Record<Variant, string> }> {
   const files: File[] = [
@@ -469,7 +484,10 @@ export async function writeArtifact(
     version: a.version,
     mainModule: a.mainModule,
     files: assetEntries(files),
-    bundleSha256: bundle,
+    variants: {
+      release: { bundleSha256: bundle.release, ...a.built.release },
+      redline: { bundleSha256: bundle.redline, ...a.built.redline },
+    },
   };
   const bytes = utf8.encode(canonicalJson(manifest));
   await writeFile(join(out, MANIFEST), bytes, { flag: "wx" });
@@ -539,14 +557,21 @@ export async function readArtifact(dir: string): Promise<Artifact> {
   }
   if (!template || !welcome)
     throw new Error("the artifact has no template or welcome");
-  for (const v of ["release", "redline"] as const)
+  for (const v of ["release", "redline"] as const) {
+    const info = manifest.variants?.[v];
     if (
+      !info ||
       bundleSha256({ mainModule: manifest.mainModule, modules: a[v] }) !==
-      manifest.bundleSha256?.[v]
+        info.bundleSha256
     )
       throw new Error(
         `the ${v} modules do not match ${MANIFEST}'s bundleSha256`,
       );
+    if (!/^[0-9a-f]{40}$/.test(info.commit) || !HEX64.test(info.lockfileSha256))
+      throw new Error(
+        `${MANIFEST} has no valid ${v} commit or lockfile sha256`,
+      );
+  }
   return a;
 }
 
@@ -565,8 +590,10 @@ export interface Prepared {
 /**
  * hosted-sign (and hosted-attach): from the verified artifact, the record and
  * tar of every variant the env takes. Requires hosted-check's outputs (the
- * manifest's sha256 and the release bundleSha256 it checked) and that
- * redline equals release once the one define literal is normalized.
+ * manifest's sha256 and the release bundleSha256 it checked); both variants
+ * built from hosted-guard's commit with the same lockfile (the one checked
+ * out here); no /__test/ route in release; defines false for release and
+ * true for redline (redline only for staging).
  */
 export function prepare(
   a: Artifact,
@@ -575,6 +602,10 @@ export function prepare(
     version: string;
     manifestSha256: string;
     bundleSha256: string;
+    /** hosted-guard's commit SHA. */
+    commit: string;
+    /** sha256 of the checked-out pnpm-lock.yaml. */
+    lockfileSha256: string;
   },
 ): Prepared[] {
   if (o.env !== "staging" && o.env !== "prod")
@@ -591,7 +622,22 @@ export function prepare(
     throw new Error(
       `version ${o.version} is not the artifact's ${a.manifest.version}`,
     );
-  assertSameButDefine(a.release, a.redline);
+  const { release: rv, redline: dv } = a.manifest.variants;
+  if (rv.commit !== dv.commit)
+    throw new Error(
+      "the release and redline builds are from different commits",
+    );
+  if (rv.lockfileSha256 !== dv.lockfileSha256)
+    throw new Error("the release and redline builds used different lockfiles");
+  if (!/^[0-9a-f]{40}$/.test(o.commit) || rv.commit !== o.commit)
+    throw new Error(
+      `the builds are not from hosted-guard's commit ${o.commit.slice(0, 40)}`,
+    );
+  if (!HEX64.test(o.lockfileSha256) || rv.lockfileSha256 !== o.lockfileSha256)
+    throw new Error(
+      "the builds' lockfile is not the checked-out pnpm-lock.yaml",
+    );
+  assertNoHookRoutes(a.release);
   const variants: Variant[] =
     o.env === "prod" ? ["release"] : ["release", "redline"];
   return variants.map((variant) => {
@@ -607,6 +653,10 @@ export function prepare(
       migrations: a.migrations,
       welcome: a.welcome,
     });
+    if (record.defines[TEST_HOOKS_DEFINE] !== (variant === "redline"))
+      throw new Error(
+        `${TEST_HOOKS_DEFINE} must be ${variant === "redline"} for ${variant}`,
+      );
     const recordString = canonicalJson(record);
     // Packed from the bytes just hashed into the record, never re-read.
     const tar = packUstar([
@@ -630,6 +680,16 @@ export function prepare(
       base: `oa-release-${o.env}-${variant}-${o.version}`,
     };
   });
+}
+
+/** sha256 of one file (pnpm-lock.yaml), read with the hardened reader. */
+export async function fileSha256(path: string): Promise<string> {
+  const name = basename(path);
+  const [f] = await readTreeHardened(dirname(path), {
+    pick: (r) => r === name,
+  });
+  if (!f) throw new Error(`${path} is missing`);
+  return sha256Hex(f.bytes);
 }
 
 /** The .sig.json bytes: the stored form { record, signature }. */

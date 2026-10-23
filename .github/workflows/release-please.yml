@@ -310,10 +310,12 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Build both variants and the release files, with manifest.json
+        env:
+          GUARD_SHA: ${{ needs.hosted-guard.outputs.sha }}
         run: |
           pnpm --filter @oa/provision build
           pnpm --filter @oa/server build
-          node --experimental-strip-types scripts/ci/build-hosted-release.ts "$RUNNER_TEMP/hosted"
+          node --experimental-strip-types scripts/ci/build-hosted-release.ts "$RUNNER_TEMP/hosted" --commit "$GUARD_SHA"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: hosted-release
@@ -394,11 +396,12 @@ jobs:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
           SIGN_ENV: ${{ matrix.env }}
           VERSION: ${{ needs.hosted-guard.outputs.version }}
+          GUARD_SHA: ${{ needs.hosted-guard.outputs.sha }}
           MANIFEST_SHA256: ${{ needs.hosted-check.outputs.manifest_sha256 }}
           BUNDLE_SHA256: ${{ needs.hosted-check.outputs.bundle_sha256 }}
         run: |
           set -euo pipefail
-          printf '%s' "$RELEASE_SIGNING_KEY" | node --experimental-strip-types scripts/ci/sign-release.ts --dir "$RUNNER_TEMP/hosted" --env "$SIGN_ENV" --version "$VERSION" --manifest-sha256 "$MANIFEST_SHA256" --bundle-sha256 "$BUNDLE_SHA256" --out "$RUNNER_TEMP/signed" >> "$GITHUB_OUTPUT"
+          printf '%s' "$RELEASE_SIGNING_KEY" | node --experimental-strip-types scripts/ci/sign-release.ts --dir "$RUNNER_TEMP/hosted" --env "$SIGN_ENV" --version "$VERSION" --manifest-sha256 "$MANIFEST_SHA256" --bundle-sha256 "$BUNDLE_SHA256" --commit "$GUARD_SHA" --lockfile pnpm-lock.yaml --out "$RUNNER_TEMP/signed" >> "$GITHUB_OUTPUT"
   hosted-attach:
     needs: [hosted-guard, hosted-build, hosted-check, hosted-sign]
     if: ${{ !cancelled() && needs.hosted-guard.result == 'success' && needs.hosted-check.result == 'success' && needs.hosted-sign.result == 'success' }}
@@ -425,6 +428,7 @@ jobs:
           REPO: ${{ github.repository }}
           TAG: ${{ needs.hosted-guard.outputs.tag }}
           VERSION: ${{ needs.hosted-guard.outputs.version }}
+          GUARD_SHA: ${{ needs.hosted-guard.outputs.sha }}
           MANIFEST_SHA256: ${{ needs.hosted-check.outputs.manifest_sha256 }}
           BUNDLE_SHA256: ${{ needs.hosted-check.outputs.bundle_sha256 }}
           STAGING_RELEASE: ${{ needs.hosted-sign.outputs.staging_release_signature }}:${{ needs.hosted-sign.outputs.staging_release_tar_sha256 }}:${{ needs.hosted-sign.outputs.staging_release_record_sha256 }}
@@ -432,7 +436,7 @@ jobs:
           PROD_RELEASE: ${{ needs.hosted-sign.outputs.prod_release_signature }}:${{ needs.hosted-sign.outputs.prod_release_tar_sha256 }}:${{ needs.hosted-sign.outputs.prod_release_record_sha256 }}
         run: |
           set -euo pipefail
-          common=(--dir "$RUNNER_TEMP/hosted" --version "$VERSION" --manifest-sha256 "$MANIFEST_SHA256" --bundle-sha256 "$BUNDLE_SHA256" --out "$RUNNER_TEMP/signed")
+          common=(--dir "$RUNNER_TEMP/hosted" --version "$VERSION" --manifest-sha256 "$MANIFEST_SHA256" --bundle-sha256 "$BUNDLE_SHA256" --commit "$GUARD_SHA" --lockfile pnpm-lock.yaml --out "$RUNNER_TEMP/signed")
           node --experimental-strip-types scripts/ci/assemble-release.ts "${common[@]}" --env staging --release "$STAGING_RELEASE" --redline "$STAGING_REDLINE"
           node --experimental-strip-types scripts/ci/assemble-release.ts "${common[@]}" --env prod --release "$PROD_RELEASE"
           gh release upload "$TAG" --repo "$REPO" "$RUNNER_TEMP"/signed/oa-release-*
