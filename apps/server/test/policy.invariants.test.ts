@@ -297,6 +297,7 @@ describe("orgCan with a cap", () => {
     "directory.manage",
     "audit.read",
     "members.manage",
+    "members.manageAdmins",
     "settings.manage",
     "usage.read",
     "tokens.create",

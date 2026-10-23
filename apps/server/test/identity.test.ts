@@ -423,6 +423,34 @@ describe("resetIdentity", () => {
     });
   });
 
+  it("target promoted to admin between the precheck and the batch: 404, D1 unchanged", async () => {
+    const email = uniq("race");
+    const uid = await seedUser(email, "member", { googleSub: `Q-${email}` });
+    await createPat(env, uid, "t");
+    // revokeAllGrants (KV) runs between the precheck and the D1 batch.
+    const promote = () =>
+      env.DB.prepare("update users set role = 'admin' where id = ?")
+        .bind(uid)
+        .run();
+    const kv = new Proxy(env.OAUTH_KV, {
+      get(t, k) {
+        const v = Reflect.get(t, k);
+        if (k !== "list" || typeof v !== "function") return v;
+        return async (...a: unknown[]) => {
+          await promote();
+          return v.apply(t, a);
+        };
+      },
+    });
+    await expect(
+      resetIdentity({ ...env, OAUTH_KV: kv } as Env, admin, uid),
+    ).rejects.toMatchObject({ code: "not_found" });
+    expect((await rowOf(uid)).role).toBe("admin");
+    expect(await subjectOf(uid)).toBe(`Q-${email}`);
+    expect((await rowOf(uid)).e).toBe(0);
+    expect(await pats(uid)).toBe(1);
+  });
+
   it("revokes the member's PATs", async () => {
     const email = uniq("resetpat");
     const uid = await seedUser(email, "member", { googleSub: `RP-${email}` });
