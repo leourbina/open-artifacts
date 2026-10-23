@@ -33,11 +33,14 @@
       ],
       "durable_objects": {
         "bindings": [
-          { "name": "ARTIFACT_RUNTIME", "class_name": "ArtifactRuntime" }
+          { "name": "ARTIFACT_RUNTIME", "class_name": "ArtifactRuntime" },
+          // P3 T7a (#502): the class ships unused one release before T7b uses it.
+          { "name": "USER_PRESENCE", "class_name": "UserPresence" }
         ]
       },
       "migrations": [
-        { "tag": "v1", "new_sqlite_classes": ["ArtifactRuntime"] }
+        { "tag": "v1", "new_sqlite_classes": ["ArtifactRuntime"] },
+        { "tag": "v2", "new_sqlite_classes": ["UserPresence"] }
       ],
       // Browser Run (server-side thumbnails). Workers edit suffices to deploy.
       "browser": { "binding": "BROWSER" },

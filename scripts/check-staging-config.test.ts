@@ -162,3 +162,29 @@ describe("wrangler.staging.jsonc env.staging", () => {
     expect(ACCESS_CLIENT_ID).toMatch(/^[0-9a-f]{64}$/);
   });
 });
+
+describe("staging Durable Objects", () => {
+  // A binding to a class the server doesn't export fails the staging deploy,
+  // so a new class's config can't land before the class itself (P3 T7a).
+  const entry = readFileSync(join(root, "apps/server", cfg.main), "utf8");
+  // biome-ignore lint/suspicious/noExplicitAny: untyped wrangler config
+  const classes: string[] = env.durable_objects.bindings.map(
+    (b: any) => b.class_name,
+  );
+  for (const name of classes)
+    it(`the server entry exports ${name}`, () => {
+      expect(entry).toMatch(
+        new RegExp(
+          `export\\s+(?:class\\s+${name}\\b|\\{[^}]*\\b${name}\\b[^}]*\\})`,
+        ),
+      );
+    });
+  it("every migrated class is bound, and every bound class is migrated", () => {
+    // biome-ignore lint/suspicious/noExplicitAny: untyped wrangler config
+    const migrated = env.migrations.flatMap((m: any) => [
+      ...(m.new_sqlite_classes ?? []),
+      ...(m.new_classes ?? []),
+    ]);
+    expect([...migrated].sort()).toEqual([...classes].sort());
+  });
+});
