@@ -80,6 +80,10 @@ const SHADCN_VARS = [
     "brand-foreground",
     "brand-soft",
     "brand-soft-foreground",
+    // Ours: soft fills for the Alert tones.
+    "success-soft",
+    "warning-soft",
+    "danger-soft",
   ],
 ];
 

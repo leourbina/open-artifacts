@@ -125,7 +125,7 @@ function pageHelpers() {
   const borders = () =>
     [
       ...document.querySelectorAll(
-        '[data-variant="outline"], [data-slot="input"], [data-slot="select-trigger"]',
+        '[data-variant="outline"], [data-slot="input"], [data-slot="select-trigger"], [data-slot="textarea"], [data-slot="checkbox"]',
       ),
     ]
       // Group wrappers carry data-variant too but draw no border.
