@@ -668,7 +668,13 @@ export function SpacePeople({
               ` as of ${dateFmt.format(new Date(filtered.lastSyncedAt))}`}
             {filtered && ` · ${ROLE_LABEL[filtered.role]}`}
           </span>
-          <Button size="sm" variant="ghost" onClick={() => onGroup("")}>
+          {/* No padding: wrapped on a phone, it lines up with the header text. */}
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-auto px-0 text-[length:var(--oa-text-sm)] underline-offset-2 hover:bg-transparent hover:underline"
+            onClick={() => onGroup("")}
+          >
             Show everyone
           </Button>
         </div>
