@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.34.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.33.1...v0.34.0) (2026-10-23)
+
+
+### Features
+
+* **auth-broker:** stateless Google broker returning raw ID tokens (P2 T11) ([#396](https://github.com/open-artifacts-ai/open-artifacts/issues/396)) ([ebc04f2](https://github.com/open-artifacts-ai/open-artifacts/commit/ebc04f28ffa53ee58429e685e5fdc61674809169))
+* **dashboard:** space People, manual and synced (P4 Task 12) ([#465](https://github.com/open-artifacts-ai/open-artifacts/issues/465)) ([fce185c](https://github.com/open-artifacts-ai/open-artifacts/commit/fce185cd70e3c6c4314a4dd5da0afb298e308b77))
+* **dashboard:** spaces admin, group mappings, Every space and manager mapping (P4 Tasks 10, 11) ([#443](https://github.com/open-artifacts-ai/open-artifacts/issues/443)) ([0ced676](https://github.com/open-artifacts-ai/open-artifacts/commit/0ced6764452cf8d55d90f6308afe56536274208f))
+* **dashboard:** View only chip for read-only viewers (P4 D10) ([#428](https://github.com/open-artifacts-ai/open-artifacts/issues/428)) ([6f36f58](https://github.com/open-artifacts-ai/open-artifacts/commit/6f36f580bd6b4b705dcd788bffeb081e47c6e0ff))
+* **shared:** Google-linked members in hosted mocks; owner_only for admin link resets ([#453](https://github.com/open-artifacts-ai/open-artifacts/issues/453)) ([6a6ac8d](https://github.com/open-artifacts-ai/open-artifacts/commit/6a6ac8d716add42ad64cd4104db48adf32221f34))
+
+
+### Bug Fixes
+
+* **auth:** only the owner can reset an admin's Google link (owner_only) ([#474](https://github.com/open-artifacts-ai/open-artifacts/issues/474)) ([ba3962a](https://github.com/open-artifacts-ai/open-artifacts/commit/ba3962a75a062091cd0859af12c83404b5dfe4fe))
+
 ## [0.33.1](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.33.0...v0.33.1) (2026-10-23)
 
 
