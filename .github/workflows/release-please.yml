@@ -390,17 +390,14 @@ jobs:
       staging_redline_signature: ${{ steps.sign.outputs.staging_redline_signature }}
       staging_redline_tar_sha256: ${{ steps.sign.outputs.staging_redline_tar_sha256 }}
       staging_redline_record_sha256: ${{ steps.sign.outputs.staging_redline_record_sha256 }}
-    # Exactly these steps: no install, node:* imports only.
+    # Exactly these steps: no install, no other action, node:* imports only.
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ needs.hosted-guard.outputs.sha }}
           persist-credentials: false
-      # Decision 4 as amended (L1): setup-node pinned by SHA, an exact
-      # version (the image's default node 20 has no strip-types), no cache.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: "22.23.4"
+      # Decision 4 (Manager review): checkout and download-artifact only, and
+      # the runner's own node (20) on plain .mjs: no setup-node, no strip-types.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: hosted-release
@@ -416,7 +413,7 @@ jobs:
           BUNDLE_SHA256: ${{ needs.hosted-check.outputs.bundle_sha256 }}
         run: |
           set -euo pipefail
-          printf '%s' "$RELEASE_SIGNING_KEY" | node --experimental-strip-types scripts/ci/sign-release.ts --dir "$RUNNER_TEMP/hosted" --env "$SIGN_ENV" --version "$VERSION" --manifest-sha256 "$MANIFEST_SHA256" --bundle-sha256 "$BUNDLE_SHA256" --commit "$GUARD_SHA" --lockfile pnpm-lock.yaml --out "$RUNNER_TEMP/signed" >> "$GITHUB_OUTPUT"
+          printf '%s' "$RELEASE_SIGNING_KEY" | node scripts/ci/sign-release.mjs --dir "$RUNNER_TEMP/hosted" --env "$SIGN_ENV" --version "$VERSION" --manifest-sha256 "$MANIFEST_SHA256" --bundle-sha256 "$BUNDLE_SHA256" --commit "$GUARD_SHA" --lockfile pnpm-lock.yaml --out "$RUNNER_TEMP/signed" >> "$GITHUB_OUTPUT"
   hosted-sign-prod:
     needs: [hosted-guard, hosted-build, hosted-check]
     if: ${{ !cancelled() && needs.hosted-guard.result == 'success' && needs.hosted-build.result == 'success' && needs.hosted-check.result == 'success' }}
@@ -432,17 +429,14 @@ jobs:
       prod_release_signature: ${{ steps.sign.outputs.prod_release_signature }}
       prod_release_tar_sha256: ${{ steps.sign.outputs.prod_release_tar_sha256 }}
       prod_release_record_sha256: ${{ steps.sign.outputs.prod_release_record_sha256 }}
-    # Exactly these steps: no install, node:* imports only.
+    # Exactly these steps: no install, no other action, node:* imports only.
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ needs.hosted-guard.outputs.sha }}
           persist-credentials: false
-      # Decision 4 as amended (L1): setup-node pinned by SHA, an exact
-      # version (the image's default node 20 has no strip-types), no cache.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: "22.23.4"
+      # Decision 4 (Manager review): checkout and download-artifact only, and
+      # the runner's own node (20) on plain .mjs: no setup-node, no strip-types.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: hosted-release
@@ -458,7 +452,7 @@ jobs:
           BUNDLE_SHA256: ${{ needs.hosted-check.outputs.bundle_sha256 }}
         run: |
           set -euo pipefail
-          printf '%s' "$RELEASE_SIGNING_KEY" | node --experimental-strip-types scripts/ci/sign-release.ts --dir "$RUNNER_TEMP/hosted" --env "$SIGN_ENV" --version "$VERSION" --manifest-sha256 "$MANIFEST_SHA256" --bundle-sha256 "$BUNDLE_SHA256" --commit "$GUARD_SHA" --lockfile pnpm-lock.yaml --out "$RUNNER_TEMP/signed" >> "$GITHUB_OUTPUT"
+          printf '%s' "$RELEASE_SIGNING_KEY" | node scripts/ci/sign-release.mjs --dir "$RUNNER_TEMP/hosted" --env "$SIGN_ENV" --version "$VERSION" --manifest-sha256 "$MANIFEST_SHA256" --bundle-sha256 "$BUNDLE_SHA256" --commit "$GUARD_SHA" --lockfile pnpm-lock.yaml --out "$RUNNER_TEMP/signed" >> "$GITHUB_OUTPUT"
   hosted-attach-staging:
     needs: [hosted-guard, hosted-build, hosted-check, hosted-sign-staging]
     if: ${{ !cancelled() && needs.hosted-guard.result == 'success' && needs.hosted-check.result == 'success' && needs.hosted-sign-staging.result == 'success' }}
@@ -498,7 +492,7 @@ jobs:
           set -euo pipefail
           existing=$(gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' | grep '^oa-release-staging-' || true)
           [ -z "$existing" ] || { echo "the release already has staging assets: $existing"; exit 1; }
-          node --experimental-strip-types scripts/ci/assemble-release.ts --dir "$RUNNER_TEMP/hosted" --env staging --version "$VERSION" --manifest-sha256 "$MANIFEST_SHA256" --bundle-sha256 "$BUNDLE_SHA256" --commit "$GUARD_SHA" --lockfile pnpm-lock.yaml --out "$RUNNER_TEMP/signed" --release "$RELEASE" --redline "$REDLINE"
+          node scripts/ci/assemble-release.mjs --dir "$RUNNER_TEMP/hosted" --env staging --version "$VERSION" --manifest-sha256 "$MANIFEST_SHA256" --bundle-sha256 "$BUNDLE_SHA256" --commit "$GUARD_SHA" --lockfile pnpm-lock.yaml --out "$RUNNER_TEMP/signed" --release "$RELEASE" --redline "$REDLINE"
           gh release upload "$TAG" --repo "$REPO" "$RUNNER_TEMP"/signed/oa-release-staging-*
   hosted-attach-prod:
     needs: [hosted-guard, hosted-build, hosted-check, hosted-sign-prod]
@@ -538,5 +532,5 @@ jobs:
           set -euo pipefail
           existing=$(gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' | grep '^oa-release-prod-' || true)
           [ -z "$existing" ] || { echo "the release already has prod assets: $existing"; exit 1; }
-          node --experimental-strip-types scripts/ci/assemble-release.ts --dir "$RUNNER_TEMP/hosted" --env prod --version "$VERSION" --manifest-sha256 "$MANIFEST_SHA256" --bundle-sha256 "$BUNDLE_SHA256" --commit "$GUARD_SHA" --lockfile pnpm-lock.yaml --out "$RUNNER_TEMP/signed" --release "$RELEASE"
+          node scripts/ci/assemble-release.mjs --dir "$RUNNER_TEMP/hosted" --env prod --version "$VERSION" --manifest-sha256 "$MANIFEST_SHA256" --bundle-sha256 "$BUNDLE_SHA256" --commit "$GUARD_SHA" --lockfile pnpm-lock.yaml --out "$RUNNER_TEMP/signed" --release "$RELEASE"
           gh release upload "$TAG" --repo "$REPO" "$RUNNER_TEMP"/signed/oa-release-prod-*

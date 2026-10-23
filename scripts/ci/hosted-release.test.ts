@@ -1,7 +1,7 @@
 // T3b: the hosted release jobs in release-please.yml (guard, build, check,
 // sign and attach per env) and hosted-floor.yml. The signing key never
 // shares a job with installed code.
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,32 +37,25 @@ const SHA_PIN =
 const GUARD_SHA = "${{ needs.hosted-guard.outputs.sha }}";
 // biome-ignore lint/suspicious/noTemplateCurlyInString: literal workflow expression
 const TAG = "${{ needs.hosted-guard.outputs.tag }}";
-const NVMRC_MAJOR = read(".nvmrc").trim().split(".")[0];
 // Any invocation (the lockfile path "pnpm-lock.yaml" is not one).
 const INSTALL = /(^|[\s;|&(`])(pnpm|npm|npx|corepack|yarn)(?=$|[\s;|&)`])/m;
 
 /**
- * Decision 4 as amended (fix round 2, L1): a key job runs only checkout,
- * setup-node and (for sign) download-artifact, all pinned by SHA; setup-node
- * takes an EXACT 22.x.y literal matching .nvmrc's major, no version file.
+ * Decision 4 (Manager's security review, fix round 2): a key job runs ONLY
+ * actions/checkout and (for sign) actions/download-artifact, pinned by SHA,
+ * and the runner's own node: no setup-node, no strip-types, plain .mjs.
  */
 function keyJobShape(st: Step[], o: { download: boolean; script: string }) {
   const uses = st.map((s) => s.uses).filter(Boolean) as string[];
   expect(uses.map((u) => u.split("@")[0])).toEqual([
     "actions/checkout",
-    "actions/setup-node",
     ...(o.download ? ["actions/download-artifact"] : []),
   ]);
   for (const u of uses)
-    expect(u).toMatch(
-      /^actions\/(checkout|setup-node|download-artifact)@[0-9a-f]{40}$/,
-    );
+    expect(u).toMatch(/^actions\/(checkout|download-artifact)@[0-9a-f]{40}$/);
+  expect(JSON.stringify(st)).not.toContain("setup-node");
   expect(st).toHaveLength(uses.length + 1);
   expect(st[0]?.with?.["persist-credentials"]).toBe(false);
-  const node = st[1]?.with ?? {};
-  expect(Object.keys(node)).toEqual(["node-version"]);
-  expect(String(node["node-version"])).toMatch(/^\d+\.\d+\.\d+$/);
-  expect(String(node["node-version"]).split(".")[0]).toBe(NVMRC_MAJOR);
   const last = st.at(-1) as Step;
   expect(last.uses).toBeUndefined();
   for (const s of st) expect(s.run ?? "").not.toMatch(INSTALL);
@@ -77,9 +70,10 @@ function keyJobShape(st: Step[], o: { download: boolean; script: string }) {
   const run = String(last.run);
   expect(run).toMatch(
     new RegExp(
-      `printf '%s' "\\$RELEASE_SIGNING_KEY" \\| node --experimental-strip-types scripts/ci/${o.script} `,
+      `printf '%s' "\\$RELEASE_SIGNING_KEY" \\| node scripts/ci/${o.script.replace(".", "\\.")} `,
     ),
   );
+  expect(run).not.toContain("--experimental-strip-types");
   expect(run.match(/RELEASE_SIGNING_KEY/g)).toHaveLength(1);
   expect(run).not.toMatch(/set -x|set -o xtrace|--key/);
   expect(JSON.stringify(st.slice(0, -1))).not.toContain("secrets.");
@@ -208,8 +202,8 @@ describe("release-please.yml hosted jobs", () => {
         });
         expect(job.env).toBeUndefined();
       });
-      it("has the key-job shape: checkout, exact setup-node, download-artifact, node sign-release.ts", () => {
-        keyJobShape(st, { download: true, script: "sign-release.ts" });
+      it("has the key-job shape: checkout, download-artifact, the runner's node on sign-release.mjs", () => {
+        keyJobShape(st, { download: true, script: "sign-release.mjs" });
       });
       it("signs only its own env and outputs only its own names", () => {
         const env2 = st.at(-1)?.env ?? {};
@@ -262,7 +256,7 @@ describe("release-please.yml hosted jobs", () => {
       });
       const st = steps(name);
       const run = runOf(st);
-      expect(run).toContain("scripts/ci/assemble-release.ts");
+      expect(run).toContain("scripts/ci/assemble-release.mjs");
       expect(run).toContain(`--env ${env}`);
       expect(run).toContain('--commit "$GUARD_SHA" --lockfile pnpm-lock.yaml');
       // L8: refuses when any of this env's assets is already on the release.
@@ -319,7 +313,7 @@ describe("hosted-floor.yml (H1)", () => {
     expect([job.needs].flat()).toEqual(["floor-guard"]);
     expect(job.permissions).toEqual({ contents: "read" });
     const st = stepsOf(fw, "hosted-floor");
-    keyJobShape(st, { download: false, script: "sign-floor.ts" });
+    keyJobShape(st, { download: false, script: "sign-floor.mjs" });
     // biome-ignore lint/suspicious/noTemplateCurlyInString: literal workflow expression
     expect(st[0]?.with?.ref).toBe("${{ needs.floor-guard.outputs.sha }}");
     const run = String(st.at(-1)?.run);
@@ -341,7 +335,7 @@ describe("hosted-floor.yml (H1)", () => {
     const st = stepsOf(fw, "hosted-floor-upload");
     for (const s of st) if (s.uses) expect(s.uses).toMatch(SHA_PIN);
     const run = runOf(st);
-    expect(run).toContain("scripts/ci/sign-floor.ts");
+    expect(run).toContain("scripts/ci/sign-floor.mjs");
     expect(run).toContain("--assemble");
     expect(run).not.toContain("gh release");
     const up = st.filter((s) =>
@@ -360,15 +354,19 @@ describe("hosted-floor.yml (H1)", () => {
   });
 });
 
-describe("the key jobs' scripts import only node:* (L3: no dynamic loading)", () => {
+describe("the key jobs' scripts: plain .mjs, node:* only, Node 20", () => {
   const FORBIDDEN =
     /\bimport\s*\(\s*[^"'\s)]|\bcreateRequire\b|\brequire\s*\(|["']node:(child_process|module|worker_threads|vm)["']|\bprocess\.dlopen\b/;
+  // APIs and syntax newer than Node 20 (the runner's preinstalled major).
+  const POST_20 =
+    /\bimport\.meta\.(dirname|filename)\b|\bprocess\.getBuiltinModule\b|\bPromise\.withResolvers\b|\bArray\.fromAsync\b|\b(Object|Map)\.groupBy\b|\.(union|intersection|symmetricDifference|isSubsetOf|isSupersetOf|isDisjointFrom)\(|\bURL\.parse\b|\bprocess\.loadEnvFile\b|\bstyleText\b|\bparseEnv\b|\bcrypto\.hash\(|\bfromBase64\b|\btoBase64\b|\bnavigator\.|\bWebSocket\b|\bnode:sqlite\b|\bglob\(|\bIterator\.from\b|\.toArray\(\)|\busing\s+\w+\s*=|\bRegExp\.escape\b|\bError\.isError\b|\bFloat16Array\b/;
   const importsOf = (src: string): string[] =>
     [
       ...src.matchAll(
         /\b(?:import|export)\b[^;]*?\bfrom\s*["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']|\bimport\s+["']([^"']+)["']/g,
       ),
     ].map((m) => (m[1] ?? m[2] ?? m[3]) as string);
+  /** The import closure, resolved recursively; anything but node:* or a local .mjs is bad. */
   const closure = (entry: string) => {
     const seen = new Set<string>();
     const bad: string[] = [];
@@ -380,7 +378,7 @@ describe("the key jobs' scripts import only node:* (L3: no dynamic loading)", ()
       if (hit) bad.push(`${f}: ${hit[0]}`);
       for (const spec of importsOf(src)) {
         if (spec.startsWith("node:")) continue;
-        if (/^\.\.?\//.test(spec) && spec.endsWith(".ts")) {
+        if (/^\.\.?\//.test(spec) && spec.endsWith(".mjs")) {
           const p = resolve(dirname(f), spec);
           if (!p.startsWith(join(root, "scripts/ci/")))
             bad.push(`${f}: ${spec}`);
@@ -391,39 +389,77 @@ describe("the key jobs' scripts import only node:* (L3: no dynamic loading)", ()
     visit(entry);
     return { seen: [...seen], bad };
   };
-  for (const entry of [
-    "sign-release.ts",
-    "assemble-release.ts",
-    "sign-floor.ts",
-  ])
-    it(entry, () => {
+  const ENTRIES = [
+    "sign-release.mjs",
+    "sign-floor.mjs",
+    "assemble-release.mjs",
+  ];
+  for (const entry of ENTRIES)
+    it(`${entry}: node:* only, every file plain .mjs with // @ts-check, no post-20 API`, () => {
       const { seen, bad } = closure(join(root, "scripts/ci", entry));
       expect(bad).toEqual([]);
       expect(seen.length).toBeGreaterThan(1);
+      for (const f of seen) {
+        expect(f.endsWith(".mjs"), f).toBe(true);
+        const src = readFileSync(f, "utf8");
+        expect(src.startsWith("// @ts-check\n"), f).toBe(true);
+        // Static Node 20 check (comments stripped so prose can't trip it).
+        const code = src
+          .replace(/\/\*[\s\S]*?\*\//g, "")
+          .replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
+        expect(POST_20.exec(code)?.[0], f).toBeUndefined();
+      }
     });
-  it("the scan flags a package import, a dynamic import, require and child_process", () => {
+  it("no TypeScript copies of the key-job scripts remain", () => {
+    for (const n of [
+      "release-artifact",
+      "release-pubkeys",
+      "sign-release",
+      "sign-floor",
+      "assemble-release",
+    ])
+      expect(existsSync(join(root, `scripts/ci/${n}.ts`)), n).toBe(false);
+  });
+  it("tsc checks them: the root tsconfig has allowJs, checkJs and scripts/**/*.mjs", () => {
+    const t = JSON.parse(read("tsconfig.json"));
+    expect(t.compilerOptions.allowJs).toBe(true);
+    expect(t.compilerOptions.checkJs).toBe(true);
+    expect(t.include).toContain("scripts/**/*.mjs");
+  });
+  it("the scan flags a package import, a dynamic import, require, child_process, a .ts import and post-20 APIs", () => {
     const d = mkdtempSync(join(tmpdir(), "oa-scan-"));
     for (const [n, src] of [
-      ["pkg.ts", 'import { parse } from "yaml";\n'],
-      ["dyn.ts", "const m = await import(spec);\n"],
-      ["req.ts", 'import { createRequire } from "node:module";\n'],
-      ["cjs.ts", 'const x = require("fs");\n'],
-      ["cp.ts", 'import { spawn } from "node:child_process";\n'],
-      ["dl.ts", "process.dlopen(m, p);\n"],
-      ["local.ts", 'import { x } from "./pkg.ts";\n'],
+      ["pkg.mjs", 'import { parse } from "yaml";\n'],
+      ["dyn.mjs", "const m = await import(spec);\n"],
+      ["req.mjs", 'import { createRequire } from "node:module";\n'],
+      ["cjs.mjs", 'const x = require("fs");\n'],
+      ["cp.mjs", 'import { spawn } from "node:child_process";\n'],
+      ["dl.mjs", "process.dlopen(m, p);\n"],
+      ["ts.mjs", 'import { x } from "./other.ts";\n'],
     ] as const) {
       writeFileSync(join(d, n), src);
       expect(closure(join(d, n)).bad.length, n).toBeGreaterThan(0);
     }
     writeFileSync(
-      join(d, "ok.ts"),
+      join(d, "ok.mjs"),
       'import { createHash } from "node:crypto";\n',
     );
-    expect(closure(join(d, "ok.ts")).bad).toEqual([]);
-    // build-release-bundle.ts loads a package dynamically: flagged.
-    expect(
-      closure(join(root, "scripts/ci/build-release-bundle.ts")).bad.length,
-    ).toBeGreaterThan(0);
+    expect(closure(join(d, "ok.mjs")).bad).toEqual([]);
+    for (const x of [
+      "import.meta.dirname",
+      "Promise.withResolvers()",
+      "Object.groupBy(a, f)",
+      "a.union(b)",
+    ])
+      expect(POST_20.test(x), x).toBe(true);
+    for (const x of [
+      "const a = b;",
+      "Object.hasOwn(o, k)",
+      "x.at(-1)",
+      "structuredClone(v)",
+      "c ? a : b;",
+    ])
+      expect(POST_20.test(x), x).toBe(false);
   });
 });
 

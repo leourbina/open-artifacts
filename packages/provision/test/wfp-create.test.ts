@@ -23,7 +23,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { DatabaseSync as Sqlite } from "node:sqlite";
 import { isPat } from "@oa/shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { packUstar } from "../../../scripts/ci/release-artifact.ts";
+import { packUstar } from "../../../scripts/ci/release-artifact.mjs";
 import { assetHash, CfError, cfClient, type Target } from "../src/cf.js";
 import * as INDEX from "../src/index.js";
 import { RELEASE_PUBKEY_PLACEHOLDER } from "../src/internal/gates.js";

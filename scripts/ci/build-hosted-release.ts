@@ -18,7 +18,7 @@ import {
   fileSha256,
   type Mod,
   writeArtifact,
-} from "./release-artifact.ts";
+} from "./release-artifact.mjs";
 
 type Bundle = {
   modules: Mod[];

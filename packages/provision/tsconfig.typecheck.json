@@ -3,7 +3,8 @@
   "compilerOptions": {
     "allowImportingTsExtensions": true,
     "lib": ["ES2022", "DOM"],
-    "types": ["node"]
+    "types": ["node"],
+    "allowJs": true
   },
   "include": ["src", "test", "vitest.config.ts"]
 }

@@ -1,14 +1,16 @@
-// hosted-sign (T3b): signs the hosted release artifact for one env. node:*
-// imports only (and ./release-artifact.ts, likewise): this job installs
+// @ts-check
+// hosted-sign (T3b): signs the hosted release artifact for one env. Plain
+// .mjs run by the runner's own node (no setup-node, no strip-types); node:*
+// imports only (and the local .mjs it imports, likewise): the job installs
 // nothing. The Ed25519 key (PKCS8 PEM) arrives on stdin only, never in argv,
 // a file or a log:
-//   printf '%s' "$RELEASE_SIGNING_KEY" | node --experimental-strip-types \
-//     scripts/ci/sign-release.ts --dir <artifact> --env staging|prod \
-//     --version <v> --manifest-sha256 <h> --bundle-sha256 <h> \
-//     --commit <hosted-guard sha> --lockfile pnpm-lock.yaml --out <dir>
+//   printf '%s' "$RELEASE_SIGNING_KEY" | node scripts/ci/sign-release.mjs \
+//     --dir <artifact> --env staging|prod --version <v> --manifest-sha256 <h> \
+//     --bundle-sha256 <h> --commit <hosted-guard sha> \
+//     --lockfile pnpm-lock.yaml --out <dir>
 // Re-hashes every file against manifest.json, requires hosted-check's two
 // hashes, both variants built from the guard's commit with the checked-out
-// lockfile, no /__test/ route in release and the defines per variant, then
+// lockfile, no /__test/ route in release and the configs' defines, then
 // signs each variant (staging: release and redline; prod: release) and writes
 // oa-release-<env>-<variant>-<version>.tar and .sig.json. Prints only
 // GITHUB_OUTPUT lines (<env>_<variant>_signature, _tar_sha256,
@@ -17,15 +19,16 @@ import { createPrivateKey, createPublicKey, sign, verify } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
-  type Env,
   fileSha256,
   parseArgs,
   prepare,
   readArtifact,
+  readKeyFromStdin,
   recordPayload,
+  runMain,
   sigJson,
-} from "./release-artifact.ts";
-import { checkSigningKey, SKIPPED } from "./release-pubkeys.ts";
+} from "./release-artifact.mjs";
+import { checkSigningKey, SKIPPED } from "./release-pubkeys.mjs";
 
 const NAME = "sign-release";
 const ARGS = [
@@ -39,29 +42,15 @@ const ARGS = [
   "out",
 ];
 
-async function readKey(): Promise<string> {
-  if (process.stdin.isTTY)
-    throw new Error("the signing key must come on stdin");
-  const chunks: Buffer[] = [];
-  let n = 0;
-  for await (const c of process.stdin) {
-    n += (c as Buffer).length;
-    if (n > 64 * 1024) throw new Error("stdin is too large for a signing key");
-    chunks.push(c as Buffer);
-  }
-  const pem = Buffer.concat(chunks).toString("utf8");
-  if (pem.trim() === "") throw new Error("no signing key on stdin");
-  return pem;
-}
-
-async function main(): Promise<void> {
+async function main() {
   const a = parseArgs(process.argv.slice(2), ARGS);
   for (const k of ARGS) if (!a[k]) throw new Error(`--${k} is required`);
-  const env = a.env as Env;
+  const env = a.env;
   if (env !== "staging" && env !== "prod")
     throw new Error("--env must be staging or prod");
-  const pem = await readKey();
-  let key: ReturnType<typeof createPrivateKey>;
+  const pem = await readKeyFromStdin();
+  /** @type {import("node:crypto").KeyObject} */
+  let key;
   try {
     key = createPrivateKey({ key: pem, format: "pem" });
   } catch {
@@ -73,18 +62,17 @@ async function main(): Promise<void> {
   const pub = createPublicKey(key);
   // L11: a wrong or swapped Environment secret is refused here, not at publish.
   if (
-    checkSigningKey(env, pub.export({ format: "jwk" }).x as string) ===
-    "skipped"
+    checkSigningKey(env, String(pub.export({ format: "jwk" }).x)) === "skipped"
   )
     process.stderr.write(SKIPPED(env, "signing key"));
-  const art = await readArtifact(resolve(a.dir as string));
+  const art = await readArtifact(resolve(String(a.dir)));
   const prepared = prepare(art, {
     env,
-    version: a.version as string,
-    manifestSha256: a["manifest-sha256"] as string,
-    bundleSha256: a["bundle-sha256"] as string,
-    commit: a.commit as string,
-    lockfileSha256: await fileSha256(resolve(a.lockfile as string)),
+    version: String(a.version),
+    manifestSha256: String(a["manifest-sha256"]),
+    bundleSha256: String(a["bundle-sha256"]),
+    commit: String(a.commit),
+    lockfileSha256: await fileSha256(resolve(String(a.lockfile))),
   });
   const signed = prepared.map((p) => {
     const payload = recordPayload(p.env, p.recordString);
@@ -94,9 +82,10 @@ async function main(): Promise<void> {
     return { p, signature };
   });
   // Nothing is written unless every variant signed.
-  const out = resolve(a.out as string);
+  const out = resolve(String(a.out));
   await mkdir(out, { recursive: true });
-  const lines: string[] = [];
+  /** @type {string[]} */
+  const lines = [];
   for (const { p, signature } of signed) {
     await writeFile(join(out, `${p.base}.tar`), p.tar, { flag: "wx" });
     await writeFile(join(out, `${p.base}.sig.json`), sigJson(p, signature), {
@@ -113,10 +102,4 @@ async function main(): Promise<void> {
   process.stdout.write(`${lines.join("\n")}\n`);
 }
 
-await main().catch((e: unknown) => {
-  const msg = (e instanceof Error ? e.message : String(e))
-    .replace(/\s+/g, " ")
-    .slice(0, 300);
-  process.stderr.write(`${NAME}: FAIL: ${msg}\n`);
-  process.exit(1);
-});
+await runMain(NAME, main);

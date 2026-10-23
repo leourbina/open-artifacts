@@ -23,7 +23,7 @@ import {
   assertSameConfigButDefine,
   readTreeHardened as libReadTree,
   packUstar,
-} from "../../../scripts/ci/release-artifact.ts";
+} from "../../../scripts/ci/release-artifact.mjs";
 import { buildBundle } from "../src/bundle.js";
 import { CfError, cfClient } from "../src/cf.js";
 import { platformNames } from "../src/names.js";

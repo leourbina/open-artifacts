@@ -9,7 +9,7 @@ import {
   assertSameConfigButDefine,
   bundleSha256,
   readArtifact,
-} from "./release-artifact.ts";
+} from "./release-artifact.mjs";
 
 const NAME = "check-hosted-release";
 
