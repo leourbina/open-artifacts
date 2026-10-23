@@ -34,7 +34,7 @@ const bob: UserRef & { email: string } = {
   email: "bob@example.com",
   name: "Bob Builder",
 };
-const agent = { name: "claude-code", version: "2.0" };
+const agent = { name: "Claude Code", version: "2.0" };
 const caps = (db = false) => ({ db, viewer: false, storage: false });
 
 const art = (

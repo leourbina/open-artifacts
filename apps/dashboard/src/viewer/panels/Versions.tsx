@@ -190,6 +190,8 @@ export function Versions({
     );
 
   const counting = searching && jump === null;
+  // No visible count when nothing matches (the empty note says it); screen readers still hear it.
+  const counted = counting && shown.length > 0;
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: "/" anywhere in the panel focuses search
     <div
@@ -233,9 +235,13 @@ export function Versions({
       <p
         role="status"
         aria-live="polite"
-        className={`${counting ? "px-4 pb-1.5" : "sr-only"} m-0 text-[length:var(--oa-text-xs)] text-muted-foreground`}
+        className={`${counted ? "px-4 pb-1.5" : "sr-only"} m-0 text-[length:var(--oa-text-xs)] text-muted-foreground`}
       >
-        {counting ? `${shown.length} of ${currentVersion} match` : ""}
+        {counted
+          ? `${shown.length} of ${currentVersion} match`
+          : counting
+            ? "No loaded matches"
+            : ""}
       </p>
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
         {shown.length > 0 && (
@@ -306,7 +312,8 @@ export function Versions({
                         <Marked text={author(x)} q={counting ? query : ""} />
                       </span>
                     </button>
-                    {viewed && (
+                    {/* Viewing Current: nothing to do from its row. */}
+                    {viewed && !current && (
                       <div className="flex flex-wrap gap-1.5 px-2.5 pb-2">
                         <ShButton
                           asChild
@@ -318,21 +325,19 @@ export function Versions({
                             View
                           </AppLink>
                         </ShButton>
-                        {!current && (
-                          <ShButton
-                            asChild
-                            variant="outline"
-                            size="xs"
-                            className={ACTION}
+                        <ShButton
+                          asChild
+                          variant="outline"
+                          size="xs"
+                          className={ACTION}
+                        >
+                          <AppLink
+                            href={diffPath(id, x.version, currentVersion)}
                           >
-                            <AppLink
-                              href={diffPath(id, x.version, currentVersion)}
-                            >
-                              Compare with current
-                            </AppLink>
-                          </ShButton>
-                        )}
-                        {canRestore && !current && (
+                            Compare with current
+                          </AppLink>
+                        </ShButton>
+                        {canRestore && (
                           <ShButton
                             variant="outline"
                             size="xs"

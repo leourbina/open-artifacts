@@ -202,7 +202,7 @@ for (const width of [1280, 390])
       };
     });
     expect(r.first).toMatch(/^(Private|Team|Public)$/);
-    expect(r.agent).toBe("claude-code");
+    expect(r.agent).toBe("Claude Code");
     expect(r.below).toBe(width <= 600);
   });
 

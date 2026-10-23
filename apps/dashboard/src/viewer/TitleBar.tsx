@@ -27,12 +27,12 @@ import {
 } from "../api/queries";
 import { accessLabel, useCan, useHosted } from "../auth/permissions";
 import { toast } from "../layout/toast";
-import { relativeTime } from "../library/time";
 import { VersionsDot } from "./LiveChip";
 import { VERSIONS_PANEL_ID } from "./panels/Versions";
 import { fullPath } from "./paths";
 import { ICON, LINK_BTN, SM, TXT, VisibilityBadge } from "./ui";
 import { useOfferUndo } from "./useOfferUndo";
+import { versionDate } from "./versionDate";
 
 const TITLE_MAX = 200;
 /** The page h1: Design's 20/600. */
@@ -175,12 +175,12 @@ export function TitleBar({
   const next = viewerPath(artifact.id, explicitVersion ? version : undefined);
   const full = fullPath(artifact.id);
   const openFull = () => window.open(full, "_blank", "noopener");
-  // "v24 · Current" following the latest; "v21 · 1 day ago" pinned to an older one.
+  // "v24 · Current" following the latest; pinned, the rows' date ("v21 · Jan 22").
   const suffix =
     version === artifact.currentVersion
       ? "Current"
       : info
-        ? relativeTime(info.createdAt)
+        ? versionDate(info.createdAt)
         : "";
   const label = `v${version}${suffix ? ` · ${suffix}` : ""}`;
   const items: (

@@ -65,11 +65,17 @@ for (const scheme of ["light", "dark"] as const)
           "aria-current",
           "true",
         );
+        // Viewing Current: its row offers no actions.
+        await expect(
+          list(page).locator("li").first().getByRole("link"),
+        ).toHaveCount(0);
         // The row name: version, Current, date, exact time, message, author
         // (Chrome spaces out the parts; screen readers ignore that).
         await expect(
           list(page).getByRole("button").first(),
-        ).toHaveAccessibleName(/^v25 ?, Current ?, .+ at .+, Update 25 ?, /);
+        ).toHaveAccessibleName(
+          /^v25 ?, Current ?, .+ at .+, Update 25 ?, Claude Code$/,
+        );
         await settle(page);
         let v = await axeRun(page);
         expect(v, v.join("\n")).toEqual([]);
@@ -89,7 +95,7 @@ for (const scheme of ["light", "dark"] as const)
           row.getByRole("button", { name: "Restore" }),
         ).toBeVisible();
         await expect(chip(page)).toHaveAccessibleName(
-          /^Version: v21 · .+ ago$/,
+          /^Version: v21 · Jan 22(, 2026)?$/,
         );
         if (width < 600)
           for (const b of await row.getByRole("button").all())
@@ -116,6 +122,7 @@ for (const scheme of ["light", "dark"] as const)
         await expect(
           page.getByRole("button", { name: /^Search older versions/ }),
         ).toBeVisible();
+        await expect(page.getByText(/^0 of \d+ match$/)).toHaveCount(0);
         await shot(page, "none", out);
       });
     });

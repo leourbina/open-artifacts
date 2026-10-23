@@ -89,7 +89,7 @@ describe("Library", () => {
   });
 
   it("Clear filters clears format and agent in a single navigation", async () => {
-    const router = mount("/?format=markdown&agent=claude-code");
+    const router = mount("/?format=markdown&agent=Claude%20Code");
     fireEvent.click(
       await screen.findByRole("button", { name: "Clear filters" }),
     );

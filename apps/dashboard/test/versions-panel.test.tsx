@@ -77,7 +77,8 @@ describe("the version chip", () => {
 
   it("says how old a pinned version is", async () => {
     mount(viewerPath(OWNED, 1));
-    expect(await chip()).toHaveTextContent(/^v1 · .+ ago$/);
+    // The row rule: relative under a week, else "Jan 2" (plus a year if not this one).
+    expect(await chip()).toHaveTextContent(/^v1 · Jan 2(, 2026)?$/);
   });
 
   it("replaces the dropdown and the separate Versions button", async () => {
@@ -93,7 +94,7 @@ describe("rows", () => {
     mount(panel(OWNED));
     const [first, second] = await rows();
     expect(first).toHaveAccessibleName(
-      /^v2, Current, .+, .+ at .+, Update 2, /,
+      /^v2, Current, .+, .+ at .+, Update 2, Claude Code$/,
     );
     expect(first).toHaveAttribute("aria-current", "true");
     expect(second).toHaveAccessibleName(/^v1, .+, Initial version, /);
@@ -111,6 +112,13 @@ describe("rows", () => {
     const v2 = (await row(2)).closest("li") as HTMLElement;
     expect(within(v2).queryByRole("link", { name: "View" })).toBeNull();
     expect(within(v2).queryByRole("button", { name: "Restore" })).toBeNull();
+  });
+
+  it("viewing Current, its row has no actions (no lone View)", async () => {
+    mount(panel(OWNED));
+    const v2 = (await row(2)).closest("li") as HTMLElement;
+    expect(await row(2)).toHaveAttribute("aria-current", "true");
+    expect(within(v2).queryByRole("link")).toBeNull();
   });
 
   it("a click opens that version and keeps the panel open", async () => {
@@ -199,6 +207,7 @@ describe("search", () => {
     expect(
       screen.getByText('No loaded version mentions "Update 5".'),
     ).toBeVisible();
+    expect(screen.queryByText(/^0 of \d+ match$/)).toBeNull();
     fireEvent.click(
       screen.getByRole("button", { name: /^Search older versions/ }),
     );
