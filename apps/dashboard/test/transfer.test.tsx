@@ -94,7 +94,7 @@ it("the dialog: title with the count, the trash note, and the choices", async ()
   expect(within(d).getByRole("button", { name: "Later" })).toBeVisible();
 });
 
-it("successors exclude Carol, guests and restricted Dan", async () => {
+it("successors exclude Carol, guests and restricted Dan; an active admin counts", async () => {
   mountHosted("/settings/members");
   await openFromCard();
   fireEvent.click(
@@ -102,7 +102,7 @@ it("successors exclude Carol, guests and restricted Dan", async () => {
   );
   expect(
     (await screen.findAllByRole("option")).map((o) => o.textContent),
-  ).toEqual(["Ada Lovelace", "Bob Builder"]);
+  ).toEqual(["Ada Lovelace", "Bob Builder", "Erin Admin"]);
 });
 
 it("to a person: the helper names both, and the transfer posts the user", async () => {
