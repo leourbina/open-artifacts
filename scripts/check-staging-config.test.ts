@@ -188,3 +188,21 @@ describe("staging Durable Objects", () => {
     expect([...migrated].sort()).toEqual([...classes].sort());
   });
 });
+
+describe("staging UserPresence (P3 T7a, #502)", () => {
+  it("binds USER_PRESENCE to UserPresence", () => {
+    expect(env.durable_objects.bindings).toContainEqual({
+      name: "USER_PRESENCE",
+      class_name: "UserPresence",
+    });
+  });
+  it("adds it in migration v2, after v1 (ArtifactRuntime)", () => {
+    // biome-ignore lint/suspicious/noExplicitAny: untyped wrangler config
+    const tags = env.migrations.map((m: any) => m.tag);
+    expect(tags.slice(0, 2)).toEqual(["v1", "v2"]);
+    expect(env.migrations[1]).toEqual({
+      tag: "v2",
+      new_sqlite_classes: ["UserPresence"],
+    });
+  });
+});
