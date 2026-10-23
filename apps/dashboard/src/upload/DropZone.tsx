@@ -31,10 +31,13 @@ const UploadIcon = () => (
 export function DropZone({
   allowed,
   button = false,
+  spaceId,
 }: {
   /** Whether this user may publish here (signed in, not a guest, not capped). */
   allowed: boolean;
   button?: boolean;
+  /** Hosted: the space the upload dialog starts on. */
+  spaceId?: string;
 }) {
   const enabled = allowed;
   const [dragging, setDragging] = useState(false);
@@ -170,6 +173,7 @@ export function DropZone({
           key={batch.n}
           files={batch.files}
           onClose={() => setBatch(null)}
+          spaceId={spaceId}
         />
       )}
     </>
