@@ -223,6 +223,14 @@ jobs:
   # generated temp config), never staging.
   e2e:
     runs-on: ubuntu-latest
+    # Browsers and their OS deps are baked into the image (no apt step: a slow
+    # Ubuntu mirror cost three queue runs, #462). The tag must match
+    # @oa/dashboard's @playwright/test; the digest pins the exact image.
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-noble@sha256:47b510dd9230bf0b9bfc9b20102241e577ea7a99334ab4c3ca19f19770e9b8ea
+      options: --ipc=host
+    env:
+      PLAYWRIGHT_IMAGE_VERSION: 1.64.1
     # Queue runs take 10.5 to 13.5 min, and 15 cancelled passing suites. Sharding is the real fix.
     timeout-minutes: 25
     steps:
@@ -265,11 +273,6 @@ jobs:
       - id: pw
         run: bash scripts/ci/e2e.sh version
         if: ${{ steps.ro.outputs.release_only != 'true' }}
-      - uses: actions/cache@v4
-        if: ${{ steps.ro.outputs.release_only != 'true' }}
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.playwright }}
       - id: install
         run: bash scripts/ci/e2e.sh install
         if: ${{ steps.ro.outputs.release_only != 'true' }}
