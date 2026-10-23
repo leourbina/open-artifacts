@@ -416,13 +416,14 @@ function Row({
                 tone: "success",
               }),
             onError: (e) => {
+              const code = e instanceof ApiClientError ? e.code : "";
               const status = e instanceof ApiClientError ? e.status : 0;
               if (status === 404)
                 toast({
                   title: `No Google sign-in is linked to ${label}, so there's nothing to reset.`,
                   tone: "danger",
                 });
-              else if (status === 403)
+              else if (code === "owner_only" || status === 403)
                 toast({
                   title:
                     "Only the owner can reset another admin's Google link.",

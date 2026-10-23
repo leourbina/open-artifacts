@@ -88,10 +88,10 @@ it("offered on a member linked to Google: confirm, then DELETE, then the toast",
 
 it("not offered without a Google link, on the owner, or on yourself", async () => {
   mountHosted("/settings/members");
-  // Bob: identities [] in the mock.
-  const bob = await openMenu("Bob Builder");
-  expect(within(bob).queryByRole("menuitem", { name: ITEM })).toBeNull();
-  fireEvent.keyDown(bob, { key: "Escape" });
+  // Dan: identities [] in the mock.
+  const dan = await openMenu("Dan Contractor");
+  expect(within(dan).queryByRole("menuitem", { name: ITEM })).toBeNull();
+  fireEvent.keyDown(dan, { key: "Escape" });
   // Ada is the owner and you: no menu at all.
   expect(
     within(await row("Ada Lovelace")).queryByRole("button", {
@@ -142,7 +142,35 @@ it("404: nothing to reset, named", async () => {
   expect(screen.queryByText("Not found")).toBeNull();
 });
 
-it("403: only the owner can reset another admin's link", async () => {
+it("owner_only: only the owner can reset another admin's link", async () => {
+  mountHosted("/settings/members", true, undefined, [
+    withAdminBob,
+    http.delete("*/api/v1/members/:id/identities/google", () =>
+      HttpResponse.json(
+        { error: { code: "owner_only", message: "server text" } },
+        { status: 403 },
+      ),
+    ),
+  ]);
+  fireEvent.click(
+    within(await openMenu("Bob Builder")).getByRole("menuitem", {
+      name: "Reset Google link…",
+    }),
+  );
+  fireEvent.click(
+    within(screen.getByRole("alertdialog")).getByRole("button", {
+      name: "Reset link",
+    }),
+  );
+  expect(
+    await screen.findByText(
+      "Only the owner can reset another admin's Google link.",
+    ),
+  ).toBeVisible();
+  expect(screen.queryByText("server text")).toBeNull();
+});
+
+it("any other 403 falls back to the owner copy", async () => {
   mountHosted("/settings/members", true, undefined, [
     withAdminBob,
     http.delete("*/api/v1/members/:id/identities/google", () =>

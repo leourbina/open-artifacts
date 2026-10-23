@@ -16,12 +16,13 @@ const TOKENS: Record<string, HostedMockOptions> = {
   business: { tier: "business" },
   frozen: { directory: "frozen" },
   "sync-off": { directory: "off" },
+  admin: { actAs: "admin" },
 };
 
 /**
  * Mock-only: `?hosted=` turns on the hosted mocks. Comma tokens: 1 (defaults),
  * access, email-only, turnstile, unhealthy, trial, team, business, frozen,
- * sync-off. Absent: the self-hosted mocks.
+ * sync-off, admin (you are an admin, not the owner). Absent: the self-hosted mocks.
  */
 export const parseHostedParam = (
   raw: string | null,
