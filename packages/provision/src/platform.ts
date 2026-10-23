@@ -29,6 +29,8 @@ export interface InstallRow {
   lease_until: number | null;
   /** A session cut still owed to the install's D1 (0003). */
   session_cut: string | null;
+  /** The install's current vars, canonical JSON (0003). */
+  vars: string | null;
 }
 
 export type InstallState =
@@ -91,6 +93,7 @@ const UPDATABLE = new Set([
   "broker_kid",
   "state",
   "session_cut",
+  "vars",
 ]);
 
 export class PlatformDb {
@@ -275,11 +278,12 @@ FROM installs WHERE rl_ns >= ?8 AND rl_ns < ?10`,
     id: InstallId,
     lease: string,
     state: InstallState,
-  ): Promise<void> {
-    await this.write(
+  ): Promise<boolean> {
+    const r = await this.write(
       "UPDATE installs SET state = ?1, lease = NULL, lease_until = NULL, updated_at = ?2 WHERE id = ?3 AND lease = ?4",
       [state, this.now(), id, lease],
     );
+    return r[0]?.meta?.changes === 1;
   }
 
   /** The stored render of one version, or undefined. */

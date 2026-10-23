@@ -1258,6 +1258,7 @@ export class WfpProvisioner {
       await platform.update(id, {
         version,
         do_migration_tag: latest,
+        vars: canonicalJson(m.vars),
       });
       await platform.audit(id, "create.upload", {
         version,
@@ -1455,6 +1456,69 @@ export class WfpProvisioner {
     };
   }
 
+  /** installs.vars: what the install runs with now (create and updateVars write it). */
+  private currentVars(row: InstallRow): Record<string, string> {
+    if (row.vars === null)
+      throw new ProvisionRefused(
+        `install ${row.id} has no stored vars (created before per-version metadata)`,
+      );
+    return JSON.parse(row.vars) as Record<string, string>;
+  }
+
+  /**
+   * Drops the operation lock a dead process left. Refused while the lease is
+   * live unless `force` (the operator is sure nothing runs); both audited. An
+   * upgrading row goes back to active; a deleting one stays deleting (rerun
+   * delete to resume).
+   */
+  async releaseLease(
+    id: InstallId,
+    confirm: string,
+    o: { force?: boolean } = {},
+  ): Promise<{
+    id: InstallId;
+    released: true;
+    forced: boolean;
+    state: InstallState;
+  }> {
+    return this.guarded(async () => {
+      if (typeof confirm !== "string" || confirm !== id)
+        throw new ProvisionRefused(
+          "releaseLease needs confirm to be exactly the install id",
+        );
+      const row = await this.openInstall(id, [
+        "creating",
+        "active",
+        "upgrading",
+        "deleting",
+        "deleted",
+      ]);
+      if (row.lease === null)
+        throw new ProvisionRefused(`install ${id} holds no lease`);
+      const live = row.lease_until !== null && row.lease_until > this.now();
+      if (live && o?.force !== true) {
+        await this.platform.audit(id, "lease.release_refused", {
+          state: row.state,
+        });
+        throw new ProvisionRefused(
+          `install ${id}: the lease has not expired (until ${new Date(row.lease_until as number).toISOString()}); pass force: true only when no operation is running`,
+        );
+      }
+      const state: InstallState =
+        row.state === "upgrading" ? "active" : row.state;
+      if (!(await this.platform.finish(id, row.lease, state)))
+        throw new ProvisionRefused(
+          `install ${id}: the lease changed while releasing it; retry`,
+        );
+      await this.platform.audit(
+        id,
+        live ? "lease.force_release" : "lease.release",
+        { from: row.state, state },
+      );
+      return { id, released: true, forced: live, state };
+    });
+  }
+
   private async storedOf(
     row: InstallRow,
     version: string,
@@ -1462,7 +1526,7 @@ export class WfpProvisioner {
     const v = await this.platform.version(row.id, version);
     if (!v)
       throw new ProvisionRefused(
-        `install ${row.id}: no stored metadata for ${version}`,
+        `install ${row.id}: no stored metadata for ${version} (the install was created before per-version metadata; it cannot be upgraded or rolled back)`,
       );
     return v;
   }
@@ -1523,8 +1587,9 @@ export class WfpProvisioner {
       );
     if (c === 0)
       throw new ProvisionRefused(`install ${id} is already at ${to}`);
-    const cur = await this.storedOf(row, from);
-    const m = this.renderInputs(row, cur.vars);
+    await this.storedOf(row, from);
+    const vars = this.currentVars(row);
+    const m = this.renderInputs(row, vars);
     const rel = await this.readRelease({
       version: to,
       bundle: m.testHooks ? "redline" : "release",
@@ -1570,7 +1635,7 @@ export class WfpProvisioner {
         send: {},
       });
       await this.platform.putVersion(id, to, {
-        vars: cur.vars,
+        vars,
         metadata: storedMetadata(sent),
         do_migration_tag: reached,
       });
@@ -1687,7 +1752,15 @@ export class WfpProvisioner {
       throw new ProvisionRefused(
         `install ${id}: the Durable Object migration tag moved from ${String(stored.do_migration_tag)} (${to}) to ${String(row.do_migration_tag)} (${from}); rollback is refused (forward-fix only)`,
       );
-    const m = this.renderInputs(row, stored.vars);
+    // The previous version's code, bindings, compat and tag, with the
+    // install's CURRENT vars, re-validated against that release as create and
+    // updateVars validate them. Vars do not change, so there is no session cut.
+    const vars = this.currentVars(row);
+    const unfit = (e: unknown) =>
+      new ProvisionRefused(
+        `install ${id}: the current vars do not fit ${to}: ${(e as Error).message}`,
+      );
+    const m = this.renderInputs(row, vars);
     const rel = await this.readRelease({
       version: to,
       bundle: m.testHooks ? "redline" : "release",
@@ -1704,10 +1777,54 @@ export class WfpProvisioner {
         `install ${id}: the stored metadata for ${to} is not a render of that release`,
       );
     const patFile = this.patFileOf(m.appHost);
-    const { d1Id } = await this.liveInstall(row, m);
+    const { d1Id, kvId } = await this.liveInstall(row, m);
+    let metadata: Record<string, unknown>;
+    try {
+      metadata = storedMetadata(
+        this.metadata(id, m, rel, {
+          d1Id,
+          kvId,
+          rlNs: row.rl_ns,
+          tag: row.do_migration_tag,
+          mode: "update",
+          secrets: {},
+          assetsJwt: "dry-run",
+        }),
+      );
+    } catch (e) {
+      throw unfit(e);
+    }
+    // Everything not rendered from vars must be what was stored for `to`.
+    const varNames = new Set([
+      ...Object.keys(stored.vars),
+      ...Object.keys(vars),
+      "FEATURES",
+      "TURNSTILE_SITE_KEY",
+    ]);
+    const notVars = (x: Record<string, unknown>) =>
+      canonicalJson({
+        ...x,
+        bindings: (x.bindings as { type: string; name: string }[]).filter(
+          (b) => !(b.type === "plain_text" && varNames.has(b.name)),
+        ),
+      });
+    if (notVars(metadata) !== notVars(stored.metadata))
+      throw new ProvisionRefused(
+        `install ${id}: release ${to} no longer renders the metadata stored for it`,
+      );
     const raiseFloor = await this.checkFloorSeq(rel.floor);
     if (m.sitekey !== null) await this.checkWidget(m.sitekey);
-    return { row, from, to, stored, m, rel, d1Id, patFile, raiseFloor };
+    return {
+      row,
+      from,
+      to,
+      stored: { ...stored, vars, metadata },
+      m,
+      rel,
+      d1Id,
+      patFile,
+      raiseFloor,
+    };
   }
 
   private async applyRollback(
@@ -1734,6 +1851,7 @@ export class WfpProvisioner {
     }
     assertOwnResource(n.script, this.env);
     await this.cf.scriptUpload(this.target, n.script, meta, mods.modules);
+    await this.platform.putVersion(id, to, p.stored);
     await this.platform.update(id, { version: to, previous_version: from });
     try {
       await this.health(id, p.m.appHost, to, "the rollback did not take");
@@ -1760,7 +1878,8 @@ export class WfpProvisioner {
       const row = await this.openInstall(id, ["active"]);
       const version = row.version;
       if (!version) throw new ProvisionRefused(`install ${id} has no version`);
-      const cur = await this.storedOf(row, version);
+      await this.storedOf(row, version);
+      const prev = this.currentVars(row);
       const vars = { ...nextVars };
       const m = this.renderInputs(row, vars);
       const rel = await this.readRelease({
@@ -1789,7 +1908,7 @@ export class WfpProvisioner {
       });
       const raiseFloor = await this.checkFloorSeq(rel.floor);
       if (m.sitekey !== null) await this.checkWidget(m.sitekey);
-      const enabled = googleNewlyEnabled(cur.vars, vars);
+      const enabled = googleNewlyEnabled(prev, vars);
 
       const lease = await this.claim(row, ["active"], "upgrading");
       try {
@@ -1800,9 +1919,9 @@ export class WfpProvisioner {
           await this.platform.update(id, { session_cut: cut });
         }
         const changed = [
-          ...new Set([...Object.keys(cur.vars), ...Object.keys(vars)]),
+          ...new Set([...Object.keys(prev), ...Object.keys(vars)]),
         ]
-          .filter((k) => cur.vars[k] !== vars[k])
+          .filter((k) => prev[k] !== vars[k])
           .sort();
         await this.platform.audit(id, "vars.start", {
           version,
@@ -1829,6 +1948,7 @@ export class WfpProvisioner {
             ? (tags[tags.length - 1] as string)
             : null,
         });
+        await this.platform.update(id, { vars: canonicalJson(vars) });
         // The new vars are live once /healthz and the selftest pass.
         await this.health(id, m.appHost, version, "rerun the var change");
         await this.selftest(rel.rec, m.appHost, patFile);
@@ -1905,7 +2025,7 @@ export class WfpProvisioner {
               `install ${row.id} is ${row.state}; rerun the rotation once it is active`,
             );
           const cur = await this.storedOf(row, row.version as string);
-          if (!codesOn(cur.vars)) {
+          if (!codesOn(this.currentVars(row))) {
             out.push({ id: row.id, ok: true, rotated: false });
             continue;
           }

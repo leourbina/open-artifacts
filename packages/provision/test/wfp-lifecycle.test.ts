@@ -276,6 +276,18 @@ const V25_TAG: Spec = {
     ],
   },
 };
+/** 0.21.0 has a binding named AUTH_DOMAINS: that var cannot render on it. */
+const V21_NAME_CLASH: Spec = {
+  template: {
+    ...BASE_TEMPLATE,
+    durable_objects: {
+      bindings: [
+        ...BASE_TEMPLATE.durable_objects.bindings,
+        { name: "AUTH_DOMAINS", class_name: "ArtifactRuntime" },
+      ],
+    },
+  },
+};
 /** 0.26.0 adds a DO class and binds it in the same release: refused. */
 const V26_BOUND: Spec = {
   template: {
@@ -331,6 +343,7 @@ function setup(o: { env?: Env; specs?: Record<string, Spec> } = {}) {
     "0.24.0": V24,
     "0.25.0": V25_TAG,
     "0.26.0": V26_BOUND,
+    "0.21.0": V21_NAME_CLASH,
     ...o.specs,
   });
   const cfWith = (f: typeof fetch = fake.fetch) =>
@@ -472,6 +485,47 @@ describe("create stores per-version metadata", () => {
       m.bindings.filter((b: { type: string }) => b.type.startsWith("secret")),
     ).toEqual([]);
     expect(JSON.parse(st?.vars as string)).toEqual({});
+  });
+});
+
+describe("fix round 1: create writes install_versions and vars for every new install", () => {
+  it("every create (fresh, hooks, codes on, resumed after a failed upload) leaves an install_versions row and installs.vars", async () => {
+    const s = setup();
+    const made = [
+      keep(await s.p.create(input("one"))),
+      keep(await s.p.create(input("two", { vars: CODES }))),
+      keep(
+        await s.p.create(
+          input("red", { testHooks: true, bundle: "redline", vars: HOOK_VARS }),
+        ),
+      ),
+    ];
+    s.fake.inject((m, p) => m === "PUT" && /\/scripts\/oa-s-[^/]+$/.test(p));
+    await fails(s.p.create(input("resumed")));
+    made.push(keep(await s.p.create(input("resumed"))));
+    const varsOf = [{}, CODES, HOOK_VARS, {}];
+    made.forEach((inst, k) => {
+      const st = s.stored(inst.id, "0.23.0");
+      expect(st, inst.slug).toBeDefined();
+      expect(JSON.parse(st?.vars as string)).toEqual(varsOf[k]);
+      expect(JSON.parse(s.row(inst.id).vars)).toEqual(varsOf[k]);
+    });
+    expect(
+      s.db().prepare("SELECT count(*) AS n FROM install_versions").get(),
+    ).toEqual({ n: 4 });
+  });
+
+  it("an upgrade of a row without its install_versions row is refused with a clear message, before any write", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    s.db().prepare("DELETE FROM install_versions").run();
+    const w = s.fake.writes().length;
+    const e = await fails(s.p.upgrade(inst.id, "0.24.0"));
+    expect(e).toBeInstanceOf(ProvisionRefused);
+    expect(e.message).toMatch(
+      /no stored metadata for 0\.23\.0.*created before per-version metadata/,
+    );
+    expect(s.fake.writes().length).toBe(w);
   });
 });
 
@@ -782,6 +836,152 @@ describe("rollback", () => {
       version: "0.24.0",
       state: "active",
     });
+  });
+});
+
+describe("fix round 1: rollback keeps the current vars", () => {
+  it("a var change after an upgrade survives a rollback, with no epoch bump", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input("finqore", { vars: CODES })));
+    await s.p.upgrade(inst.id, "0.24.0");
+    const next = { AUTH_PROVIDERS: "email,google", EMAIL_DAILY_CAP: "50" };
+    await s.p.updateVars(inst.id, next);
+    const epoch = () =>
+      (
+        s
+          .installDb(inst.id)
+          .prepare("SELECT session_epoch FROM users WHERE email = ?")
+          .get(OWNER) as { session_epoch: number }
+      ).session_epoch;
+    expect(epoch()).toBe(1);
+    const stored = JSON.parse(s.stored(inst.id, "0.23.0")?.metadata as string);
+    const from = s.fake.log.length;
+    const r = keep(await s.p.rollback(inst.id));
+    expect(r).toMatchObject({ ok: true, rolledBack: true, to: "0.23.0" });
+    const meta = metaOf(uploads(s.fake, from)[0]?.body as string);
+    const plain = (n: string) =>
+      meta.bindings.find((b: { name: string }) => b.name === n)?.text;
+    expect(plain("AUTH_PROVIDERS")).toBe("email,google");
+    expect(plain("EMAIL_DAILY_CAP")).toBe("50");
+    expect(modulesText(s, inst.id)).toContain("0.23.0");
+    // Everything not rendered from vars is the previous version's metadata.
+    const notVars = (m: typeof meta) => ({
+      ...m,
+      assets: { config: m.assets.config },
+      bindings: m.bindings.filter(
+        (b: { name: string }) =>
+          !["AUTH_PROVIDERS", "EMAIL_DAILY_CAP"].includes(b.name),
+      ),
+    });
+    expect(notVars(meta)).toEqual(notVars(stored));
+    expect(JSON.parse(s.row(inst.id).vars)).toEqual(next);
+    expect(epoch()).toBe(1);
+    expect(
+      s.fake.raw.slice(from).some((x) => x.body.includes(epochBumpSql())),
+    ).toBe(false);
+  });
+
+  it("current vars that do not validate against the previous version refuse the rollback, before any write", async () => {
+    const s = setup();
+    const inst = keep(
+      await s.p.create(input("finqore", { version: "0.21.0" })),
+    );
+    await s.p.upgrade(inst.id, "0.24.0");
+    await s.p.updateVars(inst.id, { AUTH_DOMAINS: "finqore.test" });
+    const w = s.fake.writes().length;
+    const e = await fails(s.p.rollback(inst.id));
+    expect(e).toBeInstanceOf(ProvisionRefused);
+    expect(e.message).toMatch(/current vars do not fit 0\.21\.0/);
+    expect(e.message).toMatch(/duplicate binding name "AUTH_DOMAINS"/);
+    expect(s.fake.writes().length).toBe(w);
+    expect(s.row(inst.id)).toMatchObject({
+      version: "0.24.0",
+      state: "active",
+      lease: null,
+    });
+  });
+
+  it("current vars whose conditions fail (codes on, no Turnstile pair) refuse the rollback", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input("finqore", { vars: CODES })));
+    await s.p.upgrade(inst.id, "0.24.0");
+    const e = await fails(s.mk({ turnstile: undefined }).rollback(inst.id));
+    expect(e.message).toMatch(/Turnstile sitekey and secret are missing/);
+    expect(s.row(inst.id).version).toBe("0.24.0");
+  });
+});
+
+describe("fix round 1: releaseLease", () => {
+  const hold = (s: S, id: string, until: number) =>
+    s
+      .db()
+      .prepare(
+        "UPDATE installs SET state = 'upgrading', lease = 'dead', lease_until = ? WHERE id = ?",
+      )
+      .run(until, id);
+
+  it("needs confirm === id", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    hold(s, inst.id, NOW - 1);
+    const n = s.fake.log.length;
+    expect((await fails(s.p.releaseLease(inst.id, "nope"))).message).toMatch(
+      /confirm/,
+    );
+    expect(s.fake.log.length).toBe(n);
+    expect(s.row(inst.id).lease).toBe("dead");
+  });
+
+  it("a held, unexpired lease is refused without force; with force it is released and audited", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    hold(s, inst.id, s.clock.now() + 60_000);
+    const e = await fails(s.p.releaseLease(inst.id, inst.id));
+    expect(e).toBeInstanceOf(ProvisionRefused);
+    expect(e.message).toMatch(/has not expired.*force/);
+    expect(s.row(inst.id)).toMatchObject({ lease: "dead", state: "upgrading" });
+    expect(s.audit(inst.id)).toContain("lease.release_refused");
+    const r = keep(await s.p.releaseLease(inst.id, inst.id, { force: true }));
+    expect(r).toEqual({
+      id: inst.id,
+      released: true,
+      forced: true,
+      state: "active",
+    });
+    expect(s.row(inst.id)).toMatchObject({
+      lease: null,
+      lease_until: null,
+      state: "active",
+    });
+    expect(s.audit(inst.id)).toContain("lease.force_release");
+    // The install works again.
+    expect((await s.p.upgrade(inst.id, "0.24.0")).ok).toBe(true);
+  });
+
+  it("an expired lease is released without force (a deleting row stays deleting)", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    hold(s, inst.id, s.clock.now() - 1);
+    const r = keep(await s.p.releaseLease(inst.id, inst.id));
+    expect(r).toEqual({
+      id: inst.id,
+      released: true,
+      forced: false,
+      state: "active",
+    });
+    expect(s.audit(inst.id)).toContain("lease.release");
+    s.db()
+      .prepare(
+        "UPDATE installs SET state = 'deleting', lease = 'dead', lease_until = ? WHERE id = ?",
+      )
+      .run(s.clock.now() - 1, inst.id);
+    const d = keep(await s.p.releaseLease(inst.id, inst.id));
+    expect(d.state).toBe("deleting");
+    expect(s.row(inst.id)).toMatchObject({ state: "deleting", lease: null });
+    // No lease at all: nothing to release.
+    expect((await fails(s.p.releaseLease(inst.id, inst.id))).message).toMatch(
+      /holds no lease/,
+    );
   });
 });
 

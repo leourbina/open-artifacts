@@ -23,6 +23,11 @@ CREATE TABLE IF NOT EXISTS install_versions (
 ALTER TABLE installs ADD COLUMN lease TEXT;
 ALTER TABLE installs ADD COLUMN lease_until INTEGER;
 
+-- The install's current vars (canonical JSON, no secret): what upgrade and
+-- rollback render with. install_versions.vars records what each version was
+-- rendered from; a rollback keeps these, not those.
+ALTER TABLE installs ADD COLUMN vars TEXT;
+
 -- A session cut (epoch bump) still owed to the install's own D1 after google
 -- was newly enabled: the id is written before the new vars go out and cleared
 -- after the bump, which the install's D1 records under the same id.
