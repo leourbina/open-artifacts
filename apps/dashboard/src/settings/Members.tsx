@@ -333,7 +333,7 @@ function Row({ m, you, hosted }: { m: Member; you: boolean; hosted: boolean }) {
                   manual ? setLifting(true) : setRestricting(true)
                 }
               >
-                {manual ? "Lift manual restriction…" : "Restrict by hand…"}
+                {manual ? "Lift manual restriction…" : "Restrict manually…"}
               </DropdownMenuItem>
             )}
             {groups.length > 0 && (

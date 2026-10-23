@@ -134,7 +134,7 @@ export function UpgradeActions({
     const failed = () =>
       toast({
         title: "Couldn't copy",
-        description: "Copy the prompt by hand.",
+        description: "Select the prompt and copy it yourself.",
         tone: "danger",
       });
     if (!navigator.clipboard) return failed();

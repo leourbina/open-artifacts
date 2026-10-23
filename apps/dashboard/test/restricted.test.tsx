@@ -49,13 +49,13 @@ it("restrictionLabel and restrictionReason", () => {
   expect(restrictionLabel(undefined)).toBeNull();
   expect(restrictionLabel({ manual: false, groups: [] })).toBeNull();
   expect(restrictionLabel({ manual: true, groups: [] })).toBe(
-    "Restricted by hand",
+    "Restricted manually",
   );
   expect(restrictionLabel({ manual: false, groups: [con] })).toBe(
     "Restricted via Contractors",
   );
   expect(restrictionLabel({ manual: true, groups: [con] })).toBe(
-    "Restricted by hand and via Contractors",
+    "Restricted manually and via Contractors",
   );
   expect(restrictionLabel({ manual: false, groups: [con, ven] })).toBe(
     "Restricted via Contractors and Vendors",
@@ -66,7 +66,7 @@ it("restrictionLabel and restrictionReason", () => {
       groups: [con, ven, { ...ven, groupId: "g3", name: "Temps" }],
     }),
   ).toBe("via Contractors, Vendors and Temps");
-  expect(restrictionReason({ manual: true, groups: [] })).toBe("by hand");
+  expect(restrictionReason({ manual: true, groups: [] })).toBe("manually");
 });
 
 it("Dan shows the badge and the reason, and the group cause can't be cleared here", async () => {
@@ -84,7 +84,7 @@ it("Dan shows the badge and the reason, and the group cause can't be cleared her
     within(menu).queryByRole("menuitem", { name: /Lift manual restriction/ }),
   ).toBeNull();
   expect(
-    within(menu).getByRole("menuitem", { name: "Restrict by hand…" }),
+    within(menu).getByRole("menuitem", { name: "Restrict manually…" }),
   ).toBeVisible();
 });
 
@@ -100,10 +100,10 @@ it("the Restricted badge uses the warning-soft tone, not the role badge's outlin
   }
 });
 
-it("an admin restricts Bob by hand: confirm, then PUT, then the badge", async () => {
+it("an admin restricts Bob manually: confirm, then PUT, then the badge", async () => {
   const seen = calls("PUT");
   mountHosted("/settings/members");
-  await choose("Bob Builder", "Restrict by hand…");
+  await choose("Bob Builder", "Restrict manually…");
   const d = screen.getByRole("alertdialog");
   expect(d).toHaveTextContent("Restrict Bob Builder?");
   expect(d).toHaveTextContent(
@@ -114,14 +114,16 @@ it("an admin restricts Bob by hand: confirm, then PUT, then the badge", async ()
     expect(seen.at(-1)?.path).toBe(`/api/v1/members/${BOB}/restricted`),
   );
   const r = await row("Bob Builder");
-  await waitFor(() => expect(r).toHaveTextContent("bob@example.com · by hand"));
+  await waitFor(() =>
+    expect(r).toHaveTextContent("bob@example.com · manually"),
+  );
   expect(within(r).getAllByText("Restricted")[0]).toBeVisible();
 });
 
 it("Cancel restricts nobody", async () => {
   const seen = calls("PUT");
   mountHosted("/settings/members");
-  await choose("Bob Builder", "Restrict by hand…");
+  await choose("Bob Builder", "Restrict manually…");
   fireEvent.click(
     within(screen.getByRole("alertdialog")).getByRole("button", {
       name: "Cancel",
@@ -134,7 +136,7 @@ it("Cancel restricts nobody", async () => {
 it("lifting Dan's manual restriction DELETEs and keeps the group restriction", async () => {
   const seen = calls("DELETE");
   mountHosted("/settings/members");
-  await choose("Dan Contractor", "Restrict by hand…");
+  await choose("Dan Contractor", "Restrict manually…");
   fireEvent.click(
     within(screen.getByRole("alertdialog")).getByRole("button", {
       name: "Restrict",
@@ -142,7 +144,7 @@ it("lifting Dan's manual restriction DELETEs and keeps the group restriction", a
   );
   await waitFor(async () =>
     expect(await row("Dan Contractor")).toHaveTextContent(
-      "by hand and via Contractors",
+      "manually and via Contractors",
     ),
   );
   await choose("Dan Contractor", "Lift manual restriction…");
@@ -162,19 +164,19 @@ it("lifting Dan's manual restriction DELETEs and keeps the group restriction", a
       "dan@example.com · via Contractors",
     ),
   );
-  expect(await row("Dan Contractor")).not.toHaveTextContent("by hand");
+  expect(await row("Dan Contractor")).not.toHaveTextContent("manually");
 });
 
 it("lifting a manual-only restriction says they get their roles back", async () => {
   mountHosted("/settings/members");
-  await choose("Bob Builder", "Restrict by hand…");
+  await choose("Bob Builder", "Restrict manually…");
   fireEvent.click(
     within(screen.getByRole("alertdialog")).getByRole("button", {
       name: "Restrict",
     }),
   );
   await waitFor(async () =>
-    expect(await row("Bob Builder")).toHaveTextContent("by hand"),
+    expect(await row("Bob Builder")).toHaveTextContent("manually"),
   );
   await choose("Bob Builder", "Lift manual restriction…");
   expect(screen.getByRole("alertdialog")).toHaveTextContent(
@@ -186,7 +188,7 @@ it("works in frozen Team installs (the manual flag ignores sync mode)", async ()
   mountHosted("/settings/members", { tier: "team", directory: "frozen" });
   const menu = await openMenu("Bob Builder");
   expect(
-    within(menu).getByRole("menuitem", { name: "Restrict by hand…" }),
+    within(menu).getByRole("menuitem", { name: "Restrict manually…" }),
   ).not.toHaveAttribute("aria-disabled");
 });
 
@@ -245,7 +247,7 @@ it("a 400 restrict_admin (promoted in another tab) shows the copy and no badge",
       ),
     ),
   ]);
-  await choose("Bob Builder", "Restrict by hand…");
+  await choose("Bob Builder", "Restrict manually…");
   fireEvent.click(
     within(screen.getByRole("alertdialog")).getByRole("button", {
       name: "Restrict",
@@ -286,6 +288,6 @@ it("self-hosted: today's Remove button, no More menu, no Restrict", async () => 
 
 it("no copy contains an em dash", async () => {
   mountHosted("/settings/members");
-  await choose("Dan Contractor", "Restrict by hand…");
+  await choose("Dan Contractor", "Restrict manually…");
   expect(document.body.textContent).not.toContain("—");
 });

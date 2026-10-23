@@ -121,8 +121,8 @@ function NewSpace({
             onChange={setAll}
           />
           <small id={hint} className={muted}>
-            Everyone at {orgName} gets this role. Leave None to give access by
-            group or by hand.
+            Everyone at {orgName} gets this role. Leave None to give access
+            through groups or by adding people manually.
           </small>
         </div>
         <div className="flex items-center justify-between gap-[var(--oa-space-3)]">
