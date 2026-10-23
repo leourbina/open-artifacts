@@ -185,7 +185,9 @@ for (const scheme of ["light", "dark"] as const)
           path: info.outputPath(`members-menu-${scheme}-${width}.png`),
           fullPage: true,
         });
-        await menu.getByRole("menuitem", { name: "Restrict by hand…" }).click();
+        await menu
+          .getByRole("menuitem", { name: "Restrict manually…" })
+          .click();
         await expect(page.getByRole("alertdialog")).toContainText(
           "Restrict Dan Contractor?",
         );
@@ -201,7 +203,7 @@ for (const scheme of ["light", "dark"] as const)
       });
     });
 
-test("keyboard: open the More menu, restrict by hand, focus comes back", async ({
+test("keyboard: open the More menu, restrict manually, focus comes back", async ({
   page,
 }) => {
   await page.goto("/settings/members?hosted=1");
@@ -209,14 +211,14 @@ test("keyboard: open the More menu, restrict by hand, focus comes back", async (
   const more = page.getByRole("button", { name: "More for Bob Builder" });
   await more.focus();
   await page.keyboard.press("Enter");
-  await page.getByRole("menuitem", { name: "Restrict by hand…" }).focus();
+  await page.getByRole("menuitem", { name: "Restrict manually…" }).focus();
   await page.keyboard.press("Enter");
   const d = page.getByRole("alertdialog");
   await d.getByRole("button", { name: "Restrict" }).focus();
   await page.keyboard.press("Enter");
   await expect(d).toHaveCount(0);
   await expect(page.locator("li", { hasText: "Bob Builder" })).toContainText(
-    "bob@example.com · by hand",
+    "bob@example.com · manually",
   );
   await expect(more).toBeFocused();
 });

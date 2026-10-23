@@ -20,7 +20,7 @@ export function CopyLink({
     const failed = () =>
       toast({
         title: "Couldn't copy",
-        description: "Copy it by hand.",
+        description: "Select it and copy it yourself.",
         tone: "danger",
       });
     if (!navigator.clipboard) return failed();

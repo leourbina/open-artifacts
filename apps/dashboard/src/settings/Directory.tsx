@@ -267,10 +267,10 @@ function StatusHeader({
           {sync.lastSuccessAt ? (
             <>
               Space memberships were kept as of <At iso={sync.lastSuccessAt} />{" "}
-              and are managed by hand.
+              and are managed manually.
             </>
           ) : (
-            "Space memberships are managed by hand."
+            "Space memberships are managed manually."
           )}
         </p>
       </Header>
@@ -608,7 +608,7 @@ function RestrictedRow({ g }: { g: RestrictedGroup }) {
                 ? "Its members get"
                 : `${people(g.memberCount)} ${g.memberCount === 1 ? "gets" : "get"}`}{" "}
               back the roles their spaces and groups give them. Anyone
-              restricted by hand stays restricted.
+              restricted manually stays restricted.
             </p>
           }
           confirm="Lift restriction"
@@ -711,8 +711,8 @@ function Connection({ sync, owner }: { sync: SyncStatus; owner: boolean }) {
         body={
           <>
             <p>
-              Sync stops. Space memberships stay as they are and are managed by
-              hand. Nobody loses access.
+              Sync stops. Space memberships stay as they are and are managed
+              manually. Nobody loses access.
             </p>
             <p>
               People who leave in Google keep their access here until you remove

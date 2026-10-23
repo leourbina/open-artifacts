@@ -168,7 +168,7 @@ it("frozen from another day: kept as of the date and time", async () => {
   );
   const s = await status();
   expect(seen(s)).toContain(
-    `Space memberships were kept as of ${fmt(day, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} and are managed by hand.`,
+    `Space memberships were kept as of ${fmt(day, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} and are managed manually.`,
   );
 });
 
@@ -331,7 +331,7 @@ it("frozen: kept memberships, no Sync now, no Disconnect", async () => {
     "Frozen",
   );
   expect(s).toHaveTextContent(
-    /Space memberships were kept as of .+ and are managed by hand\./,
+    /Space memberships were kept as of .+ and are managed manually\./,
   );
   expect(screen.queryByRole("button", { name: "Sync now" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Disconnect" })).toBeNull();
@@ -453,7 +453,7 @@ it("Disconnect warns that memberships freeze and nobody loses access", async () 
   const d = screen.getByRole("alertdialog");
   expect(d).toHaveTextContent("Disconnect Google Workspace?");
   expect(d).toHaveTextContent(
-    "Sync stops. Space memberships stay as they are and are managed by hand. Nobody loses access.",
+    "Sync stops. Space memberships stay as they are and are managed manually. Nobody loses access.",
   );
   expect(d).toHaveTextContent(
     "People who leave in Google keep their access here until you remove them in Members. Restricted groups stay in force until you lift them.",
@@ -680,7 +680,7 @@ it("Lift asks first, then DELETEs", async () => {
   const d = screen.getByRole("alertdialog");
   expect(d).toHaveTextContent("Lift the Contractors restriction?");
   expect(d).toHaveTextContent(
-    "1 person gets back the roles their spaces and groups give them. Anyone restricted by hand stays restricted.",
+    "1 person gets back the roles their spaces and groups give them. Anyone restricted manually stays restricted.",
   );
   fireEvent.click(within(d).getByRole("button", { name: "Lift restriction" }));
   await waitFor(() =>
