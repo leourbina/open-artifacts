@@ -58,6 +58,20 @@ it("Clients (admin view, no role) isn't a library space: the param clears", asyn
   await waitFor(() => expect(router.state.location.search).toEqual({}));
 });
 
+it("a no-role space id shows the whole library: no spaceId request, no load error", async () => {
+  const seen = calls("GET");
+  const router = mountHosted("/?space=SpCliNpQrSt4uVwX");
+  await waitFor(() => expect(router.state.location.search).toEqual({}));
+  expect(
+    await screen.findByRole("heading", { level: 1, name: "Library" }),
+  ).toBeVisible();
+  await screen.findAllByText("Q4 report");
+  expect(screen.queryByText("Couldn't load the library.")).toBeNull();
+  expect(
+    seen.some((c) => c.path === "/api/v1/artifacts" && c.search.has("spaceId")),
+  ).toBe(false);
+});
+
 it("search carries spaceId", async () => {
   const seen = calls("GET");
   mountHosted("/search?q=notes&space=SpEngNpQrSt2uVwX");
