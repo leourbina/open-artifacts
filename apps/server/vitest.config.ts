@@ -18,6 +18,9 @@ export default defineConfig({
   ],
   test: {
     include: ["test/**/*.test.ts"],
+    // Correctness, not speed: the matrix suites (list.spaces) run past the 5 s
+    // default on a loaded machine. Budgets live in the cpu configs.
+    testTimeout: 20_000,
     // Wall-clock budgets run alone (vitest.cpu.config.ts), never under suite
     // load; code-cpu runs in Node (vitest.codecpu.config.ts).
     exclude: [
