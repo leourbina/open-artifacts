@@ -186,7 +186,9 @@ describe("verifyCode", () => {
   });
 
   it("H2: 60 parallel failures from one IP stop at exactly the cap, for that IP only", async () => {
-    const ip = `192.0.2.${Math.floor(Math.random() * 200)}`;
+    // Fixed and unused elsewhere: a random pick could hit H1's 192.0.2.66,
+    // whose failures share this hour's bucket.
+    const ip = "192.0.2.240";
     const rs = await Promise.all(
       Array.from({ length: 60 }, () =>
         v("no-such-request", "00000000", { ip }),

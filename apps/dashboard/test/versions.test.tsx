@@ -4,7 +4,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { describe, expect, it, vi } from "vitest";
 import { diffRows } from "../src/viewer/Diff";
-import { installHarness, mount, seen, server } from "./harness";
+import { installHarness, intersect, mount, seen, server } from "./harness";
 
 vi.mock("../src/viewer/bridge", () => ({
   createBridge: () => ({
@@ -21,11 +21,12 @@ const id = (title: string) =>
 const OWNED = id("Landing page");
 const VIEWER = id("Onboarding guide");
 const SCRIPT = id("Parser script");
-const panel = (aid: string) => `${viewerPath(aid)}?panel=open&tab=versions`;
+const panel = (aid: string, v?: number) =>
+  `${viewerPath(aid, v)}?panel=open&tab=versions`;
 
 describe("versions panel", () => {
   it("restore confirms, calls the route and navigates to the new version", async () => {
-    const router = mount(panel(OWNED));
+    const router = mount(panel(OWNED, 1));
     await screen.findByText("Update 2");
     const row = screen
       .getByText("Initial version")
@@ -48,24 +49,13 @@ describe("versions panel", () => {
     expect(screen.queryByRole("button", { name: "Restore" })).toBeNull();
   });
 
-  it("Load older versions fetches with before", async () => {
+  it("older versions load on scroll, with before", async () => {
     mount(panel(SCRIPT));
     await screen.findByText("Update 25");
     expect(screen.queryByText("Update 5")).toBeNull();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Load older versions" }),
-    );
+    intersect();
     await screen.findByText("Update 5");
     expect(seen.some((u) => u.searchParams.get("before") === "6")).toBe(true);
-    // A short page is not the end (contract C2); the empty one after it is.
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Load older versions" }),
-    );
-    await waitFor(() =>
-      expect(
-        screen.queryByRole("button", { name: "Load older versions" }),
-      ).toBeNull(),
-    );
   });
 
   it("tab and panel state live in the URL", async () => {
@@ -266,7 +256,7 @@ describe("diff robustness", () => {
 
 describe("versions and diff details", () => {
   it("links Compare with current", async () => {
-    mount(panel(OWNED));
+    mount(panel(OWNED, 1));
     await screen.findByText("Initial version");
     expect(
       screen.getByRole("link", { name: "Compare with current" }),
@@ -294,7 +284,7 @@ describe("versions and diff details", () => {
   });
 
   it("keeps panel and tab after restore", async () => {
-    const router = mount(panel(OWNED));
+    const router = mount(panel(OWNED, 1));
     await screen.findByText("Initial version");
     fireEvent.click(screen.getByRole("button", { name: "Restore" }));
     fireEvent.click(
@@ -317,14 +307,14 @@ describe("versions and diff details", () => {
 describe("panel focus", () => {
   it("moves focus to the active tab and back to the toggle on close", async () => {
     mount(viewerPath(OWNED));
-    const toggle = await screen.findByRole("button", { name: "Versions" });
+    const toggle = await screen.findByRole("button", { name: "Share" });
     toggle.focus();
     fireEvent.click(toggle);
     const aside = await screen.findByRole("complementary", {
       name: "Side panel",
     });
     await waitFor(() =>
-      expect(screen.getByRole("tab", { name: "Versions" })).toHaveFocus(),
+      expect(screen.getByRole("tab", { name: "Share" })).toHaveFocus(),
     );
     expect(aside).not.toHaveFocus();
     fireEvent.click(screen.getByRole("button", { name: "Close panel" }));

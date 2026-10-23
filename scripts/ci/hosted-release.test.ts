@@ -230,13 +230,14 @@ describe("release-please.yml hosted jobs", () => {
         );
         const variants = env === "prod" ? ["release"] : ["release", "redline"];
         expect(Object.keys(job.outputs).sort()).toEqual(
-          variants
-            .flatMap((v) =>
+          [
+            `${env}_signed`,
+            ...variants.flatMap((v) =>
               ["signature", "tar_sha256", "record_sha256"].map(
                 (k) => `${env}_${v}_${k}`,
               ),
-            )
-            .sort(),
+            ),
+          ].sort(),
         );
       });
     });
@@ -257,6 +258,10 @@ describe("release-please.yml hosted jobs", () => {
         ]),
       );
       expect(needs(name)).not.toContain(`hosted-sign-${other}`);
+      // Before the key ceremony the sign job skips (no key): attach skips too.
+      expect(job.if).toContain(
+        `needs.hosted-sign-${env}.outputs.${env}_signed == 'true'`,
+      );
       expect(JSON.stringify(job)).not.toContain(`hosted-sign-${other}`);
       expect(job.concurrency).toEqual({
         group: `hosted-attach-${env}-${TAG}`,

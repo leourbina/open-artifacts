@@ -53,7 +53,8 @@ async function expectDetail(
   await expect(
     artifactFrame(page).getByRole("heading", { level: 1, name: heading }),
   ).toBeVisible();
-  const toggle = page.getByRole("button", { name: "Versions", exact: true });
+  // The version chip toggles the panel (#471).
+  const toggle = page.getByRole("button", { name: /^Version: v/ });
   await toggle.click();
   const panel = page.getByRole("complementary", { name: "Side panel" });
   for (const name of ["Versions", "Share", "Details"])

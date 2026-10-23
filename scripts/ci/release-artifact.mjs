@@ -860,6 +860,16 @@ export function parseArgs(argv, known) {
  * @returns {Promise<string>}
  */
 export async function readKeyFromStdin() {
+  const pem = await readStdinText();
+  if (pem.trim() === "") throw new Error("no signing key on stdin");
+  return pem;
+}
+
+/**
+ * Raw stdin (at most 64 KiB), possibly empty: never echoed.
+ * @returns {Promise<string>}
+ */
+export async function readStdinText() {
   if (process.stdin.isTTY)
     throw new Error("the signing key must come on stdin");
   /** @type {Buffer[]} */
@@ -871,9 +881,7 @@ export async function readKeyFromStdin() {
     if (n > 64 * 1024) throw new Error("stdin is too large for a signing key");
     chunks.push(b);
   }
-  const pem = Buffer.concat(chunks).toString("utf8");
-  if (pem.trim() === "") throw new Error("no signing key on stdin");
-  return pem;
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 /**

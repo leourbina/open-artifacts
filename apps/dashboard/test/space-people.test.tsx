@@ -507,31 +507,43 @@ it("a space manager's Add people has no Manager role", async () => {
 
 it("search shows above 20 people, sends q, and Load more pages on", async () => {
   const seen = calls("GET");
-  const many = Array.from({ length: 50 }, (_, i) =>
-    person({
-      userId: `u${i}`,
-      user: {
-        id: `u${i}`,
-        name: `Person ${String(i).padStart(2, "0")}`,
-        email: `p${i}@example.com`,
-      },
-      role: "viewer",
-      manualRole: "viewer",
-    }),
-  );
-  mountWith([serve(many, 312, "c1")]);
-  const card = await people();
-  expect(await within(card).findByText("Showing 50 of 312")).toBeVisible();
-  fireEvent.click(within(card).getByRole("button", { name: "Load more" }));
-  await waitFor(() =>
-    expect(
-      seen.some(
-        (c) =>
-          c.path === `/api/v1/spaces/${ID}/members` &&
-          c.search.get("cursor") === "c1",
+  // The search box and paging key off the total (312), not the rows on the
+  // page: a few rows per page keep the render cheap under a loaded suite.
+  const page = (from: number, n: number) =>
+    Array.from({ length: n }, (_, i) =>
+      person({
+        userId: `u${from + i}`,
+        user: {
+          id: `u${from + i}`,
+          name: `Person ${String(from + i).padStart(2, "0")}`,
+          email: `p${from + i}@example.com`,
+        },
+        role: "viewer",
+        manualRole: "viewer",
+      }),
+    );
+  mountWith([
+    http.get(`*/api/v1/spaces/${ID}/members`, ({ request }) =>
+      HttpResponse.json(
+        new URL(request.url).searchParams.get("cursor") === "c1"
+          ? { items: page(3, 2), nextCursor: null, total: 312 }
+          : { items: page(0, 3), nextCursor: "c1", total: 312 },
       ),
-    ).toBe(true),
-  );
+    ),
+  ]);
+  const card = await people();
+  expect(await within(card).findByText("Showing 3 of 312")).toBeVisible();
+  fireEvent.click(within(card).getByRole("button", { name: "Load more" }));
+  // Wait for the page to land, not just the request: nothing is left in flight
+  // when the search starts.
+  expect(await within(card).findByText("Person 04")).toBeVisible();
+  expect(
+    seen.some(
+      (c) =>
+        c.path === `/api/v1/spaces/${ID}/members` &&
+        c.search.get("cursor") === "c1",
+    ),
+  ).toBe(true);
   fireEvent.change(
     within(card).getByRole("searchbox", {
       name: "Search people in Engineering",

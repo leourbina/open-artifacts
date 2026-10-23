@@ -1,6 +1,7 @@
 import { defineConfig } from "@playwright/test";
 
-const port = 5199;
+// OA_E2E_PORT: another free port when 5199 is taken (parallel worktrees).
+const port = Number(process.env.OA_E2E_PORT) || 5199;
 
 export default defineConfig({
   testDir: "e2e",

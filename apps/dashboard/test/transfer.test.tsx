@@ -1,7 +1,7 @@
 // Hosted P4 Task 13: transfer a departed person's personal artifacts (Design
 // D7, answers of 2026-10-22). A "Departed" card above Members and a
 // "Transfer…" row-menu item open the same dialog; counts only, never titles.
-import { R } from "@oa/shared";
+import { type Me, R } from "@oa/shared";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { expect, it, vi } from "vitest";
@@ -276,7 +276,18 @@ it("the Settings and Members dots show while someone still has artifacts", async
 });
 
 it("no dots when nobody departed has artifacts", async () => {
-  mountHosted("/settings/members", true, undefined, [
+  // Nothing else lights Settings either: no held directory sweep (D13 B).
+  const quiet = (m: Me): Me => ({
+    ...m,
+    instance: {
+      ...m.instance,
+      directory: m.instance.directory && {
+        ...m.instance.directory,
+        heldSweeps: 0,
+      },
+    },
+  });
+  mountHosted("/settings/members", true, quiet, [
     http.get(`*${R.memberTransfer(CAROL)}`, () =>
       HttpResponse.json({ live: 0, deleted: 0 }),
     ),

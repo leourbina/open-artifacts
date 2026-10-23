@@ -182,6 +182,9 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
     m.status = "active";
     // Owners and active members are Google-linked, so reset can be shown.
     m.identities = m.role === "guest" ? [] : ["google"];
+    // A Google link means they have signed in (Bob: two days before Ada).
+    if (m.identities.length && !m.lastSeenAt)
+      m.lastSeenAt = "2026-01-01T10:00:00.000Z";
   }
   const erin: Member = {
     id: "Er9vQrStUv0wXyZa",

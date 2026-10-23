@@ -23,12 +23,12 @@ import {
   parseArgs,
   prepare,
   readArtifact,
-  readKeyFromStdin,
+  readStdinText,
   recordPayload,
   runMain,
   sigJson,
 } from "./release-artifact.mjs";
-import { checkSigningKey, SKIPPED } from "./release-pubkeys.mjs";
+import { checkSigningKey, SKIPPED, skipUnsigned } from "./release-pubkeys.mjs";
 
 const NAME = "sign-release";
 const ARGS = [
@@ -48,7 +48,18 @@ async function main() {
   const env = a.env;
   if (env !== "staging" && env !== "prod")
     throw new Error("--env must be staging or prod");
-  const pem = await readKeyFromStdin();
+  const pem = await readStdinText();
+  // Before the key ceremony (placeholder pinned key) there is no key yet:
+  // skip with a notice and <env>_signed=false, so the attach job skips too.
+  // Once this env's key is pinned, a missing key fails like any other.
+  if (skipUnsigned(env, pem)) {
+    process.stderr.write(
+      `::notice::${NAME}: no signing key and RELEASE_PUBKEY.${env} is still the placeholder; not signing ${env} (the key ceremony has not run)\n`,
+    );
+    process.stdout.write(`${env}_signed=false\n`);
+    return;
+  }
+  if (pem.trim() === "") throw new Error("no signing key on stdin");
   /** @type {import("node:crypto").KeyObject} */
   let key;
   try {
@@ -99,6 +110,7 @@ async function main() {
     );
     process.stderr.write(`${NAME}: signed ${p.base} (tar ${p.tarSha256})\n`);
   }
+  lines.push(`${env}_signed=true`);
   process.stdout.write(`${lines.join("\n")}\n`);
 }
 

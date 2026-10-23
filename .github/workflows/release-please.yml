@@ -392,6 +392,7 @@ jobs:
       group: hosted-sign-staging-${{ needs.hosted-guard.outputs.tag }}
       cancel-in-progress: false
     outputs:
+      staging_signed: ${{ steps.sign.outputs.staging_signed }}
       staging_release_signature: ${{ steps.sign.outputs.staging_release_signature }}
       staging_release_tar_sha256: ${{ steps.sign.outputs.staging_release_tar_sha256 }}
       staging_release_record_sha256: ${{ steps.sign.outputs.staging_release_record_sha256 }}
@@ -434,6 +435,7 @@ jobs:
       group: hosted-sign-prod-${{ needs.hosted-guard.outputs.tag }}
       cancel-in-progress: false
     outputs:
+      prod_signed: ${{ steps.sign.outputs.prod_signed }}
       prod_release_signature: ${{ steps.sign.outputs.prod_release_signature }}
       prod_release_tar_sha256: ${{ steps.sign.outputs.prod_release_tar_sha256 }}
       prod_release_record_sha256: ${{ steps.sign.outputs.prod_release_record_sha256 }}
@@ -463,7 +465,7 @@ jobs:
           printf '%s' "$RELEASE_SIGNING_KEY" | node scripts/ci/sign-release.mjs --dir "$RUNNER_TEMP/hosted" --env "$SIGN_ENV" --version "$VERSION" --manifest-sha256 "$MANIFEST_SHA256" --bundle-sha256 "$BUNDLE_SHA256" --commit "$GUARD_SHA" --lockfile pnpm-lock.yaml --out "$RUNNER_TEMP/signed" >> "$GITHUB_OUTPUT"
   hosted-attach-staging:
     needs: [hosted-guard, hosted-build, hosted-check, hosted-sign-staging]
-    if: ${{ !cancelled() && needs.hosted-guard.result == 'success' && needs.hosted-check.result == 'success' && needs.hosted-sign-staging.result == 'success' }}
+    if: ${{ !cancelled() && needs.hosted-guard.result == 'success' && needs.hosted-check.result == 'success' && needs.hosted-sign-staging.result == 'success' && needs.hosted-sign-staging.outputs.staging_signed == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -504,7 +506,7 @@ jobs:
           gh release upload "$TAG" --repo "$REPO" "$RUNNER_TEMP"/signed/oa-release-staging-*
   hosted-attach-prod:
     needs: [hosted-guard, hosted-build, hosted-check, hosted-sign-prod]
-    if: ${{ !cancelled() && needs.hosted-guard.result == 'success' && needs.hosted-check.result == 'success' && needs.hosted-sign-prod.result == 'success' }}
+    if: ${{ !cancelled() && needs.hosted-guard.result == 'success' && needs.hosted-check.result == 'success' && needs.hosted-sign-prod.result == 'success' && needs.hosted-sign-prod.outputs.prod_signed == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
