@@ -318,6 +318,7 @@ describe("sign-release.ts", () => {
       "staging_release_record_sha256",
       "staging_release_signature",
       "staging_release_tar_sha256",
+      "staging_signed",
     ]);
     // The key never reaches stdout, stderr or the written files.
     const der = KEYS.staging.privateKey
@@ -436,7 +437,6 @@ describe("sign-release.ts", () => {
     ],
     ["an unknown env", (s) => swap(s.args, "--env", "dev"), "staging"],
     ["a key in argv", (s) => [...s.args, "--key", "x"], "staging"],
-    ["an empty stdin", (s) => s.args, ""],
     ["a non-Ed25519 key", (s) => s.args, "rsa"],
   ])("refuses %s", async (_n, argsOf, keyKind) => {
     const s = await signed("staging");
@@ -453,6 +453,23 @@ describe("sign-release.ts", () => {
     expect(r.code).toBe(1);
     expect(readdirSync(out)).toEqual([]);
     expect(r.stdout).toBe("");
+  });
+
+  it("with the placeholder keys, an empty stdin skips: exit 0, <env>_signed=false, no files", async () => {
+    for (const env of ["staging", "prod"] as const) {
+      const s = await signed(env);
+      const out = mkdtempSync(join(tmpdir(), "oa-signed-"));
+      const r = run(SIGN, swap(s.args, "--out", out), "");
+      expect(r.code, r.stderr).toBe(0);
+      expect(outputs(r.stdout)).toEqual({ [`${env}_signed`]: "false" });
+      expect(readdirSync(out)).toEqual([]);
+      expect(r.stderr).toMatch(/::notice::/);
+    }
+  });
+  it("a signed run also outputs <env>_signed=true", async () => {
+    const s = await signed("prod");
+    expect(s.r.code, s.r.stderr).toBe(0);
+    expect(s.o.prod_signed).toBe("true");
   });
 
   it("refuses a file changed after hosted-check (re-hashed against manifest.json)", async () => {
@@ -814,6 +831,30 @@ describe("L11: pinned public keys in the node:* copy", () => {
       prod: PUBKEYS.RELEASE_PUBKEY_PLACEHOLDER,
     };
     expect(PUBKEYS.checkSigningKey("prod", x("staging"), ph)).toBe("skipped");
+  });
+  // v0.35.0's release went red on "no signing key on stdin" before the key
+  // ceremony. While an env's key is the placeholder, no key means skip (a
+  // notice, <env>_signed=false, the attach job skips); once pinned, it fails.
+  it("skipUnsigned: skips a missing key only while the pinned key is the placeholder", () => {
+    const pinned = { staging: x("staging"), prod: x("prod") };
+    const ph = {
+      staging: PUBKEYS.RELEASE_PUBKEY_PLACEHOLDER,
+      prod: PUBKEYS.RELEASE_PUBKEY_PLACEHOLDER,
+    };
+    expect(PUBKEYS.skipUnsigned("staging", "", ph)).toBe(true);
+    expect(PUBKEYS.skipUnsigned("prod", "  \n", ph)).toBe(true);
+    expect(PUBKEYS.skipUnsigned("staging", "", pinned)).toBe(false);
+    expect(PUBKEYS.skipUnsigned("prod", "", pinned)).toBe(false);
+    // A key that is present is always signed with (and checked if pinned).
+    expect(PUBKEYS.skipUnsigned("staging", pem("staging"), ph)).toBe(false);
+    expect(PUBKEYS.skipUnsigned("staging", pem("staging"), pinned)).toBe(false);
+    // Only one env pinned: the other may still skip.
+    const half = {
+      staging: x("staging"),
+      prod: PUBKEYS.RELEASE_PUBKEY_PLACEHOLDER,
+    };
+    expect(PUBKEYS.skipUnsigned("staging", "", half)).toBe(false);
+    expect(PUBKEYS.skipUnsigned("prod", "", half)).toBe(true);
   });
   it("verifySignature: refuses an invalid signature once the key is real, skips while a placeholder", async () => {
     const { sign } = await import("node:crypto");

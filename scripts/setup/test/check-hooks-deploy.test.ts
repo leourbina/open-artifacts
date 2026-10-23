@@ -29,6 +29,18 @@ describe("deploy: check-no-test-hooks on the bundle to deploy", () => {
     ).toBe(true);
   });
 
+  // v0.35.0's deploy-prod refused with "no temp dir": --ci's state-less fs
+  // wrapper dropped tempDir and removeTree, so the check never ran in CI.
+  it("on under --ci (deploy-prod's real args): the check runs, then the deploy", async () => {
+    const w = world({ env: { OA_CHECK_NO_TEST_HOOKS: "1" } });
+    const ci = [...HOSTS.filter((a) => a !== "--yes"), "--ci"];
+    expect(await run(ci, w.deps, ROOT)).toBe(0);
+    expect(w.lines.join("\n")).not.toContain("no temp dir");
+    const at = w.ops.findIndex((o) => o.startsWith("check-no-test-hooks "));
+    expect(at).toBeGreaterThan(-1);
+    expect(w.ops.indexOf("deploy")).toBeGreaterThan(at);
+  });
+
   it("a failing check refuses the deploy", async () => {
     const w = world({
       env: { OA_CHECK_NO_TEST_HOOKS: "1" },
