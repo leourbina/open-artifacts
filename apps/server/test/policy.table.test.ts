@@ -122,13 +122,24 @@ describe("decide: decision table rows", () => {
       "viewer",
     ],
     [
-      "10 public shared, public links off → none",
+      // Public links off only refuses new public links (decided): an
+      // artifact that is already public keeps its link.
+      "10 public shared, public links off, anonymous → viewer",
       with_({
         caller: null,
         artifact: { ...base.artifact, visibility: "public" },
         space: { publicLinks: false, allMembersRole: null },
       }),
-      null,
+      "viewer",
+    ],
+    [
+      "10 public shared, public links off, capped member → viewer",
+      with_({
+        cap: "restricted",
+        artifact: { ...base.artifact, visibility: "public" },
+        space: { publicLinks: false, allMembersRole: null },
+      }),
+      "viewer",
     ],
     [
       "11 org admin, no space role, shared private",

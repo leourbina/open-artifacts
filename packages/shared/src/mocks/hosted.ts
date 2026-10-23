@@ -1557,9 +1557,10 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
   ];
 
   /**
-   * The hosted list scopes (HostedListQuerySchema): "space" lists one shared
+   * The hosted list scopes (ListQuerySchema): "space" lists one shared
    * space, or the caller's own personal space; "spaces" lists every shared
-   * space. Another user's personal space is refused (400 space_personal).
+   * space. Another user's personal space is refused (400 space_personal); an
+   * unknown one, or a shared one where the caller has no role, is 404.
    */
   const listScope = (
     scope: string,
@@ -1571,8 +1572,11 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
     if (scope === "spaces") return (sp) => sp?.kind === "shared";
     if (scope !== "space") return null;
     const sp = findSpace(spaceId);
-    if (sp?.kind === "personal" && sp.id !== me.user.id)
+    if (!sp) return notFound();
+    if (sp.kind === "personal" && sp.id !== me.user.id)
       return err("space_personal", "Pick a shared space");
+    // No role there: 404, as an unknown id (no existence oracle).
+    if (sp.kind === "shared" && !roleIn(sp)) return notFound();
     return (a) => a?.id === spaceId;
   };
 

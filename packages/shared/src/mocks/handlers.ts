@@ -25,7 +25,6 @@ import { delay, type HttpHandler, HttpResponse, http } from "msw";
 import type { z } from "zod";
 import { type ErrorCode, QUOTA_MESSAGE, STATUS_FOR } from "../errors.js";
 import type { Format } from "../formats.js";
-import { HostedListQuerySchema } from "../hosted/artifacts.js";
 import { newId, newPat } from "../ids.js";
 import {
   INLINE_TOO_LARGE_MESSAGE,
@@ -453,10 +452,8 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
       if (isAnon(request))
         return err("unauthorized", "Authentication required");
       const q = new URL(request.url).searchParams;
-      // Hosted mocks accept the hosted scopes ("space", "spaces") like the server.
-      const p = (h ? HostedListQuerySchema : ListQuerySchema).safeParse(
-        params(q),
-      );
+      // Hosted mocks narrow the space scopes ("space", "spaces") like the server.
+      const p = ListQuerySchema.safeParse(params(q));
       if (!p.success)
         return err("bad_request", "Invalid query", p.error.issues);
       const inSpace = h?.listScope(p.data.scope, q.get("spaceId") ?? undefined);
@@ -721,10 +718,15 @@ export function createHandlers(opts: MockOptions = {}): HttpHandler[] {
       const q = new URL(request.url).searchParams;
       const needle = (q.get("q") ?? "").trim();
       if (!needle) return badRequest("q is required");
+      // spaceId narrows the hits as the list's scope "space" does.
+      const spaceId = q.get("spaceId") ?? undefined;
+      const inSpace = spaceId ? h?.listScope("space", spaceId) : null;
+      if (inSpace instanceof Response) return inSpace;
       const hits = artifacts
         .filter(
           (a) =>
             a.deletedAt === null &&
+            (!inSpace || inSpace(a.space)) &&
             matches(a, new URLSearchParams({ q: needle })),
         )
         .map((a) => ({

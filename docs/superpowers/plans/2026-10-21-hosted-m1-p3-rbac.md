@@ -20,7 +20,7 @@
 - Space artifacts belong to the company; space managers can share, move or delete any artifact in their space.
 - When someone leaves, their personal artifacts wait for an admin transfer. Until then nobody new gets access: no new shares and no visibility changes.
 - Contractors, outside guests and restricted groups get no more than read-only on any surface, including MCP and the data API. They make no live-data writes and create nothing.
-- "Public links off" on a space stops every public path, including `/p/` content.
+- "Public links off" on a space only blocks NEW public links (403 `public_links_off`); existing public artifacts and `/p/` links keep working.
 - 404 for no access, never 403 (existing rule). Contract exceptions: `space_forbidden` (403) on publish or move into a space the caller can't publish to, and on any create by a capped caller; `public_links_off` (403) on making an artifact public in a space with public links off; `space_forbidden` (403) and `directory_mapping_off` (403) on a space manager's mapping PUT (Task 9); `capability_denied`; `csrf`.
 - Only the control-plane broker holds shared secrets (spec 4.1/4.7). Installs never hold the Google client secret.
 - No new KV namespace (account cap); any new limiter is a `ratelimits` entry in the wrangler template; DO classes join the template `migrations` list under the next tag.
@@ -90,7 +90,7 @@ First match wins. Then, if `cap` is set, the level is capped at viewer.
 | 7 | max(`spaceRole` if shared, `shareRole`) = editor | editor |
 | 8 | max(`spaceRole` if shared, `shareRole`) = viewer | viewer |
 | 9 | `visibility = team`, signed in, not a guest | viewer |
-| 10 | `visibility = public`, and personal or `publicLinks` | viewer |
+| 10 | `visibility = public` (any space; `publicLinks` never changes a level) | viewer |
 | 11 | Otherwise (org admins with no space role, anyone else's personal artifact) | none (404) |
 
 Internal `can(level, action, ctx)` where `ctx = { cap: CapReason | null; personal: boolean }`. The response field `ArtifactSummary.can` is the contract's shared `artifactCan(level, { personal, cap })` (edit, share, setVisibility, delete, transfer, move, dataWrite); a test pins that `can` agrees with `artifactCan` on those seven for every level, kind and cap.

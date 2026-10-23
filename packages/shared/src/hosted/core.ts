@@ -71,7 +71,8 @@ export type DirectoryMode = z.infer<typeof DirectoryModeSchema>;
  * sync_frozen: Team after trial, synced rows kept and edited by hand;
  * guests_read_only: guests capped at viewer (REPORTED ONLY, see below);
  * content_revocation: uid-bound /c/ content tokens re-check the user's
- * status (the /p/ check on the space's publicLinks applies unconditionally);
+ * status (a space's publicLinks is never part of the /p/ check: off only
+ * refuses new public links);
  * usage_off: hosted, the Usage page and R.usage are 404.
  *
  * All but guests_read_only come from the FEATURES env (comma list, set per

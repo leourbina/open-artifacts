@@ -27,13 +27,14 @@ import {
   type Caller,
   callerOf,
   canCtx,
+  checkListSpace,
   firstThumbnailEligible,
+  levelSql,
   listFilterSql,
-  rowLevel,
 } from "../auth/authz.js";
 import { can } from "../auth/policy.js";
 import { getDb } from "../db/client.js";
-import { artifacts, shares, users } from "../db/schema.js";
+import { artifacts, shares, spaces, users } from "../db/schema.js";
 import type { Env } from "../env.js";
 import { ApiError, appOrigin } from "../http/errors.js";
 import { logError, logWarn } from "../log.js";
@@ -148,6 +149,7 @@ export async function publish(
         input.allowAnonymousWrites !== undefined;
       if (sharing && !can(level, "visibility", canCtx(who, a)))
         throw new ApiError("bad_request", "only the owner can change sharing");
+      await refusePublicLinksOff(env, a, input.visibility);
       capabilities = { ...CAPS, ...(JSON.parse(a.capabilities) as object) };
       accessChanged =
         (input.visibility !== undefined && input.visibility !== a.visibility) ||
@@ -539,7 +541,7 @@ export function listQuery(env: Env, caller: Caller, q: ListQuery) {
   const email =
     caller.kind === "user" ? normalizeEmail(caller.user.email) : null;
   const conds: (SQL | undefined)[] = [
-    listFilterSql(caller, q.scope, q.includeDeleted),
+    listFilterSql(caller, q.scope, q.includeDeleted, q.spaceId),
   ];
   if (q.format) conds.push(eq(artifacts.format, q.format));
   if (q.visibility) conds.push(eq(artifacts.visibility, q.visibility));
@@ -570,10 +572,11 @@ export function listQuery(env: Env, caller: Caller, q: ListQuery) {
       ownerEmail: users.email,
       ownerName: users.name,
       ownerDisplayName: users.displayName,
-      shareRole: shares.role,
+      level: levelSql(caller, { allowDeleted: q.includeDeleted }),
     })
     .from(artifacts)
     .innerJoin(users, eq(users.id, artifacts.ownerId))
+    .leftJoin(spaces, eq(spaces.id, artifacts.spaceId))
     .leftJoin(
       shares,
       and(
@@ -594,14 +597,16 @@ export async function list(
 ): Promise<Page<ArtifactSummary>> {
   if (caller.kind !== "user")
     throw new ApiError("unauthorized", "Sign in required");
+  if (q.spaceId !== undefined) await checkListSpace(env, caller, q.spaceId);
   const rows = await listQuery(env, caller, q);
   const page = rows.slice(0, q.limit);
   const last = page[page.length - 1];
-  // Belt and braces with listFilterSql: a row the policy denies is dropped,
-  // never shown with a guessed level. The cursor still follows the SQL page.
+  // The level comes from SQL (levelSql, decide's twin). Belt and braces with
+  // listFilterSql: a row it denies is dropped, never shown with a guessed
+  // level. The cursor still follows the SQL page.
   const items: ArtifactSummary[] = [];
   for (const r of page) {
-    const level = rowLevel(caller, r.a, r.shareRole, { allowDeleted: true });
+    const { level } = r;
     if (!level) continue;
     items.push(
       toSummary(
@@ -877,6 +882,33 @@ export async function restoreVersion(
 
 // ------------------------------------------------------- patch and delete
 
+/**
+ * Changing visibility to "public" in a shared space with public links off:
+ * 403 public_links_off. The toggle only refuses new links; an artifact that
+ * is already public stays viewable (decide, /p/), and echoing "public" on it
+ * is a no-op that passes (agents resend it). One PK read, only on a change to
+ * "public".
+ */
+async function refusePublicLinksOff(
+  env: Env,
+  a: { spaceId: string | null; visibility: string },
+  visibility: string | undefined,
+): Promise<void> {
+  const spaceId = a.spaceId;
+  if (visibility !== "public" || a.visibility === "public" || spaceId === null)
+    return;
+  const off = await env.DB.prepare(
+    "select 1 from spaces where id = ? and kind = 'shared' and public_links = 0",
+  )
+    .bind(spaceId)
+    .first();
+  if (off)
+    throw new ApiError(
+      "public_links_off",
+      "Public links are off in this space",
+    );
+}
+
 /** title/description: editor+; visibility/capabilities/allowAnonymousWrites: owner only. */
 export async function patch(
   env: Env,
@@ -893,6 +925,7 @@ export async function patch(
     p.allowAnonymousWrites !== undefined;
   if (sharing && !can(level, "visibility", canCtx(who, a)))
     throw new ApiError("bad_request", "only the owner can change sharing");
+  await refusePublicLinksOff(env, a, p.visibility);
   const sets: string[] = [];
   const vals: unknown[] = [];
   const set = (col: string, v: unknown) => {

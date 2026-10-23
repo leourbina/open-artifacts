@@ -55,8 +55,9 @@ export type SpaceCreateInput = z.input<typeof SpaceCreateSchema>;
 
 /**
  * PATCH R.space(id) -> Space. name and publicLinks: space manager or org
- * admin (publicLinks changes are audited; off rewrites the space's public
- * artifacts to team and closes their sockets). allMembersRole: org owner or
+ * admin (publicLinks changes are audited; off refuses new public links only:
+ * existing public artifacts, their links and sockets keep working, nothing is
+ * rewritten). allMembersRole: org owner or
  * admin. (outsideSharing is dropped until M4.) Making an artifact public in a
  * space with publicLinks off is 403 public_links_off.
  */

@@ -16,7 +16,14 @@ export function mountSearch(app: AppType): void {
       throw new ApiError("bad_request", "Invalid query", q.error.issues);
     }
     return c.json(
-      await search(c.env, caller(c), q.data.q, q.data.cursor, q.data.limit),
+      await search(
+        c.env,
+        caller(c),
+        q.data.q,
+        q.data.cursor,
+        q.data.limit,
+        q.data.spaceId,
+      ),
     );
   });
 }

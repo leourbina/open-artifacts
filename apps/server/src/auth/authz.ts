@@ -5,6 +5,7 @@ import {
   type CapReason,
   type ListQuery,
   type Member,
+  type SpaceRole,
   type Visibility,
   VisibilitySchema,
 } from "@oa/shared";
@@ -21,7 +22,14 @@ import {
 } from "drizzle-orm";
 import type { Context } from "hono";
 import { getDb } from "../db/client.js";
-import { artifacts, shares } from "../db/schema.js";
+import {
+  artifacts,
+  directoryMembers,
+  orgGroupMappings,
+  shares,
+  spaceMembers,
+  spaces,
+} from "../db/schema.js";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
 import type { AppEnv } from "../http/middleware.js";
@@ -93,19 +101,19 @@ export function requireUser(c: Context<AppEnv>): Member {
 const callerEmail = (u: Member) => normalizeEmail(u.email);
 
 /**
- * Spec §6.5 rev 2 as P3's decision table (policy.ts `decide`). Until spaces
- * exist (P3 T1) every artifact is in its creator's personal space, which
- * reproduces today's rules exactly: deleted → null (unless the creator and
- * `allowDeleted`, for undelete); creator → owner; share for the caller's
- * email → share.role; team + owner/admin/member → viewer; public → viewer;
- * else null. Admins get no implicit access to private artifacts.
+ * Spec §6.5 rev 2 as P3's decision table (policy.ts `decide`), fed by one
+ * statement: the artifact, its space, the caller's share and space role. In
+ * a personal space this is today's rules exactly: deleted → null (unless the
+ * owner and `allowDeleted`, for undelete); owner → owner; share for the
+ * caller's email → share.role; team + owner/admin/member → viewer; public →
+ * viewer; else null. Admins get no implicit access to private artifacts.
  */
 export async function accessLevel(
   env: Env,
   c: Caller,
   artifactId: string,
   opts: { allowDeleted?: boolean } = {},
-): Promise<{ level: AccessLevel; artifact: ArtifactRow } | null> {
+): Promise<Access | null> {
   // The policy gate (route-policy.ts) already loaded this row for this
   // request: reuse it once instead of a second D1 statement.
   const cache = prefetched.getStore();
@@ -118,7 +126,7 @@ export async function accessLevel(
   return loadAccess(env, c, artifactId, opts);
 }
 
-type Access = { level: AccessLevel; artifact: ArtifactRow };
+type Access = { level: AccessLevel; artifact: ArtifactRow; personal: boolean };
 const prefetched = new AsyncLocalStorage<Map<string, Access | null>>();
 const accessKey = (c: Caller, id: string, opts: { allowDeleted?: boolean }) =>
   `${c.kind === "user" ? `u:${c.user.id}:${c.cap ?? ""}` : "anon"}|${id}|${opts.allowDeleted ? 1 : 0}`;
@@ -143,8 +151,19 @@ async function loadAccess(
   const user = c.kind === "user" ? c.user : null;
   const email = user ? callerEmail(user) : null;
   const rows = await db
-    .select({ a: artifacts, shareRole: shares.role })
+    .select({
+      a: artifacts,
+      shareRole: shares.role,
+      kind: spaces.kind,
+      publicLinks: spaces.publicLinks,
+      allMembersRole: spaces.allMembersRole,
+      // allMembersRole is decide()'s to add: it knows guests and the cap.
+      spaceRank: user
+        ? sql<number>`case when ${spaces.kind} = 'shared' then ${spaceRankSql(user.id)} else 0 end`
+        : sql<number>`0`,
+    })
     .from(artifacts)
+    .leftJoin(spaces, eq(spaces.id, artifacts.spaceId))
     .leftJoin(
       shares,
       and(
@@ -157,15 +176,39 @@ async function loadAccess(
     .limit(1);
   const row = rows[0];
   if (!row) return null;
-  const level = rowLevel(c, row.a, row.shareRole, opts);
-  return level ? { level, artifact: row.a } : null;
+  const space: SpaceInput = {
+    kind: row.kind,
+    publicLinks: row.publicLinks,
+    allMembersRole: row.allMembersRole,
+    role: RANK_ROLE[row.spaceRank] ?? null,
+  };
+  const level = rowLevel(c, row.a, row.shareRole, space, opts);
+  return level
+    ? { level, artifact: row.a, personal: space.kind !== "shared" }
+    : null;
 }
 
-/** The caller's level on an already-loaded row (lists and search use it too). */
+/** An artifact's space as decide() reads it; a missing row reads as personal. */
+export type SpaceInput = {
+  kind: string | null;
+  publicLinks: number | null;
+  allMembersRole: string | null;
+  /** The caller's max role from space_members and Every-space mappings. */
+  role: SpaceRole | null;
+};
+
+const RANK_ROLE: Record<number, SpaceRole> = {
+  1: "viewer",
+  2: "editor",
+  3: "manager",
+};
+
+/** The caller's level on an already-loaded row and its space. */
 export function rowLevel(
   c: Caller,
   a: ArtifactRow,
   shareRole: string | null,
+  space: SpaceInput,
   opts: { allowDeleted?: boolean } = {},
 ): AccessLevel | null {
   const user = c.kind === "user" ? c.user : null;
@@ -173,17 +216,103 @@ export function rowLevel(
     caller: user ? { id: user.id, orgRole: user.role } : null,
     cap: capOfCaller(c),
     artifact: {
-      spaceId: a.ownerId,
-      spaceKind: "personal",
+      spaceId: a.spaceId ?? "",
+      spaceKind: space.kind === "shared" ? "shared" : "personal",
       visibility: visibilityOf(a.visibility),
       deleted: a.deletedAt != null,
     },
-    space: { publicLinks: true, allMembersRole: null },
-    spaceRole: null,
+    space: {
+      publicLinks: space.publicLinks === 1,
+      allMembersRole: space.allMembersRole as SpaceRole | null,
+    },
+    spaceRole: space.role,
     shareRole:
       shareRole === "viewer" || shareRole === "editor" ? shareRole : null,
     allowDeleted: opts.allowDeleted === true,
   });
+}
+
+/** A space role's rank in SQL; anything unknown is 0 (fail closed, as decide). */
+const rankSql = (role: SQL) =>
+  sql`(case ${role} when 'viewer' then 1 when 'editor' then 2 when 'manager' then 3 else 0 end)`;
+
+/**
+ * The caller's Every-space rank: the max org mapping role over their groups,
+ * resolved at read time. Uncorrelated, so SQLite evaluates it once per
+ * statement; CROSS JOIN keeps org_group_mappings (a handful of rows) outer,
+ * each probing directory_members by its primary key.
+ */
+const everyRankSql = (userId: string) =>
+  sql`coalesce((select max(${rankSql(sql`ogm.role`)}) from ${orgGroupMappings} ogm
+    cross join ${directoryMembers} dm on dm.group_id = ogm.group_id and dm.user_id = ${userId}), 0)`;
+
+/**
+ * The caller's role rank (0 to 3) in the artifact's space, without
+ * allMembersRole: the max over their space_members rows (manual and sync) and
+ * their Every-space rank. Callers apply it to shared spaces only.
+ */
+function spaceRankSql(
+  userId: string,
+  spaceId: SQL = sql`${artifacts.spaceId}`,
+): SQL<number> {
+  return sql<number>`max(
+    coalesce((select max(${rankSql(sql`sm.role`)}) from ${spaceMembers} sm
+      where sm.space_id = ${spaceId} and sm.user_id = ${userId}), 0),
+    ${everyRankSql(userId)})`;
+}
+
+/**
+ * The caller's full role rank in a shared space (0 to 3): spaceRankSql plus
+ * `spaces.all_members_role` for uncapped members (decide's allMembers). The
+ * space is `spaces` (joined), its id `spaceId`. Lists and checkListSpace
+ * share it.
+ */
+function roleRankSql(
+  c: Caller,
+  spaceId: SQL = sql`${artifacts.spaceId}`,
+): SQL<number> {
+  if (c.kind !== "user" || !c.user.id) return sql<number>`0`;
+  return isTeamRole(c.user.role) && capOfCaller(c) == null
+    ? sql<number>`max(${spaceRankSql(c.user.id, spaceId)}, ${rankSql(sql`${spaces.allMembersRole}`)})`
+    : spaceRankSql(c.user.id, spaceId);
+}
+
+/**
+ * The caller's level per row, as a CASE over `artifacts`, `spaces` (joined on
+ * space_id) and `shares` (the caller's share, joined): decide() in SQL, so a
+ * list or search reads its levels in the same statement. Null = no access.
+ * `CASE x WHEN` evaluates the correlated role once per row.
+ */
+export function levelSql(
+  c: Caller,
+  opts: { allowDeleted?: boolean } = {},
+): SQL<AccessLevel | null> {
+  const user = c.kind === "user" && c.user.id ? c.user : null;
+  const capped = capOfCaller(c) != null;
+  const member = user !== null && isTeamRole(user.role);
+  // The cap lowers every level to viewer (decide).
+  const lv = (l: AccessLevel) => sql.raw(`'${capped ? "viewer" : l}'`);
+  const shared = sql`${spaces.kind} = 'shared'`;
+  const role = roleRankSql(c);
+  const share = sql`(case ${shares.role} when 'editor' then 2 when 'viewer' then 1 else 0 end)`;
+  // No space role: a share, then team (uncapped members), then a public link.
+  const rest = sql`case ${share} when 2 then ${lv("editor")} when 1 then ${lv("viewer")} else case
+    ${member && !capped ? sql`when ${artifacts.visibility} = 'team' then 'viewer'` : sql``}
+    when ${artifacts.visibility} = 'public' then 'viewer'
+    end end`;
+  // Trash: the personal owner, or a shared space's manager; never capped.
+  const trash =
+    opts.allowDeleted && user && !capped
+      ? sql`case when ${shared} then (case when ${role} = 3 then 'manager' end)
+          when ${artifacts.spaceId} = ${user.id} then 'owner' end`
+      : sql`null`;
+  return sql<AccessLevel | null>`(case
+    when ${artifacts.deletedAt} is not null then ${trash}
+    when ${shared} then (case ${role} when 3 then ${lv("manager")} when 2 then ${lv("editor")}
+      when 1 then (case when ${share} = 2 then ${lv("editor")} else ${lv("viewer")} end)
+      else ${rest} end)
+    ${user ? sql`when ${artifacts.spaceId} = ${user.id} then ${lv("owner")}` : sql``}
+    else ${rest} end)`;
 }
 
 /**
@@ -240,7 +369,14 @@ export async function authorize(
     r = await loadAccess(env, c, artifactId, opts);
     prefetched.getStore()?.set(accessKey(c, artifactId, opts), r);
   } else r = await accessLevel(env, c, artifactId, opts);
-  if (!r || !can(r.level, action, { ...canCtx(c, r.artifact), ...opts.ctx }))
+  if (
+    !r ||
+    !can(r.level, action, {
+      ...canCtx(c, r.artifact),
+      personal: r.personal,
+      ...opts.ctx,
+    })
+  )
     throw new ApiError("not_found", "Not found");
   return r;
 }
@@ -268,32 +404,59 @@ export async function requireAccess(
 }
 
 /**
- * WHERE fragment over `artifacts` for list/search, consistent with accessLevel:
- * - mine: created by the caller.
- * - shared: a share for the caller's email, not created by the caller.
- * - team: visibility team or public, caller is owner/admin/member (never guests).
- * - all: the union.
- * Public artifacts reachable only by link are not listed to guests (spec: guests
- * see only what's shared). Anonymous → always false (list routes require a user).
- * Deleted rows are excluded, unless `includeDeleted`, and then only the caller's own.
+ * WHERE fragment over `artifacts` for list/search, consistent with authorize
+ * (levelSql gives each row's level):
+ * - mine: in the caller's personal space (and theirs by owner_id).
+ * - shared: a share for the caller's email, outside their personal space.
+ * - team: visibility team or public, for uncapped owner/admin/members (a
+ *   space's public-links toggle only refuses new public links).
+ * - spaces: shared spaces where the caller has a role: their space_members
+ *   rows, allMembersRole (never guests or capped callers), and the
+ *   Every-space mappings, resolved at read time (never personal spaces).
+ * - all and space: the union (`space` is narrowed by `spaceId`).
+ * `spaceId` narrows any scope to one space. Public artifacts reachable only
+ * by link are not listed to guests or capped callers (spec: guests see only
+ * what's shared). Anonymous → always false (list routes require a user).
+ * Deleted rows are excluded, unless `includeDeleted`, and then only the
+ * caller's own personal ones.
  */
 export function listFilterSql(
   c: Caller,
   scope: ListQuery["scope"],
   includeDeleted = false,
+  spaceId?: string,
 ): SQL {
   if (c.kind !== "user") return sql`0`;
   const { user } = c;
+  const capped = capOfCaller(c) != null;
   const email = callerEmail(user);
-  const mine = eq(artifacts.ownerId, user.id);
+  // owner_id too: a personal space's artifacts are its owner's (create,
+  // transfer and member removal move both). The unary + keeps SQLite off
+  // artifacts_space_live_idx, so mine walks the ordered
+  // owner_updated_live_idx and a page stops at its limit with no sort.
+  const mine = and(
+    eq(artifacts.ownerId, user.id),
+    sql`+${artifacts.spaceId} = ${user.id}`,
+  ) as SQL;
   const sharedWithMe = email
-    ? and(ne(artifacts.ownerId, user.id), sharedIds(email))
+    ? and(ne(artifacts.spaceId, user.id), sharedIds(email))
     : undefined;
-  // Capped callers see team artifacts only through a share (decide()).
+  // Capped callers see team artifacts only through a share or a space role
+  // (decide()).
   const team =
-    TEAM_ROLES.includes(user.role) && capOfCaller(c) == null
+    TEAM_ROLES.includes(user.role) && !capped
       ? inArray(artifacts.visibility, ["team", "public"])
       : undefined;
+  // Two branches, so each plans on artifacts_space_live_idx.
+  const inSpaces = [
+    sql`${artifacts.spaceId} in (select sm.space_id from ${spaceMembers} sm
+      join ${spaces} sp on sp.id = sm.space_id and sp.kind = 'shared'
+      where sm.user_id = ${user.id})`,
+    // Every shared space, when the caller has an Every-space mapping or the
+    // space has an allMembersRole: one walk over spaces.
+    sql`${artifacts.spaceId} in (select sp.id from ${spaces} sp where sp.kind = 'shared'
+      and (${TEAM_ROLES.includes(user.role) && !capped ? sql`sp.all_members_role is not null or ` : sql``}${everyRankSql(user.id)} > 0))`,
+  ];
   const parts =
     scope === "mine"
       ? [mine]
@@ -301,15 +464,19 @@ export function listFilterSql(
         ? [sharedWithMe]
         : scope === "team"
           ? [team]
-          : [mine, sharedWithMe, team];
+          : scope === "spaces"
+            ? inSpaces
+            : [mine, sharedWithMe, team, ...inSpaces];
   const present = parts.filter((p): p is SQL => p !== undefined);
   if (!present.length) return sql`0`;
   // `deleted_at is null` inside every branch: only then does SQLite plan each
   // branch on its partial index (MULTI-INDEX OR) rather than walking all live
   // rows; there are no non-partial owner/visibility indexes (#248).
   const branches = present.map((p) => and(isNull(artifacts.deletedAt), p));
-  // Trash is for callers who can undelete: never capped ones.
-  if (includeDeleted && capOfCaller(c) == null)
+  // Trash is for callers who can undelete: never capped ones. Personal only:
+  // owner_id puts it on the trash index (a personal space's artifacts are
+  // its owner's); a shared space's trash waits for its own index.
+  if (includeDeleted && !capped)
     branches.push(
       and(
         isNotNull(artifacts.deletedAt),
@@ -317,7 +484,36 @@ export function listFilterSql(
         ...(present.includes(mine) ? [] : [or(...present)]),
       ),
     );
-  return or(...branches) ?? sql`0`;
+  const filter = or(...branches) ?? sql`0`;
+  return spaceId === undefined
+    ? filter
+    : (and(eq(artifacts.spaceId, spaceId), filter) as SQL);
+}
+
+/**
+ * A list or search narrowed to `spaceId`, in one statement: 400
+ * space_personal for another user's personal space (the caller's own is
+ * their `mine`); 404 for an unknown space and for a shared one where the
+ * caller has no role (a space_members row, an Every-space mapping, or
+ * allMembersRole when uncapped), so a space's existence never leaks.
+ */
+export async function checkListSpace(
+  env: Env,
+  c: Caller,
+  spaceId: string,
+): Promise<void> {
+  const [row] = await getDb(env)
+    .select({ kind: spaces.kind, rank: roleRankSql(c, sql`${spaces.id}`) })
+    .from(spaces)
+    .where(and(eq(spaces.id, spaceId), isNull(spaces.deletedAt)))
+    .limit(1);
+  if (!row) throw new ApiError("not_found", "Not found");
+  if (row.kind !== "shared") {
+    if (c.kind !== "user" || c.user.id !== spaceId)
+      throw new ApiError("space_personal", "Pick a shared space");
+    return;
+  }
+  if (!(row.rank > 0)) throw new ApiError("not_found", "Not found");
 }
 
 /**

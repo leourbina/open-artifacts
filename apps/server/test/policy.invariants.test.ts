@@ -65,11 +65,7 @@ function violations(i: DecisionInput, l: AccessLevel | null): string[] {
   const member = caller !== null && caller.orgRole !== "guest";
   const ctx = { cap, personal };
   if (cap && l && l !== "viewer") out.push("cap above viewer");
-  if (
-    !caller &&
-    l &&
-    !(visibility === "public" && (personal || i.space.publicLinks) && !deleted)
-  )
+  if (!caller && l && !(visibility === "public" && !deleted))
     out.push("anonymous beyond a public link");
   if (personal && !own && !i.shareRole && visibility === "private" && l)
     out.push("personal leak");
@@ -82,16 +78,15 @@ function violations(i: DecisionInput, l: AccessLevel | null): string[] {
     visibility !== "public"
   )
     out.push("capped through team or all-members");
+  // Public links off only refuses new public links (decided): it never
+  // changes anyone's level on an existing artifact.
   if (
-    !personal &&
-    visibility === "public" &&
-    !i.space.publicLinks &&
-    l &&
-    !i.spaceRole &&
-    !i.shareRole &&
-    !(i.space.allMembersRole && member && !cap)
+    decide({
+      ...i,
+      space: { ...i.space, publicLinks: !i.space.publicLinks },
+    }) !== l
   )
-    out.push("public link where public links are off");
+    out.push("publicLinks changed a level");
   if (deleted && l && (!i.allowDeleted || cap))
     out.push("deleted without trash rights");
   if (

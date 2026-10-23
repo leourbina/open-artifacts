@@ -11,11 +11,12 @@ import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import {
   authorize,
   type Caller,
+  checkListSpace,
+  levelSql,
   listFilterSql,
-  rowLevel,
 } from "../auth/authz.js";
 import { getDb } from "../db/client.js";
-import { artifacts, shares, users } from "../db/schema.js";
+import { artifacts, shares, spaces, users } from "../db/schema.js";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
 import { redact, toSummary } from "./artifacts.js";
@@ -495,7 +496,8 @@ function pickSnippet(body: string, desc: string, title: string): string {
 
 /**
  * The search SELECT (exported for the EXPLAIN test): FTS MATCH `m` joined to
- * live, visible artifacts, bm25 order, `limit + 1` rows from `offset`.
+ * live, visible artifacts (in `spaceId` when given) with the caller's level
+ * per hit (levelSql), bm25 order, `limit + 1` rows from `offset`.
  */
 export function searchQuery(
   env: Env,
@@ -503,6 +505,7 @@ export function searchQuery(
   m: string,
   offset: number,
   limit: number,
+  spaceId?: string,
 ) {
   const email = normalizeEmail(caller.user.email);
   return getDb(env)
@@ -511,7 +514,7 @@ export function searchQuery(
       ownerEmail: users.email,
       ownerName: users.name,
       ownerDisplayName: users.displayName,
-      shareRole: shares.role,
+      level: levelSql(caller),
       sb: snip(3),
       sd: snip(2),
       st: snip(1),
@@ -519,6 +522,7 @@ export function searchQuery(
     .from(artifactSearch)
     .innerJoin(artifacts, sql`${artifacts}.rowid = ${artifactSearch.rowid}`)
     .innerJoin(users, eq(users.id, artifacts.ownerId))
+    .leftJoin(spaces, eq(spaces.id, artifacts.spaceId))
     .leftJoin(
       shares,
       and(
@@ -526,7 +530,12 @@ export function searchQuery(
         email ? eq(shares.email, email) : sql`0`,
       ),
     )
-    .where(and(sql`${artifactSearch} match ${m}`, listFilterSql(caller, "all")))
+    .where(
+      and(
+        sql`${artifactSearch} match ${m}`,
+        listFilterSql(caller, "all", false, spaceId),
+      ),
+    )
     .orderBy(sql`bm25(${artifactSearch})`, artifacts.id)
     .limit(limit + 1)
     .offset(offset);
@@ -534,8 +543,9 @@ export function searchQuery(
 
 /**
  * Signed-in only (401). FTS MATCH of the sanitized query, joined to artifacts
- * through listFilterSql(caller, "all") (live, visible rows only), ordered by
- * bm25 then id, with an offset cursor capped at MAX_OFFSET.
+ * through listFilterSql(caller, "all") (live, visible rows only; one space
+ * with `spaceId`), ordered by bm25 then id, with an offset cursor capped at
+ * MAX_OFFSET.
  */
 export async function search(
   env: Env,
@@ -543,13 +553,15 @@ export async function search(
   q: string,
   cursor?: string,
   limit = 25,
+  spaceId?: string,
 ): Promise<Page<SearchHit>> {
   if (caller.kind !== "user")
     throw new ApiError("unauthorized", "Sign in required");
   const m = sanitizeQuery(q);
   if (!m) throw bad("q has no searchable words", "q");
   const offset = cursor === undefined ? 0 : decodeOffset(cursor);
-  const rows = await searchQuery(env, caller, m, offset, limit);
+  if (spaceId !== undefined) await checkListSpace(env, caller, spaceId);
+  const rows = await searchQuery(env, caller, m, offset, limit, spaceId);
   const page = rows.slice(0, limit);
   const next = offset + limit;
   return {
@@ -557,7 +569,7 @@ export async function search(
     // validated by the tests, not per hit in production.
     // Rows the policy denies are dropped (belt and braces with listFilterSql).
     items: page.flatMap((r): SearchHit[] => {
-      const level = rowLevel(caller, r.a, r.shareRole);
+      const { level } = r;
       if (!level) return [];
       return [
         {

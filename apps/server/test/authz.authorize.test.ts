@@ -253,6 +253,7 @@ describe("rowLevel", () => {
     const row = {
       id: "x",
       ownerId,
+      spaceId: ownerId,
       title: "odd",
       description: null,
       format: "html",
@@ -264,8 +265,14 @@ describe("rowLevel", () => {
       updatedAt: now,
       deletedAt: null,
     } as unknown as Parameters<typeof rowLevel>[1];
-    expect(rowLevel(other, row, null)).toBeNull();
-    expect(rowLevel({ kind: "anonymous" }, row, null)).toBeNull();
-    expect(rowLevel(owner.caller, row, null)).toBe("owner");
+    const personal = {
+      kind: "personal",
+      publicLinks: 1,
+      allMembersRole: null,
+      role: null,
+    };
+    expect(rowLevel(other, row, null, personal)).toBeNull();
+    expect(rowLevel({ kind: "anonymous" }, row, null, personal)).toBeNull();
+    expect(rowLevel(owner.caller, row, null, personal)).toBe("owner");
   });
 });
