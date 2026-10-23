@@ -72,7 +72,7 @@ it("hosted guest on a live-data artifact sees the chip, a tooltip on focus, no b
   expect(
     (
       await screen.findAllByText(
-        "You can view this. Ask a space manager to make you an editor.",
+        "You can view this, but you can't change its data.",
       )
     )[0],
   ).toBeInTheDocument();
@@ -80,12 +80,32 @@ it("hosted guest on a live-data artifact sees the chip, a tooltip on focus, no b
     expect(screen.queryByRole("button", { name })).toBeNull();
 });
 
-it("hosted employee viewer (dataWrite true) gets no chip", async () => {
+it("employee + db: a hosted employee viewer (dataWrite true) gets no chip", async () => {
   mountHosted(`/a/${arts[0].id}`, true, undefined, [
     handler({ access: "viewer", can: none, capabilities: live }),
   ]);
   await screen.findByRole("heading", { name: arts[0].title });
   expect(screen.queryByText("View only")).toBeNull();
+});
+
+it("contractor + db: a restricted member on a live-data artifact gets the chip", async () => {
+  mountHosted(
+    `/a/${arts[0].id}`,
+    true,
+    (m) => ({
+      ...m,
+      auth: {
+        method: "google",
+        readOnly: true,
+        cap: "restricted",
+        expiresAt: null,
+      },
+    }),
+    [handler({ access: "viewer", can: guestCan, capabilities: live })],
+  );
+  expect(await screen.findByText("View only")).toBeVisible();
+  for (const name of ["Rename", "Share", "Delete"])
+    expect(screen.queryByRole("button", { name })).toBeNull();
 });
 
 it("hosted guest on an artifact without live data gets no chip", async () => {

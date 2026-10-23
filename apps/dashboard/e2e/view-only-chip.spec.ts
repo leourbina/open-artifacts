@@ -9,6 +9,7 @@ for (const scheme of ["light", "dark"] as const)
 
       for (const [who, mock, chipShown, what] of [
         ["guest", "guest-live", true, "a live-data artifact"],
+        ["contractor", "contractor-live", true, "a live-data artifact"],
         ["guest-static", "guest-static", false, "a static artifact"],
         ["employee", "viewer-live", false, "a live-data artifact"],
       ] as const)
@@ -30,7 +31,7 @@ for (const scheme of ["light", "dark"] as const)
           await chip.focus();
           await expect(
             page.getByRole("tooltip", {
-              name: "You can view this. Ask a space manager to make you an editor.",
+              name: "You can view this, but you can't change its data.",
             }),
           ).toBeVisible();
           await page.waitForFunction(() =>

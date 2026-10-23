@@ -111,11 +111,12 @@ async function startMocks() {
   };
   // ?mock=guest-live (with ?hosted=1): every artifact is a live-data (db) viewer share the
   // caller can't write; ?mock=viewer-live: the same for an employee viewer (data writes allowed);
-  // ?mock=guest-static: a guest on an artifact without live data.
+  // ?mock=contractor-live: a restricted member (chip); ?mock=guest-static: a guest on an artifact without live data.
   const live = params.get("mock");
   if (
     live === "guest-live" ||
     live === "viewer-live" ||
+    live === "contractor-live" ||
     live === "guest-static"
   )
     extra.push(
@@ -125,6 +126,16 @@ async function startMocks() {
         return HttpResponse.json({
           ...a,
           access: "viewer",
+          // Employees and contractors see it through a space; a guest, by link.
+          space:
+            live === "viewer-live" || live === "contractor-live"
+              ? {
+                  id: "SpEngNpQrSt2uVwX",
+                  kind: "shared",
+                  name: "Engineering",
+                  publicLinks: true,
+                }
+              : undefined,
           can: {
             edit: false,
             share: false,

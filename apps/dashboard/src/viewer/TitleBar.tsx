@@ -246,8 +246,8 @@ export function TitleBar({
                   View only
                 </Badge>
               </TooltipTrigger>
-              <TooltipContent>
-                You can view this. Ask a space manager to make you an editor.
+              <TooltipContent side="bottom" collisionPadding={8}>
+                You can view this, but you can't change its data.
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
