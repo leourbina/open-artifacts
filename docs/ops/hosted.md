@@ -70,8 +70,11 @@ Namespace `oa-spike-staging`, dispatch Worker `oa-s-spike-dispatch` (account scr
 
 ### Key-ceremony checklist (per env, with the user's OK)
 
-1. Confirm that the GitHub Environment `hosted-<env>` limits deployment branches to `main` only (a custom branch policy that is exactly the branch `main`, not protected branches, not a pattern) and has a required reviewer. This branch policy is the real control against a `workflow_dispatch` from another ref reaching the key. Check it with `gh api repos/{repo}/environments/hosted-<env>` and `gh api repos/{repo}/environments/hosted-<env>/deployment-branch-policies`.
-2. Generate the Ed25519 keypair locally and pipe the private key straight into `scripts/ops/hosted-set-signing-key.sh <env>` (never onto disk). The script runs the two `gh api` reads above and refuses the upload unless deployment branches are `main` only and a reviewer is required; only then does it `gh secret set RELEASE_SIGNING_KEY --env hosted-<env>` from stdin.
+1. Confirm the controls on GitHub (all must hold; the script below refuses otherwise):
+   - Environments `hosted-staging` and `hosted-prod`: deployment branches `main` only (a custom branch policy that is exactly the branch `main`, not protected branches, not a pattern). This is the real control against a `workflow_dispatch` from another ref reaching the key. Check with `gh api repos/{repo}/environments/hosted-<env>` and `gh api repos/{repo}/environments/hosted-<env>/deployment-branch-policies`.
+   - Each Environment has a required reviewer, and admin bypass is OFF (`can_admins_bypass: false`).
+   - A tag ruleset is active on `refs/tags/v*` (nothing excluded) with creation, update and deletion all restricted, and the only bypass actor is the release App (its numeric id, `RELEASE_APP_ID`). Check with `gh api repos/{repo}/rulesets` and each tag ruleset's `gh api repos/{repo}/rulesets/<id>`.
+2. Generate the Ed25519 keypair locally and pipe the private key straight into `RELEASE_APP_ID=<id> scripts/ops/hosted-set-signing-key.sh <env>` (never onto disk). The script runs the `gh api` reads above and refuses the upload unless every control holds; only then does it `gh secret set RELEASE_SIGNING_KEY --env hosted-<env>` from stdin.
 3. Put the public key (JWK `x`) in both `packages/provision/src/internal/gates.ts` and `scripts/ci/release-pubkeys.mjs` in one PR (a test pins them equal); flip `PROD_UNLOCKED` there for prod.
 
 ### First-create checklist (per env)

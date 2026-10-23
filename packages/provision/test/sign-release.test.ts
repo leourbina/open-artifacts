@@ -949,6 +949,12 @@ describe("H1: sign-floor.ts", () => {
 
 // Manager review: the key-job scripts must run on Node 20 (the runner's own
 // node, no setup-node). Run the real flows under a Node 20 binary.
+// R-L1: the signer-node20 CI job sets OA_REQUIRE_NODE20=1, so a missing
+// binary fails there instead of skipping.
+it("Node 20: a binary is found when OA_REQUIRE_NODE20=1", () => {
+  if (process.env.OA_REQUIRE_NODE20 === "1") expect(NODE20).toBeDefined();
+});
+
 describe.skipIf(!NODE20)(`under Node 20 (${NODE20 ?? "none found"})`, () => {
   const n20 = NODE20 as string;
   it("is really Node 20", () => {

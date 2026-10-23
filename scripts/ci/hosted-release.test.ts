@@ -146,6 +146,14 @@ describe("release-please.yml hosted jobs", () => {
         if (s.uses) expect(s.uses, name).toMatch(SHA_PIN);
   });
 
+  it("hosted-build and hosted-check use no dependency cache (a main-scoped store would feed the signed bytes)", () => {
+    for (const name of ["hosted-build", "hosted-check"])
+      for (const s of steps(name)) {
+        expect(s.with?.cache, `${name} ${s.uses}`).toBeUndefined();
+        expect(String(s.uses ?? ""), name).not.toMatch(/^actions\/cache/);
+      }
+  });
+
   it("hosted-build has no secrets, contents: read, builds both variants and uploads one artifact", () => {
     const job = w.jobs["hosted-build"];
     expect(JSON.stringify(job)).not.toContain("secrets.");
@@ -522,6 +530,47 @@ describe("ci.yml no-test-hooks job", () => {
       (s.run ?? "").includes("pnpm check-no-test-hooks"),
     );
     expect(st.indexOf(pin as Step)).toBeGreaterThan(check);
+  });
+});
+
+describe("ci.yml signer-node20 job (R-L1)", () => {
+  // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
+  const ci: any = parse(read(".github/workflows/ci.yml"));
+  const job = ci.jobs["signer-node20"];
+  const st: Step[] = job?.steps ?? [];
+  it("exists alongside the required jobs", () => {
+    expect(job).toBeDefined();
+    expect(Object.keys(ci.jobs)).toEqual(
+      expect.arrayContaining([
+        "lint",
+        "typecheck",
+        "test",
+        "build",
+        "e2e",
+        "no-test-hooks",
+      ]),
+    );
+  });
+  it("has no secrets, read-only permissions and no persisted credentials", () => {
+    expect(JSON.stringify(job)).not.toContain("secrets.");
+    expect(job.permissions).toEqual({ contents: "read" });
+    for (const s of st)
+      if (String(s.uses ?? "").startsWith("actions/checkout"))
+        expect(s.with?.["persist-credentials"]).toBe(false);
+  });
+  it("installs Node 20 via setup-node pinned by SHA at an exact 20.x.y and runs the signer tests under it, required", () => {
+    const n20 = st.filter(
+      (s) =>
+        /^actions\/setup-node@[0-9a-f]{40}$/.test(String(s.uses ?? "")) &&
+        /^20\.\d+\.\d+$/.test(String(s.with?.["node-version"] ?? "")),
+    );
+    expect(n20).toHaveLength(1);
+    for (const s of st) if (s.uses) expect(s.uses).toMatch(SHA_PIN);
+    const run = runOf(st);
+    expect(run).toContain("OA_NODE20=");
+    const test = st.find((s) => (s.run ?? "").includes('-t "Node 20"'));
+    expect(test?.run).toContain("test/sign-release.test.ts");
+    expect(test?.env?.OA_REQUIRE_NODE20).toBe("1");
   });
 });
 
