@@ -2,7 +2,7 @@
 // against the in-memory Cloudflare (fake-cf.ts). Harness pieces mirror
 // wfp-create.test.ts (gates mocked, every generated secret captured).
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
-import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -344,6 +344,14 @@ function setup(o: { env?: Env; specs?: Record<string, Spec> } = {}) {
     "0.25.0": V25_TAG,
     "0.26.0": V26_BOUND,
     "0.21.0": V21_NAME_CLASH,
+    // 0.25.0's DO step on top of 0.24.0's migrations.
+    "0.28.0": { ...V25_TAG, migrations: V24.migrations },
+    "0.27.0": {
+      migrations: [
+        ...MIGRATION_FILES,
+        { name: "0002_zz_out_of_order.sql", bytes: enc("SELECT 1;") },
+      ],
+    },
     ...o.specs,
   });
   const cfWith = (f: typeof fetch = fake.fetch) =>
@@ -439,7 +447,22 @@ const uploads = (fake: Fake, from = 0) =>
   fake.log
     .map((e, i) => ({ ...e, i, body: fake.raw[i]?.body ?? "" }))
     .slice(from)
-    .filter((e) => e.method === "PUT" && /\/scripts\/[^/?]+$/.test(e.path));
+    .filter(
+      (e) =>
+        e.method === "PUT" &&
+        /\/scripts\/[^/?]+$/.test(e.path) &&
+        e.status !== 412,
+    );
+/** Tag probes (L5): uploads no script accepts; the 412 names the live tag. */
+const probes = (fake: Fake, from = 0) =>
+  fake.log
+    .slice(from)
+    .filter(
+      (e) =>
+        e.method === "PUT" &&
+        /\/scripts\/[^/?]+$/.test(e.path) &&
+        e.status === 412,
+    );
 
 function metaOf(body: string) {
   const m = body.match(
@@ -463,6 +486,14 @@ const unhealthyAt = (s: S, version: string) => {
       ? { ok: false }
       : undefined;
 };
+
+const epochOf = (s: S, id: string) => () =>
+  (
+    s
+      .installDb(id)
+      .prepare("SELECT session_epoch FROM users WHERE email = ?")
+      .get(OWNER) as { session_epoch: number }
+  ).session_epoch;
 
 const modulesText = (s: S, id: string) =>
   new TextDecoder().decode(s.scriptOf(id)?.modules.get("index.js")?.bytes);
@@ -783,9 +814,24 @@ describe("rollback", () => {
     });
     const up = uploads(s.fake, from);
     expect(up).toHaveLength(1);
-    const { jwt, ...assets } = metaOf(up[0]?.body as string).assets;
+    const sent = metaOf(up[0]?.body as string);
+    const { jwt, ...assets } = sent.assets;
     expect(typeof jwt).toBe("string");
-    expect({ ...metaOf(up[0]?.body as string), assets }).toEqual(stored);
+    // N4: the email is not stored; it is re-injected from installs.owner_email.
+    const email = sent.bindings.find(
+      (b: { name: string }) => b.name === "OWNER_EMAIL",
+    );
+    expect(email?.text).toBe(OWNER);
+    expect(
+      stored.bindings.some((b: { name: string }) => b.name === "OWNER_EMAIL"),
+    ).toBe(false);
+    expect({
+      ...sent,
+      assets,
+      bindings: sent.bindings.filter(
+        (b: { name: string }) => b.name !== "OWNER_EMAIL",
+      ),
+    }).toEqual(stored);
     // The previous release's verified bytes, and no D1 rollback.
     expect(modulesText(s, inst.id)).toContain("0.23.0");
     expect(
@@ -870,7 +916,9 @@ describe("fix round 1: rollback keeps the current vars", () => {
       assets: { config: m.assets.config },
       bindings: m.bindings.filter(
         (b: { name: string }) =>
-          !["AUTH_PROVIDERS", "EMAIL_DAILY_CAP"].includes(b.name),
+          !["AUTH_PROVIDERS", "EMAIL_DAILY_CAP", "OWNER_EMAIL"].includes(
+            b.name,
+          ),
       ),
     });
     expect(notVars(meta)).toEqual(notVars(stored));
@@ -1098,7 +1146,7 @@ describe("updateVars and the session cut", () => {
     const from = s.fake.log.length;
     keep(await s.p.updateVars(inst.id, next));
     expect(epoch()).toBe(1);
-    // Ordering: upload, then /healthz, then the bump on the install's D1.
+    // Ordering (M1): the bump runs as soon as the upload is accepted, before /healthz.
     const d1 = s.row(inst.id).d1_id as string;
     const bump = s.fake.raw
       .map((x, i) => ({ x, i }))
@@ -1114,9 +1162,9 @@ describe("updateVars and the session cut", () => {
     const health = callsTo(s.fake, /GET .*\/healthz$/, from);
     expect(up).toHaveLength(1);
     expect(up[0]).toBeLessThan(bump[0] as number);
-    expect(
-      health.some((h) => h > (up[0] as number) && h < (bump[0] as number)),
-    ).toBe(true);
+    const after = health.filter((h) => h > (up[0] as number));
+    expect(after.length).toBeGreaterThan(0);
+    expect(after.every((h) => h > (bump[0] as number))).toBe(true);
     const plain = metaOf(
       uploads(s.fake, from)[0]?.body as string,
     ).bindings.find((b: { name: string }) => b.name === "AUTH_PROVIDERS");
@@ -1134,8 +1182,10 @@ describe("updateVars and the session cut", () => {
       idb.prepare("SELECT id FROM oa_session_cuts").get() as { id: string }
     ).id;
     s.db()
-      .prepare("UPDATE installs SET session_cut = ? WHERE id = ?")
-      .run(cut, inst.id);
+      .prepare(
+        "UPDATE installs SET session_cut = ?, session_cut_base = ? WHERE id = ?",
+      )
+      .run(cut, canonicalJson(CODES), inst.id);
     await s.p.updateVars(inst.id, next);
     expect(epoch()).toBe(1);
     expect(s.row(inst.id).session_cut).toBeNull();
@@ -1146,28 +1196,99 @@ describe("updateVars and the session cut", () => {
     expect(epoch()).toBe(2);
   });
 
-  it("a var change that fails before the bump keeps the cut pending, and the rerun bumps exactly once", async () => {
+  it("M1: a failed check after the upload still bumps (the vars are live), audited, and a rerun does not bump again", async () => {
     const s = setup();
     const inst = keep(await s.p.create(input("finqore", { vars: CODES })));
-    const idb = s.installDb(inst.id);
-    const epoch = () =>
-      (
-        idb
-          .prepare("SELECT session_epoch FROM users WHERE email = ?")
-          .get(OWNER) as { session_epoch: number }
-      ).session_epoch;
+    const epoch = epochOf(s, inst.id);
     const next = { AUTH_PROVIDERS: "email,google" };
     s.fake.health = () => ({ ok: false });
+    const r = keep(await s.p.updateVars(inst.id, next));
+    expect(r).toMatchObject({ ok: false, sessionCut: true });
+    expect(r.reason).toMatch(/healthz/);
+    expect(epoch()).toBe(1);
+    expect(s.audit(inst.id)).toEqual(
+      expect.arrayContaining(["vars.session_cut", "vars.failed"]),
+    );
+    expect(s.row(inst.id)).toMatchObject({
+      state: "active",
+      lease: null,
+      session_cut: null,
+    });
+    s.fake.health = undefined;
+    expect((await s.p.updateVars(inst.id, next)).ok).toBe(true);
+    expect(epoch()).toBe(1);
+  });
+
+  it("M1: a var change that fails before the upload keeps the cut pending with its base; the rerun bumps exactly once", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input("finqore", { vars: CODES })));
+    const epoch = epochOf(s, inst.id);
+    const next = { AUTH_PROVIDERS: "email,google" };
+    s.fake.inject((m, p) => m === "PUT" && /\/scripts\/oa-s-/.test(p));
     await fails(s.p.updateVars(inst.id, next));
     expect(epoch()).toBe(0);
     expect(s.row(inst.id)).toMatchObject({ state: "active", lease: null });
     expect(s.row(inst.id).session_cut).toMatch(/^[0-9a-f]{32}$/);
-    s.fake.health = undefined;
+    expect(JSON.parse(s.row(inst.id).session_cut_base)).toEqual(CODES);
     await s.p.updateVars(inst.id, next);
     expect(epoch()).toBe(1);
     expect(s.row(inst.id).session_cut).toBeNull();
     await s.p.updateVars(inst.id, next);
     expect(epoch()).toBe(1);
+  });
+
+  it("L10: a cut from an abandoned enable is dropped, not run, when the live vars do not have google newly on", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input("finqore", { vars: CODES })));
+    const epoch = epochOf(s, inst.id);
+    s.fake.inject((m, p) => m === "PUT" && /\/scripts\/oa-s-/.test(p));
+    await fails(s.p.updateVars(inst.id, { AUTH_PROVIDERS: "email,google" }));
+    expect(s.row(inst.id).session_cut).not.toBeNull();
+    const r = keep(
+      await s.p.updateVars(inst.id, { ...CODES, FEATURES: "beta" }),
+    );
+    expect(r).toMatchObject({ ok: true, sessionCut: false });
+    expect(epoch()).toBe(0);
+    expect(s.row(inst.id).session_cut).toBeNull();
+    expect(s.audit(inst.id)).toContain("vars.session_cut_dropped");
+  });
+
+  it("M1: the next upgrade applies a pending cut right after its upload; rotation refuses while one is pending", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input("finqore", { vars: CODES })));
+    const epoch = epochOf(s, inst.id);
+    const next = { AUTH_PROVIDERS: "email,google" };
+    await s.p.updateVars(inst.id, next);
+    expect(epoch()).toBe(1);
+    // A cut owed for vars that are live (a crash after the upload).
+    s.db()
+      .prepare(
+        "UPDATE installs SET session_cut = ?, session_cut_base = ? WHERE id = ?",
+      )
+      .run("ab".repeat(16), canonicalJson(CODES), inst.id);
+    const rot = keep(await s.p.rotateTurnstileSecret("staging"));
+    expect(rot[0]).toMatchObject({ ok: false });
+    expect(rot[0]?.reason).toMatch(/pending session cut: re-run updateVars/);
+    const from = s.fake.log.length;
+    expect((await s.p.upgrade(inst.id, "0.24.0")).ok).toBe(true);
+    expect(epoch()).toBe(2);
+    expect(s.row(inst.id).session_cut).toBeNull();
+    const up = uploads(s.fake, from).map((x) => x.i);
+    const bump = s.fake.raw.findIndex(
+      (x, i) => i >= from && x.body.includes(epochBumpSql()),
+    );
+    expect(bump).toBeGreaterThan(up[0] as number);
+  });
+
+  it("N1: a non-object is refused before anything", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    const n = s.fake.writes().length;
+    for (const v of [null, undefined, [], "x"])
+      expect(await fails(s.p.updateVars(inst.id, v as never))).toBeInstanceOf(
+        ProvisionRefused,
+      );
+    expect(s.fake.writes().length).toBe(n);
   });
 
   it("codes newly on sends only TURNSTILE_SECRET, with keep_bindings", async () => {
@@ -1368,6 +1489,16 @@ describe("delete", () => {
   });
 });
 
+function versionRows(): string {
+  return FAKES.flatMap((f) =>
+    [...f.d1.values()]
+      .filter((d) => d.name.endsWith("platform"))
+      .map((d) =>
+        JSON.stringify(d.db.prepare("SELECT * FROM install_versions").all()),
+      ),
+  ).join("\n");
+}
+
 function haystacks(): { all: string; rows: string } {
   const parts = [...THROWN, ...PRINTABLE];
   const rows: string[] = [];
@@ -1386,6 +1517,307 @@ function haystacks(): { all: string; rows: string } {
   return { all: parts.join("\n"), rows: rows.join("\n") };
 }
 
+const LEASE = 30 * 60_000;
+
+describe("fix round 2", () => {
+  it("H1/L9: two callers both pass pre-flight; exactly one wins the claim and the other is refused before any upload", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input("finqore", { vars: CODES })));
+    const p2 = s.mk();
+    let hooked = false;
+    let second: Awaited<ReturnType<WfpProvisioner["updateVars"]>> | undefined;
+    const p1 = s.mk({
+      cf: s.cfWith((async (u: RequestInfo | URL, init?: RequestInit) => {
+        const req = new Request(u, init);
+        const body = req.method === "POST" ? await req.clone().text() : "";
+        // p1's claim is about to run: p2 passes pre-flight, claims and finishes first.
+        if (!hooked && body.includes("UPDATE installs SET state = ?1, lease")) {
+          hooked = true;
+          second = await p2.updateVars(inst.id, {
+            ...CODES,
+            AUTH_DOMAINS: "finqore.test",
+          });
+        }
+        return s.fake.fetch(u, init);
+      }) as typeof fetch),
+    });
+    const from = s.fake.log.length;
+    const e = await fails(p1.upgrade(inst.id, "0.24.0"));
+    expect(hooked).toBe(true);
+    expect(second?.ok).toBe(true);
+    expect(e).toBeInstanceOf(ProvisionRefused);
+    expect(e.message).toMatch(/changed since pre-flight/);
+    // Only p2's one upload; p1 uploaded nothing and the install keeps p2's vars.
+    expect(uploads(s.fake, from)).toHaveLength(1);
+    expect(s.row(inst.id)).toMatchObject({
+      version: "0.23.0",
+      state: "active",
+      lease: null,
+    });
+    expect(JSON.parse(s.row(inst.id).vars).AUTH_DOMAINS).toBe("finqore.test");
+    expect(s.row(inst.id).row_version).toBeGreaterThan(0);
+  });
+
+  it("M2: no lifecycle operation calls publish_artifact; the selftest is read-only against the recorded welcome artifact", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input("finqore", { vars: CODES })));
+    expect(s.row(inst.id).welcome_artifact).toBe("art1");
+    const from = s.fake.raw.length;
+    await s.p.upgrade(inst.id, "0.24.0");
+    await s.p.rollback(inst.id);
+    await s.p.updateVars(inst.id, { ...CODES, FEATURES: "beta" });
+    unhealthyAt(s, "0.24.0");
+    await s.p.upgrade(inst.id, "0.24.0").catch(() => undefined);
+    s.fake.health = undefined;
+    expect(s.fake.artifacts.size).toBe(1);
+    const mcp = s.fake.raw
+      .slice(from)
+      .filter((x) => x.path.endsWith("/mcp"))
+      .map((x) => x.body);
+    expect(mcp.length).toBeGreaterThan(0);
+    expect(mcp.some((b) => b.includes("publish_artifact"))).toBe(false);
+    expect(mcp.some((b) => b.includes('"get_artifact"'))).toBe(true);
+  });
+
+  it("M2: a revoked owner PAT is refused in pre-flight with zero writes", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    s.installDb(inst.id).prepare("UPDATE tokens SET revoked_at = 1").run();
+    const w = s.fake.writes().length;
+    for (const op of [
+      () => s.p.upgrade(inst.id, "0.24.0"),
+      () => s.p.updateVars(inst.id, {}),
+    ]) {
+      const e = await fails(op());
+      expect(e).toBeInstanceOf(ProvisionRefused);
+      expect(e.message).toMatch(/owner token .* was refused/);
+    }
+    expect(s.fake.writes().length).toBe(w);
+    expect(s.row(inst.id)).toMatchObject({ state: "active", lease: null });
+  });
+
+  it("M3: a lease that expires mid-delete and is taken by a second claimant stops the first with 'lost the lease'", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    const bucket = `oa-s-${inst.id}`;
+    for (let k = 0; k < 3; k++) s.fake.r2Seed(bucket, `files/${k}`, enc("x"));
+    s.fake.r2PerPage = 1;
+    const p2 = s.mk();
+    let second: unknown;
+    let hooked = false;
+    const p1 = s.mk({
+      cf: s.cfWith((async (u: RequestInfo | URL, init?: RequestInit) => {
+        const req = new Request(u, init);
+        if (
+          !hooked &&
+          req.method === "DELETE" &&
+          req.url.includes("/objects/")
+        ) {
+          hooked = true;
+          await s.clock.sleep(LEASE + 1);
+          second = await p2.delete(inst.id, inst.id);
+        }
+        return s.fake.fetch(u, init);
+      }) as typeof fetch),
+    });
+    const e = await fails(p1.delete(inst.id, inst.id));
+    expect(e.message).toMatch(/lost the lease/);
+    expect(second).toEqual({ id: inst.id, ok: true, state: "deleted" });
+    expect(s.row(inst.id)).toMatchObject({ state: "deleted", lease: null });
+    expect(s.audit(inst.id)).toContain("delete.lost_lease");
+  });
+
+  it("M3: finish() that finds the lease gone is an error, audited, not a success", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    const p1 = s.mk({
+      fetch: (async (u: RequestInfo | URL, init?: RequestInit) => {
+        if (
+          String(u).endsWith("/mcp") &&
+          String(init?.body).includes("get_artifact")
+        )
+          s.db()
+            .prepare("UPDATE installs SET lease = 'other' WHERE id = ?")
+            .run(inst.id);
+        return s.fake.fetch(u, init);
+      }) as typeof fetch,
+    });
+    const e = await fails(p1.updateVars(inst.id, { FEATURES: "beta" }));
+    expect(e.message).toMatch(/lost the lease/);
+    expect(s.audit(inst.id)).toContain("vars.lost_lease");
+  });
+
+  it("L1: the D1 actually deleted is resolved by id and must be names(id)", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    const d1 = s.row(inst.id).d1_id as string;
+    const p = s.mk({
+      cf: s.cfWith((async (u: RequestInfo | URL, init?: RequestInit) => {
+        const req = new Request(u, init);
+        if (req.method === "GET" && req.url.endsWith(`/d1/database/${d1}`))
+          return Response.json({
+            success: true,
+            errors: [],
+            messages: [],
+            result: { uuid: d1, name: "oa-s-platform" },
+          });
+        return s.fake.fetch(u, init);
+      }) as typeof fetch),
+    });
+    const e = await fails(p.delete(inst.id, inst.id));
+    expect(e.name).toBe("ForeignResource");
+    expect(s.fake.d1.has(d1)).toBe(true);
+    expect(s.row(inst.id).state).toBe("deleting");
+  });
+
+  it("L2: a creating install can be deleted once it is stale, unmapping first", async () => {
+    const s = setup();
+    s.fake.health = () => ({ ok: false });
+    await fails(s.p.create(input()));
+    s.fake.health = undefined;
+    const id = (
+      s.db().prepare("SELECT id FROM installs").get() as { id: string }
+    ).id;
+    expect(s.row(id).state).toBe("creating");
+    expect((await fails(s.p.delete(id, id))).message).toMatch(
+      /may still be running/,
+    );
+    await s.clock.sleep(LEASE + 1);
+    const from = s.fake.log.length;
+    expect(await s.p.delete(id, id)).toEqual({
+      id,
+      ok: true,
+      state: "deleted",
+    });
+    const dels = s.fake.log.slice(from).filter((e) => e.method === "DELETE");
+    expect(dels[0]?.path).toContain(`/namespaces/${s.hostsId}/values/`);
+    expect(s.fake.kvValues(s.hostsId).size).toBe(0);
+  });
+
+  it("L3: a rollback that would move forward is refused (use upgrade)", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    unhealthyAt(s, "0.24.0");
+    expect((await s.p.upgrade(inst.id, "0.24.0")).rolledBack).toBe(true);
+    s.fake.health = undefined;
+    const from = s.fake.log.length;
+    const e = await fails(s.p.rollback(inst.id));
+    expect(e.message).toMatch(/newer than 0\.23\.0; use upgrade/);
+    expect(uploads(s.fake, from)).toHaveLength(0);
+  });
+
+  it("L4: an unapplied migration that sorts before an applied one is refused before any write", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    const w = s.fake.writes().length;
+    const e = await fails(s.p.upgrade(inst.id, "0.27.0"));
+    expect(e.message).toMatch(/0002_zz_out_of_order\.sql sorts before/);
+    expect(s.fake.writes().length).toBe(w);
+  });
+
+  it("L5: the live tag is probed; a rollback whose live tag differs from the journal is refused, and an upgrade re-runs the DO rule on the live tag", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    await s.p.upgrade(inst.id, "0.24.0");
+    const sc = s.scriptOf(inst.id);
+    if (!sc) throw new Error("no script");
+    sc.migrationTag = "v2";
+    let from = s.fake.log.length;
+    const e = await fails(s.p.rollback(inst.id));
+    expect(e.message).toMatch(/live Durable Object migration tag is v2/);
+    expect(probes(s.fake, from)).toHaveLength(1);
+    expect(uploads(s.fake, from)).toHaveLength(0);
+    sc.migrationTag = "v9";
+    from = s.fake.log.length;
+    const u = await fails(s.p.upgrade(inst.id, "0.28.0"));
+    expect(u.message).toMatch(/v9 is not in this release/);
+    expect(uploads(s.fake, from)).toHaveLength(0);
+    expect(s.row(inst.id)).toMatchObject({
+      version: "0.24.0",
+      state: "active",
+      lease: null,
+    });
+  });
+
+  it("L7: a failure after the upload gives a structured result and an audit row", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    let armed = true;
+    const p = s.mk({
+      cf: s.cfWith((async (u: RequestInfo | URL, init?: RequestInit) => {
+        const req = new Request(u, init);
+        const body = req.method === "POST" ? await req.clone().text() : "";
+        if (armed && body.includes("INSERT INTO install_versions")) {
+          armed = false;
+          return Response.json(
+            { success: false, errors: [{ code: 7500, message: "boom" }] },
+            { status: 400 },
+          );
+        }
+        return s.fake.fetch(u, init);
+      }) as typeof fetch),
+    });
+    const r = keep(await p.upgrade(inst.id, "0.24.0"));
+    expect(r).toMatchObject({ ok: false, rolledBack: false, forwardFix: true });
+    expect(r.reason).toMatch(/boom/);
+    expect(s.audit(inst.id)).toContain("upgrade.incomplete");
+    expect(s.row(inst.id)).toMatchObject({ state: "active", lease: null });
+  });
+
+  it("L8: delete removes the PAT and hook-key files", async () => {
+    const s = setup();
+    const inst = keep(
+      await s.p.create(
+        input("redqa", { testHooks: true, bundle: "redline", vars: HOOK_VARS }),
+      ),
+    );
+    const dir = s.opts().patDir;
+    const files = [`${inst.appHost}-pat-token`, `${inst.appHost}-hook-key`];
+    for (const f of files) expect(existsSync(join(dir, f))).toBe(true);
+    await s.p.delete(inst.id, inst.id);
+    for (const f of files) expect(existsSync(join(dir, f))).toBe(false);
+  });
+
+  it("N2: rotation reports a codes-off install that is not active as nothing to rotate", async () => {
+    const s = setup();
+    const off = keep(await s.p.create(input("gamma")));
+    s.db()
+      .prepare("UPDATE installs SET state = 'upgrading' WHERE id = ?")
+      .run(off.id);
+    const out = keep(await s.p.rotateTurnstileSecret("staging"));
+    expect(out).toEqual([{ id: off.id, ok: true, rotated: false }]);
+  });
+
+  it("N3: rollback runs checkFloorSeq, and so does the auto-rollback", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    await s.p.upgrade(inst.id, "0.24.0");
+    s.db().prepare("UPDATE release_floor SET floor_seq = 5").run();
+    expect((await fails(s.p.rollback(inst.id))).message).toMatch(/below 5/);
+    // Auto-rollback: the floor read for the rollback is below the cache the
+    // upgrade raised, so it is refused and the upgrade reports forward-fix.
+    const t = setup();
+    const b = keep(await t.p.create(input()));
+    t.rel.st.floor = signFloor("staging", { seq: 3 });
+    t.fake.health = (sc) => {
+      if ((sc.metadata.tags as string[]).includes("v0.24.0")) {
+        t.rel.st.floor = signFloor("staging", { seq: 2 });
+        return { ok: false };
+      }
+      return undefined;
+    };
+    const r = keep(await t.p.upgrade(b.id, "0.24.0"));
+    expect(r).toMatchObject({ ok: false, rolledBack: false, forwardFix: true });
+    expect(r.reason).toMatch(/below 3/);
+  });
+
+  it("N4: stored metadata holds no email", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    expect(s.stored(inst.id, "0.23.0")?.metadata).not.toContain(OWNER);
+  });
+});
+
 describe("no secret in any error, result, audit row or platform row", () => {
   it("collected values", () => {
     expect(SENSITIVE.size).toBeGreaterThan(20);
@@ -1396,6 +1828,8 @@ describe("no secret in any error, result, audit row or platform row", () => {
     for (const v of SENSITIVE)
       if (v.length >= 8)
         expect(rows.includes(v), "a secret is in a platform row").toBe(false);
+    // N4: install_versions holds no email either (installs.owner_email does, by design).
+    for (const v of EMAILS) expect(versionRows().includes(v)).toBe(false);
   });
 });
 

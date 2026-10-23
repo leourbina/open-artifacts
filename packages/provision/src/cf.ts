@@ -74,12 +74,16 @@ export interface Cf {
     stmts: { sql: string; params?: unknown[] }[],
   ): Promise<D1Result[]>;
   d1Delete(id: string): Promise<void>;
+  /** The name of the D1 with this id (null when there is none); delete checks it. */
+  d1NameOf(id: string): Promise<string | null>;
   r2Create(name: string): Promise<void>;
   r2Exists(name: string): Promise<boolean>;
   r2Delete(name: string): Promise<void>;
   kvCreate(title: string): Promise<string>;
   kvFind(title: string): Promise<string | null>;
   kvDelete(id: string): Promise<void>;
+  /** The title of the KV namespace with this id (null when there is none). */
+  kvTitleOf(id: string): Promise<string | null>;
   kvPut(id: string, key: string, value: string): Promise<void>;
   kvGet(id: string, key: string): Promise<string | null>;
   kvDeleteKey(id: string, key: string): Promise<void>;
@@ -385,6 +389,12 @@ export function cfClient(o: {
     async d1Delete(id) {
       await call("DELETE", `${acct}/d1/database/${seg(id)}`);
     },
+    async d1NameOf(id) {
+      const r = await call("GET", `${acct}/d1/database/${seg(id)}`, {}, [404]);
+      if (r.status === 404) return null;
+      const name = (r.body as { result?: { name?: unknown } })?.result?.name;
+      return typeof name === "string" ? name : null;
+    },
 
     async r2Create(name) {
       await call("POST", `${acct}/r2/buckets`, { json: { name } });
@@ -416,6 +426,17 @@ export function cfClient(o: {
     },
     async kvDelete(id) {
       await call("DELETE", `${acct}/storage/kv/namespaces/${seg(id)}`);
+    },
+    async kvTitleOf(id) {
+      const r = await call(
+        "GET",
+        `${acct}/storage/kv/namespaces/${seg(id)}`,
+        {},
+        [404],
+      );
+      if (r.status === 404) return null;
+      const t = (r.body as { result?: { title?: unknown } })?.result?.title;
+      return typeof t === "string" ? t : null;
     },
     async kvPut(id, key, value) {
       await call("PUT", kvPath(id, key), { body: value });

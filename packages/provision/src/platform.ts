@@ -31,6 +31,11 @@ export interface InstallRow {
   session_cut: string | null;
   /** The install's current vars, canonical JSON (0003). */
   vars: string | null;
+  /** Bumped on every write (0003 trigger); claims compare it. */
+  row_version: number;
+  welcome_artifact: string | null;
+  /** The vars a pending session_cut was minted against (0003). */
+  session_cut_base: string | null;
 }
 
 export type InstallState =
@@ -94,6 +99,8 @@ const UPDATABLE = new Set([
   "state",
   "session_cut",
   "vars",
+  "welcome_artifact",
+  "session_cut_base",
 ]);
 
 export class PlatformDb {
@@ -191,20 +198,30 @@ FROM installs WHERE rl_ns >= ?8 AND rl_ns < ?10`,
     return row;
   }
 
-  async update(id: InstallId, fields: Partial<InstallRow>): Promise<void> {
+  /**
+   * Updates the row. With `lease`, only while that lease still holds it;
+   * false when it does not (the caller lost the lease).
+   */
+  async update(
+    id: InstallId,
+    fields: Partial<InstallRow>,
+    lease?: string,
+  ): Promise<boolean> {
     const keys = Object.keys(fields);
     for (const k of keys)
       if (!UPDATABLE.has(k)) throw new Error(`installs.${k} is not updatable`);
-    if (keys.length === 0) return;
+    if (keys.length === 0) return true;
     const set = keys.map((k, i) => `${k} = ?${i + 1}`).join(", ");
-    await this.write(
-      `UPDATE installs SET ${set}, updated_at = ?${keys.length + 1} WHERE id = ?${keys.length + 2}`,
+    const r = await this.write(
+      `UPDATE installs SET ${set}, updated_at = ?${keys.length + 1} WHERE id = ?${keys.length + 2}${lease === undefined ? "" : ` AND lease = ?${keys.length + 3}`}`,
       [
         ...keys.map((k) => (fields as Record<string, unknown>)[k] ?? null),
         this.now(),
         id,
+        ...(lease === undefined ? [] : [lease]),
       ],
     );
+    return lease === undefined || r[0]?.meta?.changes === 1;
   }
 
   /** Hosts rows held by another install (any state). */
@@ -264,11 +281,21 @@ FROM installs WHERE rl_ns >= ?8 AND rl_ns < ?10`,
     to: InstallState,
     lease: string,
     until: number,
+    rowVersion: number,
   ): Promise<boolean> {
     const now = this.now();
     const r = await this.write(
-      `UPDATE installs SET state = ?1, lease = ?2, lease_until = ?3, updated_at = ?4 WHERE id = ?5 AND state IN (${from.map((_, i) => `?${i + 6}`).join(", ")}) AND (lease_until IS NULL OR lease_until <= ?4)`,
-      [to, lease, until, now, id, ...from],
+      `UPDATE installs SET state = ?1, lease = ?2, lease_until = ?3, updated_at = ?4 WHERE id = ?5 AND row_version = ?6 AND state IN (${from.map((_, i) => `?${i + 7}`).join(", ")}) AND (lease_until IS NULL OR lease_until <= ?4)`,
+      [to, lease, until, now, id, rowVersion, ...from],
+    );
+    return r[0]?.meta?.changes === 1;
+  }
+
+  /** Renews the lock, a CAS on its value; false when another holds the row now. */
+  async renew(id: InstallId, lease: string, until: number): Promise<boolean> {
+    const r = await this.write(
+      "UPDATE installs SET lease_until = ?1 WHERE id = ?2 AND lease = ?3",
+      [until, id, lease],
     );
     return r[0]?.meta?.changes === 1;
   }

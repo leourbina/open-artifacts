@@ -584,6 +584,11 @@ export class FakeCf {
         : new Response(v, { status: 200 });
     }
     m = r.match(/^\/storage\/kv\/namespaces\/([^/]+)$/);
+    if (m && req.method === "GET") {
+      const ns = this.kv.get(m[1] as string);
+      if (!ns) return fail(404, "namespace not found", 10013);
+      return env({ id: m[1], title: ns.title });
+    }
     if (m && req.method === "DELETE") {
       if (!this.kv.delete(m[1] as string))
         return fail(404, "namespace not found", 10013);

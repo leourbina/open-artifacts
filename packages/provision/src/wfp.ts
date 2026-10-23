@@ -25,6 +25,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  rmSync,
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -174,6 +175,17 @@ export interface WfpOptions {
 
 export class ProvisionRefused extends Error {
   override name = "ProvisionRefused";
+}
+
+/** An MCP call the install answered with an HTTP error. */
+class McpError extends Error {
+  constructor(
+    method: string,
+    readonly status: number,
+  ) {
+    super(`MCP ${method}: HTTP ${status}`);
+    this.name = "McpError";
+  }
 }
 
 /** Prod creates are refused until the T3b release-record writer exists. */
@@ -331,7 +343,7 @@ type Meta = {
   sitekey: string | null;
 };
 
-/** How long a lifecycle operation holds the row's lock (installs.lease_until). */
+/** How long a lifecycle operation holds the row's lock (installs.lease_until); renewed at each step. */
 const LEASE_MS = 30 * 60_000;
 const HEX32 = /^[0-9a-f]{32}$/;
 const hex16 = () =>
@@ -339,14 +351,17 @@ const hex16 = () =>
 
 /**
  * What install_versions keeps of an upload: no secret value (secrets stay on
- * the script through keep_bindings), no assets jwt (one per upload) and no DO
- * migration step (a rollback never crosses a tag).
+ * the script through keep_bindings), no email (OWNER_EMAIL is re-rendered from
+ * installs.owner_email), no assets jwt (one per upload) and no DO migration
+ * step (a rollback never crosses a tag).
  */
 export function storedMetadata(meta: UploadMetadata): Record<string, unknown> {
   const { migrations: _m, keep_assets: _k, ...rest } = meta;
   return {
     ...rest,
-    bindings: meta.bindings.filter((b) => !b.type.startsWith("secret")),
+    bindings: meta.bindings.filter(
+      (b) => !b.type.startsWith("secret") && b.name !== "OWNER_EMAIL",
+    ),
     assets: { config: meta.assets.config },
     keep_bindings: ["secret_text", "secret_key"],
   };
@@ -354,6 +369,7 @@ export function storedMetadata(meta: UploadMetadata): Record<string, unknown> {
 
 const tagsOf = (t: Template): string[] =>
   ((t.migrations ?? []) as { tag: string }[]).map((x) => x.tag);
+const latestOf = (t: Template): string | null => tagsOf(t).at(-1) ?? null;
 
 /**
  * Constraints: a Durable Object class ships one release before the code that
@@ -388,12 +404,42 @@ export function assertDoClassesShipFirst(
     );
 }
 
+/**
+ * Forward only, in order: the install may not have a migration the release
+ * lacks, and no unapplied file may sort before the last applied one.
+ */
+export function assertMigrationOrder(
+  files: readonly string[],
+  done: ReadonlySet<string>,
+  version: string,
+): void {
+  const ahead = [...done].filter((x) => !files.includes(x));
+  if (ahead.length > 0)
+    throw new ProvisionRefused(
+      `the install's D1 has migration ${ahead[0]}, which release ${version} does not; forward-fix only`,
+    );
+  const last = files.reduce((n, f, i) => (done.has(f) ? i : n), -1);
+  const early =
+    last < 0 ? undefined : files.slice(0, last).find((f) => !done.has(f));
+  if (early !== undefined)
+    throw new ProvisionRefused(
+      `release ${version}: unapplied migration ${early} sorts before applied ${files[last]}; refusing to apply out of order`,
+    );
+}
+
+/** M3: another operation holds the install now; this one stopped. */
+export class LostLease extends ProvisionRefused {
+  override name = "LostLease";
+}
+
 export interface VarsResult {
   id: InstallId;
   version: string;
-  ok: true;
+  /** False when a check after the upload failed (the new vars are live). */
+  ok: boolean;
   /** The epoch bump ran (google newly on, or a cut owed from an earlier run). */
   sessionCut: boolean;
+  reason?: string;
 }
 
 export interface RotationResult {
@@ -410,16 +456,27 @@ export interface DeleteResult {
   state: "deleted";
 }
 
+/** A pending session cut and the vars it was minted against. */
+interface Cut {
+  id: string;
+  base: Record<string, string>;
+}
+
 /** A checked rollback, planned before any write. */
 interface RollbackPlan {
   row: InstallRow;
   from: string;
   to: string;
-  stored: StoredVersion;
+  /** The render with the current vars: uploaded (with a fresh assets jwt) and stored. */
+  upload: UploadMetadata;
+  /** The previous release rendered with no tag: every DO step, for the probe. */
+  probe: UploadMetadata;
+  vars: Record<string, string>;
   m: Meta;
   rel: Checked;
   d1Id: string;
   patFile: string;
+  welcome: string;
   raiseFloor: boolean;
 }
 
@@ -1286,9 +1343,9 @@ export class WfpProvisioner {
 
     await this.health(id, m.appHost, version);
     const patFile = await this.mintPat(d1Id, n.d1, m.ownerEmail, m.appHost);
-    await this.selftest(rec, m.appHost, patFile);
+    const welcome = await this.selftest(rec, m.appHost, patFile);
 
-    await platform.update(id, { state: "active" });
+    await platform.update(id, { state: "active", welcome_artifact: welcome });
     await platform.audit(id, "create.active", { version });
     return {
       id,
@@ -1306,7 +1363,9 @@ export class WfpProvisioner {
    * returned. Decision 5: the settings API never reports the tag, so the
    * journal is checked by uploading: a 412 names the live tag and changes
    * nothing. An existing script with an empty journal is probed with a tag
-   * it cannot have; a missing script is never probed.
+   * it cannot have; a missing script is never probed. With `probe` (every
+   * lifecycle upload, L5) the live tag is always probed first and `onLive`
+   * re-checks it before the real upload.
    */
   private async uploadRelease(u: {
     id: InstallId;
@@ -1320,16 +1379,18 @@ export class WfpProvisioner {
     journal: string | null;
     tags: string[];
     send: Record<string, string>;
+    probe?: boolean;
+    onLive?: (live: string | null) => void;
   }): Promise<UploadMetadata> {
     const { cf, env, target } = this;
     let sent: UploadMetadata | undefined;
-    const upload = async (tag: string | null, probe = false) => {
-      this.assertHooksAllowed(u.rec.variant, u.m.testHooks);
-      const mods = await this.readModules(u.rec);
-      const assets = await this.readAssets(u.rec);
-      const template = await this.readTemplate(u.rec);
-      const { jwt } = await cf.assetsUpload(target, u.script, assets);
-      const meta = this.metadata(
+    const render = (
+      mods: { mainModule: string },
+      template: Template,
+      tag: string | null,
+      jwt: string,
+    ) =>
+      this.metadata(
         u.id,
         u.m,
         { rec: u.rec, mainModule: mods.mainModule, template },
@@ -1343,12 +1404,38 @@ export class WfpProvisioner {
           assetsJwt: jwt,
         },
       );
+    const upload = async (tag: string | null, probe = false) => {
+      this.assertHooksAllowed(u.rec.variant, u.m.testHooks);
+      const mods = await this.readModules(u.rec);
+      const assets = await this.readAssets(u.rec);
+      const template = await this.readTemplate(u.rec);
+      const { jwt } = await cf.assetsUpload(target, u.script, assets);
+      const meta = render(mods, template, tag, jwt);
       if (probe && meta.migrations) meta.migrations.old_tag = PROBE_TAG;
       assertOwnResource(u.script, env);
       await cf.scriptUpload(target, u.script, meta, mods.modules);
       sent = meta;
     };
-    const journal = u.exists ? u.journal : null;
+    let journal = u.exists ? u.journal : null;
+    if (u.probe && u.exists) {
+      const mods = await this.readModules(u.rec);
+      const template = await this.readTemplate(u.rec);
+      const live = await this.probeTag(
+        u.script,
+        render(mods, template, null, "probe"),
+        mods.modules,
+      );
+      if (live !== undefined) {
+        if (live !== journal)
+          this.notes.push(
+            `probe: live migration tag is ${live ?? "none"}, the journal says ${journal ?? "none"}`,
+          );
+        u.onLive?.(live);
+        journal = live;
+      }
+      await upload(journal);
+      return sent as UploadMetadata;
+    }
     try {
       await upload(journal, u.exists && journal === null);
     } catch (e) {
@@ -1367,15 +1454,54 @@ export class WfpProvisioner {
     return sent as UploadMetadata;
   }
 
+  /**
+   * L5: the live DO tag, read by an upload no script can accept (old_tag is
+   * a tag no script has): the 412 names the tag and nothing changes.
+   * undefined when the release has no DO step to send (nothing to probe).
+   */
+  private async probeTag(
+    script: string,
+    meta: UploadMetadata,
+    modules: Module[],
+  ): Promise<string | null | undefined> {
+    if (!meta.migrations) return undefined;
+    const { jwt: _j, ...assets } = meta.assets;
+    const probe: UploadMetadata = {
+      ...meta,
+      bindings: meta.bindings.filter((b) => !b.type.startsWith("secret")),
+      assets,
+      keep_assets: true,
+      migrations: { ...meta.migrations, old_tag: PROBE_TAG },
+    };
+    assertOwnResource(script, this.env);
+    try {
+      await this.cf.scriptUpload(this.target, script, probe, modules);
+    } catch (e) {
+      const live =
+        e instanceof CfError && e.status === 412
+          ? /expected tag is '([^']*)'/.exec(e.cfMessage)?.[1]
+          : undefined;
+      if (live === undefined) throw e;
+      return live === "" ? null : live;
+    }
+    throw new Error("the Durable Object tag probe was accepted; stopping");
+  }
+
   // ---------- lifecycle: upgrade, rollback, var changes, delete ----------
+
+  /** The operation in progress: its install, lock and audit prefix (M3). */
+  private held: { id: InstallId; lease: string; op: string } | null = null;
 
   /** One lifecycle operation: a fresh redaction set, every error scrubbed. */
   private async guarded<T>(fn: () => Promise<T>): Promise<T> {
     this.sensitive = new Set();
+    this.held = null;
     try {
       return await fn();
     } catch (e) {
       throw this.scrub(e);
+    } finally {
+      this.held = null;
     }
   }
 
@@ -1384,7 +1510,7 @@ export class WfpProvisioner {
     return x instanceof Error ? x.message : "failed";
   }
 
-  /** Pre-flight shared by every lifecycle operation; the CAS re-checks the state. */
+  /** Pre-flight shared by every lifecycle operation; the claim re-checks the row. */
   private async openInstall(
     id: InstallId,
     states: InstallState[],
@@ -1404,25 +1530,93 @@ export class WfpProvisioner {
     return row;
   }
 
-  /** Concurrency: the row moves state and takes the lock in one compare-and-swap. */
+  /**
+   * H1: one compare-and-swap moves the row and takes the lock, only if the
+   * row is unchanged since pre-flight read it (row_version) and no live lock
+   * is held.
+   */
   private async claim(
     row: InstallRow,
     from: InstallState[],
     to: InstallState,
-  ): Promise<string> {
+    op: string,
+  ): Promise<void> {
     const lease = hex16();
     if (
-      await this.platform.claim(row.id, from, to, lease, this.now() + LEASE_MS)
-    )
-      return lease;
+      await this.platform.claim(
+        row.id,
+        from,
+        to,
+        lease,
+        this.now() + LEASE_MS,
+        row.row_version,
+      )
+    ) {
+      this.held = { id: row.id, lease, op };
+      return;
+    }
     const cur = await this.platform.byId(row.id);
     if (cur && !from.includes(cur.state))
       throw new ProvisionRefused(
         `install ${row.id} is ${cur.state}; another operation got there first`,
       );
+    if (cur && cur.lease_until !== null && cur.lease_until > this.now())
+      throw new ProvisionRefused(
+        `install ${row.id} is busy: another operation holds it`,
+      );
     throw new ProvisionRefused(
-      `install ${row.id} is busy: another operation holds it`,
+      `install ${row.id} changed since pre-flight read it; re-run`,
     );
+  }
+
+  /** M3: renews the lock before a step; a lock another operation took stops this one. */
+  private async hold(): Promise<void> {
+    const h = this.held;
+    if (h && !(await this.platform.renew(h.id, h.lease, this.now() + LEASE_MS)))
+      await this.lost();
+  }
+
+  private async lost(): Promise<never> {
+    const h = this.held as { id: InstallId; op: string };
+    this.held = null;
+    await this.platform.audit(h.id, `${h.op}.lost_lease`, {}).catch(() => {});
+    throw new LostLease(
+      `install ${h.id}: lost the lease; another operation holds the install now, so this ${h.op} stopped`,
+    );
+  }
+
+  /** A write of the held row, only while the lock is still this operation's. */
+  private async write(fields: Partial<InstallRow>): Promise<void> {
+    const h = this.held as { id: InstallId; lease: string };
+    if (!(await this.platform.update(h.id, fields, h.lease))) await this.lost();
+  }
+
+  /** An audit row for the held install, after the lock is renewed. */
+  private async logged(
+    action: string,
+    detail: Record<string, string | number> = {},
+  ): Promise<void> {
+    await this.hold();
+    await this.platform.audit(
+      (this.held as { id: InstallId }).id,
+      action,
+      detail,
+    );
+  }
+
+  /** Ends the operation; a lock already gone is an error (lost the lease), not a success. */
+  private async release(state: InstallState): Promise<void> {
+    const h = this.held;
+    if (!h) return;
+    if (!(await this.platform.finish(h.id, h.lease, state))) await this.lost();
+    this.held = null;
+  }
+
+  /** Error paths: drops the lock if still held, never masking the error. */
+  private async releaseQuietly(state: InstallState): Promise<void> {
+    const h = this.held;
+    this.held = null;
+    if (h) await this.platform.finish(h.id, h.lease, state).catch(() => false);
   }
 
   /** Create's checks on an install's render inputs: variant, codes and Turnstile. */
@@ -1463,6 +1657,40 @@ export class WfpProvisioner {
         `install ${row.id} has no stored vars (created before per-version metadata)`,
       );
     return JSON.parse(row.vars) as Record<string, string>;
+  }
+
+  private pendingCut(row: InstallRow): Cut | null {
+    if (row.session_cut === null) return null;
+    return {
+      id: row.session_cut,
+      base:
+        row.session_cut_base === null ? {} : JSON.parse(row.session_cut_base),
+    };
+  }
+
+  /**
+   * M1 and L10, right after an upload is accepted (the uploaded vars are
+   * live): the owed cut runs when they have google newly on relative to the
+   * vars the cut was minted against, and is dropped otherwise.
+   */
+  private async settleCut(
+    cut: Cut | null,
+    live: Record<string, string>,
+    d1Id: string,
+    d1Name: string,
+    version: string,
+  ): Promise<boolean> {
+    if (cut === null) return false;
+    if (!googleNewlyEnabled(cut.base, live)) {
+      await this.write({ session_cut: null, session_cut_base: null });
+      await this.logged("vars.session_cut_dropped", { version });
+      return false;
+    }
+    await this.hold();
+    await this.sessionCut(d1Id, d1Name, cut.id);
+    await this.write({ session_cut: null, session_cut_base: null });
+    await this.logged("vars.session_cut", { version });
+    return true;
   }
 
   /**
@@ -1541,6 +1769,33 @@ export class WfpProvisioner {
     return f;
   }
 
+  /**
+   * M2: the PAT and the welcome artifact the read-only selftest needs, the
+   * PAT checked with a read-only MCP initialize before any write.
+   */
+  private async ownerToken(
+    row: InstallRow,
+    appHost: string,
+  ): Promise<{ patFile: string; welcome: string }> {
+    if (!row.welcome_artifact)
+      throw new ProvisionRefused(
+        `install ${row.id} has no recorded welcome artifact; the read-only selftest cannot run`,
+      );
+    const patFile = this.patFileOf(appHost);
+    try {
+      await this.mcp(appHost, patFile).initialize();
+    } catch (e) {
+      if (e instanceof McpError && (e.status === 401 || e.status === 403))
+        throw new ProvisionRefused(
+          `the owner token in ${patFile} was refused by ${appHost} (HTTP ${e.status}); restore it before any lifecycle operation`,
+        );
+      this.notes.push(
+        `pre-flight: MCP on ${appHost} did not answer (${errCode(e)}); continuing`,
+      );
+    }
+    return { patFile, welcome: row.welcome_artifact };
+  }
+
   /** The install's D1 and script, both present, and every secret create sends. */
   private async liveInstall(
     row: InstallRow,
@@ -1564,10 +1819,31 @@ export class WfpProvisioner {
     return { d1Id: res.d1, kvId: res.kv };
   }
 
+  /** L4 in pre-flight: read-only, the install's applied migrations against the release's. */
+  private async checkMigrationOrder(rel: Checked, d1Id: string): Promise<void> {
+    const r = await this.cf.d1Query(d1Id, "SELECT name FROM d1_migrations");
+    assertMigrationOrder(
+      rel.migrations.map((f) => f.name),
+      new Set((r[0]?.results ?? []).map((x) => String(x.name))),
+      rel.rec.version,
+    );
+  }
+
+  /** L5: the DO rule, re-run on the probed live tag. */
+  private doRule(t: Template): (live: string | null) => void {
+    return (live) => {
+      try {
+        assertDoClassesShipFirst(t, live);
+      } catch (e) {
+        throw new ProvisionRefused((e as Error).message);
+      }
+    };
+  }
+
   /**
    * active -> upgrading -> new D1 migrations -> upload (keep_bindings, no
-   * secret value) -> /healthz and the MCP selftest -> active. A failed check
-   * rolls back, unless the DO tag moved (forward-fix only).
+   * secret value) -> /healthz and the read-only MCP selftest -> active. A
+   * failed check rolls back, unless the DO tag moved (forward-fix only).
    */
   async upgrade(id: InstallId, toVersion: string): Promise<UpgradeResult> {
     return this.guarded(() => this.runUpgrade(id, toVersion));
@@ -1594,13 +1870,10 @@ export class WfpProvisioner {
       version: to,
       bundle: m.testHooks ? "redline" : "release",
     });
-    try {
-      assertDoClassesShipFirst(rel.template, row.do_migration_tag);
-    } catch (e) {
-      throw new ProvisionRefused((e as Error).message);
-    }
-    const patFile = this.patFileOf(m.appHost);
+    this.doRule(rel.template)(row.do_migration_tag);
     const { d1Id, kvId } = await this.liveInstall(row, m);
+    await this.checkMigrationOrder(rel, d1Id);
+    const own = await this.ownerToken(row, m.appHost);
     const n = names(id, this.env);
     this.metadata(id, m, rel, {
       d1Id,
@@ -1613,14 +1886,20 @@ export class WfpProvisioner {
     });
     const raiseFloor = await this.checkFloorSeq(rel.floor);
     if (m.sitekey !== null) await this.checkWidget(m.sitekey);
+    const cut = this.pendingCut(row);
 
-    const lease = await this.claim(row, ["active"], "upgrading");
+    await this.claim(row, ["active"], "upgrading", "upgrade");
+    let uploaded = false;
     try {
-      if (raiseFloor) await this.platform.raiseFloorSeq(rel.floor.seq);
-      await this.platform.audit(id, "upgrade.start", { from, to });
+      if (raiseFloor) {
+        await this.hold();
+        await this.platform.raiseFloorSeq(rel.floor.seq);
+      }
+      await this.logged("upgrade.start", { from, to });
+      await this.hold();
       await this.migrate(rel.rec, d1Id, n.d1);
-      const tags = tagsOf(rel.template);
-      const reached = tags.length ? (tags[tags.length - 1] as string) : null;
+      const reached = latestOf(rel.template);
+      await this.hold();
       const sent = await this.uploadRelease({
         id,
         script: n.script,
@@ -1631,45 +1910,72 @@ export class WfpProvisioner {
         rlNs: row.rl_ns,
         exists: true,
         journal: row.do_migration_tag,
-        tags,
+        tags: tagsOf(rel.template),
         send: {},
+        probe: true,
+        onLive: this.doRule(rel.template),
       });
+      uploaded = true;
+      await this.hold();
       await this.platform.putVersion(id, to, {
         vars,
         metadata: storedMetadata(sent),
         do_migration_tag: reached,
       });
-      await this.platform.update(id, {
+      await this.write({
         version: to,
         previous_version: from,
         do_migration_tag: reached,
       });
+      await this.settleCut(cut, vars, d1Id, n.d1, to);
       try {
         await this.health(id, m.appHost, to, "the upgrade did not take");
-        await this.selftest(rel.rec, m.appHost, patFile);
+        await this.checkSelf(m.appHost, own.patFile, own.welcome);
       } catch (e) {
+        if (e instanceof LostLease) throw e;
         const reason = this.reasonOf(e);
-        await this.platform.audit(id, "upgrade.failed", { from, to });
+        await this.logged("upgrade.failed", { from, to });
         const done = await this.afterFailedUpgrade(
           {
             ...row,
             version: to,
             previous_version: from,
             do_migration_tag: reached,
+            session_cut: null,
+            session_cut_base: null,
           },
           from,
           to,
           reason,
+          own,
         );
-        await this.platform.finish(id, lease, "active");
+        await this.release("active");
         return done;
       }
-      await this.platform.finish(id, lease, "active");
-      await this.platform.audit(id, "upgrade.done", { from, to });
+      await this.logged("upgrade.done", { from, to });
+      await this.release("active");
       return { id, from, to, ok: true, rolledBack: false };
     } catch (e) {
-      await this.platform.finish(id, lease, "active").catch(() => {});
-      throw e;
+      if (e instanceof LostLease) throw e;
+      if (!uploaded) {
+        await this.releaseQuietly("active");
+        throw e;
+      }
+      // L7: the new script may be live; say so and leave a trail.
+      const reason = this.reasonOf(e);
+      await this.platform
+        .audit(id, "upgrade.incomplete", { from, to })
+        .catch(() => {});
+      await this.releaseQuietly("active");
+      return {
+        id,
+        from,
+        to,
+        ok: false,
+        rolledBack: false,
+        forwardFix: true,
+        reason: `${reason}; the script may already run ${to}: re-run or forward-fix`,
+      };
     }
   }
 
@@ -1679,9 +1985,10 @@ export class WfpProvisioner {
     from: string,
     to: string,
     reason: string,
+    own: { patFile: string; welcome: string },
   ): Promise<UpgradeResult> {
     const forwardFix = async (why: string) => {
-      await this.platform.audit(row.id, "upgrade.forward_fix", { from, to });
+      await this.logged("upgrade.forward_fix", { from, to });
       return {
         id: row.id,
         from,
@@ -1692,14 +1999,14 @@ export class WfpProvisioner {
         reason: why,
       };
     };
-    let plan: RollbackPlan;
+    let back: { ok: boolean; reason?: string };
     try {
-      plan = await this.planRollback(row);
+      const plan = await this.planRollback(row, own);
+      back = await this.applyRollback(plan, null);
     } catch (e) {
-      if (!(e instanceof ProvisionRefused)) throw e;
+      if (e instanceof LostLease || !(e instanceof ProvisionRefused)) throw e;
       return forwardFix(`${reason}; no rollback: ${this.reasonOf(e)}`);
     }
-    const back = await this.applyRollback(plan);
     return {
       id: row.id,
       from,
@@ -1711,18 +2018,19 @@ export class WfpProvisioner {
   }
 
   /**
-   * Re-uploads the previous version's verified bytes with exactly the
-   * metadata stored for it, and swaps version and previous_version. Never
-   * rolls back D1 (forward-only) and never crosses a DO tag.
+   * Re-uploads the previous version's verified code with its stored
+   * metadata (bindings, compat, tag) and the install's current vars, and
+   * swaps version and previous_version. Never rolls back D1 (forward-only),
+   * never crosses a DO tag, never moves forward.
    */
   async rollback(id: InstallId): Promise<UpgradeResult> {
     return this.guarded(async () => {
       const row = await this.openInstall(id, ["active"]);
       const plan = await this.planRollback(row);
-      const lease = await this.claim(row, ["active"], "upgrading");
+      await this.claim(row, ["active"], "upgrading", "rollback");
       try {
-        const r = await this.applyRollback(plan);
-        await this.platform.finish(id, lease, "active");
+        const r = await this.applyRollback(plan, this.pendingCut(row));
+        await this.release("active");
         return {
           id,
           from: plan.from,
@@ -1732,20 +2040,28 @@ export class WfpProvisioner {
           ...(r.ok ? {} : { reason: r.reason }),
         };
       } catch (e) {
-        await this.platform.finish(id, lease, "active").catch(() => {});
+        if (!(e instanceof LostLease)) await this.releaseQuietly("active");
         throw e;
       }
     });
   }
 
-  /** Every rollback refusal, before any write. */
-  private async planRollback(row: InstallRow): Promise<RollbackPlan> {
+  /** Every rollback refusal, before any write. `own` is passed by the auto-rollback. */
+  private async planRollback(
+    row: InstallRow,
+    own?: { patFile: string; welcome: string },
+  ): Promise<RollbackPlan> {
     const id = row.id;
     const from = row.version;
     const to = row.previous_version;
     if (!from || !to)
       throw new ProvisionRefused(
         `install ${id} has no previous version to roll back to`,
+      );
+    // L3: a rollback never moves forward; that is an upgrade, with its checks.
+    if (compareVersions(to, from) > 0)
+      throw new ProvisionRefused(
+        `install ${id}: the previous version ${to} is newer than ${from}; use upgrade`,
       );
     const stored = await this.storedOf(row, to);
     if (stored.do_migration_tag !== row.do_migration_tag)
@@ -1776,21 +2092,21 @@ export class WfpProvisioner {
       throw new ProvisionRefused(
         `install ${id}: the stored metadata for ${to} is not a render of that release`,
       );
-    const patFile = this.patFileOf(m.appHost);
+    const tok = own ?? (await this.ownerToken(row, m.appHost));
     const { d1Id, kvId } = await this.liveInstall(row, m);
-    let metadata: Record<string, unknown>;
+    const render = (tag: string | null) =>
+      this.metadata(id, m, rel, {
+        d1Id,
+        kvId,
+        rlNs: row.rl_ns,
+        tag,
+        mode: "update",
+        secrets: {},
+        assetsJwt: "dry-run",
+      });
+    let fresh: UploadMetadata;
     try {
-      metadata = storedMetadata(
-        this.metadata(id, m, rel, {
-          d1Id,
-          kvId,
-          rlNs: row.rl_ns,
-          tag: row.do_migration_tag,
-          mode: "update",
-          secrets: {},
-          assetsJwt: "dry-run",
-        }),
-      );
+      fresh = render(row.do_migration_tag);
     } catch (e) {
       throw unfit(e);
     }
@@ -1808,41 +2124,56 @@ export class WfpProvisioner {
           (b) => !(b.type === "plain_text" && varNames.has(b.name)),
         ),
       });
-    if (notVars(metadata) !== notVars(stored.metadata))
+    if (notVars(storedMetadata(fresh)) !== notVars(stored.metadata))
       throw new ProvisionRefused(
         `install ${id}: release ${to} no longer renders the metadata stored for it`,
       );
+    const { jwt: _j, ...assets } = fresh.assets;
+    const { migrations: _m, ...upload } = { ...fresh, assets };
     const raiseFloor = await this.checkFloorSeq(rel.floor);
     if (m.sitekey !== null) await this.checkWidget(m.sitekey);
     return {
       row,
       from,
       to,
-      stored: { ...stored, vars, metadata },
+      upload,
+      probe: render(null),
+      vars,
       m,
       rel,
       d1Id,
-      patFile,
+      patFile: tok.patFile,
+      welcome: tok.welcome,
       raiseFloor,
     };
   }
 
   private async applyRollback(
     p: RollbackPlan,
+    cut: Cut | null,
   ): Promise<{ ok: boolean; reason?: string }> {
     const { row, from, to, rel } = p;
     const id = row.id;
     const n = names(id, this.env);
-    if (p.raiseFloor) await this.platform.raiseFloorSeq(rel.floor.seq);
-    await this.platform.audit(id, "rollback.start", { from, to });
+    if (p.raiseFloor) {
+      await this.hold();
+      await this.platform.raiseFloorSeq(rel.floor.seq);
+    }
+    await this.logged("rollback.start", { from, to });
     this.assertHooksAllowed(rel.rec.variant, p.m.testHooks);
     const mods = await this.readModules(rel.rec);
     const assets = await this.readAssets(rel.rec);
+    // L5: the live tag, not only the journal; a rollback never crosses it.
+    await this.hold();
+    const live = await this.probeTag(n.script, p.probe, mods.modules);
+    if (live !== undefined && live !== row.do_migration_tag)
+      throw new ProvisionRefused(
+        `install ${id}: the live Durable Object migration tag is ${live ?? "none"}, the journal says ${row.do_migration_tag ?? "none"}; rollback is refused (forward-fix only)`,
+      );
     const { jwt } = await this.cf.assetsUpload(this.target, n.script, assets);
-    const stored = p.stored.metadata as unknown as UploadMetadata;
     const meta: UploadMetadata = {
-      ...stored,
-      assets: { ...stored.assets, jwt },
+      ...p.upload,
+      assets: { ...p.upload.assets, jwt },
     };
     try {
       assertUniqueBindings(meta.bindings);
@@ -1850,35 +2181,48 @@ export class WfpProvisioner {
       throw new ProvisionRefused((e as Error).message);
     }
     assertOwnResource(n.script, this.env);
+    await this.hold();
     await this.cf.scriptUpload(this.target, n.script, meta, mods.modules);
-    await this.platform.putVersion(id, to, p.stored);
-    await this.platform.update(id, { version: to, previous_version: from });
     try {
+      await this.hold();
+      await this.platform.putVersion(id, to, {
+        vars: p.vars,
+        metadata: storedMetadata(meta),
+        do_migration_tag: row.do_migration_tag,
+      });
+      await this.write({ version: to, previous_version: from });
+      await this.settleCut(cut, p.vars, p.d1Id, n.d1, to);
       await this.health(id, p.m.appHost, to, "the rollback did not take");
-      await this.selftest(rel.rec, p.m.appHost, p.patFile);
+      await this.checkSelf(p.m.appHost, p.patFile, p.welcome);
     } catch (e) {
-      await this.platform.audit(id, "rollback.unhealthy", { from, to });
+      if (e instanceof LostLease) throw e;
+      // L7: the rolled-back script is live; report it and leave a trail.
+      await this.logged("rollback.unhealthy", { from, to });
       return { ok: false, reason: `after the rollback: ${this.reasonOf(e)}` };
     }
-    await this.platform.audit(id, "rollback.done", { from, to });
+    await this.logged("rollback.done", { from, to });
     return { ok: true };
   }
 
   /**
    * A var change on the live version, with create's checks. When google is
-   * newly on (#442) the install's own D1 gets epochBumpSql(), after the new
-   * vars are live, once per enablement: the cut id is journaled on the row
-   * before the upload and recorded in the install's D1 with the bump.
+   * newly on (#442) the install's own D1 gets epochBumpSql() as soon as the
+   * upload is accepted, once per enablement: the cut id and its base vars
+   * are journaled on the row before the upload and the id is recorded in
+   * the install's D1 with the bump.
    */
   async updateVars(
     id: InstallId,
     nextVars: Record<string, string>,
   ): Promise<VarsResult> {
     return this.guarded(async () => {
+      if (!nextVars || typeof nextVars !== "object" || Array.isArray(nextVars))
+        throw new ProvisionRefused("vars must be an object of strings");
       const row = await this.openInstall(id, ["active"]);
       const version = row.version;
       if (!version) throw new ProvisionRefused(`install ${id} has no version`);
       await this.storedOf(row, version);
+      // H1: computed from the snapshot the claim pins.
       const prev = this.currentVars(row);
       const vars = { ...nextVars };
       const m = this.renderInputs(row, vars);
@@ -1886,8 +2230,8 @@ export class WfpProvisioner {
         version,
         bundle: m.testHooks ? "redline" : "release",
       });
-      const patFile = this.patFileOf(m.appHost);
       const { d1Id, kvId } = await this.liveInstall(row, m);
+      const own = await this.ownerToken(row, m.appHost);
       const n = names(id, this.env);
       const have = await this.cf.secretList(this.target, n.script);
       // Codes newly on: the env's widget secret goes up with the vars.
@@ -1908,26 +2252,33 @@ export class WfpProvisioner {
       });
       const raiseFloor = await this.checkFloorSeq(rel.floor);
       if (m.sitekey !== null) await this.checkWidget(m.sitekey);
-      const enabled = googleNewlyEnabled(prev, vars);
+      let cut = this.pendingCut(row);
 
-      const lease = await this.claim(row, ["active"], "upgrading");
+      await this.claim(row, ["active"], "upgrading", "vars");
+      let uploaded = false;
+      let sessionCut = false;
       try {
-        if (raiseFloor) await this.platform.raiseFloorSeq(rel.floor.seq);
-        let cut = row.session_cut;
-        if (enabled && cut === null) {
-          cut = hex16();
-          await this.platform.update(id, { session_cut: cut });
+        if (raiseFloor) {
+          await this.hold();
+          await this.platform.raiseFloorSeq(rel.floor.seq);
+        }
+        if (cut === null && googleNewlyEnabled(prev, vars)) {
+          cut = { id: hex16(), base: prev };
+          await this.write({
+            session_cut: cut.id,
+            session_cut_base: canonicalJson(prev),
+          });
         }
         const changed = [
           ...new Set([...Object.keys(prev), ...Object.keys(vars)]),
         ]
           .filter((k) => prev[k] !== vars[k])
           .sort();
-        await this.platform.audit(id, "vars.start", {
+        await this.logged("vars.start", {
           version,
           changed: changed.join(","),
         });
-        const tags = tagsOf(rel.template);
+        await this.hold();
         const sent = await this.uploadRelease({
           id,
           script: n.script,
@@ -1938,31 +2289,39 @@ export class WfpProvisioner {
           rlNs: row.rl_ns,
           exists: true,
           journal: row.do_migration_tag,
-          tags,
+          tags: tagsOf(rel.template),
           send,
+          probe: true,
+          onLive: this.doRule(rel.template),
         });
+        uploaded = true;
+        await this.write({ vars: canonicalJson(vars) });
+        await this.hold();
         await this.platform.putVersion(id, version, {
           vars,
           metadata: storedMetadata(sent),
-          do_migration_tag: tags.length
-            ? (tags[tags.length - 1] as string)
-            : null,
+          do_migration_tag: latestOf(rel.template),
         });
-        await this.platform.update(id, { vars: canonicalJson(vars) });
-        // The new vars are live once /healthz and the selftest pass.
+        // M1: the vars are live once the upload is accepted; cut now.
+        sessionCut = await this.settleCut(cut, vars, d1Id, n.d1, version);
         await this.health(id, m.appHost, version, "rerun the var change");
-        await this.selftest(rel.rec, m.appHost, patFile);
-        if (cut !== null) {
-          await this.sessionCut(d1Id, n.d1, cut);
-          await this.platform.update(id, { session_cut: null });
-          await this.platform.audit(id, "vars.session_cut", { version });
-        }
-        await this.platform.finish(id, lease, "active");
-        await this.platform.audit(id, "vars.done", { version });
-        return { id, version, ok: true, sessionCut: cut !== null };
+        await this.checkSelf(m.appHost, own.patFile, own.welcome);
+        await this.logged("vars.done", { version });
+        await this.release("active");
+        return { id, version, ok: true, sessionCut };
       } catch (e) {
-        await this.platform.finish(id, lease, "active").catch(() => {});
-        throw e;
+        if (e instanceof LostLease) throw e;
+        if (!uploaded) {
+          await this.releaseQuietly("active");
+          throw e;
+        }
+        // L7: the new vars are live; report it and leave a trail.
+        const reason = this.reasonOf(e);
+        await this.platform
+          .audit(id, "vars.failed", { version })
+          .catch(() => {});
+        await this.releaseQuietly("active");
+        return { id, version, ok: false, sessionCut, reason };
       }
     });
   }
@@ -1998,7 +2357,8 @@ export class WfpProvisioner {
   /**
    * Puts the env's current Turnstile secret (options.turnstile, from the
    * keychain) on every active install of `env` with codes on. One result per
-   * install; an install that is not active is reported, not skipped silently.
+   * install; an install that is not active, or owes a session cut, is
+   * reported, not skipped silently.
    */
   async rotateTurnstileSecret(env: Env): Promise<RotationResult[]> {
     return this.guarded(async () => {
@@ -2020,15 +2380,21 @@ export class WfpProvisioner {
         "upgrading",
       ])) {
         try {
+          // N2: codes off is nothing to rotate, whatever the state.
+          if (row.vars !== null && !codesOn(this.currentVars(row))) {
+            out.push({ id: row.id, ok: true, rotated: false });
+            continue;
+          }
           if (row.state !== "active")
             throw new ProvisionRefused(
               `install ${row.id} is ${row.state}; rerun the rotation once it is active`,
             );
+          if (row.session_cut !== null)
+            throw new ProvisionRefused(
+              `install ${row.id}: pending session cut: re-run updateVars first`,
+            );
+          this.currentVars(row);
           const cur = await this.storedOf(row, row.version as string);
-          if (!codesOn(this.currentVars(row))) {
-            out.push({ id: row.id, ok: true, rotated: false });
-            continue;
-          }
           const site = (
             (cur.metadata.bindings ?? []) as { name: string; text?: string }[]
           ).find((b) => b.name === "TURNSTILE_SITE_KEY")?.text;
@@ -2036,21 +2402,22 @@ export class WfpProvisioner {
             throw new ProvisionRefused(
               `install ${row.id} uses another Turnstile sitekey; a var change sets the new one`,
             );
-          const lease = await this.claim(row, ["active"], "active");
+          await this.claim(row, ["active"], "active", "turnstile");
           try {
             const script = names(row.id, this.env).script;
             assertOwnResource(script, this.env);
+            await this.hold();
             await this.cf.secretPut(
               this.target,
               script,
               "TURNSTILE_SECRET",
               ts.secret,
             );
-            await this.platform.audit(row.id, "turnstile.rotate", {
-              sitekey: ts.sitekey,
-            });
-          } finally {
-            await this.platform.finish(row.id, lease, "active");
+            await this.logged("turnstile.rotate", { sitekey: ts.sitekey });
+            await this.release("active");
+          } catch (e) {
+            if (!(e instanceof LostLease)) await this.releaseQuietly("active");
+            throw e;
           }
           out.push({ id: row.id, ok: true, rotated: true });
         } catch (e) {
@@ -2066,19 +2433,18 @@ export class WfpProvisioner {
     });
   }
 
-  /** Throws unless `name` is one of names(id) in this env. */
-  private assertInstallName(id: InstallId, name: string): void {
-    assertOwnResource(name, this.env);
-    if (!Object.values(names(id, this.env)).includes(name))
-      throw new ForeignResource(name, this.env);
+  /** L1: the name Cloudflare holds for the id about to be deleted must be names(id)'s. */
+  private assertDeletes(actual: string, want: string): void {
+    assertOwnResource(actual, this.env);
+    if (actual !== want) throw new ForeignResource(actual, this.env);
   }
 
   /**
    * Review Focus 4: confirm must equal the id. Unmaps first (HOSTS, then the
    * hosts rows), so the dispatch Worker 404s at once; then the registry
-   * entry, the script, KV, R2 (emptied first) and D1. The row ends deleted
-   * and stays, holding the slug. Each step checks first, so a rerun after a
-   * partial failure finishes the job.
+   * entry, the script, KV, R2 (emptied first), D1 and the local token files.
+   * The row ends deleted and stays, holding the slug. Each step checks first
+   * and renews the lock, so a rerun after a partial failure finishes the job.
    */
   async delete(id: InstallId, confirm: string): Promise<DeleteResult> {
     return this.guarded(async () => {
@@ -2086,17 +2452,35 @@ export class WfpProvisioner {
         throw new ProvisionRefused(
           "delete needs confirm to be exactly the install id",
         );
-      const row = await this.openInstall(id, ["active", "deleting", "deleted"]);
+      const row = await this.openInstall(id, [
+        "creating",
+        "active",
+        "deleting",
+        "deleted",
+      ]);
       if (row.state === "deleted") return { id, ok: true, state: "deleted" };
+      // L2: a create holds no lease; it counts as abandoned once idle a lease time.
+      if (
+        row.state === "creating" &&
+        (row.lease_until ?? (row.updated_at ?? 0) + LEASE_MS) > this.now()
+      )
+        throw new ProvisionRefused(
+          `install ${id} is creating and may still be running; retry once it has been idle for ${LEASE_MS / 60_000} minutes`,
+        );
       const { cf, env, target } = this;
       const n = names(id, env);
       const res = await this.resources(row, true);
       const regTitle = platformNames(env).registry;
       const regId = await cf.kvFind(regTitle);
 
-      const lease = await this.claim(row, ["active", "deleting"], "deleting");
+      await this.claim(
+        row,
+        ["creating", "active", "deleting"],
+        "deleting",
+        "delete",
+      );
       try {
-        await this.platform.audit(id, "delete.start", {});
+        await this.logged("delete.start", {});
         for (const h of [row.app_host, row.content_host]) {
           const cur = await cf.kvGet(this.hostsKv.id, h);
           if (cur === null) continue;
@@ -2105,44 +2489,64 @@ export class WfpProvisioner {
             continue;
           }
           assertOwnResource(this.hostsKv.title, env);
+          await this.hold();
           await cf.kvDeleteKey(this.hostsKv.id, h);
         }
+        await this.hold();
         await this.platform.unmapHosts(id);
         if (regId) {
           assertOwnResource(regTitle, env);
+          await this.hold();
           await cf.kvDeleteKey(regId, id);
         }
         if (await cf.scriptExists(target, n.script)) {
-          this.assertInstallName(id, n.script);
+          assertOwnResource(n.script, env);
+          await this.hold();
           await cf.scriptDelete(target, n.script);
         }
         if (res.kv) {
-          this.assertInstallName(id, n.kv);
-          await cf.kvDelete(res.kv);
+          const title = await cf.kvTitleOf(res.kv);
+          if (title !== null) {
+            this.assertDeletes(title, n.kv);
+            await this.hold();
+            await cf.kvDelete(res.kv);
+          }
         }
         if (await cf.r2Exists(n.r2)) {
-          this.assertInstallName(id, n.r2);
+          assertOwnResource(n.r2, env);
           await this.emptyBucket(n.r2);
+          await this.hold();
           await cf.r2Delete(n.r2);
         }
         if (res.d1) {
-          this.assertInstallName(id, n.d1);
-          await cf.d1Delete(res.d1);
+          const name = await cf.d1NameOf(res.d1);
+          if (name !== null) {
+            this.assertDeletes(name, n.d1);
+            await this.hold();
+            await cf.d1Delete(res.d1);
+          }
         }
-        await this.platform.finish(id, lease, "deleted");
+        // L8: the owner PAT and hook key of a deleted host are dead weight.
+        for (const f of [
+          `${row.app_host}-pat-token`,
+          `${row.app_host}-hook-key`,
+        ])
+          rmSync(join(this.o.patDir, f), { force: true });
+        await this.release("deleted");
         await this.platform.audit(id, "delete.done", {});
         return { id, ok: true, state: "deleted" };
       } catch (e) {
         // Stays deleting; the lock goes so a rerun can resume at once.
-        await this.platform.finish(id, lease, "deleting").catch(() => {});
+        if (!(e instanceof LostLease)) await this.releaseQuietly("deleting");
         throw e;
       }
     });
   }
 
-  /** Deletes every object, a listing page at a time, until a listing comes back empty. */
+  /** Deletes every object, a listing page at a time (lock renewed each page), until a listing comes back empty. */
   private async emptyBucket(bucket: string): Promise<void> {
     for (let page = 0; page < 100_000; page++) {
+      await this.hold();
       const keys = await this.cf.r2InstallKeys(bucket);
       if (keys.length === 0) return;
       for (const k of keys) await this.cf.r2InstallDeleteObject(bucket, k);
@@ -2165,12 +2569,11 @@ export class WfpProvisioner {
     );
     const r = await this.cf.d1Query(d1Id, "SELECT name FROM d1_migrations");
     const done = new Set((r[0]?.results ?? []).map((x) => String(x.name)));
-    // Forward only: an install that has a migration this release lacks is ahead of it.
-    const ahead = [...done].filter((x) => !files.some((f) => f.name === x));
-    if (ahead.length > 0)
-      throw new ProvisionRefused(
-        `the install's D1 has migration ${ahead[0]}, which release ${rec.version} does not; forward-fix only`,
-      );
+    assertMigrationOrder(
+      files.map((f) => f.name),
+      done,
+      rec.version,
+    );
     for (const f of files) {
       if (done.has(f.name)) continue;
       if (!MIGRATION_RE.test(f.name))
@@ -2322,13 +2725,10 @@ export class WfpProvisioner {
     return file;
   }
 
-  /** As setup's selftest: publish a private Welcome artifact over MCP and read it back. */
-  private async selftest(
-    rec: ReleaseRecord,
-    appHost: string,
-    patFile: string,
-  ): Promise<void> {
+  /** An MCP session on the install as its owner (the PAT is scrubbed from every error, L6). */
+  private mcp(appHost: string, patFile: string) {
     const token = readFileSync(patFile, "utf8").trim();
+    this.sensitive.add(token);
     const url = `https://${appHost}/mcp`;
     const headers = {
       authorization: `Bearer ${token}`,
@@ -2336,14 +2736,15 @@ export class WfpProvisioner {
       accept: "application/json, text/event-stream",
     };
     let seq = 0;
-    const post = async (method: string, params: unknown) => {
+    // biome-ignore lint/suspicious/noExplicitAny: JSON-RPC results are arbitrary JSON
+    const post = async (method: string, params: unknown): Promise<any> => {
       const id = ++seq;
       const res = await this.http(url, {
         method: "POST",
         headers,
         body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
       });
-      if (!res.ok) throw new Error(`MCP ${method}: HTTP ${res.status}`);
+      if (!res.ok) throw new McpError(method, res.status);
       const text = await res.text();
       const msgs = res.headers.get("content-type")?.includes("event-stream")
         ? text
@@ -2356,43 +2757,77 @@ export class WfpProvisioner {
         throw new Error(`MCP ${method}: ${msg?.error?.code ?? "no response"}`);
       return msg.result;
     };
-    await post("initialize", {
-      protocolVersion: "2025-06-18",
-      capabilities: {},
-      clientInfo: { name: "oa-provision", version: "1" },
-    });
-    await this.http(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        method: "notifications/initialized",
-      }),
-    });
-    const { tools } = await post("tools/list", {});
+    const initialize = async () => {
+      await post("initialize", {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "oa-provision", version: "1" },
+      });
+      await this.http(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          method: "notifications/initialized",
+        }),
+      });
+    };
+    const getWelcome = async (artId: string) => {
+      const got = await post("tools/call", {
+        name: "get_artifact",
+        arguments: { id: artId },
+      });
+      const body = got?.structuredContent?.content ?? got?.content?.[0]?.text;
+      if (
+        got?.isError ||
+        typeof body !== "string" ||
+        !body.includes(WELCOME_TITLE)
+      )
+        throw new Error(
+          `MCP get_artifact did not return the welcome artifact ${artId}`,
+        );
+    };
+    return { post, initialize, getWelcome };
+  }
+
+  /** As setup's selftest: publish a private Welcome artifact over MCP and read it back. Create only. */
+  private async selftest(
+    rec: ReleaseRecord,
+    appHost: string,
+    patFile: string,
+  ): Promise<string> {
+    const c = this.mcp(appHost, patFile);
+    await c.initialize();
+    const { tools } = await c.post("tools/list", {});
     if (!tools?.some((t: { name: string }) => t.name === "publish_artifact"))
       throw new Error("MCP tools/list has no publish_artifact");
     // F3: the release's text, re-read and re-checked right before publishing.
     const content = await this.readWelcome(rec);
-    const pub = await post("tools/call", {
+    const pub = await c.post("tools/call", {
       name: "publish_artifact",
       arguments: { title: WELCOME_TITLE, format: "markdown", content },
     });
     const artId = pub?.structuredContent?.id;
     if (pub?.isError || typeof artId !== "string")
       throw new Error("MCP publish_artifact failed");
-    const got = await post("tools/call", {
-      name: "get_artifact",
-      arguments: { id: artId },
-    });
-    const body = got?.structuredContent?.content ?? got?.content?.[0]?.text;
-    if (
-      got?.isError ||
-      typeof body !== "string" ||
-      !body.includes(WELCOME_TITLE)
-    )
-      throw new Error(
-        `MCP get_artifact did not return the welcome artifact ${artId}`,
-      );
+    await c.getWelcome(artId);
+    return artId;
+  }
+
+  /**
+   * M2: the lifecycle selftest, read-only: initialize, tools/list and a
+   * get_artifact of the welcome artifact create recorded. Nothing is published.
+   */
+  private async checkSelf(
+    appHost: string,
+    patFile: string,
+    welcome: string,
+  ): Promise<void> {
+    const c = this.mcp(appHost, patFile);
+    await c.initialize();
+    const { tools } = await c.post("tools/list", {});
+    if (!tools?.some((t: { name: string }) => t.name === "get_artifact"))
+      throw new Error("MCP tools/list has no get_artifact");
+    await c.getWelcome(welcome);
   }
 }

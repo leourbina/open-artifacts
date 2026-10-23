@@ -29,6 +29,25 @@ ALTER TABLE installs ADD COLUMN lease_until INTEGER;
 ALTER TABLE installs ADD COLUMN vars TEXT;
 
 -- A session cut (epoch bump) still owed to the install's own D1 after google
--- was newly enabled: the id is written before the new vars go out and cleared
--- after the bump, which the install's D1 records under the same id.
+-- was newly enabled: the id and the vars it was minted against (the base) are
+-- written before the new vars go out. Right after any upload is accepted the
+-- cut runs when the uploaded vars have google newly on relative to the base,
+-- and is dropped otherwise; the install's D1 records the id with the bump.
 ALTER TABLE installs ADD COLUMN session_cut TEXT;
+
+-- Bumped on every write of the row (trigger below): an operation claims the
+-- row only if it is unchanged since its pre-flight read it.
+ALTER TABLE installs ADD COLUMN row_version INTEGER NOT NULL DEFAULT 0;
+
+-- The Welcome artifact create published; the lifecycle selftest reads it back
+-- (read-only) instead of publishing again.
+ALTER TABLE installs ADD COLUMN welcome_artifact TEXT;
+
+ALTER TABLE installs ADD COLUMN session_cut_base TEXT;
+
+CREATE TRIGGER IF NOT EXISTS installs_row_version
+AFTER UPDATE ON installs
+WHEN NEW.row_version = OLD.row_version
+BEGIN
+  UPDATE installs SET row_version = OLD.row_version + 1 WHERE id = NEW.id;
+END;
