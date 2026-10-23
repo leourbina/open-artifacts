@@ -23,6 +23,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { DatabaseSync as Sqlite } from "node:sqlite";
 import { isPat } from "@oa/shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { packUstar } from "../../../scripts/ci/release-artifact.mjs";
 import { assetHash, CfError, cfClient, type Target } from "../src/cf.js";
 import * as INDEX from "../src/index.js";
 import { RELEASE_PUBKEY_PLACEHOLDER } from "../src/internal/gates.js";
@@ -40,6 +41,12 @@ import {
 } from "../src/names.js";
 import { canonicalJson, inputsHash } from "../src/platform.js";
 import {
+  FLOOR_KEY,
+  probeR2Conditionals,
+  publishRelease,
+  r2ReleaseReader,
+} from "../src/publish.js";
+import {
   assetEntries,
   bundleSha256,
   compareVersions,
@@ -48,7 +55,7 @@ import {
   type ReleaseFile,
   type ReleaseReader,
   type ReleaseRecord,
-  readAssetsDir,
+  readTreeHardened,
   type SignedReleaseRecord,
   TEST_HOOKS_DEFINE,
 } from "../src/release.js";
@@ -99,6 +106,7 @@ const G = vi.hoisted(() => ({
   PROD_UNLOCKED: true,
   ALLOW_ACCOUNT_TARGET: true,
   RELEASE_PUBKEY: { staging: "", prod: "" } as Record<string, string>,
+  FLOOR_MIN_SEQ: { staging: 1, prod: 1 } as Record<string, number>,
 }));
 vi.mock("../src/internal/gates.js", async (orig) => {
   const m = await orig<typeof import("../src/internal/gates.js")>();
@@ -112,6 +120,9 @@ vi.mock("../src/internal/gates.js", async (orig) => {
     },
     get RELEASE_PUBKEY() {
       return G.RELEASE_PUBKEY;
+    },
+    get FLOOR_MIN_SEQ() {
+      return G.FLOOR_MIN_SEQ;
     },
   };
 });
@@ -175,10 +186,14 @@ beforeAll(() => {
 
 const NOW = Date.parse("2026-10-22T00:00:00Z");
 const ROOT = new URL("../../../", import.meta.url);
-const PLATFORM_SQL = readFileSync(
-  new URL("apps/platform-db/migrations/0001_installs.sql", ROOT),
-  "utf8",
-);
+// Every platform D1 migration, in order (0002 adds the release_floor cache).
+const PLATFORM_SQL = readdirSync(new URL("apps/platform-db/migrations/", ROOT))
+  .filter((f) => f.endsWith(".sql"))
+  .sort()
+  .map((f) =>
+    readFileSync(new URL(`apps/platform-db/migrations/${f}`, ROOT), "utf8"),
+  )
+  .join("\n");
 const SERVER_MIGRATIONS = readdirSync(new URL("apps/server/migrations/", ROOT))
   .filter((f) => f.endsWith(".sql"))
   .sort();
@@ -249,6 +264,7 @@ type ReleaseSpec = {
   template?: Template | Uint8Array;
   migrations?: ReleaseFile[];
   assets?: ReleaseAsset[];
+  floor?: unknown;
 };
 const tplBytes = (t: ReleaseSpec["template"]) =>
   t === undefined
@@ -272,17 +288,56 @@ const TEST_PUBKEY = pubX(SIGNER);
 // One key for both envs on purpose: domain separation must still hold (F2).
 G.RELEASE_PUBKEY = { staging: TEST_PUBKEY, prod: TEST_PUBKEY };
 
-/** The signed bytes: "oa-release-v1\n" + env + "\n" + canonicalJson(record). */
-const payloadOf = (record: unknown, env: string) =>
-  Buffer.from(`oa-release-v1\n${env}\n${canonicalJson(record)}`);
+/** The signed bytes: "oa-release-v1\n" + env + "\n" + the stored record string. */
+const payloadOf = (record: string, env: string) =>
+  Buffer.from(`oa-release-v1\n${env}\n${record}`);
+/** The stored form (T3b): the record as its canonical JSON string, and the signature over it. */
 const signRecord = (
   record: ReleaseRecord,
   key: KeyObject = SIGNER.privateKey,
   env: string = record.env,
-): SignedReleaseRecord => ({
-  record,
-  signature: sign(null, payloadOf(record, env), key).toString("base64url"),
+): SignedReleaseRecord => {
+  const s = canonicalJson(record);
+  return {
+    record: s,
+    signature: sign(null, payloadOf(s, env), key).toString("base64url"),
+  };
+};
+/** A stored record with one field replaced after signing. */
+const tamper = (g: SignedReleaseRecord, over: Record<string, unknown>) => ({
+  ...g,
+  record: canonicalJson({ ...JSON.parse(g.record), ...over }),
 });
+
+/** The env's signed floor (releases/floor.json). */
+type Floor = {
+  env: string;
+  seq: number;
+  minVersion: string;
+  revoked: string[];
+};
+const floorOf = (o: Partial<Floor> = {}, env: string = "staging"): Floor => ({
+  env,
+  seq: 1,
+  minVersion: "0.1.0",
+  revoked: [],
+  ...o,
+});
+const signFloor = (
+  f: Floor,
+  key: KeyObject = SIGNER.privateKey,
+  env: string = f.env,
+) => {
+  const s = canonicalJson(f);
+  return {
+    record: s,
+    signature: sign(
+      null,
+      Buffer.from(`oa-release-floor-v1\n${env}\n${s}`),
+      key,
+    ).toString("base64url"),
+  };
+};
 
 const WELCOME_BYTES = enc(
   "# Welcome to Open Artifacts\n\nThis text comes from the release (sentinel-from-release).\n",
@@ -315,7 +370,8 @@ type Kind =
   | "assets"
   | "template"
   | "migrations"
-  | "welcome";
+  | "welcome"
+  | "floor";
 /** An in-memory release reader that counts reads; `over` replaces any read. */
 function makeRelease(
   spec: ReleaseSpec = {},
@@ -328,6 +384,7 @@ function makeRelease(
     template: 0,
     migrations: 0,
     welcome: 0,
+    floor: 0,
   };
   const base: ReleaseReader = {
     record: async (version, v) => signRecord(recordOf(v, version, spec)),
@@ -344,6 +401,10 @@ function makeRelease(
         bytes: f.bytes.slice(),
       })),
     welcome: async () => (spec.welcome ?? WELCOME_BYTES).slice(),
+    floor: async () =>
+      spec.floor !== undefined
+        ? spec.floor
+        : signFloor(floorOf({}, spec.env ?? "staging")),
   };
   const counted = (k: Kind) =>
     // biome-ignore lint/suspicious/noExplicitAny: forwards each reader's own args
@@ -360,6 +421,7 @@ function makeRelease(
     template: counted("template"),
     migrations: counted("migrations"),
     welcome: counted("welcome"),
+    floor: counted("floor"),
   };
 }
 
@@ -2067,23 +2129,27 @@ describe("release record integrity (H-T4b M1)", () => {
     mkdirSync(join(dir, "css"));
     writeFileSync(join(dir, "index.html"), "i");
     writeFileSync(join(dir, "css", "a.css"), "a");
-    expect((await readAssetsDir(dir)).map((a) => a.path)).toEqual([
+    expect((await readTreeHardened(dir)).map((a) => a.path)).toEqual([
       "css/a.css",
       "index.html",
     ]);
     const withDot = mkdtempSync(join(tmpdir(), "oa-t4b-assets-"));
     writeFileSync(join(withDot, ".env"), "SECRET=1");
-    expect((await fails(readAssetsDir(withDot))).message).toMatch(/asset path/);
+    expect((await fails(readTreeHardened(withDot))).message).toMatch(
+      /asset path/,
+    );
     const withDotDir = mkdtempSync(join(tmpdir(), "oa-t4b-assets-"));
     mkdirSync(join(withDotDir, ".git"));
     writeFileSync(join(withDotDir, ".git", "config"), "x");
-    expect((await fails(readAssetsDir(withDotDir))).message).toMatch(
+    expect((await fails(readTreeHardened(withDotDir))).message).toMatch(
       /asset path/,
     );
     const withLink = mkdtempSync(join(tmpdir(), "oa-t4b-assets-"));
     writeFileSync(join(dir, "target.txt"), "t");
     symlinkSync(join(dir, "target.txt"), join(withLink, "link.txt"));
-    expect((await fails(readAssetsDir(withLink))).message).toMatch(/symlink/);
+    expect((await fails(readTreeHardened(withLink))).message).toMatch(
+      /symlink/,
+    );
   });
 
   it("the local checkout is never read: sentinel files in apps/server and scripts/setup change nothing", async () => {
@@ -2176,7 +2242,14 @@ describe("prod lock and signed records (H-T4b L2)", () => {
 
   const good = () => signRecord(recordOf("release"));
   it.each<[string, () => unknown]>([
-    ["an unsigned record", () => ({ record: recordOf("release") })],
+    [
+      "an unsigned record",
+      () => ({ record: canonicalJson(recordOf("release")) }),
+    ],
+    [
+      "an object record (the pre-T3b envelope)",
+      () => ({ ...good(), record: recordOf("release") }),
+    ],
     ["an empty signature", () => ({ ...good(), signature: "" })],
     ["a bare record without the envelope", () => recordOf("release")],
     [
@@ -2185,32 +2258,20 @@ describe("prod lock and signed records (H-T4b L2)", () => {
     ],
     [
       "a tampered record (template hash changed after signing)",
-      () => {
-        const g = good();
-        return {
-          ...g,
-          record: { ...g.record, templateSha256: "0".repeat(64) },
-        };
-      },
+      () => tamper(good(), { templateSha256: "0".repeat(64) }),
     ],
     [
       "a tampered record (variant and define flipped after signing)",
-      () => {
-        const g = good();
-        return {
-          ...g,
-          record: {
-            ...g.record,
-            variant: "redline",
-            defines: { [TEST_HOOKS_DEFINE]: true },
-          },
-        };
-      },
+      () =>
+        tamper(good(), {
+          variant: "redline",
+          defines: { [TEST_HOOKS_DEFINE]: true },
+        }),
     ],
     [
       "another record's signature",
       () => ({
-        record: recordOf("release"),
+        record: canonicalJson(recordOf("release")),
         signature: signRecord(recordOf("redline")).signature,
       }),
     ],
@@ -2617,7 +2678,7 @@ describe("H-T4b round 1", () => {
     it("a signature over the bare record, or a record without env, is refused", async () => {
       const rec = recordOf("release");
       const bare = {
-        record: rec,
+        record: canonicalJson(rec),
         signature: sign(
           null,
           Buffer.from(canonicalJson(rec)),
@@ -2681,7 +2742,10 @@ describe("H-T4b round 1", () => {
           {
             record: async () => signed,
             modules: async () => {
-              (signed.record as { sha256: string }).sha256 = bundleSha256(evil);
+              signed.record = canonicalJson({
+                ...JSON.parse(signed.record),
+                sha256: bundleSha256(evil),
+              });
               return evil;
             },
           },
@@ -2795,7 +2859,7 @@ describe("H-T4b round 1", () => {
       const dir = mkdtempSync(join(tmpdir(), "oa-t4b-assets-"));
       writeFileSync(join(dir, "index.html"), "i");
       symlinkSync(elsewhere, join(dir, "link-dir"));
-      expect((await fails(readAssetsDir(dir))).message).toMatch(/symlink/);
+      expect((await fails(readTreeHardened(dir))).message).toMatch(/symlink/);
     });
 
     it.each([
@@ -3364,5 +3428,138 @@ describe("frozen constants (H-ECD)", () => {
 
   it("the package index no longer exports loadTemplate", () => {
     expect("loadTemplate" in INDEX).toBe(false);
+  });
+});
+
+describe("T3b E: the signed floor gates create", () => {
+  const floorSeq = (s: ReturnType<typeof setup>) =>
+    (
+      s
+        .db()
+        .prepare("SELECT floor_seq FROM release_floor WHERE id = 1")
+        .get() as { floor_seq: number } | undefined
+    )?.floor_seq;
+
+  it.each<[string, unknown, RegExp]>([
+    ["a missing floor", null, /floor/],
+    ["an unsigned floor", { record: canonicalJson(floorOf()) }, /floor/],
+    [
+      "a wrong-key floor",
+      signFloor(floorOf(), OTHER_SIGNER.privateKey),
+      /floor/,
+    ],
+    ["another env's floor", signFloor(floorOf({}, "prod")), /floor/],
+    ["a release record as the floor", signRecord(recordOf("release")), /floor/],
+    [
+      "a version below minVersion",
+      signFloor(floorOf({ minVersion: "0.24.0" })),
+      /below/,
+    ],
+    [
+      "a revoked version",
+      signFloor(floorOf({ revoked: ["0.23.0"] })),
+      /revoked/,
+    ],
+  ])("%s is refused with zero calls", async (_n, floor, re) => {
+    const s = setup({ release: makeRelease({ floor }) });
+    const e = await fails(s.p.create(input()));
+    expect(e.message).toMatch(re);
+    expect(s.fake.log).toEqual([]);
+    const c = (s.release as ReturnType<typeof makeRelease>).calls;
+    expect([c.modules, c.assets]).toEqual([0, 0]);
+  });
+
+  it("a floor below FLOOR_MIN_SEQ is refused with zero calls, even with a valid signature", async () => {
+    const s = setup({
+      release: makeRelease({ floor: signFloor(floorOf({ seq: 2 })) }),
+    });
+    await withGate("FLOOR_MIN_SEQ", { staging: 3, prod: 1 }, async () => {
+      const e = await fails(s.p.create(input()));
+      expect(e.message).toMatch(/seq 2 is below 3/);
+      expect(s.fake.log).toEqual([]);
+    });
+  });
+
+  it("a lower-seq floor with a valid signature is refused below the D1 floor_seq cache, with zero writes", async () => {
+    const s = setup({
+      release: makeRelease({ floor: signFloor(floorOf({ seq: 4 })) }),
+    });
+    s.db()
+      .prepare("INSERT INTO release_floor (id, floor_seq) VALUES (1, 5)")
+      .run();
+    const e = await fails(s.p.create(input()));
+    expect(e.message).toMatch(/seq 4 is below 5/);
+    expect(nonReads(s.fake)).toEqual([]);
+    expect(s.rows()).toEqual([]);
+  });
+
+  it("N1: a non-integer floor_seq in D1 is refused, not read as 0", async () => {
+    const s = setup({
+      release: makeRelease({ floor: signFloor(floorOf({ seq: 4 })) }),
+    });
+    s.db()
+      .prepare("INSERT INTO release_floor (id, floor_seq) VALUES (1, 'x')")
+      .run();
+    const e = await fails(s.p.create(input()));
+    expect(e.message).toMatch(/floor_seq/);
+    expect(nonReads(s.fake)).toEqual([]);
+  });
+
+  it("create raises floor_seq to the floor's seq with MAX, never lowering it", async () => {
+    const s = setup({
+      release: makeRelease({ floor: signFloor(floorOf({ seq: 7 })) }),
+    });
+    expect(floorSeq(s)).toBeUndefined();
+    await s.p.create(input());
+    expect(floorSeq(s)).toBe(7);
+    const sql = s.fake.raw
+      .map((r) => r.body)
+      .filter((b) => b.includes("release_floor") && !/"sql":"SELECT/.test(b));
+    expect(sql).toHaveLength(1);
+    expect(sql[0]).toContain("SET floor_seq = MAX(floor_seq, ");
+    // The same seq again: no second write.
+    await s.p.create(input("second"));
+    expect(floorSeq(s)).toBe(7);
+  });
+
+  it("a create from the R2 release reader works end to end after publishRelease", async () => {
+    const s = setup();
+    const cf = s.opts().cf;
+    s.fake.r2.add(platformNames("staging").releases);
+    s.fake.r2Seed(
+      platformNames("staging").releases,
+      FLOOR_KEY,
+      enc(JSON.stringify(signFloor(floorOf()))),
+    );
+    const files = [
+      ...makeBundle("release").modules.map((m) => ({
+        path: `modules/${m.name}`,
+        bytes: m.bytes,
+      })),
+      ...ASSETS.map((a) => ({ path: `assets/${a.path}`, bytes: a.bytes })),
+      { path: "template/wrangler.template.jsonc", bytes: TEMPLATE_BYTES },
+      ...MIGRATION_FILES.map((f) => ({
+        path: `migrations/${f.name}`,
+        bytes: f.bytes,
+      })),
+      { path: "welcome/welcome.md", bytes: WELCOME_BYTES },
+    ];
+    await probeR2Conditionals(cf, "staging");
+    await publishRelease({
+      cf,
+      env: "staging",
+      version: "0.23.0",
+      files: {
+        tar: packUstar(files),
+        sig: enc(JSON.stringify(signRecord(recordOf("release")))),
+      },
+    });
+    const p = s.mk({ release: r2ReleaseReader(cf, "staging") });
+    const inst = await p.create(input());
+    expect(inst.version).toBe("0.23.0");
+    const sc = s.scriptOf(inst.id);
+    expect(sc?.modules.get("index.js")?.bytes).toEqual(
+      makeBundle("release").modules[0]?.bytes,
+    );
   });
 });

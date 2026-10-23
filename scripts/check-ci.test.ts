@@ -502,16 +502,18 @@ describe("landing-preview.yml", () => {
 });
 
 describe("release-please", () => {
-  it("workflow triggers on push to main with write permissions", () => {
+  it("workflow triggers on push to main; every job sets its own permissions", () => {
     const w = wf("release-please.yml");
     expect(triggers(w)).toEqual(
       expect.arrayContaining(["push", "workflow_dispatch"]),
     );
     expect(w.on.push.branches).toContain("main");
-    expect(w.permissions).toMatchObject({
-      contents: "write",
-      "pull-requests": "write",
-    });
+    // T3b: no workflow-wide grant. release-please writes with the release
+    // App's token, so its GITHUB_TOKEN only reads; only hosted-attach writes.
+    expect(w.permissions).toEqual({});
+    // release-please uses the App token (token: steps.app.outputs.token) and
+    // nothing uses GITHUB_TOKEN, so it gets none.
+    expect(w.jobs["release-please"].permissions).toEqual({});
     expect(read(".github/workflows/release-please.yml")).toMatch(
       /googleapis\/release-please-action@v\d+/,
     );

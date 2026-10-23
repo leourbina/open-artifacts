@@ -58,4 +58,34 @@ Namespace `oa-spike-staging`, dispatch Worker `oa-s-spike-dispatch` (account scr
 - The provisioning token also needs **Account > Turnstile > Read**, so `create` can check the env's widget. **Turnstile > Edit** is needed only for the one-time `oa:hosted turnstile-init --env <env>` (Task 8).
 - Turnstile: one widget per env, not per install. It is named `oa-s-turnstile` or `oa-p-turnstile`, and its domains are exactly `[open-artifacts-staging.app]` or `[open-artifacts.app]` (a hostname covers its subdomains). Its sitekey and secret are kept in the keychain item `oa-hosted-<env>-turnstile`. When codes are on (`AUTH_PROVIDERS` includes `email`, or `EMAIL_CODE_DOMAIN=on`), `create` reads the widget (GET only) and uploads `TURNSTILE_SITE_KEY` as a var and `TURNSTILE_SECRET` as `secret_text`.
 - Release records: `create` uploads and applies only the release's own files, never the local checkout. Those files are the modules, the assets, the server template, the D1 migrations and the Welcome artifact text. Each one is checked against the release record. The record names its `env` and `version`, and is signed with Ed25519 over `"oa-release-v1\n" + env + "\n" + canonicalJson(record)`, then verified against `RELEASE_PUBKEY[env]`. A downgrade below an install's current version is refused.
-- Gates: `PROD_UNLOCKED`, `ALLOW_ACCOUNT_TARGET` and `RELEASE_PUBKEY` are code constants in `packages/provision/src/internal/gates.ts`. The package does not export them, and no option can set them. Prod stays locked (`ProdLocked`) until T3b flips `PROD_UNLOCKED` in the same change that ships the record writer and the real per-env public keys.
+- Gates: `PROD_UNLOCKED`, `ALLOW_ACCOUNT_TARGET`, `RELEASE_PUBKEY` and `FLOOR_MIN_SEQ` are code constants in `packages/provision/src/internal/gates.ts`. The package does not export them, and no option can set them. Prod stays locked (`ProdLocked`) until a separate one-line PR, after the key ceremony, sets the real per-env public keys and flips `PROD_UNLOCKED`.
+
+## Hosted release files (T3b)
+
+- The stored record is `{ "record": "<canonicalJson(record)>", "signature": "<base64url>" }`. The signature covers `"oa-release-v1\n" + env + "\n" + record` (the exact string). Readers verify that string, parse it refusing duplicate keys (objects built with a null prototype), and require it to re-serialize byte for byte.
+- CI signs and never uploads to Cloudflare. On a stable release, `release-please.yml` runs `hosted-guard` (tag to one commit on `main`, equal to `package.json`), `hosted-build` (both variants and the release files, `manifest.json`), `hosted-check` (every hash, `check-no-test-hooks` on the release bundle), `hosted-sign-staging` and `hosted-sign-prod` (environments `hosted-staging` and `hosted-prod`; checkout and download-artifact only, the runner's own node on plain `.mjs` (node:* imports, no install), key on stdin) and `hosted-attach-staging` / `hosted-attach-prod` (each rebuilds its env's tars and `.sig.json` files, verifies them and attaches them to the GitHub release; refused if that env's assets are already there).
+- `publishRelease` (laptop, provisioning token; Task 8 wires the CLI) verifies a tar and its `.sig.json` against `RELEASE_PUBKEY[env]` and copies exactly those bytes to `oa-<p>-releases/releases/<version>/<variant>/`, every object `If-None-Match: *`. A version is never overwritten; a partial one (objects byte-identical to the tar, no record) is resumed. `publishRelease` and `publishFloor` first need `probeR2Conditionals(cf, env)` to pass in the same process (it proves the REST object routes enforce `If-None-Match` and `If-Match`).
+- The key ceremony's one-line PR sets the public keys in both `packages/provision/src/internal/gates.ts` and `scripts/ci/release-pubkeys.ts` (a test pins them equal); the key jobs then refuse a signing key that is not the pinned one.
+- The signed floor `releases/floor.json` (`{ env, seq, minVersion, revoked }`, signed over `"oa-release-floor-v1\n" + env + "\n"` plus the record) gates `create`. The platform D1 `release_floor.floor_seq` is only a cache (raised with `MAX`); the anchor is `FLOOR_MIN_SEQ[env]`. `publishFloor` needs a higher `seq`, the same or a higher `minVersion` and a superset of `revoked`, and writes with `If-Match`.
+
+### Key-ceremony checklist (per env, with the user's OK)
+
+1. Confirm the controls on GitHub (all must hold; the script below refuses otherwise):
+   - Environments `hosted-staging` and `hosted-prod`: deployment branches `main` only (a custom branch policy that is exactly the branch `main`, not protected branches, not a pattern). This is the real control against a `workflow_dispatch` from another ref reaching the key. Check with `gh api repos/{repo}/environments/hosted-<env>` and `gh api repos/{repo}/environments/hosted-<env>/deployment-branch-policies`.
+   - Each Environment has a required reviewer, and admin bypass is OFF (`can_admins_bypass: false`).
+   - A tag ruleset is active on `refs/tags/v*` (nothing excluded) with creation, update and deletion all restricted, and the only bypass actor is the release App (its numeric id, `RELEASE_APP_ID`). Check with `gh api repos/{repo}/rulesets` and each tag ruleset's `gh api repos/{repo}/rulesets/<id>`.
+2. Generate the Ed25519 keypair locally and pipe the private key straight into `RELEASE_APP_ID=<id> scripts/ops/hosted-set-signing-key.sh <env>` (never onto disk). The script runs the `gh api` reads above and refuses the upload unless every control holds; only then does it `gh secret set RELEASE_SIGNING_KEY --env hosted-<env>` from stdin.
+3. Put the public key (JWK `x`) in both `packages/provision/src/internal/gates.ts` and `scripts/ci/release-pubkeys.mjs` in one PR (a test pins them equal); flip `PROD_UNLOCKED` there for prod.
+
+### First-create checklist (per env)
+
+1. Apply every platform D1 migration to `oa-<p>-platform`, in order: `apps/platform-db/migrations/0001_installs.sql`, then `0002_release_floor.sql` (the `release_floor` cache). Without 0002, create fails closed on the floor_seq read.
+2. Key ceremony done: `RELEASE_PUBKEY[env]` set in gates.ts (and `PROD_UNLOCKED` for prod).
+3. Sign the env's first floor with the `hosted-floor` workflow (dispatch on `main`: `env`, `seq` >= `FLOOR_MIN_SEQ[env]`, `min_version`, `revoked`), download its `floor-<env>-<seq>` artifact, and `publishFloor` it.
+4. `publishRelease` the signed tar and `.sig.json` from the GitHub release for each variant the env takes.
+
+### Release checklist: revoking a version or raising the floor
+
+1. For each env, dispatch the `hosted-floor` workflow on `main` (next `seq`, `min_version`, `revoked` keeping every earlier entry), download the `floor-<env>-<seq>` artifact and run `publishFloor` with it.
+2. In the same change, bump `FLOOR_MIN_SEQ[env]` in `packages/provision/src/internal/gates.ts` to the new `seq`, so a replayed older floor is refused even if the D1 cache was reset.
+3. Merge and release; creates refuse any floor below the new anchor.

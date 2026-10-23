@@ -152,6 +152,8 @@ type World = {
   noisyDryRun?: boolean;
   /** `wrangler deploy --dry-run` fails. */
   dryRunFails?: boolean;
+  /** scripts/ci/check-no-test-hooks.ts fails on the bundle (OA_CHECK_NO_TEST_HOOKS=1). */
+  checkHooksFails?: boolean;
   /** `wrangler rollback` fails with this stderr. */
   rollbackFails?: string;
   /** /healthz reports this `version` (absent: an install without it). */
@@ -444,6 +446,25 @@ export function world(w: World = {}) {
       ) {
         ops.push("build");
         return { code: 0, stdout: "built", stderr: "" };
+      }
+      if (
+        cmd === "node" &&
+        args.some((x) => x.endsWith("check-no-test-hooks.ts"))
+      ) {
+        ops.push(`check-no-test-hooks ${args.at(-1)}`);
+        return w.checkHooksFails
+          ? {
+              code: 1,
+              stdout:
+                "check-no-test-hooks: FAIL: POST /__test/session -> 200 (want 404)\n",
+              stderr: "",
+            }
+          : {
+              code: 0,
+              stdout:
+                "check-no-test-hooks: ok: 8 /__test/* requests all 404 with TEST_HOOKS=1\n",
+              stderr: "",
+            };
       }
       if (cmd === "pnpm" && args[0] === "--version")
         return { code: 0, stdout: "10.11.1\n", stderr: "" };

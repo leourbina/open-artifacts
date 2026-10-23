@@ -104,6 +104,31 @@ export class FakeCf {
   readonly raw: { method: string; path: string; body: string }[] = [];
   readonly d1 = new Map<string, { name: string; db: DatabaseSync }>();
   readonly r2 = new Set<string>();
+  /** R2 objects by bucket, then key (the releases bucket; T3b). */
+  readonly r2Objects = new Map<
+    string,
+    Map<string, { bytes: Uint8Array; etag: string }>
+  >();
+  /** Every R2 object call, with its conditional headers. */
+  readonly r2Log: {
+    method: string;
+    bucket: string;
+    key: string;
+    ifNoneMatch?: string;
+    ifMatch?: string;
+    status: number;
+  }[] = [];
+  /** R2 list page size cap. */
+  r2PerPage?: number;
+  /** Rewrites the bytes a GET serves (the listing keeps the stored size). */
+  r2Serve?: (key: string, bytes: Uint8Array) => Uint8Array;
+  /** An R2 that ignores If-None-Match / If-Match (M2: the probe must catch it). */
+  r2IgnoreConditionals = false;
+  /** The first PUT of each key stores the object, then answers 500 (a lost reply). */
+  r2PutLandsThen500 = false;
+  private r2Landed = new Set<string>();
+  /** Runs after a PUT stored its object (e.g. another writer racing in). */
+  r2OnPut?: (key: string) => void;
   readonly kv = new Map<
     string,
     { title: string; values: Map<string, string> }
@@ -183,6 +208,18 @@ export class FakeCf {
     this.kv.set(id, { title, values: new Map() });
     return id;
   }
+  /** Put an R2 object directly (no call logged); a fresh etag each time. */
+  r2Seed(bucket: string, key: string, bytes: Uint8Array): void {
+    let b = this.r2Objects.get(bucket);
+    if (!b) {
+      b = new Map();
+      this.r2Objects.set(bucket, b);
+    }
+    b.set(key, { bytes: bytes.slice(), etag: randomBytes(16).toString("hex") });
+  }
+  r2Object(bucket: string, key: string) {
+    return this.r2Objects.get(bucket)?.get(key);
+  }
   kvValues(id: string): Map<string, string> {
     const ns = this.kv.get(id);
     if (!ns) throw new Error(`no kv ${id}`);
@@ -198,6 +235,7 @@ export class FakeCf {
       .filter(
         ({ e, body }) =>
           e.method !== "GET" &&
+          e.method !== "HEAD" &&
           !/^[^/]+\.[a-z]+\//.test(e.path) &&
           (!e.path.includes("/query") || this.isWriteQuery(body)),
       )
@@ -371,6 +409,108 @@ export class FakeCf {
         return env(null);
       }
       return env({ uuid: id, name: this.d1.get(id)?.name });
+    }
+
+    // R2 objects (account-scoped REST routes)
+    m = r.match(/^\/r2\/buckets\/([^/]+)\/objects(?:\/(.+))?$/);
+    if (m) {
+      const bucket = decodeURIComponent(m[1] as string);
+      if (!this.r2.has(bucket))
+        return fail(404, "The specified bucket does not exist.", 10006);
+      const objs =
+        this.r2Objects.get(bucket) ??
+        this.r2Objects.set(bucket, new Map()).get(bucket);
+      if (!objs) throw new Error("unreachable");
+      if (m[2] === undefined) {
+        if (req.method !== "GET") return fail(405, "Method Not Allowed");
+        const prefix = url.searchParams.get("prefix") ?? "";
+        const per = Math.min(
+          Number(url.searchParams.get("per_page") ?? 1000),
+          this.r2PerPage ?? 1000,
+        );
+        const start = Number(url.searchParams.get("cursor") ?? 0);
+        const all = [...objs.keys()].filter((k) => k.startsWith(prefix)).sort();
+        const page = all.slice(start, start + per);
+        const truncated = start + per < all.length;
+        return new Response(
+          JSON.stringify({
+            success: true,
+            errors: [],
+            messages: [],
+            result: page.map((k) => ({
+              key: k,
+              size: objs.get(k)?.bytes.length,
+              etag: objs.get(k)?.etag,
+            })),
+            result_info: {
+              is_truncated: truncated,
+              cursor: truncated ? String(start + per) : "",
+              per_page: per,
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      const key = decodeURIComponent(m[2]);
+      const cur = objs.get(key);
+      const ifNoneMatch = req.headers.get("if-none-match") ?? undefined;
+      const ifMatch = req.headers.get("if-match") ?? undefined;
+      const log = (status: number) => {
+        this.r2Log.push({
+          method: req.method,
+          bucket,
+          key,
+          ifNoneMatch,
+          ifMatch,
+          status,
+        });
+      };
+      if (req.method === "PUT") {
+        if (
+          !this.r2IgnoreConditionals &&
+          ((ifNoneMatch === "*" && cur) ||
+            (ifMatch !== undefined &&
+              cur?.etag !== ifMatch.replace(/^"(.*)"$/, "$1")))
+        ) {
+          log(412);
+          return fail(412, "PreconditionFailed", 10031);
+        }
+        const bytes = new Uint8Array(await req.arrayBuffer());
+        const etag = randomBytes(16).toString("hex");
+        objs.set(key, { bytes, etag });
+        this.r2OnPut?.(key);
+        if (this.r2PutLandsThen500 && !this.r2Landed.has(`${bucket}/${key}`)) {
+          this.r2Landed.add(`${bucket}/${key}`);
+          log(500);
+          return fail(500, "internal error (the write landed)");
+        }
+        log(200);
+        return env({ key, size: bytes.length, etag });
+      }
+      if (req.method === "DELETE") {
+        objs.delete(key);
+        log(200);
+        return env(null);
+      }
+      if (req.method === "GET" || req.method === "HEAD") {
+        if (!cur) {
+          log(404);
+          return fail(404, "The specified key does not exist.", 10007);
+        }
+        log(200);
+        const bytes = this.r2Serve?.(key, cur.bytes) ?? cur.bytes;
+        return new Response(
+          req.method === "HEAD" ? null : (bytes as BodyInit),
+          {
+            status: 200,
+            headers: {
+              etag: `"${cur.etag}"`,
+              "content-length": String(cur.bytes.length),
+            },
+          },
+        );
+      }
+      return fail(405, "Method Not Allowed");
     }
 
     // R2
