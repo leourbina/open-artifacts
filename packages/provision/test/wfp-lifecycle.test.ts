@@ -1987,7 +1987,7 @@ describe("fix round 3", () => {
     expect(s.audit(inst.id)).toContain("vars.session_cut_failed");
     expect((await s.p.status(inst.id)).sessionCut).toEqual({
       pending: true,
-      owed: true,
+      owedRelativeToRecordedVars: true,
     });
     await s.p.updateVars(inst.id, { AUTH_PROVIDERS: "email,google" });
     expect(epoch()).toBe(2);
@@ -2024,10 +2024,82 @@ describe("fix round 3", () => {
       .run("ef".repeat(16), canonicalJson(CODES), s.clock.now() + 5, inst.id);
     expect(await s.p.status(inst.id)).toMatchObject({
       leaseLive: true,
-      sessionCut: { pending: true, owed: false },
+      sessionCut: { pending: true, owedRelativeToRecordedVars: false },
     });
     expect(s.fake.writes().length).toBe(w);
     expect(await fails(s.p.status("nope"))).toBeInstanceOf(ProvisionRefused);
+  });
+});
+
+describe("fix round 4", () => {
+  const patOf = (s: S, appHost: string) =>
+    readFileSync(join(s.opts().patDir, `${appHost}-pat-token`), "utf8").trim();
+
+  it("R2-L1: status() during a running op leaves its lease and redaction intact; a later error from the op is still scrubbed", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    const token = patOf(s, inst.appHost);
+    let p: WfpProvisioner | undefined;
+    let mid: Awaited<ReturnType<WfpProvisioner["status"]>> | undefined;
+    p = s.mk({
+      fetch: (async (u: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(u);
+        if (url.endsWith("/healthz") && !mid)
+          mid = await (p as WfpProvisioner).status(inst.id);
+        // After status() ran: the selftest fails with an error that echoes the PAT.
+        if (mid && url.endsWith("/mcp"))
+          throw new Error(`socket closed after Bearer ${token}`);
+        return s.fake.fetch(u, init);
+      }) as typeof fetch,
+    });
+    const r = keep(await p.updateVars(inst.id, { FEATURES: "beta" }));
+    expect(mid).toMatchObject({ state: "upgrading", leaseLive: true });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toContain("[redacted]");
+    expect(r.reason).not.toContain(token);
+    expect(s.audit(inst.id)).toContain("vars.failed");
+    expect(s.row(inst.id)).toMatchObject({ state: "active", lease: null });
+  });
+
+  it("R2-L1: a second operation started on the same instance while one is in flight is refused", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    let second: Error | undefined;
+    let p: WfpProvisioner | undefined;
+    p = s.mk({
+      fetch: (async (u: RequestInfo | URL, init?: RequestInit) => {
+        if (String(u).endsWith("/healthz") && !second)
+          second = await fails(
+            (p as WfpProvisioner).updateVars(inst.id, { FEATURES: "x" }),
+          );
+        return s.fake.fetch(u, init);
+      }) as typeof fetch,
+    });
+    const r = keep(await p.upgrade(inst.id, "0.24.0"));
+    expect(second).toBeInstanceOf(ProvisionRefused);
+    expect(second?.message).toMatch(/already running an operation/);
+    expect(r.ok).toBe(true);
+    expect(s.row(inst.id)).toMatchObject({
+      state: "active",
+      version: "0.24.0",
+      lease: null,
+    });
+  });
+
+  it("R2-N1: status reports a pending cut as the alarm, with owed relative to the recorded vars", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input("finqore", { vars: CODES })));
+    // A crash between the upload and write(vars): google is live, the
+    // recorded vars do not show it, so only `pending` tells the truth.
+    s.db()
+      .prepare(
+        "UPDATE installs SET session_cut = ?, session_cut_base = ? WHERE id = ?",
+      )
+      .run("aa".repeat(16), canonicalJson(CODES), inst.id);
+    expect((await s.p.status(inst.id)).sessionCut).toEqual({
+      pending: true,
+      owedRelativeToRecordedVars: false,
+    });
   });
 });
 
