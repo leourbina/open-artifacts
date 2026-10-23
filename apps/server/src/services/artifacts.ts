@@ -149,7 +149,7 @@ export async function publish(
         input.allowAnonymousWrites !== undefined;
       if (sharing && !can(level, "visibility", canCtx(who, a)))
         throw new ApiError("bad_request", "only the owner can change sharing");
-      await refusePublicLinksOff(env, a.spaceId, input.visibility);
+      await refusePublicLinksOff(env, a, input.visibility);
       capabilities = { ...CAPS, ...(JSON.parse(a.capabilities) as object) };
       accessChanged =
         (input.visibility !== undefined && input.visibility !== a.visibility) ||
@@ -883,17 +883,20 @@ export async function restoreVersion(
 // ------------------------------------------------------- patch and delete
 
 /**
- * Asking for visibility "public" (set or kept) in a shared space with public
- * links off: 403 public_links_off. The toggle only refuses new links; an
- * artifact that is already public stays viewable (decide, /p/). One PK read,
- * only when "public" is asked for.
+ * Changing visibility to "public" in a shared space with public links off:
+ * 403 public_links_off. The toggle only refuses new links; an artifact that
+ * is already public stays viewable (decide, /p/), and echoing "public" on it
+ * is a no-op that passes (agents resend it). One PK read, only on a change to
+ * "public".
  */
 async function refusePublicLinksOff(
   env: Env,
-  spaceId: string | null,
+  a: { spaceId: string | null; visibility: string },
   visibility: string | undefined,
 ): Promise<void> {
-  if (visibility !== "public" || spaceId === null) return;
+  const spaceId = a.spaceId;
+  if (visibility !== "public" || a.visibility === "public" || spaceId === null)
+    return;
   const off = await env.DB.prepare(
     "select 1 from spaces where id = ? and kind = 'shared' and public_links = 0",
   )
@@ -922,7 +925,7 @@ export async function patch(
     p.allowAnonymousWrites !== undefined;
   if (sharing && !can(level, "visibility", canCtx(who, a)))
     throw new ApiError("bad_request", "only the owner can change sharing");
-  await refusePublicLinksOff(env, a.spaceId, p.visibility);
+  await refusePublicLinksOff(env, a, p.visibility);
   const sets: string[] = [];
   const vals: unknown[] = [];
   const set = (col: string, v: unknown) => {

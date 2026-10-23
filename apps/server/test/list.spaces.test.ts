@@ -556,17 +556,23 @@ describe("public links off only refuses new public links (decided)", () => {
     }
   });
 
-  it("a new public link is refused with public_links_off, even by a manager", async () => {
-    // Keeping it public is asking for public too: refused, and nothing changes.
+  it("echoing visibility public on an already-public artifact is a no-op that passes", async () => {
     const keep = await api(app, R.artifact(id), who.memberA.cookie, {
       method: "PATCH",
       body: { visibility: "public" },
     });
-    expect(keep.status).toBe(403);
-    expect((await errOf(keep)).code).toBe("public_links_off");
+    expect(keep.status).toBe(200);
+    const v = await api(app, R.versions(id), who.memberA.cookie, {
+      method: "POST",
+      body: { format: "html", content: "<p>echo", visibility: "public" },
+    });
+    expect(v.status).toBeLessThan(300);
     expect((await contentCall(`${publicPrefix(id, 1)}__view`)).status).toBe(
       200,
     );
+  });
+
+  it("a new public link is refused with public_links_off, even by a manager", async () => {
     const team = await api(app, R.artifact(id), who.memberA.cookie, {
       method: "PATCH",
       body: { visibility: "team" },
@@ -596,5 +602,20 @@ describe("public links off only refuses new public links (decided)", () => {
     expect((await contentCall(`${publicPrefix(id, 1)}__view`)).status).toBe(
       404,
     );
+    // private → public is refused the same way.
+    expect(
+      (
+        await api(app, R.artifact(id), who.memberA.cookie, {
+          method: "PATCH",
+          body: { visibility: "private" },
+        })
+      ).status,
+    ).toBe(200);
+    const fromPrivate = await api(app, R.artifact(id), who.memberA.cookie, {
+      method: "PATCH",
+      body: { visibility: "public" },
+    });
+    expect(fromPrivate.status).toBe(403);
+    expect((await errOf(fromPrivate)).code).toBe("public_links_off");
   });
 });
