@@ -18,6 +18,7 @@ import {
   type Caller,
   callerOf,
   capOfCaller,
+  withCap,
 } from "../src/auth/authz.js";
 import { isTeamRole } from "../src/auth/policy.js";
 import { publicPrefix } from "../src/content/signing.js";
@@ -57,7 +58,9 @@ type Who =
   | "restricted"
   | "everyEditor"
   | "everyViewerMgr"
-  | "s1Viewer";
+  | "s1Viewer"
+  | "guestCapped"
+  | "guestEvery";
 const ROLES: Record<Who, Role> = {
   owner: "owner",
   admin: "admin",
@@ -68,10 +71,14 @@ const ROLES: Record<Who, Role> = {
   everyEditor: "member",
   everyViewerMgr: "member",
   s1Viewer: "member",
+  guestCapped: "guest",
+  guestEvery: "guest",
 };
 const CALLERS = Object.keys(ROLES) as Who[];
 
-type SpaceName = "pA" | "pOwner" | "s1" | "s2" | "s3" | "s4";
+type SpaceName = "pA" | "pOwner" | "s1" | "s2" | "s3" | "s4" | "s5";
+/** The spaces the older explicit tests were written against (s5 is newer). */
+const S1_S4 = (id: string) => arts[id]?.space !== "s5";
 type Seed = {
   space: SpaceName;
   visibility: Visibility;
@@ -180,7 +187,12 @@ beforeAll(async () => {
         .set({ restrictedSync: 1 })
         .where(eq(users.id, userId));
     const m = (await getUser(env, userId)) as Member;
-    who[w] = { cookie, id: userId, caller: callerOf(m) };
+    // A guest under P2's guestsReadOnly, whatever this env's authConfig.
+    who[w] = {
+      cookie,
+      id: userId,
+      caller: callerOf(w === "guestCapped" ? withCap(m, "guest") : m),
+    };
   }
   spaceIds.pA = who.memberA.id;
   spaceIds.pOwner = who.owner.id;
@@ -235,10 +247,12 @@ beforeAll(async () => {
     for (const w of members)
       await db.insert(directoryMembers).values({ groupId, userId: who[w].id });
   };
-  await group("g1", "editor", ["everyEditor", "restricted"]);
+  await group("g1", "editor", ["everyEditor", "restricted", "guestEvery"]);
   await group("g2", "viewer", ["everyViewerMgr"]);
   // A shared space created after the mappings: they apply at read time.
   await shared("s4", null, 0);
+  // Every uncapped member manages s5.
+  await shared("s5", "manager", 1);
 
   const mk = async (s: Seed) => {
     const id = newId();
@@ -276,7 +290,8 @@ beforeAll(async () => {
     for (const visibility of ["private", "team", "public"] as const)
       row[visibility] = await mk({ space, visibility });
     byVis[space] = row;
-    await mk({ space, visibility: "team", deleted: true });
+    for (const visibility of ["private", "team", "public"] as const)
+      await mk({ space, visibility, deleted: true });
   }
   const at = (s: SpaceName, v: Visibility) => byVis[s]?.[v] as string;
   await share(at("pA", "private"), "memberB", "editor");
@@ -288,7 +303,28 @@ beforeAll(async () => {
   await share(at("s3", "private"), "everyEditor", "viewer");
   // A space viewer whose editor share wins: max(spaceRole, shareRole).
   await share(at("s1", "private"), "s1Viewer", "editor");
+  await share(at("s5", "private"), "guestCapped", "editor");
 });
+
+/** Read from the rows: does `w` have a role in shared space `sid`? */
+async function hasRole(w: Who, sid: string): Promise<boolean> {
+  const r = await env.DB.prepare(
+    `select exists (select 1 from space_members where space_id = ?1 and user_id = ?2)
+       or exists (select 1 from org_group_mappings o
+         join directory_members dm on dm.group_id = o.group_id where dm.user_id = ?2)
+       or (?3 and exists (select 1 from spaces where id = ?1 and all_members_role is not null))
+       as r`,
+  )
+    .bind(sid, who[w].id, teamListed(w) ? 1 : 0)
+    .first<{ r: number }>();
+  return r?.r === 1;
+}
+
+const errCode = async (p: Promise<unknown>) =>
+  p.then(
+    () => null,
+    (e) => (e instanceof ApiError ? e.code : String(e)),
+  );
 
 describe("list levels come from SQL and equal authorize()", () => {
   it("list(all) ids and levels equal authorize() for every seeded artifact", async () => {
@@ -425,17 +461,36 @@ describe("list levels come from SQL and equal authorize()", () => {
           ),
         ),
       ].sort();
-    // memberA: s1 (editor), s2 (manager), s3 (allMembersRole viewer).
-    expect(await spacesOf("memberA")).toEqual(["s1", "s2", "s3"]);
+    // memberA: s1 (editor), s2 (manager), s3 and s5 (allMembersRole).
+    expect(await spacesOf("memberA")).toEqual(["s1", "s2", "s3", "s5"]);
     // Org admins get nothing from their org role.
-    expect(await spacesOf("admin")).toEqual(["s2", "s3"]);
+    expect(await spacesOf("admin")).toEqual(["s2", "s3", "s5"]);
     // Guests and capped callers never get allMembersRole.
     expect(await spacesOf("guest")).toEqual(["s1"]);
-    expect(await spacesOf("restricted")).toEqual(["s1", "s2", "s3", "s4"]);
+    expect(await spacesOf("guestCapped")).toEqual([]);
+    // A guest's Every-space mapping is a role (decide): every shared space.
+    expect(await spacesOf("guestEvery")).toEqual([
+      "s1",
+      "s2",
+      "s3",
+      "s4",
+      "s5",
+    ]);
+    expect(await spacesOf("restricted")).toEqual([
+      "s1",
+      "s2",
+      "s3",
+      "s4",
+      "s5",
+    ]);
   });
 
   it("an Every-space editor mapping lists every shared space (including one created after the mapping) at editor, and no personal space", async () => {
-    const got = await listAll("everyEditor", { scope: "spaces" });
+    const got = Object.fromEntries(
+      Object.entries(await listAll("everyEditor", { scope: "spaces" })).filter(
+        ([id]) => S1_S4(id),
+      ),
+    );
     const bySpace: Record<string, Set<AccessLevel>> = {};
     for (const [id, l] of Object.entries(got)) {
       const s = arts[id]?.space as string;
@@ -453,12 +508,126 @@ describe("list levels come from SQL and equal authorize()", () => {
   });
 
   it("Every-space viewer and per-space manager resolve to manager (max at read time)", async () => {
-    const got = await listAll("everyViewerMgr", { scope: "spaces" });
+    const got = Object.fromEntries(
+      Object.entries(
+        await listAll("everyViewerMgr", { scope: "spaces" }),
+      ).filter(([id]) => S1_S4(id)),
+    );
     // s2's allMembersRole (editor) beats the Every-space viewer too.
     const want = { s1: "manager", s2: "editor", s3: "viewer", s4: "viewer" };
     for (const [id, l] of Object.entries(got))
       expect(l).toBe(want[arts[id]?.space as keyof typeof want]);
     expect(Object.keys(got)).toHaveLength(12);
+  });
+
+  it("hand-written levels (not derived from spaceRankSql)", async () => {
+    const id = (s: SpaceName, v: Visibility = "private") =>
+      Object.values(arts).find(
+        (a) => a.space === s && a.visibility === v && !a.deleted,
+      )?.id as string;
+    const guestEvery = capOfCaller(who.guestEvery.caller) ? "viewer" : "editor";
+    const HAND: [Who, string, AccessLevel | null][] = [
+      ["memberA", id("s2"), "manager"], // space_members manager
+      ["memberB", id("s2"), "editor"], // allMembersRole editor
+      ["memberB", id("s3"), "viewer"], // allMembersRole viewer
+      ["memberB", id("s5"), "manager"], // allMembersRole manager
+      ["memberB", id("s1"), "editor"], // sync viewer + manual editor rows
+      ["everyEditor", id("s4"), "editor"], // Every space, space created later
+      ["everyEditor", id("s5"), "manager"], // allMembersRole beats the mapping
+      ["everyViewerMgr", id("s1"), "manager"],
+      ["everyViewerMgr", id("s4"), "viewer"],
+      ["s1Viewer", id("s1"), "editor"], // viewer role + editor share
+      ["restricted", id("s1"), "viewer"], // editor role, capped
+      ["restricted", id("s5"), "viewer"], // Every space, capped; no allMembers
+      ["guestEvery", id("s4"), guestEvery],
+      ["guestCapped", id("s5"), "viewer"], // editor share, capped
+      ["guestCapped", id("s5", "team"), null], // no allMembersRole for guests
+      ["guest", id("s5", "public"), "viewer"], // the link
+      ["admin", id("s1"), null],
+      ["owner", id("pA"), null],
+    ];
+    for (const [w, a, want] of HAND) {
+      const got = await authorize(env, who[w].caller, a, "view").then(
+        (r) => r.level,
+        () => null,
+      );
+      expect({ w, a, got }).toEqual({ w, a, got: want });
+      if (want && !(await linkOnly(w, a)))
+        expect({ w, a, listed: (await listAll(w))[a] }).toEqual({
+          w,
+          a,
+          listed: want,
+        });
+    }
+  });
+
+  it("spaceId narrows list and search to the space, or is 404 without a role", async () => {
+    for (const w of CALLERS) {
+      const want = await expected(w);
+      for (const s of ["s1", "s2", "s3", "s4", "s5"] as const) {
+        const sid = spaceIds[s];
+        const inSpace = Object.fromEntries(
+          Object.entries(want).filter(([id]) => arts[id]?.space === s),
+        );
+        if (await hasRole(w, sid)) {
+          for (const scope of ["space", "all"] as const)
+            expect({
+              w,
+              s,
+              scope,
+              got: await listAll(w, { scope, spaceId: sid }),
+            }).toEqual({ w, s, scope, got: inSpace });
+          const hits = await search(
+            env,
+            who[w].caller,
+            word,
+            undefined,
+            100,
+            sid,
+          );
+          expect({
+            w,
+            s,
+            hits: Object.fromEntries(
+              hits.items.filter((h) => arts[h.id]).map((h) => [h.id, h.access]),
+            ),
+          }).toEqual({ w, s, hits: inSpace });
+        } else {
+          expect({
+            w,
+            s,
+            list: await errCode(listAll(w, { scope: "space", spaceId: sid })),
+            search: await errCode(
+              search(env, who[w].caller, word, undefined, 100, sid),
+            ),
+          }).toEqual({ w, s, list: "not_found", search: "not_found" });
+        }
+      }
+    }
+  });
+
+  it("a non-member's real shared spaceId is 404 on list and search, exactly as an unknown id", async () => {
+    // admin has no role in s1; memberB none in s4 (public artifacts there).
+    for (const [w, s] of [
+      ["admin", "s1"],
+      ["memberB", "s4"],
+    ] as const) {
+      const shape = async (sid: string) => {
+        const out = [];
+        for (const path of [
+          `${R.artifacts}?scope=space&spaceId=${sid}`,
+          `${R.artifacts}?spaceId=${sid}`,
+          `${R.search}?q=${word}&spaceId=${sid}`,
+        ]) {
+          const r = await api(app, path, who[w].cookie);
+          out.push([r.status, await r.json()]);
+        }
+        return out;
+      };
+      const real = await shape(spaceIds[s]);
+      expect(real).toEqual(await shape(newId()));
+      expect(real.map(([status]) => status)).toEqual([404, 404, 404]);
+    }
   });
 
   it("a capped caller lists at viewer only, and never sees trash", async () => {
@@ -473,8 +642,9 @@ describe("list levels come from SQL and equal authorize()", () => {
       includeDeleted: true,
     });
     const deleted = Object.keys(got).filter((id) => arts[id]?.deleted);
-    expect(deleted).toHaveLength(1);
-    expect(got[deleted[0] as string]).toBe("owner");
+    // Deleted private, team and public.
+    expect(deleted).toHaveLength(3);
+    for (const id of deleted) expect(got[id]).toBe("owner");
   });
 });
 

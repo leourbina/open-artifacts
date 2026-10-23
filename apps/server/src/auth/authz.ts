@@ -251,11 +251,30 @@ const everyRankSql = (userId: string) =>
  * allMembersRole: the max over their space_members rows (manual and sync) and
  * their Every-space rank. Callers apply it to shared spaces only.
  */
-function spaceRankSql(userId: string): SQL<number> {
+function spaceRankSql(
+  userId: string,
+  spaceId: SQL = sql`${artifacts.spaceId}`,
+): SQL<number> {
   return sql<number>`max(
     coalesce((select max(${rankSql(sql`sm.role`)}) from ${spaceMembers} sm
-      where sm.space_id = ${artifacts.spaceId} and sm.user_id = ${userId}), 0),
+      where sm.space_id = ${spaceId} and sm.user_id = ${userId}), 0),
     ${everyRankSql(userId)})`;
+}
+
+/**
+ * The caller's full role rank in a shared space (0 to 3): spaceRankSql plus
+ * `spaces.all_members_role` for uncapped members (decide's allMembers). The
+ * space is `spaces` (joined), its id `spaceId`. Lists and checkListSpace
+ * share it.
+ */
+function roleRankSql(
+  c: Caller,
+  spaceId: SQL = sql`${artifacts.spaceId}`,
+): SQL<number> {
+  if (c.kind !== "user" || !c.user.id) return sql<number>`0`;
+  return isTeamRole(c.user.role) && capOfCaller(c) == null
+    ? sql<number>`max(${spaceRankSql(c.user.id, spaceId)}, ${rankSql(sql`${spaces.allMembersRole}`)})`
+    : spaceRankSql(c.user.id, spaceId);
 }
 
 /**
@@ -274,11 +293,7 @@ export function levelSql(
   // The cap lowers every level to viewer (decide).
   const lv = (l: AccessLevel) => sql.raw(`'${capped ? "viewer" : l}'`);
   const shared = sql`${spaces.kind} = 'shared'`;
-  const role = user
-    ? member && !capped
-      ? sql`max(${spaceRankSql(user.id)}, ${rankSql(sql`${spaces.allMembersRole}`)})`
-      : spaceRankSql(user.id)
-    : sql`0`;
+  const role = roleRankSql(c);
   const share = sql`(case ${shares.role} when 'editor' then 2 when 'viewer' then 1 else 0 end)`;
   // No space role: a share, then team (uncapped members), then a public link.
   const rest = sql`case ${share} when 2 then ${lv("editor")} when 1 then ${lv("viewer")} else case
@@ -476,23 +491,29 @@ export function listFilterSql(
 }
 
 /**
- * A list or search narrowed to `spaceId`: 404 for an unknown space, 400
+ * A list or search narrowed to `spaceId`, in one statement: 400
  * space_personal for another user's personal space (the caller's own is
- * their `mine`). A shared space lists what the caller's levels allow there.
+ * their `mine`); 404 for an unknown space and for a shared one where the
+ * caller has no role (a space_members row, an Every-space mapping, or
+ * allMembersRole when uncapped), so a space's existence never leaks.
  */
 export async function checkListSpace(
   env: Env,
   c: Caller,
   spaceId: string,
 ): Promise<void> {
-  const row = await env.DB.prepare(
-    "select kind from spaces where id = ? and deleted_at is null",
-  )
-    .bind(spaceId)
-    .first<{ kind: string }>();
+  const [row] = await getDb(env)
+    .select({ kind: spaces.kind, rank: roleRankSql(c, sql`${spaces.id}`) })
+    .from(spaces)
+    .where(and(eq(spaces.id, spaceId), isNull(spaces.deletedAt)))
+    .limit(1);
   if (!row) throw new ApiError("not_found", "Not found");
-  if (row.kind !== "shared" && (c.kind !== "user" || c.user.id !== spaceId))
-    throw new ApiError("space_personal", "Pick a shared space");
+  if (row.kind !== "shared") {
+    if (c.kind !== "user" || c.user.id !== spaceId)
+      throw new ApiError("space_personal", "Pick a shared space");
+    return;
+  }
+  if (!(row.rank > 0)) throw new ApiError("not_found", "Not found");
 }
 
 /**
