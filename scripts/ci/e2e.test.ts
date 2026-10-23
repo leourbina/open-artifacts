@@ -26,12 +26,24 @@ describe("e2e.sh", () => {
     );
     expect(readFileSync(out, "utf8")).toBe(`playwright=${pkg.version}\n`);
   });
-  it("install pins chromium and webkit with OS deps", () => {
-    const r = run("install");
+  it("install takes chromium and webkit from the image, with no OS deps step", () => {
+    const pkg = JSON.parse(
+      readFileSync(
+        join(root, "apps/dashboard/node_modules/@playwright/test/package.json"),
+        "utf8",
+      ),
+    );
+    const r = run("install", { PLAYWRIGHT_IMAGE_VERSION: pkg.version });
     expect(r.code).toBe(0);
     expect(r.sb.log()).toContain(
-      "pnpm --filter @oa/dashboard exec playwright install --with-deps chromium webkit",
+      "pnpm --filter @oa/dashboard exec playwright install chromium webkit",
     );
+    expect(r.sb.log().join("\n")).not.toContain("--with-deps");
+  });
+  it("install fails fast when the image is not the pinned Playwright version", () => {
+    const r = run("install", { PLAYWRIGHT_IMAGE_VERSION: "0.0.1" });
+    expect(r.code).toBe(1);
+    expect(r.sb.log().join("\n")).not.toContain("playwright install");
   });
   it("hosts adds the line once", () => {
     const sb = sandbox({ sudo: '"$@"' });

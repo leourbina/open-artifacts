@@ -94,8 +94,14 @@ describe("ci.yml", () => {
     expect(step.run).toContain("command -v shellcheck");
     expect(step.run).toContain(".github/workflows/*.yml");
   });
-  it("e2e job runs both Playwright suites locally, with cached browsers", () => {
+  it("e2e job runs both Playwright suites locally, in the pinned Playwright image", () => {
     const job = w.jobs.e2e;
+    // Browsers and their OS deps come baked into the image, pinned by digest:
+    // no apt step, so a slow Ubuntu mirror can't eat the job's budget (#462).
+    expect(job.container.image).toMatch(
+      /^mcr\.microsoft\.com\/playwright:v\d+\.\d+\.\d+-noble@sha256:[0-9a-f]{64}$/,
+    );
+    expect(job.container.options ?? "").toContain("--ipc=host");
     expect(job["timeout-minutes"]).toBeGreaterThan(0);
     expect(job["timeout-minutes"]).toBeLessThanOrEqual(25);
     // biome-ignore lint/suspicious/noExplicitAny: untyped YAML
@@ -117,11 +123,14 @@ describe("ci.yml", () => {
     expect(steps[order[5] as number].if).toMatch(
       /^\$\{\{ !cancelled\(\) && steps\.ro\.outputs\.release_only != 'true' && steps\.install\.outcome == 'success' \}\}$/,
     );
-    const cache = steps.find((s) =>
-      (s.uses ?? "").startsWith("actions/cache@"),
-    );
-    expect(cache.with.path).toBe("~/.cache/ms-playwright");
-    expect(cache.with.key).toContain("steps.pw.outputs.playwright");
+    // No browser cache and no --with-deps: the image already has both.
+    expect(
+      steps.some((s) => (s.with?.path ?? "").includes("ms-playwright")),
+    ).toBe(false);
+    // The image tag must be the version the dashboard pins.
+    const img = /playwright:v(\d+\.\d+\.\d+)-noble/.exec(job.container.image);
+    const pkg = JSON.parse(read("apps/dashboard/package.json"));
+    expect(img?.[1]).toBe(pkg.devDependencies["@playwright/test"]);
     const upload = steps.find((s) =>
       (s.uses ?? "").startsWith("actions/upload-artifact@"),
     );
@@ -131,9 +140,8 @@ describe("ci.yml", () => {
     const s = JSON.stringify(job);
     expect(s).not.toContain("secrets.");
     expect(s).not.toContain("staging");
-    expect(ci("e2e.sh")).toContain(
-      "playwright install --with-deps chromium webkit",
-    );
+    expect(ci("e2e.sh")).not.toContain("--with-deps");
+    expect(ci("e2e.sh")).toContain("PLAYWRIGHT_IMAGE_VERSION");
   });
   describe("release-only fast path", () => {
     const REQUIRED = ["lint", "typecheck", "test", "build", "e2e"];
