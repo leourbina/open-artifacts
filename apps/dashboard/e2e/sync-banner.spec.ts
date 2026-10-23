@@ -35,11 +35,10 @@ for (const [name, token, role] of STATES)
             "Agent tokens aren't being re-checked",
           );
           if (width <= 600)
+            // The trigger keeps its name; the dot is its description.
             await expect(
-              page.getByRole("button", {
-                name: "Open menu, Settings needs attention",
-              }),
-            ).toBeVisible();
+              page.getByRole("button", { name: "Toggle navigation" }),
+            ).toHaveAccessibleDescription("Settings needs attention");
           else
             await expect(
               page.getByRole("link", { name: "Settings, needs attention" }),

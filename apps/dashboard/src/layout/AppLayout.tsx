@@ -212,14 +212,11 @@ function MenuTrigger({ me }: { me: Me | null }) {
   const syncTone = isMobile && !dot ? sync : null;
   return (
     <span className="relative inline-flex">
+      {/* Sync trouble keeps the trigger's name and describes it instead:
+          a held sweep can sit for days. */}
       <SidebarTrigger
-        aria-label={
-          dot
-            ? "Open menu, update available"
-            : syncTone
-              ? "Open menu, Settings needs attention"
-              : "Toggle navigation"
-        }
+        aria-label={dot ? "Open menu, update available" : "Toggle navigation"}
+        aria-describedby={syncTone ? "oa-menu-sync" : undefined}
       />
       {dot && (
         <UpdateDot
@@ -227,6 +224,11 @@ function MenuTrigger({ me }: { me: Me | null }) {
           ring="page"
           className="pointer-events-none absolute top-[6px] right-[5px]"
         />
+      )}
+      {syncTone && (
+        <span id="oa-menu-sync" hidden>
+          Settings needs attention
+        </span>
       )}
       {syncTone && (
         <span
