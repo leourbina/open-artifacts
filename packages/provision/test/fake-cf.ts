@@ -162,6 +162,8 @@ export class FakeCf {
   scriptsReadStatus = 200;
   /** Dispatch emulation: which KV is HOSTS and which namespace scripts live in. */
   dispatch?: { hostsKvId: string; ns: string | null };
+  /** Accept any old_tag (a Cloudflare that does not check the DO tag; R-L3). */
+  ignoreMigrationTag = false;
   /** /healthz override for a script (e.g. to simulate a slow start). */
   health?: (s: FakeScript) => unknown;
 
@@ -704,7 +706,7 @@ export class FakeCf {
     let tag = prev?.migrationTag ?? null;
     if (meta.migrations) {
       const sent = meta.migrations.old_tag ?? "";
-      if (sent !== (tag ?? ""))
+      if (sent !== (tag ?? "") && !this.ignoreMigrationTag)
         return fail(
           412,
           `Actor migration tag precondition failed, got tag '${sent}' when expected tag is '${tag ?? ""}'`,
@@ -822,7 +824,11 @@ export class FakeCf {
         return reply({ protocolVersion: "2025-06-18", capabilities: {} });
       if (msg.method === "tools/list")
         return reply({
-          tools: [{ name: "publish_artifact" }, { name: "get_artifact" }],
+          tools: [
+            { name: "publish_artifact" },
+            { name: "get_artifact" },
+            { name: "list_artifacts" },
+          ],
         });
       if (msg.method === "tools/call") {
         const { name, arguments: args } = msg.params;
@@ -834,6 +840,13 @@ export class FakeCf {
             structuredContent: { id, visibility: "private" },
           });
         }
+        if (name === "list_artifacts")
+          return reply({
+            content: [{ type: "text", text: String(this.artifacts.size) }],
+            structuredContent: {
+              items: [...this.artifacts.keys()].map((id) => ({ id })),
+            },
+          });
         if (name === "get_artifact") {
           const a = this.artifacts.get(args.id);
           if (!a)

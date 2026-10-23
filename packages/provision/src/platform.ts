@@ -33,7 +33,6 @@ export interface InstallRow {
   vars: string | null;
   /** Bumped on every write (0003 trigger); claims compare it. */
   row_version: number;
-  welcome_artifact: string | null;
   /** The vars a pending session_cut was minted against (0003). */
   session_cut_base: string | null;
 }
@@ -99,7 +98,6 @@ const UPDATABLE = new Set([
   "state",
   "session_cut",
   "vars",
-  "welcome_artifact",
   "session_cut_base",
 ]);
 

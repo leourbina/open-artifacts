@@ -36,6 +36,16 @@ import {
 } from "../src/release.js";
 import { FakeCf } from "./fake-cf.js";
 
+/**
+ * R-N2: every test here spawns node (several times, each capped at
+ * SPAWN_MS) and signs with real Ed25519. That takes about 1 s idle and
+ * several times that on a loaded machine, which crossed vitest's 5 s default
+ * (review run B: 41 s suite, "Test timed out in 5000ms"). The per-test budget
+ * is the spawn cap, so only a hung child fails a test.
+ */
+const SPAWN_MS = 60_000;
+vi.setConfig({ testTimeout: SPAWN_MS });
+
 const G = vi.hoisted(() => ({
   RELEASE_PUBKEY: { staging: "", prod: "" } as Record<string, string>,
 }));
@@ -155,7 +165,7 @@ function run(
   const r = spawnSync(node, [...flags, script, ...args], {
     input,
     encoding: "utf8",
-    timeout: 60_000,
+    timeout: SPAWN_MS,
     env: { PATH: process.env.PATH ?? "" },
   });
   return { code: r.status, stdout: r.stdout, stderr: r.stderr };

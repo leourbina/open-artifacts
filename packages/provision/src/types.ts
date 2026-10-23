@@ -32,6 +32,8 @@ export interface UpgradeResult {
   /** A failed upgrade that could not roll back (a DO tag changed, or the previous version is refused): it stays on `to`. */
   forwardFix?: boolean;
   reason?: string;
+  /** Something the operator should know about a run that still succeeded. */
+  note?: string;
 }
 
 export class NotInM1 extends Error {

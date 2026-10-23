@@ -1561,7 +1561,6 @@ describe("fix round 2", () => {
   it("M2: no lifecycle operation calls publish_artifact; the selftest is read-only against the recorded welcome artifact", async () => {
     const s = setup();
     const inst = keep(await s.p.create(input("finqore", { vars: CODES })));
-    expect(s.row(inst.id).welcome_artifact).toBe("art1");
     const from = s.fake.raw.length;
     await s.p.upgrade(inst.id, "0.24.0");
     await s.p.rollback(inst.id);
@@ -1576,7 +1575,8 @@ describe("fix round 2", () => {
       .map((x) => x.body);
     expect(mcp.length).toBeGreaterThan(0);
     expect(mcp.some((b) => b.includes("publish_artifact"))).toBe(false);
-    expect(mcp.some((b) => b.includes('"get_artifact"'))).toBe(true);
+    expect(mcp.some((b) => b.includes('"list_artifacts"'))).toBe(true);
+    expect(mcp.some((b) => b.includes('"get_artifact"'))).toBe(false);
   });
 
   it("M2: a revoked owner PAT is refused in pre-flight with zero writes", async () => {
@@ -1634,7 +1634,7 @@ describe("fix round 2", () => {
       fetch: (async (u: RequestInfo | URL, init?: RequestInit) => {
         if (
           String(u).endsWith("/mcp") &&
-          String(init?.body).includes("get_artifact")
+          String(init?.body).includes("list_artifacts")
         )
           s.db()
             .prepare("UPDATE installs SET lease = 'other' WHERE id = ?")
@@ -1670,7 +1670,7 @@ describe("fix round 2", () => {
     expect(s.row(inst.id).state).toBe("deleting");
   });
 
-  it("L2: a creating install can be deleted once it is stale, unmapping first", async () => {
+  it("L2: a creating install whose create ended can be deleted, unmapping first", async () => {
     const s = setup();
     s.fake.health = () => ({ ok: false });
     await fails(s.p.create(input()));
@@ -1678,11 +1678,7 @@ describe("fix round 2", () => {
     const id = (
       s.db().prepare("SELECT id FROM installs").get() as { id: string }
     ).id;
-    expect(s.row(id).state).toBe("creating");
-    expect((await fails(s.p.delete(id, id))).message).toMatch(
-      /may still be running/,
-    );
-    await s.clock.sleep(LEASE + 1);
+    expect(s.row(id)).toMatchObject({ state: "creating", lease: null });
     const from = s.fake.log.length;
     expect(await s.p.delete(id, id)).toEqual({
       id,
@@ -1815,6 +1811,223 @@ describe("fix round 2", () => {
     const s = setup();
     const inst = keep(await s.p.create(input()));
     expect(s.stored(inst.id, "0.23.0")?.metadata).not.toContain(OWNER);
+  });
+});
+
+describe("fix round 3", () => {
+  /** A create that fails at /healthz leaves a creating row with its lease released. */
+  const halfCreate = async (s: S) => {
+    s.fake.health = () => ({ ok: false });
+    await fails(s.p.create(input()));
+    s.fake.health = undefined;
+    return (s.db().prepare("SELECT id FROM installs").get() as { id: string })
+      .id;
+  };
+  const hostsPuts = (s: S, from: number) =>
+    s.fake.log
+      .slice(from)
+      .filter(
+        (e) =>
+          e.method === "PUT" &&
+          e.path.includes(`/namespaces/${s.hostsId}/values/`),
+      );
+  const claimHook = (s: S, run: () => Promise<unknown>) =>
+    (() => {
+      let hooked = false;
+      return (async (u: RequestInfo | URL, init?: RequestInit) => {
+        const req = new Request(u, init);
+        const body = req.method === "POST" ? await req.clone().text() : "";
+        if (!hooked && body.includes("UPDATE installs SET state = ?1, lease")) {
+          hooked = true;
+          await run();
+        }
+        return s.fake.fetch(u, init);
+      }) as typeof fetch;
+    })();
+
+  it("R-M1: a create resume racing a delete of the same row: the delete wins the claim, the resume does no HOSTS put and no state write", async () => {
+    const s = setup();
+    const id = await halfCreate(s);
+    let del: unknown;
+    const resumer = s.mk({
+      cf: s.cfWith(
+        claimHook(s, async () => {
+          del = await s.mk().delete(id, id);
+        }),
+      ),
+    });
+    const from = s.fake.log.length;
+    const e = await fails(resumer.create(input()));
+    expect(del).toEqual({ id, ok: true, state: "deleted" });
+    expect(e).toBeInstanceOf(ProvisionRefused);
+    expect(e.message).toMatch(/is deleting|is deleted|another operation/);
+    expect(hostsPuts(s, from)).toHaveLength(0);
+    expect(s.row(id)).toMatchObject({ state: "deleted", lease: null });
+    expect(s.fake.kvValues(s.hostsId).size).toBe(0);
+  });
+
+  it("R-M1: ... and when the resume wins the claim, the delete is refused and the create completes", async () => {
+    const s = setup();
+    const id = await halfCreate(s);
+    const errs: Error[] = [];
+    const deleter = s.mk({
+      cf: s.cfWith(
+        claimHook(s, async () => {
+          keep(await s.mk().create(input()));
+        }),
+      ),
+    });
+    errs.push(await fails(deleter.delete(id, id)));
+    expect(errs[0]).toBeInstanceOf(ProvisionRefused);
+    expect(s.row(id)).toMatchObject({ state: "active", lease: null });
+    expect(s.fake.kvValues(s.hostsId).size).toBe(2);
+  });
+
+  it("R-M1: a delete of a creating row whose create lease is live is refused", async () => {
+    const s = setup();
+    const id = await halfCreate(s);
+    s.db()
+      .prepare("UPDATE installs SET lease = 'c', lease_until = ? WHERE id = ?")
+      .run(s.clock.now() + 60_000, id);
+    expect((await fails(s.p.delete(id, id))).message).toMatch(
+      /create still holds the lease/,
+    );
+    s.db()
+      .prepare("UPDATE installs SET lease_until = ? WHERE id = ?")
+      .run(s.clock.now() - 1, id);
+    expect((await s.p.delete(id, id)).state).toBe("deleted");
+  });
+
+  it("R-M1: a create that loses its lease mid-way stops before HOSTS", async () => {
+    const s = setup();
+    let armed = true;
+    const p = s.mk({
+      cf: s.cfWith((async (u: RequestInfo | URL, init?: RequestInit) => {
+        const r = await s.fake.fetch(u, init);
+        const req = new Request(u, init);
+        if (
+          armed &&
+          req.method === "PUT" &&
+          /\/scripts\/oa-s-[^/]+$/.test(req.url) &&
+          r.status === 200
+        ) {
+          armed = false;
+          s.db().prepare("UPDATE installs SET lease = 'other'").run();
+        }
+        return r;
+      }) as typeof fetch),
+    });
+    const e = await fails(p.create(input()));
+    expect(e.message).toMatch(/lost the lease/);
+    expect(s.fake.kvValues(s.hostsId).size).toBe(0);
+    expect(
+      (s.db().prepare("SELECT state FROM installs").get() as { state: string })
+        .state,
+    ).toBe("creating");
+    expect(
+      s
+        .db()
+        .prepare("SELECT action FROM hosted_audit")
+        .all()
+        .map((r) => (r as { action: string }).action),
+    ).toContain("create.lost_lease");
+  });
+
+  it("R-M2: an install whose owner deleted every artifact still passes the selftest", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    s.fake.artifacts.clear();
+    expect((await s.p.upgrade(inst.id, "0.24.0")).ok).toBe(true);
+    expect((await s.p.updateVars(inst.id, { FEATURES: "beta" })).ok).toBe(true);
+  });
+
+  it("R-L1: a manual rollback on a refused PAT proceeds with /healthz only, noted and audited", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    await s.p.upgrade(inst.id, "0.24.0");
+    s.installDb(inst.id).prepare("UPDATE tokens SET revoked_at = 1").run();
+    const r = keep(await s.p.rollback(inst.id));
+    expect(r).toMatchObject({ ok: true, rolledBack: true, to: "0.23.0" });
+    expect(r.note).toMatch(/was refused .*selftest was skipped/);
+    expect(s.audit(inst.id)).toContain("rollback.selftest_skipped");
+    expect(modulesText(s, inst.id)).toContain("0.23.0");
+  });
+
+  it("R-L2: a transient bump failure keeps the cut pending, audited, and the upgrade goes on to health", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input("finqore", { vars: CODES })));
+    const epoch = epochOf(s, inst.id);
+    await s.p.updateVars(inst.id, { AUTH_PROVIDERS: "email,google" });
+    s.db()
+      .prepare(
+        "UPDATE installs SET session_cut = ?, session_cut_base = ? WHERE id = ?",
+      )
+      .run("cd".repeat(16), canonicalJson(CODES), inst.id);
+    let armed = true;
+    const p = s.mk({
+      cf: s.cfWith((async (u: RequestInfo | URL, init?: RequestInit) => {
+        const req = new Request(u, init);
+        const body = req.method === "POST" ? await req.clone().text() : "";
+        if (armed && body.includes(epochBumpSql())) {
+          armed = false;
+          return Response.json(
+            { success: false, errors: [{ code: 7500, message: "busy" }] },
+            { status: 400 },
+          );
+        }
+        return s.fake.fetch(u, init);
+      }) as typeof fetch),
+    });
+    const from = s.fake.log.length;
+    const r = keep(await p.upgrade(inst.id, "0.24.0"));
+    expect(r.ok).toBe(true);
+    expect(callsTo(s.fake, /GET .*\/healthz$/, from).length).toBeGreaterThan(0);
+    expect(epoch()).toBe(1);
+    expect(s.row(inst.id).session_cut).toBe("cd".repeat(16));
+    expect(s.audit(inst.id)).toContain("vars.session_cut_failed");
+    expect((await s.p.status(inst.id)).sessionCut).toEqual({
+      pending: true,
+      owed: true,
+    });
+    await s.p.updateVars(inst.id, { AUTH_PROVIDERS: "email,google" });
+    expect(epoch()).toBe(2);
+  });
+
+  it("R-L3: an accepted probe is treated as an upload: structured result and audit", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    s.fake.ignoreMigrationTag = true;
+    const r = keep(await s.p.upgrade(inst.id, "0.24.0"));
+    expect(r).toMatchObject({ ok: false, rolledBack: false, forwardFix: true });
+    expect(r.reason).toMatch(/probe was accepted/);
+    expect(s.audit(inst.id)).toContain("upgrade.incomplete");
+    expect(s.row(inst.id)).toMatchObject({ state: "active", lease: null });
+  });
+
+  it("R-N1: status reads state, versions, the lease and a pending cut without taking a lease", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input("finqore", { vars: CODES })));
+    const w = s.fake.writes().length;
+    expect(await s.p.status(inst.id)).toEqual({
+      id: inst.id,
+      state: "active",
+      version: "0.23.0",
+      previous_version: null,
+      lease_until: null,
+      leaseLive: false,
+      sessionCut: null,
+    });
+    s.db()
+      .prepare(
+        "UPDATE installs SET session_cut = ?, session_cut_base = ?, lease = 'x', lease_until = ? WHERE id = ?",
+      )
+      .run("ef".repeat(16), canonicalJson(CODES), s.clock.now() + 5, inst.id);
+    expect(await s.p.status(inst.id)).toMatchObject({
+      leaseLive: true,
+      sessionCut: { pending: true, owed: false },
+    });
+    expect(s.fake.writes().length).toBe(w);
+    expect(await fails(s.p.status("nope"))).toBeInstanceOf(ProvisionRefused);
   });
 });
 

@@ -3152,7 +3152,6 @@ describe("platform D1 migration (decisions 10, M1, M3)", () => {
       "vars",
       "session_cut",
       "row_version",
-      "welcome_artifact",
       "session_cut_base",
     ]);
   });

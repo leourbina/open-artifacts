@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS install_versions (
   PRIMARY KEY (install_id, version)
 );
 
--- The operation lock. A lifecycle operation takes it with a compare-and-swap
+-- The operation lock. create and every lifecycle operation take it with a compare-and-swap
 -- on (state, lease_until) and clears it when it ends, so a second upgrade,
 -- rollback, var change or delete is refused while one runs. A process that
 -- dies holding it leaves lease_until in the past after the lease time.
@@ -38,10 +38,6 @@ ALTER TABLE installs ADD COLUMN session_cut TEXT;
 -- Bumped on every write of the row (trigger below): an operation claims the
 -- row only if it is unchanged since its pre-flight read it.
 ALTER TABLE installs ADD COLUMN row_version INTEGER NOT NULL DEFAULT 0;
-
--- The Welcome artifact create published; the lifecycle selftest reads it back
--- (read-only) instead of publishing again.
-ALTER TABLE installs ADD COLUMN welcome_artifact TEXT;
 
 ALTER TABLE installs ADD COLUMN session_cut_base TEXT;
 
