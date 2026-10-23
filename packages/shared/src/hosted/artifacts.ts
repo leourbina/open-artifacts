@@ -34,7 +34,7 @@ export type HostedPublishInput = z.infer<typeof HostedPublishInputSchema>;
 /**
  * POST R.moveArtifact(id) -> ArtifactSummary. A public artifact moved into a
  * space with publicLinks off becomes "team" in the same batch and its
- * anonymous sockets close (as the publicLinks toggle-off).
+ * anonymous sockets close (the toggle itself never rewrites or revokes).
  * Shared spaces only: a personal
  * target is 400 space_personal. Needs manager or owner on the artifact (404
  * otherwise) and editor or manager in the target (403 space_forbidden).

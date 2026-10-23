@@ -149,6 +149,7 @@ export async function publish(
         input.allowAnonymousWrites !== undefined;
       if (sharing && !can(level, "visibility", canCtx(who, a)))
         throw new ApiError("bad_request", "only the owner can change sharing");
+      await refusePublicLinksOff(env, a.spaceId, input.visibility);
       capabilities = { ...CAPS, ...(JSON.parse(a.capabilities) as object) };
       accessChanged =
         (input.visibility !== undefined && input.visibility !== a.visibility) ||
@@ -881,6 +882,30 @@ export async function restoreVersion(
 
 // ------------------------------------------------------- patch and delete
 
+/**
+ * Asking for visibility "public" (set or kept) in a shared space with public
+ * links off: 403 public_links_off. The toggle only refuses new links; an
+ * artifact that is already public stays viewable (decide, /p/). One PK read,
+ * only when "public" is asked for.
+ */
+async function refusePublicLinksOff(
+  env: Env,
+  spaceId: string | null,
+  visibility: string | undefined,
+): Promise<void> {
+  if (visibility !== "public" || spaceId === null) return;
+  const off = await env.DB.prepare(
+    "select 1 from spaces where id = ? and kind = 'shared' and public_links = 0",
+  )
+    .bind(spaceId)
+    .first();
+  if (off)
+    throw new ApiError(
+      "public_links_off",
+      "Public links are off in this space",
+    );
+}
+
 /** title/description: editor+; visibility/capabilities/allowAnonymousWrites: owner only. */
 export async function patch(
   env: Env,
@@ -897,6 +922,7 @@ export async function patch(
     p.allowAnonymousWrites !== undefined;
   if (sharing && !can(level, "visibility", canCtx(who, a)))
     throw new ApiError("bad_request", "only the owner can change sharing");
+  await refusePublicLinksOff(env, a.spaceId, p.visibility);
   const sets: string[] = [];
   const vals: unknown[] = [];
   const set = (col: string, v: unknown) => {

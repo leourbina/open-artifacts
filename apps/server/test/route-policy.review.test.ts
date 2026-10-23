@@ -190,22 +190,8 @@ describe("L5, L6, L7", () => {
     expect(isPubliclyServable({ visibility: "team", deleted: false })).toBe(
       false,
     );
-    expect(
-      isPubliclyServable({
-        visibility: "public",
-        deleted: false,
-        spaceKind: "shared",
-        publicLinks: false,
-      }),
-    ).toBe(false);
-    expect(
-      isPubliclyServable({
-        visibility: "public",
-        deleted: false,
-        spaceKind: "shared",
-        publicLinks: true,
-      }),
-    ).toBe(true);
+    // A space's public-links toggle is not an input: it only refuses new
+    // public links (see list.spaces.test.ts for the toggle end to end).
   });
   it("L7: a malformed :id is 404 before D1", async () => {
     expect(

@@ -10,6 +10,7 @@ import {
   type SpaceRole,
   type Visibility,
 } from "@oa/shared";
+import { eq } from "drizzle-orm";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import {
@@ -18,6 +19,7 @@ import {
   callerOf,
   withCap,
 } from "../src/auth/authz.js";
+import { publicPrefix } from "../src/content/signing.js";
 import { getDb } from "../src/db/client.js";
 import {
   artifacts,
@@ -29,9 +31,11 @@ import {
   spaces,
 } from "../src/db/schema.js";
 import { ApiError } from "../src/http/errors.js";
-import { list } from "../src/services/artifacts.js";
+import { list, publish } from "../src/services/artifacts.js";
+import { search } from "../src/services/search.js";
 import { getUser } from "../src/services/users.js";
-import { api, errOf, login } from "./helpers.js";
+import { contentCall } from "./assets-stub.js";
+import { api, errOf, login, runIndex } from "./helpers.js";
 
 // P3 T4: list and search read the level from SQL (levelSql), and it must be
 // decide()'s. The matrix seeds every input decide reads (space kind, per-space
@@ -247,6 +251,17 @@ describe("list levels come from SQL and equal authorize()", () => {
     }
   });
 
+  it("public artifacts in spaces with public links off are listed per decide (no exception)", async () => {
+    // memberB has no role in s4 (public links off): the link alone lists it.
+    const got = await listAll("memberB");
+    for (const s of ["s2", "s4"] as const) {
+      const id = Object.values(arts).find(
+        (a) => a.space === s && a.visibility === "public" && !a.deleted,
+      )?.id as string;
+      expect(got[id]).toBe(s === "s2" ? "editor" : "viewer");
+    }
+  });
+
   it("the matrix covers every level and both kinds of space", async () => {
     const seen = new Set<string>();
     for (const w of CALLERS)
@@ -370,5 +385,126 @@ describe("list levels come from SQL and equal authorize()", () => {
     const deleted = Object.keys(got).filter((id) => arts[id]?.deleted);
     expect(deleted).toHaveLength(1);
     expect(got[deleted[0] as string]).toBe("owner");
+  });
+});
+
+describe("public links off only refuses new public links (decided)", () => {
+  const word = `linkword${tag}`;
+  let id: string;
+  let sid: string;
+
+  beforeAll(async () => {
+    const db = getDb(env);
+    const a = (await getUser(env, who.memberA.id)) as Member;
+    id = (
+      await publish(
+        env,
+        a,
+        {
+          title: "already public",
+          format: "html",
+          content: `<p>${word}</p>`,
+          visibility: "public",
+        } as never,
+        null,
+      )
+    ).id;
+    await runIndex(id);
+    // A public artifact in a shared space with public links on, then the
+    // toggle goes off (the spaces API is T9; the rows are what it writes).
+    sid = newId();
+    await db.insert(spaces).values({
+      id: sid,
+      kind: "shared",
+      name: `links-${tag}`,
+      publicLinks: 1,
+      createdAt: Date.now(),
+    });
+    await db.insert(spaceMembers).values({
+      spaceId: sid,
+      userId: who.memberA.id,
+      role: "manager",
+      source: "manual",
+      createdAt: Date.now(),
+    });
+    await db
+      .update(artifacts)
+      .set({ spaceId: sid })
+      .where(eq(artifacts.id, id));
+    await db.update(spaces).set({ publicLinks: 0 }).where(eq(spaces.id, sid));
+  });
+
+  it("an existing public artifact stays servable after the toggle goes off", async () => {
+    expect((await contentCall(`${publicPrefix(id, 1)}__view`)).status).toBe(
+      200,
+    );
+    const u = await api(app, R.contentUrl(id), null);
+    expect(u.status).toBe(200);
+    expect(((await u.json()) as { url: string }).url).toContain("/p/");
+    expect((await api(app, R.artifact(id), null)).status).toBe(200);
+    await expect(
+      authorize(env, { kind: "anonymous" }, id, "view"),
+    ).resolves.toMatchObject({ level: "viewer" });
+  });
+
+  it("lists and search match decide(): viewer by the link, manager by the role", async () => {
+    for (const [w, level] of [
+      ["memberB", "viewer"],
+      ["memberA", "manager"],
+    ] as const) {
+      const page = await list(
+        env,
+        who[w].caller,
+        ListQuerySchema.parse({ limit: 100 }),
+      );
+      expect(page.items.find((a) => a.id === id)?.access).toBe(level);
+      const hits = await search(env, who[w].caller, word);
+      expect(hits.items.map((h) => [h.id, h.access])).toEqual([[id, level]]);
+      expect((await authorize(env, who[w].caller, id, "view")).level).toBe(
+        level,
+      );
+    }
+  });
+
+  it("a new public link is refused with public_links_off, even by a manager", async () => {
+    // Keeping it public is asking for public too: refused, and nothing changes.
+    const keep = await api(app, R.artifact(id), who.memberA.cookie, {
+      method: "PATCH",
+      body: { visibility: "public" },
+    });
+    expect(keep.status).toBe(403);
+    expect((await errOf(keep)).code).toBe("public_links_off");
+    expect((await contentCall(`${publicPrefix(id, 1)}__view`)).status).toBe(
+      200,
+    );
+    const team = await api(app, R.artifact(id), who.memberA.cookie, {
+      method: "PATCH",
+      body: { visibility: "team" },
+    });
+    expect(team.status).toBe(200);
+    for (const req of [
+      // set_visibility (MCP) is this PATCH.
+      { method: "PATCH", path: R.artifact(id), body: { visibility: "public" } },
+      {
+        method: "POST",
+        path: R.versions(id),
+        body: { format: "html", content: "<p>v2", visibility: "public" },
+      },
+    ]) {
+      const r = await api(app, req.path, who.memberA.cookie, req);
+      expect({ req: req.method, ...(await errOf(r)) }).toMatchObject({
+        req: req.method,
+        code: "public_links_off",
+      });
+      expect(r.status).toBe(403);
+    }
+    const row = await getDb(env)
+      .select({ v: artifacts.visibility })
+      .from(artifacts)
+      .where(eq(artifacts.id, id));
+    expect(row[0]?.v).toBe("team");
+    expect((await contentCall(`${publicPrefix(id, 1)}__view`)).status).toBe(
+      404,
+    );
   });
 });

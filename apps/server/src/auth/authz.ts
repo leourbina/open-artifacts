@@ -283,7 +283,7 @@ export function levelSql(
   // No space role: a share, then team (uncapped members), then a public link.
   const rest = sql`case ${share} when 2 then ${lv("editor")} when 1 then ${lv("viewer")} else case
     ${member && !capped ? sql`when ${artifacts.visibility} = 'team' then 'viewer'` : sql``}
-    when ${artifacts.visibility} = 'public' and (${spaces.kind} is not 'shared' or ${spaces.publicLinks} = 1) then 'viewer'
+    when ${artifacts.visibility} = 'public' then 'viewer'
     end end`;
   // Trash: the personal owner, or a shared space's manager; never capped.
   const trash =
@@ -393,8 +393,8 @@ export async function requireAccess(
  * (levelSql gives each row's level):
  * - mine: in the caller's personal space.
  * - shared: a share for the caller's email, outside their personal space.
- * - team: team artifacts, and public ones that are servable (personal, or
- *   a shared space with public links on), for uncapped owner/admin/members.
+ * - team: visibility team or public, for uncapped owner/admin/members (a
+ *   space's public-links toggle only refuses new public links).
  * - spaces: shared spaces where the caller has a role: their space_members
  *   rows, allMembersRole (never guests or capped callers), and the
  *   Every-space mappings, resolved at read time (never personal spaces).
@@ -420,15 +420,10 @@ export function listFilterSql(
     ? and(ne(artifacts.spaceId, user.id), sharedIds(email))
     : undefined;
   // Capped callers see team artifacts only through a share or a space role
-  // (decide()); a public artifact in a space with public links off is
-  // nobody's by link.
+  // (decide()).
   const team =
     TEAM_ROLES.includes(user.role) && !capped
-      ? and(
-          inArray(artifacts.visibility, ["team", "public"]),
-          sql`(${artifacts.visibility} = 'team' or not exists (select 1 from ${spaces} sp
-            where sp.id = ${artifacts.spaceId} and sp.kind = 'shared' and sp.public_links = 0))`,
-        )
+      ? inArray(artifacts.visibility, ["team", "public"])
       : undefined;
   // Two branches, so each plans on artifacts_space_live_idx.
   const inSpaces = [

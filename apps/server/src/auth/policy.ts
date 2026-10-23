@@ -76,6 +76,10 @@ export type DecisionInput = {
     visibility: Visibility;
     deleted: boolean;
   };
+  /**
+   * publicLinks never changes a level: it only refuses new public links, a
+   * write-path guard (public_links_off). Kept for callers that report it.
+   */
   space: { publicLinks: boolean; allMembersRole: SpaceRole | null };
   /** Max of the caller's manual and sync rows in the artifact's space. */
   spaceRole: SpaceRole | null;
@@ -196,8 +200,9 @@ function uncapped(i: DecisionInput): AccessLevel | null {
   // restricted members and capped guests see team artifacts only through a
   // space role or a share.
   if (a.visibility === "team" && member && !capped) return "viewer";
-  if (a.visibility === "public" && (personal || i.space.publicLinks === true))
-    return "viewer";
+  // Public links off only refuses new public links: an artifact that is
+  // already public keeps its link (decided), whatever its space.
+  if (a.visibility === "public") return "viewer";
   return null;
 }
 
@@ -303,22 +308,15 @@ export function orgCan(
 
 /**
  * Whether an artifact may be served without a signed token (/p/ and public
- * downloads): public, live, and in a personal space or a shared space that
- * allows public links. Unknown kinds count as shared (fail closed). Until
- * spaces exist (P3 T1) every artifact is personal.
+ * downloads): public and live. A space's public-links toggle is not part of
+ * it: turning it off only refuses new public links (403 public_links_off),
+ * so an artifact that is already public keeps its link (decided).
  */
 export function isPubliclyServable(a: {
   visibility: string;
   deleted: boolean;
-  spaceKind?: SpaceKind;
-  publicLinks?: boolean;
 }): boolean {
-  const personal = a.spaceKind === undefined || a.spaceKind === "personal";
-  return (
-    a.visibility === "public" &&
-    a.deleted === false &&
-    (personal || a.publicLinks === true)
-  );
+  return a.visibility === "public" && a.deleted === false;
 }
 
 /**
