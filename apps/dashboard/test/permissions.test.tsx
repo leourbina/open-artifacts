@@ -1,5 +1,5 @@
 import { R } from "@oa/shared";
-import { fireEvent, screen } from "@testing-library/react";
+import { act, fireEvent, screen } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { expect, it, vi } from "vitest";
 import { accessLabel, canPublishTo } from "../src/auth/permissions";
@@ -14,6 +14,13 @@ vi.mock("../src/viewer/bridge", () => ({
 }));
 
 installHarness();
+
+// Radix Tooltip measures its content; jsdom has no ResizeObserver.
+globalThis.ResizeObserver ??= class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+} as unknown as typeof ResizeObserver;
 
 const none = {
   edit: false,
@@ -49,30 +56,57 @@ it("viewer sees no edit affordance but keeps data writes", async () => {
   for (const name of ["Rename", "Restore", "Delete", "Share", "Move"])
     expect(screen.queryByRole("button", { name })).toBeNull();
   expect(screen.queryByTitle("Rename")).toBeNull();
-  expect(
-    screen.queryByText("You can view this, but not change it."),
-  ).toBeNull();
 });
 
-it("hosted viewer sees the View only chip and still no buttons", async () => {
+const guestCan = { ...none, dataWrite: false };
+const live = { db: true, viewer: false, storage: false };
+
+it("hosted guest on a live-data artifact sees the chip, a tooltip on focus, no buttons", async () => {
   mountHosted(`/a/${arts[0].id}`, true, undefined, [
-    handler({ access: "viewer", can: none }),
+    handler({ access: "viewer", can: guestCan, capabilities: live }),
   ]);
-  expect(await screen.findByText("View only")).toBeVisible();
+  const chip = await screen.findByText("View only");
+  expect(chip).toBeVisible();
+  expect(chip).toHaveAttribute("tabindex", "0");
+  act(() => chip.focus());
+  expect(
+    (
+      await screen.findAllByText(
+        "You can view this. Ask a space manager to make you an editor.",
+      )
+    )[0],
+  ).toBeInTheDocument();
   for (const name of ["Rename", "Share", "Delete"])
     expect(screen.queryByRole("button", { name })).toBeNull();
 });
 
-it("hosted editor gets no View only chip", async () => {
+it("hosted employee viewer (dataWrite true) gets no chip", async () => {
   mountHosted(`/a/${arts[0].id}`, true, undefined, [
-    handler({ access: "editor", can: { ...none, edit: true } }),
+    handler({ access: "viewer", can: none, capabilities: live }),
   ]);
   await screen.findByRole("heading", { name: arts[0].title });
   expect(screen.queryByText("View only")).toBeNull();
 });
 
-it("self-hosted viewer gets no View only chip", async () => {
-  serve({ access: "viewer", can: undefined, space: undefined });
+it("hosted guest on an artifact without live data gets no chip", async () => {
+  mountHosted(`/a/${arts[0].id}`, true, undefined, [
+    handler({
+      access: "viewer",
+      can: guestCan,
+      capabilities: { db: false, viewer: false, storage: false },
+    }),
+  ]);
+  await screen.findByRole("heading", { name: arts[0].title });
+  expect(screen.queryByText("View only")).toBeNull();
+});
+
+it("self-hosted guest-shaped viewer gets no chip", async () => {
+  serve({
+    access: "viewer",
+    can: guestCan,
+    space: undefined,
+    capabilities: live,
+  });
   mount(`/a/${arts[0].id}`);
   await screen.findByRole("heading", { name: arts[0].title });
   expect(screen.queryByText("View only")).toBeNull();
@@ -87,35 +121,7 @@ it("self-hosted viewer share (no can, no space): no notice, no access label", as
   });
   mount(`/a/${arts[0].id}`);
   await screen.findByRole("heading", { name: arts[0].title });
-  expect(
-    screen.queryByText("You can view this, but not change it."),
-  ).toBeNull();
   expect(screen.queryByText("Viewer")).toBeNull();
-});
-
-it("guest sees the read-only notice when can.dataWrite is false", async () => {
-  serve({
-    access: "viewer",
-    can: { ...none, dataWrite: false },
-    capabilities: { db: true, viewer: false, storage: false },
-  });
-  mount(`/a/${arts[0].id}`);
-  expect(
-    await screen.findByText("You can view this, but not change it."),
-  ).toBeVisible(); // copy per D10
-});
-
-it("no notice on an artifact without live data", async () => {
-  serve({
-    access: "viewer",
-    can: { ...none, dataWrite: false },
-    capabilities: { db: false, viewer: false, storage: false },
-  });
-  mount(`/a/${arts[0].id}`);
-  await screen.findByRole("heading", { name: arts[0].title });
-  expect(
-    screen.queryByText("You can view this, but not change it."),
-  ).toBeNull();
 });
 
 it("a space manager gets Share and Delete, is labelled Manager, never Owner", async () => {

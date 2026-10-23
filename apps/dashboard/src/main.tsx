@@ -109,6 +109,30 @@ async function startMocks() {
       "https://github.com/open-artifacts-ai/open-artifacts/releases/tag/v0.15.0",
     checkedAt,
   };
+  // ?mock=guest-live (with ?hosted=1): every artifact is a live-data (db) viewer share the
+  // caller can't write; ?mock=viewer-live: the same for an employee viewer (data writes allowed).
+  const live = params.get("mock");
+  if (live === "guest-live" || live === "viewer-live")
+    extra.push(
+      http.get("*/api/v1/artifacts/:id", ({ params: p }) => {
+        const a = fixtures.artifacts.find((x) => x.id === p.id);
+        if (!a) return;
+        return HttpResponse.json({
+          ...a,
+          access: "viewer",
+          can: {
+            edit: false,
+            share: false,
+            setVisibility: false,
+            delete: false,
+            transfer: false,
+            move: false,
+            dataWrite: live === "viewer-live",
+          },
+          capabilities: { db: true, viewer: false, storage: false },
+        });
+      }),
+    );
   // ?mock=cpu: 4 CPU-limit hits today, and the first two library requests get a 1102 (the first may be aborted).
   if (params.get("mock") === "cpu") {
     let hits = 0;

@@ -155,8 +155,11 @@ export function TitleBar({
   const canShare = authed && (can.share || can.setVisibility);
   const canDelete = authed && can.delete;
   const canEdit = authed && can.edit;
-  // Hosted only: self-hosted viewers keep the bare title bar.
-  const viewOnly = useHosted().features.includes("spaces") && !can.edit;
+  // Guests and contractors on live-data artifacts (D10); hosted only.
+  const viewOnly =
+    useHosted().features.includes("spaces") &&
+    artifact.capabilities.db &&
+    !can.dataWrite;
   const go = (to: string) => void navigate({ to: to as string });
 
   const info = useVersionInfo(artifact.id, version, authed).data;
@@ -232,12 +235,22 @@ export function TitleBar({
         )}
         <VisibilityBadge visibility={artifact.visibility} />
         {viewOnly && (
-          <Badge
-            variant="secondary"
-            className="h-[18px] rounded-sm px-[6px] py-0 text-[length:var(--oa-text-xs)]"
-          >
-            View only
-          </Badge>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Badge
+                  variant="secondary"
+                  tabIndex={0}
+                  className="h-[18px] rounded-sm px-[6px] py-0 text-[length:var(--oa-text-xs)]"
+                >
+                  View only
+                </Badge>
+              </TooltipTrigger>
+              <TooltipContent>
+                You can view this. Ask a space manager to make you an editor.
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         )}
         {artifact.space && (
           <span className="text-[length:var(--oa-text-sm)] text-muted-foreground">
