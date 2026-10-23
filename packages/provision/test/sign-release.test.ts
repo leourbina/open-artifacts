@@ -1,0 +1,483 @@
+// T3b: the CI signer (scripts/ci/sign-release.ts, node:* only) against
+// @oa/provision. Its canonicalJson and record builder must produce the same
+// bytes; its output must pass publishRelease. The key goes in on stdin only.
+import { spawnSync } from "node:child_process";
+import { generateKeyPairSync, type KeyObject } from "node:crypto";
+import {
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import * as LIB from "../../../scripts/ci/release-artifact.ts";
+import { cfClient } from "../src/cf.js";
+import { platformNames } from "../src/names.js";
+import { canonicalJson } from "../src/platform.js";
+import { FLOOR_KEY, publishRelease, r2ReleaseReader } from "../src/publish.js";
+import {
+  assetEntries,
+  buildReleaseRecord,
+  bundleSha256,
+  migrationsSha256,
+  openReleaseRecord,
+  TEST_HOOKS_DEFINE,
+} from "../src/release.js";
+import { FakeCf } from "./fake-cf.js";
+
+const G = vi.hoisted(() => ({
+  RELEASE_PUBKEY: { staging: "", prod: "" } as Record<string, string>,
+}));
+vi.mock("../src/internal/gates.js", async (orig) => {
+  const m = await orig<typeof import("../src/internal/gates.js")>();
+  return {
+    ...m,
+    get RELEASE_PUBKEY() {
+      return G.RELEASE_PUBKEY;
+    },
+  };
+});
+
+const ROOT = new URL("../../../", import.meta.url).pathname;
+const SIGN = join(ROOT, "scripts/ci/sign-release.ts");
+const ASSEMBLE = join(ROOT, "scripts/ci/assemble-release.ts");
+const CHECK = join(ROOT, "scripts/ci/check-hosted-release.ts");
+const enc = (s: string) => new TextEncoder().encode(s);
+
+const KEYS = {
+  staging: generateKeyPairSync("ed25519"),
+  prod: generateKeyPairSync("ed25519"),
+};
+const pubX = (k: { publicKey: KeyObject }) =>
+  k.publicKey.export({ format: "jwk" }).x as string;
+G.RELEASE_PUBKEY = { staging: pubX(KEYS.staging), prod: pubX(KEYS.prod) };
+const pem = (env: "staging" | "prod") =>
+  KEYS[env].privateKey.export({ format: "pem", type: "pkcs8" }).toString();
+
+const TEMPLATE = new Uint8Array(
+  readFileSync(join(ROOT, "apps/server/wrangler.template.jsonc")),
+);
+const mods = (v: boolean) => [
+  {
+    name: "index.js",
+    type: "esm" as const,
+    bytes: enc(
+      `const t = true;\nconst hooks = ${v} === true && t;\nexport default {};\n`,
+    ),
+  },
+  {
+    name: "chunks/a.wasm",
+    type: "wasm" as const,
+    bytes: new Uint8Array([0, 97, 115, 109]),
+  },
+];
+const FIX = {
+  version: "0.34.0",
+  mainModule: "index.js",
+  release: mods(false),
+  redline: mods(true),
+  assets: [
+    { path: "index.html", bytes: enc("<p>hi</p>") },
+    { path: "assets/app.js", bytes: enc("console.log(1)") },
+  ],
+  template: TEMPLATE,
+  migrations: [{ name: "0000_init.sql", bytes: enc("CREATE TABLE a (x);\n") }],
+  welcome: enc("# Welcome\n"),
+};
+
+async function artifact(over: Partial<typeof FIX> = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "oa-art-"));
+  const out = await LIB.writeArtifact(dir, { ...FIX, ...over });
+  return { dir, ...out };
+}
+
+function run(
+  script: string,
+  args: string[],
+  input = "",
+): { code: number | null; stdout: string; stderr: string } {
+  const r = spawnSync(
+    process.execPath,
+    ["--experimental-strip-types", "--no-warnings", script, ...args],
+    {
+      input,
+      encoding: "utf8",
+      timeout: 60_000,
+      env: { PATH: process.env.PATH ?? "" },
+    },
+  );
+  return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+}
+const outputs = (stdout: string) =>
+  Object.fromEntries(
+    stdout
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => l.split("=") as [string, string]),
+  );
+
+async function signed(env: "staging" | "prod" = "staging") {
+  const a = await artifact();
+  const check = run(CHECK, [a.dir]);
+  expect(check.code, check.stderr).toBe(0);
+  const c = outputs(check.stdout);
+  const out = mkdtempSync(join(tmpdir(), "oa-signed-"));
+  const args = [
+    "--dir",
+    a.dir,
+    "--env",
+    env,
+    "--version",
+    "0.34.0",
+    "--manifest-sha256",
+    c.manifest_sha256 as string,
+    "--bundle-sha256",
+    c.bundle_sha256 as string,
+    "--out",
+    out,
+  ];
+  const r = run(SIGN, args, pem(env));
+  return { a, c, out, args, r, o: outputs(r.stdout) };
+}
+
+describe("parity with @oa/provision", () => {
+  it("canonicalJson produces identical bytes on fixtures", () => {
+    for (const v of [
+      { b: 1, a: [3, { d: null, c: 'x "' }], e: true },
+      [],
+      "s",
+      0,
+      { "": { z: 1, y: [false] } },
+    ])
+      expect(LIB.canonicalJson(v)).toBe(canonicalJson(v));
+  });
+
+  it("the record builder produces identical bytes on fixtures", () => {
+    for (const [env, variant] of [
+      ["staging", "release"],
+      ["staging", "redline"],
+      ["prod", "release"],
+    ] as const) {
+      const i = {
+        env,
+        version: FIX.version,
+        variant,
+        mainModule: FIX.mainModule,
+        modules: variant === "redline" ? FIX.redline : FIX.release,
+        assets: FIX.assets,
+        template: FIX.template,
+        migrations: FIX.migrations,
+        welcome: FIX.welcome,
+      };
+      const a = LIB.canonicalJson(LIB.buildRecord(i));
+      const b = canonicalJson(buildReleaseRecord(i));
+      expect(a).toBe(b);
+      expect(JSON.parse(a).defines).toEqual({
+        [TEST_HOOKS_DEFINE]: variant === "redline",
+      });
+    }
+    expect(
+      LIB.bundleSha256({ mainModule: FIX.mainModule, modules: FIX.release }),
+    ).toBe(bundleSha256({ mainModule: FIX.mainModule, modules: FIX.release }));
+    expect(LIB.migrationsSha256(FIX.migrations)).toBe(
+      migrationsSha256(FIX.migrations),
+    );
+    expect(LIB.canonicalJson(LIB.assetEntries(FIX.assets))).toBe(
+      canonicalJson(assetEntries(FIX.assets)),
+    );
+  });
+
+  it("the record builder refuses what provision refuses", () => {
+    const base = {
+      ...FIX,
+      env: "staging" as const,
+      variant: "release" as const,
+      modules: FIX.release,
+    };
+    for (const bad of [
+      { env: "prod" as const, variant: "redline" as const },
+      { version: "v1" },
+      { assets: [{ path: ".env", bytes: enc("") }] },
+      {
+        assets: [
+          { path: `${"d".repeat(60)}/${"f".repeat(101)}`, bytes: enc("") },
+        ],
+      },
+      {
+        assets: [{ path: "big", bytes: new Uint8Array(25 * 1024 * 1024 + 1) }],
+      },
+    ]) {
+      expect(
+        () => LIB.buildRecord({ ...base, ...bad }),
+        JSON.stringify(Object.keys(bad)),
+      ).toThrow();
+      expect(() => buildReleaseRecord({ ...base, ...bad })).toThrow();
+    }
+  });
+});
+
+describe("check-hosted-release.ts", () => {
+  it("prints the bundleSha256 recomputed from the bytes and the manifest's sha256", async () => {
+    const a = await artifact();
+    const r = run(CHECK, [a.dir]);
+    expect(r.code, r.stderr).toBe(0);
+    const o = outputs(r.stdout);
+    expect(o.bundle_sha256).toBe(
+      bundleSha256({ mainModule: "index.js", modules: FIX.release }),
+    );
+    expect(o.manifest_sha256).toBe(a.manifestSha256);
+  });
+
+  it("refuses a file that does not match manifest.json, an extra file and a symlink", async () => {
+    const a = await artifact();
+    writeFileSync(join(a.dir, "assets/index.html"), "<p>HI</p>");
+    expect(run(CHECK, [a.dir]).code).toBe(1);
+    const b = await artifact();
+    writeFileSync(join(b.dir, "assets/extra.js"), "x");
+    expect(run(CHECK, [b.dir]).code).toBe(1);
+    const c = await artifact();
+    symlinkSync("/etc/hosts", join(c.dir, "assets/hosts"));
+    expect(run(CHECK, [c.dir]).code).toBe(1);
+  });
+});
+
+describe("sign-release.ts", () => {
+  it("staging: signs release and redline, writes the tar and .sig.json, prints only outputs", async () => {
+    const s = await signed("staging");
+    expect(s.r.code, s.r.stderr).toBe(0);
+    expect(readdirSync(s.out).sort()).toEqual([
+      "oa-release-staging-redline-0.34.0.sig.json",
+      "oa-release-staging-redline-0.34.0.tar",
+      "oa-release-staging-release-0.34.0.sig.json",
+      "oa-release-staging-release-0.34.0.tar",
+    ]);
+    expect(Object.keys(s.o).sort()).toEqual([
+      "staging_redline_record_sha256",
+      "staging_redline_signature",
+      "staging_redline_tar_sha256",
+      "staging_release_record_sha256",
+      "staging_release_signature",
+      "staging_release_tar_sha256",
+    ]);
+    // The key never reaches stdout, stderr or the written files.
+    const der = KEYS.staging.privateKey
+      .export({ format: "der", type: "pkcs8" })
+      .toString("base64");
+    const d = KEYS.staging.privateKey.export({ format: "jwk" }).d as string;
+    for (const text of [
+      s.r.stdout,
+      s.r.stderr,
+      ...readdirSync(s.out).map((f) => readFileSync(join(s.out, f), "latin1")),
+    ]) {
+      expect(text).not.toContain(der.slice(20, 60));
+      expect(text).not.toContain(d);
+      expect(text).not.toContain("PRIVATE KEY");
+    }
+    // The .sig.json verifies with provision's reader.
+    for (const v of ["release", "redline"] as const) {
+      const stored = JSON.parse(
+        readFileSync(
+          join(s.out, `oa-release-staging-${v}-0.34.0.sig.json`),
+          "utf8",
+        ),
+      );
+      const rec = openReleaseRecord(
+        stored,
+        G.RELEASE_PUBKEY.staging as string,
+        "staging",
+      );
+      expect(rec.variant).toBe(v);
+      expect(rec.defines[TEST_HOOKS_DEFINE]).toBe(v === "redline");
+      expect(stored.signature).toBe(s.o[`staging_${v}_signature`]);
+    }
+  });
+
+  it("prod: signs release only", async () => {
+    const s = await signed("prod");
+    expect(s.r.code, s.r.stderr).toBe(0);
+    expect(readdirSync(s.out).sort()).toEqual([
+      "oa-release-prod-release-0.34.0.sig.json",
+      "oa-release-prod-release-0.34.0.tar",
+    ]);
+  });
+
+  it("its tar and .sig.json pass publishRelease and read back through r2ReleaseReader", async () => {
+    const s = await signed("staging");
+    expect(s.r.code, s.r.stderr).toBe(0);
+    const fake = new FakeCf();
+    fake.r2.add(platformNames("staging").releases);
+    const floor = canonicalJson({
+      env: "staging",
+      seq: 1,
+      minVersion: "0.1.0",
+      revoked: [],
+    });
+    const { sign } = await import("node:crypto");
+    fake.r2Seed(
+      "oa-s-releases",
+      FLOOR_KEY,
+      enc(
+        JSON.stringify({
+          record: floor,
+          signature: sign(
+            null,
+            Buffer.from(`oa-release-floor-v1\nstaging\n${floor}`),
+            KEYS.staging.privateKey,
+          ).toString("base64url"),
+        }),
+      ),
+    );
+    const cf = cfClient({
+      accountId: fake.accountId,
+      token: fake.token,
+      fetch: fake.fetch,
+      sleep: async () => {},
+    });
+    for (const v of ["release", "redline"] as const)
+      await publishRelease({
+        cf,
+        env: "staging",
+        version: "0.34.0",
+        files: {
+          tar: new Uint8Array(
+            readFileSync(join(s.out, `oa-release-staging-${v}-0.34.0.tar`)),
+          ),
+          sig: new Uint8Array(
+            readFileSync(
+              join(s.out, `oa-release-staging-${v}-0.34.0.sig.json`),
+            ),
+          ),
+        },
+      });
+    const r = r2ReleaseReader(cf, "staging");
+    expect(bundleSha256(await r.modules("0.34.0", "redline"))).toBe(
+      bundleSha256({ mainModule: "index.js", modules: FIX.redline }),
+    );
+  });
+
+  it.each<
+    [string, (s: Awaited<ReturnType<typeof signed>>) => string[], string]
+  >([
+    [
+      "a manifest sha256 that is not hosted-check's",
+      (s) => swap(s.args, "--manifest-sha256", "0".repeat(64)),
+      "staging",
+    ],
+    [
+      "a bundle sha256 that is not hosted-check's",
+      (s) => swap(s.args, "--bundle-sha256", "0".repeat(64)),
+      "staging",
+    ],
+    [
+      "a version other than the manifest's",
+      (s) => swap(s.args, "--version", "0.34.1"),
+      "staging",
+    ],
+    ["an unknown env", (s) => swap(s.args, "--env", "dev"), "staging"],
+    ["a key in argv", (s) => [...s.args, "--key", "x"], "staging"],
+    ["an empty stdin", (s) => s.args, ""],
+    ["a non-Ed25519 key", (s) => s.args, "rsa"],
+  ])("refuses %s", async (_n, argsOf, keyKind) => {
+    const s = await signed("staging");
+    const key =
+      keyKind === "staging"
+        ? pem("staging")
+        : keyKind === "rsa"
+          ? generateKeyPairSync("rsa", { modulusLength: 2048 })
+              .privateKey.export({ format: "pem", type: "pkcs8" })
+              .toString()
+          : "";
+    const out = mkdtempSync(join(tmpdir(), "oa-signed-"));
+    const r = run(SIGN, swap(argsOf(s), "--out", out), key);
+    expect(r.code).toBe(1);
+    expect(readdirSync(out)).toEqual([]);
+    expect(r.stdout).toBe("");
+  });
+
+  it("refuses a file changed after hosted-check (re-hashed against manifest.json)", async () => {
+    const s = await signed("staging");
+    writeFileSync(join(s.a.dir, "welcome/welcome.md"), "# Evil\n");
+    const out = mkdtempSync(join(tmpdir(), "oa-signed-"));
+    const r = run(SIGN, swap(s.args, "--out", out), pem("staging"));
+    expect(r.code).toBe(1);
+    expect(readdirSync(out)).toEqual([]);
+  });
+
+  it("refuses a redline that differs from release beyond the define literal", async () => {
+    const red = mods(true);
+    red[0] = {
+      ...red[0],
+      bytes: enc(
+        "const t = true;\nconst hooks = true === true && t;\nexport default { evil: 1 };\n",
+      ),
+    } as (typeof red)[0];
+    const a = await artifact({ redline: red });
+    const c = outputs(run(CHECK, [a.dir]).stdout);
+    const out = mkdtempSync(join(tmpdir(), "oa-signed-"));
+    const r = run(
+      SIGN,
+      [
+        "--dir",
+        a.dir,
+        "--env",
+        "staging",
+        "--version",
+        "0.34.0",
+        "--manifest-sha256",
+        c.manifest_sha256 as string,
+        "--bundle-sha256",
+        c.bundle_sha256 as string,
+        "--out",
+        out,
+      ],
+      pem("staging"),
+    );
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/define/);
+  });
+});
+
+describe("assemble-release.ts", () => {
+  it("rebuilds the signed files from the artifact and the sign job's outputs, byte-identical", async () => {
+    const s = await signed("staging");
+    const out = mkdtempSync(join(tmpdir(), "oa-asm-"));
+    const pass = (v: string) =>
+      `${s.o[`staging_${v}_signature`]}:${s.o[`staging_${v}_tar_sha256`]}:${s.o[`staging_${v}_record_sha256`]}`;
+    const r = run(ASSEMBLE, [
+      ...swap(s.args, "--out", out),
+      "--release",
+      pass("release"),
+      "--redline",
+      pass("redline"),
+    ]);
+    expect(r.code, r.stderr).toBe(0);
+    for (const f of readdirSync(s.out))
+      expect(readFileSync(join(out, f)), f).toEqual(
+        readFileSync(join(s.out, f)),
+      );
+  });
+
+  it("refuses a tar or record hash that is not the sign job's", async () => {
+    const s = await signed("prod");
+    const out = mkdtempSync(join(tmpdir(), "oa-asm-"));
+    const r = run(ASSEMBLE, [
+      ...swap(s.args, "--out", out),
+      "--release",
+      `${s.o.prod_release_signature}:${"0".repeat(64)}:${s.o.prod_release_record_sha256}`,
+    ]);
+    expect(r.code).toBe(1);
+    expect(readdirSync(out)).toEqual([]);
+  });
+});
+
+function swap(args: string[], flag: string, value: string): string[] {
+  const out = [...args];
+  const i = out.indexOf(flag);
+  if (i < 0) return [...out, flag, value];
+  out[i + 1] = value;
+  return out;
+}

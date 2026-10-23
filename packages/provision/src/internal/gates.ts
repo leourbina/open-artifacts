@@ -25,3 +25,15 @@ export const RELEASE_PUBKEY: Readonly<Record<"staging" | "prod", string>> =
     staging: RELEASE_PUBKEY_PLACEHOLDER,
     prod: RELEASE_PUBKEY_PLACEHOLDER,
   });
+
+/**
+ * The anchor of the signed release floor (releases/floor.json): create and
+ * publishRelease refuse a floor whose seq is below this, whatever the
+ * platform D1 cache says (the provisioning token can write D1). Every
+ * revocation bumps it here in the same change (docs/ops/hosted.md).
+ */
+export const FLOOR_MIN_SEQ: Readonly<Record<"staging" | "prod", number>> =
+  Object.freeze({
+    staging: 1,
+    prod: 1,
+  });

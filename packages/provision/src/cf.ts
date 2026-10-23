@@ -44,6 +44,15 @@ export interface TokenInfo {
   expires_on?: string;
 }
 
+export interface R2ObjectInfo {
+  key: string;
+  size: number;
+  etag: string;
+}
+
+/** An R2 write condition: create-only, or replace exactly this etag. */
+export type R2PutCondition = { ifNoneMatch: "*" } | { ifMatch: string };
+
 export interface TurnstileWidget {
   sitekey: string;
   name: string;
@@ -106,7 +115,35 @@ export interface Cf {
   ): Promise<{ jwt: string }>;
   /** GET a Turnstile widget by sitekey (read-only); null when there is none. */
   turnstileWidget(sitekey: string): Promise<TurnstileWidget | null>;
+  /**
+   * R2 objects in an env's releases bucket (platformNames(env).releases),
+   * account-scoped REST routes only. null when the object does not exist.
+   */
+  r2ObjectGet(
+    bucket: string,
+    key: string,
+  ): Promise<{ bytes: Uint8Array; etag: string } | null>;
+  r2ObjectHead(
+    bucket: string,
+    key: string,
+  ): Promise<{ size: number; etag: string } | null>;
+  /** A conditional PUT; a failed condition is a CfError with status 412. */
+  r2ObjectPut(
+    bucket: string,
+    key: string,
+    bytes: Uint8Array,
+    cond: R2PutCondition,
+  ): Promise<void>;
+  /** One page of keys under `prefix`; pass `cursor` back for the next page. */
+  r2ObjectList(
+    bucket: string,
+    prefix: string,
+    cursor?: string,
+  ): Promise<{ objects: R2ObjectInfo[]; cursor?: string; truncated: boolean }>;
 }
+
+/** The only buckets the R2 object calls touch: the releases bucket of an env. */
+const RELEASES_BUCKET = /^oa-[sp]-releases$/;
 
 /** Manifest hash: the first 32 hex characters of SHA-256 (64 is rejected). */
 export function assetHash(bytes: Uint8Array): string {
@@ -132,7 +169,14 @@ function describeErrors(body: unknown): string {
     .slice(0, 300);
 }
 
-type CallInit = { body?: BodyInit; json?: unknown; auth?: string };
+type CallInit = {
+  body?: BodyInit;
+  json?: unknown;
+  auth?: string;
+  headers?: Record<string, string>;
+  /** Keep the raw body bytes (R2 objects are not JSON). */
+  binary?: boolean;
+};
 
 export function cfClient(o: {
   accountId: string;
@@ -153,9 +197,16 @@ export function cfClient(o: {
     path: string,
     init: CallInit = {},
     ok: number[] = [],
-  ): Promise<{ status: number; body: unknown; text: string }> {
+  ): Promise<{
+    status: number;
+    body: unknown;
+    text: string;
+    bytes?: Uint8Array;
+    headers: Headers;
+  }> {
     const route = path.split("?")[0] as string;
     const headers: Record<string, string> = {
+      ...init.headers,
       authorization: `Bearer ${init.auth ?? o.token}`,
     };
     let body = init.body;
@@ -173,15 +224,25 @@ export function cfClient(o: {
         last = new CfError(method, route, 0, `network: ${(e as Error).name}`);
         continue;
       }
-      const text = await res.text();
+      const bytes =
+        init.binary && res.ok
+          ? new Uint8Array(await res.arrayBuffer())
+          : undefined;
+      const text = bytes ? "" : await res.text();
       let parsed: unknown;
       try {
-        parsed = JSON.parse(text);
+        parsed = bytes ? undefined : JSON.parse(text);
       } catch {
         parsed = undefined;
       }
       if (res.ok || ok.includes(res.status))
-        return { status: res.status, body: parsed, text };
+        return {
+          status: res.status,
+          body: parsed,
+          text,
+          bytes,
+          headers: res.headers,
+        };
       last = new CfError(method, route, res.status, describeErrors(parsed));
       if (res.status !== 429 && res.status < 500) throw last;
     }
@@ -197,6 +258,17 @@ export function cfClient(o: {
     (await call("GET", path, {}, [404])).status !== 404;
   const kvPath = (id: string, key: string) =>
     `${acct}/storage/kv/namespaces/${seg(id)}/values/${seg(key)}`;
+  const r2Path = (bucket: string, key: string) => {
+    if (!RELEASES_BUCKET.test(bucket))
+      throw new Error(
+        `R2 object calls are for an env's releases bucket only, not ${JSON.stringify(bucket).slice(0, 60)}`,
+      );
+    if (typeof key !== "string" || key === "" || key.length > 1024)
+      throw new Error("invalid R2 object key");
+    return `${acct}/r2/buckets/${seg(bucket)}/objects/${seg(key)}`;
+  };
+  const etagOf = (h: Headers) =>
+    (h.get("etag") ?? "").replace(/^W\//, "").replace(/^"(.*)"$/, "$1");
 
   return {
     accountId: o.accountId,
@@ -393,6 +465,73 @@ export function cfClient(o: {
         if (next) jwt = next;
       }
       return { jwt };
+    },
+    async r2ObjectGet(bucket, key) {
+      const r = await call("GET", r2Path(bucket, key), { binary: true }, [404]);
+      if (r.status === 404) return null;
+      return { bytes: r.bytes ?? new Uint8Array(), etag: etagOf(r.headers) };
+    },
+    async r2ObjectHead(bucket, key) {
+      const r = await call("HEAD", r2Path(bucket, key), {}, [404]);
+      if (r.status === 404) return null;
+      const size = Number(r.headers.get("content-length"));
+      if (!Number.isSafeInteger(size) || size < 0)
+        throw new CfError("HEAD", r2Path(bucket, key), r.status, "no size");
+      return { size, etag: etagOf(r.headers) };
+    },
+    async r2ObjectPut(bucket, key, bytes, cond) {
+      const headers: Record<string, string> =
+        "ifNoneMatch" in cond && cond.ifNoneMatch === "*"
+          ? { "if-none-match": "*" }
+          : "ifMatch" in cond &&
+              typeof cond.ifMatch === "string" &&
+              cond.ifMatch !== ""
+            ? { "if-match": `"${cond.ifMatch}"` }
+            : (() => {
+                throw new Error("an R2 put needs If-None-Match: * or If-Match");
+              })();
+      await call("PUT", r2Path(bucket, key), {
+        body: bytes as BodyInit,
+        headers: { ...headers, "content-type": "application/octet-stream" },
+      });
+    },
+    async r2ObjectList(bucket, prefix, cursor) {
+      if (!RELEASES_BUCKET.test(bucket))
+        throw new Error(
+          `R2 object calls are for an env's releases bucket only, not ${JSON.stringify(bucket).slice(0, 60)}`,
+        );
+      const q = `prefix=${seg(prefix)}&per_page=1000${cursor ? `&cursor=${seg(cursor)}` : ""}`;
+      const { body } = await call(
+        "GET",
+        `${acct}/r2/buckets/${seg(bucket)}/objects?${q}`,
+      );
+      const b = body as {
+        result?: { key?: unknown; size?: unknown; etag?: unknown }[];
+        result_info?: { cursor?: unknown; is_truncated?: unknown };
+      };
+      const objects = (b?.result ?? []).map((x) => {
+        if (
+          typeof x?.key !== "string" ||
+          !Number.isSafeInteger(x.size) ||
+          (x.size as number) < 0
+        )
+          throw new Error("R2 listing has a malformed entry");
+        return {
+          key: x.key,
+          size: x.size as number,
+          etag: String(x.etag ?? ""),
+        };
+      });
+      const info = b?.result_info ?? {};
+      const next =
+        typeof info.cursor === "string" && info.cursor !== ""
+          ? info.cursor
+          : undefined;
+      const truncated =
+        info.is_truncated === true || info.is_truncated === "true";
+      if (truncated && !next)
+        throw new Error("R2 listing is truncated but has no cursor");
+      return { objects, cursor: next, truncated };
     },
     async turnstileWidget(sitekey) {
       const r = await call(

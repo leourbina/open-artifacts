@@ -647,23 +647,25 @@ describe("buildBundle", () => {
       cwd: string;
       config: Record<string, unknown>;
     }[] = [];
-    const b = await buildBundle(root, async (cmd, args, o) => {
-      const outdir = args[args.indexOf("--outdir") + 1] as string;
-      const cfg = args[args.indexOf("-c") + 1] as string;
-      calls.push({
-        cmd,
-        args,
-        cwd: o.cwd,
-        config: JSON.parse(await readFile(cfg, "utf8")),
-      });
-      await mkdir(join(outdir, "chunks"), { recursive: true });
-      await writeFile(join(outdir, "index.js"), "export default {}");
-      await writeFile(join(outdir, "chunks/a.mjs"), "export {}");
-      await writeFile(
-        join(outdir, "x.wasm"),
-        new Uint8Array([0, 97, 115, 109]),
-      );
-      await writeFile(join(outdir, "README.md"), "no");
+    const b = await buildBundle(root, {
+      exec: async (cmd, args, o) => {
+        const outdir = args[args.indexOf("--outdir") + 1] as string;
+        const cfg = args[args.indexOf("-c") + 1] as string;
+        calls.push({
+          cmd,
+          args,
+          cwd: o.cwd,
+          config: JSON.parse(await readFile(cfg, "utf8")),
+        });
+        await mkdir(join(outdir, "chunks"), { recursive: true });
+        await writeFile(join(outdir, "index.js"), "export default {}");
+        await writeFile(join(outdir, "chunks/a.mjs"), "export {}");
+        await writeFile(
+          join(outdir, "x.wasm"),
+          new Uint8Array([0, 97, 115, 109]),
+        );
+        await writeFile(join(outdir, "README.md"), "no");
+      },
     });
     expect(calls).toHaveLength(1);
     expect(calls[0]?.cmd).toBe("pnpm");
@@ -711,12 +713,14 @@ describe("buildBundle", () => {
       await readFile(TEMPLATE_PATH),
     );
     const run = (extra: string) =>
-      buildBundle(root, async (_c, args) => {
-        const outdir = args[args.indexOf("--outdir") + 1] as string;
-        await writeFile(join(outdir, "index.js"), "export default {}");
-        await writeFile(join(outdir, "index.js.map"), "{}");
-        await writeFile(join(outdir, "README.md"), "x");
-        await writeFile(join(outdir, extra), "x");
+      buildBundle(root, {
+        exec: async (_c, args) => {
+          const outdir = args[args.indexOf("--outdir") + 1] as string;
+          await writeFile(join(outdir, "index.js"), "export default {}");
+          await writeFile(join(outdir, "index.js.map"), "{}");
+          await writeFile(join(outdir, "README.md"), "x");
+          await writeFile(join(outdir, extra), "x");
+        },
       });
     await expect(run("data.bin")).rejects.toThrow(/unexpected wrangler output/);
     await expect(run("a.txt")).rejects.toThrow(/unexpected/);
@@ -733,7 +737,7 @@ describe("buildBundle", () => {
       join(root, "apps/server/wrangler.template.jsonc"),
       await readFile(TEMPLATE_PATH),
     );
-    await expect(buildBundle(root, async () => {})).rejects.toThrow(
+    await expect(buildBundle(root, { exec: async () => {} })).rejects.toThrow(
       /no index.js/,
     );
   });

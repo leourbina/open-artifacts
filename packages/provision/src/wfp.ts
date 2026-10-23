@@ -4,9 +4,11 @@
 //
 // create(), each step idempotent by checking first:
 //   pre-flight (no Cloudflare call): prod lock, env, target, domains, owner
-//     email, bundle variant, Turnstile inputs, the signed release record and
-//     every release file against it, secrets, metadata dry run
+//     email, bundle variant, Turnstile inputs, the signed release record,
+//     the signed release floor, every release file against the record,
+//     secrets, metadata dry run
 //   token check -> resolve platform D1, HOSTS and registry by name
+//   -> floor_seq (the D1 cache of the floor: refuse below it, raise to it)
 //   -> Turnstile widget (GET, codes on only)
 //   -> platform row (creating, rl_ns, hosts, audit; one batch) -> D1 -> R2
 //   -> KV (ids resolved by name and checked against the row) -> server
@@ -29,6 +31,7 @@ import { newId, newPat } from "@oa/shared";
 import { type Cf, CfError, type Module, type Target } from "./cf.js";
 import {
   ALLOW_ACCOUNT_TARGET,
+  FLOOR_MIN_SEQ,
   PROD_UNLOCKED,
   RELEASE_PUBKEY,
   RELEASE_PUBKEY_PLACEHOLDER,
@@ -68,9 +71,13 @@ import {
   type BundleVariant,
   bundleSha256,
   compareVersions,
+  type FloorRecord,
+  floorRefusal,
   isReleaseVersion,
   MIGRATION_RE,
   migrationsSha256,
+  openFloor,
+  openReleaseRecord,
   type ReleaseAsset,
   type ReleaseAssetEntry,
   type ReleaseFile,
@@ -78,13 +85,12 @@ import {
   type ReleaseRecord,
   sha256Hex,
   TEST_HOOKS_DEFINE,
-  verifyReleaseSignature,
 } from "./release.js";
 import type { CreateInput, Install, InstallId } from "./types.js";
 
 /** Option names that look like a gate: refused, so no config or spread can try one. */
 const GATE_LIKE =
-  /^(?:__testOnly|prodRecordWriter$|PROD_UNLOCKED$|ALLOW_ACCOUNT_TARGET$|RELEASE_PUBKEY)/;
+  /^(?:__testOnly|prodRecordWriter$|PROD_UNLOCKED$|ALLOW_ACCOUNT_TARGET$|RELEASE_PUBKEY|FLOOR_MIN_SEQ$)/;
 
 function deepFreeze<T>(v: T): T {
   if (v && typeof v === "object") {
@@ -179,6 +185,8 @@ interface Checked {
   assets: ReleaseAsset[];
   template: Template;
   migrations: ReleaseFile[];
+  /** The env's signed floor, checked against FLOOR_MIN_SEQ and the version. */
+  floor: FloorRecord;
 }
 
 const SECRET_BYTES = 48;
@@ -457,17 +465,22 @@ export class WfpProvisioner {
         `no release record for ${want}; the bundle step (T3b) must write one before any create`,
       );
     // F4: verify and use a private, frozen copy; the reader keeps nothing.
+    // T3b: the record is the exact signed string, parsed strictly after the
+    // signature (no duplicate key, no unknown key, canonical).
     let signed: unknown;
     try {
       signed = deepFreeze(structuredClone(got));
     } catch {
       signed = null;
     }
-    if (!verifyReleaseSignature(signed, this.pubkey(), this.env))
+    let rec: ReleaseRecord;
+    try {
+      rec = deepFreeze(openReleaseRecord(signed, this.pubkey(), this.env));
+    } catch (e) {
       throw new ProvisionRefused(
-        `release record ${want}: the signature is missing or does not verify against the ${this.env} release key`,
+        `release record ${want}: ${(e as Error).message}`,
       );
-    const rec = signed.record;
+    }
     if (rec.env !== this.env)
       throw new ProvisionRefused(
         `release record ${want} is for env ${String(rec.env)}, not ${this.env}`,
@@ -522,6 +535,47 @@ export class WfpProvisioner {
       );
     }
     return rec;
+  }
+
+  /**
+   * E (T3b): the env's signed floor, verified against the release key, at or
+   * above FLOOR_MIN_SEQ[env] (the code anchor), and not below minVersion or
+   * revoked for this version. The D1 floor_seq cache is checked after the
+   * platform DB resolves (checkFloorSeq).
+   * TODO(Task 5): upgrade must run the same floor check (and checkFloorSeq)
+   * for its target version.
+   */
+  private async readFloor(rec: ReleaseRecord): Promise<FloorRecord> {
+    const got = await this.o.release.floor();
+    if (got === null || got === undefined)
+      throw new ProvisionRefused(
+        `the ${this.env} release floor (releases/floor.json) is missing; publish one before any create`,
+      );
+    let f: FloorRecord;
+    try {
+      f = deepFreeze(openFloor(structuredClone(got), this.pubkey(), this.env));
+    } catch (e) {
+      throw new ProvisionRefused(
+        `the ${this.env} release floor: ${(e as Error).message}`,
+      );
+    }
+    const why = floorRefusal(f, rec.version, FLOOR_MIN_SEQ[this.env]);
+    if (why) throw new ProvisionRefused(why);
+    return f;
+  }
+
+  /**
+   * E: floor_seq in D1 is only a cache (the token can write D1). Read-only:
+   * refuses a floor below it; returns whether create must raise it (with
+   * MAX, right before its first platform write).
+   */
+  private async checkFloorSeq(floor: FloorRecord): Promise<boolean> {
+    const cached = await this.platform.floorSeq();
+    if (floor.seq < cached)
+      throw new ProvisionRefused(
+        `the release floor seq ${floor.seq} is below ${cached}, the highest this env has accepted`,
+      );
+    return floor.seq > cached;
   }
 
   /** M1: each read is checked against the record right before it is used. */
@@ -618,12 +672,13 @@ export class WfpProvisioner {
   private async readRelease(i: WfpCreateInput): Promise<Checked> {
     if (!this.o.release) throw new ProvisionRefused("no release reader");
     const rec = await this.readRecord(i);
+    const floor = await this.readFloor(rec);
     const { mainModule, modules } = await this.readModules(rec);
     const assets = await this.readAssets(rec);
     const template = await this.readTemplate(rec);
     const migrations = await this.readMigrations(rec);
     await this.readWelcome(rec);
-    return { rec, mainModule, modules, assets, template, migrations };
+    return { rec, mainModule, modules, assets, template, migrations, floor };
   }
 
   /** Belt and braces before every upload: hooks only reach a staging test install. */
@@ -770,6 +825,7 @@ export class WfpProvisioner {
 
     await this.checkToken();
     await this.resolvePlatform();
+    const raiseFloor = await this.checkFloorSeq(rel.floor);
     if (ts) await this.checkWidget(ts.sitekey);
 
     // ---------- platform row ----------
@@ -820,6 +876,7 @@ export class WfpProvisioner {
       if (cur !== null && cur !== row?.id)
         throw new ProvisionRefused(`host ${h} is already taken by ${cur}`);
     }
+    if (raiseFloor) await this.platform.raiseFloorSeq(rel.floor.seq);
     if (!row) {
       row = await this.platform.insertCreating({
         id: newInstallId(),

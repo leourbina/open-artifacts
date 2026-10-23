@@ -8,12 +8,15 @@ on:
         description: Existing release tag whose landing site to (re)deploy
         required: true
         type: string
-permissions:
-  contents: write
-  pull-requests: write
+# No workflow-wide grant: every job sets its own permissions (T3b). Only
+# hosted-attach may write contents; no job has actions: write.
+permissions: {}
 jobs:
   release-please:
     if: ${{ github.event_name == 'push' }}
+    # Writes (release PR, tags, releases) use the release App's token below.
+    permissions:
+      contents: read
     # Back-to-back pushes queue instead of racing on the release PR ("Error updating ref").
     concurrency:
       group: release-please
@@ -42,6 +45,8 @@ jobs:
     # always(): on workflow_dispatch the release-please job is skipped.
     if: ${{ always() && (needs.release-please.outputs.release_created == 'true' || (github.event_name == 'workflow_dispatch' && inputs.tag != '')) }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -78,6 +83,8 @@ jobs:
     needs: [release-please]
     if: ${{ always() && github.ref == 'refs/heads/main' && (needs.release-please.outputs.release_created == 'true' || (github.event_name == 'workflow_dispatch' && inputs.tag != '')) }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     concurrency:
       group: prod
       cancel-in-progress: false
@@ -118,6 +125,17 @@ jobs:
           cache: pnpm
       - if: steps.guard.outputs.deploy == 'true'
         run: pnpm install --frozen-lockfile
+      # The release bundle must hold no /__test/* hooks; a failure stops the deploy.
+      - name: Build the release bundle (buildBundle, dry run)
+        if: steps.guard.outputs.deploy == 'true'
+        run: |
+          pnpm --filter @oa/provision build
+          pnpm --filter @oa/server run gen
+          mkdir -p apps/server/dist-assets
+          node --experimental-strip-types scripts/ci/build-release-bundle.ts "$RUNNER_TEMP/release-bundle" --variant release
+      - name: No test hooks in the release bundle
+        if: steps.guard.outputs.deploy == 'true'
+        run: pnpm check-no-test-hooks "$RUNNER_TEMP/release-bundle"
       - name: Preflight (read-only; fails if not installed or drifted)
         if: steps.guard.outputs.deploy == 'true'
         env:
@@ -227,3 +245,194 @@ jobs:
       - name: Verify the release is live (with the demo)
         if: ${{ vars.DEMO_ENABLED == 'true' }}
         run: node --experimental-strip-types scripts/ci/verify-release.ts --tag "$TAG" --repo "$GITHUB_REPOSITORY" --demo-url https://demo.open-artifacts.com
+  # ---------- hosted release files (T3b) ----------
+  # Stable releases only. CI signs and never uploads to Cloudflare: the signed
+  # tars and .sig.json files are attached to the GitHub release, and
+  # publishRelease (on a laptop, provisioning token) verifies them and copies
+  # them to R2. The signing key never shares a job with installed code.
+  hosted-guard:
+    needs: [release-please]
+    # always(): on workflow_dispatch the release-please job is skipped.
+    if: ${{ always() && github.ref == 'refs/heads/main' && ((github.event_name == 'push' && needs.release-please.outputs.release_created == 'true') || github.event_name == 'workflow_dispatch') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - id: resolve
+        name: Resolve the tag to one commit on main, matching package.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.release-please.outputs.tag_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "$TAG is not a stable vX.Y.Z tag"; exit 1; }
+          pre=$(gh release view "$TAG" --repo "$REPO" --json isPrerelease -q .isPrerelease)
+          [ "$pre" = "false" ] || { echo "$TAG is a pre-release; no hosted release files"; exit 1; }
+          # <tag>^{commit}, resolved once here; every later job checks out this SHA.
+          ref=$(gh api "repos/$REPO/git/ref/tags/$TAG")
+          sha=$(jq -r .object.sha <<< "$ref")
+          type=$(jq -r .object.type <<< "$ref")
+          for _ in 1 2 3 4; do
+            [ "$type" = tag ] || break
+            obj=$(gh api "repos/$REPO/git/tags/$sha")
+            sha=$(jq -r .object.sha <<< "$obj")
+            type=$(jq -r .object.type <<< "$obj")
+          done
+          [ "$type" = commit ] && [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "$TAG does not resolve to a commit"; exit 1; }
+          status=$(gh api "repos/$REPO/compare/main...$sha" -q .status)
+          case "$status" in
+            behind|identical) ;;
+            *) echo "$TAG ($sha) is not on main (compare: $status)"; exit 1 ;;
+          esac
+          version=$(gh api -H "Accept: application/vnd.github.raw+json" "repos/$REPO/contents/package.json?ref=$sha" | jq -r .version)
+          [ "$version" = "${TAG#v}" ] || { echo "package.json at $sha is $version, not ${TAG#v}"; exit 1; }
+          { echo "sha=$sha"; echo "tag=$TAG"; echo "version=$version"; } >> "$GITHUB_OUTPUT"
+  hosted-build:
+    needs: [hosted-guard]
+    if: ${{ !cancelled() && needs.hosted-guard.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.hosted-guard.outputs.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build both variants and the release files, with manifest.json
+        run: |
+          pnpm --filter @oa/provision build
+          pnpm --filter @oa/server build
+          node --experimental-strip-types scripts/ci/build-hosted-release.ts "$RUNNER_TEMP/hosted"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: hosted-release
+          path: ${{ runner.temp }}/hosted
+          if-no-files-found: error
+          retention-days: 7
+  hosted-check:
+    needs: [hosted-guard, hosted-build]
+    if: ${{ !cancelled() && needs.hosted-guard.result == 'success' && needs.hosted-build.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      bundle_sha256: ${{ steps.check.outputs.bundle_sha256 }}
+      manifest_sha256: ${{ steps.check.outputs.manifest_sha256 }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.hosted-guard.outputs.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: hosted-release
+          path: ${{ runner.temp }}/hosted
+      # The hashes are recomputed from the bytes check-no-test-hooks ran on,
+      # before and after, and handed to hosted-sign.
+      - id: check
+        name: Verify manifest.json, then no test hooks in the release bundle
+        run: |
+          set -euo pipefail
+          before=$(node --experimental-strip-types --no-warnings scripts/ci/check-hosted-release.ts "$RUNNER_TEMP/hosted")
+          pnpm check-no-test-hooks "$RUNNER_TEMP/hosted/release"
+          after=$(node --experimental-strip-types --no-warnings scripts/ci/check-hosted-release.ts "$RUNNER_TEMP/hosted")
+          [ "$before" = "$after" ] || { echo "the artifact changed during the check"; exit 1; }
+          echo "$after" >> "$GITHUB_OUTPUT"
+  hosted-sign:
+    needs: [hosted-guard, hosted-build, hosted-check]
+    if: ${{ !cancelled() && needs.hosted-guard.result == 'success' && needs.hosted-build.result == 'success' && needs.hosted-check.result == 'success' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        env: [staging, prod]
+    # Each env's key lives only in its GitHub Environment (main only, required reviewer).
+    environment: hosted-${{ matrix.env }}
+    permissions:
+      contents: read
+    # Distinct names per env, so the matrix legs' outputs combine.
+    outputs:
+      staging_release_signature: ${{ steps.sign.outputs.staging_release_signature }}
+      staging_release_tar_sha256: ${{ steps.sign.outputs.staging_release_tar_sha256 }}
+      staging_release_record_sha256: ${{ steps.sign.outputs.staging_release_record_sha256 }}
+      staging_redline_signature: ${{ steps.sign.outputs.staging_redline_signature }}
+      staging_redline_tar_sha256: ${{ steps.sign.outputs.staging_redline_tar_sha256 }}
+      staging_redline_record_sha256: ${{ steps.sign.outputs.staging_redline_record_sha256 }}
+      prod_release_signature: ${{ steps.sign.outputs.prod_release_signature }}
+      prod_release_tar_sha256: ${{ steps.sign.outputs.prod_release_tar_sha256 }}
+      prod_release_record_sha256: ${{ steps.sign.outputs.prod_release_record_sha256 }}
+    # Exactly these steps: no install, no other action, node:* imports only.
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.hosted-guard.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: hosted-release
+          path: ${{ runner.temp }}/hosted
+      - id: sign
+        name: Sign (the key goes in on stdin only)
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+          SIGN_ENV: ${{ matrix.env }}
+          VERSION: ${{ needs.hosted-guard.outputs.version }}
+          MANIFEST_SHA256: ${{ needs.hosted-check.outputs.manifest_sha256 }}
+          BUNDLE_SHA256: ${{ needs.hosted-check.outputs.bundle_sha256 }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$RELEASE_SIGNING_KEY" | node --experimental-strip-types scripts/ci/sign-release.ts --dir "$RUNNER_TEMP/hosted" --env "$SIGN_ENV" --version "$VERSION" --manifest-sha256 "$MANIFEST_SHA256" --bundle-sha256 "$BUNDLE_SHA256" --out "$RUNNER_TEMP/signed" >> "$GITHUB_OUTPUT"
+  hosted-attach:
+    needs: [hosted-guard, hosted-build, hosted-check, hosted-sign]
+    if: ${{ !cancelled() && needs.hosted-guard.result == 'success' && needs.hosted-check.result == 'success' && needs.hosted-sign.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.hosted-guard.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: hosted-release
+          path: ${{ runner.temp }}/hosted
+      # Rebuilt from the same verified bytes; refused unless the tar and the
+      # record hash to what hosted-sign signed. Never overwrites an asset.
+      - name: Attach the signed release files to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.hosted-guard.outputs.tag }}
+          VERSION: ${{ needs.hosted-guard.outputs.version }}
+          MANIFEST_SHA256: ${{ needs.hosted-check.outputs.manifest_sha256 }}
+          BUNDLE_SHA256: ${{ needs.hosted-check.outputs.bundle_sha256 }}
+          STAGING_RELEASE: ${{ needs.hosted-sign.outputs.staging_release_signature }}:${{ needs.hosted-sign.outputs.staging_release_tar_sha256 }}:${{ needs.hosted-sign.outputs.staging_release_record_sha256 }}
+          STAGING_REDLINE: ${{ needs.hosted-sign.outputs.staging_redline_signature }}:${{ needs.hosted-sign.outputs.staging_redline_tar_sha256 }}:${{ needs.hosted-sign.outputs.staging_redline_record_sha256 }}
+          PROD_RELEASE: ${{ needs.hosted-sign.outputs.prod_release_signature }}:${{ needs.hosted-sign.outputs.prod_release_tar_sha256 }}:${{ needs.hosted-sign.outputs.prod_release_record_sha256 }}
+        run: |
+          set -euo pipefail
+          common=(--dir "$RUNNER_TEMP/hosted" --version "$VERSION" --manifest-sha256 "$MANIFEST_SHA256" --bundle-sha256 "$BUNDLE_SHA256" --out "$RUNNER_TEMP/signed")
+          node --experimental-strip-types scripts/ci/assemble-release.ts "${common[@]}" --env staging --release "$STAGING_RELEASE" --redline "$STAGING_REDLINE"
+          node --experimental-strip-types scripts/ci/assemble-release.ts "${common[@]}" --env prod --release "$PROD_RELEASE"
+          gh release upload "$TAG" --repo "$REPO" "$RUNNER_TEMP"/signed/oa-release-*

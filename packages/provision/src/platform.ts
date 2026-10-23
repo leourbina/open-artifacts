@@ -222,6 +222,27 @@ FROM installs WHERE rl_ns >= ?8 AND rl_ns < ?10`,
     ]);
   }
 
+  /** The highest signed floor seq this env has accepted (0 before any). A cache only. */
+  async floorSeq(): Promise<number> {
+    const r = await this.cf.d1Query(
+      this.db.id,
+      "SELECT floor_seq FROM release_floor WHERE id = 1",
+      [],
+    );
+    const v = r[0]?.results?.[0]?.floor_seq;
+    return typeof v === "number" ? v : 0;
+  }
+
+  /** Raises the floor_seq cache; MAX, so it never goes down. */
+  async raiseFloorSeq(seq: number): Promise<void> {
+    if (!Number.isSafeInteger(seq) || seq < 1)
+      throw new Error("floor seq must be a positive integer");
+    await this.write(
+      "INSERT INTO release_floor (id, floor_seq) VALUES (1, ?1) ON CONFLICT (id) DO UPDATE SET floor_seq = MAX(floor_seq, excluded.floor_seq)",
+      [seq],
+    );
+  }
+
   /** Appends an audit row; `detail` must never carry a secret or an email. */
   async audit(
     id: InstallId,

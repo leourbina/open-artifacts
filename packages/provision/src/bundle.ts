@@ -1,16 +1,14 @@
 import { execFile } from "node:child_process";
-import {
-  mkdir,
-  mkdtemp,
-  readdir,
-  readFile,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, extname, join, relative } from "node:path";
+import { basename, extname, join } from "node:path";
 import { promisify } from "node:util";
 import { parseTemplate } from "./metadata.js";
+import {
+  type BundleVariant,
+  readTreeHardened,
+  TEST_HOOKS_DEFINE,
+} from "./release.js";
 
 export type Exec = (
   cmd: string,
@@ -28,26 +26,25 @@ export interface Bundle {
   mainModule: string;
   assetsDir: string;
   version: string;
+  variant: BundleVariant;
 }
 
 const ZERO_UUID = "00000000-0000-0000-0000-000000000000";
 const ZERO_ID = "00000000000000000000000000000000";
 
-async function walk(dir: string): Promise<string[]> {
-  const out: string[] = [];
-  for (const e of await readdir(dir, { withFileTypes: true })) {
-    const p = join(dir, e.name);
-    if (e.isDirectory()) out.push(...(await walk(p)));
-    else out.push(p);
-  }
-  return out;
-}
-
-/** Build the server once per release with a dry-run deploy and dummy values. */
+/**
+ * Build the server once per release and variant with a dry-run deploy and
+ * dummy values. Both variants come from the same config; the only difference
+ * is the TEST_HOOKS_DEFINE define: "false" for release, "true" for redline.
+ */
 export async function buildBundle(
   root: string,
-  exec: Exec = defaultExec,
+  o: { variant?: BundleVariant; exec?: Exec } = {},
 ): Promise<Bundle> {
+  const variant = o.variant ?? "release";
+  if (variant !== "release" && variant !== "redline")
+    throw new Error("variant must be release or redline");
+  const exec = o.exec ?? defaultExec;
   const tmp = await mkdtemp(join(tmpdir(), "oa-bundle-"));
   try {
     const serverDir = join(root, "apps/server");
@@ -72,6 +69,10 @@ export async function buildBundle(
     for (const d of dummy.d1_databases ?? [])
       if (d.migrations_dir)
         d.migrations_dir = join(serverDir, d.migrations_dir);
+    dummy.define = {
+      ...(dummy.define ?? {}),
+      [TEST_HOOKS_DEFINE]: variant === "redline" ? "true" : "false",
+    };
     const config = join(tmp, "wrangler.json");
     await writeFile(config, JSON.stringify(dummy));
     const outdir = join(tmp, "out");
@@ -93,8 +94,9 @@ export async function buildBundle(
       { cwd: root },
     );
     const modules: Bundle["modules"] = [];
-    for (const f of (await walk(outdir)).sort()) {
-      const ext = extname(f);
+    // The hardened reader: no symlink, hardlink or swap in the outdir.
+    for (const f of await readTreeHardened(outdir)) {
+      const ext = extname(f.path);
       const type =
         ext === ".wasm"
           ? "wasm"
@@ -102,18 +104,12 @@ export async function buildBundle(
             ? "esm"
             : null;
       if (!type) {
-        const base = basename(f);
-        if (ext === ".map" || (base === "README.md" && dirname(f) === outdir))
-          continue;
+        if (ext === ".map" || f.path === "README.md") continue;
         throw new Error(
-          `unexpected wrangler output ${relative(outdir, f)}: only .js, .mjs and .wasm modules are supported`,
+          `unexpected wrangler output ${f.path}: only .js, .mjs and .wasm modules are supported`,
         );
       }
-      modules.push({
-        name: relative(outdir, f).split("\\").join("/"),
-        type,
-        bytes: new Uint8Array(await readFile(f)),
-      });
+      modules.push({ name: f.path, type, bytes: f.bytes });
     }
     const main = `${basename(tpl.main, extname(tpl.main))}.js`;
     if (!modules.some((m) => m.name === main && m.type === "esm"))
@@ -128,6 +124,7 @@ export async function buildBundle(
       mainModule: main,
       assetsDir: "apps/server/dist-assets",
       version: pkg.version,
+      variant,
     };
   } finally {
     await rm(tmp, { recursive: true, force: true });
