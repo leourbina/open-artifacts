@@ -46,6 +46,8 @@ for (const scheme of ["light", "dark"] as const)
             "Google link reset for Bob Builder. They're signed out and link again at their next Google sign-in.",
           ),
         ).toBeVisible();
+        await expect(page.getByRole("alertdialog")).toHaveCount(0);
+        await settle(page);
         await shot(page, info.outputPath(`reset-done-${scheme}-${width}.png`));
       });
 
@@ -103,6 +105,8 @@ for (const scheme of ["light", "dark"] as const)
             "Only the owner can reset another admin's Google link.",
           ),
         ).toBeVisible();
+        await expect(page.getByRole("alertdialog")).toHaveCount(0);
+        await settle(page);
         await shot(
           page,
           info.outputPath(`reset-owner-only-${scheme}-${width}.png`),
