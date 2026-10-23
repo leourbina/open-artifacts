@@ -7,29 +7,26 @@ for (const scheme of ["light", "dark"] as const)
     test.describe(`${scheme} ${width}`, () => {
       test.use({ colorScheme: scheme, viewport: { width, height: 900 } });
 
-      for (const [who, dataWrite] of [
-        ["guest", false],
-        ["employee", true],
+      for (const [who, mock, chipShown, what] of [
+        ["guest", "guest-live", true, "a live-data artifact"],
+        ["guest-static", "guest-static", false, "a static artifact"],
+        ["employee", "viewer-live", false, "a live-data artifact"],
       ] as const)
-        test(`${who} viewer on a live-data artifact`, async ({
-          page,
-        }, info) => {
-          await page.goto(
-            `/?hosted=1&mock=${who === "guest" ? "guest" : "viewer"}-live`,
-          );
+        test(`${who} viewer on ${what}`, async ({ page }, info) => {
+          await page.goto(`/?hosted=1&mock=${mock}`);
           await page.getByRole("link", { name: "Q4 report" }).first().click();
           await page.waitForURL(/\/a\//);
           await page.getByRole("heading", { name: "Q4 report" }).waitFor();
           const chip = page.getByText("View only", { exact: true });
-          if (dataWrite) await expect(chip).toHaveCount(0);
-          else await expect(chip).toBeVisible();
+          if (chipShown) await expect(chip).toBeVisible();
+          else await expect(chip).toHaveCount(0);
           await expect(page.getByRole("button", { name: "Share" })).toHaveCount(
             0,
           );
           await page.screenshot({
             path: info.outputPath(`view-only-${who}-${scheme}-${width}.png`),
           });
-          if (dataWrite) return;
+          if (!chipShown) return;
           await chip.focus();
           await expect(
             page.getByRole("tooltip", {

@@ -110,9 +110,14 @@ async function startMocks() {
     checkedAt,
   };
   // ?mock=guest-live (with ?hosted=1): every artifact is a live-data (db) viewer share the
-  // caller can't write; ?mock=viewer-live: the same for an employee viewer (data writes allowed).
+  // caller can't write; ?mock=viewer-live: the same for an employee viewer (data writes allowed);
+  // ?mock=guest-static: a guest on an artifact without live data.
   const live = params.get("mock");
-  if (live === "guest-live" || live === "viewer-live")
+  if (
+    live === "guest-live" ||
+    live === "viewer-live" ||
+    live === "guest-static"
+  )
     extra.push(
       http.get("*/api/v1/artifacts/:id", ({ params: p }) => {
         const a = fixtures.artifacts.find((x) => x.id === p.id);
@@ -129,7 +134,11 @@ async function startMocks() {
             move: false,
             dataWrite: live === "viewer-live",
           },
-          capabilities: { db: true, viewer: false, storage: false },
+          capabilities: {
+            db: live !== "guest-static",
+            viewer: false,
+            storage: false,
+          },
         });
       }),
     );
