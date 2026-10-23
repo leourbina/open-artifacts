@@ -122,6 +122,20 @@ focus outline, and each overlay opened from the keyboard.
   `--sidebar-accent` (about 1.2:1). A collapsed off-canvas sidebar is `inert`,
   so its links leave the tab order. The mobile sheet returns focus to the
   trigger that opened it.
+- **alert:** four Studio tones, `info` (`bg-brand-soft`), `success`,
+  `warning` and `danger` (`bg-{success,warning,danger}-soft`, ours in
+  theme.css), each with ink text and no border, beside shadcn's `default`
+  and `destructive`. `size="sm"` is the one-line strip. `role` is `alert`
+  for `danger`/`destructive` and `status` otherwise (shadcn always used
+  `alert`). The title wraps (no `line-clamp-1`). Ours: `AlertAction`, a
+  trailing column for buttons or a dismiss, spanning the title and text
+  rows. Outline controls inside a tone use `--muted-foreground` edges,
+  since `--input` is below 3:1 on the soft fills.
+- **textarea, checkbox:** the solid focus outline and no
+  `dark:bg-input/30`, like Input; Textarea resizes vertically only.
+  Checkbox sits on `bg-card` and shows a dash when `indeterminate`.
+- **kbd:** a Studio keycap: mono, `bg-secondary`, a 1px border with a 2px
+  bottom.
 - **brand.tsx (ours):** `BrandMark`, the Framed Artifact mark inline (frame in
   `currentColor`, corners in the accent), and `SidebarBrand`, the sidebar
   header row with the mark and "Open Artifacts".
@@ -167,6 +181,7 @@ on a nested element doesn't switch the theme.
 | `--brand` | `--oa-accent` | Ours, not shadcn's: `bg-brand`/`text-brand` for state marks |
 | `--brand-soft`, `--brand-soft-foreground` | `--oa-accent-soft`, `--oa-accent-fg` | Ours: tinted state fills (toggle on, selected row) |
 | `--brand-foreground` | `--oa-accent-text` | Text on a brand fill |
+| `--success-soft`, `--warning-soft`, `--danger-soft` | `--oa-success-soft`, `--oa-warning-soft`, `--oa-danger-soft` | Ours: Alert tone fills |
 | `--radius` | `--oa-radius-md` | |
 | `--chart-1` … `--chart-5` | `--oa-accent`, `--oa-success`, `--oa-warning`, `--oa-danger`, `--oa-text-muted` | |
 | `--sidebar` | `--oa-chrome` | |

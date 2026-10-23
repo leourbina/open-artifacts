@@ -1,8 +1,13 @@
 // Every shadcn component and variant, shared by the jsdom checks, the a11y
 // Ladle story and the real-browser checks (test-browser/) that drive it.
+
+import { XIcon } from "lucide-react";
 import type { ReactElement } from "react";
 import { toast } from "sonner";
 import {
+  Alert,
+  AlertAction,
+  AlertDescription,
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -12,6 +17,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   AlertDialogTrigger,
+  AlertTitle,
   Avatar,
   AvatarFallback,
   Badge,
@@ -21,6 +27,7 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  Checkbox,
   Dialog,
   DialogContent,
   DialogDescription,
@@ -36,6 +43,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   Input,
+  Kbd,
   Label,
   ScrollArea,
   Select,
@@ -56,6 +64,7 @@ import {
   TabsContent,
   TabsList,
   TabsTrigger,
+  Textarea,
   ToggleGroup,
   ToggleGroupItem,
   Tooltip,
@@ -234,6 +243,86 @@ export const cases: Record<string, ReactElement> = {
         note. Rewrote the cutover procedure around the new script.
       </p>
     </ScrollArea>
+  ),
+  Textarea: <Textarea aria-label="Description" placeholder="What changed" />,
+  Checkbox: (
+    <div className="flex items-center gap-2">
+      <Checkbox id="cb-notify" defaultChecked />
+      <Label htmlFor="cb-notify">Notify people</Label>
+    </div>
+  ),
+  CheckboxUnchecked: <Checkbox aria-label="Allow comments" />,
+  CheckboxIndeterminate: (
+    <Checkbox aria-label="Select all" checked="indeterminate" />
+  ),
+  Kbd: (
+    <p>
+      Type <Kbd>!</Kbd> and a space, or press <Kbd>⌘K</Kbd>.
+    </p>
+  ),
+  AlertInfo: (
+    <Alert variant="info">
+      <AlertTitle>No usage recorded yet today.</AlertTitle>
+      <AlertDescription>
+        <p>Numbers appear after the first request.</p>
+      </AlertDescription>
+      <AlertAction>
+        <Button variant="ghost" size="icon-sm" aria-label="Dismiss">
+          <XIcon />
+        </Button>
+      </AlertAction>
+    </Alert>
+  ),
+  AlertSuccess: (
+    <Alert variant="success">
+      <AlertTitle>Directory is healthy.</AlertTitle>
+      <AlertDescription>
+        <p>Last synced 2 minutes ago.</p>
+      </AlertDescription>
+      <AlertAction>
+        <Button variant="ghost" size="icon-sm" aria-label="Dismiss">
+          <XIcon />
+        </Button>
+      </AlertAction>
+    </Alert>
+  ),
+  AlertWarning: (
+    <Alert variant="warning">
+      <AlertTitle>Some requests hit Cloudflare's CPU limit</AlertTitle>
+      <AlertDescription>
+        <p>Retrying usually works.</p>
+      </AlertDescription>
+      <AlertAction>
+        <Button variant="ghost" size="icon-sm" aria-label="Dismiss">
+          <XIcon />
+        </Button>
+      </AlertAction>
+    </Alert>
+  ),
+  AlertDanger: (
+    <Alert variant="danger">
+      <AlertTitle>Sign-in didn't finish.</AlertTitle>
+      <AlertDescription>
+        <p>Try again, or ask your admin.</p>
+      </AlertDescription>
+      <AlertAction>
+        <Button variant="ghost" size="icon-sm" aria-label="Dismiss">
+          <XIcon />
+        </Button>
+      </AlertAction>
+    </Alert>
+  ),
+  AlertStrip: (
+    <Alert variant="info" size="sm">
+      <AlertDescription>
+        You can view this, but you can't change it.
+      </AlertDescription>
+      <AlertAction>
+        <Button variant="outline" size="sm">
+          Request access
+        </Button>
+      </AlertAction>
+    </Alert>
   ),
   // The <Toaster /> itself is mounted once, by the a11y story.
   ToastTrigger: (

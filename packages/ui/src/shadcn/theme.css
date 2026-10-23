@@ -63,6 +63,10 @@
   /* Tinted state fills (toggle on, selected row), with --brand as the edge. */
   --brand-soft: var(--oa-accent-soft);
   --brand-soft-foreground: var(--oa-accent-fg);
+  /* Ours: soft fills for the Alert tones (info uses --brand-soft). */
+  --success-soft: var(--oa-success-soft);
+  --warning-soft: var(--oa-warning-soft);
+  --danger-soft: var(--oa-danger-soft);
 
   --chart-1: var(--oa-accent);
   --chart-2: var(--oa-success);
@@ -107,6 +111,9 @@
   --color-brand-foreground: var(--brand-foreground);
   --color-brand-soft: var(--brand-soft);
   --color-brand-soft-foreground: var(--brand-soft-foreground);
+  --color-success-soft: var(--success-soft);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger-soft: var(--danger-soft);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
