@@ -287,3 +287,49 @@ test("http asks with a not-secure warning; the port shows when not the default",
       });
     }
 });
+
+// #525: a link to an app page (or another artifact's content) is blocked in
+// place with a note, so the frame and the bridge survive.
+test("an app page link is blocked with a note; the bridge stays alive", async ({
+  page,
+  member,
+}, info) => {
+  const b = await publishViaApi(member.pat, {
+    title: `Target ${uniq()}`,
+    format: "html",
+    content: `<!doctype html><p id="who">B</p>`,
+  });
+  const a = await publishLinks(member.pat, {
+    content: `${LINKS}<a id="app" href="${APP}/settings">Settings</a> <a id="other" href="/p/${b.id}/v1/index.html">Other artifact</a> <a id="b" href="${APP}/a/${b.id}">B</a>`,
+  });
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.goto(`/a/${a.id}`);
+  await ready(page);
+  const note = page.getByText("Artifacts can't open app pages.");
+  await artifactFrame(page).locator("#app").click();
+  await expect(note).toBeVisible();
+  await expect(page.getByText("Use the sidebar to get there.")).toBeVisible();
+  expect(page.url()).toBe(`${APP}/a/${a.id}`);
+  await expect(artifactFrame(page).locator("#who")).toHaveText("links");
+  if (info.project.name === "chromium")
+    for (const scheme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: scheme });
+      // Let the theme's colour transitions finish.
+      await page.waitForTimeout(400);
+      await page.screenshot({
+        path: info.outputPath(`app-page-note-390-${scheme}.png`),
+      });
+    }
+  await page.getByRole("button", { name: "Dismiss" }).click();
+  await expect(note).toHaveCount(0);
+  await page.waitForTimeout(1_100); // past the shared 1/s limit
+  // Another artifact's content path: blocked the same way.
+  await artifactFrame(page).locator("#other").click();
+  await expect(note).toBeVisible();
+  await expect(artifactFrame(page).locator("#who")).toHaveText("links");
+  await page.waitForTimeout(1_100);
+  // The bridge is alive: a viewer link still navigates in place.
+  await artifactFrame(page).locator("#b").click();
+  await expect(page).toHaveURL(`${APP}/a/${b.id}`);
+  await expect(artifactFrame(page).locator("#who")).toHaveText("B");
+});
