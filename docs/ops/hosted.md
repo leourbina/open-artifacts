@@ -108,8 +108,10 @@ UP=$(printf %s "$ENV" | tr a-z A-Z)
      && pnpm exec wrangler deploy -c wrangler.deploy.jsonc --env "$ENV" \
      && rm wrangler.deploy.jsonc
    ```
-   Then check that the deployed binding is the right namespace: the Worker's `HOSTS` id must be the namespace titled `oa-$P-hosts`.
+   Then check that the deployed binding is the right namespace: the Worker's `HOSTS` id must be the namespace titled `oa-$P-hosts`. `CF_ACCOUNT_ID` is the hosted account's id, and `CF_API_TOKEN` is the env's provisioning token read from the keychain (never echoed):
    ```sh
+   CF_ACCOUNT_ID=<the hosted account id>
+   CF_API_TOKEN=$(security find-generic-password -s "oa-hosted-$ENV" -w)
    BOUND=$(curl -sS -H "Authorization: Bearer $CF_API_TOKEN" \
      "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/workers/scripts/oa-$P-dispatch/settings" \
      | jq -r '.result.bindings[] | select(.name == "HOSTS") | .namespace_id')
@@ -129,7 +131,8 @@ UP=$(printf %s "$ENV" | tr a-z A-Z)
        test "$(curl -sS -o /tmp/body -w '%{http_code}' "https://$H/")" = 404 && test "$(cat /tmp/body)" = "Not found" \
          || echo "FAIL https://$H/"
      done
-     curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' "http://nope.$Z/"   # 301 https://nope.$Z/
+     test "$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' "http://nope.$Z/")" = "301 https://nope.$Z/" \
+       || echo "FAIL http://nope.$Z/ does not redirect to https"
    done
    curl -sS -o /dev/null -w '%{http_code}\n' "https://auth.$APP/"   # the broker's answer, not dispatch's 404 "Not found"
    ```
