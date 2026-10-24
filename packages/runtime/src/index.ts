@@ -147,37 +147,47 @@ const ignore = (e: unknown) => {
 };
 
 /** Cumulative scroll (px) that counts as an interaction. */
-export const SCROLL_INTERACT_PX = 24;
 const INTERACT_EVENTS = ["pointerdown", "keydown", "input", "change"];
 
 /**
- * Calls `fire` once, on the first pointerdown, keydown, input or change, or
- * once scrolling (the window or any element) adds up to over
- * SCROLL_INTERACT_PX; then removes every listener. Returns the remover.
+ * Calls `fire` once, on the first pointerdown, keydown, input or change; then
+ * removes every listener. Scrolling doesn't count: reading a long page must
+ * not stop live versions from swapping in. Returns the remover.
  */
 function onFirstInteraction(fire: () => void): () => void {
   const opts = { capture: true, passive: true };
-  const last = new WeakMap<object, number[]>();
-  let moved = 0;
   const done = () => {
     for (const t of INTERACT_EVENTS) removeEventListener(t, hit, opts);
-    removeEventListener("scroll", scroll, opts);
   };
   function hit() {
     done();
     fire();
   }
-  function scroll(e: Event) {
-    const el = e.target instanceof Element ? e.target : null;
-    const pos = el ? [el.scrollLeft, el.scrollTop] : [scrollX, scrollY];
-    const [x = 0, y = 0] = last.get(el ?? window) ?? [];
-    last.set(el ?? window, pos);
-    moved += Math.abs((pos[0] ?? 0) - x) + Math.abs((pos[1] ?? 0) - y);
-    if (moved > SCROLL_INTERACT_PX) hit();
-  }
   for (const t of INTERACT_EVENTS) addEventListener(t, hit, opts);
-  addEventListener("scroll", scroll, opts);
   return done;
+}
+
+/** How far the document can scroll. */
+const maxScroll = () =>
+  Math.max(0, document.documentElement.scrollHeight - innerHeight);
+const SCROLL_REPORT_MS = 150;
+const RESTORE_TRIES = 30;
+const RESTORE_EVERY_MS = 100;
+
+/**
+ * Scrolls to where the previous version was: the same offset if the page can
+ * scroll as far as before, else the same fraction. A page not laid out yet
+ * (shorter than the offset) is retried every 100 ms for up to 3 s.
+ */
+function restoreScroll(top: number, max: number, tries = RESTORE_TRIES) {
+  const now = maxScroll();
+  if (now < top && tries > 0) {
+    setTimeout(() => restoreScroll(top, max, tries - 1), RESTORE_EVERY_MS);
+    return;
+  }
+  const y =
+    max > 0 && Math.abs(now - max) > 1 ? (top / max) * now : Math.min(top, now);
+  scrollTo(0, y);
 }
 
 /** Builds the SDK over a fresh bridge and announces it with `hello` (html pages). */
@@ -311,6 +321,7 @@ export function createRuntime(opts: RuntimeOptions = {}): OpenArtifacts {
       setTheme(m.theme);
       welcomed();
     } else if (m.type === "theme") setTheme(m.theme);
+    else if (m.type === "scroll.to") restoreScroll(m.top, m.max);
     else if (m.type === "thumb.request") {
       if (kind === "html") void snapshot();
     } else if (m.type === "event") {
@@ -435,8 +446,20 @@ export function createRuntime(opts: RuntimeOptions = {}): OpenArtifacts {
   const stopInteract = bridge.raw
     ? () => {}
     : onFirstInteraction(() => bridge.send({ oa: 1, type: "interacted" }));
+  // Where the document is scrolled, for the shell to carry over a live swap.
+  let reportTimer: ReturnType<typeof setTimeout> | undefined;
+  const onScroll = () => {
+    if (reportTimer) return;
+    reportTimer = setTimeout(() => {
+      reportTimer = undefined;
+      bridge.send({ oa: 1, type: "scroll", top: scrollY, max: maxScroll() });
+    }, SCROLL_REPORT_MS);
+  };
+  if (!bridge.raw) addEventListener("scroll", onScroll, { passive: true });
   opts.signal?.addEventListener("abort", () => {
     stopInteract();
+    removeEventListener("scroll", onScroll);
+    clearTimeout(reportTimer);
     document.removeEventListener("click", onClick, true);
     bridge.dispose();
   });
