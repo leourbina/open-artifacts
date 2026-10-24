@@ -74,28 +74,34 @@ describe("the Worker answers only its own hosts", () => {
       ).toBe(404);
   });
 
-  it("self-host unchanged: APP_HOST unset keeps the any-host behavior", async () => {
-    for (const host of ["app.localhost", "anything.example", "localhost"])
-      expect(
-        (
-          await get(`http://${host}/healthz`, {
-            APP_HOST: undefined,
-            ENVIRONMENT: "production",
-          })
-        ).status,
-      ).toBe(200);
+  it("APP_HOST unset fails closed for every install, self-host included", async () => {
+    // Setup always renders APP_HOST (scripts/setup refuses an empty one), so
+    // a missing value is a broken config: answer nothing, hosted or not.
+    for (const over of [
+      { APP_HOST: undefined, ENVIRONMENT: "production" },
+      { APP_HOST: "", ENVIRONMENT: "production" },
+      { APP_HOST: undefined, HOSTED: "1" },
+      { APP_HOST: undefined },
+    ])
+      for (const host of ["app.localhost", "anything.example", "localhost"]) {
+        const r = await get(`http://${host}/healthz`, over);
+        expect(r.status).toBe(404);
+        expect(await r.text()).toBe("Not found");
+      }
   });
 
-  it("hosted with no APP_HOST fails closed", async () => {
-    for (const host of ["app.localhost", "anything.example", "localhost"])
-      expect(
-        (
-          await get(`http://${host}/healthz`, {
-            APP_HOST: undefined,
-            HOSTED: "1",
-          })
-        ).status,
-      ).toBe(404);
+  it("self-host answers a foreign host with the same 404 as hosted", async () => {
+    for (const HOSTED of [undefined, "0", "1"]) {
+      const r = await get("https://other-install.example/healthz", {
+        HOSTED,
+        ENVIRONMENT: "production",
+      });
+      expect(r.status).toBe(404);
+      expect(await r.text()).toBe("Not found");
+      expect([...r.headers]).toEqual([
+        ["content-type", "text/plain;charset=UTF-8"],
+      ]);
+    }
   });
 
   it("refuses foreign hosts on every pre-auth surface", async () => {
