@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.43.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.42.0...v0.43.0) (2026-10-24)
+
+
+### Features
+
+* **server:** spaces API and space-wide narrowing (P3 T9) ([#527](https://github.com/open-artifacts-ai/open-artifacts/issues/527)) ([c0c5ada](https://github.com/open-artifacts-ai/open-artifacts/commit/c0c5adac24e898ae6be74e37f561df1ddea57da5))
+
+
+### Bug Fixes
+
+* **viewer:** live versions swap while you scroll or have the panel open, and keep your place ([#542](https://github.com/open-artifacts-ai/open-artifacts/issues/542)) ([9bf0d41](https://github.com/open-artifacts-ai/open-artifacts/commit/9bf0d41a597795c0d05ed88ce76efea4504b0a0a))
+
 ## [0.42.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.41.0...v0.42.0) (2026-10-24)
 
 
