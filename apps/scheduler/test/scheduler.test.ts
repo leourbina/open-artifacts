@@ -296,7 +296,9 @@ describe("runNightly", () => {
       ok: [],
       failed: [{ id: idOf(0), reason: "timeout" }],
       skipped: [],
-      ...NONE,
+      dbErrors: [],
+      // Never settles: leaked when the run ends.
+      leaked: [idOf(0)],
     });
   });
 
@@ -644,6 +646,8 @@ describe("runNightly", () => {
     expect(lines).toEqual([
       `nightly failed exception ${idOf(0)}`,
       `nightly failed timeout ${idOf(1)}`,
+      // Still unsettled when the run ended.
+      `nightly leaked ${idOf(1)}`,
     ]);
   });
 
@@ -773,7 +777,7 @@ describe("scheduled", () => {
     const lines = captureLogs();
     const f = fakes("staging", (s) => kinds[n36(s) % kinds.length] as Behavior);
     // The real handler path (scheduled calls nightly with the defaults).
-    const { ok, failed, skipped } = await nightly(f.env, NOW, {
+    const { ok, failed, skipped, leaked } = await nightly(f.env, NOW, {
       concurrency: 50,
       timeoutMs: 20,
       deadlineMs: 500,
@@ -785,7 +789,7 @@ describe("scheduled", () => {
       failed.length,
     );
     expect(lines.filter((l) => l.startsWith("nightly summary"))).toEqual([
-      `nightly summary active=301 ok=${ok.length} failed=${failed.length} skipped=${skipped.length} db_errors=0 leaked=0`,
+      `nightly summary active=301 ok=${ok.length} failed=${failed.length} skipped=${skipped.length} db_errors=0 leaked=${leaked.length}`,
     ]);
     for (const l of lines) expect(l).toMatch(LOG_LINE);
   });

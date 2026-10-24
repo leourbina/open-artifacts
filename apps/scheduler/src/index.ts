@@ -26,11 +26,18 @@ const SCALE_WARN = 300;
 
 export type Reason = "timeout" | "not_found" | "canceled" | "exception";
 
+/** Why an install wasn't called; logged as `nightly skipped <reason> <id>`. */
+export type SkipReason = "state" | "deadline" | "recheck" | "db_error";
+
 export interface NightlyResult {
   ok: string[];
   failed: { id: string; reason: Reason }[];
-  /** Not called: left active or took a lease before its turn, or past the deadline. */
+  /** Not called: left active or took a lease, a stalled re-check, or the run stopped. */
   skipped: string[];
+  /** The platform D1 re-check failed: not the install's fault, not called. */
+  dbErrors: string[];
+  /** Timed out and still unsettled leakMs later, or when the run ended. */
+  leaked: string[];
 }
 
 export interface NightlyOptions {
@@ -46,8 +53,16 @@ export interface NightlyOptions {
   timeoutMs?: number;
   /** No new call starts after this; under the 15-minute cron wall time. */
   deadlineMs?: number;
+  /** How long a timed-out call may still hold its lane before it is leaked. */
+  leakMs?: number;
+  /** Bound on the per-call platform D1 re-check (also bounded by the deadline). */
+  recheckMs?: number;
   pageSize?: number;
 }
+
+/** Consecutive re-check D1 errors that stop the run (a platform D1 outage). */
+const DB_ERROR_STOP = 3;
+const DAY_MS = 86_400_000;
 
 // Keyset pages, so a large table is never one result set.
 const PAGE_SQL =
@@ -81,7 +96,7 @@ const category = (e: unknown): Exclude<Reason, "timeout"> =>
   e instanceof Canceled
     ? "canceled"
     : e instanceof NotFound ||
-        (e instanceof Error && e.message.startsWith("Worker not found"))
+        (e instanceof Error && /^(?:Error: )?Worker not found/.test(e.message))
       ? "not_found"
       : "exception";
 
@@ -133,13 +148,30 @@ function positive(name: string, v: number, integer: boolean): number {
 const logFailed = (reason: Reason, id: string) =>
   console.error("nightly failed", reason, id);
 
+class Stall extends Error {}
+
+/** Resolves with p, or rejects with Stall after ms; the timer is always cleared. */
+function within<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    p,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Stall()), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 /**
  * Calls scheduled() on every `active` install's script, re-checking right
- * before each call that it is still active with no live lease. At most
- * `concurrency` calls are in flight, a timed-out one included until it
- * settles; each call is reported `timeout` after `timeoutMs`. No call starts
- * after `deadlineMs`. One install throwing or timing out never stops the
- * others. Each failure is logged when it happens.
+ * before each call (within recheckMs and the deadline) that it is still
+ * active with no live lease. The start rotates by UTC day over the stable id
+ * order, so a slow head doesn't starve the same tail every night. At most
+ * `concurrency` lanes are held; a call is reported `timeout` after
+ * `timeoutMs` but keeps its lane until it settles, or for `leakMs` more, when
+ * the lane is given back and the call counted as leaked. No call starts after
+ * `deadlineMs`, or after 3 consecutive re-check D1 errors. One install
+ * throwing or timing out never stops the others. Every failure, skip, D1
+ * error and leak is logged when it happens, ids and fixed categories only.
  */
 export async function runNightly(
   env: Env,
@@ -148,42 +180,62 @@ export async function runNightly(
     concurrency = 6,
     timeoutMs = 25_000,
     deadlineMs = 13 * 60_000,
+    leakMs = 60_000,
+    recheckMs = 5_000,
     pageSize = 500,
   }: NightlyOptions = {},
 ): Promise<NightlyResult> {
   positive("concurrency", concurrency, true);
   positive("timeoutMs", timeoutMs, false);
   positive("deadlineMs", deadlineMs, false);
+  positive("leakMs", leakMs, false);
+  positive("recheckMs", recheckMs, false);
   positive("pageSize", pageSize, true);
   const start = Date.now();
 
   const rows = await activeIds(env.PLATFORM_DB, pageSize);
-  const ids = rows.ids.filter((id) => isInstallId(id));
+  const valid = rows.ids.filter((id) => isInstallId(id));
   // Resolve every script name first: an unknown OA_ENV throws before any call.
-  const scripts = ids.map((id) => names(id, env.OA_ENV).script);
-  const invalid = rows.invalid + rows.ids.length - ids.length;
+  for (const id of valid) names(id, env.OA_ENV);
+  const invalid = rows.invalid + rows.ids.length - valid.length;
   if (invalid > 0) console.warn("nightly invalid", `ids=${invalid}`);
-  if (ids.length > SCALE_WARN)
-    console.warn("nightly scale", `active=${ids.length} over ${SCALE_WARN}`);
+  if (valid.length > SCALE_WARN)
+    console.warn("nightly scale", `active=${valid.length} over ${SCALE_WARN}`);
+  // Rotate by UTC day: tonight's tail is near the head on a later night.
+  const off = valid.length > 0 ? Math.floor(now / DAY_MS) % valid.length : 0;
+  const ids = [...valid.slice(off), ...valid.slice(0, off)];
 
   const ok: string[] = [];
   const failed: NightlyResult["failed"] = [];
   const skipped: string[] = [];
+  const dbErrors: string[] = [];
+  const leaked: string[] = [];
   const fail = (id: string, reason: Reason) => {
     failed.push({ id, reason });
     logFailed(reason, id);
   };
+  const skip = (id: string, reason: SkipReason) => {
+    skipped.push(id);
+    console.warn("nightly skipped", reason, id);
+  };
 
   let next = 0;
-  let held = 0; // lanes held: from the re-check until the call settles
-  let undecided = 0; // started calls with no result yet
-  let stopped = false;
+  let held = 0; // lanes held: from the re-check until the call settles or leaks
+  let undecided = 0; // started installs with no result yet
+  let stopped: SkipReason | null = null;
+  let dbStreak = 0;
+  const stuck = new Set<string>(); // timed out, not settled, lane still held
+  const leak = (id: string) => {
+    if (!stuck.delete(id)) return;
+    leaked.push(id);
+    console.warn("nightly leaked", id);
+  };
 
   await new Promise<void>((resolve) => {
     let finished = false;
     const deadline = setTimeout(
       () => {
-        stopped = true;
+        stopped ??= "deadline";
         pump();
       },
       Math.max(0, start + deadlineMs - Date.now()),
@@ -197,8 +249,8 @@ export async function runNightly(
     function pump() {
       if (finished) return;
       while (!stopped && held < concurrency && next < ids.length) run(next++);
-      // Done once nothing more will start and every started call has a result;
-      // timed-out calls may still hold lanes, but they never block the return.
+      // Done once nothing more will start and every started install has a
+      // result; timed-out calls may still hold lanes, but never block this.
       if ((stopped || next >= ids.length) && undecided === 0) finish();
     }
     async function run(i: number) {
@@ -206,29 +258,60 @@ export async function runNightly(
       held++;
       undecided++;
       let decided = false;
+      let released = false;
       const decide = (f: () => void) => {
         if (decided) return;
         decided = true;
         undecided--;
         f();
       };
+      const release = () => {
+        if (released) return;
+        released = true;
+        held--;
+        pump();
+      };
       let timer: ReturnType<typeof setTimeout> | undefined;
+      let leakTimer: ReturnType<typeof setTimeout> | undefined;
       try {
-        const still = await env.PLATFORM_DB.prepare(RECHECK_SQL)
-          .bind(id, Date.now())
-          .first();
-        if (!still) {
-          decide(() => skipped.push(id));
+        let still: unknown;
+        try {
+          still = await within(
+            env.PLATFORM_DB.prepare(RECHECK_SQL).bind(id, Date.now()).first(),
+            Math.max(1, Math.min(recheckMs, start + deadlineMs - Date.now())),
+          );
+        } catch (e) {
+          if (e instanceof Stall) {
+            decide(() => skip(id, "recheck"));
+          } else {
+            // The platform D1, not the install: never a failure of the install.
+            decide(() => {
+              dbErrors.push(id);
+              console.error("nightly db_error", id);
+            });
+            if (++dbStreak >= DB_ERROR_STOP) stopped ??= "db_error";
+          }
           return;
         }
-        // A timeout is reported now; the lane stays held until the call settles.
+        dbStreak = 0;
+        if (!still) {
+          decide(() => skip(id, "state"));
+          return;
+        }
+        // A timeout is reported now; the lane stays held until the call
+        // settles, or until leakMs more, when it is given back as leaked.
         timer = setTimeout(() => {
           decide(() => fail(id, "timeout"));
+          stuck.add(id);
+          leakTimer = setTimeout(() => {
+            leak(id);
+            release();
+          }, leakMs);
           pump();
         }, timeoutMs);
         const r = await (
           env.DISPATCHER.get(
-            scripts[i] as string,
+            names(id, env.OA_ENV).script,
           ) as unknown as ScheduledFetcher
         ).scheduled({ cron: CRON, scheduledTime: new Date(now) });
         checkOutcome(r);
@@ -236,17 +319,21 @@ export async function runNightly(
       } catch (e) {
         decide(() => fail(id, category(e)));
       } finally {
+        stuck.delete(id);
         clearTimeout(timer);
-        held--;
-        pump();
+        clearTimeout(leakTimer);
+        release();
       }
     }
     pump();
   });
 
-  // Past the deadline: everything not started is skipped, in id order.
-  for (let i = next; i < ids.length; i++) skipped.push(ids[i] as string);
-  return { ok, failed, skipped };
+  // Calls still stuck when the run ends are leaked too.
+  for (const id of [...stuck]) leak(id);
+  // The run stopped (deadline or D1 errors): everything not started is skipped.
+  for (let i = next; i < ids.length; i++)
+    skip(ids[i] as string, stopped ?? "deadline");
+  return { ok, failed, skipped, dbErrors, leaked };
 }
 
 /** runNightly plus the summary line; an aborted run logs a fixed line and rethrows. */
@@ -265,10 +352,11 @@ export async function nightly(
     );
     throw e;
   }
-  const { ok, failed, skipped } = r;
+  const { ok, failed, skipped, dbErrors, leaked } = r;
+  const active = ok.length + failed.length + skipped.length + dbErrors.length;
   console.log(
     "nightly summary",
-    `active=${ok.length + failed.length + skipped.length} ok=${ok.length} failed=${failed.length} skipped=${skipped.length}`,
+    `active=${active} ok=${ok.length} failed=${failed.length} skipped=${skipped.length} db_errors=${dbErrors.length} leaked=${leaked.length}`,
   );
   return r;
 }
