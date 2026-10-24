@@ -1,6 +1,6 @@
 import type { ArtifactSummary } from "@oa/shared";
-import { displayName, Textarea } from "@oa/ui";
-import { Button, Input } from "@oa/ui/shadcn";
+import { displayName } from "@oa/ui";
+import { Button, Input, Textarea } from "@oa/ui/shadcn";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { ApiClientError } from "../../api/client";

@@ -137,11 +137,16 @@ describe("share panel", () => {
     );
   });
 
-  it("allowAnonymousWrites is disabled unless public and db", async () => {
+  it("allowAnonymousWrites is disabled unless public and db, and says why", async () => {
     mount(panel(OWNED));
+    const anon = await screen.findByRole("checkbox", {
+      name: "Allow anonymous writes",
+    });
+    expect(anon).toBeDisabled();
+    expect(anon).toHaveAccessibleDescription("Public and database only.");
     expect(
-      await screen.findByRole("checkbox", { name: "Allow anonymous writes" }),
-    ).toBeDisabled();
+      screen.getByRole("checkbox", { name: "Database" }),
+    ).toHaveAccessibleDescription(/./);
   });
 
   it("turning db off also unsets allowAnonymousWrites in the same PATCH", async () => {
