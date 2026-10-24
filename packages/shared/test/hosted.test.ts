@@ -206,9 +206,9 @@ describe("hosted contract schemas", () => {
       title: "t",
     });
     expect(PublishInputSchema.safeParse({ spaceId: "s" }).success).toBe(false);
-    expect(
-      PublishInputSchema.safeParse({ ...base, spaceId: 1 }).success,
-    ).toBe(false);
+    expect(PublishInputSchema.safeParse({ ...base, spaceId: 1 }).success).toBe(
+      false,
+    );
   });
 
   it("artifactCan follows the action table", () => {

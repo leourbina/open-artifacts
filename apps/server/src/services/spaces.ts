@@ -1764,9 +1764,7 @@ export async function transferPersonal(
     ownerId = fromUserId;
     publicLinks = s.publicLinks === 1;
   }
-  const page = publicLinks
-    ? TRANSFER_PAGE
-    : Math.min(TRANSFER_PAGE, MAX_CLOSE);
+  const page = publicLinks ? TRANSFER_PAGE : Math.min(TRANSFER_PAGE, MAX_CLOSE);
   const { results } = await stmt(env.DB, DEPARTED_PAGE)
     .bind(fromUserId, page)
     .all<{ id: string }>();

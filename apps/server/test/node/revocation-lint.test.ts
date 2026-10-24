@@ -88,6 +88,8 @@ const WIDENS: Readonly<Record<string, string>> = {
   // Removing a restricted group only lifts caps (restricted_sync recomputed
   // from the groups that remain).
   "services/spaces.ts:deleteRestrictedGroup": "lifts a restriction only",
+  // P3 T10: the transfer successor predicate reads restricted_* (no write).
+  "services/spaces.ts:SUCCESSOR": "a read: the successor predicate",
 };
 
 /** Exempt from the scan: the primitives themselves. */

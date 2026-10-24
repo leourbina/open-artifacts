@@ -182,9 +182,7 @@ export function mountArtifacts(app: AppType): void {
     const user = requireUser(c);
     const id = idParam(c);
     const { userId } = await jsonBody(c, TransferArtifactInputSchema);
-    return c.json(
-      await transferArtifact(c.env, user, id, userId, execCtx(c)),
-    );
+    return c.json(await transferArtifact(c.env, user, id, userId, execCtx(c)));
   });
 
   app.post(`${ARTIFACT}/undelete`, async (c) => {

@@ -30,7 +30,11 @@ const ON = {
 } as unknown as Env;
 const OFF = { ...(env as object), FEATURES: "" } as unknown as Env;
 
-type Init = { method?: string; body?: unknown; headers?: Record<string, string> };
+type Init = {
+  method?: string;
+  body?: unknown;
+  headers?: Record<string, string>;
+};
 const call = (
   path: string,
   cookie: string | null,
@@ -257,7 +261,9 @@ describe("publish into a space", () => {
             if (!fired) {
               fired = true;
               await t
-                .prepare("update artifacts set visibility = 'team' where id = ?")
+                .prepare(
+                  "update artifacts set visibility = 'team' where id = ?",
+                )
                 .bind(id)
                 .run();
             }
@@ -279,6 +285,42 @@ describe("publish into a space", () => {
     expect(r.status).toBe(409);
     expect(await code(r)).toBe("conflict");
     expect((await row(id))?.visibility).toBe("team");
+  });
+});
+
+describe("patch compare-and-set (#484)", () => {
+  it("a stale PATCH visibility loses to a concurrent change: 409, no audit row", async () => {
+    const u = await mk("pcas");
+    const id = await insertArtifact(u.userId, u.userId, "team");
+    let fired = false;
+    const DB = new Proxy(env.DB, {
+      get(t, p) {
+        if (p === "batch")
+          return async (ss: D1PreparedStatement[]) => {
+            if (!fired) {
+              fired = true;
+              await t
+                .prepare(
+                  "update artifacts set visibility = 'private' where id = ?",
+                )
+                .bind(id)
+                .run();
+            }
+            return t.batch(ss);
+          };
+        const v = Reflect.get(t, p);
+        return typeof v === "function" ? v.bind(t) : v;
+      },
+    });
+    const r = await call(
+      R.artifact(id),
+      u.cookie,
+      { method: "PATCH", body: { visibility: "public" } },
+      { ...(ON as object), DB } as unknown as Env,
+    );
+    expect(r.status).toBe(409);
+    expect((await row(id))?.visibility).toBe("private");
+    expect(await audits("artifact.visibility", id)).toHaveLength(0);
   });
 });
 
@@ -594,9 +636,8 @@ describe("departed transfer", () => {
     const m = await mk("nadm");
     const s = await createSpace();
     expect(
-      (
-        await departed(m, g.userId, { to: { kind: "space", spaceId: s.id } })
-      ).status,
+      (await departed(m, g.userId, { to: { kind: "space", spaceId: s.id } }))
+        .status,
     ).toBe(404);
     expect((await call(R.memberTransfer(g.userId), m.cookie)).status).toBe(404);
   });
@@ -605,7 +646,10 @@ describe("departed transfer", () => {
     const g = await gone(140, 10);
     const s = await createSpace();
     const sum = await call(R.memberTransfer(g.userId), admin.cookie);
-    expect(await json<TransferSummary>(sum)).toEqual({ live: 140, deleted: 10 });
+    expect(await json<TransferSummary>(sum)).toEqual({
+      live: 140,
+      deleted: 10,
+    });
     const r1 = await json<TransferResult>(
       await departed(admin, g.userId, { to: { kind: "space", spaceId: s.id } }),
     );
@@ -710,6 +754,9 @@ describe("departed transfer", () => {
     await run("update users set status = 'removed' where id = ?", g.userId);
     const s = await createSpace({ publicLinks: false });
     await departed(admin, g.userId, { to: { kind: "space", spaceId: s.id } });
-    expect(await row(pub)).toMatchObject({ space_id: s.id, visibility: "team" });
+    expect(await row(pub)).toMatchObject({
+      space_id: s.id,
+      visibility: "team",
+    });
   });
 });
