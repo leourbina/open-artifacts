@@ -93,6 +93,8 @@ export function linkHost(u: URL): string {
   return h.length > HOST_MAX ? `…${h.slice(-(HOST_MAX - 1))}` : h;
 }
 
+const bareHost = (h: string) => h.replace(/\.$/, "");
+
 /** Transient user activation in this window (a click in the frame counts). */
 const userActive = () =>
   (navigator as Navigator & { userActivation?: { isActive: boolean } })
@@ -134,9 +136,11 @@ export function createOpener(opts: {
     const origin = opts.origin ?? location.origin;
     const u = openableUrl(url);
     if (!u) return;
+    // "app.example." is app.example too: compare without a trailing dot.
+    const host = bareHost(u.hostname);
     const content = opts.contentOrigin?.();
-    if (content && u.hostname === new URL(content).hostname) return;
-    const appHost = u.hostname === new URL(origin).hostname;
+    if (content && host === bareHost(new URL(content).hostname)) return;
+    const appHost = host === bareHost(new URL(origin).hostname);
     const path =
       appHost && NAVIGATE_PATH_RE.test(u.pathname) ? u.pathname : null;
     if (appHost && !path) return;

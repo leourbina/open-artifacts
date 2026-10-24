@@ -262,6 +262,9 @@ describe("createOpener", () => {
     "http://app.test/?space=x",
     "http://content.test/p/B/v1/index.html",
     "https://content.test:8443/c/token/B/v1/__view",
+    "http://app.test./oauth/authorize?client_id=evil",
+    "https://app.test./settings",
+    "https://content.test./p/B/v1/index.html",
   ])(
     "refuses %s: the app's or content host, whatever the scheme or port",
     (u) => {
@@ -279,7 +282,9 @@ describe("createOpener", () => {
     openLink("http://app.test/a/B");
     tick(1000);
     openLink("https://app.test:8443/a/C/full");
-    expect(go.mock.calls).toEqual([["/a/B"], ["/a/C/full"]]);
+    tick(1000);
+    openLink("https://app.test./a/D");
+    expect(go.mock.calls).toEqual([["/a/B"], ["/a/C/full"], ["/a/D"]]);
   });
 
   it.each(["dismissed", "timed out", "opened"])(
