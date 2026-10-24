@@ -2632,21 +2632,22 @@ describe("H-T4b round 1", () => {
       expect(pkg.exports["./names"].import).toBe("./dist/names.js");
     });
 
-    it("the real gates are shut: prod locked, no account target, placeholder keys", async () => {
+    it("the real gates: prod locked, no account target, both keys pinned and distinct", async () => {
       const real = await vi.importActual<
         typeof import("../src/internal/gates.js")
       >("../src/internal/gates.js");
+      // Prod unlocks in its own PR, after the red-line suite passes on staging.
       expect(real.PROD_UNLOCKED).toBe(false);
       expect(real.ALLOW_ACCOUNT_TARGET).toBe(false);
-      expect(real.RELEASE_PUBKEY).toEqual({
-        staging: real.RELEASE_PUBKEY_PLACEHOLDER,
-        prod: real.RELEASE_PUBKEY_PLACEHOLDER,
-      });
       expect(real.RELEASE_PUBKEY_PLACEHOLDER).toMatch(/placeholder/i);
+      expect(real.RELEASE_PUBKEY.staging).not.toBe(
+        real.RELEASE_PUBKEY_PLACEHOLDER,
+      );
+      expect(real.RELEASE_PUBKEY.prod).not.toBe(
+        real.RELEASE_PUBKEY_PLACEHOLDER,
+      );
+      expect(real.RELEASE_PUBKEY.staging).not.toBe(real.RELEASE_PUBKEY.prod);
       expect(Object.isFrozen(real.RELEASE_PUBKEY)).toBe(true);
-      // Once T3b sets real keys, the envs must not share one.
-      if (real.RELEASE_PUBKEY.staging !== real.RELEASE_PUBKEY_PLACEHOLDER)
-        expect(real.RELEASE_PUBKEY.staging).not.toBe(real.RELEASE_PUBKEY.prod);
     });
   });
 

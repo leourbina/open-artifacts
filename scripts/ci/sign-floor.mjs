@@ -23,11 +23,7 @@ import {
   runMain,
   sha256Hex,
 } from "./release-artifact.mjs";
-import {
-  checkSigningKey,
-  SKIPPED,
-  verifySignature,
-} from "./release-pubkeys.mjs";
+import { checkSigningKey, verifySignature } from "./release-pubkeys.mjs";
 
 /** @typedef {import("./release-pubkeys.mjs").Env} Env */
 
@@ -85,8 +81,7 @@ async function main() {
     if (a["record-sha256"] !== sha256Hex(f.record))
       throw new Error("the floor record is not the one hosted-floor signed");
     signature = a.signature ?? "";
-    if (verifySignature(f.env, payload, signature) === "skipped")
-      process.stderr.write(SKIPPED(f.env, "floor signature"));
+    verifySignature(f.env, payload, signature);
   } else {
     const pem = await readKeyFromStdin();
     /** @type {import("node:crypto").KeyObject} */
@@ -99,11 +94,7 @@ async function main() {
     if (key.asymmetricKeyType !== "ed25519")
       throw new Error("the signing key is not Ed25519");
     const pub = createPublicKey(key);
-    if (
-      checkSigningKey(f.env, String(pub.export({ format: "jwk" }).x)) ===
-      "skipped"
-    )
-      process.stderr.write(SKIPPED(f.env, "signing key"));
+    checkSigningKey(f.env, String(pub.export({ format: "jwk" }).x));
     signature = sign(null, payload, key).toString("base64url");
     if (!verify(null, payload, pub, Buffer.from(signature, "base64url")))
       throw new Error("the signature does not verify");
