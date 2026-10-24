@@ -141,6 +141,58 @@ UP=$(printf %s "$ENV" | tr a-z A-Z)
 
 Unmapping and slug purges: dispatch reads HOSTS with `cacheTtl: 60`, so an edge can serve a removed mapping for up to about 60 s plus KV propagation. `delete` deletes the user script right after the unmap (`packages/provision/src/wfp.ts`: HOSTS keys at line 2792, script at line 2804, then KV, R2 and D1), so a stale mapping hits a missing script and gets the 404, not a half-deleted install. **A slug purge (freeing a deleted install's hosts for reuse) must wait at least 2 minutes after the unmap**, so no edge still maps the host to the old id when a new install takes it.
 
+## Nightly scheduler: one-time deploy per env (Task 7, gated)
+
+User Workers in a dispatch namespace get no cron triggers, so `apps/scheduler` is the only nightly caller. Its cron (`17 3 * * *`, the same as a self-hosted install's) reads `SELECT id FROM installs WHERE state = 'active'` from the platform D1 (in keyset pages of 500) and calls `DISPATCHER.get(oa-<p>-<id>).scheduled({ cron, scheduledTime })` on each, 10 at a time, each raced against 25 s. Installs in `creating`, `upgrading`, `deleting` or `deleted` are never called, nor is a row whose id isn't an install id. One install throwing, timing out or missing never stops the others. A hosted upload carries no cron of its own (`TEMPLATE_BINDINGS_EXCLUDED.triggers`, pinned in `packages/provision/test/metadata.test.ts`), so the job runs once.
+
+The repo config has no routes, custom domains or `workers.dev`, no fetch handler, and no top-level name, so a deploy without `--env` is refused (tests pin all of it). Observability is off. **The Manager and the user run the deploy by hand; CI never does.**
+
+| Env | Worker | Namespace | Platform D1 | Config placeholder |
+|---|---|---|---|---|
+| staging | `oa-s-scheduler` | `oa-staging` | `oa-s-platform` | `{{PLATFORM_DB_ID_STAGING}}` |
+| prod | `oa-p-scheduler` | `oa-prod` | `oa-p-platform` | `{{PLATFORM_DB_ID_PROD}}` |
+
+Steps, per env (`ENV`, `P` and `UP` as in the dispatch steps above):
+
+1. Preconditions: the namespace `oa-$ENV` and the D1 `oa-$P-platform` exist, with the platform-db migrations applied.
+2. Build and test from a clean checkout of the reviewed commit:
+   ```sh
+   git status --porcelain | grep -q . && { echo "dirty checkout" >&2; exit 1; }
+   pnpm install --frozen-lockfile && pnpm --filter @oa/provision build && pnpm --filter @oa/scheduler test
+   ```
+3. Deploy with the provisioning token. Fill only this env's placeholder into a gitignored copy, deploy it, then remove the copy:
+   ```sh
+   cd apps/scheduler
+   DB_ID=$(pnpm exec wrangler d1 list --json | jq -r --arg n "oa-$P-platform" '.[] | select(.name == $n) | .uuid')
+   test -n "$DB_ID" \
+     && sed "s/{{PLATFORM_DB_ID_$UP}}/$DB_ID/" wrangler.jsonc > wrangler.deploy.jsonc \
+     && pnpm exec wrangler deploy -c wrangler.deploy.jsonc --env "$ENV" \
+     && rm wrangler.deploy.jsonc
+   ```
+   The deploy output must name `oa-$P-scheduler` with `DISPATCHER (oa-$ENV)`, `PLATFORM_DB (oa-$P-platform)`, `OA_ENV ("$ENV")`, the schedule `17 3 * * *`, and no routes or workers.dev URL.
+4. Platform D1 binding check: the deployed `PLATFORM_DB` must be the database named `oa-$P-platform`, never another env's (`CF_ACCOUNT_ID` and `CF_API_TOKEN` as in the dispatch check):
+   ```sh
+   BOUND=$(curl -sS -H "Authorization: Bearer $CF_API_TOKEN" \
+     "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/workers/scripts/oa-$P-scheduler/settings" \
+     | jq -r '.result.bindings[] | select(.name == "PLATFORM_DB") | .id')
+   NAME=$(curl -sS -H "Authorization: Bearer $CF_API_TOKEN" \
+     "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/d1/database/$BOUND" | jq -r .result.name)
+   test "$NAME" = "oa-$P-platform" || { echo "PLATFORM_DB bound to $NAME" >&2; exit 1; }
+   ```
+
+### Reading the nightly run
+
+Observability is off, so the lines are visible only live: `pnpm exec wrangler tail oa-$P-scheduler --format pretty` around 03:17 UTC. The dashboard's Cron Events list (Worker > Settings > Triggers) shows each past invocation and its outcome, and the run itself only fails there if the platform D1 read fails. Lines, with no error text, emails or vars:
+
+| Line | Meaning |
+|---|---|
+| `nightly summary active=<n> ok=<n> failed=<n>` | One per run. `active` counts the valid active ids called. |
+| `nightly failed <category> <installId>` | One per failed install. `timeout` (over 25 s; the install's job may still finish), `not_found` (no script in the namespace: check the row's state against the namespace), `exception` (the install's handler threw or the call failed: read that install's own Workers Logs). |
+| `nightly invalid ids=<n>` | Active rows whose id isn't an install id; skipped. Fix the rows. |
+| `nightly scale active=<n> over 300` | Near the ~360-install limit of one cron run (10 at a time × 25 s). Move to the M2 Queue fan-out before it grows. |
+
+The email-quota alert (80% of the account limit) is not in M1: the per-install send counters live in each install's own D1 and no route exposes them. Backend owns that contract.
+
 ## Hosted release files (T3b)
 
 - The stored record is `{ "record": "<canonicalJson(record)>", "signature": "<base64url>" }`. The signature covers `"oa-release-v1\n" + env + "\n" + record` (the exact string). Readers verify that string, parse it refusing duplicate keys (objects built with a null prototype), and require it to re-serialize byte for byte.
