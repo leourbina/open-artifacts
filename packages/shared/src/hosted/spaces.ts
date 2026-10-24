@@ -44,9 +44,29 @@ export const SpacesQuerySchema = z.strictObject({
 });
 export type SpacesQuery = z.infer<typeof SpacesQuerySchema>;
 
+/**
+ * C0 controls (U+0000-U+001F), DEL (U+007F) and bidi controls (LRM/RLM,
+ * ALM, LRE..RLO, LRI..PDI): stripped from space names.
+ */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: stripping them is the point
+const NAME_CONTROLS = /[\u0000-\u001F\u007F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
+
+/** A space name with control and bidi characters removed. */
+export const stripNameControls = (s: string): string =>
+  s.replace(NAME_CONTROLS, "");
+
+/**
+ * A space name: control and bidi characters stripped, then trimmed, 1-80
+ * characters (a name of only such characters is 400).
+ */
+export const SpaceNameSchema = z
+  .string()
+  .transform(stripNameControls)
+  .pipe(z.string().trim().min(1).max(80));
+
 /** POST R.spaces (org owner, admin) -> 201 Space. */
 export const SpaceCreateSchema = z.strictObject({
-  name: z.string().trim().min(1).max(80),
+  name: SpaceNameSchema,
   allMembersRole: SpaceRoleSchema.nullable().default(null),
   publicLinks: z.boolean().default(true),
 });
@@ -63,7 +83,7 @@ export type SpaceCreateInput = z.input<typeof SpaceCreateSchema>;
  */
 export const SpacePatchSchema = z
   .strictObject({
-    name: z.string().trim().min(1).max(80),
+    name: SpaceNameSchema,
     allMembersRole: SpaceRoleSchema.nullable(),
     publicLinks: z.boolean(),
   })

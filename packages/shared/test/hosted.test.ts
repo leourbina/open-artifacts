@@ -34,6 +34,7 @@ import {
   SettingsSchema,
   SPACE_MANAGER_MAPPING_ROLES,
   SpaceCanSchema,
+  SpaceCreateSchema,
   SpaceForbiddenDetailsSchema,
   SpaceMemberGroupSchema,
   SpaceMemberSchema,
@@ -144,6 +145,21 @@ describe("hosted contract schemas", () => {
       CodeRateLimitedDetailsSchema.parse({ retryAfter: 60, scope: "ip" }),
     ).toEqual({ retryAfter: 60, scope: "ip" });
     expect(SpacePatchSchema.safeParse({ kind: "shared" }).success).toBe(false);
+    // Space names: C0, DEL and bidi controls stripped, then trimmed.
+    expect(
+      SpaceCreateSchema.parse({
+        name: " \u202EEng\u0000\u0007ineer\u2066ing\u200F\u007F\u061C ",
+      }).name,
+    ).toBe("Engineering");
+    expect(SpacePatchSchema.parse({ name: "A\u0009B\u2069" }).name).toBe(
+      "AB",
+    );
+    expect(
+      SpacePatchSchema.safeParse({ name: "\u202A\u0000 \u200E" }).success,
+    ).toBe(false);
+    expect(SpaceCreateSchema.parse({ name: "Café 東京" }).name).toBe(
+      "Café 東京",
+    );
     expect(
       TransferInputSchema.parse({
         to: { kind: "space", spaceId: "s" },

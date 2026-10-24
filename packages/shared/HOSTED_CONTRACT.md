@@ -152,7 +152,7 @@ only per-space rows.
 |---|---|
 | `SpaceSchema` | `SpaceRef + { owner, allMembersRole, myRole, memberCount, artifactCount, createdAt }` (`outsideSharing` dropped until M4) |
 | `SpacesQuerySchema` | `{ kind?, cursor?, limit? }` |
-| `SpaceCreateSchema` / `SpacePatchSchema` | `{ name, allMembersRole, publicLinks }` (patch: partial); `SPACE_MANAGER_FIELDS` = name, publicLinks |
+| `SpaceCreateSchema` / `SpacePatchSchema` | `{ name, allMembersRole, publicLinks }` (patch: partial); `SPACE_MANAGER_FIELDS` = name, publicLinks. `name` is `SpaceNameSchema`: C0 controls, DEL and bidi controls (U+061C, U+200E/F, U+202A-U+202E, U+2066-U+2069) are stripped, then trimmed, 1-80 characters (only such characters: 400); `stripNameControls` is the same rule |
 | `SpaceMemberSchema` | userId-keyed: `{ userId, user, status, role, source: manual \| sync, manualRole, syncRole, groups: SpaceMemberGroup[], cap, allMembers }`. `allMembers`: the space's `allMembersRole` when it applies to this person, null for guests and capped users (or when none is set) |
 | `SpaceMemberGroupSchema` | `GroupRef + { role, via: space \| every }`: one entry per mapping granting `syncRole` (`every` = an Every-space org mapping); a group mapped both ways appears twice |
 | `SpaceMembersQuerySchema` / `SpaceMembersPageSchema` | `{ q?, group?, cursor?, limit? }` (strict) / `Page<SpaceMember> + { total }` |
