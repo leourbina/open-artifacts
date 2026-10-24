@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.41.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.40.1...v0.41.0) (2026-10-24)
+
+
+### Features
+
+* **server:** UserPresence DO class, unused (P3 T7a) ([#502](https://github.com/open-artifacts-ai/open-artifacts/issues/502)) ([11155de](https://github.com/open-artifacts-ai/open-artifacts/commit/11155de3cd4e9b655d87f5b726f9acd144222999))
+
+
+### Bug Fixes
+
+* **server:** answer only the configured app and content hosts ([#518](https://github.com/open-artifacts-ai/open-artifacts/issues/518)) ([1681e10](https://github.com/open-artifacts-ai/open-artifacts/commit/1681e10a83cfa88065a44f3e61c4c936764ac28d))
+* **viewer:** links to app pages are blocked in place with a note ([#525](https://github.com/open-artifacts-ai/open-artifacts/issues/525)) ([#530](https://github.com/open-artifacts-ai/open-artifacts/issues/530)) ([dd9b3e5](https://github.com/open-artifacts-ai/open-artifacts/commit/dd9b3e58d252bae443e4ff248a90e7c699a7e7c1))
+
 ## [0.40.1](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.40.0...v0.40.1) (2026-10-24)
 
 
