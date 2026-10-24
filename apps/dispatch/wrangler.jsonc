@@ -1,0 +1,38 @@
+// Hosted dispatch Worker (P1 Task 6): maps the request host to an install id
+// (HOSTS KV, written by provisioning) and forwards the request unchanged to
+// that install's user Worker in the env's dispatch namespace.
+//
+// Deploy with --env staging or --env prod only (docs/ops/hosted.md). No
+// routes, custom domains or workers.dev here: the wildcard routes are wired
+// once per env by the gated ops step, never from this file. HOSTS ids are
+// filled at deploy (the id of oa-s-hosts / oa-p-hosts).
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "oa-dispatch",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": false,
+  "preview_urls": false,
+  "env": {
+    "staging": {
+      "name": "oa-s-dispatch",
+      "workers_dev": false,
+      "preview_urls": false,
+      "vars": { "OA_ENV": "staging" },
+      "dispatch_namespaces": [
+        { "binding": "DISPATCHER", "namespace": "oa-staging" }
+      ],
+      "kv_namespaces": [{ "binding": "HOSTS", "id": "{{HOSTS_KV_ID}}" }]
+    },
+    "prod": {
+      "name": "oa-p-dispatch",
+      "workers_dev": false,
+      "preview_urls": false,
+      "vars": { "OA_ENV": "prod" },
+      "dispatch_namespaces": [
+        { "binding": "DISPATCHER", "namespace": "oa-prod" }
+      ],
+      "kv_namespaces": [{ "binding": "HOSTS", "id": "{{HOSTS_KV_ID}}" }]
+    }
+  }
+}
