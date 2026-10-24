@@ -236,7 +236,7 @@ function OAuthClients() {
       )}
       {target && (
         <Confirm
-          title={`Revoke ${target.clientName}?`}
+          title={`Revoke "${target.clientName}"?`}
           action="Revoke"
           onClose={() => setTarget(null)}
           onConfirm={() => revoke.mutate(target.grantId)}
@@ -407,7 +407,7 @@ function Tokens() {
       {creating && <CreateDialog onClose={() => setCreating(false)} />}
       {target && (
         <Confirm
-          title={`Revoke ${target.label}?`}
+          title={`Revoke "${target.label}"?`}
           action="Revoke"
           onClose={() => setTarget(null)}
           onConfirm={() => revoke.mutate(target.id)}

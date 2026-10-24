@@ -89,11 +89,11 @@ for (const scheme of ["light", "dark"] as const)
         await page.getByRole("button", { name: "Create", exact: true }).click();
         await page.getByRole("button", { name: "Done" }).click();
         await page.getByRole("button", { name: "Revoke old" }).click();
-        const dlg = page.getByRole("alertdialog", { name: "Revoke old?" });
+        const dlg = page.getByRole("alertdialog", { name: 'Revoke "old"?' });
         await expect(dlg).toContainText(
           "Anything using it stops working immediately.",
         );
-        await trapped(page, "Revoke old?", "alertdialog");
+        await trapped(page, 'Revoke "old"?', "alertdialog");
         await expect(dlg.getByRole("button", { name: "Close" })).toHaveCount(0);
         await shot(page, info, "revoke-confirm");
       });
@@ -135,6 +135,53 @@ for (const scheme of ["light", "dark"] as const)
           page.getByRole("option", { name: "Personal" }),
         ).toBeVisible();
         await page.keyboard.press("Escape");
+      });
+
+      test("update toast: one Toaster, Couldn't copy", async ({
+        page,
+      }, info) => {
+        // No clipboard: Upgrade falls back to the toast.
+        await page.addInitScript(() =>
+          Object.defineProperty(navigator, "clipboard", { value: undefined }),
+        );
+        await page.goto("/settings/instance?mock=update");
+        await page.getByRole("button", { name: "Upgrade" }).first().click();
+        const toast = page
+          .getByRole("alert")
+          .filter({ hasText: "Couldn't copy" });
+        await expect(toast).toBeVisible();
+        await expect(
+          page.getByText("Select the prompt and copy it yourself."),
+        ).toBeVisible();
+        // One Toaster in the whole app, so toasts never stack from two.
+        await expect(page.locator("[data-sonner-toaster]")).toHaveCount(1);
+        await shot(page, info, "update-toast");
+      });
+
+      test("dialog footers: stacked full width below 640px, inline above", async ({
+        page,
+      }) => {
+        await page.goto("/settings/agents");
+        await page.waitForLoadState("networkidle");
+        await page.getByRole("button", { name: "Create token" }).click();
+        const dlg = page.getByRole("dialog", { name: "Create token" });
+        // Measure at rest: the dialog zooms in.
+        await settle(page);
+        const create = await dlg
+          .getByRole("button", { name: "Create", exact: true })
+          .boundingBox();
+        const cancel = await dlg
+          .getByRole("button", { name: "Cancel" })
+          .boundingBox();
+        if (!create || !cancel) throw new Error("no footer buttons");
+        if (width < 640) {
+          expect(create.y).toBeLessThan(cancel.y);
+          expect(Math.abs(create.width - cancel.width)).toBeLessThan(1);
+          expect(create.width).toBeGreaterThan(300);
+        } else {
+          expect(Math.abs(create.y - cancel.y)).toBeLessThan(2);
+          expect(create.x).toBeGreaterThan(cancel.x);
+        }
       });
 
       test("not found: signed-in-as avatar", async ({ page }, info) => {

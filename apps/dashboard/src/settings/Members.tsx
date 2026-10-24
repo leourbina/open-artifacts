@@ -567,8 +567,8 @@ function DepartedRow({ d: { member: m, summary } }: { d: Departed }) {
     <li className="flex flex-wrap items-center gap-[10px] border-0 border-t border-border py-[var(--oa-space-2)] first:border-t-0">
       <UserAvatar name={m.name} email={m.email} />
       <div className="min-w-0 flex-1">
-        <b className="flex min-w-0 items-center gap-[6px] font-medium">
-          <span className="truncate">{label}</span>
+        <b className="flex min-w-0 flex-wrap items-center gap-x-[6px] gap-y-[2px] font-medium">
+          <span className="min-w-0 break-words">{label}</span>
           <Badge variant="outline" className="flex-none">
             {STATUS[m.status === "removed" ? "removed" : "suspended"]}
           </Badge>

@@ -197,7 +197,7 @@ test("keyboard: create and revoke a token without a mouse", async ({
   ).toBeFocused();
   await page.getByRole("button", { name: "Revoke kbd" }).focus();
   await page.keyboard.press("Enter");
-  const confirm = page.getByRole("alertdialog", { name: "Revoke kbd?" });
+  const confirm = page.getByRole("alertdialog", { name: 'Revoke "kbd"?' });
   await expect(confirm).toBeVisible();
   await confirm.getByRole("button", { name: "Revoke" }).focus();
   await page.keyboard.press("Enter");
