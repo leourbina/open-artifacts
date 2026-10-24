@@ -21,7 +21,7 @@ import {
   type SpaceRole,
   type SpacesQuery,
 } from "@oa/shared";
-import { and, eq, isNull, or, type SQL, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { type Caller, capOfCaller, roleRankSql } from "../auth/authz.js";
 import { authConfig } from "../auth/config.js";
 import { canBeRestricted, capOf, isGuestRole, orgCan } from "../auth/policy.js";
