@@ -129,6 +129,21 @@ export const ArtifactToShellSchema = z.union([
     type: z.literal("navigate"),
     url: z.string().max(2048),
   }),
+  /**
+   * A click on any other plain link that would move the frame elsewhere
+   * (another origin, the app outside NAVIGATE_PATH_RE, or another artifact's
+   * content): the sandboxed frame can't show most sites, so the shell opens it
+   * in the top window; app pages and content URLs it refuses, with a note. Artifact
+   * content can forge this too: the shell accepts only http(s) without
+   * credentials, rate limited, and navigates only with transient user
+   * activation (else it asks first).
+   */
+  z.strictObject({
+    oa: z.literal(1),
+    nonce,
+    type: z.literal("open"),
+    url: z.string().max(2048),
+  }),
 ]);
 export type ArtifactToShell = z.infer<typeof ArtifactToShellSchema>;
 

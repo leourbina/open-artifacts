@@ -121,7 +121,7 @@ describe("Agents settings", () => {
       await screen.findByRole("button", { name: "Revoke Example MCP client" }),
     );
     expect(deletes).toEqual([]);
-    const dlg = await screen.findByRole("dialog");
+    const dlg = await screen.findByRole("alertdialog");
     fireEvent.click(within(dlg).getByRole("button", { name: /^revoke/i }));
     await waitFor(() =>
       expect(deletes).toEqual([
@@ -140,7 +140,7 @@ describe("Agents settings", () => {
     await screen.findByText("laptop");
     expect(screen.getAllByText("Last used Never").length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "Revoke laptop" }));
-    const dlg = await screen.findByRole("dialog");
+    const dlg = await screen.findByRole("alertdialog");
     fireEvent.click(within(dlg).getByRole("button", { name: /^revoke/i }));
     await waitFor(() => expect(deletes).toHaveLength(1));
     expect(deletes[0]).toBe(R.token(fixtures.tokens[0]?.id ?? ""));
@@ -302,7 +302,7 @@ describe("Agents settings", () => {
       mount("/settings/agents");
       fireEvent.click(await screen.findByRole("button", { name: button }));
       fireEvent.click(
-        within(await screen.findByRole("dialog")).getByRole("button", {
+        within(await screen.findByRole("alertdialog")).getByRole("button", {
           name: /^revoke/i,
         }),
       );

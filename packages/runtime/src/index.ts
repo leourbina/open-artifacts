@@ -86,6 +86,9 @@ const STORAGE_PAGE = 500;
 const STORAGE_LIST_PAGES = 20;
 
 type SnapshotModule = { snapshot(): Promise<string | null> };
+/** A content path's artifact-version prefix: /p/<id>/v<n>/ or /c/<token>/<id>/v<n>/. */
+const CONTENT_PREFIX_RE = /^\/(?:p|c\/[^/]+)\/[^/]+\/v\d+\//;
+
 export type RuntimeOptions = {
   /** Loads the contract validators (default: the built schemas chunk). */
   loadSchemas?: () => Promise<Schemas>;
@@ -93,6 +96,8 @@ export type RuntimeOptions = {
   loadSnapshot?: () => Promise<SnapshotModule>;
   /** Aborting detaches the runtime from the window (tests). */
   signal?: AbortSignal;
+  /** Whether a click came from the user (default: `isTrusted`; jsdom can't make one). */
+  isTrusted?: (e: Event) => boolean;
 };
 
 const scriptSrc =
@@ -243,10 +248,22 @@ export function createRuntime(opts: RuntimeOptions = {}): OpenArtifacts {
     }
   };
 
+  /**
+   * A link that stays in this artifact version: same content origin and under
+   * this document's /p/<id>/v<n>/ or /c/<token>/<id>/v<n>/ prefix (or any
+   * same-origin link when this document isn't on such a path).
+   */
+  const ownPage = (u: URL) => {
+    if (u.origin !== location.origin) return false;
+    const own = CONTENT_PREFIX_RE.exec(location.pathname)?.[0];
+    return !own || u.pathname.startsWith(own);
+  };
   /** From the shell's welcome; until then links behave as usual. */
   let appOrigin: string | undefined;
+  const trusted = opts.isTrusted ?? ((e: Event) => e.isTrusted);
   // Framed, a link to the app would load the app inside the sandboxed frame
-  // (which it refuses): ask the shell to navigate the viewer instead.
+  // (which it refuses): ask the shell to navigate the viewer instead. Any other
+  // site would load in the frame too (most refuse): ask the shell to open it.
   const onClick = (e: MouseEvent) => {
     if (
       !appOrigin ||
@@ -261,7 +278,10 @@ export function createRuntime(opts: RuntimeOptions = {}): OpenArtifacts {
       return;
     const a = e.target.closest("a[href]");
     if (!(a instanceof HTMLAnchorElement) || a.hasAttribute("download")) return;
-    const t = a.target;
+    // No target attribute: the document's <base target>, if any.
+    const t =
+      a.getAttribute("target") ??
+      document.querySelector("base[target]")?.getAttribute("target");
     if (t && t !== "_self") return;
     let u: URL;
     try {
@@ -269,9 +289,20 @@ export function createRuntime(opts: RuntimeOptions = {}): OpenArtifacts {
     } catch {
       return;
     }
-    if (u.origin !== appOrigin || !NAVIGATE_PATH_RE.test(u.pathname)) return;
+    if (u.origin === appOrigin && NAVIGATE_PATH_RE.test(u.pathname)) {
+      e.preventDefault();
+      bridge.send({ oa: 1, type: "navigate", url: u.href });
+      return;
+    }
+    // This artifact's own pages and anchors, and non-web schemes, stay as they
+    // are. Everything else goes to the shell as "open": other sites open, and
+    // app pages or other artifacts' content are refused there (with a note),
+    // instead of loading in the frame, which they'd refuse or strand.
+    if (ownPage(u) || (u.protocol !== "https:" && u.protocol !== "http:"))
+      return;
+    if (!trusted(e)) return;
     e.preventDefault();
-    bridge.send({ oa: 1, type: "navigate", url: u.href });
+    bridge.send({ oa: 1, type: "open", url: u.href });
   };
 
   bridge.on((m) => {

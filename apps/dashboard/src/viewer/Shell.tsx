@@ -1,5 +1,5 @@
 import { type ArtifactSummary, type Me, viewerPath } from "@oa/shared";
-import { Button } from "@oa/ui";
+import { Button } from "@oa/ui/shadcn";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
   type ReactNode,
@@ -24,7 +24,12 @@ import { Crumbs } from "./Crumbs";
 import { FullScreenEscape } from "./FullScreenEscape";
 import { frameLoad, SANDBOX, safeContentUrl } from "./frame";
 import { FullLive, GoneBanner, LiveAnnouncer, TitleLive } from "./LiveChip";
-import { createNavigator } from "./navigate";
+import {
+  createLimiter,
+  createNavigator,
+  createOpener,
+  linkHost,
+} from "./navigate";
 import { isPanelTab, type PanelTab, SidePanel } from "./panels/SidePanel";
 import { RenavNotice } from "./RenavNotice";
 import { SlowNotice } from "./SlowNotice";
@@ -34,14 +39,63 @@ import { useContentUrl } from "./useContentUrl";
 import { type FrameState, type Gone, useLiveVersions } from "./useLiveVersions";
 import { useTheme } from "./useTheme";
 import "./viewer.css";
+import { toast } from "../layout/toast";
 import { fullPath } from "./paths";
 
 type Bridge = ReturnType<typeof createBridge>;
 
-// One navigator for every viewer, so the rate limit survives the remount a
-// navigation causes. `go` is the mounted viewer's router navigate.
-const artifactNav = { go: (_path: string) => {} };
-const onArtifactNavigate = createNavigator((p) => artifactNav.go(p));
+// One navigator and opener for every viewer, so the rate limit survives the
+// remount a navigation causes. `go` is the mounted viewer's router navigate.
+const artifactNav = {
+  go: (_path: string) => {},
+  /** The mounted viewer's content origin: open never goes there. */
+  contentOrigin: undefined as string | undefined,
+};
+const navLimit = createLimiter();
+const onArtifactNavigate = createNavigator((p) => artifactNav.go(p), {
+  limit: navLimit,
+});
+/**
+ * A link without user activation asks in one toast at a time (Design: 10 s,
+ * pauses on hover); http says it isn't secure, in the warning tone.
+ */
+const askToOpen = (u: URL, open: () => void, done: () => void) =>
+  toast({
+    id: "oa-open-link",
+    title: `Open link to ${linkHost(u)}?`,
+    ...(u.protocol === "http:"
+      ? {
+          tone: "warning" as const,
+          description: "Not secure: this site doesn't use HTTPS.",
+        }
+      : { tone: "neutral" as const }),
+    duration: 10_000,
+    action: {
+      label: "Open",
+      onClick: () => {
+        done();
+        open();
+      },
+    },
+    onClose: done,
+  });
+/** A link to an app page (or another artifact's content) was blocked in place. */
+const noteRefused = (done: () => void) =>
+  toast({
+    id: "oa-open-link",
+    title: "Artifacts can't open app pages.",
+    description: "Use the sidebar to get there.",
+    tone: "neutral",
+    duration: 5_000,
+    onClose: done,
+  });
+const onArtifactOpen = createOpener({
+  go: (p) => artifactNav.go(p),
+  ask: askToOpen,
+  refuse: noteRefused,
+  limit: navLimit,
+  contentOrigin: () => artifactNav.contentOrigin,
+});
 
 /** No hello this long after the frame loaded: hint that it may be stuck. */
 export const SLOW_MS = 8_000;
@@ -52,7 +106,11 @@ function ErrorPanel({ onRetry }: { onRetry?: () => void }) {
       <section className="oa-panel">
         <h1>Couldn't load this artifact</h1>
         <p>Something went wrong. Try again in a moment.</p>
-        {onRetry && <Button onClick={onRetry}>Retry</Button>}
+        {onRetry && (
+          <Button variant="outline" onClick={onRetry}>
+            Retry
+          </Button>
+        )}
       </section>
     </div>
   );
@@ -101,6 +159,7 @@ function Viewer({
 }) {
   const content = useContentUrl(artifact.id, version, gone !== null);
   const url = safeContentUrl(content.url);
+  if (url) artifactNav.contentOrigin = new URL(url).origin;
   const signedOut =
     content.error instanceof ApiClientError && content.error.status === 401;
   useLoginRedirect(
@@ -258,6 +317,7 @@ function Viewer({
       onAccessLost: () => cbs.current.onAccessLost?.(),
       onRenavigated,
       onNavigate: onArtifactNavigate,
+      onOpen: onArtifactOpen,
       onInteracted: touch,
     });
     bridge.current = b;

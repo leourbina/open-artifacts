@@ -35,6 +35,14 @@ export const PORT = Number(process.env.OA_E2E_PORT ?? 8787);
 export const APP_HOST = `localhost:${PORT}`;
 export const CONTENT_HOST = `content.localhost:${PORT}`;
 export const APP = `http://${APP_HOST}`;
+/**
+ * A page on another loopback origin that frames `?src=` (an /a/<id>/full on
+ * APP), allowed by EMBED_ORIGINS. Served by global-setup: a page.route page
+ * counts as public, and Chrome's local network access check would block it
+ * from framing localhost.
+ */
+export const EMBEDDER_PORT = PORT + 1;
+export const EMBEDDER = `http://embedder.localhost:${EMBEDDER_PORT}`;
 /** OIDC issuer host: reserved, so the IdP leg of a login never leaves the machine. */
 export const ACCESS_TEAM_DOMAIN = "access.e2e.invalid";
 
@@ -87,6 +95,9 @@ export function devConfig(): Record<string, unknown> {
   cfg.vars = {
     ...cfg.vars,
     ENVIRONMENT: "dev",
+    // A test-only page that frames /a/<id>/full (artifact-links.spec, embed mode).
+    EMBED_ORIGINS: EMBEDDER,
+    EMBED_ALLOW_SAME_SITE: "1",
     ACCESS_CLIENT_SECRET: secret(),
     SESSION_SECRET: secret(),
     CONTENT_SIGNING_KEY: secret(),
@@ -126,13 +137,17 @@ export async function startServer(): Promise<() => Promise<void>> {
   const dir = mkdtempSync(join(tmpdir(), "oa-e2e-"));
   let child: ChildProcess | undefined;
   let exited = false;
-  // The group (wrangler and workerd), even after wrangler itself has exited.
+  // The group (wrangler and workerd), only while wrangler is alive: once it has
+  // exited, its group id may be reused (on a shared machine, by anyone's
+  // processes), so signalling -pid then could hit something else.
   const kill = (signal: NodeJS.Signals = "SIGTERM") => {
-    if (child?.pid === undefined) return;
+    if (child?.pid === undefined || exited) return;
     try {
       process.kill(-child.pid, signal);
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "ESRCH") throw e;
+      // Gone already, or no longer ours.
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code !== "ESRCH" && code !== "EPERM") throw e;
     }
   };
   const onExit = () => kill();
@@ -198,9 +213,9 @@ export async function startServer(): Promise<() => Promise<void>> {
       const timeout = new Promise<boolean>((r) =>
         setTimeout(() => r(false), 10_000).unref(),
       );
+      // Still up after SIGTERM: kill the whole group (workerd too) while the
+      // group is certainly still ours.
       if (!(await Promise.race([gone, timeout]))) kill("SIGKILL");
-      // workerd may outlive wrangler on SIGTERM: always finish the group off.
-      kill("SIGKILL");
       process.removeListener("exit", onExit);
       rmSync(dir, { recursive: true, force: true });
     };

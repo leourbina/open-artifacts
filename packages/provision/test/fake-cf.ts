@@ -162,6 +162,8 @@ export class FakeCf {
   scriptsReadStatus = 200;
   /** Dispatch emulation: which KV is HOSTS and which namespace scripts live in. */
   dispatch?: { hostsKvId: string; ns: string | null };
+  /** Accept any old_tag (a Cloudflare that does not check the DO tag; R-L3). */
+  ignoreMigrationTag = false;
   /** /healthz override for a script (e.g. to simulate a slow start). */
   health?: (s: FakeScript) => unknown;
 
@@ -530,7 +532,17 @@ export class FakeCf {
       const name = decodeURIComponent(m[1] as string);
       if (!this.r2.has(name))
         return fail(404, "The specified bucket does not exist.", 10006);
-      if (req.method === "DELETE") this.r2.delete(name);
+      if (req.method === "DELETE") {
+        // Cloudflare refuses to delete a bucket that still holds objects.
+        if ((this.r2Objects.get(name)?.size ?? 0) > 0)
+          return fail(
+            409,
+            "The bucket you tried to delete is not empty.",
+            10008,
+          );
+        this.r2.delete(name);
+        this.r2Objects.delete(name);
+      }
       return env({ name });
     }
 
@@ -574,6 +586,11 @@ export class FakeCf {
         : new Response(v, { status: 200 });
     }
     m = r.match(/^\/storage\/kv\/namespaces\/([^/]+)$/);
+    if (m && req.method === "GET") {
+      const ns = this.kv.get(m[1] as string);
+      if (!ns) return fail(404, "namespace not found", 10013);
+      return env({ id: m[1], title: ns.title });
+    }
     if (m && req.method === "DELETE") {
       if (!this.kv.delete(m[1] as string))
         return fail(404, "namespace not found", 10013);
@@ -689,7 +706,7 @@ export class FakeCf {
     let tag = prev?.migrationTag ?? null;
     if (meta.migrations) {
       const sent = meta.migrations.old_tag ?? "";
-      if (sent !== (tag ?? ""))
+      if (sent !== (tag ?? "") && !this.ignoreMigrationTag)
         return fail(
           412,
           `Actor migration tag precondition failed, got tag '${sent}' when expected tag is '${tag ?? ""}'`,
@@ -807,7 +824,11 @@ export class FakeCf {
         return reply({ protocolVersion: "2025-06-18", capabilities: {} });
       if (msg.method === "tools/list")
         return reply({
-          tools: [{ name: "publish_artifact" }, { name: "get_artifact" }],
+          tools: [
+            { name: "publish_artifact" },
+            { name: "get_artifact" },
+            { name: "list_artifacts" },
+          ],
         });
       if (msg.method === "tools/call") {
         const { name, arguments: args } = msg.params;
@@ -819,6 +840,13 @@ export class FakeCf {
             structuredContent: { id, visibility: "private" },
           });
         }
+        if (name === "list_artifacts")
+          return reply({
+            content: [{ type: "text", text: String(this.artifacts.size) }],
+            structuredContent: {
+              items: [...this.artifacts.keys()].map((id) => ({ id })),
+            },
+          });
         if (name === "get_artifact") {
           const a = this.artifacts.get(args.id);
           if (!a)

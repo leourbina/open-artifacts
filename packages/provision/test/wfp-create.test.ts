@@ -616,7 +616,8 @@ describe("WfpProvisioner.create", () => {
       state: "active",
       test_hooks: 0,
       version: "0.23.0",
-      do_migration_tag: "v1",
+      // The template's latest tag (v2 adds UserPresence, unbound, P3 T7a).
+      do_migration_tag: "v2",
     });
     expect(
       s
@@ -2614,7 +2615,7 @@ describe("H-T4b round 1", () => {
       },
     );
 
-    it("the package index does not export the gates, and the package exports only its index", () => {
+    it("the package index does not export the gates, and the package exports only its index and names", () => {
       for (const k of [
         "PROD_UNLOCKED",
         "ALLOW_ACCOUNT_TARGET",
@@ -2625,7 +2626,10 @@ describe("H-T4b round 1", () => {
       const pkg = JSON.parse(
         readFileSync(new URL("../package.json", import.meta.url), "utf8"),
       );
-      expect(Object.keys(pkg.exports)).toEqual(["."]);
+      // "./names" is the Worker-safe entry (no node:*, no gates) the dispatch
+      // Worker bundles; nothing else is reachable by subpath.
+      expect(Object.keys(pkg.exports)).toEqual([".", "./names"]);
+      expect(pkg.exports["./names"].import).toBe("./dist/names.js");
     });
 
     it("the real gates are shut: prod locked, no account target, placeholder keys", async () => {
@@ -3146,6 +3150,14 @@ describe("platform D1 migration (decisions 10, M1, M3)", () => {
       "state",
       "created_at",
       "updated_at",
+      // 0003 (Task 5): the operation lock, current vars, a session cut owed.
+      "lease",
+      "lease_until",
+      "vars",
+      "session_cut",
+      "row_version",
+      "session_cut_base",
+      "session_cut_armed",
     ]);
   });
 
