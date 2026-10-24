@@ -384,7 +384,7 @@ jobs:
     needs: [hosted-guard, hosted-build, hosted-check]
     if: ${{ !cancelled() && needs.hosted-guard.result == 'success' && needs.hosted-build.result == 'success' && needs.hosted-check.result == 'success' }}
     runs-on: ubuntu-latest
-    # The staging key lives only in this GitHub Environment (main only, required reviewer).
+    # The staging key lives only in this GitHub Environment (main only, no admin bypass, no approval step).
     environment: hosted-staging
     permissions:
       contents: read
@@ -427,7 +427,7 @@ jobs:
     needs: [hosted-guard, hosted-build, hosted-check]
     if: ${{ !cancelled() && needs.hosted-guard.result == 'success' && needs.hosted-build.result == 'success' && needs.hosted-check.result == 'success' }}
     runs-on: ubuntu-latest
-    # The prod key lives only in this GitHub Environment (main only, required reviewer).
+    # The prod key lives only in this GitHub Environment (main only, no admin bypass, required reviewer).
     environment: hosted-prod
     permissions:
       contents: read

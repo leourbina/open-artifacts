@@ -4,8 +4,9 @@
 # - that Environment allows deployments from main only (a custom branch
 #   policy that is exactly the branch `main`): the real control against a
 #   dispatch from another ref;
-# - it has a required reviewer, and admins cannot bypass it
-#   (can_admins_bypass is false);
+# - admins cannot bypass it (can_admins_bypass is false), and for prod it has
+#   a required reviewer (user ruling 2026-10-24: staging signs without an
+#   approval step);
 # - two active rulesets target refs/tags/v* (nothing excluded): A restricts
 #   creation with the release App (RELEASE_APP_ID, its numeric App id) as the
 #   only bypass actor; B restricts update and deletion with no bypass at all,
@@ -52,7 +53,7 @@ rulesets+="]"
 
 # Prints nothing when every control holds, else the reason.
 # shellcheck disable=SC2016 # the ${...} below are JS template literals, not shell
-why=$(ENV_JSON="$env_json" POL_JSON="$pol_json" RULESETS_JSON="$rulesets" APP_ID="$app" node -e '
+why=$(ENV_JSON="$env_json" POL_JSON="$pol_json" RULESETS_JSON="$rulesets" APP_ID="$app" OA_ENV="$env" node -e '
 let e, p, rs;
 try {
   e = JSON.parse(process.env.ENV_JSON);
@@ -68,8 +69,11 @@ const reason = (() => {
   const b = (p.branch_policies ?? []).map((x) => `${x.type ?? "branch"}:${x.name}`);
   if (b.length !== 1 || b[0] !== "branch:main")
     return `deployment branches are [${b.join(", ")}], not exactly branch main`;
-  if (!(e.protection_rules ?? []).some((r) => r.type === "required_reviewers"))
-    return "no required reviewer";
+  if (
+    process.env.OA_ENV === "prod" &&
+    !(e.protection_rules ?? []).some((r) => r.type === "required_reviewers")
+  )
+    return "no required reviewer (prod needs one)";
   if (e.can_admins_bypass !== false)
     return "admins can bypass the environment (can_admins_bypass is not false)";
   // An active tag ruleset on all of refs/tags/v* that restricts every rule in `need`.
@@ -103,4 +107,6 @@ if [ -n "$why" ]; then
   exit 1
 fi
 printf '%s\n' "$key" | gh secret set RELEASE_SIGNING_KEY --env "$name" --repo "$repo"
-echo "set RELEASE_SIGNING_KEY in $name ($repo): main-only deployments, required reviewer, no admin bypass, v* creation only by App $app, v* update and delete blocked"
+review="no approval step"
+[ "$env" = prod ] && review="required reviewer"
+echo "set RELEASE_SIGNING_KEY in $name ($repo): main-only deployments, $review, no admin bypass, v* creation only by App $app, v* update and delete blocked"
