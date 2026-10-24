@@ -38,6 +38,7 @@ import {
   can,
   decide,
   isTeamRole,
+  orgCan,
   type PolicyAction,
   TEAM_ROLES,
 } from "./policy.js";
@@ -514,6 +515,62 @@ export async function checkListSpace(
     return;
   }
   if (!(row.rank > 0)) throw new ApiError("not_found", "Not found");
+}
+
+/** A space an artifact is created in or moved to (publishTarget). */
+export type TargetSpace = {
+  id: string;
+  kind: "personal" | "shared";
+  publicLinks: boolean;
+};
+
+/**
+ * The space a create (`publish`, spaceId) or a move puts an artifact in, if
+ * the caller may: orgCan("space.publish") with their role there (editor or
+ * manager, uncapped). One statement. Errors, in order:
+ * - 404: unknown or deleted, or a shared space where the caller has no role
+ *   and is not an org admin (no existence oracle);
+ * - personal: a move is 400 space_personal (company artifacts stay
+ *   company-owned); a create is 404 unless it is the caller's own;
+ * - 403 space_forbidden: seen but not allowed (a viewer role, an org admin
+ *   without a role, a capped caller).
+ */
+export async function publishTarget(
+  env: Env,
+  c: Caller,
+  spaceId: string,
+  purpose: "create" | "move",
+): Promise<TargetSpace> {
+  if (c.kind !== "user") throw new ApiError("unauthorized", "Sign in required");
+  const [row] = await getDb(env)
+    .select({
+      kind: spaces.kind,
+      publicLinks: spaces.publicLinks,
+      rank: roleRankSql(c, sql`${spaces.id}`),
+    })
+    .from(spaces)
+    .where(and(eq(spaces.id, spaceId), isNull(spaces.deletedAt)))
+    .limit(1);
+  if (!row) throw new ApiError("not_found", "Not found");
+  const cap = capOfCaller(c);
+  const forbidden = () =>
+    new ApiError("space_forbidden", "You can't publish to this space");
+  if (row.kind !== "shared") {
+    if (purpose === "move")
+      throw new ApiError(
+        "space_personal",
+        "Artifacts move into shared spaces only",
+      );
+    if (c.user.id !== spaceId) throw new ApiError("not_found", "Not found");
+    if (!orgCan(c.user, "artifact.create", { cap })) throw forbidden();
+    return { id: spaceId, kind: "personal", publicLinks: true };
+  }
+  const role = RANK_ROLE[row.rank] ?? null;
+  if (!role && !orgCan(c.user, "space.create", { cap }))
+    throw new ApiError("not_found", "Not found");
+  if (!orgCan(c.user, "space.publish", { spaceRole: role, cap }))
+    throw forbidden();
+  return { id: spaceId, kind: "shared", publicLinks: row.publicLinks === 1 };
 }
 
 /**

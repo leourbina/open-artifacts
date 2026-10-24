@@ -29,12 +29,11 @@ hosted off.
 - **Identity linking** is `identities(provider = "google", subject)`; the
   Google sign-in `sub` equals `DirUser.id`. No shape carries `users.directory_id`.
 - **`instance.hosted` exists once**, on `Me.instance`.
-- **The list and search extensions are folded in** (P3 T4): `ListQuerySchema`
-  and `SearchQuerySchema` carry the space scopes and `spaceId`, so the MCP
-  `list_artifacts` and `search_artifacts` inputs and the generated skill have
-  them too. **The publish extension is still separate** (`HostedPublishInputSchema`);
-  `PublishInputSchema` also defines the MCP tool input and the generated skill,
-  so P3 folds it in, and regenerates the skill, in the PR that implements it.
+- **The list, search and publish extensions are folded in** (P3 T4, T10):
+  `ListQuerySchema` and `SearchQuerySchema` carry the space scopes and
+  `spaceId`, and `PublishInputSchema` carries `spaceId` (create only), so the
+  MCP `list_artifacts`, `search_artifacts` and `publish_artifact` inputs and
+  the generated skill have them too. `HostedPublishInputSchema` is gone.
 
 ## FEATURES flags (`FeatureFlagSchema`, `Me.instance.features`)
 
@@ -175,13 +174,14 @@ line, never twice. A non-null `cap` still limits access to viewer.
 |---|---|---|
 | `GET R.artifacts` | `ListQuery` | `scope` adds `space` (needs `spaceId`) and `spaces`; `mine` = personal space; `spaceId` narrows any scope (another user's personal space: 400 `space_personal`; unknown, or a shared space where the caller has no role: 404, never an empty page) |
 | `GET R.search` | `SearchQuery` | optional `spaceId`, as the list's |
-| `POST R.artifacts` | `HostedPublishInput` | `spaceId` on create only (existing id: 400 `use_move`); default personal space; not allowed: 403 `space_forbidden` (also any create by a capped caller); `visibility: "public"` where the space's publicLinks is off: 403 `public_links_off` |
+| `POST R.artifacts` | `PublishInput` (`spaceId?`) | `spaceId` on create only (existing id: 400 `use_move`); default personal space; unknown, another user's personal space, or a shared space the caller can't see: 404; seen but not allowed: 403 `space_forbidden` (also any create by a capped caller); `visibility: "public"` where the space's publicLinks is off: 403 `public_links_off` (echoing it on an already public artifact passes). A visibility change is compare-and-set: a concurrent change or move is 409 `conflict` |
 | `PATCH R.artifact(id)` | `ArtifactPatch` | `visibility: "public"` where publicLinks is off: 403 `public_links_off` |
-| `POST R.moveArtifact(id)` | `MoveArtifactInput {spaceId}` → `ArtifactSummary` | manager/owner on the artifact (else 404); shared target only (400 `space_personal`); editor+ in target (else 403 `space_forbidden`). A public artifact moved into a space with publicLinks off becomes `team` in the same batch and its anonymous sockets close (the toggle itself never rewrites or revokes); the returned summary shows `visibility: "team"` |
-| `POST R.transferArtifact(id)` | `TransferArtifactInput {userId}` → `ArtifactSummary` | `level === "owner"` only, personal (else 404; a manager can't); successor active, non-guest, non-restricted (400 `invalid_successor`); former owner keeps an editor share |
+| `POST R.moveArtifact(id)` | `MoveArtifactInput {spaceId}` → `ArtifactSummary` | manager/owner on the artifact (else 404); shared target only (400 `space_personal`); editor+ in target (else 403 `space_forbidden`). A public artifact moved into a space with publicLinks off becomes `team` in the same batch and its anonymous sockets close (the toggle itself never rewrites or revokes); the returned summary shows `visibility: "team"`. Compare-and-set on the space and visibility read: a concurrent change is 409 `conflict`. Audited `artifact.move` |
+| `POST R.transferArtifact(id)` | `TransferArtifactInput {userId}` → `ArtifactSummary` | `level === "owner"` only, personal (else 404; a manager can't); successor active, non-guest, non-restricted (400 `invalid_successor`); former owner keeps an editor share; audited `artifact.transfer` |
 | `GET R.members?status=` | `MembersQuery` → `Member[]` | comma list, default `active`; other statuses org owner/admin |
 | `GET R.memberTransfer(id)` | → `TransferSummary {live, deleted}` | counts only; org owner, admin |
-| `POST R.memberTransfer(id)` | `TransferInput {to: user\|space, cursor?}` → `TransferResult {moved, remaining, nextCursor}` | 409 `member_active`; user target active, non-guest, non-restricted (400 `invalid_successor`); ≤ `TRANSFER_PAGE` (100) per call; repeat with `cursor` until `nextCursor` is null |
+| `POST R.memberTransfer(id)` | `TransferInput {to: user\|space, cursor?}` → `TransferResult {moved, remaining, nextCursor}` | 409 `member_active`; user target active, non-guest, non-restricted (400 `invalid_successor`); ≤ `TRANSFER_PAGE` (100) per call; repeat with `cursor` until `nextCursor` is null (each call moves the next page still in the departed person's space; the cursor is a continuation marker only, so a forged one moves no more). Into a space with publicLinks off, public artifacts become `team` and their sockets close, and a page is at most 50 so the closes fit one request. One `artifact.transfer` audit row per call |
+| MCP `list_spaces` | → `{ items: MySpace[] }` | the spaces the caller can publish into: their personal space first, then shared spaces where they are editor or manager; empty for a capped caller |
 
 Accepted disclosure: `scope=space` (or any `spaceId`) naming another user's personal space returns 400 `space_personal`, not 404, so it reveals that the id is a user's. Accepted because ids are random and already visible to members on Members (a personal space's id is its owner's user id).
 

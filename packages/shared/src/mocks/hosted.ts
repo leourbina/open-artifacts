@@ -23,7 +23,6 @@ import { type HttpHandler, HttpResponse, http } from "msw";
 import type { z } from "zod";
 import type { ErrorCode } from "../errors.js";
 import {
-  HostedPublishInputSchema,
   MembersQuerySchema,
   MoveArtifactInputSchema,
   TRANSFER_PAGE,
@@ -643,7 +642,6 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
   const fails = new Map<string, number>();
 
   // ---- publish hook (used by POST R.artifacts) -----------------------------
-  const publishSchema = HostedPublishInputSchema;
   /** Checks spaceId; returns a refusal, or the space to place a new artifact in. */
   const checkPublish = (
     input: PublishInput & { spaceId?: string },
@@ -673,12 +671,20 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
     a.access = levelIn(sp) ?? "owner";
     refresh();
   };
-  /** Making an artifact public in a space whose publicLinks is off: 403 public_links_off. */
+  /**
+   * Making an artifact public in a space whose publicLinks is off: 403
+   * public_links_off. Echoing "public" on an artifact that already is public
+   * passes, as on the server.
+   */
   const refusePublic = (
     space: { publicLinks: boolean } | null | undefined,
     visibility: string | undefined,
+    current?: string,
   ) =>
-    visibility === "public" && space && !space.publicLinks
+    visibility === "public" &&
+    current !== "public" &&
+    space &&
+    !space.publicLinks
       ? err("public_links_off", "Public links are off in this space")
       : null;
   /** A create by a capped caller (no spaceId) is refused too. */
@@ -1615,7 +1621,6 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
   return {
     handlers,
     refresh,
-    publishSchema,
     checkPublish,
     placeNew,
     refuseCappedCreate,
