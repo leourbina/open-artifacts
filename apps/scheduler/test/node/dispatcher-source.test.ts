@@ -17,6 +17,10 @@ const src = join(dirname(fileURLToPath(import.meta.url)), "../../src");
  * only other allowed mention is the Env member `DISPATCHER: DispatchNamespace`.
  * Comments and strings are blanked first. Conservative on purpose: anything
  * else fails, and the fix is to keep to the one form.
+ *
+ * A tripwire against honest mistakes, not a security boundary: it misses
+ * code inside template-literal `${}` and computed env keys (`env[k]`).
+ * Code review is still the control.
  */
 function violations(code: string): string[] {
   const text = blank(code);
