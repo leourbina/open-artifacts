@@ -80,23 +80,37 @@ describe("setup refuses a host pair the server can't serve", () => {
   });
 
   it("--upgrade --check flags a deployed pair that is equal, empty or a placeholder", async () => {
-    for (const worker of [
-      { ...VARS, CONTENT_HOST: "App.Example.com" },
-      { ...VARS, CONTENT_HOST: "{{CONTENT_HOST}}" },
-      { ...VARS, APP_HOST: "{{APP_HOST}}" },
-      { ...VARS, APP_HOST: "" },
-    ]) {
+    // Each case names the guard that fired: the new pair check for an equal
+    // pair, the existing host validation for a placeholder or an empty value.
+    for (const [worker, message] of [
+      [
+        { ...VARS, CONTENT_HOST: "App.Example.com" },
+        /^APP_HOST and CONTENT_HOST must differ/,
+      ],
+      [
+        { ...VARS, CONTENT_HOST: "{{CONTENT_HOST}}" },
+        /^invalid --content-host: "\{\{CONTENT_HOST\}\}"/,
+      ],
+      [
+        { ...VARS, APP_HOST: "{{APP_HOST}}" },
+        /^invalid --app-host: "\{\{APP_HOST\}\}"/,
+      ],
+      [
+        { ...VARS, APP_HOST: "" },
+        /^pass --app-host \(the deployed Worker has no APP_HOST\)/,
+      ],
+    ] as const) {
       const w = cloud(worker);
       expect(await run(UPGRADE_CHECK, w.deps, ROOT)).not.toBe(0);
       expect(args(w)?.status).toMatch(/^(error|action_required)$/);
+      expect(args(w)?.message).toMatch(message);
       expect(w.ops).toEqual([]);
     }
   });
 
   it("--upgrade --check passes the deployed pair when it is sound", async () => {
     const w = cloud(VARS);
-    expect(args(w)).toBeUndefined();
-    await run(UPGRADE_CHECK, w.deps, ROOT);
+    expect(await run(UPGRADE_CHECK, w.deps, ROOT)).toBe(0);
     expect(args(w)).toBeUndefined();
   });
 });
