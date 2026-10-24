@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.40.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.39.0...v0.40.0) (2026-10-24)
+
+
+### Features
+
+* **provision:** upgrade, rollback and delete for hosted installs ([#490](https://github.com/open-artifacts-ai/open-artifacts/issues/490)) ([5815742](https://github.com/open-artifacts-ai/open-artifacts/commit/58157423ccb8ba28f553fd1d96def9c6a44a88b8))
+
 ## [0.39.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.38.0...v0.39.0) (2026-10-23)
 
 
