@@ -232,7 +232,7 @@ The email-quota alert (80% of the account limit) is not in M1: the per-install s
 
 1. Confirm the controls on GitHub (all must hold; the script below refuses otherwise):
    - Environments `hosted-staging` and `hosted-prod`: deployment branches `main` only (a custom branch policy that is exactly the branch `main`, not protected branches, not a pattern). This is the real control against a `workflow_dispatch` from another ref reaching the key. Check with `gh api repos/{repo}/environments/hosted-<env>` and `gh api repos/{repo}/environments/hosted-<env>/deployment-branch-policies`.
-   - Admin bypass is OFF on both Environments (`can_admins_bypass: false`). `hosted-prod` has a required reviewer, so every prod signing run waits for approval. `hosted-staging` has none (user ruling, 2026-10-24): staging releases sign without an approval step, still from `main` only.
+   - Admin bypass is OFF on both Environments (`can_admins_bypass: false`). Neither Environment has a required reviewer for now (user rulings, 2026-10-24): releases sign without an approval step, still from `main` only. The script does not check for a reviewer. A required reviewer on `hosted-prod` comes back before FinQore go-live (first-create checklist).
    - Two tag rulesets are active on `refs/tags/v*` (nothing excluded). Ruleset A restricts creation, and its only bypass actor is the release App (its numeric id, `RELEASE_APP_ID`). Ruleset B restricts update and deletion with no bypass actor at all, so not even the App can move or delete a release tag. Check with `gh api repos/{repo}/rulesets` and each tag ruleset's `gh api repos/{repo}/rulesets/<id>`.
 2. Generate the Ed25519 keypair locally and pipe the private key straight into `RELEASE_APP_ID=<id> scripts/ops/hosted-set-signing-key.sh <env>` (never onto disk). The script runs the `gh api` reads above and refuses the upload unless every control holds; only then does it `gh secret set RELEASE_SIGNING_KEY --env hosted-<env>` from stdin.
 3. Put the public key (JWK `x`) in both `packages/provision/src/internal/gates.ts` and `scripts/ci/release-pubkeys.mjs` in one PR (a test pins them equal); flip `PROD_UNLOCKED` there for prod.
@@ -241,6 +241,7 @@ The email-quota alert (80% of the account limit) is not in M1: the per-install s
 
 1. Apply every platform D1 migration to `oa-<p>-platform`, in order: `apps/platform-db/migrations/0001_installs.sql`, then `0002_release_floor.sql` (the `release_floor` cache), then `0003_lifecycle.sql` (per-version metadata, the operation lock and the session-cut journal). Without 0002, create fails closed on the floor_seq read; without 0003, create fails closed on its first metadata write.
 2. Key ceremony done: `RELEASE_PUBKEY[env]` set in gates.ts (and `PROD_UNLOCKED` for prod).
+   - Prod, before FinQore go-live: add the user back as a required reviewer on `hosted-prod` (admin bypass stays off), so every prod signing run waits for approval again.
 3. Sign the env's first floor with the `hosted-floor` workflow (dispatch on `main`: `env`, `seq` >= `FLOOR_MIN_SEQ[env]`, `min_version`, `revoked`), download its `floor-<env>-<seq>` artifact, and `publishFloor` it.
 4. `publishRelease` the signed tar and `.sig.json` from the GitHub release for each variant the env takes.
 
