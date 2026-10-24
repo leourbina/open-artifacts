@@ -52,7 +52,14 @@ async function seed(rows: { id: string; state: State }[]) {
     await db.batch(stmts.slice(i, i + 100));
 }
 
-type Behavior = "ok" | "throw" | "hang" | "outcome" | "missing";
+type Behavior =
+  | "ok"
+  | "throw"
+  | "hang"
+  | "outcome"
+  | "canceled"
+  | "missing"
+  | { result: unknown };
 
 function fakes(
   oaEnv: "staging" | "prod" = "staging",
@@ -82,9 +89,12 @@ function fakes(
               if (b === "hang") await new Promise(() => {});
               if (b === "throw")
                 throw new Error("boom for owner@customer.test SECRET=x");
-              return b === "outcome"
-                ? { outcome: "exception", noRetry: false }
-                : { outcome: "ok", noRetry: false };
+              if (typeof b === "object") return b.result;
+              if (b === "outcome")
+                return { outcome: "exception", noRetry: false };
+              if (b === "canceled")
+                return { outcome: "canceled", noRetry: false };
+              return { outcome: "ok", noRetry: false };
             } finally {
               inFlight--;
             }
@@ -109,6 +119,10 @@ function captureLogs() {
 }
 
 const NOW = Date.UTC(2026, 9, 24, 3, 17);
+
+/** The whole log vocabulary: install ids, fixed categories and counts. */
+const LOG_LINE =
+  /^(?:nightly failed (?:timeout|not_found|canceled|exception) i[a-z0-9]{11}|nightly summary active=\d+ ok=\d+ failed=\d+|nightly invalid ids=\d+|nightly scale active=\d+ over 300)$/;
 
 describe("runNightly", () => {
   it("runs every active install and skips creating, upgrading and deleting ones", async () => {
@@ -158,6 +172,32 @@ describe("runNightly", () => {
     // Reasons are fixed categories, never error text.
     for (const x of r.failed)
       expect(["timeout", "not_found", "exception"]).toContain(x.reason);
+  });
+
+  it('fails closed on the result: only outcome "ok" is ok', async () => {
+    const results: Behavior[] = [
+      "ok",
+      "outcome",
+      "canceled",
+      { result: undefined },
+      { result: null },
+      { result: {} },
+      { result: { outcome: "OK", noRetry: false } },
+      { result: { outcome: 1, noRetry: false } },
+      { result: "ok" },
+    ];
+    await seed(results.map((_, n) => ({ id: idOf(n), state: "active" })));
+    const f = fakes(
+      "staging",
+      (s) => results[Number.parseInt(s.slice(-11), 36)] as Behavior,
+    );
+    const r = await runNightly(f.env, NOW);
+    expect(r.ok).toEqual([idOf(0)]);
+    expect([...r.failed].sort((a, b) => a.id.localeCompare(b.id))).toEqual([
+      { id: idOf(1), reason: "exception" },
+      { id: idOf(2), reason: "canceled" },
+      ...[3, 4, 5, 6, 7, 8].map((n) => ({ id: idOf(n), reason: "exception" })),
+    ]);
   });
 
   it("the timeout is real: a never-resolving install fails at timeoutMs (default 25 s)", async () => {
@@ -319,8 +359,48 @@ describe("scheduled", () => {
         "nightly summary active=3 ok=1 failed=2",
       ].sort(),
     );
+    // Every line is ids, fixed categories and counts only.
+    for (const l of lines) expect(l).toMatch(LOG_LINE);
     const all = lines.join("\n");
     expect(all).not.toMatch(/@|boom|SECRET|Worker not found|not-an-id|oa-s-/);
+  });
+
+  it("logs nothing but ids, categories and counts, whatever the installs do", async () => {
+    const kinds: Behavior[] = [
+      "ok",
+      "throw",
+      "hang",
+      "outcome",
+      "canceled",
+      "missing",
+      { result: undefined },
+    ];
+    await seed([
+      ...Array.from({ length: 301 }, (_, n) => ({
+        id: idOf(n),
+        state: "active" as State,
+      })),
+      { id: "x@customer.test", state: "active" },
+    ]);
+    const lines = captureLogs();
+    const f = fakes(
+      "staging",
+      (s) =>
+        kinds[Number.parseInt(s.slice(-11), 36) % kinds.length] as Behavior,
+    );
+    const { ok, failed } = await runNightly(f.env, NOW, {
+      concurrency: 50,
+      timeoutMs: 20,
+    });
+    for (const x of failed) console.error("nightly failed", x.reason, x.id);
+    await scheduler.scheduled(
+      controller(NOW),
+      fakes("prod").env,
+      createExecutionContext(),
+    );
+    expect(ok.length + failed.length).toBe(301);
+    expect(lines.length).toBeGreaterThan(failed.length);
+    for (const l of lines) expect(l).toMatch(LOG_LINE);
   });
 
   it("zero installs logs only the summary", async () => {

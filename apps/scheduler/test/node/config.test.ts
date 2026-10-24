@@ -41,7 +41,9 @@ describe("wrangler.jsonc", () => {
           database_id: `{{PLATFORM_DB_ID_${env.toUpperCase()}}}`,
         },
       ]);
-      expect(e.observability).toEqual({ enabled: false });
+      // On for this Worker only: it serves no requests, and its logs carry
+      // install ids, fixed categories and counts (pinned in scheduler.test.ts).
+      expect(e.observability).toEqual({ enabled: true });
       // Only what the brief lists: no KV, services, R2 or other bindings.
       for (const k of [
         "kv_namespaces",
