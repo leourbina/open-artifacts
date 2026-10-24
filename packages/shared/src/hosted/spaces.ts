@@ -45,12 +45,13 @@ export const SpacesQuerySchema = z.strictObject({
 export type SpacesQuery = z.infer<typeof SpacesQuerySchema>;
 
 /**
- * C0 controls (U+0000-U+001F), DEL (U+007F) and bidi controls (LRM/RLM,
- * ALM, LRE..RLO, LRI..PDI): stripped from space names.
+ * C0 controls (U+0000-U+001F), DEL (U+007F), bidi controls (LRM/RLM,
+ * ALM, LRE..RLO, LRI..PDI) and zero-width characters (ZWSP, ZWNJ, ZWJ,
+ * BOM/ZWNBSP): stripped from space names.
  */
 const NAME_CONTROLS =
   // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping them is the point
-  /[\u0000-\u001F\u007F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
+  /[\u0000-\u001F\u007F\u061C\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g;
 
 /** A space name with control and bidi characters removed. */
 export const stripNameControls = (s: string): string =>

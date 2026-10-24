@@ -1310,6 +1310,28 @@ describe("peer managers (manager ruling)", () => {
     expect(await audits("space.member.add", peer.userId)).toHaveLength(0);
   });
 
+  it("race: a frozen override that loses to a manual manager promotion → 403, synced row kept, no audit row", async () => {
+    const { s, mgr } = await staffed();
+    const peer = await mk("mrace");
+    await syncRow(s.id, peer.userId, "editor");
+    const e = racing(
+      FROZEN,
+      "insert into space_members (space_id, user_id, role, source, created_at) values (?, ?, 'manager', 'manual', 1)",
+      s.id,
+      peer.userId,
+    );
+    const who = callerOf(await getUser(e, mgr.userId));
+    await refusal(
+      putSpaceMember(e, who, s.id, peer.userId, "viewer"),
+      "member",
+    );
+    expect(await rowOf(s.id, peer.userId, "sync")).toEqual({ role: "editor" });
+    expect(await rowOf(s.id, peer.userId, "manual")).toEqual({
+      role: "manager",
+    });
+    expect(await audits("space.member.role", peer.userId)).toHaveLength(0);
+  });
+
   it("race: a frozen DELETE that loses to a sync manager promotion → 403, nothing removed or audited", async () => {
     const { s, mgr } = await staffed();
     const peer = await mk("frace");

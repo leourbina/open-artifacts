@@ -155,6 +155,14 @@ describe("hosted contract schemas", () => {
     expect(
       SpacePatchSchema.safeParse({ name: "\u202A\u0000 \u200E" }).success,
     ).toBe(false);
+    // Zero-width characters too: ZWSP, ZWNJ, ZWJ and BOM.
+    expect(
+      SpaceCreateSchema.parse({ name: "\uFEFFEn\u200Bg\u200Cin\u200Deering" })
+        .name,
+    ).toBe("Engineering");
+    expect(
+      SpacePatchSchema.safeParse({ name: "\u200B\uFEFF\u200D" }).success,
+    ).toBe(false);
     expect(SpaceCreateSchema.parse({ name: "Café 東京" }).name).toBe(
       "Café 東京",
     );

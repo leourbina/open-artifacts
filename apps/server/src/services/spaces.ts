@@ -712,12 +712,12 @@ const UPSERT_MANUAL = `insert into space_members (space_id, user_id, role, sourc
   on conflict (space_id, user_id, source) do update set role = excluded.role
   where space_members.role <> excluded.role and (?5 = 1 or space_members.role <> 'manager')`;
 // The frozen override's manual row: as UPSERT_MANUAL, but for a non-admin
-// (?5 = 0) nothing at all when the synced row became a manager after the
+// (?5 = 0) nothing at all when either row became a manager after the
 // handler's check (the delete above skipped it): no half override.
 const OVERRIDE_MANUAL = `insert into space_members (space_id, user_id, role, source, created_at)
   select ?1, ?2, ?3, 'manual', ?4
   where ?5 = 1 or not exists (select 1 from space_members
-    where space_id = ?1 and user_id = ?2 and source = 'sync' and role = 'manager')
+    where space_id = ?1 and user_id = ?2 and role = 'manager')
   on conflict (space_id, user_id, source) do update set role = excluded.role
   where space_members.role <> excluded.role and (?5 = 1 or space_members.role <> 'manager')`;
 const MANUAL_ROW = `exists (select 1 from space_members where space_id = ? and user_id = ? and source = 'manual')`;
@@ -783,16 +783,21 @@ export async function putSpaceMember(
           audit(env, "space.member.role", target, actor, {
             spaceId: id,
             detail: { syncFrozen: true, role },
+            // Every override statement is void for a non-admin once either
+            // row is a manager (a promotion racing the check): a loss
+            // writes nothing.
             when: {
-              sql: `exists (select 1 from space_members where space_id = ? and user_id = ?
-                and source = 'sync' and (? = 1 or role <> 'manager'))`,
-              args: [id, userId, a],
+              sql: `exists (select 1 from space_members where space_id = ? and user_id = ? and source = 'sync')
+                and (? = 1 or not exists (select 1 from space_members
+                  where space_id = ? and user_id = ? and role = 'manager'))`,
+              args: [id, userId, a, id, userId],
             },
           }),
           stmt(
             env.DB,
             `delete from space_members where space_id = ?1 and user_id = ?2 and source = 'sync'
-              and (?3 = 1 or role <> 'manager')`,
+              and (?3 = 1 or not exists (select 1 from space_members
+                where space_id = ?1 and user_id = ?2 and role = 'manager'))`,
           ).bind(id, userId, a),
           stmt(env.DB, OVERRIDE_MANUAL).bind(id, userId, role, Date.now(), a),
         ]
