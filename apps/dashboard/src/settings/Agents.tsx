@@ -4,10 +4,10 @@ import {
   TokenCreatedSchema,
   TokenCreateInputSchema,
 } from "@oa/shared";
-import { Button, Dialog, Input, Kbd } from "@oa/ui";
+import { Kbd } from "@oa/ui";
 import {
-  Button as ShButton,
-  Input as ShInput,
+  Button,
+  Input,
   Tabs,
   TabsContent,
   TabsList,
@@ -26,8 +26,10 @@ import {
   useTokens,
 } from "../api/queries";
 import { useMe } from "../auth/useMe";
+import { Modal } from "../layout/Modal";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { relativeTime } from "../library/time";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { saveTokenCommand, snippets, tokenFile } from "./snippets";
 import {
   Code,
@@ -183,27 +185,14 @@ function Confirm({
   onConfirm: () => void;
 }) {
   return (
-    <Dialog
+    <ConfirmDialog
       open
-      onOpenChange={(o) => !o && onClose()}
+      onClose={onClose}
       title={title}
-      description="Anything using it stops working immediately."
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            variant="primary"
-            onClick={() => {
-              onClose();
-              onConfirm();
-            }}
-          >
-            {action}
-          </Button>
-        </>
-      }
+      body={<p>Anything using it stops working immediately.</p>}
+      confirm={action}
+      danger
+      onConfirm={onConfirm}
     />
   );
 }
@@ -231,7 +220,7 @@ function OAuthClients() {
             <li key={c.grantId} className={ROW}>
               <b className={NAME}>{c.clientName}</b>
               <span className={muted}>Connected {when(c.createdAt)}</span>
-              <ShButton
+              <Button
                 className={ACTION}
                 variant="ghost"
                 size="sm"
@@ -240,14 +229,14 @@ function OAuthClients() {
                 onClick={() => setTarget(c)}
               >
                 Revoke
-              </ShButton>
+              </Button>
             </li>
           ))}
         </ul>
       )}
       {target && (
         <Confirm
-          title={`Revoke ${target.clientName}?`}
+          title={`Revoke "${target.clientName}"?`}
           action="Revoke"
           onClose={() => setTarget(null)}
           onConfirm={() => revoke.mutate(target.grantId)}
@@ -287,10 +276,9 @@ function CreateDialog({ onClose }: { onClose: () => void }) {
     }
   };
   return (
-    <Dialog
-      open
+    <Modal
       // Mid-request or with the token on screen, only Done closes it.
-      onOpenChange={(o) => !o && !busy && !created && onClose()}
+      onClose={() => !busy && !created && onClose()}
       title={created ? "Token created" : "Create token"}
       description={
         created
@@ -299,20 +287,14 @@ function CreateDialog({ onClose }: { onClose: () => void }) {
       }
       footer={
         created ? (
-          <Button variant="primary" onClick={onClose}>
-            Done
-          </Button>
+          <Button onClick={onClose}>Done</Button>
         ) : (
           <>
-            <Button variant="ghost" disabled={busy} onClick={onClose}>
+            <Button variant="outline" disabled={busy} onClick={onClose}>
               Cancel
             </Button>
-            <Button
-              variant="primary"
-              disabled={busy}
-              onClick={() => void submit()}
-            >
-              Create
+            <Button disabled={busy} onClick={() => void submit()}>
+              {busy ? "Creating…" : "Create"}
             </Button>
           </>
         )
@@ -365,7 +347,7 @@ function CreateDialog({ onClose }: { onClose: () => void }) {
           )}
         </form>
       )}
-    </Dialog>
+    </Modal>
   );
 }
 
@@ -381,14 +363,14 @@ function Tokens() {
       id="oa-pat-h"
       title="Personal access tokens"
       action={
-        <ShButton
+        <Button
           variant="outline"
           size="sm"
           className="text-[length:var(--oa-text-sm)]"
           onClick={() => setCreating(true)}
         >
           Create token
-        </ShButton>
+        </Button>
       }
     >
       {q.isError ? (
@@ -408,7 +390,7 @@ function Tokens() {
               <span className={muted}>
                 Last used {t.lastUsedAt ? when(t.lastUsedAt) : "Never"}
               </span>
-              <ShButton
+              <Button
                 className={ACTION}
                 variant="ghost"
                 size="sm"
@@ -417,7 +399,7 @@ function Tokens() {
                 onClick={() => setTarget(t)}
               >
                 Revoke
-              </ShButton>
+              </Button>
             </li>
           ))}
         </ul>
@@ -425,7 +407,7 @@ function Tokens() {
       {creating && <CreateDialog onClose={() => setCreating(false)} />}
       {target && (
         <Confirm
-          title={`Revoke ${target.label}?`}
+          title={`Revoke "${target.label}"?`}
           action="Revoke"
           onClose={() => setTarget(null)}
           onConfirm={() => revoke.mutate(target.id)}
@@ -444,19 +426,19 @@ export function Agents() {
       {mcpUrl && (
         <SettingsCard id="oa-mcp-h" title="MCP server">
           <div className="flex min-w-0 items-center gap-[var(--oa-space-2)]">
-            <ShInput
+            <Input
               readOnly
               aria-label="MCP server URL"
               value={mcpUrl}
               className="h-[30px] flex-1 text-[length:var(--oa-text-sm)] md:text-[length:var(--oa-text-sm)]"
             />
-            <ShButton
+            <Button
               variant="outline"
               className="h-[30px] flex-none text-[length:var(--oa-text-sm)]"
               onClick={() => copyText(mcpUrl, "MCP URL copied")}
             >
               Copy URL
-            </ShButton>
+            </Button>
           </div>
           <Connect mcpUrl={mcpUrl} />
         </SettingsCard>

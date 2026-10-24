@@ -1,7 +1,13 @@
 // The "Space" select in the upload dialog (Design D4, 2026-10-22): Personal
 // first, then the shared spaces you can publish to, by name. Spaces you can't
 // publish to are hidden (canPublishTo); a capped caller gets none.
-import { Select } from "@oa/ui";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@oa/ui/shadcn";
 import { useId } from "react";
 import { canPublishTo, useHosted } from "../auth/permissions";
 
@@ -30,13 +36,26 @@ export function SpacePicker({
       <span id={`${id}-label`} className="up-entry-label">
         {label}
       </span>
-      <Select
-        aria-labelledby={`${id}-label`}
-        options={options}
-        value={value}
-        onChange={onChange}
-        placeholder="Choose a space"
-      />
+      <Select value={value ?? ""} onValueChange={onChange}>
+        <SelectTrigger
+          aria-labelledby={`${id}-label`}
+          size="sm"
+          className="w-full text-[length:var(--oa-text-sm)]"
+        >
+          <SelectValue placeholder="Choose a space" />
+        </SelectTrigger>
+        <SelectContent position="popper">
+          {options.map((o) => (
+            <SelectItem
+              key={o.value}
+              value={o.value}
+              className="text-[length:var(--oa-text-sm)]"
+            >
+              {o.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
       <small id={`${id}-help`} className="up-help">
         {value && value === personalSpaceId
           ? "Only you, and anyone you share it with."

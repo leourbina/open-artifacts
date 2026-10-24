@@ -616,7 +616,8 @@ describe("WfpProvisioner.create", () => {
       state: "active",
       test_hooks: 0,
       version: "0.23.0",
-      do_migration_tag: "v1",
+      // The template's latest tag (v2 adds UserPresence, unbound, P3 T7a).
+      do_migration_tag: "v2",
     });
     expect(
       s
@@ -3146,6 +3147,14 @@ describe("platform D1 migration (decisions 10, M1, M3)", () => {
       "state",
       "created_at",
       "updated_at",
+      // 0003 (Task 5): the operation lock, current vars, a session cut owed.
+      "lease",
+      "lease_until",
+      "vars",
+      "session_cut",
+      "row_version",
+      "session_cut_base",
+      "session_cut_armed",
     ]);
   });
 
