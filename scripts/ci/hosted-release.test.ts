@@ -462,7 +462,7 @@ describe("the key jobs' scripts: plain .mjs, node:* only, Node 22", () => {
     expect(t.compilerOptions.checkJs).toBe(true);
     expect(t.include).toContain("scripts/**/*.mjs");
   });
-  it("the scan flags a package import, a dynamic import, require, child_process, a .ts import and post-20 APIs", () => {
+  it("the scan flags a package import, a dynamic import, require, child_process, a .ts import and post-22 APIs", () => {
     const d = mkdtempSync(join(tmpdir(), "oa-scan-"));
     for (const [n, src] of [
       ["pkg.mjs", 'import { parse } from "yaml";\n'],
@@ -482,20 +482,24 @@ describe("the key jobs' scripts: plain .mjs, node:* only, Node 22", () => {
     );
     expect(closure(join(d, "ok.mjs")).bad).toEqual([]);
     for (const x of [
+      "process.getBuiltinModule(m)",
+      "URL.parse(u)",
+      "using r = open();",
+      "RegExp.escape(s)",
+    ])
+      expect(POST_22.test(x), x).toBe(true);
+    for (const x of [
+      "const a = b;",
       "import.meta.dirname",
       "Promise.withResolvers()",
       "Object.groupBy(a, f)",
       "a.union(b)",
-    ])
-      expect(POST_20.test(x), x).toBe(true);
-    for (const x of [
-      "const a = b;",
       "Object.hasOwn(o, k)",
       "x.at(-1)",
       "structuredClone(v)",
       "c ? a : b;",
     ])
-      expect(POST_20.test(x), x).toBe(false);
+      expect(POST_22.test(x), x).toBe(false);
   });
 });
 
