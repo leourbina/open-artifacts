@@ -156,14 +156,14 @@ User Workers in a dispatch namespace get no cron triggers, so `apps/scheduler` i
 - **6 at a time.** Calling a service binding doesn't count toward the 6 simultaneous open connections, but the installs' own fetch, KV, R2, Cache and Queues calls share the scheduler's limit while they wait for headers ([limits](https://developers.cloudflare.com/workers/platform/limits/#simultaneous-open-connections), [service bindings](https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/#limits)). A call is reported `timeout` after 25 s, but it keeps its slot until it settles. A stuck call holds its slot for at most 60 s after its timeout. Then the slot is given back, the call counts as `leaked`, and the run goes on. A call still unsettled when the run ends is `leaked` too. Leaked calls may still hold connections, so the real bound is on unsettled calls: at most 12 (2 × the 6 slots, in a slot or leaked) at any time. At that cap no new call starts until one settles, or the deadline hits.
 - **Deadline.** No call starts after 13 minutes, under the 15-minute cron wall time. The rest is `skipped`, and the summary still lands.
 - One install throwing, timing out or missing never stops the others.
-- **Email-quota alert.** After the nightly run, in its own try, the scheduler reads the previous UTC day's sends from Cloudflare's Email Sending analytics (GraphQL, dataset `emailSendingAdaptiveGroups`, zone-level; [metrics](https://developers.cloudflare.com/email-service/observability/metrics-analytics/)) and sums them over `EMAIL_QUOTA_ZONES`. It never reads an install's D1, never changes or delays the nightly result, and gives up after 10 s. The sending limit is per account, not per zone ([limits](https://developers.cloudflare.com/email-service/platform/limits/)), so list every sending zone of the account and set `EMAIL_DAILY_LIMIT` to that account's current daily limit (new accounts start low and scale up, so re-check it in the dashboard). The window is `[day start, day end)` in UTC, from `event.scheduledTime`. Each group's `count` is summed over all statuses (an estimate: Cloudflare doesn't count suppressed or verified-destination sends toward the limit, so the alert may run slightly high). At most 10 zones. Both vars are per-env placeholders, filled at deploy like `PLATFORM_DB`:
+- **Email-quota alert.** After the nightly run, in its own try, the scheduler reads the previous UTC day's sends from Cloudflare's Email Sending analytics (GraphQL, dataset `emailSendingAdaptiveGroups`, zone-level; [metrics](https://developers.cloudflare.com/email-service/observability/metrics-analytics/)) and sums them over `EMAIL_QUOTA_ZONES`. It never reads an install's D1, never changes or delays the nightly result, and gives up after 10 s. The sending limit is per account, not per zone ([limits](https://developers.cloudflare.com/email-service/platform/limits/)), so list every sending zone of the account and set `EMAIL_DAILY_LIMIT` to that account's current daily limit (new accounts start low and scale up, so re-check it in the dashboard). The window is `[day start, day end)` in UTC, from `event.scheduledTime`. The query filters `isLastEvent: 1`, so each email counts once (`count` is per event, and only an email's last event has it), and sums `count` over every status on purpose: Cloudflare doesn't count suppressed or verified-destination sends toward the limit, but the alert does, so it may read slightly high. Over-counting is the safe direction. At most 10 zones. Both vars are per-env placeholders, filled at deploy like `PLATFORM_DB`:
 
   | Var | Placeholder (staging, prod) | Value |
   |---|---|---|
-  | `EMAIL_QUOTA_ZONES` | `{{EMAIL_ZONE_TAG_STAGING}}`, `{{EMAIL_ZONE_TAG_PROD}}` | Comma-separated zone tags (32 hex chars), no spaces needed |
-  | `EMAIL_DAILY_LIMIT` | `{{EMAIL_DAILY_LIMIT_STAGING}}`, `{{EMAIL_DAILY_LIMIT_PROD}}` | The account's daily sending limit, a positive integer |
+  | `EMAIL_QUOTA_ZONES` | `{{EMAIL_ZONE_TAG_STAGING}}`, `{{EMAIL_ZONE_TAG_PROD}}` | Comma-separated zone tags (32 hex chars). Each is the zone's id: dashboard > the domain > Overview > API section > Zone ID |
+  | `EMAIL_DAILY_LIMIT` | `{{EMAIL_DAILY_LIMIT_STAGING}}`, `{{EMAIL_DAILY_LIMIT_PROD}}` | The account's Email Sending daily limit, a positive integer: dashboard > Compute > Email Service > Email Sending |
 
-  Fill them in the same gitignored `wrangler.deploy.jsonc` as the D1 id (step 3's `sed`, one more `-e` per placeholder). An unfilled placeholder is an invalid config, so the alert skips.
+  Step 3 below fills them in the same gitignored copy as the D1 id and refuses to deploy if any of this env's placeholders is left. An unfilled placeholder would be an invalid config, so the alert would skip.
 
 A hosted upload carries no cron of its own (`TEMPLATE_BINDINGS_EXCLUDED.triggers`). That's pinned for the metadata in `packages/provision/test/metadata.test.ts`, and for the create, upgrade and rollback uploads, with no `/schedules` call, in `wfp-lifecycle.test.ts`. So the job runs once.
 
@@ -182,15 +182,22 @@ Steps, per env (`ENV`, `P` and `UP` as in the dispatch steps above):
    git status --porcelain | grep -q . && { echo "dirty checkout" >&2; exit 1; }
    pnpm install --frozen-lockfile && pnpm --filter @oa/provision build && pnpm --filter @oa/scheduler test
    ```
-3. Deploy with the provisioning token. Fill only this env's placeholder into a gitignored copy, deploy it, then remove the copy:
+3. Deploy with the provisioning token. Fill this env's placeholders into a gitignored copy, refuse if any of this env's `{{...}}` is left, deploy the copy, then remove it. `ZONES` is the sending zone tags, comma-separated (each is the zone's id: dashboard > the domain > Overview > API section > Zone ID). `LIMIT` is the account's Email Sending daily limit (dashboard > Compute > Email Service > Email Sending). Set both by hand:
    ```sh
    cd apps/scheduler
+   ZONES=<zone-tag>[,<zone-tag>...]
+   LIMIT=<daily-limit>   # a positive integer
    DB_ID=$(pnpm exec wrangler d1 list --json | jq -r --arg n "oa-$P-platform" '.[] | select(.name == $n) | .uuid')
    test -n "$DB_ID" \
-     && sed "s/{{PLATFORM_DB_ID_$UP}}/$DB_ID/" wrangler.jsonc > wrangler.deploy.jsonc \
+     && sed -e "s/{{PLATFORM_DB_ID_$UP}}/$DB_ID/" \
+            -e "s/{{EMAIL_ZONE_TAG_$UP}}/$ZONES/" \
+            -e "s/{{EMAIL_DAILY_LIMIT_$UP}}/$LIMIT/" wrangler.jsonc > wrangler.deploy.jsonc \
+     && { ! grep -q "{{[A-Z_]*_$UP}}" wrangler.deploy.jsonc \
+          || { rm wrangler.deploy.jsonc; echo "unfilled $UP placeholder" >&2; false; }; } \
      && pnpm exec wrangler deploy -c wrangler.deploy.jsonc --env "$ENV" \
      && rm wrangler.deploy.jsonc
    ```
+   The copy is the whole file, so the other env's placeholders stay in it (harmless: `--env` deploys only this env's block); the check is on this env's.
    The deploy output must name `oa-$P-scheduler` with `DISPATCHER (oa-$ENV)`, `PLATFORM_DB (oa-$P-platform)`, `OA_ENV ("$ENV")`, the schedule `17 3 * * *`, and no routes or workers.dev URL.
 4. Binding check, from the deployed settings: `PLATFORM_DB` must be the database named `oa-$P-platform`, `DISPATCHER` must be the namespace `oa-$ENV`, `OA_ENV` must be `$ENV`, and the schedules must be exactly `17 3 * * *`. Never another env's (`CF_ACCOUNT_ID` and `CF_API_TOKEN` as in the dispatch check):
    ```sh

@@ -30,11 +30,16 @@ const WARN_PCT = 80;
 /** A zone-scoped GraphQL query takes at most 10 zones. */
 const MAX_ZONES = 10;
 
+// `count` is per event; an email has several (queued, delivered, ...), and
+// only its last has isLastEvent 1, so that filter counts each email once.
+// No status filter, on purpose: suppressed and verified-destination sends
+// don't count toward Cloudflare's limit but are counted here. Over-counting
+// is the conservative direction for an alert.
 const QUERY = `query EmailQuota($zoneTags: [string!]!, $start: Time!, $end: Time!) {
   viewer {
     zones(filter: { zoneTag_in: $zoneTags }) {
       emailSendingAdaptiveGroups(
-        filter: { datetimeHour_geq: $start, datetimeHour_lt: $end }
+        filter: { datetimeHour_geq: $start, datetimeHour_lt: $end, isLastEvent: 1 }
         limit: 10000
       ) {
         count
