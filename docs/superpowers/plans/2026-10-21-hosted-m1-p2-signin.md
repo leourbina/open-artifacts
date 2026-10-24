@@ -23,6 +23,7 @@
 ## Global Constraints
 
 - Anti-goal: no sign-in to another customer's install. Every task carries its cross-tenant negative tests.
+- **`HOSTED=1` only tightens or reports.** It may add a fail-closed requirement (broker transport, Turnstile for codes, a named host) or report itself (`Me.instance.hosted`), never enable a feature or loosen a check. Every `HOSTED` read in `apps/server/src` is listed with its reason in `test/node/hosted-lint.test.ts`.
 - Tenant binding is the `hd` claim of a Google ID token **verified by the install**: signature from Google's JWKS, `alg` RS256 only, `iss` ∈ {`https://accounts.google.com`, `accounts.google.com`}, `aud` = the client id (single value), `azp` = the client id when present, `exp`/`iat` with 60 s skew, `nonce` = this browser's state-cookie nonce (constant time), PKCE S256, `email_verified === true`, `hd` exact member of `AUTH_DOMAINS`. Never the email domain.
 - No secret shared across installs (spec §4.7). The Google client secret lives only in the broker. The broker holds no install secrets.
 - Codes are invite-only and at most read-only outside the verified domains (spec §4.2). Domain codes exist only for a trial with no Google sign-in.
