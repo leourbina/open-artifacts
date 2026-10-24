@@ -1,5 +1,6 @@
 import type { ArtifactSummary } from "@oa/shared";
-import { Avatar, FormatIcon } from "@oa/ui";
+import { FormatIcon } from "@oa/ui";
+import { UserAvatar } from "../layout/UserAvatar";
 import { SpaceMarker, VisibilityWithHint } from "../spaces/SpaceMarker";
 import { AppLink } from "./AppLink";
 import { relativeTime } from "./time";
@@ -22,7 +23,7 @@ function Meta({ artifact: a, meId, showSpace }: CardProps) {
       {showSpace && <SpaceMarker space={a.space} />}
       {a.lastAgent && <span>{a.lastAgent.name}</span>}
       {a.owner.id !== meId && (
-        <Avatar
+        <UserAvatar
           name={a.owner.name ?? undefined}
           email={a.owner.email ?? a.owner.name ?? "Unknown"}
         />

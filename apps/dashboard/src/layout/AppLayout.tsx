@@ -1,6 +1,6 @@
 import { AUTH, type Me } from "@oa/shared";
-import { Avatar, Button } from "@oa/ui";
 import {
+  Button,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -49,6 +49,7 @@ import { QuotaBanner } from "./QuotaBanner";
 import { SyncBanner, SyncDot, syncDot } from "./SyncBanner";
 import { Toaster } from "./toast";
 import { UpdateChip, UpdateDot } from "./UpdateChip";
+import { UserAvatar } from "./UserAvatar";
 import { instanceUpdate, shouldNudge } from "./update";
 
 const icon = (d: string) => (
@@ -470,12 +471,12 @@ function TopBar({ me }: { me: Me | null }) {
             <Button
               variant="ghost"
               title="Account menu"
-              style={{ padding: "0 2px" }}
+              className="h-auto px-[2px] py-0"
             >
               {/* Named by hidden text, not aria-label, so the visible initials never contradict it. */}
               <span className="oa-sr">Account menu</span>
               <span aria-hidden="true" style={{ display: "contents" }}>
-                <Avatar
+                <UserAvatar
                   name={me.user.name ?? undefined}
                   email={me.user.email}
                 />

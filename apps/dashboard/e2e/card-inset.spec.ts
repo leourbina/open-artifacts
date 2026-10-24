@@ -102,7 +102,7 @@ for (const width of [1280, 390]) {
     for (const name of ["Example MCP client", "laptop"]) {
       await page.getByRole("button", { name: `Revoke ${name}` }).click();
       await page
-        .getByRole("dialog")
+        .getByRole("alertdialog")
         .getByRole("button", { name: "Revoke" })
         .click();
     }
