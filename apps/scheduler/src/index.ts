@@ -17,7 +17,7 @@ export const CRON = "17 3 * * *";
  */
 const SCALE_WARN = 300;
 
-export type Reason = "timeout" | "not_found" | "exception";
+export type Reason = "timeout" | "not_found" | "canceled" | "exception";
 
 export interface NightlyResult {
   ok: string[];
@@ -29,9 +29,12 @@ const PAGE_SQL =
   "SELECT id FROM installs WHERE state = 'active' AND id > ?1 ORDER BY id LIMIT ?2";
 
 /**
- * Fetcher.scheduled() is only in the experimental workers-types; the Task 1
- * spike ran it through a namespace binding (docs/ops/hosted.md). A handler
- * that throws resolves with outcome "exception" rather than rejecting.
+ * Fetcher.scheduled(options) resolves with { outcome, noRetry }; it does not
+ * reject when the install's handler throws (outcome "exception"). Its
+ * scheduledTime is a Date, as in the Workers docs for service bindings
+ * (https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/).
+ * Only the experimental workers-types declare it; the Task 1 spike ran it
+ * through a namespace binding (docs/ops/hosted.md).
  */
 interface ScheduledFetcher {
   scheduled(o: {
@@ -41,14 +44,17 @@ interface ScheduledFetcher {
 }
 
 class Timeout extends Error {}
+class Canceled extends Error {}
 
 /** A fixed category; never the error text (it can carry names or URLs). */
 const category = (e: unknown): Reason =>
   e instanceof Timeout
     ? "timeout"
-    : e instanceof Error && e.message.startsWith("Worker not found")
-      ? "not_found"
-      : "exception";
+    : e instanceof Canceled
+      ? "canceled"
+      : e instanceof Error && e.message.startsWith("Worker not found")
+        ? "not_found"
+        : "exception";
 
 async function activeIds(db: D1Database, pageSize: number): Promise<string[]> {
   const ids: string[] = [];
@@ -117,7 +123,12 @@ export async function runNightly(
             ).scheduled({ cron: CRON, scheduledTime: new Date(now) }))(),
           timeoutMs,
         );
-        if (r.outcome !== "ok") throw new Error("outcome");
+        // Fail closed: anything but outcome "ok" (a missing or odd result
+        // too) is a failure.
+        const outcome = (r as { outcome?: unknown } | null | undefined)
+          ?.outcome;
+        if (outcome === "canceled") throw new Canceled();
+        if (outcome !== "ok") throw new Error("outcome");
         ok.push(id);
       } catch (e) {
         failed.push({ id, reason: category(e) });

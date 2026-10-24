@@ -145,7 +145,7 @@ Unmapping and slug purges: dispatch reads HOSTS with `cacheTtl: 60`, so an edge 
 
 User Workers in a dispatch namespace get no cron triggers, so `apps/scheduler` is the only nightly caller. Its cron (`17 3 * * *`, the same as a self-hosted install's) reads `SELECT id FROM installs WHERE state = 'active'` from the platform D1 (in keyset pages of 500) and calls `DISPATCHER.get(oa-<p>-<id>).scheduled({ cron, scheduledTime })` on each, 10 at a time, each raced against 25 s. Installs in `creating`, `upgrading`, `deleting` or `deleted` are never called, nor is a row whose id isn't an install id. One install throwing, timing out or missing never stops the others. A hosted upload carries no cron of its own (`TEMPLATE_BINDINGS_EXCLUDED.triggers`, pinned in `packages/provision/test/metadata.test.ts`), so the job runs once.
 
-The repo config has no routes, custom domains or `workers.dev`, no fetch handler, and no top-level name, so a deploy without `--env` is refused (tests pin all of it). Observability is off. **The Manager and the user run the deploy by hand; CI never does.**
+The repo config has no routes, custom domains or `workers.dev`, no fetch handler, and no top-level name, so a deploy without `--env` is refused (tests pin all of it). Observability (Workers Logs) is on for this Worker only: it serves no requests, so there are no URLs to record, and its lines carry install ids, fixed categories and counts only (a test pins the whole log vocabulary). The dispatch Worker stays off. **The Manager and the user run the deploy by hand; CI never does.**
 
 | Env | Worker | Namespace | Platform D1 | Config placeholder |
 |---|---|---|---|---|
@@ -182,12 +182,12 @@ Steps, per env (`ENV`, `P` and `UP` as in the dispatch steps above):
 
 ### Reading the nightly run
 
-Observability is off, so the lines are visible only live: `pnpm exec wrangler tail oa-$P-scheduler --format pretty` around 03:17 UTC. The dashboard's Cron Events list (Worker > Settings > Triggers) shows each past invocation and its outcome, and the run itself only fails there if the platform D1 read fails. Lines, with no error text, emails or vars:
+Read the lines in Workers Logs for `oa-$P-scheduler` (dashboard, or the Observability API with the Platform read-only token), filtered on `nightly`; live, `pnpm exec wrangler tail oa-$P-scheduler --format pretty` around 03:17 UTC. The dashboard's Cron Events list (Worker > Settings > Triggers) shows each past invocation and its outcome, and the run itself only fails there if the platform D1 read fails. Lines, with no error text, emails or vars:
 
 | Line | Meaning |
 |---|---|
 | `nightly summary active=<n> ok=<n> failed=<n>` | One per run. `active` counts the valid active ids called. |
-| `nightly failed <category> <installId>` | One per failed install. `timeout` (over 25 s; the install's job may still finish), `not_found` (no script in the namespace: check the row's state against the namespace), `exception` (the install's handler threw or the call failed: read that install's own Workers Logs). |
+| `nightly failed <category> <installId>` | One per failed install. `timeout` (over 25 s; the install's job may still finish), `canceled` (the runtime canceled the install's handler), `not_found` (no script in the namespace: check the row's state against the namespace), `exception` (the install's handler threw, the call failed, or the result wasn't `outcome: "ok"`: read that install's own Workers Logs). |
 | `nightly invalid ids=<n>` | Active rows whose id isn't an install id; skipped. Fix the rows. |
 | `nightly scale active=<n> over 300` | Near the ~360-install limit of one cron run (10 at a time × 25 s). Move to the M2 Queue fan-out before it grows. |
 
