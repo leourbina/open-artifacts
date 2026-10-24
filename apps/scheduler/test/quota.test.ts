@@ -88,6 +88,9 @@ describe("emailQuota", () => {
     ["negative limit", { EMAIL_DAILY_LIMIT: "-5" }],
     ["fractional limit", { EMAIL_DAILY_LIMIT: "10.5" }],
     ["exponent limit", { EMAIL_DAILY_LIMIT: "1e3" }],
+    ["leading zero limit", { EMAIL_DAILY_LIMIT: "010" }],
+    ["padded limit", { EMAIL_DAILY_LIMIT: " 5" }],
+    ["limit past 9 digits", { EMAIL_DAILY_LIMIT: "1234567890" }],
   ])("bad config (%s): no call, config skip line", async (_n, o) => {
     const f = stub(() => json(body([[1]])));
     const l = logs();
@@ -173,6 +176,40 @@ describe("emailQuota", () => {
     expect(l).toEqual([
       { level: "warn", text: "email-quota warn sent=1500 limit=1000 pct=150" },
     ]);
+  });
+
+  it("zone tags are deduped and lowercased: one query for one zone", async () => {
+    const f = stub(() => json(body([[7]])));
+    const l = logs();
+    await emailQuota(
+      env({ EMAIL_QUOTA_ZONES: `${Z1},${Z1.toUpperCase()}, ${Z1}` }),
+      NOW,
+    );
+    expect(f).toHaveBeenCalledTimes(1);
+    const b = JSON.parse(
+      (f.mock.calls[0] as [string, RequestInit])[1].body as string,
+    );
+    expect(b.variables.zoneTags).toEqual([Z1]);
+    expect(l.map((x) => x.text)).toEqual([
+      "email-quota ok sent=7 limit=1000 pct=0",
+    ]);
+  });
+
+  it("does not follow redirects: a 3xx is http, with the token never re-sent", async () => {
+    const f = stub(
+      () =>
+        new Response(null, {
+          status: 302,
+          headers: { location: "https://evil.test/x" },
+        }),
+    );
+    const l = logs();
+    await emailQuota(env(), NOW);
+    expect(f).toHaveBeenCalledTimes(1);
+    expect((f.mock.calls[0] as [string, RequestInit])[1].redirect).toBe(
+      "manual",
+    );
+    expect(l).toEqual([{ level: "error", text: "email-quota failed http" }]);
   });
 
   const failing: [string, () => unknown, string][] = [
@@ -270,12 +307,13 @@ describe("emailQuota", () => {
     ];
     for (const impl of cases) {
       vi.restoreAllMocks();
-      stub(impl);
+      const f = stub(impl);
       const l = logs();
       await emailQuota(env(), NOW);
       await emailQuota(env({ EMAIL_QUOTA_TOKEN: undefined }), NOW);
       await emailQuota(env({ EMAIL_DAILY_LIMIT: "0" }), NOW);
       expect(l.length).toBeGreaterThan(0);
+      expect(f).toHaveBeenCalledTimes(1);
       for (const { text } of l) {
         expect(text).toMatch(QUOTA_LINE);
         expect(text).not.toMatch(

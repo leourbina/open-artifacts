@@ -21,6 +21,9 @@ const src = join(dirname(fileURLToPath(import.meta.url)), "../../src");
 function violations(code: string): string[] {
   const text = blank(code);
   const out: string[] = [];
+  // A bracketed string key hides the name from the blanked text.
+  if (/\[\s*["'`]DISPATCHER["'`]\s*\]/.test(code))
+    out.push("DISPATCHER accessed by string key");
   for (const m of text.matchAll(/\bDISPATCHER\b/g)) {
     const at = m.index as number;
     const rest = text.slice(at + "DISPATCHER".length);
@@ -68,7 +71,11 @@ function blank(code: string): string {
 function files(dir: string): string[] {
   return readdirSync(dir).flatMap((f) => {
     const p = join(dir, f);
-    return statSync(p).isDirectory() ? files(p) : p.endsWith(".ts") ? [p] : [];
+    return statSync(p).isDirectory()
+      ? files(p)
+      : /\.[mc]?[jt]sx?$/.test(p)
+        ? [p]
+        : [];
   });
 }
 
@@ -113,6 +120,10 @@ describe("DISPATCHER is only ever called with .scheduled(", () => {
     "env.DISPATCHER['get'](x).fetch(r)",
     "fn(env.DISPATCHER)",
     "env.DISPATCHER.get(x",
+    'env["DISPATCHER"].get(x).fetch(r)',
+    "env['DISPATCHER'].get(x).fetch(r)",
+    "env[`DISPATCHER`].get(x).fetch(r)",
+    'const k = env["DISPATCHER"]',
   ])("rejects %s", (code) => {
     expect(violations(code).length).toBeGreaterThan(0);
   });
