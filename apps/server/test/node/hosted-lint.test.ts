@@ -54,7 +54,7 @@ function enclosing(n: ts.Node): string {
   return "(module)";
 }
 
-/** Every `x.HOSTED` read in `root`, as "file: enclosing function". */
+/** Every HOSTED identifier or string in `root`, as "file: enclosing function". */
 function hostedReads(root: string): string[] {
   const out: string[] = [];
   for (const file of files(root)) {
@@ -66,12 +66,14 @@ function hostedReads(root: string): string[] {
       ts.ScriptTarget.Latest,
       true,
     );
+    // Any identifier or string literal spelled HOSTED counts, so a property
+    // read, a destructured binding ({ HOSTED }) and a key held in a variable
+    // (const k = "HOSTED"; env[k]) are all caught.
     const visit = (n: ts.Node) => {
       if (
-        (ts.isPropertyAccessExpression(n) && n.name.text === "HOSTED") ||
-        (ts.isElementAccessExpression(n) &&
-          ts.isStringLiteral(n.argumentExpression) &&
-          n.argumentExpression.text === "HOSTED")
+        (ts.isIdentifier(n) && n.text === "HOSTED") ||
+        ((ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) &&
+          n.text === "HOSTED")
       )
         out.push(`${rel}: ${enclosing(n)}`);
       ts.forEachChild(n, visit);
@@ -91,12 +93,17 @@ describe("HOSTED lint", () => {
     for (const k of Object.keys(READS)) expect(found.has(k), k).toBe(true);
   });
 
-  it("the scan catches property and element reads", () => {
+  it("the scan catches property, element, destructured and variable-key reads", () => {
     const dir = join(import.meta.dirname, "fixtures/hosted");
     expect(hostedReads(dir)).toEqual([
       "probe.ts: (anonymous)",
+      "probe.ts: (module)",
+      "probe.ts: destructuredLocal",
+      "probe.ts: destructuredParam",
       "probe.ts: elementRead",
       "probe.ts: propertyRead",
+      // variableKey reads through KEY: the "HOSTED" string is caught where it
+      // is written, the module-level const (module), so the read can't hide.
     ]);
   });
 });
