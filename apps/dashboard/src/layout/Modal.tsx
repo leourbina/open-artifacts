@@ -26,7 +26,7 @@ export function Modal({
   open?: boolean;
   onClose: () => void;
   title: string;
-  description: string;
+  description?: string;
   footer: ReactNode;
   children?: ReactNode;
   /** Below 640px: a full-width sheet from the bottom. */
@@ -36,6 +36,8 @@ export function Modal({
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent
+        // Radix warns about a missing description unless this is explicit.
+        {...(description ? {} : { "aria-describedby": undefined })}
         className={`gap-[var(--oa-space-4)] sm:max-w-[440px] ${sheetOnPhone ? SHEET : ""}`}
         // No Radix Trigger (the dialog is controlled), so put focus back on
         // whatever opened it, as a trigger would.
@@ -51,9 +53,11 @@ export function Modal({
           <DialogTitle className="text-[length:var(--oa-text-lg)]">
             {title}
           </DialogTitle>
-          <DialogDescription className="text-[length:var(--oa-text-sm)]">
-            {description}
-          </DialogDescription>
+          {description && (
+            <DialogDescription className="text-[length:var(--oa-text-sm)]">
+              {description}
+            </DialogDescription>
+          )}
         </DialogHeader>
         {children}
         <DialogFooter>{footer}</DialogFooter>

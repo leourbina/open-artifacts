@@ -1,5 +1,5 @@
 import { type Member, MemberInviteSchema, type Role } from "@oa/shared";
-import { Avatar, displayName } from "@oa/ui";
+import { displayName } from "@oa/ui";
 import {
   Badge,
   Button,
@@ -31,6 +31,7 @@ import { useMe } from "../auth/useMe";
 import { CopyLink } from "../layout/CopyLink";
 import { Modal } from "../layout/Modal";
 import { toast } from "../layout/toast";
+import { UserAvatar } from "../layout/UserAvatar";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { relativeTime } from "../library/time";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -270,7 +271,7 @@ function Row({
   return (
     <li className={ROW}>
       <div className="flex min-w-0 items-center gap-[10px]">
-        <Avatar name={m.name} email={m.email} />
+        <UserAvatar name={m.name} email={m.email} />
         <div className="min-w-0">
           <b className="flex min-w-0 items-center gap-[6px] font-medium">
             <span className="truncate">{label}</span>
@@ -564,7 +565,7 @@ function DepartedRow({ d: { member: m, summary } }: { d: Departed }) {
   const n = summary.live;
   return (
     <li className="flex flex-wrap items-center gap-[10px] border-0 border-t border-border py-[var(--oa-space-2)] first:border-t-0">
-      <Avatar name={m.name} email={m.email} />
+      <UserAvatar name={m.name} email={m.email} />
       <div className="min-w-0 flex-1">
         <b className="flex min-w-0 items-center gap-[6px] font-medium">
           <span className="truncate">{label}</span>

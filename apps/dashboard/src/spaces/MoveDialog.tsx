@@ -4,12 +4,13 @@
 // is one-way; a public artifact moved into a space with public links off asks
 // first, and the server makes it Team in the same step.
 import type { ArtifactSummary, MySpace } from "@oa/shared";
-import { Button, Dialog } from "@oa/ui";
+import { Button } from "@oa/ui/shadcn";
 import { useState } from "react";
 import { errorCopy } from "../api/errorCopy";
 import { useMoveArtifact, useSpaces } from "../api/queries";
 import { canPublishTo, useHosted } from "../auth/permissions";
 import { useMe } from "../auth/useMe";
+import { Modal } from "../layout/Modal";
 import { toast } from "../layout/toast";
 import { ConfirmDialog } from "../settings/ConfirmDialog";
 
@@ -79,9 +80,9 @@ export function MoveDialog({
 
   return (
     <>
-      <Dialog
+      <Modal
         open={!asking}
-        onOpenChange={(o) => !o && onClose()}
+        onClose={onClose}
         title={`Move "${a.title}" to`}
         footer={
           <>
@@ -89,9 +90,8 @@ export function MoveDialog({
               Cancel
             </Button>
             <Button
-              variant="primary"
               disabled={!target || move.isPending}
-              loading={move.isPending}
+              aria-busy={move.isPending}
               onClick={submit}
             >
               Move
@@ -135,7 +135,7 @@ export function MoveDialog({
             </p>
           )}
         </div>
-      </Dialog>
+      </Modal>
       {target && (
         <ConfirmDialog
           open={asking}
