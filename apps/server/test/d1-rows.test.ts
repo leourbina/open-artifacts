@@ -173,7 +173,11 @@ it("spaces API reads (P3 T9): GET /spaces skips personal spaces; a member page d
   )?.n as number;
   expect(allSpaces).toBeGreaterThan(spaceCount + 30);
   rows.read = 0;
-  const page = await api(S as never, `${R.spaceMembers(id)}?limit=2`, admin.cookie);
+  const page = await api(
+    S as never,
+    `${R.spaceMembers(id)}?limit=2`,
+    admin.cookie,
+  );
   expect(page.status).toBe(200);
   // Measured 37 to 40: the 5-member set and its users twice (page ids,
   // total), then only the 2-row page decorated (roles, groups).

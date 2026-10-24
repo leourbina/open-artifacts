@@ -1167,6 +1167,50 @@ describe("hosted contract: space People", () => {
     ).toBe("mapping");
   });
 
+  it("a space manager can't change or remove a peer manager (403 target member); org admins can", async () => {
+    for (const directory of ["google", "frozen"] as const) {
+      fresh({ hosted: { directory } });
+      // Bob becomes a manager of Engineering, where Ada is manager by hand.
+      await call("PUT", R.spaceMember(ENG, bob), { role: "manager" });
+      await call("PUT", R.spaceMember(ENG, dan), { role: "manager" });
+      // Org admin (Ada) changes and removes a manager: allowed.
+      expect(
+        (await call("PUT", R.spaceMember(ENG, dan), { role: "editor" })).status,
+      ).toBe(200);
+      expect((await call("DELETE", R.spaceMember(ENG, dan))).status).toBe(204);
+      await signIn("bob@example.com");
+      expect(
+        await forbidden(
+          await call("PUT", R.spaceMember(ENG, ada), { role: "viewer" }),
+        ),
+      ).toBe("member");
+      expect(
+        await forbidden(await call("DELETE", R.spaceMember(ENG, ada))),
+      ).toBe("member");
+    }
+  });
+
+  it("PUT member validates the body before the target (400, not 404)", async () => {
+    fresh({ hosted: true });
+    const r = await call("PUT", R.spaceMember(ENG, "Zz0nobodyZz0abcd"), {
+      role: "owner",
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it("PATCH space audits space.update only when name or allMembersRole changes", async () => {
+    fresh({ hosted: true });
+    await call("PATCH", R.space(ENG), { publicLinks: false });
+    await call("PATCH", R.space(ENG), { name: "Engineering" });
+    const actions = async () =>
+      PageSchema(Strict.AuditEvent)
+        .parse(await json(await call("GET", R.audit)))
+        .items.map((e) => e.action);
+    expect(await actions()).toEqual(["space.public_links"]);
+    await call("PATCH", R.space(ENG), { name: "Eng" });
+    expect(await actions()).toEqual(["space.update", "space.public_links"]);
+  });
+
   it("live sync: DELETE on a synced-only row is 409 member_synced", async () => {
     fresh({ hosted: true });
     const r = await call("DELETE", R.spaceMember(ENG, bob));

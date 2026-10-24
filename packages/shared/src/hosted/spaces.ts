@@ -144,15 +144,17 @@ export type SpaceForbiddenDetails = z.infer<typeof SpaceForbiddenDetailsSchema>;
  * PUT R.spaceMember(id, userId) (space manager, org admin) -> SpaceMember.
  * The target must be an existing, active member, else 404.
  * Sets the manual row. A space manager (not an org admin) granting manager,
- * or changing a member whose manualRole is manager: 403 space_forbidden
- * { target: "member" }. While sync is frozen, on a row with a syncRole: any
+ * or changing a peer manager (a manager row by hand or synced, the frozen
+ * override included): 403 space_forbidden { target: "member" }. While sync is frozen, on a row with a syncRole: any
  * role (raise or lower) is a manual grant under those rules and replaces the
  * synced row with a manual override (the next reconcile after unfreezing
  * replaces it). Audited space.member.add/role
  * (frozen override: detail { syncFrozen: true, role }).
  *
- * DELETE R.spaceMember(id, userId) -> 204: removes the manual row. A
- * synced-only row while sync is live: 409 member_synced. While frozen it
+ * DELETE R.spaceMember(id, userId) -> 204: removes the manual row. Only an
+ * org admin removes a peer manager (a manager row by hand or synced, frozen
+ * included): else 403 space_forbidden { target: "member" }, before
+ * member_synced. A synced-only row while sync is live: 409 member_synced. While frozen it
  * removes the synced row too (removing access is always allowed); audited
  * space.member.remove (frozen: detail { syncFrozen: true }).
  */

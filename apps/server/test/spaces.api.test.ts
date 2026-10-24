@@ -1184,7 +1184,9 @@ describe("peer managers (manager ruling)", () => {
 
   it("a space manager still removes and changes non-manager members", async () => {
     const { s, mgr, ed, vw } = await staffed();
-    expect((await putMember(GOOGLE, mgr, s.id, ed.userId, "viewer")).status).toBe(200);
+    expect(
+      (await putMember(GOOGLE, mgr, s.id, ed.userId, "viewer")).status,
+    ).toBe(200);
     expect((await del(GOOGLE, mgr, s.id, vw.userId)).status).toBe(204);
   });
 });

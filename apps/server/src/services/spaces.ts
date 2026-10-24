@@ -155,7 +155,8 @@ function decodeCursor(
 const SMM_KEY = "space_manager_mappings";
 
 /** Distinct members of every Every-space mapped group (uncorrelated). */
-const EVERY_MEMBER_COUNT = sql.raw(`(select count(distinct dm.user_id) from org_group_mappings ogm
+const EVERY_MEMBER_COUNT =
+  sql.raw(`(select count(distinct dm.user_id) from org_group_mappings ogm
   join directory_members dm on dm.group_id = ogm.group_id)`);
 
 /** The caller's view of each space row, in one statement (counts included). */
@@ -303,9 +304,7 @@ export async function listSpaces(
         eq(spaces.kind, "shared"),
         isNull(spaces.deletedAt),
         wantShared ? undefined : sql`0`,
-        isAdmin(c)
-          ? undefined
-          : sql`${roleRankSql(c, sql`${spaces.id}`)} > 0`,
+        isAdmin(c) ? undefined : sql`${roleRankSql(c, sql`${spaces.id}`)} > 0`,
         // A cursor on the personal space (kind 0) continues from the first shared one.
         after && after[0] === 1
           ? sql`(${spaces.name} > ${an} or (${spaces.name} = ${an} and ${spaces.id} > ${ai}))`
@@ -414,9 +413,10 @@ export async function patchSpace(
   const out = await env.DB.batch([
     // The old role, read in the batch (its transaction), so a concurrent
     // change can't hide a lowering.
-    stmt(env.DB, "select all_members_role as old from spaces where id = ?").bind(
-      id,
-    ),
+    stmt(
+      env.DB,
+      "select all_members_role as old from spaces where id = ?",
+    ).bind(id),
     // Before the update, each gated on the row still differing (no-op: no row).
     audit(env, "space.update", { type: "space", id }, actor, {
       spaceId: id,
