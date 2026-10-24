@@ -1002,6 +1002,9 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
         if (r.error) return r.error;
         const s = findSpace(r.data.spaceId);
         if (!s) return notFound();
+        // Someone else's personal space is 404 (no user-id oracle); one's
+        // own is 400 space_personal.
+        if (s.kind === "personal" && s.id !== me.user.id) return notFound();
         if (s.kind === "personal")
           return err(
             "space_personal",

@@ -328,10 +328,15 @@ describe("hosted mocks", () => {
     );
     expect(hits.items[0]?.space?.name).toBe("Engineering");
 
-    // Move: a personal target is refused; a viewer-role space is forbidden; Engineering works.
+    // Move: one's own personal space is refused, someone else's is 404; a
+    // viewer-role space is forbidden; Engineering works.
     const bob = fixtures.members[1]?.id as string;
-    const toPersonal = await call("POST", R.moveArtifact(mine?.id as string), {
+    const toBob = await call("POST", R.moveArtifact(mine?.id as string), {
       spaceId: bob,
+    });
+    expect(toBob.status).toBe(404);
+    const toPersonal = await call("POST", R.moveArtifact(mine?.id as string), {
+      spaceId: me.user.id,
     });
     expect(toPersonal.status).toBe(400);
     expect((await errCode(toPersonal)).code).toBe("space_personal");

@@ -48,6 +48,7 @@ import { audit, userActor } from "./audit.js";
 import { type ManifestEntry, materialize, planFiles } from "./manifest.js";
 import { getSettings } from "./members.js";
 import { ftsFilter, seedSearchStmt, syncTitleStmt } from "./search.js";
+import { requireSpaces } from "./spaces.js";
 import { writeThumbnail } from "./thumbs.js";
 import { toUserRef } from "./users.js";
 
@@ -176,7 +177,11 @@ export async function publish(
       if (input.visibility !== undefined)
         cas = {
           before: [
-            " and visibility = ? and space_id is ?",
+            ` and visibility = ? and space_id is ?${
+              input.visibility === "public" && a.visibility !== "public"
+                ? LINKS_STILL_ON
+                : ""
+            }`,
             [a.visibility, a.spaceId],
           ],
           after: [
@@ -226,6 +231,8 @@ export async function publish(
   // A shared space (or the caller's own personal one, by id): 404 when not
   // theirs to see, 403 space_forbidden when seen but not allowed.
   if (create && input.spaceId !== undefined && input.spaceId !== user.id) {
+    // Another space needs the spaces feature (404 without it).
+    requireSpaces(env);
     spaceId = (
       await publishTarget(env, callerOf(user), input.spaceId, "create")
     ).id;
@@ -385,7 +392,7 @@ export async function publish(
       .bind(id)
       .first();
     if (live)
-      throw cas && !n
+      throw cas
         ? changed()
         : new ApiError("conflict", "An upload was already used");
     throw notFound();
@@ -398,6 +405,13 @@ export async function publish(
 }
 
 const notFound = () => new ApiError("not_found", "Not found");
+/**
+ * Appended to an artifacts UPDATE that makes the row public: the space's
+ * public-links toggle re-checked in the write, so a racing toggle-off never
+ * lets a new public link through (it loses as a 409).
+ */
+const LINKS_STILL_ON =
+  " and not exists (select 1 from spaces where id = artifacts.space_id and kind = 'shared' and public_links = 0)";
 /** A compare-and-set lost to a concurrent change (#484). */
 const changed = () =>
   new ApiError("conflict", "The artifact changed while saving; try again");
@@ -1104,10 +1118,11 @@ export async function patch(
     set("updated_at = ?", Date.now());
     // Compare-and-set on the visibility and space checked above (#484).
     const cas = p.visibility !== undefined;
+    const toPublic = p.visibility === "public" && a.visibility !== "public";
     const upd = env.DB.prepare(
       `update artifacts set ${sets.join(", ")} where id = ? and deleted_at is null${
         cas ? " and visibility = ? and space_id is ?" : ""
-      }`,
+      }${toPublic ? LINKS_STILL_ON : ""}`,
     ).bind(...vals, id, ...(cas ? [a.visibility, a.spaceId] : []));
     const batch = [upd];
     if (p.visibility !== undefined && p.visibility !== a.visibility)

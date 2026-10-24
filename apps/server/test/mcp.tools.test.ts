@@ -685,6 +685,20 @@ describe("MCP spaces (P3 T10)", () => {
     await c.close();
   });
 
+  it("spaces off: list_spaces offers the personal space only", async () => {
+    const u = await login(`mcp-spoff-${tag}@x.com`);
+    const edit = await mkSpace(`Off ${tag}`);
+    await member(edit, u.userId, "editor");
+    const c = await connect((await createPat(env, u.userId, "off")).token, {
+      env: E({ FEATURES: "" }),
+    });
+    const listed = sc<{ items: { id: string }[] }>(
+      await tool(c, "list_spaces", {}),
+    );
+    expect(listed.items.map((s) => s.id)).toEqual([u.userId]);
+    await c.close();
+  });
+
   it("the skill lists list_spaces and the instructions say owner or space manager", () => {
     expect(TOOL_DEFS.map((t) => t.name)).toContain("list_spaces");
     expect(INSTRUCTIONS("free")).toContain("owner or space manager");

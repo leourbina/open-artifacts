@@ -140,6 +140,25 @@ const addMember = async (sid: string, u: U, role: string) =>
   ).toBe(200);
 const restrict = (u: U) =>
   run("update users set restricted_manual = 1 where id = ?", u.userId);
+/** ON whose first D1 batch runs `change` first (a write racing the request). */
+const racing = (change: () => Promise<unknown>): Env => {
+  let fired = false;
+  const DB = new Proxy(env.DB, {
+    get(t, p) {
+      if (p === "batch")
+        return async (ss: D1PreparedStatement[]) => {
+          if (!fired) {
+            fired = true;
+            await change();
+          }
+          return t.batch(ss);
+        };
+      const v = Reflect.get(t, p);
+      return typeof v === "function" ? v.bind(t) : v;
+    },
+  });
+  return { ...(ON as object), DB } as unknown as Env;
+};
 
 const base = { title: "T10", format: "html", content: "<p>x</p>" };
 const publishTo = (u: U, body: Record<string, unknown>) =>
@@ -324,6 +343,68 @@ describe("patch compare-and-set (#484)", () => {
   });
 });
 
+describe("public links toggled off mid-write", () => {
+  it("PATCH team → public loses to a racing toggle-off: 409, still team", async () => {
+    const s = await createSpace();
+    const mgr = await mk("prace");
+    await addMember(s.id, mgr, "manager");
+    const id = await insertArtifact(mgr.userId, s.id, "team");
+    const r = await call(
+      R.artifact(id),
+      mgr.cookie,
+      { method: "PATCH", body: { visibility: "public" } },
+      racing(() =>
+        run("update spaces set public_links = 0 where id = ?", s.id),
+      ),
+    );
+    expect(r.status).toBe(409);
+    expect((await row(id))?.visibility).toBe("team");
+    expect(await audits("artifact.visibility", id)).toHaveLength(0);
+  });
+
+  it("publish (new version) team → public loses the same race: 409", async () => {
+    const s = await createSpace();
+    const mgr = await mk("prace2");
+    await addMember(s.id, mgr, "manager");
+    const id = await insertArtifact(mgr.userId, s.id, "team");
+    const r = await call(
+      R.versions(id),
+      mgr.cookie,
+      {
+        method: "POST",
+        body: { format: "html", content: "<p>2</p>", visibility: "public" },
+      },
+      racing(() =>
+        run("update spaces set public_links = 0 where id = ?", s.id),
+      ),
+    );
+    expect(r.status).toBe(409);
+    expect((await row(id))?.visibility).toBe("team");
+  });
+});
+
+describe("spaces off", () => {
+  it("publish with a spaceId other than one's own → 404; one's own works", async () => {
+    const s = await createSpace();
+    const ed = await mk("soff");
+    await addMember(s.id, ed, "editor");
+    const r = await call(
+      R.artifacts,
+      ed.cookie,
+      { method: "POST", body: { ...base, spaceId: s.id } },
+      OFF,
+    );
+    expect(r.status).toBe(404);
+    const own = await call(
+      R.artifacts,
+      ed.cookie,
+      { method: "POST", body: { ...base, spaceId: ed.userId } },
+      OFF,
+    );
+    expect(own.status).toBe(201);
+  });
+});
+
 describe("move", () => {
   it("move shared → personal is 400 space_personal", async () => {
     const s = await createSpace();
@@ -333,11 +414,9 @@ describe("move", () => {
     const r = await move(mgr, art, mgr.userId);
     expect(r.status).toBe(400);
     expect(await code(r)).toBe("space_personal");
-    // Someone else's personal space too, and nothing moves.
+    // Someone else's personal space is 404 (no user-id oracle).
     const other = await mk("mpo");
-    expect(await code(await move(mgr, art, other.userId))).toBe(
-      "space_personal",
-    );
+    expect((await move(mgr, art, other.userId)).status).toBe(404);
     expect((await row(art))?.space_id).toBe(s.id);
   });
 
@@ -566,6 +645,25 @@ describe("transfer", () => {
     expect(rows[0]?.detail).not.toContain("@");
   });
 
+  it("a successor's existing share is removed in the same batch", async () => {
+    const a = await mk("tsa");
+    const b = await mk("tsb");
+    const art = await insertArtifact(a.userId, a.userId);
+    await run(
+      "insert into shares (artifact_id, email, role, created_by, created_at) values (?, ?, 'viewer', ?, 1)",
+      art,
+      b.email,
+      a.userId,
+    );
+    expect((await transfer(a, art, b.userId)).status).toBe(200);
+    const left = await env.DB.prepare(
+      "select email, role from shares where artifact_id = ? order by email",
+    )
+      .bind(art)
+      .all<{ email: string; role: string }>();
+    expect(left.results).toEqual([{ email: a.email, role: "editor" }]);
+  });
+
   it("transfer by a non-owner → 404: an editor share, a space manager, a stranger", async () => {
     const a = await mk("tn");
     const ed = await mk("tne");
@@ -671,6 +769,7 @@ describe("departed transfer", () => {
     expect(audit).toHaveLength(2);
     expect(JSON.parse(audit[0]?.detail ?? "{}")).toEqual({
       moved: 100,
+      teamed: 0,
       to: { kind: "space", id: s.id },
     });
   });
@@ -758,5 +857,86 @@ describe("departed transfer", () => {
       space_id: s.id,
       visibility: "team",
     });
+    const detail = JSON.parse(
+      (await audits("artifact.transfer", g.userId))[0]?.detail ?? "{}",
+    );
+    expect(detail).toEqual({
+      moved: 1,
+      teamed: 1,
+      to: { kind: "space", id: s.id },
+    });
+  });
+
+  // The target is re-checked in the write: a change between the read and
+  // the batch moves nothing and is 409.
+  const raced = async (
+    body: unknown,
+    from: string,
+    change: () => Promise<unknown>,
+  ) =>
+    call(
+      R.memberTransfer(from),
+      admin.cookie,
+      { method: "POST", body },
+      racing(change),
+    );
+
+  it("race: public links toggled off mid-call → 409, nothing moved", async () => {
+    const g = await gone(2);
+    const s = await createSpace();
+    const r = await raced(
+      { to: { kind: "space", spaceId: s.id } },
+      g.userId,
+      () => run("update spaces set public_links = 0 where id = ?", s.id),
+    );
+    expect(r.status).toBe(409);
+    expect(await code(r)).toBe("conflict");
+    expect(
+      (
+        await one<{ n: number }>(
+          "select count(*) n from artifacts where space_id = ?",
+          g.userId,
+        )
+      )?.n,
+    ).toBe(2);
+    expect(await audits("artifact.transfer", g.userId)).toHaveLength(0);
+  });
+
+  it("race: the target space deleted mid-call → 409, nothing moved", async () => {
+    const g = await gone(1);
+    const s = await createSpace();
+    const r = await raced(
+      { to: { kind: "space", spaceId: s.id } },
+      g.userId,
+      () => run("update spaces set deleted_at = 1 where id = ?", s.id),
+    );
+    expect(r.status).toBe(409);
+    expect(
+      (
+        await one<{ n: number }>(
+          "select count(*) n from artifacts where space_id = ?",
+          g.userId,
+        )
+      )?.n,
+    ).toBe(1);
+  });
+
+  it("race: the successor suspended mid-call → 409, nothing moved", async () => {
+    const g = await gone(1);
+    const b = await mk("rsucc");
+    const r = await raced(
+      { to: { kind: "user", userId: b.userId } },
+      g.userId,
+      () => run("update users set status = 'suspended' where id = ?", b.userId),
+    );
+    expect(r.status).toBe(409);
+    expect(
+      (
+        await one<{ n: number }>(
+          "select count(*) n from artifacts where space_id = ?",
+          b.userId,
+        )
+      )?.n,
+    ).toBe(0);
   });
 });

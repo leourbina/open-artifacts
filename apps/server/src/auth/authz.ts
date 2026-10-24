@@ -530,8 +530,9 @@ export type TargetSpace = {
  * manager, uncapped). One statement. Errors, in order:
  * - 404: unknown or deleted, or a shared space where the caller has no role
  *   and is not an org admin (no existence oracle);
- * - personal: a move is 400 space_personal (company artifacts stay
- *   company-owned); a create is 404 unless it is the caller's own;
+ * - personal: someone else's is 404 (no user-id oracle); the caller's own
+ *   is 400 space_personal for a move (company artifacts stay
+ *   company-owned) and allowed for a create;
  * - 403 space_forbidden: seen but not allowed (a viewer role, an org admin
  *   without a role, a capped caller).
  */
@@ -556,12 +557,13 @@ export async function publishTarget(
   const forbidden = () =>
     new ApiError("space_forbidden", "You can't publish to this space");
   if (row.kind !== "shared") {
+    // Someone else's personal space is 404 either way (no user-id oracle).
+    if (c.user.id !== spaceId) throw new ApiError("not_found", "Not found");
     if (purpose === "move")
       throw new ApiError(
         "space_personal",
         "Artifacts move into shared spaces only",
       );
-    if (c.user.id !== spaceId) throw new ApiError("not_found", "Not found");
     if (!orgCan(c.user, "artifact.create", { cap })) throw forbidden();
     return { id: spaceId, kind: "personal", publicLinks: true };
   }

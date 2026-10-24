@@ -1641,6 +1641,10 @@ export async function transferArtifact(
   if (toUserId === user.id || !(await isSuccessor(env, toUserId)))
     throw invalidSuccessor();
   const email = normalizeEmail(user.email) ?? user.email;
+  // After the move, the share writes are gated on the artifact now being
+  // the successor's (only its owner could have put it there).
+  const theirs =
+    "exists (select 1 from artifacts where id = ?1 and owner_id = ?2 and space_id = ?2)";
   const out = await env.DB.batch([
     stmt(
       env.DB,
@@ -1648,12 +1652,6 @@ export async function transferArtifact(
         where id = ?2 and deleted_at is null and space_id = ?3 and owner_id = ?3
           and ${SUCCESSOR(1)}`,
     ).bind(toUserId, id, user.id),
-    stmt(
-      env.DB,
-      `insert into shares (artifact_id, email, role, created_by, created_at)
-        select ?1, ?2, 'editor', ?3, ?4 where changes() > 0
-        on conflict (artifact_id, email) do update set role = 'editor'`,
-    ).bind(id, email, user.id, Date.now()),
     audit(
       env,
       "artifact.transfer",
@@ -1665,6 +1663,18 @@ export async function transferArtifact(
         when: { sql: "changes() > 0", args: [] },
       },
     ),
+    stmt(
+      env.DB,
+      `insert into shares (artifact_id, email, role, created_by, created_at)
+        select ?1, ?3, 'editor', ?4, ?5 where ${theirs}
+        on conflict (artifact_id, email) do update set role = 'editor'`,
+    ).bind(id, toUserId, email, user.id, Date.now()),
+    // The successor owns it now: their own share is redundant.
+    stmt(
+      env.DB,
+      `delete from shares where artifact_id = ?1
+        and email = (select email from users where id = ?2) and ${theirs}`,
+    ).bind(id, toUserId),
   ]);
   if (!out[0]?.meta.changes) {
     if (!(await isSuccessor(env, toUserId))) throw invalidSuccessor();
@@ -1680,8 +1690,8 @@ export async function transferArtifact(
 const DEPARTED_COUNTS = `select
     (select count(*) from artifacts where space_id = ?1 and deleted_at is null) as live,
     (select count(*) from artifacts where owner_id = ?1 and deleted_at is not null and space_id = ?1) as deleted`;
-const DEPARTED_PAGE = `select id from artifacts where space_id = ?1 and deleted_at is null
-  union all select id from artifacts where owner_id = ?1 and deleted_at is not null and space_id = ?1
+const DEPARTED_PAGE = `select id, visibility from artifacts where space_id = ?1 and deleted_at is null
+  union all select id, visibility from artifacts where owner_id = ?1 and deleted_at is not null and space_id = ?1
   limit ?2`;
 type Counts = { live: number; deleted: number };
 
@@ -1767,27 +1777,39 @@ export async function transferPersonal(
   const page = publicLinks ? TRANSFER_PAGE : Math.min(TRANSFER_PAGE, MAX_CLOSE);
   const { results } = await stmt(env.DB, DEPARTED_PAGE)
     .bind(fromUserId, page)
-    .all<{ id: string }>();
+    .all<{ id: string; visibility: string }>();
   if (!results.length) return { moved: 0, remaining: 0, nextCursor: null };
   const ids = JSON.stringify(results.map((r) => r.id));
-  // Each statement re-checks the row is still in the departed space, so two
-  // admins racing move each artifact once.
-  const IN_PAGE =
-    "id in (select value from json_each(?1)) and space_id = ?2 and owner_id = ?2";
-  const stmts: D1PreparedStatement[] = [];
-  if (!publicLinks)
-    stmts.push(
-      stmt(
-        env.DB,
-        `update artifacts set visibility = 'team' where ${IN_PAGE} and visibility = 'public' returning id`,
-      ).bind(ids, fromUserId),
-    );
-  const at = stmts.length;
-  stmts.push(
-    stmt(
-      env.DB,
-      `update artifacts set space_id = ?3, owner_id = ?4 where ${IN_PAGE}`,
-    ).bind(ids, fromUserId, spaceId, ownerId),
+  const pub = JSON.stringify(
+    results.filter((r) => r.visibility === "public").map((r) => r.id),
+  );
+  // One statement, re-checking in SQL what was read: each row is still in
+  // the departed space (two admins racing move each artifact once), the
+  // target space still exists with the public-links value read (a personal
+  // one always qualifies), and a user target is still a valid successor.
+  // Into a space with public links off, public rows become team in the same
+  // write.
+  const move = stmt(
+    env.DB,
+    `update artifacts set space_id = ?3, owner_id = ?4,
+        visibility = case when ?5 = 0 and visibility = 'public' then 'team' else visibility end
+      where id in (select value from json_each(?1)) and space_id = ?2 and owner_id = ?2
+        and exists (select 1 from spaces where id = ?3 and deleted_at is null
+          and (kind = 'personal' or public_links = ?5))
+        and (?6 = 0 or ${SUCCESSOR(4)})
+      returning id`,
+  ).bind(
+    ids,
+    fromUserId,
+    spaceId,
+    ownerId,
+    publicLinks ? 1 : 0,
+    input.to.kind === "user" ? 1 : 0,
+  );
+  const out = await env.DB.batch([
+    move,
+    // Right after the move: moved is its changes(); teamed counts the rows
+    // read as public that are now team in the target.
     audit(
       env,
       "artifact.transfer",
@@ -1795,26 +1817,36 @@ export async function transferPersonal(
       userActor(actor.id),
       {
         spaceId,
-        detail: {
-          moved: results.length,
-          to: { kind: input.to.kind, id: spaceId },
+        detail: { to: { kind: input.to.kind, id: spaceId } },
+        detailSql: {
+          sql: `json_object('moved', changes(), 'teamed', (select count(*) from artifacts
+            where id in (select value from json_each(?)) and space_id = ? and visibility = 'team'))`,
+          args: [publicLinks ? "[]" : pub, spaceId],
         },
         when: { sql: "changes() > 0", args: [] },
       },
     ),
     stmt(env.DB, DEPARTED_COUNTS).bind(fromUserId),
-  );
-  const out = await env.DB.batch(stmts);
-  const moved = out[at]?.meta.changes ?? 0;
-  const counts = out[out.length - 1]?.results[0] as Counts | undefined;
+  ]);
+  const moved = out[0]?.meta.changes ?? 0;
+  const counts = out[2]?.results[0] as Counts | undefined;
   const remaining = (counts?.live ?? 0) + (counts?.deleted ?? 0);
+  // Nothing moved while rows remain: the target changed under us.
+  if (!moved && remaining > 0)
+    throw new ApiError(
+      "conflict",
+      "The transfer target changed; check it and try again",
+    );
   if (moved) {
     await revokeUserLive(env, fromUserId, "artifacts transferred", ctx);
-    const team = publicLinks
-      ? []
-      : ((out[0]?.results ?? []) as { id: string }[]).map((r) => r.id);
-    if (team.length)
-      await closeRuntimeSockets(env, team, "access changed", ctx);
+    // Public links off: every moved row may have been public (a page is at
+    // most MAX_CLOSE), so all of them close.
+    if (!publicLinks) {
+      const movedIds = ((out[0]?.results ?? []) as { id: string }[]).map(
+        (r) => r.id,
+      );
+      await closeRuntimeSockets(env, movedIds, "access changed", ctx);
+    }
   }
   return {
     moved,
@@ -1836,6 +1868,8 @@ export async function publishableSpaces(
   const u = me(c);
   const cap = capOfCaller(c);
   if (!orgCan(u, "artifact.create", { cap })) return [];
+  // Without the spaces feature only the personal space is offered.
+  const withShared = spacesOn(env);
   const db = getDb(env);
   const rank = roleRankSql(c, sql`${spaces.id}`);
   const cols = {
@@ -1863,6 +1897,7 @@ export async function publishableSpaces(
         and(
           eq(spaces.kind, "shared"),
           isNull(spaces.deletedAt),
+          withShared ? undefined : sql`0`,
           sql`${rank} >= 2`,
         ),
       )
