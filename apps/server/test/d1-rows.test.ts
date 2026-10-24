@@ -183,3 +183,52 @@ it("spaces API reads (P3 T9): GET /spaces skips personal spaces; a member page d
   // total), then only the 2-row page decorated (roles, groups).
   expect(rows.read).toBeLessThanOrEqual(44);
 });
+
+it("move and transfer (P3 T10): the row, its index entries and the audit row", async () => {
+  const spacesEnv = {
+    ...(counted as object),
+    FEATURES: "spaces",
+  } as unknown as typeof env;
+  const S = {
+    fetch: (r: Request, _e: unknown, c: never) => app.fetch(r, spacesEnv, c),
+  };
+  const admin = await login("rows-move-admin@x.com", "admin");
+  const u = await login("rows-move-u@x.com");
+  const b = await login("rows-move-b@x.com");
+  const s = await api(S as never, R.spaces, admin.cookie, {
+    method: "POST",
+    body: { name: "Rows move" },
+  });
+  const { id: sid } = (await s.json()) as { id: string };
+  await api(S as never, R.spaceMember(sid, u.userId), admin.cookie, {
+    method: "PUT",
+    body: { role: "editor" },
+  });
+  const mk = async () => {
+    const r = await api(S as never, R.artifacts, u.cookie, {
+      method: "POST",
+      body: { title: "M", format: "html", content: "<p>m</p>" },
+    });
+    return ((await r.json()) as { id: string }).id;
+  };
+  const moved = await mk();
+  rows.n = 0;
+  const m = await api(S as never, R.moveArtifact(moved), u.cookie, {
+    method: "POST",
+    body: { spaceId: sid },
+  });
+  expect(m.status).toBe(200);
+  // The artifacts row 1 and its artifacts_space_live_idx entry 2 (out and
+  // in), plus audit_events 2 (table, audit_events_at_idx).
+  expect(rows.n).toBe(5);
+  const given = await mk();
+  rows.n = 0;
+  const t = await api(S as never, R.transferArtifact(given), u.cookie, {
+    method: "POST",
+    body: { userId: b.userId },
+  });
+  expect(t.status).toBe(200);
+  // Measured 8: the artifacts row and its owner and space index entries,
+  // the editor share (table, shares_email_idx) and audit 2.
+  expect(rows.n).toBe(8);
+});
