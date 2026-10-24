@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.42.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.41.0...v0.42.0) (2026-10-24)
+
+
+### Features
+
+* **provision:** pin the release signing public keys; refuse a key while unpinned ([#536](https://github.com/open-artifacts-ai/open-artifacts/issues/536)) ([7f96e7e](https://github.com/open-artifacts-ai/open-artifacts/commit/7f96e7e94496e01844be5229b9df8bef96b51950))
+* **scheduler:** nightly jobs for hosted installs ([#531](https://github.com/open-artifacts-ai/open-artifacts/issues/531)) ([390b17f](https://github.com/open-artifacts-ai/open-artifacts/commit/390b17fd4fda03fa1e5aa352f412f2e7ca8bd8f6))
+* **server:** per-user presence closes live sockets (P3 T7b) ([#503](https://github.com/open-artifacts-ai/open-artifacts/issues/503)) ([5061994](https://github.com/open-artifacts-ai/open-artifacts/commit/5061994d086401b8d92e78c34d7e825bfb2a165a))
+* **server:** user status, admission seam with P2 (P3 T6) ([#515](https://github.com/open-artifacts-ai/open-artifacts/issues/515)) ([ed48a9b](https://github.com/open-artifacts-ai/open-artifacts/commit/ed48a9b5420ff587b754c85a96bb149c8b4582b6))
+
 ## [0.41.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.40.1...v0.41.0) (2026-10-24)
 
 
