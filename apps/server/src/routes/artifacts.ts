@@ -5,15 +5,17 @@ import {
   isId,
   LIMITS,
   ListQuerySchema,
+  MoveArtifactInputSchema,
   type PublishInput,
   PublishInputSchema,
   R,
+  TransferArtifactInputSchema,
 } from "@oa/shared";
 import type { Context } from "hono";
 import { authorize, caller, callerOf, requireUser } from "../auth/authz.js";
 import { isPubliclyServable } from "../auth/policy.js";
 import { publicPrefix, signContent } from "../content/signing.js";
-import { readCapped } from "../http/body.js";
+import { jsonBody, readCapped } from "../http/body.js";
 import { ApiError, contentOrigin } from "../http/errors.js";
 import { type AppEnv, execCtx } from "../http/middleware.js";
 import {
@@ -31,6 +33,11 @@ import {
 } from "../services/artifacts.js";
 import { planFiles, RESERVED_KEYS } from "../services/manifest.js";
 import { putExtractedText } from "../services/search.js";
+import {
+  moveArtifact,
+  requireSpaces,
+  transferArtifact,
+} from "../services/spaces.js";
 import { utf8Decoder } from "../util/text.js";
 import type { AppType } from "./index.js";
 
@@ -159,6 +166,23 @@ export function mountArtifacts(app: AppType): void {
     const user = requireUser(c);
     await softDelete(c.env, user, idParam(c), execCtx(c));
     return c.body(null, 204);
+  });
+
+  // Hosted M1 (P3 T10): 404 without the spaces feature.
+  app.post(`${ARTIFACT}/move`, async (c) => {
+    requireSpaces(c.env);
+    const user = requireUser(c);
+    const id = idParam(c);
+    const { spaceId } = await jsonBody(c, MoveArtifactInputSchema);
+    return c.json(await moveArtifact(c.env, user, id, spaceId, execCtx(c)));
+  });
+
+  app.post(`${ARTIFACT}/transfer`, async (c) => {
+    requireSpaces(c.env);
+    const user = requireUser(c);
+    const id = idParam(c);
+    const { userId } = await jsonBody(c, TransferArtifactInputSchema);
+    return c.json(await transferArtifact(c.env, user, id, userId, execCtx(c)));
   });
 
   app.post(`${ARTIFACT}/undelete`, async (c) => {

@@ -98,6 +98,9 @@ export const ROUTE_POLICY: Readonly<Record<string, Policy>> = {
   "POST /api/v1/members": { org: "members.manage" },
   "PATCH /api/v1/members/:id": { org: "members.manage" },
   "DELETE /api/v1/members/:id": { org: "members.manage" },
+  // P3 T10: a departed member's artifacts (404 without the spaces feature).
+  "GET /api/v1/members/:id/transfer": { org: "transfer.departed" },
+  "POST /api/v1/members/:id/transfer": { org: "transfer.departed" },
   // The handler requires a manager and 404s for the owner's own link.
   "DELETE /api/v1/members/:id/identities/google": { org: "members.manage" },
   "GET /api/v1/settings": { org: "settings.read" },
@@ -151,6 +154,10 @@ export const ROUTE_POLICY: Readonly<Record<string, Policy>> = {
     signedIn: true,
     allowDeleted: true,
   }),
+  // P3 T10 (404 without the spaces feature); the service checks the target
+  // space (publishTarget).
+  [`POST ${ARTS}/move`]: art("move", signedIn),
+  [`POST ${ARTS}/transfer`]: art("transfer", signedIn),
   [`GET ${ARTS}/content-url`]: art("content.mint"),
   [`GET ${ARTS}/versions`]: art("versions"),
   [`POST ${ARTS}/versions`]: art("publish", signedIn),
@@ -247,6 +254,7 @@ export const TOOL_POLICY: Readonly<Record<string, Policy>> = {
   artifact_data_set: art("data.write"),
   artifact_data_update: art("data.write"),
   artifact_data_delete: art("data.write"),
+  list_spaces: { user: "the caller's own publishable spaces" },
 };
 
 type Target = { method: string; path: string; index: number };
