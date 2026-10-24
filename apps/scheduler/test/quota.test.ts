@@ -116,6 +116,10 @@ describe("emailQuota", () => {
     expect(b.query).toContain("emailSendingAdaptiveGroups");
     expect(b.query).toMatch(/datetimeHour_geq:\s*\$start/);
     expect(b.query).toMatch(/datetimeHour_lt:\s*\$end/);
+    // Each email once: count is per event, and only the last event of an
+    // email has isLastEvent 1. No status filter (all statuses count).
+    expect(b.query).toMatch(/isLastEvent:\s*1\b/);
+    expect(b.query).not.toMatch(/status/);
     // Nothing secret or per-zone is inlined in the query text.
     expect(b.query).not.toContain(TOKEN);
     expect(b.query).not.toContain(Z1);
