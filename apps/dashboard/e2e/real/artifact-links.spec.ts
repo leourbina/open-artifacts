@@ -67,19 +67,24 @@ const serveOutside = (ctx: BrowserContext) =>
     }),
   );
 
+/** Waits for the welcome; retried, since a frame may still be (re)loading. */
 const ready = (page: Page) =>
-  artifactFrame(page)
-    .locator("body")
-    .evaluate(
-      () =>
-        (window as unknown as { openArtifacts: { ready: Promise<unknown> } })
-          .openArtifacts.ready,
-    );
+  expect(async () => {
+    await artifactFrame(page)
+      .locator("body")
+      .evaluate(
+        () =>
+          (window as unknown as { openArtifacts: { ready: Promise<unknown> } })
+            .openArtifacts.ready,
+      );
+  }).toPass();
 
 /** The per-load nonce, from the frame's #oa= hash. */
 const nonceOf = async (page: Page) => {
-  const src =
-    (await page.locator("iframe.oa-vframe").getAttribute("src")) ?? "";
+  // The bridge sets the src property (no attribute).
+  const src = await page
+    .locator("iframe.oa-vframe")
+    .evaluate((f) => (f as HTMLIFrameElement).src);
   return new URL(src).hash.replace(/^#oa=/, "");
 };
 
@@ -160,20 +165,17 @@ test("a script-posted open without user activation asks first; Open goes", async
 }, info) => {
   test.slow();
   await serveOutside(page.context());
-  const a = await publishLinks(member.pat);
+  // The artifact forges "open" on its own, with the nonce it can read, long
+  // after any activation (5 s in Chromium and WebKit). Nothing here may touch
+  // the page before it fires: Playwright's evaluate and polling count as user
+  // gestures.
+  const a = await publishLinks(member.pat, {
+    content: `${LINKS}<script>setTimeout(() => parent.postMessage({ oa: 1, type: "open", url: "${OUTSIDE}/forged", nonce: window.__oaShellNonce.n }, "*"), 12000)</script>`,
+  });
   await page.goto(`/a/${a.id}`);
-  await ready(page);
-  const nonce = await nonceOf(page);
-  // Let any activation from loading the page expire (5 s in Chromium and WebKit).
-  await page.waitForTimeout(6_000);
-  await artifactFrame(page)
-    .locator("body")
-    .evaluate((_b, msg) => parent.postMessage(msg, "*"), {
-      oa: 1,
-      type: "open",
-      url: `${OUTSIDE}/www-path`,
-      nonce,
-    });
+  await expect(artifactFrame(page).locator("#who")).toHaveText("links");
+  // Idle until the post: Playwright's own polling also counts as a gesture.
+  await page.waitForTimeout(13_000);
   const ask = page.getByText("Open link to outside.example?");
   await expect(ask).toBeVisible();
   expect(page.url()).toBe(`${APP}/a/${a.id}`);
@@ -191,7 +193,7 @@ test("a script-posted open without user activation asks first; Open goes", async
         });
       }
   await page.getByRole("button", { name: "Open" }).click();
-  await expect(page).toHaveURL(`${OUTSIDE}/www-path`);
+  await expect(page).toHaveURL(`${OUTSIDE}/forged`);
 });
 
 test("embed mode: an external plain link opens a new tab", async ({
@@ -201,14 +203,9 @@ test("embed mode: an external plain link opens a new tab", async ({
   const a = await publishLinks(member.pat, { visibility: "public" });
   const ctx = await browser.newContext();
   await serveOutside(ctx);
-  await ctx.route(`${EMBEDDER}/**`, (r) =>
-    r.fulfill({
-      contentType: "text/html",
-      body: `<!doctype html><iframe id="app" src="${APP}/a/${a.id}/full" style="width:900px;height:600px"></iframe>`,
-    }),
-  );
   const page = await ctx.newPage();
-  await page.goto(`${EMBEDDER}/host`);
+  const host = `${EMBEDDER}/host?src=${encodeURIComponent(`/a/${a.id}/full`)}`;
+  await page.goto(host);
   const art = page.frameLocator("#app").frameLocator("iframe.oa-vframe");
   await expect(art.locator("#who")).toHaveText("links");
   await art
@@ -223,6 +220,26 @@ test("embed mode: an external plain link opens a new tab", async ({
     art.locator("#ext").click(),
   ]);
   await expect(tab).toHaveURL(`${OUTSIDE}/landing`);
-  expect(page.url()).toBe(`${EMBEDDER}/host`);
+  expect(page.url()).toBe(host);
   await ctx.close();
+});
+
+test("a relative link to the artifact's own page still loads in the frame", async ({
+  page,
+  member,
+}) => {
+  const a = await publishViaApi(member.pat, {
+    title: `Pages ${uniq()}`,
+    entry: "index.html",
+    files: {
+      "index.html": `<!doctype html><p id="who">page 1</p><a id="next" href="page2.html">Next</a>`,
+      "page2.html": `<!doctype html><p id="who">page 2</p>`,
+    },
+  });
+  await page.goto(`/a/${a.id}`);
+  await ready(page);
+  await artifactFrame(page).locator("#next").click();
+  await expect(artifactFrame(page).locator("#who")).toHaveText("page 2");
+  expect(page.url()).toBe(`${APP}/a/${a.id}`);
+  expect(page.context().pages()).toHaveLength(1);
 });

@@ -35,8 +35,14 @@ export const PORT = Number(process.env.OA_E2E_PORT ?? 8787);
 export const APP_HOST = `localhost:${PORT}`;
 export const CONTENT_HOST = `content.localhost:${PORT}`;
 export const APP = `http://${APP_HOST}`;
-/** An embedder origin (served by page.route); allowed to frame /a/<id>/full. */
-export const EMBEDDER = "http://embedder.localhost:9";
+/**
+ * A page on another loopback origin that frames `?src=` (an /a/<id>/full on
+ * APP), allowed by EMBED_ORIGINS. Served by global-setup: a page.route page
+ * counts as public, and Chrome's local network access check would block it
+ * from framing localhost.
+ */
+export const EMBEDDER_PORT = PORT + 1;
+export const EMBEDDER = `http://embedder.localhost:${EMBEDDER_PORT}`;
 /** OIDC issuer host: reserved, so the IdP leg of a login never leaves the machine. */
 export const ACCESS_TEAM_DOMAIN = "access.e2e.invalid";
 
