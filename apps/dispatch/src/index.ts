@@ -10,8 +10,12 @@ export interface Env {
 // IPv4 dotted quad, or IPv6 (URL.hostname keeps the brackets: "[::1]").
 const IP_LITERAL = /^(?:\d+(?:\.\d+){3}|\[.*\])$/;
 
-/** The lookup key, or null for a host no install can hold. */
-function hostOf(req: Request): string | null {
+/**
+ * The lookup key, or null for a host no install can hold. Matches @oa/shared's
+ * normalizeHost on every tenant host (pinned by a parity test); kept local so
+ * the bundle stays small.
+ */
+export function hostOf(req: Request): string | null {
   let host: string;
   try {
     // URL.hostname drops the port; no other header (X-Forwarded-Host) counts.

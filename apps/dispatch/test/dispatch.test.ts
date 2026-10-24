@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import dispatch, { type Env } from "../src/index.js";
+import { normalizeHost } from "../../../packages/shared/src/hosts";
+import dispatch, { type Env, hostOf } from "../src/index.js";
 
 // P1 Task 6: a hostname that isn't mapped must get the generic 404 and never
 // reach another install. The fakes record every HOSTS read and every script
@@ -442,4 +443,23 @@ describe("dispatch", () => {
       for (const s of spies) s.mockRestore();
     }
   });
+});
+
+// The server routes and setup compare hosts with @oa/shared's normalizeHost
+// (#518). Dispatch keeps its own copy to stay a ~2 KB bundle, so pin that
+// both reach the same key for every tenant host a URL can carry.
+describe("host normalization matches @oa/shared normalizeHost", () => {
+  const urls = [
+    "https://acme.open-artifacts-staging.app/",
+    "https://ACME.Open-Artifacts-Staging.APP/x",
+    "https://acme.open-artifacts-staging.app./",
+    "https://acme.open-artifacts-staging.app:443/",
+    "https://acme.open-artifacts-staging.page.:8443/a?b=c",
+    "https://xn--bcher-kva.open-artifacts.app/",
+    "https://a.b.open-artifacts.app/",
+  ];
+  for (const u of urls)
+    it(u, () => {
+      expect(hostOf(new Request(u))).toBe(normalizeHost(new URL(u).host));
+    });
 });
