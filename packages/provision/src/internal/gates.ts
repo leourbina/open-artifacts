@@ -22,8 +22,10 @@ export const ALLOW_ACCOUNT_TARGET: boolean = false;
  */
 export const RELEASE_PUBKEY: Readonly<Record<"staging" | "prod", string>> =
   Object.freeze({
-    staging: RELEASE_PUBKEY_PLACEHOLDER,
-    prod: RELEASE_PUBKEY_PLACEHOLDER,
+    // Key ceremony 2026-10-24: the private halves live only in the GitHub
+    // Environment secrets hosted-staging / hosted-prod RELEASE_SIGNING_KEY.
+    staging: "octk3ysmW5j0Fw8hPs1ex3POLXmYH8l6nLoms8Rrb8c",
+    prod: "tfSgv1PLRZlYQfVNpy9Vp1ohxdfZihz2WgPCYcCQyJg",
   });
 
 /**

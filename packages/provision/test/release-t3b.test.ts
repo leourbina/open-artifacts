@@ -1699,13 +1699,15 @@ describe("F: r2ReleaseReader", () => {
 // ---------- G: gates ----------
 
 describe("G: gates", () => {
-  it("PROD_UNLOCKED stays false, RELEASE_PUBKEY stays a placeholder, FLOOR_MIN_SEQ starts at 1", async () => {
+  it("PROD_UNLOCKED stays false, RELEASE_PUBKEY is pinned (key ceremony 2026-10-24), FLOOR_MIN_SEQ starts at 1", async () => {
     const real = await vi.importActual<
       typeof import("../src/internal/gates.js")
     >("../src/internal/gates.js");
     expect(real.PROD_UNLOCKED).toBe(false);
-    expect(real.RELEASE_PUBKEY.staging).toBe(real.RELEASE_PUBKEY_PLACEHOLDER);
-    expect(real.RELEASE_PUBKEY.prod).toBe(real.RELEASE_PUBKEY_PLACEHOLDER);
+    expect(real.RELEASE_PUBKEY.staging).not.toBe(
+      real.RELEASE_PUBKEY_PLACEHOLDER,
+    );
+    expect(real.RELEASE_PUBKEY.prod).not.toBe(real.RELEASE_PUBKEY_PLACEHOLDER);
     expect(real.FLOOR_MIN_SEQ).toEqual({ staging: 1, prod: 1 });
     expect(Object.isFrozen(real.FLOOR_MIN_SEQ)).toBe(true);
   });
