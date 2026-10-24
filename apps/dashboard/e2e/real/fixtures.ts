@@ -35,6 +35,8 @@ export const PORT = Number(process.env.OA_E2E_PORT ?? 8787);
 export const APP_HOST = `localhost:${PORT}`;
 export const CONTENT_HOST = `content.localhost:${PORT}`;
 export const APP = `http://${APP_HOST}`;
+/** An embedder origin (served by page.route); allowed to frame /a/<id>/full. */
+export const EMBEDDER = "http://embedder.localhost:9";
 /** OIDC issuer host: reserved, so the IdP leg of a login never leaves the machine. */
 export const ACCESS_TEAM_DOMAIN = "access.e2e.invalid";
 
@@ -87,6 +89,9 @@ export function devConfig(): Record<string, unknown> {
   cfg.vars = {
     ...cfg.vars,
     ENVIRONMENT: "dev",
+    // A test-only page that frames /a/<id>/full (artifact-links.spec, embed mode).
+    EMBED_ORIGINS: EMBEDDER,
+    EMBED_ALLOW_SAME_SITE: "1",
     ACCESS_CLIENT_SECRET: secret(),
     SESSION_SECRET: secret(),
     CONTENT_SIGNING_KEY: secret(),

@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { artifactNavPath, createNavigator } from "../src/viewer/navigate";
+import {
+  artifactNavPath,
+  createLimiter,
+  createNavigator,
+  createOpener,
+  linkHost,
+  openableUrl,
+} from "../src/viewer/navigate";
 
 const O = "https://app.test";
 
@@ -103,5 +110,137 @@ describe("createNavigator", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("openableUrl", () => {
+  it.each([
+    "https://other.example/x?q#h",
+    "http://other.example/",
+    "https://app.test/settings",
+  ])("accepts %s", (u) => {
+    expect(openableUrl(u)?.href).toBe(new URL(u).href);
+  });
+  it.each([
+    "javascript:alert(1)",
+    "data:text/html,hi",
+    "blob:https://other.example/1",
+    "file:///etc/passwd",
+    "mailto:a@example.com",
+    "https://user:pw@other.example/",
+    "https://user@other.example/",
+    "not a url",
+    "/relative",
+  ])("refuses %s", (u) => {
+    expect(openableUrl(u)).toBeNull();
+  });
+});
+
+describe("linkHost", () => {
+  it.each([
+    ["https://www.example.com/a", "example.com"],
+    ["https://docs.example.com:8443/a", "docs.example.com"],
+    ["https://xn--bcher-kva.example/", "xn--bcher-kva.example"],
+    ["https://bücher.example/", "xn--bcher-kva.example"],
+    [
+      "https://a-very-long-subdomain.with.many.parts.docs.example.com/",
+      "…ith.many.parts.docs.example.com",
+    ],
+  ])("%s reads %s", (u, host) => {
+    expect(linkHost(new URL(u))).toBe(host);
+  });
+});
+
+describe("createOpener", () => {
+  const setup = (o: { embed?: boolean; active?: boolean } = {}) => {
+    let t = 0;
+    const now = () => t;
+    const go = vi.fn();
+    const assign = vi.fn();
+    const open = vi.fn();
+    const ask = vi.fn();
+    const limit = createLimiter(now);
+    const openLink = createOpener({
+      origin: O,
+      go,
+      assign,
+      open,
+      ask,
+      limit,
+      embed: () => o.embed ?? false,
+      active: () => o.active ?? true,
+    });
+    return {
+      openLink,
+      go,
+      assign,
+      open,
+      ask,
+      limit,
+      tick: (ms: number) => (t += ms),
+    };
+  };
+
+  it("with user activation, navigates the top window in the same tab", () => {
+    const { openLink, assign, ask } = setup();
+    openLink("https://other.example/x");
+    expect(assign).toHaveBeenCalledWith("https://other.example/x");
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it("without user activation, asks instead; Open then navigates", () => {
+    const { openLink, assign, ask } = setup({ active: false });
+    openLink("https://other.example/x");
+    expect(assign).not.toHaveBeenCalled();
+    expect(ask).toHaveBeenCalledTimes(1);
+    const [u, go] = ask.mock.calls[0] as [URL, () => void];
+    expect(u.href).toBe("https://other.example/x");
+    go();
+    expect(assign).toHaveBeenCalledWith("https://other.example/x");
+  });
+
+  it("refuses javascript:, data:, credentials and junk silently, without spending the limit", () => {
+    const { openLink, assign, ask } = setup();
+    for (const u of [
+      "javascript:alert(1)",
+      "data:text/html,x",
+      "https://u:p@other.example/",
+      "nope",
+    ])
+      openLink(u);
+    expect(assign).not.toHaveBeenCalled();
+    expect(ask).not.toHaveBeenCalled();
+    openLink("https://other.example/");
+    expect(assign).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares the 1/s limit with navigate", () => {
+    const { openLink, assign, limit, tick } = setup();
+    const go = vi.fn();
+    const nav = createNavigator(go, { origin: O, limit, embed: () => false });
+    nav("https://app.test/a/B");
+    openLink("https://other.example/");
+    expect(assign).not.toHaveBeenCalled();
+    tick(1000);
+    openLink("https://other.example/");
+    expect(assign).toHaveBeenCalledTimes(1);
+  });
+
+  it("an app viewer link routes in place, like navigate", () => {
+    const { openLink, go, assign } = setup();
+    openLink("https://app.test/a/B?x#y");
+    expect(go).toHaveBeenCalledWith("/a/B");
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("in embed mode opens a new tab", () => {
+    const { openLink, open, assign, ask } = setup({
+      embed: true,
+      active: false,
+    });
+    openLink("https://other.example/x");
+    expect(open).toHaveBeenCalledWith("https://other.example/x");
+    expect(assign).not.toHaveBeenCalled();
+    expect(ask).not.toHaveBeenCalled();
   });
 });

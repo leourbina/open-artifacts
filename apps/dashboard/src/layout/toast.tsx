@@ -8,22 +8,36 @@ import type { ReactNode } from "react";
 export type ToastOptions = {
   title: string;
   description?: ReactNode;
-  tone?: "info" | "success" | "danger";
+  /** "neutral": no icon. */
+  tone?: "info" | "success" | "danger" | "neutral";
   /** A button in the toast, e.g. Undo. Clicking it also dismisses. */
   action?: { label: string; onClick(): void };
+  /** A toast with the same id replaces the one showing. */
+  id?: string;
+  /** Milliseconds (default: Design's, see above). */
+  duration?: number;
 };
 
 const LONG = 8000;
 
-export function toast({ title, description, tone, action }: ToastOptions) {
+export function toast({
+  title,
+  description,
+  tone,
+  action,
+  id,
+  duration,
+}: ToastOptions) {
   const danger = tone === "danger";
   const opts = {
+    id,
     description,
-    duration: danger || action ? LONG : undefined,
+    duration: duration ?? (danger || action ? LONG : undefined),
     action: action && { label: action.label, onClick: () => action.onClick() },
   };
   if (danger) return sonner.error(<span role="alert">{title}</span>, opts);
   if (tone === "success") return sonner.success(title, opts);
+  if (tone === "neutral") return sonner(title, opts);
   return sonner.info(title, opts);
 }
 

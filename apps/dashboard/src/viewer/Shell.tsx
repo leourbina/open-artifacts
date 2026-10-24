@@ -24,7 +24,12 @@ import { Crumbs } from "./Crumbs";
 import { FullScreenEscape } from "./FullScreenEscape";
 import { frameLoad, SANDBOX, safeContentUrl } from "./frame";
 import { FullLive, GoneBanner, LiveAnnouncer, TitleLive } from "./LiveChip";
-import { createNavigator } from "./navigate";
+import {
+  createLimiter,
+  createNavigator,
+  createOpener,
+  linkHost,
+} from "./navigate";
 import { isPanelTab, type PanelTab, SidePanel } from "./panels/SidePanel";
 import { RenavNotice } from "./RenavNotice";
 import { SlowNotice } from "./SlowNotice";
@@ -34,14 +39,32 @@ import { useContentUrl } from "./useContentUrl";
 import { type FrameState, type Gone, useLiveVersions } from "./useLiveVersions";
 import { useTheme } from "./useTheme";
 import "./viewer.css";
+import { toast } from "../layout/toast";
 import { fullPath } from "./paths";
 
 type Bridge = ReturnType<typeof createBridge>;
 
-// One navigator for every viewer, so the rate limit survives the remount a
-// navigation causes. `go` is the mounted viewer's router navigate.
+// One navigator and opener for every viewer, so the rate limit survives the
+// remount a navigation causes. `go` is the mounted viewer's router navigate.
 const artifactNav = { go: (_path: string) => {} };
-const onArtifactNavigate = createNavigator((p) => artifactNav.go(p));
+const navLimit = createLimiter();
+const onArtifactNavigate = createNavigator((p) => artifactNav.go(p), {
+  limit: navLimit,
+});
+/** A blocked link asks in one toast at a time (Design: 10 s, pauses on hover). */
+const askToOpen = (u: URL, open: () => void) =>
+  toast({
+    id: "oa-open-link",
+    title: `Open link to ${linkHost(u)}?`,
+    tone: "neutral",
+    duration: 10_000,
+    action: { label: "Open", onClick: open },
+  });
+const onArtifactOpen = createOpener({
+  go: (p) => artifactNav.go(p),
+  ask: askToOpen,
+  limit: navLimit,
+});
 
 /** No hello this long after the frame loaded: hint that it may be stuck. */
 export const SLOW_MS = 8_000;
@@ -258,6 +281,7 @@ function Viewer({
       onAccessLost: () => cbs.current.onAccessLost?.(),
       onRenavigated,
       onNavigate: onArtifactNavigate,
+      onOpen: onArtifactOpen,
       onInteracted: touch,
     });
     bridge.current = b;

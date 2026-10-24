@@ -49,6 +49,8 @@ export interface BridgeOptions {
   onRenavigated?: () => void;
   /** The artifact asked to open `url` (unvalidated: see navigate.ts). */
   onNavigate?: (url: string) => void;
+  /** The artifact asked to open another site's `url` (unvalidated: see createOpener). */
+  onOpen?: (url: string) => void;
   /** The viewer first touched the artifact since this load (runtime `interacted`). */
   onInteracted?: () => void;
 }
@@ -435,6 +437,9 @@ export function createBridge(opts: BridgeOptions) {
       }
       case "navigate":
         opts.onNavigate?.(m.url);
+        break;
+      case "open":
+        opts.onOpen?.(m.url);
         break;
       case "resize":
         if (Number.isFinite(m.height) && m.height >= 0 && m.height <= 100_000)
