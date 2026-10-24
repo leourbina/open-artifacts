@@ -43,6 +43,7 @@ const TOOLS = [
   "artifact_data_set",
   "artifact_data_update",
   "artifact_data_delete",
+  "list_spaces",
 ];
 
 const tag = newId().slice(0, 6).toLowerCase();
@@ -86,7 +87,7 @@ afterAll(async () => {
 });
 
 describe("MCP tools over PAT", () => {
-  it("tools/list has all 17 tools", async () => {
+  it("tools/list has all 18 tools", async () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([...TOOLS].sort());
     for (const t of tools) {
@@ -476,7 +477,7 @@ describe("MCP artifact data tools", () => {
 describe("MCP 2026-07-28 era (per-request envelope)", () => {
   it("lists tools and publishes", async () => {
     const c = await connect(ownerPat, { modern: true });
-    expect((await c.listTools()).tools).toHaveLength(17);
+    expect((await c.listTools()).tools).toHaveLength(18);
     const pub = await publishMd(c, "# modern");
     const got = sc<{ content: string; version: { agent: unknown } }>(
       await tool(c, "get_artifact", { id: pub.id }),
@@ -619,5 +620,73 @@ describe("tool manifest", () => {
     expect(INSTRUCTIONS("paid")).toContain(
       `${LIMITS.dataDocBytesPaid / 1024 / 1024} MB per document on this instance (paid plan),`,
     );
+  });
+});
+
+describe("MCP spaces (P3 T10)", () => {
+  const SPACES = E({ FEATURES: "spaces", PLAN: "paid" });
+  const mkSpace = async (name: string) => {
+    const id = newId();
+    await env.DB.prepare(
+      "insert into spaces (id, kind, name, public_links, created_at) values (?, 'shared', ?, 1, 1)",
+    )
+      .bind(id, name)
+      .run();
+    return id;
+  };
+  const member = (sid: string, uid: string, role: string) =>
+    env.DB.prepare(
+      "insert into space_members (space_id, user_id, role, source, created_at) values (?, ?, ?, 'manual', 1)",
+    )
+      .bind(sid, uid, role)
+      .run();
+
+  it("MCP publish into a view-only space → 403 space_forbidden; list_spaces omits it", async () => {
+    const u = await login(`mcp-sp-${tag}@x.com`);
+    const view = await mkSpace(`View ${tag}`);
+    const edit = await mkSpace(`Edit ${tag}`);
+    await member(view, u.userId, "viewer");
+    await member(edit, u.userId, "editor");
+    const c = await connect((await createPat(env, u.userId, "sp")).token, {
+      env: SPACES,
+    });
+    const denied = await tool(c, "publish_artifact", {
+      title: "no",
+      format: "markdown",
+      content: "x",
+      spaceId: view,
+    });
+    expect(denied.isError).toBe(true);
+    expect(textOf(denied)).toMatch(/^space_forbidden/);
+    const listed = sc<{
+      items: { id: string; kind: string; myRole: string }[];
+    }>(await tool(c, "list_spaces", {}));
+    const ids = listed.items.map((s) => s.id);
+    expect(ids).toContain(edit);
+    expect(ids).not.toContain(view);
+    expect(listed.items[0]).toMatchObject({
+      id: u.userId,
+      kind: "personal",
+      myRole: "manager",
+    });
+    const pub = sc<{ id: string }>(
+      await tool(c, "publish_artifact", {
+        title: "yes",
+        format: "markdown",
+        content: "x",
+        spaceId: edit,
+      }),
+    );
+    const got = sc<{
+      artifact: { space?: { id: string }; can?: { edit: boolean } };
+    }>(await tool(c, "get_artifact", { id: pub.id }));
+    expect(got.artifact.space).toMatchObject({ id: edit, kind: "shared" });
+    expect(got.artifact.can).toMatchObject({ edit: true, move: false });
+    await c.close();
+  });
+
+  it("the skill lists list_spaces and the instructions say owner or space manager", () => {
+    expect(TOOL_DEFS.map((t) => t.name)).toContain("list_spaces");
+    expect(INSTRUCTIONS("free")).toContain("owner or space manager");
   });
 });

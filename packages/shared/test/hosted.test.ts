@@ -17,7 +17,6 @@ import {
   ERROR_CODES,
   GroupMappingSchema,
   HealthzSchema,
-  HostedPublishInputSchema,
   ListQuerySchema,
   MemberSchema,
   MembersQuerySchema,
@@ -200,20 +199,16 @@ describe("hosted contract schemas", () => {
     expect(TEST_HOOKS_ALLOWED).toBe(false);
   });
 
-  it("publish: spaceId is hosted-only and keeps the publish rules", () => {
+  it("publish: spaceId is folded into PublishInputSchema and keeps the publish rules", () => {
     const base = { title: "t", format: "html", content: "x" };
-    expect(
-      PublishInputSchema.safeParse({ ...base, spaceId: "s" }).success,
-    ).toBe(false);
-    expect(
-      HostedPublishInputSchema.parse({ ...base, spaceId: "s" }),
-    ).toMatchObject({
+    expect(PublishInputSchema.parse({ ...base, spaceId: "s" })).toMatchObject({
       spaceId: "s",
       title: "t",
     });
-    expect(HostedPublishInputSchema.safeParse({ spaceId: "s" }).success).toBe(
-      false,
-    );
+    expect(PublishInputSchema.safeParse({ spaceId: "s" }).success).toBe(false);
+    expect(
+      PublishInputSchema.safeParse({ ...base, spaceId: 1 }).success,
+    ).toBe(false);
   });
 
   it("artifactCan follows the action table", () => {
@@ -691,6 +686,20 @@ describe("hosted mocks: restriction, public links, admin self-add, audit", () =>
       visibility: "public",
       space: { id: eng, publicLinks: false },
     });
+    // Echoing "public" on it passes (agents resend it); only a change is refused.
+    expect(
+      (await call("PATCH", R.artifact(notes), { visibility: "public" })).status,
+    ).toBe(200);
+    expect(
+      (
+        await call("POST", R.artifacts, {
+          id: notes,
+          format: "html",
+          content: "y",
+          visibility: "public",
+        })
+      ).status,
+    ).toBe(201);
   });
 
   it("space members: personal space 400 space_personal; PUT needs an existing, active target", async () => {
