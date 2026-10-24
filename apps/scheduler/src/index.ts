@@ -60,7 +60,7 @@ export interface NightlyOptions {
   pageSize?: number;
 }
 
-/** Consecutive re-check D1 errors that stop the run (a platform D1 outage). */
+/** Consecutive re-check D1 errors or stalls that stop the run (a platform D1 outage). */
 const DB_ERROR_STOP = 3;
 const DAY_MS = 86_400_000;
 
@@ -222,6 +222,10 @@ export async function runNightly(
   let next = 0;
   let held = 0; // lanes held: from the re-check until the call settles or leaks
   let undecided = 0; // started installs with no result yet
+  // Calls not yet settled, in a lane or leaked: at most 2 × concurrency, so
+  // leaked calls can't pile up on the shared connection limit.
+  let unsettled = 0;
+  const leakTimers = new Set<ReturnType<typeof setTimeout>>();
   let stopped: SkipReason | null = null;
   let dbStreak = 0;
   const stuck = new Set<string>(); // timed out, not settled, lane still held
@@ -244,11 +248,18 @@ export async function runNightly(
       if (finished) return;
       finished = true;
       clearTimeout(deadline);
+      for (const t of leakTimers) clearTimeout(t);
       resolve();
     };
     function pump() {
       if (finished) return;
-      while (!stopped && held < concurrency && next < ids.length) run(next++);
+      while (
+        !stopped &&
+        held < concurrency &&
+        unsettled < 2 * concurrency &&
+        next < ids.length
+      )
+        run(next++);
       // Done once nothing more will start and every started install has a
       // result; timed-out calls may still hold lanes, but never block this.
       if ((stopped || next >= ids.length) && undecided === 0) finish();
@@ -256,6 +267,7 @@ export async function runNightly(
     async function run(i: number) {
       const id = ids[i] as string;
       held++;
+      unsettled++;
       undecided++;
       let decided = false;
       let released = false;
@@ -289,8 +301,9 @@ export async function runNightly(
               dbErrors.push(id);
               console.error("nightly db_error", id);
             });
-            if (++dbStreak >= DB_ERROR_STOP) stopped ??= "db_error";
           }
+          // A stall counts like an error: a hanging D1 stops the run too.
+          if (++dbStreak >= DB_ERROR_STOP) stopped ??= "db_error";
           return;
         }
         dbStreak = 0;
@@ -304,9 +317,11 @@ export async function runNightly(
           decide(() => fail(id, "timeout"));
           stuck.add(id);
           leakTimer = setTimeout(() => {
+            leakTimers.delete(leakTimer as ReturnType<typeof setTimeout>);
             leak(id);
             release();
           }, leakMs);
+          leakTimers.add(leakTimer);
           pump();
         }, timeoutMs);
         const r = await (
@@ -321,8 +336,14 @@ export async function runNightly(
       } finally {
         stuck.delete(id);
         clearTimeout(timer);
-        clearTimeout(leakTimer);
+        if (leakTimer) {
+          clearTimeout(leakTimer);
+          leakTimers.delete(leakTimer);
+        }
+        unsettled--;
         release();
+        // A leaked call settling frees room under the unsettled cap.
+        pump();
       }
     }
     pump();
