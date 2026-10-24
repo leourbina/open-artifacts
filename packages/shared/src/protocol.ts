@@ -131,8 +131,9 @@ export const ArtifactToShellSchema = z.union([
   }),
   /**
    * A click on any other plain link that would move the frame elsewhere
-   * (another origin, or the app outside NAVIGATE_PATH_RE): the sandboxed frame
-   * can't show most sites, so the shell opens it in the top window. Artifact
+   * (another origin, the app outside NAVIGATE_PATH_RE, or another artifact's
+   * content): the sandboxed frame can't show most sites, so the shell opens it
+   * in the top window; app pages and content URLs it refuses, with a note. Artifact
    * content can forge this too: the shell accepts only http(s) without
    * credentials, rate limited, and navigates only with transient user
    * activation (else it asks first).

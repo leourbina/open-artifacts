@@ -189,9 +189,6 @@ describe("oa:open", () => {
     ["named target", "https://other.example/", { target: "w" }],
     ["download", "https://other.example/f.zip", { download: "" }],
     ["the artifact's own pages", "/p/page2.html", {}],
-    ["another app path", `${APP}/settings`, {}],
-    ["an app OAuth page", `${APP}/oauth/authorize?client_id=x`, {}],
-    ["a deeper /a/ path", `${APP}/a/abc/edit`, {}],
     ["an in-page anchor", "#section", {}],
     ["mailto", "mailto:a@example.com", {}],
     ["javascript", "javascript:void(0)", {}],
@@ -223,6 +220,61 @@ describe("oa:open", () => {
 
   it("before welcome (no shell yet) is untouched", async () => {
     expect(await click("https://other.example/")).toBe(false);
+    expect(opens()).toEqual([]);
+  });
+});
+
+describe("app pages and other artifacts' content: blocked in place (#525)", () => {
+  /** The frame's own document, as the content host serves it. */
+  const at = (path: string) => history.replaceState(null, "", path);
+
+  it.each([
+    ["an app page", `${APP}/settings`],
+    ["an app OAuth page", `${APP}/oauth/authorize?client_id=x`],
+    ["a deeper /a/ path", `${APP}/a/abc/edit`],
+    ["the app over http", "http://app.example/settings"],
+    ["the app on another port", "https://app.example:8443/invite/x"],
+    ["the app with a trailing dot", "https://app.example./settings"],
+  ])(
+    "%s: prevented, and the shell is told (it refuses and says why)",
+    async (_n, href) => {
+      await welcome();
+      expect(await click(href)).toBe(true);
+      expect(opens()).toEqual([
+        { oa: 1, type: "open", url: new URL(href).href, nonce: N },
+      ]);
+    },
+  );
+
+  it.each([
+    ["another artifact", "/p/Other45/v1/index.html"],
+    ["another artifact, signed", "/c/tok/Other45/v1/index.html"],
+    ["another version of this one", "/p/Own123/v2/index.html"],
+  ])(
+    "%s on the content host: prevented, and the shell is told",
+    async (_n, path) => {
+      at("/p/Own123/v3/index.html");
+      await welcome();
+      expect(await click(path)).toBe(true);
+      expect(opens()).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    ["a relative page", "page2.html"],
+    ["a nested page", "docs/a.html"],
+    ["an in-page anchor", "#top"],
+  ])("this artifact's own %s still navigates the frame", async (_n, href) => {
+    at("/p/Own123/v3/index.html");
+    await welcome();
+    expect(await click(href)).toBe(false);
+    expect(opens()).toEqual([]);
+  });
+
+  it("a script's synthetic click on an app page is untouched", async () => {
+    await welcome();
+    trusted = false;
+    expect(await click(`${APP}/settings`)).toBe(false);
     expect(opens()).toEqual([]);
   });
 });

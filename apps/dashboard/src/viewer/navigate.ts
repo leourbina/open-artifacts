@@ -111,12 +111,16 @@ const userActive = () =>
  * - the shared rate limit, and nothing while a prompt is showing (so the URL
  *   can't change under the cursor);
  * - the top window moves only with transient user activation; without it,
- *   `ask` puts the choice in the shell's chrome and calls `done` when it closes.
+ *   `ask` puts the choice in the shell's chrome and calls `done` when it closes;
+ * - a refused app page or content URL gets `refuse`'s note, under the same
+ *   lock and limit (the runtime blocks those clicks in place, #525).
  * Embedded, everything opens in a new tab.
  */
 export function createOpener(opts: {
   go: (path: string) => void;
   ask: (u: URL, open: () => void, done: () => void) => void;
+  /** An app page or content-host URL was refused: say so (names no URL), then `done`. */
+  refuse?: (done: () => void) => void;
   limit: () => boolean;
   origin?: string;
   /** The frame's content origin, when known. */
@@ -131,6 +135,15 @@ export function createOpener(opts: {
   const assign = opts.assign ?? ((u: string) => location.assign(u));
   const open = opts.open ?? newTab;
   let asking = false;
+  const release = () => {
+    asking = false;
+  };
+  /** One note or prompt at a time, inside the shared limit. */
+  const refused = () => {
+    if (!opts.refuse || !opts.limit()) return;
+    asking = true;
+    opts.refuse(release);
+  };
   return (url: string) => {
     if (asking) return;
     const origin = opts.origin ?? location.origin;
@@ -139,24 +152,19 @@ export function createOpener(opts: {
     // "app.example." is app.example too: compare without a trailing dot.
     const host = bareHost(u.hostname);
     const content = opts.contentOrigin?.();
-    if (content && host === bareHost(new URL(content).hostname)) return;
+    if (content && host === bareHost(new URL(content).hostname))
+      return refused();
     const appHost = host === bareHost(new URL(origin).hostname);
     const path =
       appHost && NAVIGATE_PATH_RE.test(u.pathname) ? u.pathname : null;
-    if (appHost && !path) return;
+    if (appHost && !path) return refused();
     if (!opts.limit()) return;
     if (embed()) open(path ? origin + path : u.href);
     else if (path) opts.go(path);
     else if (active()) assign(u.href);
     else {
       asking = true;
-      opts.ask(
-        u,
-        () => assign(u.href),
-        () => {
-          asking = false;
-        },
-      );
+      opts.ask(u, () => assign(u.href), release);
     }
   };
 }

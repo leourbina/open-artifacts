@@ -79,9 +79,20 @@ const askToOpen = (u: URL, open: () => void, done: () => void) =>
     },
     onClose: done,
   });
+/** A link to an app page (or another artifact's content) was blocked in place. */
+const noteRefused = (done: () => void) =>
+  toast({
+    id: "oa-open-link",
+    title: "Artifacts can't open app pages.",
+    description: "Use the sidebar to get there.",
+    tone: "neutral",
+    duration: 5_000,
+    onClose: done,
+  });
 const onArtifactOpen = createOpener({
   go: (p) => artifactNav.go(p),
   ask: askToOpen,
+  refuse: noteRefused,
   limit: navLimit,
   contentOrigin: () => artifactNav.contentOrigin,
 });
