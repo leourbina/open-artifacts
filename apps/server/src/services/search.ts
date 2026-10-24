@@ -522,7 +522,7 @@ export function searchQuery(
       ownerDisplayName: users.displayName,
       level: levelSql(caller),
       // The joined space, for `space` and `can` (withSpace).
-      space: spaceCols,
+      space: spaceCols(caller, decorates(env, caller)),
       sb: snip(3),
       sd: snip(2),
       st: snip(1),

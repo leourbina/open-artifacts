@@ -34,6 +34,8 @@ import {
   levelSql,
   listFilterSql,
   publishTarget,
+  roleRankQuery,
+  roleRankSql,
 } from "../auth/authz.js";
 import { authConfig } from "../auth/config.js";
 import { can } from "../auth/policy.js";
@@ -273,12 +275,20 @@ export async function publish(
       spaceId !== user.id && visibility === "public"
         ? " and not exists (select 1 from spaces where id = ? and kind = 'shared' and public_links = 0)"
         : "";
+    // Into a shared space: the caller's role there (editor or manager) is
+    // re-checked in the insert, so a role revoked mid-request writes nothing.
+    const role =
+      spaceId !== user.id
+        ? roleRankQuery(env, callerOf(user), spaceId)
+        : { sql: "", params: [] as unknown[] };
     stmts.push(
       db
         .prepare(
           `insert into artifacts (id, owner_id, space_id, title, description, format, visibility,
              current_version, capabilities, allow_anonymous_writes, created_at, updated_at)
-           select ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ? where 1${links}${guard}`,
+           select ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ? where 1${links}${
+             role.sql ? ` and ${role.sql} >= 2` : ""
+           }${guard}`,
         )
         .bind(
           id,
@@ -295,6 +305,7 @@ export async function publish(
           now,
           now,
           ...(links ? [spaceId] : []),
+          ...role.params,
           ...guardArgs,
         ),
     );
@@ -579,11 +590,11 @@ export async function getSummary(
   const out = toSummary(env, r.artifact, owner, r.level);
   if (!decorates(env, caller)) return out;
   // One PK read for the space (lists and search read it from their join).
-  const sp = await env.DB.prepare(
-    "select kind, name, public_links as publicLinks from spaces where id = ?",
-  )
-    .bind(r.artifact.spaceId)
-    .first<SpaceCols>();
+  const [sp] = await getDb(env)
+    .select(spaceCols(caller, true, sql`${spaces.id}`))
+    .from(spaces)
+    .where(eq(spaces.id, r.artifact.spaceId ?? ""))
+    .limit(1);
   return withSpace(caller, out, r.level, r.artifact.spaceId, sp);
 }
 
@@ -592,14 +603,26 @@ export type SpaceCols = {
   kind: string | null;
   name: string | null;
   publicLinks: number | null;
+  /** The caller's role rank in a shared space (roleRankSql); 0 = none. */
+  rank: number | null;
 };
 
-/** The joined space's columns for a list or search SELECT (no extra statement). */
-export const spaceCols = {
+/**
+ * The joined space's columns for a list, search or get SELECT (no extra
+ * statement). `rank` is computed only when the row is decorated (`on`).
+ */
+export const spaceCols = (
+  c: Caller,
+  on: boolean,
+  spaceId: SQL = sql`${artifacts.spaceId}`,
+) => ({
   kind: spaces.kind,
   name: spaces.name,
   publicLinks: spaces.publicLinks,
-};
+  rank: on
+    ? sql<number>`case when ${spaces.kind} = 'shared' then ${roleRankSql(c, spaceId)} else 0 end`
+    : sql<number>`0`,
+});
 
 /**
  * Hosted M1: `space` and `can` go on artifact responses for signed-in
@@ -613,7 +636,10 @@ export const decorates = (env: Env, caller: Caller): boolean =>
  * level, personal or not, with their cap) from the space row already read.
  * A personal space is named for its owner as the caller may see them (the
  * summary's owner ref), never by the stored name. A missing row reads as
- * personal, as decide() does. Call only when `decorates`.
+ * personal, as decide() does. A shared space is shown only to callers with
+ * a role there (space_members, Every-space, allMembersRole when uncapped:
+ * checkListSpace's rule); anyone else (a share recipient, say) gets no
+ * `space`, so its name and id never leak. Call only when `decorates`.
  */
 export function withSpace<T extends ArtifactSummary>(
   caller: Caller,
@@ -623,7 +649,7 @@ export function withSpace<T extends ArtifactSummary>(
   sp: SpaceCols | null | undefined,
 ): T {
   const shared = sp?.kind === "shared";
-  if (sp?.kind)
+  if (sp?.kind && (!shared || (sp.rank ?? 0) > 0))
     out.space = {
       id: spaceId ?? "",
       kind: shared ? "shared" : "personal",
@@ -715,7 +741,7 @@ export function listQuery(env: Env, caller: Caller, q: ListQuery) {
       ownerDisplayName: users.displayName,
       level: levelSql(caller, { allowDeleted: q.includeDeleted }),
       // The joined space, for `space` and `can` (withSpace).
-      space: spaceCols,
+      space: spaceCols(caller, decorates(env, caller)),
     })
     .from(artifacts)
     .innerJoin(users, eq(users.id, artifacts.ownerId))

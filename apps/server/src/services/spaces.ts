@@ -36,6 +36,7 @@ import {
   callerOf,
   capOfCaller,
   publishTarget,
+  roleRankQuery,
   roleRankSql,
 } from "../auth/authz.js";
 import { authConfig } from "../auth/config.js";
@@ -1586,20 +1587,31 @@ export async function moveArtifact(
   const to = await publishTarget(env, who, toSpaceId, "move");
   if (a.spaceId === to.id) return getSummary(env, who, id);
   const rewrite = a.visibility === "public" && !to.publicLinks;
+  // The roles the move was allowed under, re-checked in the write: editor or
+  // manager in the target, and manager of a shared source (a personal source
+  // is the caller's own: the space_id check already pins it).
+  const target = roleRankQuery(env, who, to.id);
+  const source = roleRankQuery(env, who, a.spaceId ?? "");
+  const own = a.spaceId === user.id ? 1 : 0;
   const out = await env.DB.batch([
-    stmt(
-      env.DB,
-      `update artifacts set space_id = ?1, visibility = ?2
-        where id = ?3 and deleted_at is null and space_id is ?4 and visibility = ?5
-          and exists (select 1 from spaces where id = ?1 and kind = 'shared'
-            and deleted_at is null and public_links = ?6)`,
+    env.DB.prepare(
+      `update artifacts set space_id = ?, visibility = ?
+        where id = ? and deleted_at is null and space_id is ? and visibility = ?
+          and exists (select 1 from spaces where id = ? and kind = 'shared'
+            and deleted_at is null and public_links = ?)
+          and ${target.sql} >= 2
+          and (? = 1 or ${source.sql} = 3)`,
     ).bind(
       to.id,
       rewrite ? "team" : a.visibility,
       id,
       a.spaceId,
       a.visibility,
+      to.id,
       to.publicLinks ? 1 : 0,
+      ...target.params,
+      own,
+      ...source.params,
     ),
     audit(env, "artifact.move", { type: "artifact", id }, userActor(user.id), {
       spaceId: to.id,
@@ -1797,6 +1809,7 @@ export async function transferPersonal(
         and exists (select 1 from spaces where id = ?3 and deleted_at is null
           and (kind = 'personal' or public_links = ?5))
         and (?6 = 0 or ${SUCCESSOR(4)})
+        and exists (select 1 from users where id = ?2 and status <> 'active')
       returning id`,
   ).bind(
     ids,

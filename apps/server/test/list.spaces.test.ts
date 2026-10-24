@@ -827,6 +827,7 @@ describe("space and can on list and search rows", () => {
 
   it("list(all) and search rows equal getSummary for every caller and artifact", async () => {
     let decorated = 0;
+    let hidden = 0;
     for (const w of CALLERS) {
       const listed = await collect((cursor) =>
         list(ON, who[w].caller, ListQuerySchema.parse({ limit: 100, cursor })),
@@ -841,12 +842,65 @@ describe("space and can on list and search rows", () => {
         searched: await summaries(w, Object.keys(searched)),
       });
       for (const d of Object.values(listed)) {
-        expect(d.space?.id).toBeTruthy();
         expect(d.can).toBeDefined();
-        decorated++;
+        if (d.space) decorated++;
+        else hidden++;
       }
     }
+    // Both happen across the matrix: a role shows the space, a share or a
+    // team or public link alone hides a shared one.
     expect(decorated).toBeGreaterThan(0);
+    expect(hidden).toBeGreaterThan(0);
+  });
+
+  it("a share recipient with no role in the shared space gets no space on list, search and get", async () => {
+    const s = await getDb(env)
+      .insert(spaces)
+      .values({
+        id: newId(),
+        kind: "shared",
+        name: `Hidden ${tag}`,
+        publicLinks: 1,
+        createdAt: Date.now(),
+      })
+      .returning({ id: spaces.id });
+    const sid = s[0]?.id as string;
+    const id = newId();
+    const title = `hiddenspace${tag}`.replace(/\d/g, "q");
+    await env.DB.prepare(
+      "insert into artifacts (id, owner_id, space_id, title, format, visibility, created_at, updated_at) values (?, ?, ?, ?, 'html', 'private', 1, ?)",
+    )
+      .bind(id, who.owner.id, sid, title, Date.now())
+      .run();
+    await env.DB.prepare(
+      "insert into artifact_search (rowid, artifact_id, title, description, body) select rowid, id, title, '', '' from artifacts where id = ?",
+    )
+      .bind(id)
+      .run();
+    const m = await getUser(env, who.memberA.id);
+    await env.DB.prepare(
+      "insert into shares (artifact_id, email, role, created_by, created_at) values (?, ?, 'viewer', ?, 1)",
+    )
+      .bind(id, m?.email, who.owner.id)
+      .run();
+    const c = who.memberA.caller;
+    const got = await getSummary(ON, c, id);
+    expect(got.access).toBe("viewer");
+    expect(got.space).toBeUndefined();
+    expect(got.can).toMatchObject({ edit: false });
+    const listed = await list(
+      ON,
+      c,
+      ListQuerySchema.parse({ scope: "shared", limit: 100 }),
+    );
+    const row = listed.items.find((a) => a.id === id);
+    expect(row?.space).toBeUndefined();
+    expect(row?.can).toEqual(got.can);
+    const hit = (await search(ON, c, title, undefined, 10)).items.find(
+      (a) => a.id === id,
+    );
+    expect(hit?.space).toBeUndefined();
+    expect(hit?.can).toEqual(got.can);
   });
 
   it("spaces off, or anonymous: no space or can on rows", async () => {

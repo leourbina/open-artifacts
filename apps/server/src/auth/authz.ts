@@ -517,6 +517,26 @@ export async function checkListSpace(
   if (!(row.rank > 0)) throw new ApiError("not_found", "Not found");
 }
 
+/**
+ * The caller's full role rank (0 to 3) in `spaceId` (roleRankSql, so
+ * allMembersRole only for uncapped members), as a scalar subquery and its
+ * parameters for a raw D1 statement: a write re-checks the role it was
+ * allowed under. Its placeholders are positional (`?`).
+ */
+export function roleRankQuery(
+  env: Env,
+  c: Caller,
+  spaceId: string,
+): { sql: string; params: unknown[] } {
+  const q = getDb(env)
+    .select({ r: roleRankSql(c, sql`${spaces.id}`) })
+    .from(spaces)
+    .where(and(eq(spaces.id, spaceId), isNull(spaces.deletedAt)))
+    .limit(1)
+    .toSQL();
+  return { sql: `coalesce((${q.sql}), 0)`, params: q.params };
+}
+
 /** A space an artifact is created in or moved to (publishTarget). */
 export type TargetSpace = {
   id: string;
