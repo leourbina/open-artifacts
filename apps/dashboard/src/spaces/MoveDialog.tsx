@@ -86,7 +86,7 @@ export function MoveDialog({
         title={`Move "${a.title}" to`}
         footer={
           <>
-            <Button variant="ghost" onClick={onClose}>
+            <Button variant="outline" onClick={onClose}>
               Cancel
             </Button>
             <Button
@@ -94,7 +94,7 @@ export function MoveDialog({
               aria-busy={move.isPending}
               onClick={submit}
             >
-              Move
+              {move.isPending ? "Moving…" : "Move"}
             </Button>
           </>
         }

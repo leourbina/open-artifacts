@@ -9,8 +9,12 @@ const settle = (page: Page) =>
     document.getAnimations().every((x) => x.playState !== "running"),
   );
 /** Tab through the dialog: focus never leaves it. */
-const trapped = async (page: Page, name: string) => {
-  const dlg = page.getByRole("dialog", { name });
+const trapped = async (
+  page: Page,
+  name: string,
+  role: "dialog" | "alertdialog" = "dialog",
+) => {
+  const dlg = page.getByRole(role, { name });
   for (let i = 0; i < 8; i++) {
     await page.keyboard.press("Tab");
     expect(await dlg.evaluate((d) => d.contains(document.activeElement))).toBe(
@@ -85,11 +89,12 @@ for (const scheme of ["light", "dark"] as const)
         await page.getByRole("button", { name: "Create", exact: true }).click();
         await page.getByRole("button", { name: "Done" }).click();
         await page.getByRole("button", { name: "Revoke old" }).click();
-        const dlg = page.getByRole("dialog", { name: "Revoke old?" });
+        const dlg = page.getByRole("alertdialog", { name: "Revoke old?" });
         await expect(dlg).toContainText(
           "Anything using it stops working immediately.",
         );
-        await trapped(page, "Revoke old?");
+        await trapped(page, "Revoke old?", "alertdialog");
+        await expect(dlg.getByRole("button", { name: "Close" })).toHaveCount(0);
         await shot(page, info, "revoke-confirm");
       });
 

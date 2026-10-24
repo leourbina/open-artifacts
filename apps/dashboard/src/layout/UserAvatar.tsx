@@ -13,7 +13,8 @@ const two = (s: string) =>
     .slice(0, 2)
     .join("");
 
-function initials(name: string | null | undefined, email: string) {
+/** Two initials from the name, else from the email's local part, else "?". */
+export function initials(name: string | null | undefined, email: string) {
   const words = name?.trim().split(/\s+/).filter(Boolean) ?? [];
   if (words.length > 0)
     return two(
@@ -39,6 +40,8 @@ export function UserAvatar({
   const style: CSSProperties | undefined = key
     ? { backgroundColor: `hsl(${avatarHue(key)} 45% 30%)`, color: "white" }
     : undefined;
+  // Nobody to hash: the quiet sunken tone.
+  const quiet = key ? "" : " bg-[var(--oa-sunken)] text-[var(--oa-text-2)]";
   return (
     <Avatar
       role="img"
@@ -47,7 +50,7 @@ export function UserAvatar({
     >
       <AvatarFallback
         style={style}
-        className="font-semibold group-data-[size=sm]/avatar:text-[10px] text-[13px]"
+        className={`text-[13px] font-semibold group-data-[size=sm]/avatar:text-[10px]${quiet}`}
       >
         {initials(name, email ?? "")}
       </AvatarFallback>

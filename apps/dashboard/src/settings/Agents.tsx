@@ -29,6 +29,7 @@ import { useMe } from "../auth/useMe";
 import { Modal } from "../layout/Modal";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { relativeTime } from "../library/time";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { saveTokenCommand, snippets, tokenFile } from "./snippets";
 import {
   Code,
@@ -184,25 +185,14 @@ function Confirm({
   onConfirm: () => void;
 }) {
   return (
-    <Modal
+    <ConfirmDialog
+      open
       onClose={onClose}
       title={title}
-      description="Anything using it stops working immediately."
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            onClick={() => {
-              onClose();
-              onConfirm();
-            }}
-          >
-            {action}
-          </Button>
-        </>
-      }
+      body={<p>Anything using it stops working immediately.</p>}
+      confirm={action}
+      danger
+      onConfirm={onConfirm}
     />
   );
 }
@@ -300,11 +290,11 @@ function CreateDialog({ onClose }: { onClose: () => void }) {
           <Button onClick={onClose}>Done</Button>
         ) : (
           <>
-            <Button variant="ghost" disabled={busy} onClick={onClose}>
+            <Button variant="outline" disabled={busy} onClick={onClose}>
               Cancel
             </Button>
             <Button disabled={busy} onClick={() => void submit()}>
-              Create
+              {busy ? "Creating…" : "Create"}
             </Button>
           </>
         )
