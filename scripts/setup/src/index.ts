@@ -6,7 +6,7 @@ import { type Deps, makeApi, makeWrangler, realDeps, realFs } from "./cf.ts";
 import { hostPairProblem } from "./hosts.ts";
 import { readOnlyDeps } from "./readonly.ts";
 import { rollbackCommand } from "./rollback.ts";
-import { parseSigninFlags, SIGNIN } from "./signin.ts";
+import { parseSigninFlags } from "./signin.ts";
 import { readState, type State, statePath, writeState } from "./state.ts";
 import { type Ctx, NeedInput, type Opts, type Step } from "./step.ts";
 import { access } from "./steps/access.ts";
@@ -118,9 +118,14 @@ async function resolve(
       "yes-paid": { type: "boolean", default: false },
       plan: { type: "string" },
       var: { type: "string", multiple: true },
-      ...Object.fromEntries(
-        Object.values(SIGNIN).map((f) => [f, { type: "string" as const }]),
-      ),
+      // Direct sign-in vars (src/signin.ts SIGNIN).
+      "auth-providers": { type: "string" },
+      "auth-domains": { type: "string" },
+      "auth-domain-join": { type: "string" },
+      "google-client-id": { type: "string" },
+      "turnstile-site-key": { type: "string" },
+      "email-code-domain": { type: "string" },
+      "code-emails-per-day": { type: "string" },
       // Handled before resolve() by tokenCommand (src/token-page.ts).
       "token-links": { type: "boolean", default: false },
       "token-page": { type: "boolean", default: false },

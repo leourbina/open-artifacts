@@ -5,6 +5,7 @@ import { HELP, run } from "../src/index.ts";
 import {
   PROVIDERS,
   resolveSignin,
+  SIGNIN,
   SIGNIN_VARS,
   signinProblems,
 } from "../src/signin.ts";
@@ -48,6 +49,15 @@ const deploys = (w: W) =>
   w.ops.filter((o) => o === "deploy" || o.startsWith("migrate"));
 
 describe("setup keeps direct sign-in vars across upgrades", () => {
+  it("every SIGNIN flag is a setup option", async () => {
+    const src = readFileSync(
+      join(import.meta.dirname, "../src/index.ts"),
+      "utf8",
+    );
+    for (const f of Object.values(SIGNIN))
+      expect(src, f).toContain(`"${f}": { type: "string" },`);
+  });
+
   it("--help documents the sign-in flags and how to clear them", () => {
     for (const f of [
       "--auth-providers",
