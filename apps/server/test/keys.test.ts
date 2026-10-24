@@ -20,6 +20,7 @@ describe("deriveKey", () => {
       "oa:code-cookie",
       "oa:login-codes",
       "oa:code-email",
+      "oa:audit-cursor",
     ]);
   });
 

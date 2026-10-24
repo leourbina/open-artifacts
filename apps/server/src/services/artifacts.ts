@@ -40,6 +40,7 @@ import { ApiError, appOrigin } from "../http/errors.js";
 import { logError, logWarn } from "../log.js";
 import { runtimeStub, type VersionEvent } from "../runtime/do.js";
 import { closeRuntimeSockets } from "../runtime/revoke.js";
+import { audit, userActor } from "./audit.js";
 import { type ManifestEntry, materialize, planFiles } from "./manifest.js";
 import { getSettings } from "./members.js";
 import { ftsFilter, seedSearchStmt, syncTitleStmt } from "./search.js";
@@ -127,6 +128,8 @@ export async function publish(
   let capabilities = CAPS;
   /** Sharing fields changed on an existing artifact: live sockets must reconnect. */
   let accessChanged = false;
+  /** A visibility change on an existing artifact: audited in the batch. */
+  let visAudit: D1PreparedStatement | null = null;
   if (input.id === undefined) {
     if (mode === "version") throw notFound();
     id = newId();
@@ -151,6 +154,8 @@ export async function publish(
         throw new ApiError("bad_request", "only the owner can change sharing");
       await refusePublicLinksOff(env, a, input.visibility);
       capabilities = { ...CAPS, ...(JSON.parse(a.capabilities) as object) };
+      if (input.visibility !== undefined && input.visibility !== a.visibility)
+        visAudit = visibilityAudit(env, user, id, a, input.visibility);
       accessChanged =
         (input.visibility !== undefined && input.visibility !== a.visibility) ||
         (input.capabilities !== undefined &&
@@ -283,6 +288,7 @@ export async function publish(
   );
   // Title/description searchable now (a new row, or the existing row synced
   // on rename); the body is indexed asynchronously.
+  if (visAudit) stmts.push(visAudit);
   stmts.push(seedSearchStmt(db, id));
   if (!create && (input.title !== undefined || input.description !== undefined))
     stmts.push(syncTitleStmt(env, id));
@@ -909,6 +915,34 @@ async function refusePublicLinksOff(
     );
 }
 
+/**
+ * artifact.visibility for the change's batch, after the statement that sets
+ * it: written only when the row now has the new visibility (a lost race or a
+ * deleted artifact writes nothing).
+ */
+function visibilityAudit(
+  env: Env,
+  user: Member,
+  id: string,
+  a: { spaceId: string | null; visibility: string },
+  to: string,
+): D1PreparedStatement {
+  return audit(
+    env,
+    "artifact.visibility",
+    { type: "artifact", id },
+    userActor(user.id),
+    {
+      spaceId: a.spaceId,
+      detail: { from: a.visibility, to },
+      when: {
+        sql: "exists (select 1 from artifacts where id = ? and visibility = ? and deleted_at is null)",
+        args: [id, to],
+      },
+    },
+  );
+}
+
 /** title/description: editor+; visibility/capabilities/allowAnonymousWrites: owner only. */
 export async function patch(
   env: Env,
@@ -947,8 +981,12 @@ export async function patch(
     const upd = env.DB.prepare(
       `update artifacts set ${sets.join(", ")} where id = ? and deleted_at is null`,
     ).bind(...vals, id);
+    const batch = [upd];
+    if (p.visibility !== undefined && p.visibility !== a.visibility)
+      batch.push(visibilityAudit(env, user, id, a, p.visibility));
     if (p.title !== undefined || p.description !== undefined)
-      await env.DB.batch([upd, syncTitleStmt(env, id)]);
+      batch.push(syncTitleStmt(env, id));
+    if (batch.length > 1) await env.DB.batch(batch);
     else await upd.run();
   }
   if (

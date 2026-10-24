@@ -25,6 +25,7 @@ import { requireTurnstile } from "../auth/turnstile.js";
 import { stmt } from "../db/stmt.js";
 import { ApiError, appOrigin, errorJson } from "../http/errors.js";
 import { type AppEnv, CSRF_HEADER, execCtx } from "../http/middleware.js";
+import { signInAudit } from "../services/audit.js";
 import { codeEligibility } from "../services/identity.js";
 import { getUserWithEpoch, insertUser } from "../services/users.js";
 import { forgetTestOtp } from "../test-hooks/index.js";
@@ -354,9 +355,14 @@ export function mountCodes(app: AppType): void {
       epoch: row.sessionEpoch,
       maxAgeS,
     });
-    await stmt(c.env.DB, "update users set last_seen_at = ?1 where id = ?2")
-      .bind(Date.now(), user.id)
-      .run();
+    // The sign-in and its auth.signin audit row commit together.
+    await c.env.DB.batch([
+      stmt(c.env.DB, "update users set last_seen_at = ?1 where id = ?2").bind(
+        Date.now(),
+        user.id,
+      ),
+      signInAudit(c.env, user.id, "code", guest ? undefined : domain),
+    ]);
     logAuth({
       provider: "code",
       outcome: "ok",
