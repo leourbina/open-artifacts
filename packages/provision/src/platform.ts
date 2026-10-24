@@ -21,9 +21,36 @@ export interface InstallRow {
   test_hooks: number;
   inputs_hash: string;
   broker_kid: string | null;
-  state: "creating" | "active" | "upgrading" | "deleting" | "deleted";
+  state: InstallState;
   created_at: number | null;
   updated_at: number | null;
+  /** The operation lock (0003): set by claim, cleared by finish. */
+  lease: string | null;
+  lease_until: number | null;
+  /** A session cut still owed to the install's D1 (0003). */
+  session_cut: string | null;
+  /** The install's current vars, canonical JSON (0003). */
+  vars: string | null;
+  /** Bumped on every write (0003 trigger); claims compare it. */
+  row_version: number;
+  /** The vars a pending session_cut was minted against (0003). */
+  session_cut_base: string | null;
+  /** 1 once an upload turning google on may have gone live (0003). */
+  session_cut_armed: number;
+}
+
+export type InstallState =
+  | "creating"
+  | "active"
+  | "upgrading"
+  | "deleting"
+  | "deleted";
+
+/** What install_versions keeps per install and version (0003). */
+export interface StoredVersion {
+  vars: Record<string, string>;
+  metadata: Record<string, unknown>;
+  do_migration_tag: string | null;
 }
 
 /** JSON with object keys sorted at every level. */
@@ -71,6 +98,10 @@ const UPDATABLE = new Set([
   "do_migration_tag",
   "broker_kid",
   "state",
+  "session_cut",
+  "vars",
+  "session_cut_base",
+  "session_cut_armed",
 ]);
 
 export class PlatformDb {
@@ -168,20 +199,30 @@ FROM installs WHERE rl_ns >= ?8 AND rl_ns < ?10`,
     return row;
   }
 
-  async update(id: InstallId, fields: Partial<InstallRow>): Promise<void> {
+  /**
+   * Updates the row. With `lease`, only while that lease still holds it;
+   * false when it does not (the caller lost the lease).
+   */
+  async update(
+    id: InstallId,
+    fields: Partial<InstallRow>,
+    lease?: string,
+  ): Promise<boolean> {
     const keys = Object.keys(fields);
     for (const k of keys)
       if (!UPDATABLE.has(k)) throw new Error(`installs.${k} is not updatable`);
-    if (keys.length === 0) return;
+    if (keys.length === 0) return true;
     const set = keys.map((k, i) => `${k} = ?${i + 1}`).join(", ");
-    await this.write(
-      `UPDATE installs SET ${set}, updated_at = ?${keys.length + 1} WHERE id = ?${keys.length + 2}`,
+    const r = await this.write(
+      `UPDATE installs SET ${set}, updated_at = ?${keys.length + 1} WHERE id = ?${keys.length + 2}${lease === undefined ? "" : ` AND lease = ?${keys.length + 3}`}`,
       [
         ...keys.map((k) => (fields as Record<string, unknown>)[k] ?? null),
         this.now(),
         id,
+        ...(lease === undefined ? [] : [lease]),
       ],
     );
+    return lease === undefined || r[0]?.meta?.changes === 1;
   }
 
   /** Hosts rows held by another install (any state). */
@@ -220,6 +261,100 @@ FROM installs WHERE rl_ns >= ?8 AND rl_ns < ?10`,
         params: [now, r.id, canonicalJson({ slug: r.slug })],
       },
     ]);
+  }
+
+  /** Rows of every install in one of `states`. */
+  async inStates(states: InstallState[]): Promise<InstallRow[]> {
+    return this.read(
+      `SELECT * FROM installs WHERE state IN (${states.map((_, i) => `?${i + 1}`).join(", ")}) ORDER BY id`,
+      states,
+    );
+  }
+
+  /**
+   * Compare-and-swap: moves the row from one of `from` to `to` and takes the
+   * operation lock, only when no live lock is held. False when another
+   * operation got there first (or the row is in another state).
+   */
+  async claim(
+    id: InstallId,
+    from: InstallState[],
+    to: InstallState,
+    lease: string,
+    until: number,
+    rowVersion: number,
+  ): Promise<boolean> {
+    const now = this.now();
+    const r = await this.write(
+      `UPDATE installs SET state = ?1, lease = ?2, lease_until = ?3, updated_at = ?4 WHERE id = ?5 AND row_version = ?6 AND state IN (${from.map((_, i) => `?${i + 7}`).join(", ")}) AND (lease_until IS NULL OR lease_until <= ?4)`,
+      [to, lease, until, now, id, rowVersion, ...from],
+    );
+    return r[0]?.meta?.changes === 1;
+  }
+
+  /** Renews the lock, a CAS on its value; false when another holds the row now. */
+  async renew(id: InstallId, lease: string, until: number): Promise<boolean> {
+    const r = await this.write(
+      "UPDATE installs SET lease_until = ?1 WHERE id = ?2 AND lease = ?3",
+      [until, id, lease],
+    );
+    return r[0]?.meta?.changes === 1;
+  }
+
+  /** Sets the final state and drops the lock, if this lease still holds it. */
+  async finish(
+    id: InstallId,
+    lease: string,
+    state: InstallState,
+  ): Promise<boolean> {
+    const r = await this.write(
+      "UPDATE installs SET state = ?1, lease = NULL, lease_until = NULL, updated_at = ?2 WHERE id = ?3 AND lease = ?4",
+      [state, this.now(), id, lease],
+    );
+    return r[0]?.meta?.changes === 1;
+  }
+
+  /** The stored render of one version, or undefined. */
+  async version(
+    id: InstallId,
+    version: string,
+  ): Promise<StoredVersion | undefined> {
+    const r = await this.cf.d1Query(
+      this.db.id,
+      "SELECT vars, metadata, do_migration_tag FROM install_versions WHERE install_id = ?1 AND version = ?2",
+      [id, version],
+    );
+    const row = r[0]?.results?.[0];
+    if (!row) return undefined;
+    return {
+      vars: JSON.parse(String(row.vars)),
+      metadata: JSON.parse(String(row.metadata)),
+      do_migration_tag: (row.do_migration_tag ?? null) as string | null,
+    };
+  }
+
+  /** Stores (or replaces) the render of one version; never a secret value. */
+  async putVersion(
+    id: InstallId,
+    version: string,
+    v: StoredVersion,
+  ): Promise<void> {
+    await this.write(
+      "INSERT INTO install_versions (install_id, version, vars, metadata, do_migration_tag, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT (install_id, version) DO UPDATE SET vars = excluded.vars, metadata = excluded.metadata, do_migration_tag = excluded.do_migration_tag, updated_at = excluded.updated_at",
+      [
+        id,
+        version,
+        canonicalJson(v.vars),
+        canonicalJson(v.metadata),
+        v.do_migration_tag,
+        this.now(),
+      ],
+    );
+  }
+
+  /** Drops the install's hosts rows (delete's first step, with HOSTS). The installs row keeps both hosts held. */
+  async unmapHosts(id: InstallId): Promise<void> {
+    await this.write("DELETE FROM hosts WHERE install_id = ?1", [id]);
   }
 
   /** The highest signed floor seq this env has accepted (0 before any). A cache only. */

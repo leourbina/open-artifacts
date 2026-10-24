@@ -79,7 +79,7 @@ Namespace `oa-spike-staging`, dispatch Worker `oa-s-spike-dispatch` (account scr
 
 ### First-create checklist (per env)
 
-1. Apply every platform D1 migration to `oa-<p>-platform`, in order: `apps/platform-db/migrations/0001_installs.sql`, then `0002_release_floor.sql` (the `release_floor` cache). Without 0002, create fails closed on the floor_seq read.
+1. Apply every platform D1 migration to `oa-<p>-platform`, in order: `apps/platform-db/migrations/0001_installs.sql`, then `0002_release_floor.sql` (the `release_floor` cache), then `0003_lifecycle.sql` (per-version metadata, the operation lock and the session-cut journal). Without 0002, create fails closed on the floor_seq read; without 0003, create fails closed on its first metadata write.
 2. Key ceremony done: `RELEASE_PUBKEY[env]` set in gates.ts (and `PROD_UNLOCKED` for prod).
 3. Sign the env's first floor with the `hosted-floor` workflow (dispatch on `main`: `env`, `seq` >= `FLOOR_MIN_SEQ[env]`, `min_version`, `revoked`), download its `floor-<env>-<seq>` artifact, and `publishFloor` it.
 4. `publishRelease` the signed tar and `.sig.json` from the GitHub release for each variant the env takes.
@@ -89,3 +89,12 @@ Namespace `oa-spike-staging`, dispatch Worker `oa-s-spike-dispatch` (account scr
 1. For each env, dispatch the `hosted-floor` workflow on `main` (next `seq`, `min_version`, `revoked` keeping every earlier entry), download the `floor-<env>-<seq>` artifact and run `publishFloor` with it.
 2. In the same change, bump `FLOOR_MIN_SEQ[env]` in `packages/provision/src/internal/gates.ts` to the new `seq`, so a replayed older floor is refused even if the D1 cache was reset.
 3. Merge and release; creates refuse any floor below the new anchor.
+
+### Leases and recovery (Task 5)
+
+- Every create, upgrade, rollback, var change, Turnstile rotation and delete holds the install row's lease (`installs.lease`, `lease_until`, 30 minutes, renewed before each step). A second operation on the same install is refused while the lease is live. `status(id)` shows the state, the versions, `lease_until` and any pending session cut without taking the lease.
+- Use one `WfpProvisioner` per concurrent operation. A second operation started on an instance that is already running one is refused.
+- **After a `<op>.lost_lease` audit row** (the operation stopped with "lost the lease"), check `status(id)`. After `create.lost_lease`, re-run `delete(id, confirm: id)` if the install should go, or re-run create to resume it. Either one claims the row only once the other operation's lease has ended.
+- **The lease has a time-of-check to time-of-use window.** An operation renews its lease and then makes its Cloudflare call. If the process stalls for longer than the lease between the two (for example, a laptop sleeps), another operation can claim the row in the meantime, and the stalled call still lands once. Example: a create's `HOSTS` put lands after a delete has unmapped the hosts. The stalled operation's next step raises `LostLease`, so it goes no further. A stale `HOSTS` entry left this way points only at the deleted install's id, never at another install: the dispatch Worker finds no script and answers 404. To clear it, re-run delete, which removes the `HOSTS` keys first.
+- **A pending session cut** (`status(id).sessionCut.pending`) means google was turned on and the epoch bump that ends earlier sessions has not run yet. Re-run `updateVars` with the intended vars; any upgrade or rollback also settles it right after its upload. Rotation refuses while a cut is pending.
+- A lease left by a dead process: `releaseLease(id, confirm: id)` once it has expired, or with `force: true` only when you are sure nothing is running. Both are audited.
