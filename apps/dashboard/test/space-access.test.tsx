@@ -340,11 +340,14 @@ it("a 403 space_forbidden for a mapping (a race) says the group changed and relo
     seen.filter((c) => c.path === `/api/v1/spaces/${ID}/mappings`).length;
   const before = loads();
   await chooseOption("Role for eng@example.com", "Viewer");
-  expect(
-    await screen.findByText(
-      "This group's access just changed. Check it and try again.",
-    ),
-  ).toBeVisible();
+  const msg = await screen.findByText(
+    "This group's access just changed. Check it and try again.",
+  );
+  expect(msg).toBeVisible();
+  // On the affected row, not in a line under the table.
+  const eng = await row(/eng@example.com/);
+  const note = eng.nextElementSibling;
+  expect(note).toContainElement(msg);
   await waitFor(() => expect(loads()).toBeGreaterThan(before));
   expect(screen.queryByText("server text")).toBeNull();
   expect(document.body.textContent).not.toMatch(/mapping/i);

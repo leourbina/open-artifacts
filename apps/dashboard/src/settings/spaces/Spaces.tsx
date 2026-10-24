@@ -94,7 +94,7 @@ function NewSpace({
       description="Choose a name and who gets access."
       footer={
         <>
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>
           <Button disabled={create.isPending} onClick={submit}>
