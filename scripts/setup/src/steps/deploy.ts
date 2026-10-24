@@ -1,7 +1,15 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
+import {
+  providersOf,
+  resolveSignin,
+  SIGNIN,
+  type Signin,
+  setOnly,
+  signinProblems,
+} from "../signin.ts";
 import type { State } from "../state.ts";
-import type { Ctx, Step } from "../step.ts";
+import { type Ctx, NeedInput, type Step } from "../step.ts";
 import { resolveVars, TUNABLES } from "../tunables.ts";
 import { repoVersion } from "../version-guard.ts";
 import { currentVersion, deployedVars, workerBindings } from "../worker.ts";
@@ -138,6 +146,70 @@ function settleVars(state: State, ctx: Ctx, live: Live) {
 type Live = Awaited<ReturnType<typeof workerBindings>> | "unreadable";
 
 /**
+ * Settles the direct sign-in vars (flag, then the live Worker; the values
+ * saved by the last deploy only when it is unreadable) and sets them in the
+ * rendered config: the template has none, so a deploy would drop them.
+ * Refuses, before any deploy call, a combination the server would not serve.
+ */
+function settleSignin(state: State, ctx: Ctx, live: Live): Signin {
+  const { values, changed, kept, missing } = resolveSignin({
+    flags: ctx.opts.signinFlags,
+    live:
+      live === "unreadable"
+        ? undefined
+        : new Map(
+            (live ?? [])
+              .filter((b) => b.type === "plain_text")
+              .map((b) => [b.name, b.text]),
+          ),
+    state: state.signin,
+  });
+  // An --upgrade (stateless CI included) has a Worker whose sign-in a deploy
+  // could drop: refuse. A full setup only warns, like the tunables.
+  if (missing.length) {
+    const m = `could not read the live Worker's sign-in vars and none are saved; pass ${missing.map((k) => `--${SIGNIN[k]}`).join(", ")} (empty for one that is unset) so the deploy keeps them`;
+    if (ctx.opts.upgrade && !ctx.opts.check) throw new NeedInput(m);
+    ctx.notes.push(`warning: ${m}`);
+  }
+  const problems = signinProblems(values);
+  if (problems.length)
+    throw new Error(`refusing to deploy: ${problems.join("; ")}`);
+  for (const [k, was, now] of changed)
+    ctx.notes.push(
+      `--${SIGNIN[k]} ${now || '""'} differs from the deployed ${k} ${was}; using the flag`,
+    );
+  if (kept.length) ctx.notes.push(`kept the deployed ${kept.join(", ")}`);
+  ctx.signin = values;
+  if (!ctx.opts.check) {
+    const file = join(ctx.root, CONFIG);
+    const text = ctx.fs.read(file);
+    if (text !== null) {
+      const has = JSON.parse(stripComments(text)).vars ?? {};
+      // Set values, and unset ones still in the file (to drop them).
+      const touch = Object.fromEntries(
+        Object.entries(values).filter(([k, v]) => v !== "" || k in has),
+      );
+      const next = applyTunables(text, touch);
+      if (next !== text) ctx.fs.write(file, next);
+    }
+  }
+  return values;
+}
+
+/** Sign-in that needs a secret the Worker lacks: a warning, never a refusal. */
+function secretWarnings(ctx: Ctx, s: Signin, have: Set<string>) {
+  const put = (n: string) => `wrangler secret put ${n} --name ${ctx.opts.name}`;
+  if (providersOf(s).includes("google") && !have.has("GOOGLE_CLIENT_SECRET"))
+    ctx.notes.push(
+      `warning: google is in AUTH_PROVIDERS but the Worker has no GOOGLE_CLIENT_SECRET secret; Google sign-in stays off until \`${put("GOOGLE_CLIENT_SECRET")}\``,
+    );
+  if (s.TURNSTILE_SITE_KEY && !have.has("TURNSTILE_SECRET"))
+    ctx.notes.push(
+      `warning: TURNSTILE_SITE_KEY is set but the Worker has no TURNSTILE_SECRET secret; Turnstile stays off until \`${put("TURNSTILE_SECRET")}\``,
+    );
+}
+
+/**
  * A deploy never turns a live (or last-deployed) paid PLAN into free unless
  * asked with --plan free: an unreadable plan must not downgrade prod. The live
  * PLAN var wins; with an unreadable Worker only the saved value (written after
@@ -248,14 +320,13 @@ export const deploy: Step = {
       ctx.notes.push(`Worker ${ctx.opts.name} never deployed`);
     }
     if (ctx.opts.check) {
-      const vars = settleVars(
-        state,
-        ctx,
-        await readLive(ctx, state.accountId ?? ""),
-      );
+      const live = await readLive(ctx, state.accountId ?? "");
+      const vars = settleVars(state, ctx, live);
+      const signin = setOnly(settleSignin(state, ctx, live));
       ctx.data = {
         ...ctx.version,
         ...(Object.keys(vars).length ? { vars } : {}),
+        ...(Object.keys(signin).length ? { signin } : {}),
       };
     }
     // A pending downgrade refusal is drift too: report it instead of a clean check.
@@ -279,6 +350,7 @@ export const deploy: Step = {
   async apply(state, ctx) {
     const live = await readLive(ctx, state.accountId ?? "");
     const tuned = settleVars(state, ctx, live);
+    const signin = settleSignin(state, ctx, live);
     const vars = renderedVars(ctx);
     const shown = Object.keys(tuned).length ? { vars: tuned } : {};
     // The version guard ran in prereqs, before anything had a side effect.
@@ -303,6 +375,7 @@ export const deploy: Step = {
       throw new Error(
         `refusing to deploy: Worker secrets missing: ${missing.join(", ")}; rerun setup without --upgrade`,
       );
+    secretWarnings(ctx, signin, have);
     const build = ["--dir", ctx.root, "--filter", "@oa/server...", "build"];
     const b = await ctx.deps.exec("pnpm", build);
     if (b.code !== 0)
@@ -335,6 +408,7 @@ export const deploy: Step = {
         ...shown,
       };
       state.vars = Object.keys(tuned).length ? tuned : undefined;
+      state.signin = signin;
       return undefined;
     }
     await checkNoTestHooks(ctx);
@@ -349,6 +423,7 @@ export const deploy: Step = {
     state.deployHash = hash;
     state.planVar = ctx.opts.planVar;
     state.vars = Object.keys(tuned).length ? tuned : undefined;
+    state.signin = signin;
     ctx.notes.push(`deployed ${state.deployedVersion}`);
     ctx.data = { deployedVersion: state.deployedVersion, ...ver, ...shown };
     return undefined;
