@@ -157,8 +157,10 @@ function PersonRow({
   const [problem, setProblem] = useState<string | null>(null);
   const [asking, setAsking] = useState(false);
   const name = nameOf(m);
-  // A space manager can't change or remove an admin-set Manager row.
-  const canAct = admin || m.manualRole !== "manager";
+  // A space manager can't remove, demote or override another manager's row,
+  // manual or synced, frozen kept rows included (the server answers 403
+  // space_forbidden { target: "member" }): the role shows as text.
+  const canAct = admin || m.role !== "manager";
   const active = m.status === "active";
   const capped = m.cap !== null;
   const allowed = admin ? ALL_ROLES : ALL_ROLES.filter((r) => r !== "manager");
