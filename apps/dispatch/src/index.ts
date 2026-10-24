@@ -31,18 +31,31 @@ function hostOf(req: Request): string | null {
  */
 const notFound = () => new Response("Not found", { status: 404 });
 
+/** A fixed log category; never the error text (it can carry names or URLs). */
+const category = (e: unknown) =>
+  e instanceof Error && e.message.startsWith("Worker not found")
+    ? "not_found"
+    : "exception";
+
 export default {
   async fetch(req, env) {
     const host = hostOf(req);
     if (!host) return notFound();
+    let id: string | null;
     try {
-      const id = await env.HOSTS.get(host, { cacheTtl: 60 });
-      if (typeof id !== "string" || !isInstallId(id)) return notFound();
+      id = await env.HOSTS.get(host, { cacheTtl: 60 });
+    } catch {
+      console.error("dispatch failed", "kv", host);
+      return notFound();
+    }
+    if (typeof id !== "string" || !isInstallId(id)) return notFound();
+    try {
       // The original Request, unread and unchanged (body, Upgrade, Cookie).
       return await env.DISPATCHER.get(names(id, env.OA_ENV).script).fetch(req);
-    } catch {
-      // The host only: never the URL, headers, body or the error text.
-      console.error("dispatch failed", host);
+    } catch (e) {
+      // A deleted script, a crashing install or a binding error: still the
+      // one 404, with only the host and a fixed category logged.
+      console.error("dispatch failed", category(e), host);
       return notFound();
     }
   },

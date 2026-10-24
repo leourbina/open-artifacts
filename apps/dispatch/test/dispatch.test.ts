@@ -225,7 +225,9 @@ describe("dispatch", () => {
     });
     expect((await call(f.env, req)).status).toBe(200);
     expect(f.scripts).toEqual([`oa-s-${A}`]);
-    expect(f.reads.map((r) => r.key)).toEqual(["acme.open-artifacts-staging.app"]);
+    expect(f.reads.map((r) => r.key)).toEqual([
+      "acme.open-artifacts-staging.app",
+    ]);
   });
 
   it("the user Worker's response is returned unchanged", async () => {

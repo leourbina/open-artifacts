@@ -16,6 +16,7 @@
     },
     "./names": {
       "types": "./dist/names.d.ts",
+      "workerd": "./src/names.ts",
       "import": "./dist/names.js",
       "default": "./dist/names.js"
     }
