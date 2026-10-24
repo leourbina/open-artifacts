@@ -16,15 +16,13 @@ export interface Env {
 export const CRON = "17 3 * * *";
 
 /**
- * Scale warnings. "A single request has a maximum of 32 Worker invocations,
- * and each call to a Service binding counts"
- * (https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/#limits).
- * If dispatch-namespace calls count too, one run reaches only 32 installs;
- * unverified until the first staging run with 33 or more (docs/ops/hosted.md).
- * Past that, 6 at a time × 25 s each fits about 190 installs in the 13-minute
- * deadline. M2 replaces the loop with a Queue fan-out (one message per install).
+ * 6 at a time × 25 s each fits about 190 slow installs in the 13-minute
+ * deadline. Dispatch calls hit no 32-invocation cap (measured on staging,
+ * 2026-10-24: 100 sequential calls from one request; docs/ops/hosted.md).
+ * M2 replaces the loop with a Queue fan-out (one message per install); until
+ * then, warn above this many.
  */
-const SCALE_WARN = [32, 300] as const;
+const SCALE_WARN = 300;
 
 export type Reason = "timeout" | "not_found" | "canceled" | "exception";
 
@@ -61,24 +59,24 @@ const RECHECK_SQL =
   "SELECT 1 AS ok FROM installs WHERE id = ?1 AND state = 'active' AND (lease_until IS NULL OR lease_until <= ?2)";
 
 /**
- * Fetcher.scheduled(options) resolves with { outcome, noRetry }; it does not
- * reject when the install's handler throws (outcome "exception"). Its
- * scheduledTime is a Date, as in the Workers docs for service bindings
+ * Measured on staging through a dispatch namespace (2026-10-24): scheduled()
+ * resolves to undefined when the install's handler succeeds and rejects with
+ * the handler's own error when it throws. The { outcome, noRetry } result of
+ * the experimental workers-types is handled defensively. scheduledTime is a
+ * Date, as in the Workers docs for service bindings
  * (https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/).
- * Only the experimental workers-types declare it; the Task 1 spike ran it
- * through a namespace binding (docs/ops/hosted.md).
  */
 interface ScheduledFetcher {
-  scheduled(o: {
-    cron?: string;
-    scheduledTime?: Date;
-  }): Promise<{ outcome: string; noRetry: boolean }>;
+  scheduled(o: { cron?: string; scheduledTime?: Date }): Promise<unknown>;
 }
 
 class Canceled extends Error {}
 class NotFound extends Error {}
 
-/** A fixed category; never the error text (it can carry names or URLs). */
+/**
+ * A fixed category; never the error text: a rejection carries the install's
+ * own error message (emails, URLs), so it is neither logged nor returned.
+ */
 const category = (e: unknown): Exclude<Reason, "timeout"> =>
   e instanceof Canceled
     ? "canceled"
@@ -87,9 +85,13 @@ const category = (e: unknown): Exclude<Reason, "timeout"> =>
       ? "not_found"
       : "exception";
 
-/** Fail closed: only outcome "ok" is ok, a missing or odd result too. */
+/** Resolving to undefined is ok; any other result but outcome "ok" fails closed. */
 function checkOutcome(r: unknown): void {
-  const outcome = (r as { outcome?: unknown } | null | undefined)?.outcome;
+  if (r === undefined) return;
+  const outcome =
+    typeof r === "object" && r !== null
+      ? (r as { outcome?: unknown }).outcome
+      : undefined;
   if (outcome === "ok") return;
   if (outcome === "canceled") throw new Canceled();
   if (outcome === "scriptNotFound") throw new NotFound();
@@ -161,9 +163,8 @@ export async function runNightly(
   const scripts = ids.map((id) => names(id, env.OA_ENV).script);
   const invalid = rows.invalid + rows.ids.length - ids.length;
   if (invalid > 0) console.warn("nightly invalid", `ids=${invalid}`);
-  for (const n of SCALE_WARN)
-    if (ids.length > n)
-      console.warn("nightly scale", `active=${ids.length} over ${n}`);
+  if (ids.length > SCALE_WARN)
+    console.warn("nightly scale", `active=${ids.length} over ${SCALE_WARN}`);
 
   const ok: string[] = [];
   const failed: NightlyResult["failed"] = [];

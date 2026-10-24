@@ -192,10 +192,9 @@ Steps, per env (`ENV`, `P` and `UP` as in the dispatch steps above):
      | jq -c '[.result.schedules[].cron]')" = '["17 3 * * *"]' \
      || { echo "schedules are not exactly 17 3 * * *" >&2; exit 1; }
    ```
-5. **First staging run: verify the per-request invocation limit.** The service-bindings docs say "A single request has a maximum of 32 Worker invocations, and each call to a Service binding counts". If dispatch-namespace calls count too, one nightly run reaches only 32 installs. Before prod has more than 32 installs, run the scheduler on staging with at least 33 active test installs (synthetic scripts that only stamp a KV key or log their id are enough), using a one-off cron or `wrangler dev --test-scheduled` against the remote namespace. Check that the summary shows `ok=` for all of them and that every install stamped. Record the result here. While you're on that run, also confirm:
-   - the real shape of a missing script: `outcome: "scriptNotFound"` or a rejection; both map to `not_found`;
+5. **Per-request invocation limit: measured, no cap.** The service-bindings docs say "A single request has a maximum of 32 Worker invocations, and each call to a Service binding counts". Measured on staging 2026-10-24: 100 sequential dispatch `scheduled()` calls from one request, no invocation cap hit (probe: `.superpowers/platform/probe_invocations.py` in the platform workspace). The same probe showed that `scheduled()` resolves to `undefined` when the install's handler succeeds, and rejects with the handler's own error when it throws. The scheduler logs only a fixed category, never that text. On the first real staging run, also confirm:
+   - the rejection for a missing script maps to `not_found`;
    - whether a timed-out install's job is canceled when the scheduler's invocation ends.
-6. If step 5 shows the 32 limit applies, the M2 Queue fan-out (one message per install, each consumer invocation calling one install) is needed before the 33rd install, not at ~190.
 
 ### Reading the nightly run
 
@@ -203,10 +202,9 @@ Read the lines in Workers Logs for `oa-$P-scheduler` (dashboard, or the Observab
 
 | Line | Meaning |
 |---|---|
-| `nightly summary active=<n> ok=<n> failed=<n> skipped=<n>` | One per run, at the end. `active` counts the valid active ids read; `skipped` counts installs that left `active` or took a lease before their turn, plus those not started by the 13-minute deadline. A large `skipped` with few `failed` means the deadline hit: see the scale lines. |
-| `nightly failed <category> <installId>` | One per failed install, logged when it happens. `timeout`: over 25 s; the job may have been canceled when the run ended, so treat it as not done. `canceled`: the runtime canceled the install's handler. `not_found`: no script in the namespace (outcome `scriptNotFound` or a "Worker not found" error); check the row's state against the namespace. `exception`: the install's handler threw, the call failed, or the result wasn't `outcome: "ok"` (`exceededCpu`, `exceededMemory`, …); read that install's own Workers Logs. |
+| `nightly summary active=<n> ok=<n> failed=<n> skipped=<n>` | One per run, at the end. `active` counts the valid active ids read; `skipped` counts installs that left `active` or took a lease before their turn, plus those not started by the 13-minute deadline. A large `skipped` with few `failed` means the deadline hit: see the scale line. |
+| `nightly failed <category> <installId>` | One per failed install, logged when it happens. `timeout`: over 25 s; the job may have been canceled when the run ended, so treat it as not done. `canceled`: the runtime canceled the install's handler. `not_found`: no script in the namespace (a "Worker not found" rejection, or outcome `scriptNotFound`); check the row's state against the namespace. `exception`: the install's handler threw (the call rejected), the call failed, or it resolved with an outcome other than `ok` (`exceededCpu`, `exceededMemory`, …); read that install's own Workers Logs. |
 | `nightly invalid ids=<n>` | Active rows whose id isn't an install id; skipped. Fix the rows. |
-| `nightly scale active=<n> over 32` | Past the possible 32-invocations-per-request limit. Until step 5 has verified it, check that the summary's `ok` reaches `active`. |
 | `nightly scale active=<n> over 300` | Past what one run fits (about 190 at 6 × 25 s in 13 minutes, fewer under shared-connection queuing). The M2 Queue fan-out is overdue. |
 | `nightly aborted <env\|exception>` | The run stopped before any call: a bad `OA_ENV` (`env`) or a platform D1 read error (`exception`). Cron Events shows the failure. |
 
