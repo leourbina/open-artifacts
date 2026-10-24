@@ -168,6 +168,9 @@ const SET_ROLE = `update users set role = ?2, session_epoch = session_epoch + 1
   where id = ?1 and role <> 'owner'
   returning id, email, name, display_name as displayName, role, last_seen_at as lastSeenAt`;
 
+const CLEAR_MANUAL_RESTRICTION = `update users set restricted_manual = 0
+  where id = ?1 and role in ('owner', 'admin') and restricted_manual <> 0`;
+
 export async function patchMember(
   env: Env,
   id: string,
@@ -190,6 +193,12 @@ export async function patchMember(
     // a demoted admin in a restricted group is capped now, a promoted
     // member no longer is (P3 T9).
     stmt(env.DB, RESTRICTED_SYNC_FOR_USER).bind(id),
+    // Owners and admins can't be restricted (ruling c): a promotion to admin
+    // clears the manual flag too, audited restricted.remove when it was set.
+    stmt(env.DB, CLEAR_MANUAL_RESTRICTION).bind(id),
+    audit(env, "restricted.remove", { type: "user", id }, by, {
+      when: { sql: "changes() > 0", args: [] },
+    }),
   ]);
   const out = res?.results[0] as Parameters<typeof toMember>[0] | undefined;
   if (!out) throw new ApiError("not_found", "Not found");

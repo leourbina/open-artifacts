@@ -815,7 +815,12 @@ export async function putSpaceMember(
         ]),
     stmt(env.DB, ROWS_OF).bind(id, userId),
   ]);
-  if (rank(rowsRole(rowsIn(out.at(-1)))) < rank(rowsRole(rowsIn(out[0]))))
+  const after = rowsIn(out.at(-1));
+  // The guarded writes refused: a manager row (manual or synced) appeared
+  // after the check, and a non-admin can't change a peer manager. Nothing
+  // was written or audited.
+  if (knownRole(after?.manual) !== role) throw forbidden("member");
+  if (rank(rowsRole(after)) < rank(rowsRole(rowsIn(out[0]))))
     await revokeUserLive(env, userId, "space role lowered", ctx);
   return memberView(env, id, r.allMembersRole, userId);
 }
@@ -880,7 +885,18 @@ export async function deleteSpaceMember(
     stmt(env.DB, `delete from space_members where ${rows}`).bind(...args),
     stmt(env.DB, ROWS_OF).bind(id, userId),
   ]);
-  if (!out[2]?.meta.changes) throw notFound();
+  if (!out[2]?.meta.changes) {
+    // Refused (a racing manager row, non-admin): 403, as the check would
+    // have said; else the rows were already gone.
+    const now = rowsIn(out[3]);
+    if (
+      !admin &&
+      (knownRole(now?.manual) === "manager" ||
+        (both && knownRole(now?.sync) === "manager"))
+    )
+      throw forbidden("member");
+    throw notFound();
+  }
   if (rank(rowsRole(rowsIn(out[3]))) < rank(rowsRole(rowsIn(out[0]))))
     await revokeUserLive(env, userId, "removed from space", ctx);
 }
@@ -1115,9 +1131,12 @@ export async function putSpaceMapping(
     audit(env, "mapping.set", { type: "mapping", id: groupId }, actor, {
       spaceId: id,
       detail: { role },
+      // Not when the write below refuses (a racing manager row, non-admin).
       when: {
-        sql: "not exists (select 1 from group_mappings where space_id = ? and group_id = ? and role = ?)",
-        args: [id, groupId, role],
+        sql: `not exists (select 1 from group_mappings where space_id = ? and group_id = ? and role = ?)
+          and (? = 1 or not exists (select 1 from group_mappings
+            where space_id = ? and group_id = ? and role = 'manager'))`,
+        args: [id, groupId, role, admin ? 1 : 0, id, groupId],
       },
     }),
     stmt(
@@ -1131,9 +1150,13 @@ export async function putSpaceMapping(
     stmt(env.DB, GROUP_MEMBERS).bind(groupId, revokeFanoutCap(env) + 1),
     stmt(env.DB, MAP_ROLE).bind(id, groupId),
   ]);
-  if (rank(roleIn(out[6])) < rank(roleIn(out[0])))
+  const after = roleIn(out[6]);
+  // The guarded write refused: the row became a manager mapping after the
+  // check (a non-admin can't touch it). Nothing changed, nothing audited.
+  if (after !== role) throw forbidden("mapping");
+  if (rank(after) < rank(roleIn(out[0])))
     await revokeUsersLive(env, idsOf(out[5]), "space mapping lowered", ctx);
-  return mapping(groupId, g.email, role, g.n);
+  return mapping(groupId, g.email, after, g.n);
 }
 
 const idsOf = (r: D1Result | undefined): string[] =>
@@ -1166,9 +1189,11 @@ export async function deleteSpaceMapping(
   const out = await env.DB.batch([
     audit(env, "mapping.remove", { type: "mapping", id: groupId }, actor, {
       spaceId: id,
+      // Exactly the row the delete below removes.
       when: {
-        sql: "exists (select 1 from group_mappings where space_id = ? and group_id = ?)",
-        args: [id, groupId],
+        sql: `exists (select 1 from group_mappings where space_id = ? and group_id = ?
+          and (? = 1 or role <> 'manager'))`,
+        args: [id, groupId, admin ? 1 : 0],
       },
     }),
     stmt(
@@ -1179,7 +1204,13 @@ export async function deleteSpaceMapping(
     stmt(env.DB, RESYNC_DELETE).bind(id, groupId),
     stmt(env.DB, RESYNC_INSERT).bind(id, groupId, Date.now()),
     stmt(env.DB, GROUP_MEMBERS).bind(groupId, revokeFanoutCap(env) + 1),
+    stmt(env.DB, MAP_ROLE).bind(id, groupId),
   ]);
+  if (!out[1]?.meta.changes) {
+    // Refused (raced to a manager mapping, non-admin) or already gone.
+    if (roleIn(out[5])) throw forbidden("mapping");
+    throw notFound();
+  }
   await revokeUsersLive(env, idsOf(out[4]), "space mapping removed", ctx);
 }
 

@@ -151,9 +151,7 @@ describe("hosted contract schemas", () => {
         name: " \u202EEng\u0000\u0007ineer\u2066ing\u200F\u007F\u061C ",
       }).name,
     ).toBe("Engineering");
-    expect(SpacePatchSchema.parse({ name: "A\u0009B\u2069" }).name).toBe(
-      "AB",
-    );
+    expect(SpacePatchSchema.parse({ name: "A\u0009B\u2069" }).name).toBe("AB");
     expect(
       SpacePatchSchema.safeParse({ name: "\u202A\u0000 \u200E" }).success,
     ).toBe(false);

@@ -21,7 +21,12 @@ import type { Env } from "../src/env.js";
 import type { UserPresence } from "../src/runtime/presence.js";
 import { REVOKE_FANOUT_CAP, revokeUsersLive } from "../src/runtime/revoke.js";
 import { patchMember } from "../src/services/members.js";
-import { putSpaceMember } from "../src/services/spaces.js";
+import {
+  deleteSpaceMapping,
+  deleteSpaceMember,
+  putSpaceMapping,
+  putSpaceMember,
+} from "../src/services/spaces.js";
 import { getUser } from "../src/services/users.js";
 import { errOf, fetchAndWait, login } from "./helpers.js";
 
@@ -224,6 +229,21 @@ describe("the spaces flag", () => {
 });
 
 describe("spaces", () => {
+  it("space names lose C0 and bidi controls on create and rename; only controls is 400", async () => {
+    const s = await createSpace({ name: "\u202ESales\u0000 \u2066Team\u200F" });
+    expect(s.name).toBe("Sales Team");
+    const r = await call(GOOGLE, R.space(s.id), admin.cookie, {
+      method: "PATCH",
+      body: { name: "Ops\u0007\u202A" },
+    });
+    expect((await json<Space>(r)).name).toBe("Ops");
+    const bad = await call(GOOGLE, R.space(s.id), admin.cookie, {
+      method: "PATCH",
+      body: { name: "\u202A\u0000" },
+    });
+    expect(bad.status).toBe(400);
+  });
+
   it("POST /spaces: org admin 201, audited space.create; a member 404", async () => {
     const s = await createSpace({ allMembersRole: "viewer" });
     expect(s).toMatchObject({
@@ -1115,6 +1135,36 @@ describe("restrictions", () => {
   });
 });
 
+describe("promotion clears the manual restriction (ruling c)", () => {
+  it("a restricted member promoted to admin loses the manual flag, audited restricted.remove", async () => {
+    const m = await mk("rpro");
+    await call(GOOGLE, R.memberRestricted(m.userId), admin.cookie, {
+      method: "PUT",
+    });
+    const manual = async () =>
+      (
+        await one<{ r: number }>(
+          "select restricted_manual r from users where id = ?",
+          m.userId,
+        )
+      )?.r;
+    expect(await manual()).toBe(1);
+    await patchMember(GOOGLE, m.userId, { role: "admin" });
+    expect(await manual()).toBe(0);
+    expect(await audits("restricted.remove", m.userId)).toHaveLength(1);
+    // A demotion back leaves it off (no restriction re-applied, no row).
+    await patchMember(GOOGLE, m.userId, { role: "member" });
+    expect(await manual()).toBe(0);
+    expect(await audits("restricted.remove", m.userId)).toHaveLength(1);
+  });
+
+  it("a member role change on an unrestricted member writes no restricted.remove", async () => {
+    const m = await mk("rnone");
+    await patchMember(GOOGLE, m.userId, { role: "admin" });
+    expect(await audits("restricted.remove", m.userId)).toHaveLength(0);
+  });
+});
+
 describe("peer managers (manager ruling)", () => {
   const syncRow = (sid: string, uid: string, role: string) =>
     run(
@@ -1183,48 +1233,130 @@ describe("peer managers (manager ruling)", () => {
     expect(await revokedAt(peer.userId)).not.toBeNull();
   });
 
-  it("frozen override race: a sync row promoted to manager after the check → no manual row, no audit row", async () => {
-    const { s, mgr } = await staffed();
-    const peer = await mk("race");
-    await syncRow(s.id, peer.userId, "editor");
-    // The promotion lands between the handler's check and its batch.
+  /**
+   * `e` whose first D1 batch runs `sql` first: a write that lands between
+   * the service's check (a plain read) and its batch.
+   */
+  const racing = (e: Env, sql: string, ...binds: unknown[]): Env => {
+    let fired = false;
     const DB = new Proxy(env.DB, {
       get(t, p) {
         if (p === "batch")
           return async (ss: D1PreparedStatement[]) => {
-            await t
-              .prepare(
-                "update space_members set role = 'manager' where space_id = ? and user_id = ? and source = 'sync'",
-              )
-              .bind(s.id, peer.userId)
-              .run();
+            if (!fired) {
+              fired = true;
+              await t
+                .prepare(sql)
+                .bind(...binds)
+                .run();
+            }
             return t.batch(ss);
           };
         const v = Reflect.get(t, p);
         return typeof v === "function" ? v.bind(t) : v;
       },
     });
-    const racy = { ...(FROZEN as object), DB } as unknown as Env;
-    const who = callerOf(await getUser(racy, mgr.userId));
-    await putSpaceMember(racy, who, s.id, peer.userId, "viewer").catch(
-      () => {},
+    return { ...(e as object), DB } as unknown as Env;
+  };
+  const refusal = async (p: Promise<unknown>, target: "member" | "mapping") => {
+    const e = await p.then(
+      () => null,
+      (x: unknown) => x,
     );
-    expect(
-      await one(
-        "select 1 from space_members where space_id = ? and user_id = ? and source = 'manual'",
-        s.id,
-        peer.userId,
-      ),
-    ).toBeNull();
-    expect(
-      await one<{ role: string }>(
-        "select role from space_members where space_id = ? and user_id = ? and source = 'sync'",
-        s.id,
-        peer.userId,
-      ),
-    ).toEqual({ role: "manager" });
+    expect(e).toMatchObject({ code: "space_forbidden", details: { target } });
+  };
+  const PROMOTE = (source: "manual" | "sync") =>
+    `update space_members set role = 'manager' where space_id = ? and user_id = ? and source = '${source}'`;
+  const rowOf = (sid: string, uid: string, source: "manual" | "sync") =>
+    one<{ role: string }>(
+      "select role from space_members where space_id = ? and user_id = ? and source = ?",
+      sid,
+      uid,
+      source,
+    );
+
+  it("race: a member PUT that loses to a manager promotion → 403, nothing written or audited", async () => {
+    const { s, mgr, ed } = await staffed();
+    const e = racing(GOOGLE, PROMOTE("manual"), s.id, ed.userId);
+    const who = callerOf(await getUser(e, mgr.userId));
+    const roles = (await audits("space.member.role", ed.userId)).length;
+    await refusal(putSpaceMember(e, who, s.id, ed.userId, "viewer"), "member");
+    expect(await rowOf(s.id, ed.userId, "manual")).toEqual({ role: "manager" });
+    expect(await audits("space.member.role", ed.userId)).toHaveLength(roles);
+  });
+
+  it("race: a member DELETE that loses to a manager promotion → 403, nothing removed or audited", async () => {
+    const { s, mgr, vw } = await staffed();
+    const e = racing(GOOGLE, PROMOTE("manual"), s.id, vw.userId);
+    const who = callerOf(await getUser(e, mgr.userId));
+    await refusal(deleteSpaceMember(e, who, s.id, vw.userId), "member");
+    expect(await rowOf(s.id, vw.userId, "manual")).toEqual({ role: "manager" });
+    expect(await audits("space.member.remove", vw.userId)).toHaveLength(0);
+  });
+
+  it("race: a frozen override that loses to a sync manager promotion → 403, no manual row, no audit row", async () => {
+    const { s, mgr } = await staffed();
+    const peer = await mk("race");
+    await syncRow(s.id, peer.userId, "editor");
+    const e = racing(FROZEN, PROMOTE("sync"), s.id, peer.userId);
+    const who = callerOf(await getUser(e, mgr.userId));
+    await refusal(
+      putSpaceMember(e, who, s.id, peer.userId, "viewer"),
+      "member",
+    );
+    expect(await rowOf(s.id, peer.userId, "manual")).toBeNull();
+    expect(await rowOf(s.id, peer.userId, "sync")).toEqual({ role: "manager" });
     expect(await audits("space.member.role", peer.userId)).toHaveLength(0);
     expect(await audits("space.member.add", peer.userId)).toHaveLength(0);
+  });
+
+  it("race: a frozen DELETE that loses to a sync manager promotion → 403, nothing removed or audited", async () => {
+    const { s, mgr } = await staffed();
+    const peer = await mk("frace");
+    await syncRow(s.id, peer.userId, "editor");
+    const e = racing(FROZEN, PROMOTE("sync"), s.id, peer.userId);
+    const who = callerOf(await getUser(e, mgr.userId));
+    await refusal(deleteSpaceMember(e, who, s.id, peer.userId), "member");
+    expect(await rowOf(s.id, peer.userId, "sync")).toEqual({ role: "manager" });
+    expect(await audits("space.member.remove", peer.userId)).toHaveLength(0);
+  });
+
+  const PROMOTE_MAPPING =
+    "update group_mappings set role = 'manager' where space_id = ? and group_id = ?";
+  const mapRole = (sid: string, gid: string) =>
+    one<{ role: string }>(
+      "select role from group_mappings where space_id = ? and group_id = ?",
+      sid,
+      gid,
+    );
+
+  it("race: a mapping PUT that loses to a manager mapping → 403 target mapping, no mapping.set row", async () => {
+    const { s, mgr } = await staffed();
+    const g = await group([]);
+    await call(GOOGLE, R.spaceMapping(s.id, g), admin.cookie, {
+      method: "PUT",
+      body: { role: "editor" },
+    });
+    const sets = (await audits("mapping.set", g)).length;
+    const e = racing(GOOGLE, PROMOTE_MAPPING, s.id, g);
+    const who = callerOf(await getUser(e, mgr.userId));
+    await refusal(putSpaceMapping(e, who, s.id, g, "viewer"), "mapping");
+    expect(await mapRole(s.id, g)).toEqual({ role: "manager" });
+    expect(await audits("mapping.set", g)).toHaveLength(sets);
+  });
+
+  it("race: a mapping DELETE that loses to a manager mapping → 403 target mapping, no mapping.remove row", async () => {
+    const { s, mgr } = await staffed();
+    const g = await group([]);
+    await call(GOOGLE, R.spaceMapping(s.id, g), admin.cookie, {
+      method: "PUT",
+      body: { role: "viewer" },
+    });
+    const e = racing(GOOGLE, PROMOTE_MAPPING, s.id, g);
+    const who = callerOf(await getUser(e, mgr.userId));
+    await refusal(deleteSpaceMapping(e, who, s.id, g), "mapping");
+    expect(await mapRole(s.id, g)).toEqual({ role: "manager" });
+    expect(await audits("mapping.remove", g)).toHaveLength(0);
   });
 
   it("a space manager still removes and changes non-manager members", async () => {

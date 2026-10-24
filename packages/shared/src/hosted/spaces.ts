@@ -49,7 +49,8 @@ export type SpacesQuery = z.infer<typeof SpacesQuerySchema>;
  * ALM, LRE..RLO, LRI..PDI): stripped from space names.
  */
 // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping them is the point
-const NAME_CONTROLS = /[\u0000-\u001F\u007F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
+const NAME_CONTROLS =
+  /[\u0000-\u001F\u007F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
 
 /** A space name with control and bidi characters removed. */
 export const stripNameControls = (s: string): string =>
