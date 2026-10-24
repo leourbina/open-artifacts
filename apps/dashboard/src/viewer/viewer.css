@@ -61,10 +61,6 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.oa-details textarea {
-  width: 100%;
-  max-width: 100%;
-}
 .oa-cap {
   display: flex;
   flex-direction: column;

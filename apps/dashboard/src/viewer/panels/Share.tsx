@@ -6,7 +6,7 @@ import {
   type Visibility,
   viewerPath,
 } from "@oa/shared";
-import { Banner, Checkbox, displayName, VisibilityBadge } from "@oa/ui";
+import { displayName, VisibilityBadge } from "@oa/ui";
 import {
   Button,
   Input,
@@ -32,7 +32,9 @@ import { emailEnabled } from "../../auth/emailEnabled";
 import { useCan } from "../../auth/permissions";
 import { useMe } from "../../auth/useMe";
 import { CopyLink } from "../../layout/CopyLink";
+import { LabelledCheckbox } from "../../layout/LabelledCheckbox";
 import { Modal } from "../../layout/Modal";
+import { Notice } from "../../layout/Notice";
 import { toast } from "../../layout/toast";
 import { UserAvatar } from "../../layout/UserAvatar";
 import { visibilityHint } from "../../spaces/SpaceMarker";
@@ -356,19 +358,10 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
       <section>
         {shared && (
           <div className="mb-[var(--oa-space-4)] [&_p]:mb-[var(--oa-space-2)]">
-            <Banner
+            <Notice
               tone="success"
               title={`Shared with ${shared.email}`}
-              action={
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  aria-label="Dismiss"
-                  onClick={() => setShared(null)}
-                >
-                  {"\u00d7"}
-                </Button>
-              }
+              onDismiss={() => setShared(null)}
             >
               <p>
                 {shared.emailed
@@ -380,7 +373,7 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
               {/* emailed:false with email on is not a failure here: members and
                   re-shares are never emailed, so there's no "didn't send" line. */}
               <CopyLink link={link} label="Artifact link" />
-            </Banner>
+            </Notice>
           </div>
         )}
         <h3 className={H3}>People</h3>
@@ -442,17 +435,19 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
         <h3 className={H3}>Live data</h3>
         {CAPS.map(([k, label, hint]) => (
           <div className="oa-cap" key={k}>
-            <Checkbox
+            <LabelledCheckbox
+              id={`oa-cap-${k}`}
               label={label}
               checked={artifact.capabilities[k]}
               disabled={!vis || patch.isPending}
-              onCheckedChange={(on) => setCap(k, on === true)}
+              onCheckedChange={(on) => setCap(k, on)}
             />
             <small className="oa-muted">{hint}</small>
           </div>
         ))}
         <div className="oa-cap">
-          <Checkbox
+          <LabelledCheckbox
+            id="oa-cap-anon"
             label="Allow anonymous writes"
             checked={artifact.allowAnonymousWrites}
             disabled={
@@ -461,9 +456,7 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
               artifact.visibility !== "public" ||
               !artifact.capabilities.db
             }
-            onCheckedChange={(on) =>
-              save({ allowAnonymousWrites: on === true })
-            }
+            onCheckedChange={(on) => save({ allowAnonymousWrites: on })}
           />
           <small className="oa-muted">Public and database only.</small>
         </div>
