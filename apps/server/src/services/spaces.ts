@@ -36,6 +36,7 @@ import { logError } from "../log.js";
 import { revokeUserLive, revokeUsersLive } from "../runtime/revoke.js";
 import { type AuditActor, audit, userActor } from "./audit.js";
 import { getSettings } from "./members.js";
+import { RESTRICTED_SYNC_FOR_GROUP } from "./restriction.js";
 import { toMember } from "./users.js";
 
 // The spaces API (P3 T9): shared spaces, their members and group mappings,
@@ -149,6 +150,10 @@ function decodeCursor(
 
 const SMM_KEY = "space_manager_mappings";
 
+/** Distinct members of every Every-space mapped group (uncorrelated). */
+const EVERY_MEMBER_COUNT = sql.raw(`(select count(distinct dm.user_id) from org_group_mappings ogm
+  join directory_members dm on dm.group_id = ogm.group_id)`);
+
 /** The caller's view of each space row, in one statement (counts included). */
 const viewCols = (c: Caller) => ({
   id: spaces.id,
@@ -160,10 +165,16 @@ const viewCols = (c: Caller) => ({
   // The caller's role in a shared space: space_members, Every-space
   // mappings, allMembersRole (uncapped members): decide()'s inputs.
   rank: sql<number>`case when ${spaces.kind} = 'shared' then ${roleRankSql(c, sql`${spaces.id}`)} else 0 end`,
-  memberCount: sql<number>`case when ${spaces.kind} = 'shared' then (select count(*) from (
-      select sm.user_id from space_members sm where sm.space_id = ${spaces.id}
-      union select dm.user_id from org_group_mappings ogm
-        join directory_members dm on dm.group_id = ogm.group_id)) else 1 end`,
+  // |space rows ∪ Every-space members| = (space-row users not in an
+  // Every-space group) + |Every-space members|. The second term is
+  // uncorrelated, so SQLite reads it once per statement; the first walks the
+  // space's own rows, each probing directory_members by primary key per org
+  // mapping (a handful).
+  memberCount: sql<number>`case when ${spaces.kind} = 'shared' then
+      (select count(distinct sm.user_id) from space_members sm where sm.space_id = ${spaces.id}
+        and not exists (select 1 from org_group_mappings ogm join directory_members dm
+          on dm.group_id = ogm.group_id and dm.user_id = sm.user_id))
+      + ${EVERY_MEMBER_COUNT} else 1 end`,
   artifactCount: sql<number>`(select count(*) from artifacts a where a.space_id = ${spaces.id} and a.deleted_at is null)`,
   smm: sql<string | null>`(select value from settings where key = ${SMM_KEY})`,
 });
@@ -253,7 +264,9 @@ export async function getSpace(
 /**
  * GET R.spaces: the caller's personal space first, then shared spaces by
  * name. Org admins also see every shared space (myRole null where they have
- * no role). Keyset on (kind, name, id).
+ * no role). Keyset on (kind, name, id). Two statements in one batch: the
+ * personal space by primary key, and shared spaces walking
+ * spaces_kind_name_idx in order (no personal row is read, no sort).
  */
 export async function listSpaces(
   env: Env,
@@ -262,30 +275,43 @@ export async function listSpaces(
 ): Promise<Page<Space>> {
   const u = me(c);
   const after = decodeCursor(q.cursor, ["number", "string", "string"]);
-  const k = sql<number>`(case when ${spaces.kind} = 'shared' then 1 else 0 end)`;
-  const shared = isAdmin(c)
-    ? eq(spaces.kind, "shared")
-    : and(
-        eq(spaces.kind, "shared"),
-        sql`${roleRankSql(c, sql`${spaces.id}`)} > 0`,
-      );
-  const where: (SQL | undefined)[] = [
-    isNull(spaces.deletedAt),
-    q.kind ? eq(spaces.kind, q.kind) : undefined,
-    or(and(eq(spaces.kind, "personal"), eq(spaces.id, u.id)), shared),
-  ];
-  if (after) {
-    const [ak, an, ai] = after;
-    where.push(
-      sql`(${k} > ${ak} or (${k} = ${ak} and (${spaces.name} > ${an} or (${spaces.name} = ${an} and ${spaces.id} > ${ai}))))`,
-    );
-  }
-  const rows = await getDb(env)
+  const db = getDb(env);
+  const wantPersonal = !after && q.kind !== "shared";
+  const wantShared = q.kind !== "personal";
+  const personal = db
     .select(viewCols(c))
     .from(spaces)
-    .where(and(...where))
-    .orderBy(k, spaces.name, spaces.id)
+    .where(
+      and(
+        eq(spaces.id, u.id),
+        eq(spaces.kind, "personal"),
+        isNull(spaces.deletedAt),
+        wantPersonal ? undefined : sql`0`,
+      ),
+    )
+    .limit(1);
+  const [, an, ai] = after ?? [];
+  const shared = db
+    .select(viewCols(c))
+    .from(spaces)
+    .where(
+      and(
+        eq(spaces.kind, "shared"),
+        isNull(spaces.deletedAt),
+        wantShared ? undefined : sql`0`,
+        isAdmin(c)
+          ? undefined
+          : sql`${roleRankSql(c, sql`${spaces.id}`)} > 0`,
+        // A cursor on the personal space (kind 0) continues from the first shared one.
+        after && after[0] === 1
+          ? sql`(${spaces.name} > ${an} or (${spaces.name} = ${an} and ${spaces.id} > ${ai}))`
+          : undefined,
+      ),
+    )
+    .orderBy(spaces.kind, spaces.name, spaces.id)
     .limit(q.limit + 1);
+  const [mine, others] = await db.batch([personal, shared]);
+  const rows = [...mine, ...others];
   const more = rows.length > q.limit;
   const page = more ? rows.slice(0, q.limit) : rows;
   const last = page[page.length - 1];
@@ -475,7 +501,13 @@ const MEMBER_FILTER = `(?3 is null or u.id = ?3)
   and (?6 is null or (u.id in (select dm.user_id from directory_members dm where dm.group_id = ?6)
     and (exists (select 1 from group_mappings gm where gm.space_id = ?1 and gm.group_id = ?6)
       or exists (select 1 from org_group_mappings ogm where ogm.group_id = ?6))))`;
-const MEMBER_PAGE = `${MEMBER_SET}
+// The page's ids first (filter, keyset, limit), then only those rows are
+// decorated with their roles and groups.
+const MEMBER_PAGE = `${MEMBER_SET},
+  p(id, email) as (select u.id, u.email from m join users u on u.id = m.user_id
+    where ${MEMBER_FILTER}
+      and (?7 is null or u.email > ?7 or (u.email = ?7 and u.id > ?8))
+    order by u.email, u.id limit ?2)
   select u.id, u.email, u.name, u.display_name as displayName, u.role, u.status,
     u.last_seen_at as lastSeenAt, u.restricted_manual as rm, u.restricted_sync as rs,
     (select sm.role from space_members sm where sm.space_id = ?1 and sm.user_id = u.id and sm.source = 'manual') as manualRole,
@@ -485,10 +517,8 @@ const MEMBER_PAGE = `${MEMBER_SET}
       where gm.space_id = ?1) as spaceGroups,
     (select json_group_array(json_object('groupId', ogm.group_id, 'email', ogm.group_email, 'role', ogm.role))
       from org_group_mappings ogm join directory_members dm on dm.group_id = ogm.group_id and dm.user_id = u.id) as everyGroups
-  from m join users u on u.id = m.user_id
-  where ${MEMBER_FILTER}
-    and (?7 is null or u.email > ?7 or (u.email = ?7 and u.id > ?8))
-  order by u.email, u.id limit ?2`;
+  from p join users u on u.id = p.id
+  order by p.email, p.id`;
 const MEMBER_TOTAL = `${MEMBER_SET}
   select count(*) as n from m join users u on u.id = m.user_id
   where ${MEMBER_FILTER} and ?2 is null`;
@@ -1207,15 +1237,6 @@ export async function deleteOrgMapping(
 
 // --------------------------------------------------------- restrictions
 
-// restricted_sync for a group's members: set while they are in any
-// restricted group; owners and admins are never restricted (restrict_admin).
-const RESTRICT_RECOMPUTE = `update users set restricted_sync = case
-    when role in ('owner', 'admin') then 0
-    when exists (select 1 from directory_members dm join restricted_groups rg on rg.group_id = dm.group_id
-      where dm.user_id = users.id) then 1
-    else 0 end
-  where id in (select user_id from directory_members where group_id = ?1)`;
-
 const RESTRICTED_LIST = `select rg.group_id as groupId, rg.group_email as email, rg.created_at as createdAt,
     case when exists (select 1 from directory_groups dg where dg.group_id = rg.group_id)
       then (select count(*) from directory_members dm where dm.group_id = rg.group_id) end as n
@@ -1278,7 +1299,7 @@ export async function putRestrictedGroup(
         when: { sql: "changes() > 0", args: [] },
       },
     ),
-    stmt(env.DB, RESTRICT_RECOMPUTE).bind(groupId),
+    stmt(env.DB, RESTRICTED_SYNC_FOR_GROUP).bind(groupId),
     stmt(env.DB, GROUP_MEMBERS).bind(groupId),
     stmt(env.DB, RESTRICTED_LIST).bind(groupId),
   ]);
@@ -1314,7 +1335,7 @@ export async function deleteRestrictedGroup(
     stmt(env.DB, "delete from restricted_groups where group_id = ?").bind(
       groupId,
     ),
-    stmt(env.DB, RESTRICT_RECOMPUTE).bind(groupId),
+    stmt(env.DB, RESTRICTED_SYNC_FOR_GROUP).bind(groupId),
   ]);
   if (!out[1]?.meta.changes) throw notFound();
 }

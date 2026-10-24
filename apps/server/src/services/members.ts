@@ -35,6 +35,7 @@ import {
   revokeUserLive,
 } from "../runtime/revoke.js";
 import { type AuditActor, audit } from "./audit.js";
+import { RESTRICTED_SYNC_FOR_USER } from "./restriction.js";
 import { insertUser, toMember } from "./users.js";
 
 /** Active members only (the contract's default `status`). */
@@ -185,11 +186,15 @@ export async function patchMember(
       detail: { from: row.role, to: patch.role },
       when: { sql: "changes() > 0 and ? <> ?", args: [row.role, patch.role] },
     }),
+    // The group restriction depends on the role (never owners or admins):
+    // a demoted admin in a restricted group is capped now, a promoted
+    // member no longer is (P3 T9).
+    stmt(env.DB, RESTRICTED_SYNC_FOR_USER).bind(id),
   ]);
   const out = res?.results[0] as Parameters<typeof toMember>[0] | undefined;
   if (!out) throw new ApiError("not_found", "Not found");
-  // Sessions ended above; live sockets were authorized under the old role:
-  // close them too (P3 T7).
+  // Sessions ended above; live sockets were authorized under the old role
+  // (and a raised restriction cap): close them too (P3 T7).
   await revokeUserLive(env, id, "role changed", ctx);
   // Guests can't connect agents: a demotion revokes their PATs and OAuth grants.
   // (MemberPatch allows only admin|member today; this guards a wider contract.)

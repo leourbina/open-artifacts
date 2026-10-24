@@ -99,6 +99,11 @@ export const spaces = sqliteTable(
     deletedAt: integer("deleted_at"),
   },
   (t) => [
+    // GET R.spaces: shared spaces by name, without walking personal ones.
+    // Partial, so a user insert (its personal space) writes no index entry.
+    index("spaces_kind_name_idx")
+      .on(t.kind, t.name, t.id)
+      .where(sql`${t.kind} = 'shared'`),
     check("spaces_kind_check", inList("kind", SpaceKindSchema.options)),
     check(
       "spaces_all_members_role_check",
