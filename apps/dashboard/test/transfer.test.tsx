@@ -113,7 +113,7 @@ it("to a person: the helper names both, and the transfer posts the user", async 
   expect(d).toHaveTextContent(
     "You won't see titles or contents. Bob Builder gets them in their Personal, with Carol Departed's shares kept.",
   );
-  fireEvent.click(within(d).getByRole("button", { name: "Transfer 2" }));
+  fireEvent.click(await within(d).findByRole("button", { name: "Transfer 2" }));
   await waitFor(() =>
     expect(seen.find((c) => c.path === R.memberTransfer(CAROL))?.body).toEqual({
       to: { kind: "user", userId: "Bc4eFgHjKm5nPqRs" },
@@ -135,7 +135,7 @@ it("to a space: the helper says who can open them, and it posts the space", asyn
   expect(d).toHaveTextContent(
     "Everyone with access to Engineering can open them, by their role.",
   );
-  fireEvent.click(within(d).getByRole("button", { name: "Transfer 2" }));
+  fireEvent.click(await within(d).findByRole("button", { name: "Transfer 2" }));
   await waitFor(() =>
     expect(seen.find((c) => c.path === R.memberTransfer(CAROL))?.body).toEqual({
       to: { kind: "space", spaceId: ENG },
@@ -207,7 +207,9 @@ it("a partial failure shows inline with Retry, which moves only the rest", async
   ]);
   const d = await openFromCard();
   await chooseOption("Give them to", "Bob Builder");
-  fireEvent.click(within(d).getByRole("button", { name: "Transfer 150" }));
+  fireEvent.click(
+    await within(d).findByRole("button", { name: "Transfer 150" }),
+  );
   const alert = await within(d).findByRole("alert");
   expect(alert).toHaveTextContent("Moved 100 of 150. 50 didn't move.");
   expect(screen.queryByText("boom")).toBeNull();
@@ -222,18 +224,20 @@ it("a partial failure shows inline with Retry, which moves only the rest", async
 });
 
 it("progress reads Transferring… <done> of <n>", async () => {
+  // The gate exists before the request does: releasing early can't be lost.
   let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
   mountHosted("/settings/members", true, undefined, [
     http.post(`*${R.memberTransfer(CAROL)}`, async () => {
-      await new Promise<void>((r) => {
-        release = r;
-      });
+      await gate;
       return HttpResponse.json({ moved: 3, remaining: 0, nextCursor: null });
     }),
   ]);
   const d = await openFromCard();
   await chooseOption("Give them to", "Bob Builder");
-  fireEvent.click(within(d).getByRole("button", { name: "Transfer 2" }));
+  fireEvent.click(await within(d).findByRole("button", { name: "Transfer 2" }));
   expect(
     await within(d).findByText("Transferring… 0 of 3, including trash."),
   ).toBeVisible();
@@ -251,7 +255,7 @@ it("400 invalid_successor shows the copy", async () => {
   ]);
   const d = await openFromCard();
   await chooseOption("Give them to", "Bob Builder");
-  fireEvent.click(within(d).getByRole("button", { name: "Transfer 2" }));
+  fireEvent.click(await within(d).findByRole("button", { name: "Transfer 2" }));
   expect(
     await within(d).findByText(
       "Pick an active member who isn't a guest or restricted.",
@@ -302,21 +306,23 @@ it("no dots when nobody departed has artifacts", async () => {
 });
 
 it("no trash: plain progress and toast", async () => {
+  // The gate exists before the request does: releasing early can't be lost.
   let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
   mountHosted("/settings/members", true, undefined, [
     http.get(`*${R.memberTransfer(CAROL)}`, () =>
       HttpResponse.json({ live: 2, deleted: 0 }),
     ),
     http.post(`*${R.memberTransfer(CAROL)}`, async () => {
-      await new Promise<void>((r) => {
-        release = r;
-      });
+      await gate;
       return HttpResponse.json({ moved: 2, remaining: 0, nextCursor: null });
     }),
   ]);
   const d = await openFromCard();
   await chooseOption("Give them to", "Bob Builder");
-  fireEvent.click(within(d).getByRole("button", { name: "Transfer 2" }));
+  fireEvent.click(await within(d).findByRole("button", { name: "Transfer 2" }));
   expect(await within(d).findByText("Transferring… 0 of 2")).toBeVisible();
   release();
   expect(
