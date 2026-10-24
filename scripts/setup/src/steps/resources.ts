@@ -83,6 +83,17 @@ export function renderConfig(
   plan: "free" | "paid" = "free",
   tunables: Record<string, string> = {},
 ): string {
+  // The server answers these two hosts only (no any-host fallback), so a
+  // template naming them must get both, and two different ones. A missing
+  // value is the placeholder error below.
+  const hostKeys = ["APP_HOST", "CONTENT_HOST"] as const;
+  if (hostKeys.every((k) => template.includes(`{{${k}}}`))) {
+    for (const k of hostKeys)
+      if (vars[k]?.trim() === "") throw new Error(`rendered config needs ${k}`);
+    const [app, content] = hostKeys.map((k) => vars[k]?.toLowerCase());
+    if (app !== undefined && app === content)
+      throw new Error("APP_HOST and CONTENT_HOST must differ");
+  }
   // The template stays strict JSON (e2e fixtures JSON.parse it), so the
   // browser and email lines are matched by their keys and dropped when off.
   // EMAIL_FROM and SERVER_THUMBNAILS are never the last var, so dropping
