@@ -181,33 +181,38 @@ describe("setUserStatus", () => {
     await setUserStatus(env, u.userId, "removed", "directory_delete");
     await setUserStatus(env, u.userId, "active", "admin_restore");
     const rows = await auditsFor(u.userId, "user.status");
-    expect(
-      rows.map((r) => ({
-        kind: r.actor_kind,
-        actor: r.actor_id,
-        target: r.target_type,
-        detail: JSON.parse(r.detail),
-      })),
-    ).toEqual([
-      {
-        kind: "user",
-        actor: admin.userId,
-        target: "user",
-        detail: { status: "suspended", reason: "admin_suspend" },
-      },
-      {
-        kind: "sync",
-        actor: null,
-        target: "user",
-        detail: { status: "active", reason: "directory_unsuspend" },
-      },
-      {
-        kind: "sync",
-        actor: null,
-        target: "user",
-        detail: { status: "removed", reason: "directory_delete" },
-      },
-    ]);
+    // A set, not a sequence: rows written in the same millisecond tie on
+    // `at`, and their random ids order them arbitrarily (audit_events is
+    // WITHOUT ROWID, so there is no insertion order to sort by).
+    const got = rows.map((r) => ({
+      kind: r.actor_kind,
+      actor: r.actor_id,
+      target: r.target_type,
+      detail: JSON.parse(r.detail),
+    }));
+    expect(got).toHaveLength(3);
+    expect(got).toEqual(
+      expect.arrayContaining([
+        {
+          kind: "user",
+          actor: admin.userId,
+          target: "user",
+          detail: { status: "suspended", reason: "admin_suspend" },
+        },
+        {
+          kind: "sync",
+          actor: null,
+          target: "user",
+          detail: { status: "active", reason: "directory_unsuspend" },
+        },
+        {
+          kind: "sync",
+          actor: null,
+          target: "user",
+          detail: { status: "removed", reason: "directory_delete" },
+        },
+      ]),
+    );
   });
 });
 

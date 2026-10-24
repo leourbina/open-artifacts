@@ -47,6 +47,10 @@ export type OrgAction =
   | "space.create"
   | "space.delete"
   | "space.mappings"
+  /** Per-space mappings on a shared space: org admins any role, its managers viewer or editor (the handler applies the ceiling). */
+  | "space.mappings.manage"
+  /** "Every space" org mappings (R.orgMappings). */
+  | "org.mappings"
   | "space.allMembers"
   | "space.members"
   | "space.rename"
@@ -272,6 +276,10 @@ export function can(
 
 const ORG_ADMINS: readonly Role[] = ["owner", "admin"];
 
+/** Org owners and admins can't be restricted (400 restrict_admin; sync skips them). */
+export const canBeRestricted = (role: Role): boolean =>
+  !ORG_ADMINS.includes(role);
+
 /** Instance and space administration (no artifact involved). */
 export function orgCan(
   m: Member,
@@ -286,6 +294,7 @@ export function orgCan(
     case "space.members":
     case "space.rename":
     case "space.publicLinks":
+    case "space.mappings.manage":
       return !capped && (admin || opts.spaceRole === "manager");
     case "space.publish":
       return (

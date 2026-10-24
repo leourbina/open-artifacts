@@ -477,6 +477,8 @@ it("export streams NDJSON with one line per event", async () => { /* lines.lengt
   - New `public` on that space (PATCH or publish) is 403 `public_links_off`, enforced on the visibility route itself (pinned from the #367 review).
   - The move rule is separate (T10): a public artifact moved into a no-public-links space is rewritten to `team` in the move batch and its sockets close.
 - **Lowering `allMembersRole`, removing or lowering a mapping (per-space or Every-space), or removing a member:** the job `revokeUsers(userIds)` runs in pages of 50, with no cap.
+  - **Deviation, accepted for M1 (manager, 2026-10-24):** until T13's `DirectorySync` queue lands, T9 revokes in the request's `waitUntil` (`revokeUsersLive`), capped at 20 users on Free and 450 on Paid, so one invocation stays within its subrequest limit. The SQL reads at most cap + 1 ids, most recently seen first. Past the cap, `revoke_fanout_truncated` alerts the operator, and the remaining users' open sockets end at the 10-minute TTL (their next request and reconnect are refused by D1 at once). T13 moves the fan-out to its queue and removes the cap.
+- **Peer managers (manager ruling, 2026-10-24):** a space manager who is not an org admin can't remove, demote or override another manager's row, manual or synced, frozen mode included: 403 `space_forbidden` `{ target: "member" }` (DELETE checks it before `member_synced`). Org owners and admins are unaffected.
 - Admin self-add (`POST R.spaceMemberSelf(id)`, `SpaceMemberPut` → 201 `SpaceMember`, org admin): shared spaces only (else 400 `space_personal`); writes `space.admin_self_add` and emails the space managers.
 
 - [ ] **Step 1: Failing tests**

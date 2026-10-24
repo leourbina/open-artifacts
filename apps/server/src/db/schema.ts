@@ -99,6 +99,11 @@ export const spaces = sqliteTable(
     deletedAt: integer("deleted_at"),
   },
   (t) => [
+    // GET R.spaces: shared spaces by name, without walking personal ones.
+    // Partial, so a user insert (its personal space) writes no index entry.
+    index("spaces_kind_name_idx")
+      .on(t.kind, t.name, t.id)
+      .where(sql`${t.kind} = 'shared'`),
     check("spaces_kind_check", inList("kind", SpaceKindSchema.options)),
     check(
       "spaces_all_members_role_check",
@@ -176,6 +181,8 @@ export const orgGroupMappings = sqliteTable(
 export const restrictedGroups = sqliteTable("restricted_groups", {
   groupId: text("group_id").primaryKey(),
   groupEmail: text("group_email").notNull(),
+  /** When the group was restricted (ms); null for rows written before P3 T9. */
+  createdAt: integer("created_at"),
 });
 
 // Raw directory rows from the last successful read: a parent_ids list resolves

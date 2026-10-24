@@ -1108,16 +1108,31 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
           r.data.publicLinks !== undefined &&
           r.data.publicLinks !== s.publicLinks
         ) {
+          // Off refuses NEW public links only (decided): existing public
+          // artifacts, their links and sockets keep working; nothing is rewritten.
           log("space.public_links", { type: "space", id: s.id }, s.id, {
             publicLinks: r.data.publicLinks,
           });
-          if (!r.data.publicLinks)
-            for (const a of artifacts)
-              if (a.space?.id === s.id && a.visibility === "public")
-                a.visibility = "team";
         }
+        // As the server: space.update only when name or allMembersRole
+        // actually changes (publicLinks has its own space.public_links).
+        const fields = [
+          ...(r.data.name !== undefined && r.data.name !== s.name
+            ? ["name"]
+            : []),
+          ...(r.data.allMembersRole !== undefined &&
+          r.data.allMembersRole !== s.allMembersRole
+            ? ["allMembersRole"]
+            : []),
+        ];
         Object.assign(s, r.data);
-        log("space.update", { type: "space", id: s.id }, s.id, { keys });
+        if (fields.length)
+          log("space.update", { type: "space", id: s.id }, s.id, {
+            fields,
+            ...(r.data.allMembersRole !== undefined
+              ? { allMembersRole: r.data.allMembersRole }
+              : {}),
+          });
         refresh();
         return HttpResponse.json(view(s));
       }),
@@ -1142,6 +1157,8 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
       authed(async ({ request, params }) => {
         const s = sharedSpace(params.id);
         if (s instanceof Response) return s;
+        if (s.kind === "personal")
+          return err("space_personal", "Personal spaces have no members");
         const qs = new URL(request.url).searchParams;
         const raw: Record<string, string> = {};
         qs.forEach((v, k) => {
@@ -1211,15 +1228,19 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
         if (s.kind === "personal")
           return err("space_personal", "Personal spaces have no members");
         if (!isAdmin() && roleIn(s) !== "manager") return notFound();
-        const u = memberOf(params.userId as string);
-        if (!u) return notFound();
+        // The body first, then an existing, active member (as the server): else 404.
         const r = await c.body(request, SpaceMemberPutSchema);
         if (r.error) return r.error;
+        const u = memberOf(params.userId as string);
+        if (!u || (u.status ?? "active") !== "active") return notFound();
         const cur = rowsOf(s).find((x) => x.userId === u.id);
-        // Only an org admin grants or changes the Manager role on a member.
+        // Only an org admin grants Manager or changes a peer manager (a
+        // manager row by hand or synced; the frozen override included).
         if (
           !isAdmin() &&
-          (r.data.role === "manager" || cur?.manualRole === "manager")
+          (r.data.role === "manager" ||
+            cur?.manualRole === "manager" ||
+            cur?.syncRole === "manager")
         )
           return err(
             "space_forbidden",
@@ -1259,6 +1280,14 @@ export function createHostedMock(o: HostedMockOptions, c: HostedCtx) {
         const userId = params.userId as string;
         const cur = rowsOf(s).find((x) => x.userId === userId);
         if (!cur) return notFound();
+        // A peer manager (by hand or synced) is an org admin's to remove.
+        if (
+          !isAdmin() &&
+          (cur.manualRole === "manager" || cur.syncRole === "manager")
+        )
+          return err("space_forbidden", "Only an admin can remove a manager", {
+            target: "member",
+          });
         if (directoryMode === "frozen" && cur.syncRole) {
           // Removing access is always allowed, synced rows included.
           detach(baseRow(s, userId));

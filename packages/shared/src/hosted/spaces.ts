@@ -44,9 +44,31 @@ export const SpacesQuerySchema = z.strictObject({
 });
 export type SpacesQuery = z.infer<typeof SpacesQuerySchema>;
 
+/**
+ * C0 controls (U+0000-U+001F), DEL (U+007F), bidi controls (LRM/RLM,
+ * ALM, LRE..RLO, LRI..PDI) and zero-width characters (ZWSP, ZWNJ, ZWJ,
+ * BOM/ZWNBSP): stripped from space names.
+ */
+const NAME_CONTROLS =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping them is the point
+  /[\u0000-\u001F\u007F\u061C\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g;
+
+/** A space name with control and bidi characters removed. */
+export const stripNameControls = (s: string): string =>
+  s.replace(NAME_CONTROLS, "");
+
+/**
+ * A space name: control and bidi characters stripped, then trimmed, 1-80
+ * characters (a name of only such characters is 400).
+ */
+export const SpaceNameSchema = z
+  .string()
+  .transform(stripNameControls)
+  .pipe(z.string().trim().min(1).max(80));
+
 /** POST R.spaces (org owner, admin) -> 201 Space. */
 export const SpaceCreateSchema = z.strictObject({
-  name: z.string().trim().min(1).max(80),
+  name: SpaceNameSchema,
   allMembersRole: SpaceRoleSchema.nullable().default(null),
   publicLinks: z.boolean().default(true),
 });
@@ -63,7 +85,7 @@ export type SpaceCreateInput = z.input<typeof SpaceCreateSchema>;
  */
 export const SpacePatchSchema = z
   .strictObject({
-    name: z.string().trim().min(1).max(80),
+    name: SpaceNameSchema,
     allMembersRole: SpaceRoleSchema.nullable(),
     publicLinks: z.boolean(),
   })
@@ -87,7 +109,8 @@ export const SpaceMemberGroupSchema = GroupRefSchema.extend({
 export type SpaceMemberGroup = z.infer<typeof SpaceMemberGroupSchema>;
 
 /**
- * GET R.spaceMembers(id) -> SpaceMembersPage. Keyed by user id. The UI's
+ * GET R.spaceMembers(id) -> SpaceMembersPage (personal: 400 space_personal).
+ * Keyed by user id. The UI's
  * per-row reason line comes from manualRole, groups[].role/via and
  * allMembers (e.g. "Manager by hand, Editor via eng@", "Viewer via All
  * members").
@@ -141,16 +164,19 @@ export type SpaceForbiddenDetails = z.infer<typeof SpaceForbiddenDetailsSchema>;
 
 /*
  * PUT R.spaceMember(id, userId) (space manager, org admin) -> SpaceMember.
+ * The target must be an existing, active member, else 404.
  * Sets the manual row. A space manager (not an org admin) granting manager,
- * or changing a member whose manualRole is manager: 403 space_forbidden
- * { target: "member" }. While sync is frozen, on a row with a syncRole: any
+ * or changing a peer manager (a manager row by hand or synced, the frozen
+ * override included): 403 space_forbidden { target: "member" }. While sync is frozen, on a row with a syncRole: any
  * role (raise or lower) is a manual grant under those rules and replaces the
  * synced row with a manual override (the next reconcile after unfreezing
  * replaces it). Audited space.member.add/role
  * (frozen override: detail { syncFrozen: true, role }).
  *
- * DELETE R.spaceMember(id, userId) -> 204: removes the manual row. A
- * synced-only row while sync is live: 409 member_synced. While frozen it
+ * DELETE R.spaceMember(id, userId) -> 204: removes the manual row. Only an
+ * org admin removes a peer manager (a manager row by hand or synced, frozen
+ * included): else 403 space_forbidden { target: "member" }, before
+ * member_synced. A synced-only row while sync is live: 409 member_synced. While frozen it
  * removes the synced row too (removing access is always allowed); audited
  * space.member.remove (frozen: detail { syncFrozen: true }).
  */

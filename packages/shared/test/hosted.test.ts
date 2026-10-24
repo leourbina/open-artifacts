@@ -34,6 +34,7 @@ import {
   SettingsSchema,
   SPACE_MANAGER_MAPPING_ROLES,
   SpaceCanSchema,
+  SpaceCreateSchema,
   SpaceForbiddenDetailsSchema,
   SpaceMemberGroupSchema,
   SpaceMemberSchema,
@@ -144,6 +145,27 @@ describe("hosted contract schemas", () => {
       CodeRateLimitedDetailsSchema.parse({ retryAfter: 60, scope: "ip" }),
     ).toEqual({ retryAfter: 60, scope: "ip" });
     expect(SpacePatchSchema.safeParse({ kind: "shared" }).success).toBe(false);
+    // Space names: C0, DEL and bidi controls stripped, then trimmed.
+    expect(
+      SpaceCreateSchema.parse({
+        name: " \u202EEng\u0000\u0007ineer\u2066ing\u200F\u007F\u061C ",
+      }).name,
+    ).toBe("Engineering");
+    expect(SpacePatchSchema.parse({ name: "A\u0009B\u2069" }).name).toBe("AB");
+    expect(
+      SpacePatchSchema.safeParse({ name: "\u202A\u0000 \u200E" }).success,
+    ).toBe(false);
+    // Zero-width characters too: ZWSP, ZWNJ, ZWJ and BOM.
+    expect(
+      SpaceCreateSchema.parse({ name: "\uFEFFEn\u200Bg\u200Cin\u200Deering" })
+        .name,
+    ).toBe("Engineering");
+    expect(
+      SpacePatchSchema.safeParse({ name: "\u200B\uFEFF\u200D" }).success,
+    ).toBe(false);
+    expect(SpaceCreateSchema.parse({ name: "Café 東京" }).name).toBe(
+      "Café 東京",
+    );
     expect(
       TransferInputSchema.parse({
         to: { kind: "space", spaceId: "s" },
@@ -652,6 +674,45 @@ describe("hosted mocks: restriction, public links, admin self-add, audit", () =>
     expect((await errCode(create)).code).toBe("public_links_off");
   });
 
+  it("public links off keeps an existing public artifact public (no rewrite)", async () => {
+    fresh({ hosted: true });
+    const me = Strict.Me.parse(await json(await call("GET", R.me)));
+    const eng = me.spaces?.find((s) => s.name === "Engineering")?.id as string;
+    const notes = fixtures.artifacts.find((a) => a.title === "Meeting notes")
+      ?.id as string;
+    expect(
+      (await call("PATCH", R.artifact(notes), { visibility: "public" })).status,
+    ).toBe(200);
+    expect(
+      (await call("PATCH", R.space(eng), { publicLinks: false })).status,
+    ).toBe(200);
+    const a = await json(await call("GET", R.artifact(notes)));
+    expect(a).toMatchObject({
+      visibility: "public",
+      space: { id: eng, publicLinks: false },
+    });
+  });
+
+  it("space members: personal space 400 space_personal; PUT needs an existing, active target", async () => {
+    fresh({ hosted: true });
+    const ada = fixtures.members[0]?.id as string;
+    expect((await errCode(await call("GET", R.spaceMembers(ada)))).code).toBe(
+      "space_personal",
+    );
+    const me = Strict.Me.parse(await json(await call("GET", R.me)));
+    const eng = me.spaces?.find((s) => s.name === "Engineering")?.id as string;
+    // Carol is suspended; the other id names nobody.
+    for (const userId of ["Cr7tNpQrSt8uVwXy", "Zz0nobodyZz0abcd"])
+      expect(
+        (await call("PUT", R.spaceMember(eng, userId), { role: "viewer" }))
+          .status,
+      ).toBe(404);
+    const bob = fixtures.members[1]?.id as string;
+    expect(
+      (await call("PUT", R.spaceMember(eng, bob), { role: "viewer" })).status,
+    ).toBe(200);
+  });
+
   it("admin self-add to a shared space only, audited", async () => {
     fresh({ hosted: true });
     const spaces = PageSchema(Strict.Space).parse(
@@ -991,7 +1052,6 @@ describe("hosted contract: space People", () => {
   const EXEC = "SpExcNpQrSt3uVwX";
   const ada = fixtures.members[0]?.id as string;
   const bob = fixtures.members[1]?.id as string;
-  const carol = "Cr7tNpQrSt8uVwXy";
   const dan = "Dn8uPqRsTu9vWxYz";
   const StrictMember = SpaceMemberSchema.extend({
     groups: z.array(SpaceMemberGroupSchema.strict()),
@@ -1106,7 +1166,7 @@ describe("hosted contract: space People", () => {
     await signIn("bob@example.com");
     expect(
       await forbidden(
-        await call("PUT", R.spaceMember(ENG, carol), { role: "manager" }),
+        await call("PUT", R.spaceMember(ENG, dan), { role: "manager" }),
       ),
     ).toBe("member");
     // Ada is a manager by hand: demoting her is changing the Manager role.
@@ -1118,15 +1178,59 @@ describe("hosted contract: space People", () => {
     expect(
       StrictMember.parse(
         await json(
-          await call("PUT", R.spaceMember(ENG, carol), { role: "editor" }),
+          await call("PUT", R.spaceMember(ENG, dan), { role: "editor" }),
         ),
       ),
-    ).toMatchObject({ userId: carol, manualRole: "editor" });
+    ).toMatchObject({ userId: dan, manualRole: "editor" });
     expect(
       await forbidden(
         await call("PUT", R.spaceMapping(ENG, "gSales03"), { role: "manager" }),
       ),
     ).toBe("mapping");
+  });
+
+  it("a space manager can't change or remove a peer manager (403 target member); org admins can", async () => {
+    for (const directory of ["google", "frozen"] as const) {
+      fresh({ hosted: { directory } });
+      // Bob becomes a manager of Engineering, where Ada is manager by hand.
+      await call("PUT", R.spaceMember(ENG, bob), { role: "manager" });
+      await call("PUT", R.spaceMember(ENG, dan), { role: "manager" });
+      // Org admin (Ada) changes and removes a manager: allowed.
+      expect(
+        (await call("PUT", R.spaceMember(ENG, dan), { role: "editor" })).status,
+      ).toBe(200);
+      expect((await call("DELETE", R.spaceMember(ENG, dan))).status).toBe(204);
+      await signIn("bob@example.com");
+      expect(
+        await forbidden(
+          await call("PUT", R.spaceMember(ENG, ada), { role: "viewer" }),
+        ),
+      ).toBe("member");
+      expect(
+        await forbidden(await call("DELETE", R.spaceMember(ENG, ada))),
+      ).toBe("member");
+    }
+  });
+
+  it("PUT member validates the body before the target (400, not 404)", async () => {
+    fresh({ hosted: true });
+    const r = await call("PUT", R.spaceMember(ENG, "Zz0nobodyZz0abcd"), {
+      role: "owner",
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it("PATCH space audits space.update only when name or allMembersRole changes", async () => {
+    fresh({ hosted: true });
+    await call("PATCH", R.space(ENG), { publicLinks: false });
+    await call("PATCH", R.space(ENG), { name: "Engineering" });
+    const actions = async () =>
+      PageSchema(Strict.AuditEvent)
+        .parse(await json(await call("GET", R.audit)))
+        .items.map((e) => e.action);
+    expect(await actions()).toEqual(["space.public_links"]);
+    await call("PATCH", R.space(ENG), { name: "Eng" });
+    expect(await actions()).toEqual(["space.update", "space.public_links"]);
   });
 
   it("live sync: DELETE on a synced-only row is 409 member_synced", async () => {
