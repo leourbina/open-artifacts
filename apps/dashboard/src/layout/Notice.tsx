@@ -36,7 +36,11 @@ export function Notice({
     <Alert variant={tone} size={compact ? "sm" : "default"}>
       {icon}
       {title && <AlertTitle>{title}</AlertTitle>}
-      {children && <AlertDescription>{children}</AlertDescription>}
+      {children && (
+        <AlertDescription className="w-full justify-self-stretch">
+          {children}
+        </AlertDescription>
+      )}
       {(action || onDismiss) && (
         <AlertAction>
           {action}

@@ -107,7 +107,8 @@ const At = ({ iso }: { iso: string }) => <When iso={iso} text={when(iso)} />;
 
 // -- connect errors (`?error=` after Google)
 
-const connectCopy = (raw: string, domain: string | null) => {
+/** The reason Google gave, or null when there is none to show. */
+const connectCopy = (raw: string, domain: string | null): string | null => {
   const parsed = DirectoryConnectErrorSchema.safeParse(raw);
   switch (parsed.success ? parsed.data : "failed") {
     case "not_super_admin":
@@ -125,7 +126,7 @@ const connectCopy = (raw: string, domain: string | null) => {
     case "expired":
       return "The connection took too long. Try again.";
     default:
-      return "Couldn't connect. Try again.";
+      return null;
   }
 };
 
@@ -818,7 +819,7 @@ export function Directory() {
       {search.error !== undefined && !status.isPending && (
         <Notice
           tone="danger"
-          title="Couldn't connect Google Workspace"
+          title="Couldn't connect Google Workspace."
           action={
             owner ? (
               <Button asChild size="sm" variant="outline">

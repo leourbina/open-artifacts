@@ -48,7 +48,13 @@ const CASES = [
     n: "directory-error",
     path: "/settings/directory?hosted=1&error=access_denied",
     role: "alert",
-    text: "Couldn't connect Google Workspace",
+    text: "Couldn't connect Google Workspace.",
+  },
+  {
+    n: "directory-reason",
+    path: "/settings/directory?hosted=1&error=denied",
+    role: "alert",
+    text: "Google access was declined.",
   },
 ] as const;
 
