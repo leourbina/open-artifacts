@@ -1,0 +1,54 @@
+// Hosted nightly scheduler (P1 Task 7): user Workers in a dispatch namespace
+// get no cron triggers, so this Worker's one cron calls scheduled() on every
+// active install's script (platform D1 `installs`), 10 at a time, 25 s each.
+//
+// Deploy with --env staging or --env prod only (docs/ops/hosted.md): the top
+// level has no name, so a deploy without --env is refused. No routes, custom
+// domains or workers.dev: the Worker has no fetch handler. Each env's
+// PLATFORM_DB id has its own placeholder, filled at deploy (the id of
+// oa-s-platform / oa-p-platform). Observability stays off.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": false,
+  "preview_urls": false,
+  "env": {
+    "staging": {
+      "name": "oa-s-scheduler",
+      "workers_dev": false,
+      "preview_urls": false,
+      "vars": { "OA_ENV": "staging" },
+      "observability": { "enabled": false },
+      "triggers": { "crons": ["17 3 * * *"] },
+      "dispatch_namespaces": [
+        { "binding": "DISPATCHER", "namespace": "oa-staging" }
+      ],
+      "d1_databases": [
+        {
+          "binding": "PLATFORM_DB",
+          "database_name": "oa-s-platform",
+          "database_id": "{{PLATFORM_DB_ID_STAGING}}"
+        }
+      ]
+    },
+    "prod": {
+      "name": "oa-p-scheduler",
+      "workers_dev": false,
+      "preview_urls": false,
+      "vars": { "OA_ENV": "prod" },
+      "observability": { "enabled": false },
+      "triggers": { "crons": ["17 3 * * *"] },
+      "dispatch_namespaces": [
+        { "binding": "DISPATCHER", "namespace": "oa-prod" }
+      ],
+      "d1_databases": [
+        {
+          "binding": "PLATFORM_DB",
+          "database_name": "oa-p-platform",
+          "database_id": "{{PLATFORM_DB_ID_PROD}}"
+        }
+      ]
+    }
+  }
+}
