@@ -319,6 +319,37 @@ it("a 403 directory_mapping_off (switch turned off in another tab) shows the rea
   expect(screen.queryByText("server text")).toBeNull();
 });
 
+it("a 403 space_forbidden for a mapping (a race) says the group changed and reloads the groups", async () => {
+  const seen = calls("GET");
+  mountHosted(ENG, true, asManager, [
+    http.put("*/api/v1/spaces/:id/mappings/:g", () =>
+      HttpResponse.json(
+        {
+          error: {
+            code: "space_forbidden",
+            message: "server text",
+            details: { target: "mapping" },
+          },
+        },
+        { status: 403 },
+      ),
+    ),
+  ]);
+  await groups();
+  const loads = () =>
+    seen.filter((c) => c.path === `/api/v1/spaces/${ID}/mappings`).length;
+  const before = loads();
+  await chooseOption("Role for eng@example.com", "Viewer");
+  expect(
+    await screen.findByText(
+      "This group's access just changed. Check it and try again.",
+    ),
+  ).toBeVisible();
+  await waitFor(() => expect(loads()).toBeGreaterThan(before));
+  expect(screen.queryByText("server text")).toBeNull();
+  expect(document.body.textContent).not.toMatch(/mapping/i);
+});
+
 // -- Every space (org mappings)
 
 it("the Every space card adds a group for every shared space", async () => {

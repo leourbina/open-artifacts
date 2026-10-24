@@ -12,11 +12,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@oa/ui/shadcn";
+import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { ApiClientError } from "../../api/client";
 import type { GroupMapping, Space, SpaceRole } from "../../api/contract";
 import { errorCopy, errorLink } from "../../api/errorCopy";
 import {
+  qk,
   useDeleteMapping,
   useOrgMappings,
   usePatchSpace,
@@ -97,11 +99,19 @@ export function RoleSelect({
   );
 }
 
+/** space_forbidden { target: "mapping" }: the row changed under the editor. */
+const isMappingRace = (e: unknown) =>
+  e instanceof ApiClientError &&
+  e.code === "space_forbidden" &&
+  (e.details as { target?: string } | undefined)?.target === "mapping";
+
 /** What a refused mapping change says, and its link (sync off points to Directory). */
 export const mappingProblem = (e: unknown) => {
   if (e instanceof ApiClientError && e.code === "space_forbidden")
     return {
-      text: "Only an admin can make a group a manager.",
+      text: isMappingRace(e)
+        ? "This group's access just changed. Check it and try again."
+        : "Only an admin can make a group a manager.",
       link: null,
     };
   return {
@@ -179,10 +189,18 @@ export function SpaceAccess({
   const put = usePutMapping(space.id);
   const remove = useDeleteMapping(space.id);
   const patch = usePatchSpace(space.id);
+  const qc = useQueryClient();
   const [pending, setPending] = useState<Record<string, SpaceRole>>({});
   const [problem, setProblem] = useState<ReturnType<
     typeof mappingProblem
   > | null>(null);
+
+  // The row changed under the editor: say so, and reload the groups.
+  const refused = (e: unknown) => {
+    setProblem(mappingProblem(e));
+    if (isMappingRace(e))
+      void qc.invalidateQueries({ queryKey: qk.spaceMappings(space.id) });
+  };
 
   const manager = space.myRole === "manager";
   const canMap = admin || (manager && (space.can?.manageMappings ?? false));
@@ -199,7 +217,7 @@ export function SpaceAccess({
     put.mutate(
       { groupId, role },
       {
-        onError: (e) => setProblem(mappingProblem(e)),
+        onError: refused,
         onSettled: () => setPending(({ [groupId]: _, ...rest }) => rest),
       },
     );
@@ -256,7 +274,7 @@ export function SpaceAccess({
                         onClick={() => {
                           setProblem(null);
                           remove.mutate(g.groupId, {
-                            onError: (e) => setProblem(mappingProblem(e)),
+                            onError: refused,
                           });
                         }}
                       >
@@ -322,7 +340,7 @@ export function SpaceAccess({
             setProblem(null);
             put.mutate(
               { groupId: g.groupId, role: "viewer" },
-              { onError: (e) => setProblem(mappingProblem(e)) },
+              { onError: refused },
             );
           }}
         />

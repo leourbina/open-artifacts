@@ -29,6 +29,7 @@ import { ConfirmDialog } from "../ConfirmDialog";
 import { GroupPicker } from "../GroupPicker";
 import { errorText, muted, SettingsCard, STACK } from "../ui";
 import { isOrgAdmin } from "./access";
+import { checkName, nameRefusal } from "./name";
 import {
   AccessRow,
   ALL_ROLES,
@@ -66,15 +67,24 @@ function NewSpace({
   const [name, setName] = useState("");
   const [allMembersRole, setAll] = useState<SpaceRole | null>(null);
   const [publicLinks, setPublic] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [touched, setTouched] = useState(false);
+  const [refused, setRefused] = useState<string | null>(null);
   const hint = useId();
+  const nameId = useId();
+  const checked = checkName(name);
+  // Before submit: once something was typed, the field says what's wrong.
+  const error = (touched || name !== "" ? checked.error : null) ?? refused;
   const submit = () => {
-    const trimmed = name.trim();
-    if (!trimmed) return setError("Give the space a name.");
-    setError(null);
+    setTouched(true);
+    const clean = checked.name;
+    if (clean === null) return;
+    setRefused(null);
     create.mutate(
-      { name: trimmed, allMembersRole, publicLinks },
-      { onSuccess: onClose },
+      { name: clean, allMembersRole, publicLinks },
+      {
+        onSuccess: onClose,
+        onError: (e) => setRefused(nameRefusal(e, name)),
+      },
     );
   };
   return (
@@ -105,9 +115,18 @@ function NewSpace({
           <Input
             id="oa-new-space-name"
             value={name}
-            maxLength={80}
-            onChange={(e) => setName(e.target.value)}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? nameId : undefined}
+            onChange={(e) => {
+              setName(e.target.value);
+              setRefused(null);
+            }}
           />
+          {error && (
+            <p id={nameId} role="alert" className={`m-0 ${errorText}`}>
+              {error}
+            </p>
+          )}
         </div>
         <div className="grid gap-[6px]">
           <span className="text-[length:var(--oa-text-sm)] font-medium">
@@ -135,11 +154,6 @@ function NewSpace({
             onChange={setPublic}
           />
         </div>
-        {error && (
-          <p role="alert" className={errorText}>
-            {error}
-          </p>
-        )}
       </form>
     </Modal>
   );
@@ -355,15 +369,27 @@ function General({ space }: { space: Space }) {
   const [name, setName] = useState(space.name);
   const [asking, setAsking] = useState(false);
   useEffect(() => setName(space.name), [space.name]);
-  const trimmed = name.trim();
+  const nameId = useId();
+  const [refused, setRefused] = useState<string | null>(null);
+  const checked = checkName(name);
+  const error = checked.error ?? refused;
+  const same = checked.name === space.name;
   return (
     <SettingsCard id="oa-space-general" title="General">
       <form
         className="grid gap-[6px]"
         onSubmit={(e) => {
           e.preventDefault();
-          if (trimmed && trimmed !== space.name)
-            patch.mutate({ name: trimmed });
+          if (!checked.name || same) return;
+          setRefused(null);
+          patch.mutate(
+            { name: checked.name },
+            {
+              // The saved name, cleaned, is what the field shows.
+              onSuccess: (s) => setName(s.name),
+              onError: (e) => setRefused(nameRefusal(e, name)),
+            },
+          );
         }}
       >
         <Label htmlFor="oa-space-name">Name</Label>
@@ -371,19 +397,28 @@ function General({ space }: { space: Space }) {
           <Input
             id="oa-space-name"
             value={name}
-            maxLength={80}
-            onChange={(e) => setName(e.target.value)}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? nameId : undefined}
+            onChange={(e) => {
+              setName(e.target.value);
+              setRefused(null);
+            }}
           />
           <Button
             type="submit"
             size="sm"
             variant="outline"
             className="h-auto text-[length:var(--oa-text-sm)]"
-            disabled={!trimmed || trimmed === space.name || patch.isPending}
+            disabled={!checked.name || same || patch.isPending}
           >
             Save name
           </Button>
         </div>
+        {error && (
+          <p id={nameId} role="alert" className={`m-0 ${errorText}`}>
+            {error}
+          </p>
+        )}
       </form>
       <div className="flex items-start justify-between gap-[var(--oa-space-3)]">
         <div>
