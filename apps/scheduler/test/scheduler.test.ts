@@ -155,10 +155,12 @@ const NOW = Date.UTC(2026, 9, 24, 3, 17);
 
 /** The whole log vocabulary: install ids, fixed categories and counts. */
 const LOG_LINE =
-  /^(?:nightly failed (?:timeout|not_found|canceled|exception) i[a-z0-9]{11}|nightly skipped (?:state|deadline|recheck|db_error) i[a-z0-9]{11}|nightly db_error i[a-z0-9]{11}|nightly leaked i[a-z0-9]{11}|nightly summary active=\d+ ok=\d+ failed=\d+ skipped=\d+ db_errors=\d+ leaked=\d+|nightly invalid ids=\d+|nightly scale active=\d+ over 300|nightly aborted (?:env|exception))$/;
+  /^(?:nightly failed (?:timeout|not_found|canceled|exception) i[a-z0-9]{11}|nightly skipped (?:state|deadline|capped|recheck|db_error) i[a-z0-9]{11}|nightly db_error i[a-z0-9]{11}|nightly leaked i[a-z0-9]{11}|nightly summary active=\d+ ok=\d+ failed=\d+ skipped=\d+ capped=\d+ db_errors=\d+ leaked=\d+|nightly invalid ids=\d+|nightly scale active=\d+ over 300|nightly aborted (?:env|exception))$/;
 
 const DAY = 86_400_000;
-const NONE = { dbErrors: [], leaked: [] };
+const GOLDEN = 0.3819660112501051;
+const frac = (x: number) => x - Math.floor(x);
+const NONE = { capped: [], dbErrors: [], leaked: [] };
 
 /** PLATFORM_DB with the per-call re-check (only) replaced for some ids. */
 function recheckDb(
@@ -306,6 +308,7 @@ describe("runNightly", () => {
       ok: [],
       failed: [{ id: idOf(0), reason: "timeout" }],
       skipped: [],
+      capped: [],
       dbErrors: [],
       // Never settles: leaked when the run ends.
       leaked: [idOf(0)],
@@ -329,6 +332,7 @@ describe("runNightly", () => {
       concurrency: 3,
       timeoutMs: 20,
       deadlineMs: 300,
+      recheckFloorMs: 1,
     });
     // Three calls hold the three lanes forever; nothing else is started.
     expect(f.calls).toHaveLength(3);
@@ -489,6 +493,7 @@ describe("runNightly", () => {
     const r = await runNightly(f.env, NOW, {
       concurrency: 1,
       deadlineMs: 100,
+      recheckFloorMs: 1,
     });
     expect(r.failed).toEqual([]);
     expect(r.ok.length).toBeGreaterThanOrEqual(1);
@@ -501,7 +506,11 @@ describe("runNightly", () => {
     await seed(ids(6));
     const lines = captureLogs();
     const f = fakes("staging", () => "ok", 40);
-    const r = await runNightly(f.env, 0, { concurrency: 1, deadlineMs: 60 });
+    const r = await runNightly(f.env, 0, {
+      concurrency: 1,
+      deadlineMs: 60,
+      recheckFloorMs: 1,
+    });
     expect(r.skipped.length).toBeGreaterThan(0);
     expect(lines.filter((l) => l.startsWith("nightly skipped"))).toEqual(
       r.skipped.map((id) => `nightly skipped deadline ${id}`),
@@ -548,12 +557,13 @@ describe("runNightly", () => {
 
   it("caps unsettled calls (in-lane plus leaked) at 2 × concurrency", async () => {
     await seed(ids(30));
-    captureLogs();
+    const lines = captureLogs();
     const f = fakes("staging", () => "hang");
     const r = await runNightly(f.env, 0, {
       timeoutMs: 10,
       leakMs: 10,
       deadlineMs: 400,
+      recheckFloorMs: 1,
     });
     // Every call hangs, so each one stays unsettled: the fake's max in flight
     // is the number of unsettled calls the scheduler ever allowed.
@@ -562,6 +572,28 @@ describe("runNightly", () => {
     expect(r.failed).toHaveLength(12);
     expect(r.leaked).toHaveLength(12);
     expect(r.skipped).toHaveLength(18);
+    // Held back by the unsettled cap, not by the deadline itself.
+    expect(r.capped).toEqual(r.skipped);
+    expect(
+      lines.filter((l) => l.startsWith("nightly skipped capped")),
+    ).toHaveLength(18);
+    expect(lines.some((l) => l.startsWith("nightly skipped deadline"))).toBe(
+      false,
+    );
+  });
+
+  it("work still waiting on free lanes at the deadline is deadline, not capped", async () => {
+    await seed(ids(6));
+    captureLogs();
+    const f = fakes("staging", () => "hang");
+    const r = await runNightly(f.env, 0, {
+      concurrency: 2,
+      timeoutMs: 1_000,
+      deadlineMs: 100,
+      recheckFloorMs: 1,
+    });
+    expect(r.capped).toEqual([]);
+    expect(r.skipped).toHaveLength(4);
   });
 
   it("caps unsettled calls at 2 × a custom concurrency, and resumes when one settles", async () => {
@@ -652,6 +684,7 @@ describe("runNightly", () => {
       const r = await runNightly(f.env, day * DAY, {
         concurrency: 1,
         deadlineMs: 70,
+        recheckFloorMs: 1,
       });
       for (const id of r.ok) ran.add(id);
     }
@@ -673,18 +706,42 @@ describe("runNightly", () => {
     expect(lines).toEqual([`nightly skipped recheck ${idOf(1)}`]);
   });
 
-  it("a stalled re-check is bounded by the deadline too", async () => {
-    await seed(ids(1));
+  it("with less than recheckFloorMs (1 s) left, no re-check starts: skipped deadline", async () => {
+    await seed(ids(3));
+    const lines = captureLogs();
     const f = fakes();
+    let started = 0;
     const env = {
       ...f.env,
-      PLATFORM_DB: recheckDb(() => "stall"),
+      PLATFORM_DB: recheckDb(() => {
+        started++;
+        return "ok";
+      }),
     } as Env;
-    const t0 = Date.now();
-    const r = await runNightly(env, 0, { deadlineMs: 40, recheckMs: 5_000 });
-    expect(Date.now() - t0).toBeLessThan(2_000);
-    expect(r.skipped).toEqual([idOf(0)]);
+    const r = await runNightly(env, 0, { deadlineMs: 800 });
+    expect(started).toBe(0);
     expect(f.calls).toEqual([]);
+    expect(r.dbErrors).toEqual([]);
+    expect([...r.skipped].sort()).toEqual(ids(3).map((x) => x.id));
+    expect(lines).toHaveLength(3);
+    for (const l of lines) expect(l).toMatch(/^nightly skipped deadline /);
+  });
+
+  it("a re-check cut short by the deadline is deadline, never a stall, and doesn't count toward the stop", async () => {
+    await seed(ids(5));
+    const lines = captureLogs();
+    const f = fakes();
+    const env = { ...f.env, PLATFORM_DB: recheckDb(() => "stall") } as Env;
+    const t0 = Date.now();
+    // 1.2 s left is over the 1 s floor but under recheckMs: the deadline bounds it.
+    const r = await nightly(env, 0, { deadlineMs: 1_200, recheckMs: 5_000 });
+    expect(Date.now() - t0).toBeLessThan(3_000);
+    expect(f.calls).toEqual([]);
+    expect(r.dbErrors).toEqual([]);
+    expect(r.skipped).toHaveLength(5);
+    const skips = lines.filter((l) => l.startsWith("nightly skipped"));
+    expect(skips).toHaveLength(5);
+    for (const l of skips) expect(l).toMatch(/^nightly skipped deadline /);
   });
 
   it("a D1 error on the re-check is db_error, never blamed on the install", async () => {
@@ -714,7 +771,7 @@ describe("runNightly", () => {
     expect(r.skipped).toEqual(o.slice(3));
     expect(f.calls).toEqual([]);
     expect(lines.at(-1)).toBe(
-      "nightly summary active=10 ok=0 failed=0 skipped=7 db_errors=3 leaked=0",
+      "nightly summary active=10 ok=0 failed=0 skipped=7 capped=0 db_errors=3 leaked=0",
     );
     for (const l of lines) expect(l).toMatch(LOG_LINE);
   });
@@ -775,6 +832,8 @@ describe("runNightly", () => {
       { leakMs: Number.NaN },
       { recheckMs: 0 },
       { recheckMs: Number.POSITIVE_INFINITY },
+      { recheckFloorMs: 0 },
+      { recheckFloorMs: Number.NaN },
     ])
       await expect(runNightly(f.env, NOW, o)).rejects.toThrow(RangeError);
     expect(f.scripts).toEqual([]);
@@ -890,9 +949,52 @@ describe("nightOrder (golden-stride rotation over a fixed sha256(id) order)", ()
     const before = await nightOrder(all, day - 1);
     const after = await nightOrder(all, day);
     expect(after).not.toEqual(before);
-    // Same fixed cycle, start moved by round(0.382 × 50) = 19.
+    // Same fixed cycle; the start moves by the golden step scaled to N.
+    const start = (d: number) => Math.floor(frac(d * GOLDEN) * 50);
+    const d = Math.floor(D0 / DAY);
     const at = (o: string[]) => o.indexOf(after[0] as string);
-    expect((at(before) - 0 + 50) % 50).toBe(19);
+    expect(at(before)).toBe((start(d) - start(d - 1) + 50) % 50);
+  });
+
+  // Churn (the normal case): +2 and -1 installs a night. The start is
+  // frac(day × 0.382) × N, so a small change in N moves the window only
+  // slightly and the golden step still carries the uncovered tail past
+  // itself. (An integer start, day × round(0.382 N) mod N, jumps to an
+  // unrelated place whenever N changes: max streak 7 in the review.)
+  it("churn: 300 installs, +2 -1 a night, budget 190, 30 nights: max streak <= 2, never 3 in a row", async () => {
+    let live = fixture(300);
+    let born = 300;
+    const run = new Map<string, number>();
+    const ranOn: Map<string, boolean>[] = [];
+    let max = 0;
+    for (let d = 0; d < 30; d++) {
+      const covered = new Set(
+        (await nightOrder(live, D0 + d * DAY)).slice(0, 190),
+      );
+      const night = new Map<string, boolean>();
+      for (const id of live) {
+        const k = covered.has(id) ? 0 : (run.get(id) ?? 0) + 1;
+        run.set(id, k);
+        night.set(id, covered.has(id));
+        max = Math.max(max, k);
+      }
+      ranOn.push(night);
+      // Tomorrow: the oldest live install deleted, two created.
+      live = [
+        ...live.slice(1),
+        ...[0, 1].map(
+          () => `i${(born++ * 7919).toString(36).padStart(11, "0")}`,
+        ),
+      ];
+    }
+    let threeInARow = 0;
+    for (let d = 0; d + 2 < 30; d++)
+      for (const [id] of ranOn[d] as Map<string, boolean>)
+        if ([0, 1, 2].every((k) => ranOn[d + k]?.get(id) === false))
+          threeInARow++;
+    console.info(`churn max streak ${max}, three-in-a-row ${threeInARow}`);
+    expect(max).toBeLessThanOrEqual(2);
+    expect(threeInARow).toBe(0);
   });
 });
 
@@ -930,7 +1032,7 @@ describe("scheduled", () => {
         `nightly failed exception ${idOf(1)}`,
         `nightly failed not_found ${idOf(2)}`,
         "nightly invalid ids=1",
-        "nightly summary active=3 ok=1 failed=2 skipped=0 db_errors=0 leaked=0",
+        "nightly summary active=3 ok=1 failed=2 skipped=0 capped=0 db_errors=0 leaked=0",
       ].sort(),
     );
     // Every line is ids, fixed categories and counts only.
@@ -959,10 +1061,11 @@ describe("scheduled", () => {
     const lines = captureLogs();
     const f = fakes("staging", (s) => kinds[n36(s) % kinds.length] as Behavior);
     // The real handler path (scheduled calls nightly with the defaults).
-    const { ok, failed, skipped, leaked } = await nightly(f.env, NOW, {
+    const { ok, failed, skipped, capped, leaked } = await nightly(f.env, NOW, {
       concurrency: 50,
       timeoutMs: 20,
       deadlineMs: 500,
+      recheckFloorMs: 1,
     });
     expect(ok.length + failed.length + skipped.length).toBe(301);
     for (const r of ["timeout", "exception", "canceled", "not_found"])
@@ -971,7 +1074,7 @@ describe("scheduled", () => {
       failed.length,
     );
     expect(lines.filter((l) => l.startsWith("nightly summary"))).toEqual([
-      `nightly summary active=301 ok=${ok.length} failed=${failed.length} skipped=${skipped.length} db_errors=0 leaked=${leaked.length}`,
+      `nightly summary active=301 ok=${ok.length} failed=${failed.length} skipped=${skipped.length} capped=${capped.length} db_errors=0 leaked=${leaked.length}`,
     ]);
     for (const l of lines) expect(l).toMatch(LOG_LINE);
   });
@@ -981,7 +1084,7 @@ describe("scheduled", () => {
     const f = fakes();
     await scheduler.scheduled(controller(NOW), f.env, createExecutionContext());
     expect(lines).toEqual([
-      "nightly summary active=0 ok=0 failed=0 skipped=0 db_errors=0 leaked=0",
+      "nightly summary active=0 ok=0 failed=0 skipped=0 capped=0 db_errors=0 leaked=0",
     ]);
     expect(f.scripts).toEqual([]);
   });
