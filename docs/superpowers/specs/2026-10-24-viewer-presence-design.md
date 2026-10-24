@@ -39,7 +39,14 @@ When someone opens an artifact, the header shows who else has it open right now,
 - **Colors:** each avatar's circle color is stable for that identity on that artifact during the session, from a fixed palette that works in light and dark. My call.
 - **Anonymous names:** "Anonymous " + an animal from a fixed list (Google uses animals such as Duck, Capybara, Axolotl, Llama). Within one artifact, two anonymous viewers never share an animal while both are present. If the list runs out, add a number. My call.
 - **Sticky for the browser session:** a fresh random presence id is kept in a session cookie on the app origin (no expiry, so the browser drops it when the session ends; shared by every tab of that browser). It's not the `oa.anonId`. The animal and color come from that id, so all tabs of one browser show one animal. A new browser session gets a new animal, as in Google. My call (from the builder check: `sessionStorage` would give each tab its own animal).
-- **Agents:** reads don't reach the artifact's DO today, so each agent read (MCP `get_artifact`, REST GET) adds one fire-and-forget DO call to record it. Agents are low volume, so the cost is small; this is the one exception to "no extra requests". My call (from the builder check). An agent counts as present for about 2 minutes after its last request touching the artifact (reading it, publishing, reading or writing its data). Its label is the connection's name (the agent token's label) plus the person it works for, for example "Claude · Leo's agent". If its last request was a publish or a data write, the card says "Editing", otherwise "Viewing". Several requests from the same connection show as one agent.
+- **Agents: one face per agent session, in the shared identity card shape** (user, 2026-10-24; option C of the options page, step 1 of the shared-identity proposal). Each card field carries a trust level, and the UI never shows a self-reported field as fact:
+  - **owner** (verified): the person whose sign-in the connection belongs to. The face shows the owner's initials inside the agent shape. The card says "<Owner name>'s agent".
+  - **product** (self-reported): the OAuth client name the agent registered with ("Claude Code"). For a token connection there's no product; the card says "Agent". The token label shows to the owner only.
+  - **session** (server-issued): the MCP Streamable HTTP session id (`Mcp-Session-Id`), which the server starts issuing at `initialize`. One face per session. Plain REST calls and clients that don't keep the session fall back to one face per connection.
+  - **name** (server-assigned): the product name, made unique on the artifact with "-2", "-3" on a clash, the way OpenBus does ("Claude Code", "Claude Code-2"). Agents never name themselves as a trusted fact through tool arguments.
+  - **activity** (self-reported): the change note from the agent's last publish, or an optional short "what I'm doing" field on reads and data calls, at most 80 characters, shown in quotes and labeled as the agent's own words. The MCP server instructions ask agents to set it.
+  - **state**: "Editing" after a publish or data write, otherwise "Viewing".
+- **Agent reads cost one DO call:** reads don't reach the artifact's DO today, so each agent read (MCP `get_artifact`, REST GET) adds one fire-and-forget DO call to record it. Agents are low volume, so the cost is small; this is the one exception to "no extra requests". My call (from the builder check). An agent session counts as present for about 2 minutes after its last request touching the artifact.
 - **Names, never emails:** today `versionEvent` falls back to the email when a user has no name, and `UserAvatar` takes initials and hue from the email. Presence uses the name only; with no name, the label is "Member" (or "Guest" for a guest), and the initials and hue come from an opaque per-artifact key, not the email. The same rule applies to the owner in "Leo's agent". My call (from the builder check).
 - **The card:** name; for an anonymous viewer, "Anonymous Duck" and nothing else; for an agent, its label, the owner's name, and Viewing or Editing. For signed-in people we show the name and initials only.
 - **Where it shows:** the dashboard viewer and the full-screen view (`/full`). Embeds (`/embed`) have no header, so they show nothing; whether an embed viewer counts toward others' stacks is left to the builder (Section 9).
@@ -74,6 +81,8 @@ When someone opens an artifact, the header shows who else has it open right now,
 | Everyone who can open it sees everyone, including strangers on public links | user |
 | Clicking a face shows the name only, never the email | user |
 | AI agents show too, in a different shape (square or hexagon; Design options) | user |
+| One face per agent session, shared identity card shape with trust levels (option C) | user |
+| Verified by OpenBus (signed identity card) is a joint follow-up after hosted M1 | user |
 | Mirror Google Drive's patterns for every detail | user |
 | Initials only; photos later | user |
 | Agents count as present ~2 minutes after their last request | my call |
@@ -82,6 +91,7 @@ When someone opens an artifact, the header shows who else has it open right now,
 
 ## 9. Later
 
+- **Verified by OpenBus** (user, 2026-10-24). An agent presents a short-lived identity card signed by OpenBus, which can attest the product and session from the agent's machine; Open Artifacts verifies it and shows "verified by OpenBus". Conditions: same human linked once by the owner; trust only the signed card; activity stays self-reported; no agent shown to someone who couldn't see it on the bus; revoking a machine in OpenBus drops its agents. Joint with OpenBus (#540).
 - **Profile photos** (user, 2026-10-24: initials for now). Google shows photos, but none exist in Open Artifacts today; adding them means taking the picture at sign-in, storing it and serving it.
 
 ## 10. Left to the builder
