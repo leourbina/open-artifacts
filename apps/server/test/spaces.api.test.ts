@@ -21,6 +21,7 @@ import type { Env } from "../src/env.js";
 import type { UserPresence } from "../src/runtime/presence.js";
 import { REVOKE_FANOUT_CAP, revokeUsersLive } from "../src/runtime/revoke.js";
 import { patchMember } from "../src/services/members.js";
+import { putSpaceMember } from "../src/services/spaces.js";
 import { getUser } from "../src/services/users.js";
 import { errOf, fetchAndWait, login } from "./helpers.js";
 
@@ -1180,6 +1181,50 @@ describe("peer managers (manager ruling)", () => {
       syncRole: null,
     });
     expect(await revokedAt(peer.userId)).not.toBeNull();
+  });
+
+  it("frozen override race: a sync row promoted to manager after the check → no manual row, no audit row", async () => {
+    const { s, mgr } = await staffed();
+    const peer = await mk("race");
+    await syncRow(s.id, peer.userId, "editor");
+    // The promotion lands between the handler's check and its batch.
+    const DB = new Proxy(env.DB, {
+      get(t, p) {
+        if (p === "batch")
+          return async (ss: D1PreparedStatement[]) => {
+            await t
+              .prepare(
+                "update space_members set role = 'manager' where space_id = ? and user_id = ? and source = 'sync'",
+              )
+              .bind(s.id, peer.userId)
+              .run();
+            return t.batch(ss);
+          };
+        const v = Reflect.get(t, p);
+        return typeof v === "function" ? v.bind(t) : v;
+      },
+    });
+    const racy = { ...(FROZEN as object), DB } as unknown as Env;
+    const who = callerOf(await getUser(racy, mgr.userId));
+    await putSpaceMember(racy, who, s.id, peer.userId, "viewer").catch(
+      () => {},
+    );
+    expect(
+      await one(
+        "select 1 from space_members where space_id = ? and user_id = ? and source = 'manual'",
+        s.id,
+        peer.userId,
+      ),
+    ).toBeNull();
+    expect(
+      await one<{ role: string }>(
+        "select role from space_members where space_id = ? and user_id = ? and source = 'sync'",
+        s.id,
+        peer.userId,
+      ),
+    ).toEqual({ role: "manager" });
+    expect(await audits("space.member.role", peer.userId)).toHaveLength(0);
+    expect(await audits("space.member.add", peer.userId)).toHaveLength(0);
   });
 
   it("a space manager still removes and changes non-manager members", async () => {

@@ -711,6 +711,15 @@ const UPSERT_MANUAL = `insert into space_members (space_id, user_id, role, sourc
   values (?1, ?2, ?3, 'manual', ?4)
   on conflict (space_id, user_id, source) do update set role = excluded.role
   where space_members.role <> excluded.role and (?5 = 1 or space_members.role <> 'manager')`;
+// The frozen override's manual row: as UPSERT_MANUAL, but for a non-admin
+// (?5 = 0) nothing at all when the synced row became a manager after the
+// handler's check (the delete above skipped it): no half override.
+const OVERRIDE_MANUAL = `insert into space_members (space_id, user_id, role, source, created_at)
+  select ?1, ?2, ?3, 'manual', ?4
+  where ?5 = 1 or not exists (select 1 from space_members
+    where space_id = ?1 and user_id = ?2 and source = 'sync' and role = 'manager')
+  on conflict (space_id, user_id, source) do update set role = excluded.role
+  where space_members.role <> excluded.role and (?5 = 1 or space_members.role <> 'manager')`;
 const MANUAL_ROW = `exists (select 1 from space_members where space_id = ? and user_id = ? and source = 'manual')`;
 
 /** Manager-capable on this space (org admins, or its uncapped managers), else 404. */
@@ -785,7 +794,7 @@ export async function putSpaceMember(
             `delete from space_members where space_id = ?1 and user_id = ?2 and source = 'sync'
               and (?3 = 1 or role <> 'manager')`,
           ).bind(id, userId, a),
-          stmt(env.DB, UPSERT_MANUAL).bind(id, userId, role, Date.now(), a),
+          stmt(env.DB, OVERRIDE_MANUAL).bind(id, userId, role, Date.now(), a),
         ]
       : [
           audit(env, "space.member.add", target, actor, {
@@ -992,6 +1001,11 @@ const RESYNC_INSERT = `insert into space_members (space_id, user_id, role, sourc
 // At most ?2 rows (revokeUsersLive's cap plus one), as ALL_MEMBERS.
 const GROUP_MEMBERS = `select u.id from directory_members dm join users u on u.id = dm.user_id
   where dm.group_id = ?1 and u.status = 'active' order by u.last_seen_at desc limit ?2`;
+// A restricted group's members who can be restricted: owners and admins
+// never are (restrict_admin), so they don't use up the revoke cap.
+const RESTRICTABLE_MEMBERS = `select u.id from directory_members dm join users u on u.id = dm.user_id
+  where dm.group_id = ?1 and u.status = 'active' and u.role not in ('owner', 'admin')
+  order by u.last_seen_at desc limit ?2`;
 const GROUP_OF = `select (select role from group_mappings where space_id = ?1 and group_id = ?2) as cur,
   (select email from directory_groups where group_id = ?2) as email,
   (select count(*) from directory_members where group_id = ?2) as n`;
@@ -1353,7 +1367,7 @@ export async function putRestrictedGroup(
       },
     ),
     stmt(env.DB, RESTRICTED_SYNC_FOR_GROUP).bind(groupId),
-    stmt(env.DB, GROUP_MEMBERS).bind(groupId, revokeFanoutCap(env) + 1),
+    stmt(env.DB, RESTRICTABLE_MEMBERS).bind(groupId, revokeFanoutCap(env) + 1),
     stmt(env.DB, RESTRICTED_LIST).bind(groupId),
   ]);
   await revokeUsersLive(env, idsOf(out[3]), "restricted", ctx);
