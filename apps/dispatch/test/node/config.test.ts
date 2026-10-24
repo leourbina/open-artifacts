@@ -32,9 +32,12 @@ describe("wrangler.jsonc", () => {
       expect(e.dispatch_namespaces).toEqual([
         { binding: "DISPATCHER", namespace: NAMESPACES[env] },
       ]);
+      // One placeholder per env, so filling one env can't bind the other's HOSTS.
       expect(e.kv_namespaces).toEqual([
-        { binding: "HOSTS", id: "{{HOSTS_KV_ID}}" },
+        { binding: "HOSTS", id: `{{HOSTS_KV_ID_${env.toUpperCase()}}}` },
       ]);
+      // Workers Logs would record full URLs; the Worker logs the host only.
+      expect(e.observability).toEqual({ enabled: false });
     }
     expect(platformNames("staging").hosts).toBe("oa-s-hosts");
     expect(platformNames("prod").hosts).toBe("oa-p-hosts");
@@ -48,30 +51,46 @@ describe("wrangler.jsonc", () => {
     }
     expect(JSON.stringify(cfg)).not.toMatch(/custom_domain|"pattern"|zone_/);
   });
+
+  it("has no top-level name, bindings or vars (a deploy without --env can't run)", () => {
+    for (const k of [
+      "name",
+      "vars",
+      "kv_namespaces",
+      "dispatch_namespaces",
+      "services",
+    ])
+      expect(cfg).not.toHaveProperty(k);
+  });
 });
 
+describe("@oa/provision/names", () => {
+  it("resolves to the source under workerd, so a deploy never bundles a stale dist", () => {
+    const pkg = JSON.parse(
+      readFileSync(join(app, "../../packages/provision/package.json"), "utf8"),
+    );
+    expect(pkg.exports["./names"].workerd).toBe("./src/names.ts");
+    expect(Object.keys(pkg.exports["./names"])[1]).toBe("workerd");
+  });
+});
+
+const wrangler = (args: string[]) =>
+  execFileSync("pnpm", ["exec", "wrangler", "deploy", "--dry-run", ...args], {
+    cwd: app,
+    stdio: "pipe",
+    env: { ...process.env, WRANGLER_SEND_METRICS: "false", CI: "1" },
+  });
+
 describe("bundle", () => {
+  it("wrangler deploy without --env is refused", () => {
+    const out = mkdtempSync(join(tmpdir(), "oa-dispatch-"));
+    expect(() => wrangler(["--outdir", out])).toThrow(/name of your worker/);
+  });
+
   it("wrangler deploy --dry-run is under 50 KB per env", () => {
     for (const env of ENVS) {
       const out = mkdtempSync(join(tmpdir(), "oa-dispatch-"));
-      execFileSync(
-        "pnpm",
-        [
-          "exec",
-          "wrangler",
-          "deploy",
-          "--dry-run",
-          "--env",
-          env,
-          "--outdir",
-          out,
-        ],
-        {
-          cwd: app,
-          stdio: "pipe",
-          env: { ...process.env, WRANGLER_SEND_METRICS: "false", CI: "1" },
-        },
-      );
+      wrangler(["--env", env, "--outdir", out]);
       const bytes = readdirSync(out)
         .filter((f) => f.endsWith(".js"))
         .reduce((n, f) => n + statSync(join(out, f)).size, 0);

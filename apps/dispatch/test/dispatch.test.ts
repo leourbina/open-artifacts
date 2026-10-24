@@ -205,12 +205,27 @@ describe("dispatch", () => {
     expect(r.status).toBe(200);
     expect(f.seen).toEqual([req]);
     expect(f.seen[0]).toBe(req);
+    // X-Forwarded-Host names beta: routing still follows the URL (acme).
+    expect(f.scripts).toEqual([`oa-s-${A}`]);
     expect(got).toEqual({
       method: "PUT",
       url: req.url,
       headers: [...new Headers(headers)],
       body: '{"a":1}',
     });
+  });
+
+  it("routes on the URL host only, never a Host or X-Forwarded-Host header", async () => {
+    const f = fakes(MAP);
+    const req = new Request("https://acme.open-artifacts-staging.app/", {
+      headers: {
+        host: "beta.open-artifacts-staging.app",
+        "x-forwarded-host": "beta.open-artifacts-staging.app",
+      },
+    });
+    expect((await call(f.env, req)).status).toBe(200);
+    expect(f.scripts).toEqual([`oa-s-${A}`]);
+    expect(f.reads.map((r) => r.key)).toEqual(["acme.open-artifacts-staging.app"]);
   });
 
   it("the user Worker's response is returned unchanged", async () => {
@@ -374,7 +389,7 @@ describe("dispatch", () => {
       });
   });
 
-  it("logs only the host, and only on a dispatch error", async () => {
+  it("logs only the host and a fixed category, and only on a dispatch error", async () => {
     const logs: unknown[][] = [];
     const spies = (["log", "info", "warn", "error", "debug"] as const).map(
       (m) =>
@@ -382,26 +397,45 @@ describe("dispatch", () => {
           logs.push(a);
         }),
     );
+    const host = "acme.open-artifacts-staging.app";
+    const reject = (msg: string) =>
+      fakes(MAP, {
+        fetch: async () => {
+          throw new Error(msg);
+        },
+      }).env;
+    const prodEnv = fakes(MAP).env;
+    (prodEnv as { OA_ENV: string }).OA_ENV = "dev";
     try {
       const ok = fakes(MAP);
-      await call(ok.env, "https://acme.open-artifacts-staging.app/");
+      await call(ok.env, `https://${host}/`);
       await call(ok.env, "https://nope.open-artifacts-staging.app/");
+      await call(fakes({ [host]: "../x" }).env, `https://${host}/`);
       expect(logs).toEqual([]);
-      const bad = fakes(MAP, {
-        fetch: async () => {
-          throw new Error("secret detail");
-        },
-      });
-      await call(
-        bad.env,
-        new Request("https://acme.open-artifacts-staging.app/p?token=t1", {
-          headers: { cookie: "oa_session=s1", authorization: "Bearer b1" },
-        }),
-      );
-      const text = JSON.stringify(logs);
-      expect(text).toContain("acme.open-artifacts-staging.app");
-      for (const leak of ["token=t1", "/p", "s1", "b1", "secret detail"])
-        expect(text).not.toContain(leak);
+      const kinds: [Env, string][] = [
+        [fakes(MAP, { kvThrows: true }).env, "kv"],
+        [reject(`Worker not found: oa-s-${A} secret detail`), "not_found"],
+        [reject("secret detail: uncaught in user Worker"), "exception"],
+        [
+          fakes(MAP, {
+            get: () => {
+              throw new Error("Worker not found secret detail");
+            },
+          }).env,
+          "not_found",
+        ],
+        [prodEnv, "exception"],
+      ];
+      for (const [env, category] of kinds) {
+        logs.length = 0;
+        await call(
+          env,
+          new Request(`https://${host}/p?token=t1`, {
+            headers: { cookie: "oa_session=s1", authorization: "Bearer b1" },
+          }),
+        );
+        expect(logs).toEqual([["dispatch failed", category, host]]);
+      }
     } finally {
       for (const s of spies) s.mockRestore();
     }
