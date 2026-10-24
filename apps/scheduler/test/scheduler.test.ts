@@ -14,6 +14,7 @@ import scheduler, {
   CRON,
   type Env,
   nightly,
+  nightOrder,
   runNightly,
 } from "../src/index.js";
 
@@ -797,6 +798,84 @@ describe("runNightly", () => {
     const lines = captureLogs();
     await runNightly(fakes().env, NOW, { concurrency: 50 });
     expect(lines.some((l) => l.startsWith("nightly scale"))).toBe(false);
+  });
+});
+
+describe("nightOrder (golden-stride rotation over a fixed sha256(id) order)", () => {
+  const D0 = Date.UTC(2026, 9, 24, 3, 17);
+  const fixture = (n: number) =>
+    Array.from(
+      { length: n },
+      (_, k) => `i${(k * 7919).toString(36).padStart(11, "0")}`,
+    );
+
+  /** The longest run of consecutive nights an id is outside the budget. */
+  async function streaks(n: number, budget: number, nights: number) {
+    const all = fixture(n);
+    const run = new Map(all.map((id) => [id, 0]));
+    const ranOn: Set<string>[] = [];
+    let max = 0;
+    for (let d = 0; d < nights; d++) {
+      const covered = new Set(
+        (await nightOrder(all, D0 + d * DAY)).slice(0, budget),
+      );
+      ranOn.push(covered);
+      for (const id of all) {
+        const k = covered.has(id) ? 0 : (run.get(id) ?? 0) + 1;
+        run.set(id, k);
+        max = Math.max(max, k);
+      }
+    }
+    let threeInARow = 0;
+    for (let d = 0; d + 2 < nights; d++)
+      for (const id of all)
+        if ([0, 1, 2].every((k) => !ranOn[d + k]?.has(id))) threeInARow++;
+    return { max, threeInARow };
+  }
+
+  // Each night covers a window of `budget` positions starting at the night's
+  // offset; the offset steps by round(0.382 × N) a night (a golden-ratio
+  // stride), so by the three-distance theorem the uncovered gap (N - budget)
+  // moves on by more than its own width when budget > N - stride: 300 - 190
+  // = 110 < 115, so an id is never skipped two nights running (measured: 1).
+  it("300 ids, budget 190, 30 nights: max skip streak <= 2, never 3 nights in a row", async () => {
+    const r = await streaks(300, 190, 30);
+    expect(r.max).toBeLessThanOrEqual(2);
+    expect(r.threeInARow).toBe(0);
+  });
+
+  // Degraded: a budget of 100 (a third of N) can't cover everyone in two
+  // nights; the stride still bounds the streak (measured: 4).
+  it("300 ids, budget 100 (degraded): max skip streak <= 4", async () => {
+    expect((await streaks(300, 100, 30)).max).toBeLessThanOrEqual(4);
+  });
+
+  it("N = 0 and N = 1", async () => {
+    expect(await nightOrder([], D0)).toEqual([]);
+    expect(await nightOrder([idOf(3)], D0)).toEqual([idOf(3)]);
+    expect(await nightOrder([idOf(3)], D0 + 9 * DAY)).toEqual([idOf(3)]);
+  });
+
+  it("is a permutation, deterministic for a given day and N", async () => {
+    const all = fixture(50);
+    const a = await nightOrder(all, D0);
+    expect([...a].sort()).toEqual([...all].sort());
+    expect(await nightOrder([...all].reverse(), D0)).toEqual(a);
+    // Any time within the same UTC day gives the same order.
+    const day = Math.floor(D0 / DAY) * DAY;
+    expect(await nightOrder(all, day)).toEqual(a);
+    expect(await nightOrder(all, day + DAY - 1)).toEqual(a);
+  });
+
+  it("changes at the UTC day boundary by one stride", async () => {
+    const all = fixture(50);
+    const day = Math.floor(D0 / DAY) * DAY;
+    const before = await nightOrder(all, day - 1);
+    const after = await nightOrder(all, day);
+    expect(after).not.toEqual(before);
+    // Same fixed cycle, start moved by round(0.382 × 50) = 19.
+    const at = (o: string[]) => o.indexOf(after[0] as string);
+    expect((at(before) - 0 + 50) % 50).toBe(19);
   });
 });
 
