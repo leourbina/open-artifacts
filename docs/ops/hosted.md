@@ -52,7 +52,7 @@ Namespace `oa-spike-staging`, dispatch Worker `oa-s-spike-dispatch` (account scr
 
 - Per env: one dispatch namespace (`oa-staging`, `oa-prod`), one dispatch Worker with the `dispatch_namespace` binding, one wildcard DNS record and wildcard route per tenant domain pair, platform D1 + `HOSTS` KV, `BROKER_REGISTRY`, the scheduler.
 - Create/upgrade/delete: see `@oa/provision` and the P1 plan tasks 4/5/8.
-- Nightly: the scheduler calls `DISPATCHER.get(id).scheduled(...)` for every `active` install, 10 at a time, 25 s each.
+- Nightly: the scheduler calls `DISPATCHER.get(id).scheduled(...)` for every `active` install, 6 at a time, 25 s each, 13-minute deadline (see "Nightly scheduler" below).
 - Tokens: per-env provisioning token (Workers Admin + KV/R2/D1 Edit account-wide) and per-env zone tokens (Zone Read, DNS Edit, Workers Routes Edit on the env's two zones), each ≤ 30 days and verified before any write.
 - Provisioning tokens must be **user-owned** (created under My Profile > API Tokens), not account-owned. The provisioner (`cfClient().tokenVerify`, which the CLI uses) checks the token with `GET /user/tokens/verify`, and that endpoint refuses account-owned tokens. An account-owned token would need `GET /accounts/{account_id}/tokens/verify` instead, which the CLI does not call.
 - The provisioning token also needs **Account > Turnstile > Read**, so `create` can check the env's widget. **Turnstile > Edit** is needed only for the one-time `oa:hosted turnstile-init --env <env>` (Task 8).
@@ -140,6 +140,85 @@ UP=$(printf %s "$ENV" | tr a-z A-Z)
 9. CPU, after some traffic: CPU time for `oa-$P-dispatch` must stay under 1 ms at both p50 and p99 (Global Constraints). Read it from the GraphQL Analytics API (`workersInvocationsAdaptive`, `filter: { scriptName: "oa-$P-dispatch" }`, `quantiles { cpuTimeP50 cpuTimeP99 }`, in microseconds), or the Worker's Metrics tab. It can't be measured locally, because workerd's clock doesn't advance without I/O.
 
 Unmapping and slug purges: dispatch reads HOSTS with `cacheTtl: 60`, so an edge can serve a removed mapping for up to about 60 s plus KV propagation. `delete` deletes the user script right after the unmap (`packages/provision/src/wfp.ts`: HOSTS keys at line 2792, script at line 2804, then KV, R2 and D1), so a stale mapping hits a missing script and gets the 404, not a half-deleted install. **A slug purge (freeing a deleted install's hosts for reuse) must wait at least 2 minutes after the unmap**, so no edge still maps the host to the old id when a new install takes it.
+
+## Nightly scheduler: one-time deploy per env (Task 7, gated)
+
+User Workers in a dispatch namespace get no cron triggers, so `apps/scheduler` is the only nightly caller. Its cron (`17 3 * * *`, the same as a self-hosted install's) reads `SELECT id FROM installs WHERE state = 'active'` from the platform D1 (in keyset pages of 500) and calls `DISPATCHER.get(oa-<p>-<id>).scheduled({ cron, scheduledTime })` on each:
+
+- **Night order (stateless).** The installs form a fixed cycle, sorted by `sha256(id)` with a tie-break on id. Each night enters the cycle at `floor(frac(UTC day number × 0.3819660112501051) × N)`, where `frac(x) = x − floor(x)`: a golden-ratio step, scaled by tonight's N. A run that stops early leaves a tail, and the step moves that tail on by more than its own width. Because the step is a fraction of the cycle, installs created or deleted between nights move the window only slightly. Measured over 30 nights (tests pin all three):
+  - 300 installs, run budget 190: never skipped 3 nights in a row; at most 2 (the test bound);
+  - churn, +2 and −1 installs a night, budget 190: max streak 2, never 3 in a row. The earlier integer start, `day × round(0.382 N) mod N`, gave 7 and 652;
+  - budget 100, the degraded case: at most 4 nights in a row.
+
+  Independent daily shuffles (`sha256(id + date)`) gave 8 and 18. **A skip streak means the run budget is short:** raise `concurrency`, or move to the M2 Queue fan-out.
+- **Re-checked per call.** Right before each call it re-reads the row, within 5 s and within the deadline. If the install has left `active`, or holds a live lifecycle lease (`lease_until` in the future: an upgrade, rollback or delete is running), it isn't called and counts as `skipped`, not failed. A stalled re-check is `skipped` too. A D1 error on the re-check is `db_error`, never blamed on the install. 3 in a row of either (errors or stalls, as a hanging D1) stop the run, and the rest is `skipped`. Installs in `creating`, `upgrading`, `deleting` or `deleted` are never called, nor is a row whose id isn't an install id.
+- **Known window.** A lifecycle operation can take its lease after the re-check, while that install's nightly job is already running. Provision can't see the scheduler, so an upgrade, rollback or delete may overlap a nightly job that has already started. Nightly work must therefore be idempotent (the server's sweeps are), and upgrade and delete must tolerate it and retry their own steps. This is accepted for M1.
+- **6 at a time.** Calling a service binding doesn't count toward the 6 simultaneous open connections, but the installs' own fetch, KV, R2, Cache and Queues calls share the scheduler's limit while they wait for headers ([limits](https://developers.cloudflare.com/workers/platform/limits/#simultaneous-open-connections), [service bindings](https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/#limits)). A call is reported `timeout` after 25 s, but it keeps its slot until it settles. A stuck call holds its slot for at most 60 s after its timeout. Then the slot is given back, the call counts as `leaked`, and the run goes on. A call still unsettled when the run ends is `leaked` too. Leaked calls may still hold connections, so the real bound is on unsettled calls: at most 12 (2 × the 6 slots, in a slot or leaked) at any time. At that cap no new call starts until one settles, or the deadline hits.
+- **Deadline.** No call starts after 13 minutes, under the 15-minute cron wall time. The rest is `skipped`, and the summary still lands.
+- One install throwing, timing out or missing never stops the others.
+
+A hosted upload carries no cron of its own (`TEMPLATE_BINDINGS_EXCLUDED.triggers`). That's pinned for the metadata in `packages/provision/test/metadata.test.ts`, and for the create, upgrade and rollback uploads, with no `/schedules` call, in `wfp-lifecycle.test.ts`. So the job runs once.
+
+The repo config has no routes, custom domains or `workers.dev`, no fetch handler, and no top-level name or `main`. A deploy without `--env` is therefore refused, even with `--name` (tests pin all of it). A positional entry (`wrangler deploy src/index.ts --name …`) would still get past that guard. **Always deploy with `--env`, and never pass an entry point.** Observability (Workers Logs) is on for this Worker only: it serves no requests, so there are no URLs to record, and its lines carry install ids, fixed categories and counts only (a test pins the whole log vocabulary). The dispatch Worker stays off. **The Manager and the user run the deploy by hand; CI never does.**
+
+| Env | Worker | Namespace | Platform D1 | Config placeholder |
+|---|---|---|---|---|
+| staging | `oa-s-scheduler` | `oa-staging` | `oa-s-platform` | `{{PLATFORM_DB_ID_STAGING}}` |
+| prod | `oa-p-scheduler` | `oa-prod` | `oa-p-platform` | `{{PLATFORM_DB_ID_PROD}}` |
+
+Steps, per env (`ENV`, `P` and `UP` as in the dispatch steps above):
+
+1. Preconditions: the namespace `oa-$ENV` and the D1 `oa-$P-platform` exist, with the platform-db migrations applied.
+2. Build and test from a clean checkout of the reviewed commit:
+   ```sh
+   git status --porcelain | grep -q . && { echo "dirty checkout" >&2; exit 1; }
+   pnpm install --frozen-lockfile && pnpm --filter @oa/provision build && pnpm --filter @oa/scheduler test
+   ```
+3. Deploy with the provisioning token. Fill only this env's placeholder into a gitignored copy, deploy it, then remove the copy:
+   ```sh
+   cd apps/scheduler
+   DB_ID=$(pnpm exec wrangler d1 list --json | jq -r --arg n "oa-$P-platform" '.[] | select(.name == $n) | .uuid')
+   test -n "$DB_ID" \
+     && sed "s/{{PLATFORM_DB_ID_$UP}}/$DB_ID/" wrangler.jsonc > wrangler.deploy.jsonc \
+     && pnpm exec wrangler deploy -c wrangler.deploy.jsonc --env "$ENV" \
+     && rm wrangler.deploy.jsonc
+   ```
+   The deploy output must name `oa-$P-scheduler` with `DISPATCHER (oa-$ENV)`, `PLATFORM_DB (oa-$P-platform)`, `OA_ENV ("$ENV")`, the schedule `17 3 * * *`, and no routes or workers.dev URL.
+4. Binding check, from the deployed settings: `PLATFORM_DB` must be the database named `oa-$P-platform`, `DISPATCHER` must be the namespace `oa-$ENV`, `OA_ENV` must be `$ENV`, and the schedules must be exactly `17 3 * * *`. Never another env's (`CF_ACCOUNT_ID` and `CF_API_TOKEN` as in the dispatch check):
+   ```sh
+   API="https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID"
+   SET=$(curl -sS -H "Authorization: Bearer $CF_API_TOKEN" "$API/workers/scripts/oa-$P-scheduler/settings")
+   BOUND=$(printf %s "$SET" | jq -r '.result.bindings[] | select(.name == "PLATFORM_DB") | .id')
+   NAME=$(curl -sS -H "Authorization: Bearer $CF_API_TOKEN" "$API/d1/database/$BOUND" | jq -r .result.name)
+   test "$NAME" = "oa-$P-platform" || { echo "PLATFORM_DB bound to $NAME" >&2; exit 1; }
+   test "$(printf %s "$SET" | jq -r '.result.bindings[] | select(.name == "DISPATCHER") | .namespace')" = "oa-$ENV" \
+     || { echo "DISPATCHER is not oa-$ENV" >&2; exit 1; }
+   test "$(printf %s "$SET" | jq -r '.result.bindings[] | select(.name == "OA_ENV") | .text')" = "$ENV" \
+     || { echo "OA_ENV is not $ENV" >&2; exit 1; }
+   test "$(curl -sS -H "Authorization: Bearer $CF_API_TOKEN" "$API/workers/scripts/oa-$P-scheduler/schedules" \
+     | jq -c '[.result.schedules[].cron]')" = '["17 3 * * *"]' \
+     || { echo "schedules are not exactly 17 3 * * *" >&2; exit 1; }
+   ```
+5. **Per-request invocation limit: measured, no cap.** The service-bindings docs say "A single request has a maximum of 32 Worker invocations, and each call to a Service binding counts". Measured on staging 2026-10-24: 100 sequential dispatch `scheduled()` calls from one request, no invocation cap hit (probe: `.superpowers/platform/probe_invocations.py` in the platform workspace). The same probe showed that `scheduled()` resolves to `undefined` when the install's handler succeeds, and rejects with the handler's own error when it throws. The scheduler logs only a fixed category, never that text. On the first real staging run, also confirm:
+   - the rejection for a missing script maps to `not_found`;
+   - whether a timed-out install's job is canceled when the scheduler's invocation ends.
+
+### Reading the nightly run
+
+Read the lines in Workers Logs for `oa-$P-scheduler` (dashboard, or the Observability API with the Platform read-only token), filtered on `nightly`. To watch live, run `pnpm exec wrangler tail oa-$P-scheduler --format pretty` around 03:17 UTC. The dashboard's Cron Events list (Worker > Settings > Triggers) shows each past invocation and its outcome. The run itself fails there only when it aborts (`nightly aborted`). The lines carry no error text, emails or vars:
+
+| Line | Meaning |
+|---|---|
+| `nightly summary active=<n> ok=<n> failed=<n> skipped=<n> capped=<n> db_errors=<n> leaked=<n>` | One per run, at the end. `active` counts the valid active ids read (ok + failed + skipped + db_errors). `capped` is the part of `skipped` held back by the unsettled cap. `leaked` counts timed-out calls still unsettled 60 s later, or at the end; they're also in `failed` as `timeout`. A large `skipped` with few `failed` means the deadline hit: see the scale line. |
+| `nightly skipped <state\|deadline\|capped\|recheck\|db_error> <installId>` | One per install not called, when it happens. `state`: it left `active` or took a lease before its turn. `deadline`: not started by the 13-minute deadline, including a re-check that would start with under 1 s left or that the deadline cut short. `capped`: held back by the 12-unsettled cap until the deadline: 12 calls never settled, so look at the `leaked` lines first. `recheck`: the per-call D1 re-check stalled for its full 5 s. `db_error`: the run stopped after 3 D1 errors or full 5 s stalls in a row (the reason covers both). A `deadline`-skipped tail is near the head on a later night (night order). The same id skipped night after night means the run budget is short. |
+| `nightly db_error <installId>` | The platform D1 re-check failed for that install, so it wasn't called. Check the platform D1, not the install. |
+| `nightly leaked <installId>` | The install's call never settled within 60 s of its timeout (or by the end of the run), and its slot was given back. Read that install's own Workers Logs: its nightly job is hanging. |
+| `nightly failed <category> <installId>` | One per failed install, logged when it happens. `timeout`: over 25 s; the job may have been canceled when the run ended, so treat it as not done. `canceled`: the runtime canceled the install's handler. `not_found`: no script in the namespace (a rejection starting "Worker not found", with or without an `Error: ` prefix, or outcome `scriptNotFound`; an install's own error that starts that way would land here too); check the row's state against the namespace. `exception`: the install's handler threw (the call rejected), the call failed, or it resolved with an outcome other than `ok` (`exceededCpu`, `exceededMemory`, …); read that install's own Workers Logs. |
+| `nightly invalid ids=<n>` | Active rows whose id isn't an install id; skipped. Fix the rows. |
+| `nightly scale active=<n> over 300` | Past what one run fits (about 190 at 6 × 25 s in 13 minutes, fewer under shared-connection queuing). The M2 Queue fan-out is overdue. |
+| `nightly aborted <env\|exception>` | The run stopped before any call: a bad `OA_ENV` (`env`) or a platform D1 read error (`exception`). Cron Events shows the failure. |
+
+The email-quota alert (80% of the account limit) is not in M1: the per-install send counters live in each install's own D1 and no route exposes them. Backend owns that contract.
 
 ## Hosted release files (T3b)
 

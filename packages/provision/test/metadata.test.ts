@@ -419,6 +419,17 @@ describe("userWorkerMetadata", () => {
     });
   });
 
+  it("no per-install cron: the central scheduler (apps/scheduler) is the only nightly caller", () => {
+    // The template keeps its cron for self-hosted installs; a hosted upload
+    // carrying it too would run the nightly job twice (or be ignored).
+    expect(tpl.triggers?.crons).toEqual(["17 3 * * *"]);
+    for (const m of [
+      userWorkerMetadata(inst(), res()),
+      userWorkerMetadata(inst(), res({ mode: "update", secrets: {} })),
+    ])
+      expect(JSON.stringify(m)).not.toMatch(/cron|trigger|schedul|17 3/i);
+  });
+
   it("no secret names appear as plain bindings", () => {
     const m = userWorkerMetadata(inst(), res());
     for (const n of [
