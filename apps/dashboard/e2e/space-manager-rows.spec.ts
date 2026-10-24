@@ -29,6 +29,22 @@ for (const scheme of ["light", "dark"] as const)
       }
       const bob = card.getByRole("listitem").filter({ hasText: "Bob Builder" });
       await expect(bob.getByRole("combobox")).toBeVisible();
+      // One muted line under the intro for a non-admin manager.
+      await expect(
+        card.getByText("Only an admin can change another manager's access."),
+      ).toHaveCount(1);
+      if (width <= 600) {
+        // The role text lines up with the select's left edge.
+        const rina = card
+          .getByRole("listitem")
+          .filter({ hasText: "Rina Patel" });
+        const text = await rina
+          .getByText("Manager", { exact: true })
+          .boundingBox();
+        const select = await bob.getByRole("combobox").boundingBox();
+        if (!text || !select) throw new Error("no boxes");
+        expect(Math.abs(text.x - select.x)).toBeLessThan(1.5);
+      }
       await card.scrollIntoViewIfNeeded();
       await settle(page);
       await page.screenshot({

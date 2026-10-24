@@ -464,9 +464,90 @@ it("a stale 403 on Remove (a manager row the list showed as removable) says why 
     }),
   );
   expect(
-    await within(r).findByText("Only an admin can make someone a manager."),
+    await within(r).findByText(
+      "Only an admin can change another manager's access.",
+    ),
   ).toBeVisible();
   expect(screen.queryByText("server text")).toBeNull();
+});
+
+it("a 403 on Remove or a non-promoting role change refetches the members", async () => {
+  const seen = calls("GET");
+  mountWith([
+    serve([
+      person({
+        userId: "l1",
+        user: { id: "l1", name: "Lee Chen", email: "lee@example.com" },
+        role: "editor",
+        manualRole: "editor",
+      }),
+    ]),
+    http.put(`*/api/v1/spaces/${ID}/members/:u`, () =>
+      HttpResponse.json(
+        {
+          error: {
+            code: "space_forbidden",
+            message: "server text",
+            details: { target: "member" },
+          },
+        },
+        { status: 403 },
+      ),
+    ),
+  ]);
+  const r = await row("Lee Chen");
+  const loads = () =>
+    seen.filter((c) => c.path === `/api/v1/spaces/${ID}/members`).length;
+  const before = loads();
+  fireEvent.click(
+    within(r).getByRole("combobox", { name: "Role for Lee Chen" }),
+  );
+  fireEvent.click(await screen.findByRole("option", { name: "Viewer" }));
+  expect(
+    await within(r).findByText(
+      "Only an admin can change another manager's access.",
+    ),
+  ).toBeVisible();
+  await waitFor(() => expect(loads()).toBeGreaterThan(before));
+});
+
+it("only a non-admin manager who can see another manager gets the muted line under the intro", async () => {
+  const line = "Only an admin can change another manager's access.";
+  mountWith([managerRows()], asManager);
+  await row("Rina Patel");
+  expect(await within(await people()).findAllByText(line)).toHaveLength(1);
+});
+
+it("the muted manager line is not shown to an org admin", async () => {
+  mountWith([managerRows()]);
+  await row("Rina Patel");
+  expect(
+    within(await people()).queryByText(
+      "Only an admin can change another manager's access.",
+    ),
+  ).toBeNull();
+});
+
+it("no muted manager line for a non-admin manager when no one else manages", async () => {
+  mountWith(
+    [
+      serve([
+        person({
+          userId: "l1",
+          user: { id: "l1", name: "Lee Chen", email: "lee@example.com" },
+          role: "editor",
+          manualRole: "editor",
+        }),
+      ]),
+    ],
+    asManager,
+  );
+  await row("Lee Chen");
+  expect(
+    within(await people()).queryByText(
+      "Only an admin can change another manager's access.",
+    ),
+  ).toBeNull();
 });
 
 it("a 403 space_forbidden on a role change shows the copy by the row and snaps back", async () => {
