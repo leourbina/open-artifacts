@@ -1,7 +1,15 @@
 import { applyD1Migrations, createExecutionContext } from "cloudflare:test";
 import { env as testEnv } from "cloudflare:workers";
 import type { D1Migration } from "@cloudflare/vitest-plugin";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import scheduler, { CRON, type Env, runNightly } from "../src/index.js";
 
 // P1 Task 7 (Review Focus 5): one install's nightly job throwing or timing
@@ -121,12 +129,17 @@ describe("runNightly", () => {
     expect(r.failed).toEqual([]);
     expect([...f.scripts].sort()).toEqual(active.map((id) => `oa-s-${id}`));
     for (const c of f.calls)
-      expect(c.opts).toEqual({ cron: "17 3 * * *", scheduledTime: NOW });
+      expect(c.opts).toEqual({
+        cron: "17 3 * * *",
+        scheduledTime: new Date(NOW),
+      });
     expect(CRON).toBe("17 3 * * *");
   });
 
   it("one install throwing or timing out doesn't stop the others; it's reported in failed", async () => {
-    await seed([0, 1, 2, 3, 4, 5].map((n) => ({ id: idOf(n), state: "active" })));
+    await seed(
+      [0, 1, 2, 3, 4, 5].map((n) => ({ id: idOf(n), state: "active" })),
+    );
     const by: Record<string, Behavior> = {
       [`oa-s-${idOf(1)}`]: "throw",
       [`oa-s-${idOf(2)}`]: "hang",
@@ -155,8 +168,11 @@ describe("runNightly", () => {
     const p = runNightly(f.env, NOW).then((r) => {
       done = r;
     });
-    // Let the D1 read and the call start before moving the clock.
-    await vi.waitFor(() => expect(f.calls.length).toBe(1));
+    // Let the D1 read and the call start before moving the clock (vi.waitFor
+    // would advance the fake clock itself; a D1 round trip is real I/O).
+    for (let k = 0; k < 100 && f.calls.length === 0; k++)
+      await db.prepare("SELECT 1").first();
+    expect(f.calls.length).toBe(1);
     await vi.advanceTimersByTimeAsync(24_999);
     expect(done).toBeUndefined();
     await vi.advanceTimersByTimeAsync(1);
@@ -285,9 +301,15 @@ describe("scheduled", () => {
       [`oa-s-${idOf(2)}`]: "missing",
     };
     const f = fakes("staging", (s) => by[s] ?? "ok");
-    await scheduler.scheduled(controller(1234), f.env, createExecutionContext());
+    await scheduler.scheduled(
+      controller(1234),
+      f.env,
+      createExecutionContext(),
+    );
+    // The missing script never gets a call; the throwing one does.
     expect(f.calls.map((c) => c.opts)).toEqual([
-      { cron: CRON, scheduledTime: 1234 },
+      { cron: CRON, scheduledTime: new Date(1234) },
+      { cron: CRON, scheduledTime: new Date(1234) },
     ]);
     expect([...lines].sort()).toEqual(
       [
