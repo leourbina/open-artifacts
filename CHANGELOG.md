@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.1](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.43.0...v0.43.1) (2026-10-24)
+
+
+### Bug Fixes
+
+* **ops:** the signing key script no longer requires a prod reviewer ([#545](https://github.com/open-artifacts-ai/open-artifacts/issues/545)) ([b507e93](https://github.com/open-artifacts-ai/open-artifacts/commit/b507e937f32bb8a6e2bddef1e0a8c9c673d6bff8))
+
 ## [0.43.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.42.0...v0.43.0) (2026-10-24)
 
 
