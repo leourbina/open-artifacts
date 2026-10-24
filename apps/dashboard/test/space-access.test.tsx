@@ -344,6 +344,8 @@ it("a 403 space_forbidden for a mapping (a race) says the group changed and relo
     "This group's access just changed. Check it and try again.",
   );
   expect(msg).toBeVisible();
+  // A status, not an alert: it is information, not a failure to act on.
+  expect(msg).toHaveAttribute("role", "status");
   // On the affected row, not in a line under the table.
   const eng = await row(/eng@example.com/);
   const note = eng.nextElementSibling;

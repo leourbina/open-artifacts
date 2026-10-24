@@ -72,8 +72,8 @@ function NewSpace({
   const hint = useId();
   const nameId = useId();
   const checked = checkName(name);
-  // Before submit: once something was typed, the field says what's wrong.
-  const error = (touched || name !== "" ? checked.error : null) ?? refused;
+  // After the field was left or a submit was tried, never on a fresh form.
+  const error = (touched ? checked.error : null) ?? refused;
   const submit = () => {
     setTouched(true);
     const clean = checked.name;
@@ -117,6 +117,7 @@ function NewSpace({
             value={name}
             aria-invalid={error ? true : undefined}
             aria-describedby={error ? nameId : undefined}
+            onBlur={() => setTouched(true)}
             onChange={(e) => {
               setName(e.target.value);
               setRefused(null);
@@ -371,8 +372,9 @@ function General({ space }: { space: Space }) {
   useEffect(() => setName(space.name), [space.name]);
   const nameId = useId();
   const [refused, setRefused] = useState<string | null>(null);
+  const [touched, setTouched] = useState(false);
   const checked = checkName(name);
-  const error = checked.error ?? refused;
+  const error = (touched ? checked.error : null) ?? refused;
   const same = checked.name === space.name;
   return (
     <SettingsCard id="oa-space-general" title="General">
@@ -380,6 +382,7 @@ function General({ space }: { space: Space }) {
         className="grid gap-[6px]"
         onSubmit={(e) => {
           e.preventDefault();
+          setTouched(true);
           if (!checked.name || same) return;
           setRefused(null);
           patch.mutate(
@@ -399,6 +402,7 @@ function General({ space }: { space: Space }) {
             value={name}
             aria-invalid={error ? true : undefined}
             aria-describedby={error ? nameId : undefined}
+            onBlur={() => setTouched(true)}
             onChange={(e) => {
               setName(e.target.value);
               setRefused(null);

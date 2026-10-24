@@ -21,6 +21,9 @@ for (const scheme of ["light", "dark"] as const)
         await page.getByRole("button", { name: "New space" }).click();
         const d = page.getByRole("dialog", { name: "New space" });
         await d.getByRole("textbox", { name: "Name" }).fill("‮\u0007");
+        // The error waits for the field to be left.
+        await expect(d.getByText("Enter a space name.")).toHaveCount(0);
+        await page.keyboard.press("Tab");
         await expect(d.getByText("Enter a space name.")).toBeVisible();
         await settle(page);
         await page.screenshot({
@@ -31,6 +34,7 @@ for (const scheme of ["light", "dark"] as const)
       test("Rename: 81 characters", async ({ page }, info) => {
         await page.goto(`/settings/spaces?hosted=1&space=${ENG}`);
         await page.getByRole("textbox", { name: "Name" }).fill("x".repeat(81));
+        await page.getByRole("textbox", { name: "Name" }).blur();
         await expect(
           page.getByText("Use 80 characters or fewer."),
         ).toBeVisible();

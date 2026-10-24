@@ -141,6 +141,16 @@ it("create trims the name and sends the defaults", async () => {
   );
 });
 
+it("a fresh New space form shows no error until the field is left or a submit is tried", async () => {
+  mountHosted("/settings/spaces");
+  fireEvent.click(await screen.findByRole("button", { name: "New space" }));
+  const d = screen.getByRole("dialog", { name: "New space" });
+  expect(within(d).queryByRole("alert")).toBeNull();
+  expect(within(d).getByRole("textbox", { name: "Name" })).not.toHaveAttribute(
+    "aria-invalid",
+  );
+});
+
 it("create refuses an empty name before sending", async () => {
   const seen = calls("POST");
   mountHosted("/settings/spaces");
@@ -179,9 +189,15 @@ it("a name that is only controls is empty: the error shows before submit and not
   const d = screen.getByRole("dialog", { name: "New space" });
   const field = within(d).getByRole("textbox", { name: "Name" });
   expect(within(d).queryByText("Enter a space name.")).toBeNull();
+  expect(field).not.toHaveAttribute("aria-invalid");
   fireEvent.change(field, { target: { value: CTRL } });
-  expect(await within(d).findByText("Enter a space name.")).toBeVisible();
+  // Typing alone says nothing: the error waits for blur or a submit.
+  expect(within(d).queryByText("Enter a space name.")).toBeNull();
+  fireEvent.blur(field);
+  const msg = await within(d).findByText("Enter a space name.");
+  expect(msg).toBeVisible();
   expect(field).toHaveAttribute("aria-invalid", "true");
+  expect(field.getAttribute("aria-describedby")).toBe(msg.id);
   expect(d.textContent).not.toMatch(/control|character was|removed/i);
   fireEvent.click(within(d).getByRole("button", { name: "Create space" }));
   expect(seen.some((c) => c.path === "/api/v1/spaces")).toBe(false);
@@ -194,6 +210,7 @@ it("81 characters says to use 80 or fewer; 80 is fine", async () => {
   const d = screen.getByRole("dialog", { name: "New space" });
   const field = within(d).getByRole("textbox", { name: "Name" });
   fireEvent.change(field, { target: { value: "x".repeat(81) } });
+  fireEvent.blur(field);
   expect(
     await within(d).findByText("Use 80 characters or fewer."),
   ).toBeVisible();
@@ -229,7 +246,12 @@ it("rename shows the error before submit, disables Save, and shows the cleaned s
   mountHosted(`/settings/spaces?space=${ENG}`);
   const field = await screen.findByRole("textbox", { name: "Name" });
   fireEvent.change(field, { target: { value: "" } });
-  expect(await screen.findByText("Enter a space name.")).toBeVisible();
+  expect(screen.queryByText("Enter a space name.")).toBeNull();
+  fireEvent.blur(field);
+  const msg = await screen.findByText("Enter a space name.");
+  expect(msg).toBeVisible();
+  expect(field).toHaveAttribute("aria-invalid", "true");
+  expect(field.getAttribute("aria-describedby")).toBe(msg.id);
   expect(screen.getByRole("button", { name: "Save name" })).toBeDisabled();
   fireEvent.change(field, { target: { value: `${CTRL}  Platform ${CTRL}` } });
   expect(screen.queryByText("Enter a space name.")).toBeNull();
