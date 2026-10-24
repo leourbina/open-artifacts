@@ -346,7 +346,7 @@ test("7. delete: the agent gets not_found; undo restores it", async ({
   await owner.getByRole("button", { name: "More actions" }).click();
   await owner.getByRole("menuitem", { name: "Delete" }).click();
   await owner
-    .getByRole("dialog")
+    .getByRole("alertdialog", { name: "Delete artifact?" })
     .getByRole("button", { name: "Delete" })
     .click();
 
