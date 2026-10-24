@@ -237,18 +237,6 @@
   font-size: 13px;
   font-weight: 600;
 }
-.oa-lchip-undo {
-  height: 22px;
-  padding: 0 7px;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--oa-accent-fg);
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
-}
-.oa-lchip-undo:focus-visible,
 .oa-lchip-quiet:focus-visible {
   outline: 2px solid var(--oa-accent);
   outline-offset: 2px;
@@ -432,8 +420,5 @@ a.oa-lpill-gone {
   .oa-lchip {
     gap: 4px;
     padding-left: 8px;
-  }
-  .oa-lchip-undo {
-    padding: 0 5px;
   }
 }

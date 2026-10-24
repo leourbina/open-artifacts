@@ -119,6 +119,17 @@ export const ArtifactToShellSchema = z.union([
    */
   z.strictObject({ oa: z.literal(1), nonce, type: z.literal("interacted") }),
   /**
+   * The reader is mid-task in the frame (text selected, or an input, textarea
+   * or contenteditable focused), or no longer: a live swap waits meanwhile.
+   * A hint only, like `interacted`.
+   */
+  z.strictObject({
+    oa: z.literal(1),
+    nonce,
+    type: z.literal("engaged"),
+    engaged: z.boolean(),
+  }),
+  /**
    * The document's scroll position (throttled): the shell carries it over to
    * the next version's frame after a live swap. A hint only.
    */

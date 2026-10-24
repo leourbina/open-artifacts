@@ -215,7 +215,11 @@ function Viewer({
   const cpu = useCpuSignals(role, plan);
   // Since this frame's last intentional load: did the runtime say hello, has
   // the viewer touched it. Read by the safe-swap rule.
-  const fs = useRef<FrameState>({ hello: false, touched: false });
+  const fs = useRef<FrameState>({
+    hello: false,
+    touched: false,
+    engaged: false,
+  });
   const cbs = useRef({ onReady, onTouched, onAccessLost, onScroll });
   cbs.current = { onReady, onTouched, onAccessLost, onScroll };
   // Fixed at mount: a swap shows this layer on load, before its hello.
@@ -291,6 +295,7 @@ function Viewer({
     helloSeen.current = false;
     fs.current.hello = false;
     fs.current.touched = false;
+    fs.current.engaged = false;
     clearTimeout(slowTimer.current);
     setSlow(false);
     renavigated.current = false;
@@ -325,6 +330,9 @@ function Viewer({
         if (pos) bridge.current?.scrollTo(pos);
       },
       onScroll: (pos) => cbs.current.onScroll?.(pos),
+      onEngaged: (on) => {
+        fs.current.engaged = on;
+      },
       onPdfText: (t) => fxRef.current.onPdfText(t),
       onThumb: (b) => fxRef.current.onThumb(b),
       // The shell re-checks access: still readable, or the gone state.
@@ -502,6 +510,7 @@ function ArtifactShell({
       frames.current.get(shownRef.current ?? -1) ?? {
         hello: false,
         touched: true,
+        engaged: false,
       },
     chromeOpen,
   });
@@ -569,10 +578,6 @@ function ArtifactShell({
       swapped={live.swapped}
       current={v !== undefined && live.latest > v ? live.latest : null}
       onView={live.view}
-      onUndo={() => {
-        const prev = live.swapped?.prev;
-        if (prev !== undefined) void navigate({ to: viewerPath(id, prev) });
-      }}
       onCurrent={() => void navigate({ to: viewerPath(id) })}
       onExpire={live.clearSwapped}
     />

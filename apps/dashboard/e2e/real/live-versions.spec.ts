@@ -148,6 +148,42 @@ test("the side panel open: a new version still swaps", async ({
   await expect(
     page.getByRole("complementary", { name: "Side panel" }),
   ).toBeVisible();
+  // Design: a brief note, no Undo; about 3 s later the chip is back to normal.
+  await expect(page.getByRole("button", { name: /^Undo/ })).toHaveCount(0);
+  await expect(page.getByText("Updated to v2")).toHaveCount(0, {
+    timeout: 5_000,
+  });
+  await expect(
+    page.getByRole("button", { name: "Version: v2 · Current" }),
+  ).toBeVisible();
+});
+
+test("text selected in the frame: the chip, not a swap", async ({
+  page,
+  member,
+}) => {
+  const { id } = await publishViaApi(member.pat, {
+    title: `Live ${uniq()}`,
+    format: "html",
+    content: LONG(1),
+  });
+  await page.goto(`/a/${id}`);
+  await expect(artifactFrame(page).locator("#v")).toHaveText("version 1");
+  await page.waitForTimeout(500);
+  // A selection made without a click or key (the runtime reports it).
+  await artifactFrame(page)
+    .locator("#p2")
+    .evaluate((p) => {
+      const r = document.createRange();
+      r.selectNodeContents(p);
+      getSelection()?.addRange(r);
+    });
+  await page.waitForTimeout(300);
+  await publishLong(member.pat, id, 2);
+  await expect(page.locator(".oa-lchip")).toContainText("v2 available", {
+    timeout: 5_000,
+  });
+  await expect(artifactFrame(page).locator("#v")).toHaveText("version 1");
 });
 
 test("clicked inside: still the chip", async ({ page, member }) => {

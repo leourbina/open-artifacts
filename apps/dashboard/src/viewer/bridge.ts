@@ -55,6 +55,8 @@ export interface BridgeOptions {
   onInteracted?: () => void;
   /** The document scrolled (runtime `scroll`, throttled). */
   onScroll?: (pos: ScrollPos) => void;
+  /** Text selected or a field focused in the frame, or no longer. */
+  onEngaged?: (engaged: boolean) => void;
 }
 
 /** A document's scroll offset and how far it could scroll. */
@@ -455,6 +457,9 @@ export function createBridge(opts: BridgeOptions) {
         break;
       case "scroll":
         opts.onScroll?.({ top: m.top, max: m.max });
+        break;
+      case "engaged":
+        opts.onEngaged?.(m.engaged);
         break;
     }
   };

@@ -87,12 +87,16 @@ describe("live versions: the safe swap", () => {
     expect(nonceOf(next)).not.toBe(nonceOf(first));
     fireEvent.load(next);
     expect(await screen.findByText("Updated to v3")).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Undo, go back to version 2" }),
-    ).toBeTruthy();
+    // Design (option C): a brief note, no Undo.
+    expect(screen.queryByRole("button", { name: /^Undo/ })).toBeNull();
     expect(
       screen.getByRole("button", { name: "Version: v3 · Current" }),
     ).toBeTruthy();
+    // About 3 s, then the chip is back to normal.
+    await waitFor(
+      () => expect(screen.queryByText("Updated to v3")).toBeNull(),
+      { timeout: 5_000 },
+    );
     await waitFor(() => expect(frames()).toEqual([next]));
     await waitFor(() =>
       expect(document.querySelector('[aria-live="polite"]')?.textContent).toBe(
@@ -180,6 +184,29 @@ describe("live versions: the safe swap", () => {
     expect(await screen.findByText("Updated to v3")).toBeTruthy();
   });
 
+  it("text selected or a field focused in the frame: the chip", async () => {
+    const first = await open(viewerPath(OWNED));
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: {
+            oa: 1,
+            type: "engaged",
+            engaged: true,
+            nonce: nonceOf(first),
+          },
+          origin: "null",
+          source: first.contentWindow,
+        }),
+      );
+    });
+    await publish();
+    expect(
+      await screen.findByRole("button", { name: "View version 3" }, LONG),
+    ).toBeTruthy();
+    expect(frames()).toEqual([first]);
+  });
+
   it("an open side panel doesn't block it: swaps", async () => {
     const first = await open(`${viewerPath(OWNED)}?panel=open&tab=versions`);
     await publish();
@@ -247,15 +274,12 @@ describe("live versions: restore", () => {
     await api("POST", R.restoreVersion(OWNED, 1));
     const next = await frame(first);
     fireEvent.load(next);
-    // Design: the pill says "Restored v1 · Undo"; the announcement says more.
+    // Design: the note says "Restored v1" (no Undo); the announcement says more.
     const pill = await screen.findAllByText("Restored v1");
-    expect(pill[0]?.closest(".oa-lchip")?.textContent).toContain("Undo");
+    expect(pill[0]?.closest(".oa-lchip")?.textContent).not.toContain("Undo");
     expect(screen.queryByText("Updated", { exact: true })).toBeNull();
     expect(
       screen.getByRole("button", { name: "Version: v3 · Current" }),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Undo, go back to version 2" }),
     ).toBeTruthy();
     await waitFor(() =>
       expect(document.querySelector('[aria-live="polite"]')?.textContent).toBe(

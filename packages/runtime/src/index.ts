@@ -167,6 +167,32 @@ function onFirstInteraction(fire: () => void): () => void {
   return done;
 }
 
+/** Text selected, or a field (input, textarea, contenteditable) focused. */
+function isEngaged(): boolean {
+  const sel = getSelection();
+  if (sel && !sel.isCollapsed && sel.toString().trim() !== "") return true;
+  const el = document.activeElement;
+  return (
+    el instanceof HTMLTextAreaElement ||
+    (el instanceof HTMLInputElement &&
+      ![
+        "button",
+        "submit",
+        "reset",
+        "checkbox",
+        "radio",
+        "range",
+        "color",
+        "file",
+        "image",
+      ].includes(el.type)) ||
+    (el instanceof HTMLElement &&
+      (el.isContentEditable ||
+        el.closest('[contenteditable]:not([contenteditable="false"])') !==
+          null))
+  );
+}
+
 /** How far the document can scroll. */
 const maxScroll = () =>
   Math.max(0, document.documentElement.scrollHeight - innerHeight);
@@ -446,6 +472,21 @@ export function createRuntime(opts: RuntimeOptions = {}): OpenArtifacts {
   const stopInteract = bridge.raw
     ? () => {}
     : onFirstInteraction(() => bridge.send({ oa: 1, type: "interacted" }));
+  // Mid-task (a selection, a focused field): the shell holds a live swap.
+  let wasEngaged = false;
+  const onEngage = () => {
+    const now = isEngaged();
+    if (now === wasEngaged) return;
+    wasEngaged = now;
+    bridge.send({ oa: 1, type: "engaged", engaged: now });
+  };
+  // focusout fires before focus lands elsewhere: look once it has.
+  const onFocusOut = () => setTimeout(onEngage, 0);
+  if (!bridge.raw) {
+    document.addEventListener("selectionchange", onEngage);
+    addEventListener("focusin", onEngage, true);
+    addEventListener("focusout", onFocusOut, true);
+  }
   // Where the document is scrolled, for the shell to carry over a live swap.
   let reportTimer: ReturnType<typeof setTimeout> | undefined;
   const onScroll = () => {
@@ -459,6 +500,9 @@ export function createRuntime(opts: RuntimeOptions = {}): OpenArtifacts {
   opts.signal?.addEventListener("abort", () => {
     stopInteract();
     removeEventListener("scroll", onScroll);
+    document.removeEventListener("selectionchange", onEngage);
+    removeEventListener("focusin", onEngage, true);
+    removeEventListener("focusout", onFocusOut, true);
     clearTimeout(reportTimer);
     document.removeEventListener("click", onClick, true);
     bridge.dispose();
