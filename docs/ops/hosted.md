@@ -156,6 +156,14 @@ User Workers in a dispatch namespace get no cron triggers, so `apps/scheduler` i
 - **6 at a time.** Calling a service binding doesn't count toward the 6 simultaneous open connections, but the installs' own fetch, KV, R2, Cache and Queues calls share the scheduler's limit while they wait for headers ([limits](https://developers.cloudflare.com/workers/platform/limits/#simultaneous-open-connections), [service bindings](https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/#limits)). A call is reported `timeout` after 25 s, but it keeps its slot until it settles. A stuck call holds its slot for at most 60 s after its timeout. Then the slot is given back, the call counts as `leaked`, and the run goes on. A call still unsettled when the run ends is `leaked` too. Leaked calls may still hold connections, so the real bound is on unsettled calls: at most 12 (2 × the 6 slots, in a slot or leaked) at any time. At that cap no new call starts until one settles, or the deadline hits.
 - **Deadline.** No call starts after 13 minutes, under the 15-minute cron wall time. The rest is `skipped`, and the summary still lands.
 - One install throwing, timing out or missing never stops the others.
+- **Email-quota alert.** After the nightly run, in its own try, the scheduler reads the previous UTC day's sends from Cloudflare's Email Sending analytics (GraphQL, dataset `emailSendingAdaptiveGroups`, zone-level; [metrics](https://developers.cloudflare.com/email-service/observability/metrics-analytics/)) and sums them over `EMAIL_QUOTA_ZONES`. It never reads an install's D1, never changes or delays the nightly result, and gives up after 10 s. The sending limit is per account, not per zone ([limits](https://developers.cloudflare.com/email-service/platform/limits/)), so list every sending zone of the account and set `EMAIL_DAILY_LIMIT` to that account's current daily limit (new accounts start low and scale up, so re-check it in the dashboard). The window is `[day start, day end)` in UTC, from `event.scheduledTime`. Each group's `count` is summed over all statuses (an estimate: Cloudflare doesn't count suppressed or verified-destination sends toward the limit, so the alert may run slightly high). At most 10 zones. Both vars are per-env placeholders, filled at deploy like `PLATFORM_DB`:
+
+  | Var | Placeholder (staging, prod) | Value |
+  |---|---|---|
+  | `EMAIL_QUOTA_ZONES` | `{{EMAIL_ZONE_TAG_STAGING}}`, `{{EMAIL_ZONE_TAG_PROD}}` | Comma-separated zone tags (32 hex chars), no spaces needed |
+  | `EMAIL_DAILY_LIMIT` | `{{EMAIL_DAILY_LIMIT_STAGING}}`, `{{EMAIL_DAILY_LIMIT_PROD}}` | The account's daily sending limit, a positive integer |
+
+  Fill them in the same gitignored `wrangler.deploy.jsonc` as the D1 id (step 3's `sed`, one more `-e` per placeholder). An unfilled placeholder is an invalid config, so the alert skips.
 
 A hosted upload carries no cron of its own (`TEMPLATE_BINDINGS_EXCLUDED.triggers`). That's pinned for the metadata in `packages/provision/test/metadata.test.ts`, and for the create, upgrade and rollback uploads, with no `/schedules` call, in `wfp-lifecycle.test.ts`. So the job runs once.
 
@@ -203,6 +211,27 @@ Steps, per env (`ENV`, `P` and `UP` as in the dispatch steps above):
    - the rejection for a missing script maps to `not_found`;
    - whether a timed-out install's job is canceled when the scheduler's invocation ends.
 
+### Email-quota token (optional, set after the scheduler is deployed)
+
+The alert needs one secret, `EMAIL_QUOTA_TOKEN`: a Cloudflare API token that can only read analytics. Without it the alert skips, and nothing else changes.
+
+| | |
+|---|---|
+| Permission | Zone > Analytics > Read |
+| Scope | Specific zone: each zone in `EMAIL_QUOTA_ZONES`. Nothing else. |
+| TTL | 30 days or less (set an expiry; recreate it before it lapses, or the alert logs `email-quota failed http`) |
+
+Steps, per env:
+
+1. Dashboard > My Profile > API Tokens > Create Token > Custom token.
+2. Add Zone / Analytics / Read. Zone Resources: Include > Specific zone, then pick the sending zone (add one row per zone). Set the TTL.
+3. Create the token and copy it. Don't paste it anywhere else.
+4. Only after the scheduler is deployed, from `apps/scheduler`:
+   ```sh
+   pbpaste | npx wrangler secret put EMAIL_QUOTA_TOKEN --env <staging|prod>
+   ```
+5. Clear the clipboard. The token is used only as the `Authorization` header of the call to `api.cloudflare.com`, and is never logged.
+
 ### Reading the nightly run
 
 Read the lines in Workers Logs for `oa-$P-scheduler` (dashboard, or the Observability API with the Platform read-only token), filtered on `nightly`. To watch live, run `pnpm exec wrangler tail oa-$P-scheduler --format pretty` around 03:17 UTC. The dashboard's Cron Events list (Worker > Settings > Triggers) shows each past invocation and its outcome. The run itself fails there only when it aborts (`nightly aborted`). The lines carry no error text, emails or vars:
@@ -218,7 +247,20 @@ Read the lines in Workers Logs for `oa-$P-scheduler` (dashboard, or the Observab
 | `nightly scale active=<n> over 300` | Past what one run fits (about 190 at 6 × 25 s in 13 minutes, fewer under shared-connection queuing). The M2 Queue fan-out is overdue. |
 | `nightly aborted <env\|exception>` | The run stopped before any call: a bad `OA_ENV` (`env`) or a platform D1 read error (`exception`). Cron Events shows the failure. |
 
-The email-quota alert (80% of the account limit) is not in M1: the per-install send counters live in each install's own D1 and no route exposes them. Backend owns that contract.
+Email-quota lines (one per run, after `nightly summary`; filter on `email-quota`). Same rules: no token, zone tag, response text, address or URL:
+
+| Line | Meaning |
+|---|---|
+| `email-quota ok sent=<n> limit=<L> pct=<p>` | Yesterday's (UTC) sends are under 80% of the limit. `console.log`. |
+| `email-quota warn sent=<n> limit=<L> pct=<p>` | At or above 80% (`pct` is rounded down; over 100 means the limit was passed). `console.warn`. Ask Cloudflare for a higher limit, or cut sending. |
+| `email-quota skipped no_token` | `EMAIL_QUOTA_TOKEN` isn't set. No call was made. |
+| `email-quota skipped config` | `EMAIL_QUOTA_ZONES` has no zone, a bad tag, or more than 10, or `EMAIL_DAILY_LIMIT` isn't a positive integer (an unfilled `{{...}}` placeholder is one). No call was made. |
+| `email-quota failed http` | Non-2xx from the API (an expired or wrongly scoped token is a 401 or 403) or a network error. |
+| `email-quota failed graphql` | The API answered with GraphQL `errors`. |
+| `email-quota failed timeout` | No full answer within 10 s. |
+| `email-quota failed shape` | Not JSON, or not the expected shape (including a configured zone missing from the answer). |
+
+A failed or skipped alert never changes the nightly lines above.
 
 ## Hosted release files (T3b)
 
