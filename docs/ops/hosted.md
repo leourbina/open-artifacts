@@ -182,13 +182,15 @@ Steps, per env (`ENV`, `P` and `UP` as in the dispatch steps above):
    git status --porcelain | grep -q . && { echo "dirty checkout" >&2; exit 1; }
    pnpm install --frozen-lockfile && pnpm --filter @oa/provision build && pnpm --filter @oa/scheduler test
    ```
-3. Deploy with the provisioning token. Fill this env's placeholders into a gitignored copy, refuse if any of this env's `{{...}}` is left, deploy the copy, then remove it. `ZONES` is the sending zone tags, comma-separated (each is the zone's id: dashboard > the domain > Overview > API section > Zone ID). `LIMIT` is the account's Email Sending daily limit (dashboard > Compute > Email Service > Email Sending). Set both by hand:
+3. Deploy with the provisioning token. Fill this env's placeholders into a gitignored copy, refuse if any of this env's `{{...}}` is left, deploy the copy, then remove it. `ZONES` is the sending zone tags, comma-separated (each is the zone's id: dashboard > the domain > Overview > API section > Zone ID, 32 lowercase hex chars). `LIMIT` is the account's Email Sending daily limit (dashboard > Compute > Email Service > Email Sending), a positive integer of at most 9 digits. Replace both quoted values before running; the chain refuses anything `apps/scheduler/src/quota.ts` would reject (an empty value, the example text, a bad tag or limit):
    ```sh
    cd apps/scheduler
-   ZONES=<zone-tag>[,<zone-tag>...]
-   LIMIT=<daily-limit>   # a positive integer
+   ZONES='<zone tag>[,<zone tag>...]'
+   LIMIT='<daily limit>'
    DB_ID=$(pnpm exec wrangler d1 list --json | jq -r --arg n "oa-$P-platform" '.[] | select(.name == $n) | .uuid')
-   test -n "$DB_ID" \
+   printf '%s' "$ZONES" | grep -Eq '^[0-9a-f]{32}(,[0-9a-f]{32}){0,9}$' \
+     && printf '%s' "$LIMIT" | grep -Eq '^[1-9][0-9]{0,8}$' \
+     && test -n "$DB_ID" \
      && sed -e "s/{{PLATFORM_DB_ID_$UP}}/$DB_ID/" \
             -e "s/{{EMAIL_ZONE_TAG_$UP}}/$ZONES/" \
             -e "s/{{EMAIL_DAILY_LIMIT_$UP}}/$LIMIT/" wrangler.jsonc > wrangler.deploy.jsonc \
@@ -197,9 +199,9 @@ Steps, per env (`ENV`, `P` and `UP` as in the dispatch steps above):
      && pnpm exec wrangler deploy -c wrangler.deploy.jsonc --env "$ENV" \
      && rm wrangler.deploy.jsonc
    ```
-   The copy is the whole file, so the other env's placeholders stay in it (harmless: `--env` deploys only this env's block); the check is on this env's.
-   The deploy output must name `oa-$P-scheduler` with `DISPATCHER (oa-$ENV)`, `PLATFORM_DB (oa-$P-platform)`, `OA_ENV ("$ENV")`, the schedule `17 3 * * *`, and no routes or workers.dev URL.
-4. Binding check, from the deployed settings: `PLATFORM_DB` must be the database named `oa-$P-platform`, `DISPATCHER` must be the namespace `oa-$ENV`, `OA_ENV` must be `$ENV`, and the schedules must be exactly `17 3 * * *`. Never another env's (`CF_ACCOUNT_ID` and `CF_API_TOKEN` as in the dispatch check):
+   The copy is the whole file, so the other env's placeholders stay in it (harmless: `--env` deploys only this env's block); the check is on this env's. A refused chain leaves nothing deployed; if `wrangler deploy` itself fails, remove `wrangler.deploy.jsonc` by hand.
+   The deploy output must name `oa-$P-scheduler` with `DISPATCHER (oa-$ENV)`, `PLATFORM_DB (oa-$P-platform)`, `OA_ENV ("$ENV")`, `EMAIL_QUOTA_ZONES ("<your zone tags>")` and `EMAIL_DAILY_LIMIT ("<your limit>")` (no `{{`), the schedule `17 3 * * *`, and no routes or workers.dev URL.
+4. Binding check, from the deployed settings (in the same shell as step 3, so `ZONES` and `LIMIT` are still set): `PLATFORM_DB` must be the database named `oa-$P-platform`, `DISPATCHER` must be the namespace `oa-$ENV`, `OA_ENV` must be `$ENV`, `EMAIL_QUOTA_ZONES` and `EMAIL_DAILY_LIMIT` must be the values from step 3, and the schedules must be exactly `17 3 * * *`. Never another env's (`CF_ACCOUNT_ID` and `CF_API_TOKEN` as in the dispatch check):
    ```sh
    API="https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID"
    SET=$(curl -sS -H "Authorization: Bearer $CF_API_TOKEN" "$API/workers/scripts/oa-$P-scheduler/settings")
@@ -210,6 +212,10 @@ Steps, per env (`ENV`, `P` and `UP` as in the dispatch steps above):
      || { echo "DISPATCHER is not oa-$ENV" >&2; exit 1; }
    test "$(printf %s "$SET" | jq -r '.result.bindings[] | select(.name == "OA_ENV") | .text')" = "$ENV" \
      || { echo "OA_ENV is not $ENV" >&2; exit 1; }
+   test "$(printf %s "$SET" | jq -r '.result.bindings[] | select(.name == "EMAIL_QUOTA_ZONES") | .text')" = "$ZONES" \
+     || { echo "EMAIL_QUOTA_ZONES is not the zones set at deploy" >&2; exit 1; }
+   test "$(printf %s "$SET" | jq -r '.result.bindings[] | select(.name == "EMAIL_DAILY_LIMIT") | .text')" = "$LIMIT" \
+     || { echo "EMAIL_DAILY_LIMIT is not the limit set at deploy" >&2; exit 1; }
    test "$(curl -sS -H "Authorization: Bearer $CF_API_TOKEN" "$API/workers/scripts/oa-$P-scheduler/schedules" \
      | jq -c '[.result.schedules[].cron]')" = '["17 3 * * *"]' \
      || { echo "schedules are not exactly 17 3 * * *" >&2; exit 1; }
@@ -217,6 +223,7 @@ Steps, per env (`ENV`, `P` and `UP` as in the dispatch steps above):
 5. **Per-request invocation limit: measured, no cap.** The service-bindings docs say "A single request has a maximum of 32 Worker invocations, and each call to a Service binding counts". Measured on staging 2026-10-24: 100 sequential dispatch `scheduled()` calls from one request, no invocation cap hit (probe: `.superpowers/platform/probe_invocations.py` in the platform workspace). The same probe showed that `scheduled()` resolves to `undefined` when the install's handler succeeds, and rejects with the handler's own error when it throws. The scheduler logs only a fixed category, never that text. On the first real staging run, also confirm:
    - the rejection for a missing script maps to `not_found`;
    - whether a timed-out install's job is canceled when the scheduler's invocation ends.
+   - the first `email-quota` line (once the token is set) is `ok` or `warn`, not `failed graphql` (the window variables are sent as ISO times with milliseconds, e.g. `2026-10-23T00:00:00.000Z`; a `graphql` failure on the first run points there or at the `datetimeHour_lt` filter).
 
 ### Email-quota token (optional, set after the scheduler is deployed)
 
@@ -237,7 +244,8 @@ Steps, per env:
    ```sh
    pbpaste | npx wrangler secret put EMAIL_QUOTA_TOKEN --env <staging|prod>
    ```
-5. Clear the clipboard. The token is used only as the `Authorization` header of the call to `api.cloudflare.com`, and is never logged.
+5. Put the expiry in a calendar: at 30 days or less the token lapses, and the alert then logs `email-quota failed http` every night until it is rotated (repeat steps 1 to 4).
+6. Clear the clipboard. The token is used only as the `Authorization` header of the call to `api.cloudflare.com`, and is never logged.
 
 ### Reading the nightly run
 

@@ -34,7 +34,8 @@ const MAX_ZONES = 10;
 // only its last has isLastEvent 1, so that filter counts each email once.
 // No status filter, on purpose: suppressed and verified-destination sends
 // don't count toward Cloudflare's limit but are counted here. Over-counting
-// is the conservative direction for an alert.
+// is the conservative direction for an alert. (`limit` is inert: with no
+// dimensions each zone returns one aggregate row; it is only a ceiling.)
 const QUERY = `query EmailQuota($zoneTags: [string!]!, $start: Time!, $end: Time!) {
   viewer {
     zones(filter: { zoneTag_in: $zoneTags }) {
@@ -57,16 +58,22 @@ class Failure extends Error {
 }
 
 function config(env: QuotaEnv): { zones: string[]; limit: number } | null {
-  const zones = (env.EMAIL_QUOTA_ZONES ?? "")
-    .split(",")
-    .map((z) => z.trim())
-    .filter((z) => z !== "");
+  // Lowercased and deduped: a repeated tag would return one zone and fail
+  // the zone-count check every night.
+  const zones = [
+    ...new Set(
+      (env.EMAIL_QUOTA_ZONES ?? "")
+        .split(",")
+        .map((z) => z.trim().toLowerCase())
+        .filter((z) => z !== ""),
+    ),
+  ];
   const raw = env.EMAIL_DAILY_LIMIT ?? "";
   if (
     zones.length === 0 ||
     zones.length > MAX_ZONES ||
     !zones.every((z) => /^[0-9a-f]{32}$/.test(z)) ||
-    !/^[1-9][0-9]{0,14}$/.test(raw)
+    !/^[1-9][0-9]{0,8}$/.test(raw)
   )
     return null;
   return { zones, limit: Number(raw) };
@@ -122,12 +129,14 @@ async function query(
           end: new Date(day).toISOString(),
         },
       }),
+      // Never follow a redirect with the token; a 3xx is `http`.
+      redirect: "manual",
       signal,
     });
   } catch {
     throw new Failure(signal.aborted ? "timeout" : "http");
   }
-  if (!res.ok) throw new Failure("http");
+  if (!res.ok || res.status >= 300) throw new Failure("http");
   let body: unknown;
   try {
     body = await res.json();

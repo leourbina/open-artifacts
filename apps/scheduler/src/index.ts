@@ -456,7 +456,8 @@ export default {
   async scheduled(event, env, _ctx) {
     await nightly(env, event.scheduledTime);
     // Own try, after the nightly result is settled: it never changes it
-    // (emailQuota logs one fixed line and doesn't throw; this is the belt).
+    // (emailQuota logs one fixed line and doesn't throw; this catch is
+    // defense only, unreachable today).
     try {
       await emailQuota(env, event.scheduledTime);
     } catch {

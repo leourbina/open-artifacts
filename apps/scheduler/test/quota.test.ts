@@ -81,7 +81,14 @@ describe("emailQuota", () => {
       { EMAIL_QUOTA_ZONES: "{{EMAIL_ZONE_TAG_STAGING}}" },
     ],
     ["not a zone tag", { EMAIL_QUOTA_ZONES: `${Z1},nope` }],
-    ["over 10 zones", { EMAIL_QUOTA_ZONES: Array(11).fill(Z1).join(",") }],
+    [
+      "over 10 zones",
+      {
+        EMAIL_QUOTA_ZONES: Array.from({ length: 11 }, (_, i) =>
+          i.toString(16).padStart(32, "0"),
+        ).join(","),
+      },
+    ],
     ["no limit", { EMAIL_DAILY_LIMIT: undefined }],
     ["placeholder limit", { EMAIL_DAILY_LIMIT: "{{EMAIL_DAILY_LIMIT}}" }],
     ["zero limit", { EMAIL_DAILY_LIMIT: "0" }],
