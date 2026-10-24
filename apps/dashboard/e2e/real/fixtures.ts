@@ -137,13 +137,17 @@ export async function startServer(): Promise<() => Promise<void>> {
   const dir = mkdtempSync(join(tmpdir(), "oa-e2e-"));
   let child: ChildProcess | undefined;
   let exited = false;
-  // The group (wrangler and workerd), even after wrangler itself has exited.
+  // The group (wrangler and workerd), only while wrangler is alive: once it has
+  // exited, its group id may be reused (on a shared machine, by anyone's
+  // processes), so signalling -pid then could hit something else.
   const kill = (signal: NodeJS.Signals = "SIGTERM") => {
-    if (child?.pid === undefined) return;
+    if (child?.pid === undefined || exited) return;
     try {
       process.kill(-child.pid, signal);
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "ESRCH") throw e;
+      // Gone already, or no longer ours.
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code !== "ESRCH" && code !== "EPERM") throw e;
     }
   };
   const onExit = () => kill();
@@ -209,9 +213,9 @@ export async function startServer(): Promise<() => Promise<void>> {
       const timeout = new Promise<boolean>((r) =>
         setTimeout(() => r(false), 10_000).unref(),
       );
+      // Still up after SIGTERM: kill the whole group (workerd too) while the
+      // group is certainly still ours.
       if (!(await Promise.race([gone, timeout]))) kill("SIGKILL");
-      // workerd may outlive wrangler on SIGTERM: always finish the group off.
-      kill("SIGKILL");
       process.removeListener("exit", onExit);
       rmSync(dir, { recursive: true, force: true });
     };
