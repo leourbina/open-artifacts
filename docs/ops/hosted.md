@@ -60,6 +60,44 @@ Namespace `oa-spike-staging`, dispatch Worker `oa-s-spike-dispatch` (account scr
 - Release records: `create` uploads and applies only the release's own files, never the local checkout. Those files are the modules, the assets, the server template, the D1 migrations and the Welcome artifact text. Each one is checked against the release record. The record names its `env` and `version`, and is signed with Ed25519 over `"oa-release-v1\n" + env + "\n" + canonicalJson(record)`, then verified against `RELEASE_PUBKEY[env]`. A downgrade below an install's current version is refused.
 - Gates: `PROD_UNLOCKED`, `ALLOW_ACCOUNT_TARGET`, `RELEASE_PUBKEY` and `FLOOR_MIN_SEQ` are code constants in `packages/provision/src/internal/gates.ts`. The package does not export them, and no option can set them. Prod stays locked (`ProdLocked`) until a separate one-line PR, after the key ceremony, sets the real per-env public keys and flips `PROD_UNLOCKED`.
 
+## Dispatch Worker: one-time deploy per env (Task 6, gated)
+
+`apps/dispatch` maps the request host (lowercased, one trailing dot stripped, port ignored) to an install id in `HOSTS` and forwards the original request to `oa-<p>-<id>` in the env's dispatch namespace. A miss, a value that isn't an install id, a binding error or a deleted script all get the same plain `404 Not found`. It logs the host only, and only when a dispatch fails.
+
+The repo config has no routes, custom domains or `workers.dev` (a test pins that). Routing is wired once per env by this step. **The Manager and the user run it by hand; CI never does.**
+
+| Env | Worker | Namespace | HOSTS KV title |
+|---|---|---|---|
+| staging | `oa-s-dispatch` | `oa-staging` | `oa-s-hosts` |
+| prod | `oa-p-dispatch` | `oa-prod` | `oa-p-hosts` |
+
+The four routes (two per env, one per tenant zone):
+
+| Env | Zone | Route | Worker |
+|---|---|---|---|
+| staging | `open-artifacts-staging.app` | `*.open-artifacts-staging.app/*` | `oa-s-dispatch` |
+| staging | `open-artifacts-staging.page` | `*.open-artifacts-staging.page/*` | `oa-s-dispatch` |
+| prod | `open-artifacts.app` | `*.open-artifacts.app/*` | `oa-p-dispatch` |
+| prod | `open-artifacts.page` | `*.open-artifacts.page/*` | `oa-p-dispatch` |
+
+Steps, per env (`ENV=staging`, `P=s`, `APP=open-artifacts-staging.app`, `PAGE=open-artifacts-staging.page`; prod: `ENV=prod`, `P=p`, `APP=open-artifacts.app`, `PAGE=open-artifacts.page`):
+
+1. Preconditions: the namespace `oa-<env>` and the `oa-<p>-hosts` KV namespace exist (create's preflight needs both anyway).
+2. Deploy the Worker with the provisioning token. Fill the HOSTS id into a gitignored copy of the config, deploy it, then remove the copy:
+   ```sh
+   cd apps/dispatch
+   HOSTS_ID=$(pnpm exec wrangler kv namespace list | jq -r --arg t "oa-$P-hosts" '.[] | select(.title == $t) | .id')
+   test -n "$HOSTS_ID" && sed "s/{{HOSTS_KV_ID}}/$HOSTS_ID/" wrangler.jsonc > wrangler.deploy.jsonc \
+     && pnpm exec wrangler deploy -c wrangler.deploy.jsonc --env "$ENV" \
+     && rm wrangler.deploy.jsonc
+   ```
+   Check the output names `oa-$P-dispatch` with bindings `DISPATCHER (oa-$ENV)`, `HOSTS` and `OA_ENV=$ENV`, and no routes or workers.dev URL.
+3. Create a short-lived zone token (expires within the day) scoped to the env's two zones only: Zone Read, DNS Edit, Workers Routes Edit. Verify it (`GET /user/tokens/verify`) before any write.
+4. On each of the two zones, add one proxied wildcard record: `AAAA * 100::` with `proxied: true` (`POST /zones/<zone_id>/dns_records`). Refuse if a `*` record already exists that isn't this one.
+5. On each of the two zones, add the route: `POST /zones/<zone_id>/workers/routes` with `{"pattern": "*.$APP/*", "script": "oa-$P-dispatch"}` on the app zone and `{"pattern": "*.$PAGE/*", "script": "oa-$P-dispatch"}` on the page zone.
+6. Revoke the zone token.
+7. Check: `curl -sS -o /dev/null -w '%{http_code}' https://nope.$APP/` and the same on `$PAGE` both print `404` with the body `Not found`. Task 9's smoke then checks a real install's host on each zone.
+
 ## Hosted release files (T3b)
 
 - The stored record is `{ "record": "<canonicalJson(record)>", "signature": "<base64url>" }`. The signature covers `"oa-release-v1\n" + env + "\n" + record` (the exact string). Readers verify that string, parse it refusing duplicate keys (objects built with a null prototype), and require it to re-serialize byte for byte.
