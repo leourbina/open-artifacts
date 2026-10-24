@@ -502,6 +502,21 @@ describe("runNightly", () => {
     expect(f.calls).toHaveLength(r.ok.length);
   });
 
+  it("past the re-check floor, the rest is skipped without recursing through every install", async () => {
+    // Skipping each install in its own run() recursed synchronously
+    // (finally -> release -> pump -> run), one stack level per install.
+    await seed(ids(20_000));
+    const f = fakes();
+    const r = await runNightly(f.env, NOW, {
+      concurrency: 6,
+      deadlineMs: 1_000,
+      recheckFloorMs: 5_000,
+    });
+    expect(f.calls).toHaveLength(0);
+    expect(r.ok).toEqual([]);
+    expect(r.skipped).toEqual(await night(20_000, NOW));
+  }, 60_000);
+
   it("logs each skipped id with its reason", async () => {
     await seed(ids(6));
     const lines = captureLogs();

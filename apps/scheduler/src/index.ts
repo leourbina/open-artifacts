@@ -342,6 +342,9 @@ export async function runNightly(
       try {
         const left = start + deadlineMs - Date.now();
         if (left < recheckFloorMs) {
+          // Stop here: the rest is skipped after the run, not one by one
+          // through pump (which would recurse once per install).
+          stopped ??= "deadline";
           decide(() => skip(id, "deadline"));
           return;
         }
