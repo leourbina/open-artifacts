@@ -170,6 +170,7 @@ describe("createOpener", () => {
     const assign = vi.fn();
     const open = vi.fn();
     const ask = vi.fn();
+    const refuse = vi.fn();
     const limit = createLimiter(now);
     const openLink = createOpener({
       origin: O,
@@ -178,6 +179,7 @@ describe("createOpener", () => {
       assign,
       open,
       ask,
+      refuse,
       limit,
       embed: () => o.embed ?? false,
       active: () => o.active ?? true,
@@ -188,6 +190,7 @@ describe("createOpener", () => {
       assign,
       open,
       ask,
+      refuse,
       limit,
       tick: (ms: number) => (t += ms),
     };
@@ -212,7 +215,7 @@ describe("createOpener", () => {
   });
 
   it("refuses javascript:, data:, credentials and junk silently, without spending the limit", () => {
-    const { openLink, assign, ask } = setup();
+    const { openLink, assign, ask, refuse } = setup();
     for (const u of [
       "javascript:alert(1)",
       "data:text/html,x",
@@ -222,6 +225,7 @@ describe("createOpener", () => {
       openLink(u);
     expect(assign).not.toHaveBeenCalled();
     expect(ask).not.toHaveBeenCalled();
+    expect(refuse).not.toHaveBeenCalled();
     openLink("https://other.example/");
     expect(assign).toHaveBeenCalledTimes(1);
   });
@@ -246,14 +250,20 @@ describe("createOpener", () => {
     "https://app.test/a/B/edit",
     "https://content.test/c/token/B/v1/__view",
     "https://content.test/p/B/v1/index.html",
-  ])("refuses the app's or content host's %s (not a viewer path)", (u) => {
-    const { openLink, go, assign, ask, open } = setup({ active: false });
-    openLink(u);
-    expect(go).not.toHaveBeenCalled();
-    expect(assign).not.toHaveBeenCalled();
-    expect(ask).not.toHaveBeenCalled();
-    expect(open).not.toHaveBeenCalled();
-  });
+  ])(
+    "refuses the app's or content host's %s (not a viewer path), and says why",
+    (u) => {
+      const { openLink, go, assign, ask, open, refuse } = setup({
+        active: false,
+      });
+      openLink(u);
+      expect(go).not.toHaveBeenCalled();
+      expect(assign).not.toHaveBeenCalled();
+      expect(ask).not.toHaveBeenCalled();
+      expect(open).not.toHaveBeenCalled();
+      expect(refuse).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it.each([
     "http://app.test/oauth/authorize?client_id=evil",
@@ -268,14 +278,35 @@ describe("createOpener", () => {
   ])(
     "refuses %s: the app's or content host, whatever the scheme or port",
     (u) => {
-      const { openLink, go, assign, ask, open } = setup({ active: true });
+      const { openLink, go, assign, ask, open, refuse } = setup({
+        active: true,
+      });
       openLink(u);
       expect(go).not.toHaveBeenCalled();
       expect(assign).not.toHaveBeenCalled();
       expect(ask).not.toHaveBeenCalled();
       expect(open).not.toHaveBeenCalled();
+      expect(refuse).toHaveBeenCalledTimes(1);
     },
   );
+
+  it("the refusal note shares the prompt lock and the limit", () => {
+    const { openLink, ask, refuse, tick } = setup({ active: false });
+    openLink("https://app.test/settings");
+    tick(1000);
+    // While the note shows, nothing else asks or notes.
+    openLink("https://other.example/x");
+    openLink("https://app.test/invite/a");
+    expect(ask).not.toHaveBeenCalled();
+    expect(refuse).toHaveBeenCalledTimes(1);
+    (refuse.mock.calls[0] as [() => void])[0]();
+    openLink("https://other.example/x");
+    expect(ask).toHaveBeenCalledTimes(1);
+    // A second refusal within 1 s of the last request isn't noted.
+    (ask.mock.calls[0] as [URL, () => void, () => void])[2]();
+    openLink("https://app.test/settings");
+    expect(refuse).toHaveBeenCalledTimes(1);
+  });
 
   it("a viewer path on the app host, any scheme or port, routes in place", () => {
     const { openLink, go, tick } = setup();

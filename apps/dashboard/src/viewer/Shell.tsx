@@ -1,5 +1,5 @@
 import { type ArtifactSummary, type Me, viewerPath } from "@oa/shared";
-import { Button } from "@oa/ui";
+import { Button } from "@oa/ui/shadcn";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
   type ReactNode,
@@ -79,9 +79,20 @@ const askToOpen = (u: URL, open: () => void, done: () => void) =>
     },
     onClose: done,
   });
+/** A link to an app page (or another artifact's content) was blocked in place. */
+const noteRefused = (done: () => void) =>
+  toast({
+    id: "oa-open-link",
+    title: "Artifacts can't open app pages.",
+    description: "Use the sidebar to get there.",
+    tone: "neutral",
+    duration: 5_000,
+    onClose: done,
+  });
 const onArtifactOpen = createOpener({
   go: (p) => artifactNav.go(p),
   ask: askToOpen,
+  refuse: noteRefused,
   limit: navLimit,
   contentOrigin: () => artifactNav.contentOrigin,
 });
@@ -95,7 +106,11 @@ function ErrorPanel({ onRetry }: { onRetry?: () => void }) {
       <section className="oa-panel">
         <h1>Couldn't load this artifact</h1>
         <p>Something went wrong. Try again in a moment.</p>
-        {onRetry && <Button onClick={onRetry}>Retry</Button>}
+        {onRetry && (
+          <Button variant="outline" onClick={onRetry}>
+            Retry
+          </Button>
+        )}
       </section>
     </div>
   );
