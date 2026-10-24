@@ -194,6 +194,15 @@ const ids = (n: number, state: State = "active") =>
 
 const realSleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Tonight's call order for ids(n), as runNightly will use it. */
+const night = (n: number, now: number) =>
+  nightOrder(
+    ids(n).map((x) => x.id),
+    now,
+  );
+/** The install id of a script name (oa-s-<id>). */
+const idIn = (script: string) => script.slice("oa-s-".length);
+
 describe("runNightly", () => {
   it("runs every active install and skips creating, upgrading and deleting ones", async () => {
     const states: State[] = [
@@ -266,7 +275,7 @@ describe("runNightly", () => {
       (s) => results[Number.parseInt(s.slice(-11), 36)] as Behavior,
     );
     const r = await runNightly(f.env, NOW);
-    expect(r.ok).toEqual([idOf(0), idOf(3)]);
+    expect([...r.ok].sort()).toEqual([idOf(0), idOf(3)]);
     expect([...r.failed].sort((a, b) => a.id.localeCompare(b.id))).toEqual([
       { id: idOf(1), reason: "exception" },
       { id: idOf(2), reason: "canceled" },
@@ -314,6 +323,7 @@ describe("runNightly", () => {
 
   it("a timed-out call keeps its lane until it settles: never-settling installs can't over-subscribe", async () => {
     await seed(ids(10));
+    const o = await night(10, NOW);
     const f = fakes("staging", () => "hang");
     const r = await runNightly(f.env, NOW, {
       concurrency: 3,
@@ -324,10 +334,10 @@ describe("runNightly", () => {
     expect(f.calls).toHaveLength(3);
     expect(f.max()).toBe(3);
     expect(r.failed).toEqual(
-      [0, 1, 2].map((n) => ({ id: idOf(n), reason: "timeout" })),
+      o.slice(0, 3).map((id) => ({ id, reason: "timeout" })),
     );
     expect(r.ok).toEqual([]);
-    expect(r.skipped).toEqual([3, 4, 5, 6, 7, 8, 9].map(idOf));
+    expect(r.skipped).toEqual(o.slice(3));
   });
 
   it("timed-out calls still count against the cap while the others run", async () => {
@@ -335,7 +345,7 @@ describe("runNightly", () => {
     const f = fakes("staging", (s) => (n36(s) < 2 ? "hang" : "ok"), 5);
     const r = await runNightly(f.env, NOW, { concurrency: 3, timeoutMs: 20 });
     expect(f.max()).toBe(3);
-    expect(r.failed).toEqual([
+    expect([...r.failed].sort((a, b) => a.id.localeCompare(b.id))).toEqual([
       { id: idOf(0), reason: "timeout" },
       { id: idOf(1), reason: "timeout" },
     ]);
@@ -423,32 +433,32 @@ describe("runNightly", () => {
 
   it("re-checks each install right before its call: one that left active or took a lease is skipped", async () => {
     await seed(ids(5));
+    const o = await night(5, NOW);
+    // During the first call, the next three in tonight's order change.
     const flipped = async (script: string) => {
-      if (script !== `oa-s-${idOf(0)}`) return;
+      if (idIn(script) !== o[0]) return;
       await db
         .prepare("UPDATE installs SET state = 'upgrading' WHERE id = ?")
-        .bind(idOf(1))
+        .bind(o[1])
         .run();
       await db
         .prepare("UPDATE installs SET state = 'deleting' WHERE id = ?")
-        .bind(idOf(2))
+        .bind(o[2])
         .run();
       await db
         .prepare("UPDATE installs SET lease_until = ? WHERE id = ?")
-        .bind(Date.now() + 60_000, idOf(3))
+        .bind(Date.now() + 60_000, o[3])
         .run();
     };
     const lines = captureLogs();
     const f = fakes("staging", () => "ok", 0, flipped);
     const r = await runNightly(f.env, NOW, { concurrency: 1 });
-    expect(r.ok).toEqual([idOf(0), idOf(4)]);
+    expect(r.ok).toEqual([o[0], o[4]]);
     expect(r.failed).toEqual([]);
-    expect(r.skipped).toEqual([idOf(1), idOf(2), idOf(3)]);
-    expect(f.calls.map((c) => c.script)).toEqual(
-      [0, 4].map((n) => `oa-s-${idOf(n)}`),
-    );
+    expect(r.skipped).toEqual([o[1], o[2], o[3]]);
+    expect(f.calls.map((c) => idIn(c.script))).toEqual([o[0], o[4]]);
     expect(lines).toEqual(
-      [1, 2, 3].map((n) => `nightly skipped state ${idOf(n)}`),
+      [1, 2, 3].map((k) => `nightly skipped state ${o[k]}`),
     );
   });
 
@@ -483,7 +493,7 @@ describe("runNightly", () => {
     expect(r.failed).toEqual([]);
     expect(r.ok.length).toBeGreaterThanOrEqual(1);
     expect(r.skipped.length).toBeGreaterThanOrEqual(5);
-    expect([...r.ok, ...r.skipped]).toEqual(ids(10).map((x) => x.id));
+    expect([...r.ok, ...r.skipped]).toEqual(await night(10, NOW));
     expect(f.calls).toHaveLength(r.ok.length);
   });
 
@@ -501,14 +511,14 @@ describe("runNightly", () => {
   it("six hanging installs at the head no longer starve the rest: a stuck call frees its lane after leakMs and counts as leaked", async () => {
     await seed(ids(26));
     const lines = captureLogs();
-    // Day 0: the rotation starts at the head, where the six hang.
-    const f = fakes("staging", (s) => (n36(s) < 6 ? "hang" : "ok"));
+    // The first six in tonight's order hang.
+    const head = (await night(26, 0)).slice(0, 6);
+    const f = fakes("staging", (s) => (head.includes(idIn(s)) ? "hang" : "ok"));
     const r = await runNightly(f.env, 0, {
       timeoutMs: 20,
       leakMs: 30,
       deadlineMs: 5_000,
     });
-    const head = [0, 1, 2, 3, 4, 5].map(idOf);
     expect(r.ok).toHaveLength(20);
     expect(r.skipped).toEqual([]);
     expect(r.failed).toEqual(head.map((id) => ({ id, reason: "timeout" })));
@@ -518,7 +528,12 @@ describe("runNightly", () => {
 
   it("within leakMs a stuck call still holds its lane (the cap holds)", async () => {
     await seed(ids(8));
-    const f = fakes("staging", (s) => (n36(s) < 2 ? "hang" : "ok"), 5);
+    const head = (await night(8, 0)).slice(0, 2);
+    const f = fakes(
+      "staging",
+      (s) => (head.includes(idIn(s)) ? "hang" : "ok"),
+      5,
+    );
     const r = await runNightly(f.env, 0, {
       concurrency: 2,
       timeoutMs: 20,
@@ -526,9 +541,9 @@ describe("runNightly", () => {
     });
     expect(r.ok).toHaveLength(6);
     // Nothing else started until the two stuck calls were given up as leaked.
-    const firstOk = f.calls.findIndex((c) => n36(c.script) >= 2);
+    const firstOk = f.calls.findIndex((c) => !head.includes(idIn(c.script)));
     expect(firstOk).toBe(2);
-    expect(r.leaked).toEqual([idOf(0), idOf(1)]);
+    expect(r.leaked).toEqual(head);
   });
 
   it("caps unsettled calls (in-lane plus leaked) at 2 × concurrency", async () => {
@@ -585,48 +600,48 @@ describe("runNightly", () => {
     const lines = captureLogs();
     const f = fakes();
     const env = { ...f.env, PLATFORM_DB: recheckDb(() => "stall") } as Env;
+    const o = await night(10, 0);
     const t0 = Date.now();
     const r = await nightly(env, 0, { concurrency: 1, recheckMs: 20 });
     expect(Date.now() - t0).toBeLessThan(2_000);
     expect(f.calls).toEqual([]);
     expect(r.dbErrors).toEqual([]);
-    expect(r.skipped).toEqual(ids(10).map((x) => x.id));
+    expect(r.skipped).toEqual(o);
     expect(lines.filter((l) => l.startsWith("nightly skipped"))).toEqual([
-      ...[0, 1, 2].map((n) => `nightly skipped recheck ${idOf(n)}`),
-      ...[3, 4, 5, 6, 7, 8, 9].map(
-        (n) => `nightly skipped db_error ${idOf(n)}`,
-      ),
+      ...o.slice(0, 3).map((id) => `nightly skipped recheck ${id}`),
+      ...o.slice(3).map((id) => `nightly skipped db_error ${id}`),
     ]);
   });
 
   it("a mix of stalls and D1 errors in a row trips the stop", async () => {
     await seed(ids(6));
+    const o = await night(6, 0);
     const f = fakes();
     const by: Record<string, "stall" | "throw"> = {
-      [idOf(0)]: "stall",
-      [idOf(1)]: "throw",
-      [idOf(2)]: "stall",
+      [o[0] as string]: "stall",
+      [o[1] as string]: "throw",
+      [o[2] as string]: "stall",
     };
     const env = {
       ...f.env,
       PLATFORM_DB: recheckDb((id) => by[id] ?? "ok"),
     } as Env;
     const r = await runNightly(env, 0, { concurrency: 1, recheckMs: 20 });
-    expect(r.dbErrors).toEqual([idOf(1)]);
-    expect(r.skipped).toEqual([0, 2, 3, 4, 5].map(idOf));
+    expect(r.dbErrors).toEqual([o[1]]);
+    expect(r.skipped).toEqual([o[0], o[2], ...o.slice(3)]);
     expect(f.calls).toEqual([]);
   });
 
-  it("rotates the start by UTC day, over the stable id order", async () => {
+  it("calls installs in nightOrder's order, which moves each UTC day", async () => {
     await seed(ids(5));
     const order = async (day: number) => {
       const f = fakes();
       await runNightly(f.env, day * DAY + 3_600_000, { concurrency: 1 });
-      return f.calls.map((c) => n36(c.script));
+      return f.calls.map((c) => idIn(c.script));
     };
-    expect(await order(0)).toEqual([0, 1, 2, 3, 4]);
-    expect(await order(1)).toEqual([1, 2, 3, 4, 0]);
-    expect(await order(7)).toEqual([2, 3, 4, 0, 1]);
+    for (const day of [0, 1, 7])
+      expect(await order(day)).toEqual(await night(5, day * DAY));
+    expect(await order(1)).not.toEqual(await order(0));
   });
 
   it("a different day gives a starved tail its turn", async () => {
@@ -693,9 +708,10 @@ describe("runNightly", () => {
     const lines = captureLogs();
     const f = fakes();
     const env = { ...f.env, PLATFORM_DB: recheckDb(() => "throw") } as Env;
+    const o = await night(10, 0);
     const r = await nightly(env, 0, { concurrency: 1 });
-    expect(r.dbErrors).toEqual([0, 1, 2].map(idOf));
-    expect(r.skipped).toEqual([3, 4, 5, 6, 7, 8, 9].map(idOf));
+    expect(r.dbErrors).toEqual(o.slice(0, 3));
+    expect(r.skipped).toEqual(o.slice(3));
     expect(f.calls).toEqual([]);
     expect(lines.at(-1)).toBe(
       "nightly summary active=10 ok=0 failed=0 skipped=7 db_errors=3 leaked=0",
@@ -705,15 +721,16 @@ describe("runNightly", () => {
 
   it("a successful re-check resets the db_error streak", async () => {
     await seed(ids(7));
+    const o = await night(7, 0);
     const f = fakes();
-    const bad = new Set([0, 1, 3, 4, 6].map(idOf));
+    const bad = new Set([0, 1, 3, 4, 6].map((k) => o[k] as string));
     const env = {
       ...f.env,
       PLATFORM_DB: recheckDb((id) => (bad.has(id) ? "throw" : "ok")),
     } as Env;
     const r = await runNightly(env, 0, { concurrency: 1 });
     expect(r.dbErrors).toEqual([...bad]);
-    expect(r.ok).toEqual([idOf(2), idOf(5)]);
+    expect(r.ok).toEqual([o[2], o[5]]);
     expect(r.skipped).toEqual([]);
   });
 

@@ -145,6 +145,40 @@ function positive(name: string, v: number, integer: boolean): number {
   return v;
 }
 
+const hex = (b: ArrayBuffer) =>
+  [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, "0")).join("");
+
+/**
+ * Tonight's call order, stateless: a fixed cycle (ids sorted by sha256(id),
+ * tie-break on id) entered at (UTC day number × round(0.382 × N)) mod N. The
+ * golden-ratio stride moves the uncovered tail of a short run on by more than
+ * its width, so a run that covers 190 of 300 never skips an id two nights
+ * running, and one that covers 100 of 300 skips an id at most 4 nights
+ * running (measured; docs/ops/hosted.md). Independent daily shuffles can't
+ * bound that.
+ */
+export async function nightOrder(
+  ids: string[],
+  now: number,
+): Promise<string[]> {
+  const keyed = await Promise.all(
+    ids.map(async (id) => ({
+      id,
+      h: hex(
+        await crypto.subtle.digest("SHA-256", new TextEncoder().encode(id)),
+      ),
+    })),
+  );
+  keyed.sort((a, b) =>
+    a.h < b.h ? -1 : a.h > b.h ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+  );
+  const cycle = keyed.map((k) => k.id);
+  const n = cycle.length;
+  if (n === 0) return cycle;
+  const off = (Math.floor(now / DAY_MS) * Math.round(0.382 * n)) % n;
+  return [...cycle.slice(off), ...cycle.slice(0, off)];
+}
+
 const logFailed = (reason: Reason, id: string) =>
   console.error("nightly failed", reason, id);
 
@@ -164,12 +198,13 @@ function within<T>(p: Promise<T>, ms: number): Promise<T> {
 /**
  * Calls scheduled() on every `active` install's script, re-checking right
  * before each call (within recheckMs and the deadline) that it is still
- * active with no live lease. The start rotates by UTC day over the stable id
- * order, so a slow head doesn't starve the same tail every night. At most
+ * active with no live lease. The order is nightOrder's, so a short run
+ * doesn't starve the same tail night after night. At most
  * `concurrency` lanes are held; a call is reported `timeout` after
  * `timeoutMs` but keeps its lane until it settles, or for `leakMs` more, when
  * the lane is given back and the call counted as leaked. No call starts after
- * `deadlineMs`, or after 3 consecutive re-check D1 errors. One install
+ * `deadlineMs`, or after 3 consecutive re-check D1 errors or stalls. At most
+ * 2 × `concurrency` calls are unsettled (in a lane or leaked). One install
  * throwing or timing out never stops the others. Every failure, skip, D1
  * error and leak is logged when it happens, ids and fixed categories only.
  */
@@ -201,9 +236,8 @@ export async function runNightly(
   if (invalid > 0) console.warn("nightly invalid", `ids=${invalid}`);
   if (valid.length > SCALE_WARN)
     console.warn("nightly scale", `active=${valid.length} over ${SCALE_WARN}`);
-  // Rotate by UTC day: tonight's tail is near the head on a later night.
-  const off = valid.length > 0 ? Math.floor(now / DAY_MS) % valid.length : 0;
-  const ids = [...valid.slice(off), ...valid.slice(0, off)];
+  // Tonight's tail is near the head on a later night (nightOrder).
+  const ids = await nightOrder(valid, now);
 
   const ok: string[] = [];
   const failed: NightlyResult["failed"] = [];
