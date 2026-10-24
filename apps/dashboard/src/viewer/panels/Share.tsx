@@ -437,17 +437,21 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
           <div className="oa-cap" key={k}>
             <LabelledCheckbox
               id={`oa-cap-${k}`}
+              describedBy={`oa-cap-${k}-hint`}
               label={label}
               checked={artifact.capabilities[k]}
               disabled={!vis || patch.isPending}
               onCheckedChange={(on) => setCap(k, on)}
             />
-            <small className="oa-muted">{hint}</small>
+            <small id={`oa-cap-${k}-hint`} className="oa-muted">
+              {hint}
+            </small>
           </div>
         ))}
         <div className="oa-cap">
           <LabelledCheckbox
             id="oa-cap-anon"
+            describedBy="oa-cap-anon-hint"
             label="Allow anonymous writes"
             checked={artifact.allowAnonymousWrites}
             disabled={
@@ -458,7 +462,9 @@ export function Share({ artifact }: { artifact: ArtifactSummary }) {
             }
             onCheckedChange={(on) => save({ allowAnonymousWrites: on })}
           />
-          <small className="oa-muted">Public and database only.</small>
+          <small id="oa-cap-anon-hint" className="oa-muted">
+            Public and database only.
+          </small>
         </div>
       </section>
 

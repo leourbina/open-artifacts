@@ -7,12 +7,15 @@ export function LabelledCheckbox({
   label,
   checked,
   disabled,
+  describedBy,
   onCheckedChange,
 }: {
   id: string;
   label: string;
   checked: boolean;
   disabled?: boolean;
+  /** The id of a hint that explains it (and why it's off, when disabled). */
+  describedBy?: string;
   onCheckedChange: (checked: boolean) => void;
 }) {
   return (
@@ -21,6 +24,7 @@ export function LabelledCheckbox({
         id={id}
         checked={checked}
         disabled={disabled}
+        aria-describedby={describedBy}
         onCheckedChange={(on) => onCheckedChange(on === true)}
       />
       <Label

@@ -19,6 +19,25 @@ it("is named by its label, and clicking the label toggles it", () => {
   expect(on).toHaveBeenCalledWith(true);
 });
 
+it("is described by its hint when one is given", () => {
+  render(
+    <>
+      <LabelledCheckbox
+        id="z"
+        label="Allow anonymous writes"
+        checked={false}
+        disabled
+        describedBy="z-hint"
+        onCheckedChange={vi.fn()}
+      />
+      <small id="z-hint">Public and database only.</small>
+    </>,
+  );
+  expect(
+    screen.getByRole("checkbox", { name: "Allow anonymous writes" }),
+  ).toHaveAccessibleDescription("Public and database only.");
+});
+
 it("disabled, it can't change", () => {
   const on = vi.fn();
   render(
