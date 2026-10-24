@@ -37,7 +37,7 @@ export function Notice({
       {icon}
       {title && <AlertTitle>{title}</AlertTitle>}
       {children && (
-        <AlertDescription className="w-full justify-self-stretch">
+        <AlertDescription className="w-full justify-self-stretch *:justify-self-stretch">
           {children}
         </AlertDescription>
       )}
