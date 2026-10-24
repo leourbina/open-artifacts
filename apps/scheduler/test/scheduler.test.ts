@@ -530,6 +530,92 @@ describe("runNightly", () => {
     expect(r.leaked).toEqual([idOf(0), idOf(1)]);
   });
 
+  it("caps unsettled calls (in-lane plus leaked) at 2 × concurrency", async () => {
+    await seed(ids(30));
+    captureLogs();
+    const f = fakes("staging", () => "hang");
+    const r = await runNightly(f.env, 0, {
+      timeoutMs: 10,
+      leakMs: 10,
+      deadlineMs: 400,
+    });
+    // Every call hangs, so each one stays unsettled: the fake's max in flight
+    // is the number of unsettled calls the scheduler ever allowed.
+    expect(f.max()).toBe(12);
+    expect(f.calls).toHaveLength(12);
+    expect(r.failed).toHaveLength(12);
+    expect(r.leaked).toHaveLength(12);
+    expect(r.skipped).toHaveLength(18);
+  });
+
+  it("caps unsettled calls at 2 × a custom concurrency, and resumes when one settles", async () => {
+    await seed(ids(10));
+    captureLogs();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let n = 0;
+    const f = fakes(
+      "staging",
+      () => "ok",
+      0,
+      async () => {
+        // The first four calls wait on the gate; the rest return at once.
+        if (n++ < 4) await gate;
+      },
+    );
+    const p = runNightly(f.env, 0, {
+      concurrency: 2,
+      timeoutMs: 10,
+      leakMs: 10,
+    });
+    await realSleep(150);
+    expect(f.calls).toHaveLength(4);
+    release();
+    const r = await p;
+    expect(f.max()).toBeLessThanOrEqual(4);
+    expect(r.skipped).toEqual([]);
+    expect(f.calls).toHaveLength(10);
+  });
+
+  it("a hanging platform D1: stalled re-checks count toward the stop like db_errors", async () => {
+    await seed(ids(10));
+    const lines = captureLogs();
+    const f = fakes();
+    const env = { ...f.env, PLATFORM_DB: recheckDb(() => "stall") } as Env;
+    const t0 = Date.now();
+    const r = await nightly(env, 0, { concurrency: 1, recheckMs: 20 });
+    expect(Date.now() - t0).toBeLessThan(2_000);
+    expect(f.calls).toEqual([]);
+    expect(r.dbErrors).toEqual([]);
+    expect(r.skipped).toEqual(ids(10).map((x) => x.id));
+    expect(lines.filter((l) => l.startsWith("nightly skipped"))).toEqual([
+      ...[0, 1, 2].map((n) => `nightly skipped recheck ${idOf(n)}`),
+      ...[3, 4, 5, 6, 7, 8, 9].map(
+        (n) => `nightly skipped db_error ${idOf(n)}`,
+      ),
+    ]);
+  });
+
+  it("a mix of stalls and D1 errors in a row trips the stop", async () => {
+    await seed(ids(6));
+    const f = fakes();
+    const by: Record<string, "stall" | "throw"> = {
+      [idOf(0)]: "stall",
+      [idOf(1)]: "throw",
+      [idOf(2)]: "stall",
+    };
+    const env = {
+      ...f.env,
+      PLATFORM_DB: recheckDb((id) => by[id] ?? "ok"),
+    } as Env;
+    const r = await runNightly(env, 0, { concurrency: 1, recheckMs: 20 });
+    expect(r.dbErrors).toEqual([idOf(1)]);
+    expect(r.skipped).toEqual([0, 2, 3, 4, 5].map(idOf));
+    expect(f.calls).toEqual([]);
+  });
+
   it("rotates the start by UTC day, over the stable id order", async () => {
     await seed(ids(5));
     const order = async (day: number) => {
