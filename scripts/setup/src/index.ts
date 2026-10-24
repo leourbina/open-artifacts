@@ -6,6 +6,7 @@ import { type Deps, makeApi, makeWrangler, realDeps, realFs } from "./cf.ts";
 import { hostPairProblem } from "./hosts.ts";
 import { readOnlyDeps } from "./readonly.ts";
 import { rollbackCommand } from "./rollback.ts";
+import { parseSigninFlags, SIGNIN } from "./signin.ts";
 import { readState, type State, statePath, writeState } from "./state.ts";
 import { type Ctx, NeedInput, type Opts, type Step } from "./step.ts";
 import { access } from "./steps/access.ts";
@@ -117,6 +118,9 @@ async function resolve(
       "yes-paid": { type: "boolean", default: false },
       plan: { type: "string" },
       var: { type: "string", multiple: true },
+      ...Object.fromEntries(
+        Object.values(SIGNIN).map((f) => [f, { type: "string" as const }]),
+      ),
       // Handled before resolve() by tokenCommand (src/token-page.ts).
       "token-links": { type: "boolean", default: false },
       "token-page": { type: "boolean", default: false },
@@ -222,6 +226,7 @@ async function resolve(
     yesPaid: v["yes-paid"],
     planFlag: v.plan,
     varFlags: parseVarFlags(v.var),
+    signinFlags: parseSigninFlags(v),
     planVar: "free",
     yes: v.yes || v.ci,
     upgrade: v.upgrade,
@@ -390,6 +395,21 @@ export const HELP = `Usage: pnpm oa:setup [options]
                 saved in state wins over a dashboard edit; the dashboard value is kept
                 (noted "kept live") only when setup has none. Invalid saved or live
                 values are ignored with a note. --check/--json report data.vars.
+  --auth-providers <list>  --auth-domains <list>  --auth-domain-join invite|member
+  --google-client-id <id>  --turnstile-site-key <key>
+                Direct sign-in (docs/self-hosting/direct-sign-in.md): the Worker vars
+                AUTH_PROVIDERS (access, google, email), AUTH_DOMAINS, AUTH_DOMAIN_JOIN,
+                GOOGLE_CLIENT_ID and TURNSTILE_SITE_KEY. Without a flag a deploy keeps
+                the live Worker's value (an --upgrade in CI included); a flag replaces
+                it, and an empty value (--auth-domains "") clears it, so the server
+                default applies. --auth-providers access switches back to Access only.
+                Refused before deploying: an unknown provider, a malformed domain, a
+                join other than invite or member, or google without both
+                GOOGLE_CLIENT_ID and AUTH_DOMAINS. A missing GOOGLE_CLIENT_SECRET
+                secret only warns. When the live Worker can't be read, the values
+                saved by the last deploy stand in; with none saved, --upgrade stops
+                (action_required) until each flag is passed, and a full setup warns.
+                --check reports data.signin.
   --token-links [--json]  Print each Cloudflare token setup needs (deploy, access,
                 analytics) with its permissions and a link that pre-fills the
                 dashboard form; account and zone come from --account-id/--app-host
