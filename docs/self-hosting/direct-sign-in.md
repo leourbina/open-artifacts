@@ -53,7 +53,7 @@ Direct sign-in keys everything it signs from `SESSION_SECRET`: one key per purpo
 
 - **Use at least 32 characters.** Setup generates a random one. To make your own: `openssl rand -base64 32`.
 - **Emailed codes need it.** With a shorter secret, code requests answer 503 `code_unavailable`.
-- **Shorter, older secrets (legacy).** Session and sign-in cookies keep working, signed with the raw secret as before, so nobody is signed out. Nothing reports a short secret (`/healthz` doesn't), so check its length yourself and rotate it soon.
+- **Shorter, older secrets (legacy).** Session and sign-in cookies keep working, signed with the raw secret as before, so nobody is signed out. `/healthz` then reports `SESSION_SECRET shorter than 32 characters; rotate it`. Rotate it soon.
 - **Cookies from before the per-purpose keys** (signed with the raw secret) are still accepted until 1 December 2026. After that date they are refused, and anyone still holding one signs in again once.
 - **Rotating it** signs everyone out and invalidates every pending code.
 
