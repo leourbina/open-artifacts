@@ -18,20 +18,29 @@ export type Swapped = LiveUpdate & { prev: number };
 /** Deleted (final), or no longer readable by this viewer. */
 export type Gone = "deleted" | "unavailable";
 /** What the shell knows about the frame it shows, since that frame's load. */
-export type FrameState = { hello: boolean; touched: boolean };
+export type FrameState = {
+  hello: boolean;
+  touched: boolean;
+  /** Text selected or a field focused in the frame, right now. */
+  engaged: boolean;
+};
 
 /**
- * Design's safe-swap rule (option B): swap only when the viewer follows
- * Current, the frame's runtime said hello, the viewer hasn't touched the
- * frame since it loaded, and no menu, panel or dialog is open. Anything
- * unknown is unsafe, which shows the chip instead.
+ * Design's safe-swap rule (option B, revised by C): swap only when the viewer
+ * follows Current, the frame's runtime said hello, the viewer hasn't touched
+ * the frame since it loaded (a click, key or input; scrolling doesn't count),
+ * nothing is selected or focused for typing in it right now, and no menu or
+ * dialog is open (the side panel doesn't count). Anything
+ * unknown is unsafe, which shows the chip instead. A swap keeps the scroll
+ * position.
  */
 export const isSafeSwap = (s: {
   following: boolean;
   hello: boolean;
   touched: boolean;
+  engaged: boolean;
   chromeOpen: boolean;
-}) => s.following && s.hello && !s.touched && !s.chromeOpen;
+}) => s.following && s.hello && !s.touched && !s.engaged && !s.chromeOpen;
 
 /** Design's announcements (one polite status region in the top document). */
 export const say = {
@@ -109,7 +118,7 @@ export function useLiveVersions(o: {
   embed: boolean;
   /** The shown frame's state, read when a decision is made. */
   frame: () => FrameState;
-  /** A menu, the side panel or a dialog is open. */
+  /** A menu or dialog is open (not the side panel). */
   chromeOpen: () => boolean;
 }) {
   const { id, embed } = o;

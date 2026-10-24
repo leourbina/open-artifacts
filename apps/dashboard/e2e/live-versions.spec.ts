@@ -106,11 +106,11 @@ for (const width of [1280, 390])
         await expect(
           page.getByRole("button", { name: `Version: v${v} · Current` }),
         ).toBeVisible();
-        await expect(
-          page.getByRole("button", {
-            name: `Undo, go back to version ${v - 1}`,
-          }),
-        ).toBeVisible();
+        // Design (option C): a brief "Updated to vN", no Undo, gone in about 3 s.
+        await expect(page.getByRole("button", { name: /^Undo/ })).toHaveCount(
+          0,
+        );
+        await expect(note).toHaveCount(0, { timeout: 5_000 });
         await expect(page.locator("iframe.oa-vframe")).toHaveCount(1);
         const after = await page
           .locator("iframe.oa-vframe")

@@ -77,3 +77,128 @@ test("touched (typed in the frame): the chip, and the typing survives", async ({
   await expect(page.locator("iframe.oa-vframe")).toHaveCount(1);
   await expect(artifactFrame(page).locator("#v")).toHaveText("version 2");
 });
+
+// Option C: scrolling and the side panel no longer hold a live version back,
+// and the swap keeps the reader's place. A click still shows the chip.
+const LONG = (n: number) =>
+  `<!doctype html><h1 id="v">version ${n}</h1>${Array.from(
+    { length: 200 },
+    (_, i) => `<p id="p${i}">paragraph ${i} of version ${n}</p>`,
+  ).join("")}`;
+const publishLong = (pat: string, id: string, n: number) =>
+  fetch(`${APP}${R.versions(id)}`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${pat}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ id, format: "html", content: LONG(n) }),
+  }).then((r) => {
+    expect(r.ok).toBe(true);
+  });
+const frameScroll = (page: import("@playwright/test").Page) =>
+  artifactFrame(page)
+    .locator("body")
+    .evaluate(() => Math.round(window.scrollY));
+
+test("scrolled, then a new version: it swaps and keeps the place", async ({
+  page,
+  member,
+}) => {
+  const { id } = await publishViaApi(member.pat, {
+    title: `Live ${uniq()}`,
+    format: "html",
+    content: LONG(1),
+  });
+  await page.goto(`/a/${id}`);
+  await expect(artifactFrame(page).locator("#v")).toHaveText("version 1");
+  await page.waitForTimeout(500);
+  const box = await page.locator("iframe.oa-vframe").boundingBox();
+  if (!box) throw new Error("no frame");
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, 1500);
+  await expect.poll(() => frameScroll(page)).toBeGreaterThan(1000);
+  const before = await frameScroll(page);
+  await page.waitForTimeout(400); // the throttled report reaches the shell
+  await publishLong(member.pat, id, 2);
+  await expect(page.getByText("Updated to v2")).toBeVisible({ timeout: 5_000 });
+  await expect(artifactFrame(page).locator("#p0")).toHaveText(
+    "paragraph 0 of version 2",
+  );
+  await expect.poll(() => frameScroll(page)).toBeGreaterThanOrEqual(before - 2);
+  expect(Math.abs((await frameScroll(page)) - before)).toBeLessThanOrEqual(2);
+  await expect(page.locator(".oa-lchip")).toHaveCount(0);
+});
+
+test("the side panel open: a new version still swaps", async ({
+  page,
+  member,
+}) => {
+  const { id } = await publishViaApi(member.pat, {
+    title: `Live ${uniq()}`,
+    format: "html",
+    content: LONG(1),
+  });
+  await page.goto(`/a/${id}?panel=open&tab=versions`);
+  await expect(artifactFrame(page).locator("#v")).toHaveText("version 1");
+  await page.waitForTimeout(500);
+  await publishLong(member.pat, id, 2);
+  await expect(page.getByText("Updated to v2")).toBeVisible({ timeout: 5_000 });
+  await expect(artifactFrame(page).locator("#v")).toHaveText("version 2");
+  await expect(
+    page.getByRole("complementary", { name: "Side panel" }),
+  ).toBeVisible();
+  // Design: a brief note, no Undo; about 3 s later the chip is back to normal.
+  await expect(page.getByRole("button", { name: /^Undo/ })).toHaveCount(0);
+  await expect(page.getByText("Updated to v2")).toHaveCount(0, {
+    timeout: 5_000,
+  });
+  await expect(
+    page.getByRole("button", { name: "Version: v2 · Current" }),
+  ).toBeVisible();
+});
+
+test("text selected in the frame: the chip, not a swap", async ({
+  page,
+  member,
+}) => {
+  const { id } = await publishViaApi(member.pat, {
+    title: `Live ${uniq()}`,
+    format: "html",
+    content: LONG(1),
+  });
+  await page.goto(`/a/${id}`);
+  await expect(artifactFrame(page).locator("#v")).toHaveText("version 1");
+  await page.waitForTimeout(500);
+  // A selection made without a click or key (the runtime reports it).
+  await artifactFrame(page)
+    .locator("#p2")
+    .evaluate((p) => {
+      const r = document.createRange();
+      r.selectNodeContents(p);
+      getSelection()?.addRange(r);
+    });
+  await page.waitForTimeout(300);
+  await publishLong(member.pat, id, 2);
+  await expect(page.locator(".oa-lchip")).toContainText("v2 available", {
+    timeout: 5_000,
+  });
+  await expect(artifactFrame(page).locator("#v")).toHaveText("version 1");
+});
+
+test("clicked inside: still the chip", async ({ page, member }) => {
+  const { id } = await publishViaApi(member.pat, {
+    title: `Live ${uniq()}`,
+    format: "html",
+    content: LONG(1),
+  });
+  await page.goto(`/a/${id}`);
+  await expect(artifactFrame(page).locator("#v")).toHaveText("version 1");
+  await page.waitForTimeout(500);
+  await artifactFrame(page).locator("#p3").click();
+  await publishLong(member.pat, id, 2);
+  await expect(page.locator(".oa-lchip")).toContainText("v2 available", {
+    timeout: 5_000,
+  });
+  await expect(artifactFrame(page).locator("#v")).toHaveText("version 1");
+});

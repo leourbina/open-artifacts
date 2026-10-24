@@ -87,12 +87,16 @@ describe("live versions: the safe swap", () => {
     expect(nonceOf(next)).not.toBe(nonceOf(first));
     fireEvent.load(next);
     expect(await screen.findByText("Updated to v3")).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Undo, go back to version 2" }),
-    ).toBeTruthy();
+    // Design (option C): a brief note, no Undo.
+    expect(screen.queryByRole("button", { name: /^Undo/ })).toBeNull();
     expect(
       screen.getByRole("button", { name: "Version: v3 · Current" }),
     ).toBeTruthy();
+    // About 3 s, then the chip is back to normal.
+    await waitFor(
+      () => expect(screen.queryByText("Updated to v3")).toBeNull(),
+      { timeout: 5_000 },
+    );
     await waitFor(() => expect(frames()).toEqual([next]));
     await waitFor(() =>
       expect(document.querySelector('[aria-live="polite"]')?.textContent).toBe(
@@ -149,12 +153,67 @@ describe("live versions: the safe swap", () => {
     ).toBeTruthy();
   });
 
-  it("an open side panel: the chip", async () => {
-    await open(`${viewerPath(OWNED)}?panel=open&tab=versions`);
+  it("the swapped-in frame scrolls to where the old one was", async () => {
+    const first = await open(viewerPath(OWNED));
+    // The shown frame reports its scroll position; scrolling isn't touching.
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: {
+            oa: 1,
+            type: "scroll",
+            top: 600,
+            max: 2000,
+            nonce: nonceOf(first),
+          },
+          origin: "null",
+          source: first.contentWindow,
+        }),
+      );
+    });
+    await publish();
+    const next = await frame(first);
+    fireEvent.load(next);
+    const sent = post(next, "hello");
+    await waitFor(() =>
+      expect(sent).toHaveBeenCalledWith(
+        { oa: 1, type: "scroll.to", top: 600, max: 2000 },
+        "*",
+      ),
+    );
+    expect(await screen.findByText("Updated to v3")).toBeTruthy();
+  });
+
+  it("text selected or a field focused in the frame: the chip", async () => {
+    const first = await open(viewerPath(OWNED));
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: {
+            oa: 1,
+            type: "engaged",
+            engaged: true,
+            nonce: nonceOf(first),
+          },
+          origin: "null",
+          source: first.contentWindow,
+        }),
+      );
+    });
     await publish();
     expect(
       await screen.findByRole("button", { name: "View version 3" }, LONG),
     ).toBeTruthy();
+    expect(frames()).toEqual([first]);
+  });
+
+  it("an open side panel doesn't block it: swaps", async () => {
+    const first = await open(`${viewerPath(OWNED)}?panel=open&tab=versions`);
+    await publish();
+    const next = await frame(first);
+    fireEvent.load(next);
+    expect(await screen.findByText("Updated to v3")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /View version/ })).toBeNull();
   });
 
   it("focus inside the frame (window blur): touched", async () => {
@@ -215,48 +274,18 @@ describe("live versions: restore", () => {
     await api("POST", R.restoreVersion(OWNED, 1));
     const next = await frame(first);
     fireEvent.load(next);
-    // Design: the pill says "Restored v1 · Undo"; the announcement says more.
+    // Design: the note says "Restored v1" (no Undo); the announcement says more.
     const pill = await screen.findAllByText("Restored v1");
-    expect(pill[0]?.closest(".oa-lchip")?.textContent).toContain("Undo");
+    expect(pill[0]?.closest(".oa-lchip")?.textContent).not.toContain("Undo");
     expect(screen.queryByText("Updated", { exact: true })).toBeNull();
     expect(
       screen.getByRole("button", { name: "Version: v3 · Current" }),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Undo, go back to version 2" }),
     ).toBeTruthy();
     await waitFor(() =>
       expect(document.querySelector('[aria-live="polite"]')?.textContent).toBe(
         "Restored v1 as v3.",
       ),
     );
-  });
-});
-
-describe("live versions: a chip stays until View", () => {
-  it("held while the side panel was open; closing it never auto-swaps that version", async () => {
-    const router = mount(`${viewerPath(OWNED)}?panel=open&tab=versions`);
-    const first = await frame();
-    fireEvent.load(first);
-    post(first, "hello");
-    await waitFor(() => expect(events.connections(OWNED)).toBe(1));
-    await publish();
-    await screen.findByRole("button", { name: "View version 3" }, LONG);
-    await act(() =>
-      router.navigate({
-        to: viewerPath(OWNED) as string,
-        search: { panel: "closed" } as never,
-      }),
-    );
-    await act(() => new Promise((r) => setTimeout(r, 1_200)));
-    expect(screen.getByRole("button", { name: "View version 3" })).toBeTruthy();
-    expect(frames()).toEqual([first]);
-    // A later version, now safe: it swaps (and the chip goes).
-    await publish();
-    const next = await frame(first);
-    fireEvent.load(next);
-    expect(await screen.findByText("Updated to v4")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /View version/ })).toBeNull();
   });
 });
 

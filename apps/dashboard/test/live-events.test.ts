@@ -170,6 +170,7 @@ describe("safe swap (Design's Spec for B)", () => {
     following: true,
     hello: true,
     touched: false,
+    engaged: false,
     chromeOpen: false,
   };
   it.each([
@@ -178,6 +179,7 @@ describe("safe swap (Design's Spec for B)", () => {
     [{ hello: false }, false],
     [{ touched: true }, false],
     [{ chromeOpen: true }, false],
+    [{ engaged: true }, false],
     [{ hello: false, touched: true }, false],
     [{ following: false, chromeOpen: true }, false],
   ])("%o → swap %s", (patch, swap) => {

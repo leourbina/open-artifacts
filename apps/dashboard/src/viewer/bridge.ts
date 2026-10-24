@@ -53,7 +53,14 @@ export interface BridgeOptions {
   onOpen?: (url: string) => void;
   /** The viewer first touched the artifact since this load (runtime `interacted`). */
   onInteracted?: () => void;
+  /** The document scrolled (runtime `scroll`, throttled). */
+  onScroll?: (pos: ScrollPos) => void;
+  /** Text selected or a field focused in the frame, or no longer. */
+  onEngaged?: (engaged: boolean) => void;
 }
+
+/** A document's scroll offset and how far it could scroll. */
+export type ScrollPos = { top: number; max: number };
 
 const BACKOFF_BASE_MS = 1_000;
 const BACKOFF_CAP_MS = 30_000;
@@ -448,6 +455,12 @@ export function createBridge(opts: BridgeOptions) {
       case "interacted":
         onInteracted?.();
         break;
+      case "scroll":
+        opts.onScroll?.({ top: m.top, max: m.max });
+        break;
+      case "engaged":
+        opts.onEngaged?.(m.engaged);
+        break;
     }
   };
 
@@ -484,6 +497,10 @@ export function createBridge(opts: BridgeOptions) {
     },
     setTheme(t: Theme) {
       reply({ oa: 1, type: "theme", theme: t });
+    },
+    /** After a live swap: scroll to the previous version's position. */
+    scrollTo(pos: ScrollPos) {
+      reply({ oa: 1, type: "scroll.to", top: pos.top, max: pos.max });
     },
   };
 }

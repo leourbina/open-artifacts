@@ -8,7 +8,8 @@ import { SM } from "./ui";
 import type { Gone, LiveUpdate, Swapped } from "./useLiveVersions";
 
 /** Swapped notes: dashboard and phone; /full. Paused while hovered or focused. */
-export const NOTE_MS = 8_000;
+/** "Updated to vN" after an auto-swap (Design, option C): brief, no Undo. */
+export const NOTE_MS = 3_000;
 export const FULL_NOTE_MS = 3_000;
 /** The /full pill shows widened this long on arrival, then collapses. */
 export const PILL_REVEAL_MS = 4_000;
@@ -96,33 +97,22 @@ const Copy = ({ long, short }: { long: string; short: string }) => (
 
 function SwappedChip({
   swapped,
-  onUndo,
   onExpire,
 }: {
   swapped: Swapped;
-  onUndo: () => void;
   onExpire: () => void;
 }) {
   const pause = usePausableTimer(NOTE_MS, onExpire);
   return (
     <span className="oa-lchip oa-lchip-done" {...pause}>
       <Copy {...swappedLabel(swapped)} />
-      <span className="oa-lchip-sep" aria-hidden="true" />
-      <button
-        type="button"
-        className="oa-lchip-undo oa-hit"
-        aria-label={`Undo, go back to version ${swapped.prev}`}
-        onClick={onUndo}
-      >
-        Undo
-      </button>
     </span>
   );
 }
 
 /**
  * The title bar's live slot, right after the version picker: held (vN
- * available · View), swapped (Updated to vN · Undo, for 8 s) or, on an
+ * available · View), swapped (Updated to vN, for about 3 s) or, on an
  * explicit older version, the quiet "Current is vN" hint.
  */
 export function TitleLive({
@@ -130,7 +120,6 @@ export function TitleLive({
   swapped,
   current,
   onView,
-  onUndo,
   onCurrent,
   onExpire,
 }: {
@@ -139,7 +128,6 @@ export function TitleLive({
   /** Set on a pinned older version: the current one. */
   current: number | null;
   onView: () => void;
-  onUndo: () => void;
   onCurrent: () => void;
   onExpire: () => void;
 }) {
@@ -164,7 +152,6 @@ export function TitleLive({
       <SwappedChip
         key={swapped.version}
         swapped={swapped}
-        onUndo={onUndo}
         onExpire={onExpire}
       />
     );

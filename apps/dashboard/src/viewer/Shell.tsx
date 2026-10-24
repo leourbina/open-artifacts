@@ -19,7 +19,7 @@ import { useCpuSignals } from "../layout/cpu";
 import { useDocumentTitle } from "../layout/useDocumentTitle";
 import { NotFound } from "../pages/NotFound";
 import { NotPublic } from "../pages/NotPublic";
-import { createBridge } from "./bridge";
+import { createBridge, type ScrollPos } from "./bridge";
 import { Crumbs } from "./Crumbs";
 import { FullScreenEscape } from "./FullScreenEscape";
 import { frameLoad, SANDBOX, safeContentUrl } from "./frame";
@@ -131,6 +131,8 @@ function Viewer({
   onFrame,
   onReady,
   onTouched,
+  onScroll,
+  restoreScroll,
   onAccessLost,
   onUndelete,
 }: {
@@ -145,6 +147,10 @@ function Viewer({
   onReady?: () => void;
   /** The viewer touched the frame (runtime `interacted`, or focus inside it). */
   onTouched?: () => void;
+  /** The shown frame scrolled. */
+  onScroll?: (pos: ScrollPos) => void;
+  /** A live swap's new frame: where to scroll once it says hello. */
+  restoreScroll?: () => ScrollPos | null;
   /** A data socket closed with 4403: the shell re-checks access. */
   onAccessLost?: () => void;
   /** The owner's Restore of an artifact deleted while open. */
@@ -209,9 +215,15 @@ function Viewer({
   const cpu = useCpuSignals(role, plan);
   // Since this frame's last intentional load: did the runtime say hello, has
   // the viewer touched it. Read by the safe-swap rule.
-  const fs = useRef<FrameState>({ hello: false, touched: false });
-  const cbs = useRef({ onReady, onTouched, onAccessLost });
-  cbs.current = { onReady, onTouched, onAccessLost };
+  const fs = useRef<FrameState>({
+    hello: false,
+    touched: false,
+    engaged: false,
+  });
+  const cbs = useRef({ onReady, onTouched, onAccessLost, onScroll });
+  cbs.current = { onReady, onTouched, onAccessLost, onScroll };
+  // Fixed at mount: a swap shows this layer on load, before its hello.
+  const restore = useRef(restoreScroll);
   // biome-ignore lint/correctness/useExhaustiveDependencies: once, on mount
   useEffect(() => {
     onFrame?.(fs.current);
@@ -283,6 +295,7 @@ function Viewer({
     helloSeen.current = false;
     fs.current.hello = false;
     fs.current.touched = false;
+    fs.current.engaged = false;
     clearTimeout(slowTimer.current);
     setSlow(false);
     renavigated.current = false;
@@ -310,6 +323,15 @@ function Viewer({
       onHello: () => {
         onHello();
         fxRef.current.onHello();
+        // A live swap keeps the reader's place.
+        const pos = restore.current?.();
+        // Once: a later Reload starts at the top, as usual.
+        restore.current = undefined;
+        if (pos) bridge.current?.scrollTo(pos);
+      },
+      onScroll: (pos) => cbs.current.onScroll?.(pos),
+      onEngaged: (on) => {
+        fs.current.engaged = on;
       },
       onPdfText: (t) => fxRef.current.onPdfText(t),
       onThumb: (b) => fxRef.current.onThumb(b),
@@ -449,8 +471,8 @@ export function Shell(props: { id: string; v?: number; chromeless?: boolean }) {
 }
 
 /** A menu, dialog or the side panel is open (the safe swap waits for it). */
-const chromeOpen = (panelOpen: boolean) =>
-  panelOpen ||
+/** A menu or dialog is open (the side panel doesn't count: it sits beside the frame). */
+const chromeOpen = () =>
   document.querySelector(
     '[role="menu"],[role="dialog"],[role="alertdialog"]',
   ) !== null;
@@ -467,9 +489,6 @@ function ArtifactShell({
   const q = useArtifact(id);
   const me = useMe();
   const navigate = useNavigate();
-  const search = useSearch({ strict: false }) as { panel?: string };
-  const panelOpen = useRef(false);
-  panelOpen.current = search.panel === "open";
   const embed = isEmbed();
   // Deleted or made private while open: keep what's on screen (never blank it).
   const last = useRef<ArtifactSummary | undefined>(undefined);
@@ -478,6 +497,8 @@ function ArtifactShell({
 
   // Each layer's frame state, by version; the shown one decides a swap.
   const frames = useRef(new Map<number, FrameState>());
+  /** The shown frame's last scroll position, carried into a live swap. */
+  const lastScroll = useRef<ScrollPos | null>(null);
   const shownRef = useRef<number | undefined>(undefined);
   const live = useLiveVersions({
     id,
@@ -489,8 +510,9 @@ function ArtifactShell({
       frames.current.get(shownRef.current ?? -1) ?? {
         hello: false,
         touched: true,
+        engaged: false,
       },
-    chromeOpen: () => chromeOpen(panelOpen.current),
+    chromeOpen,
   });
 
   const status = q.error instanceof ApiClientError ? q.error.status : null;
@@ -556,10 +578,6 @@ function ArtifactShell({
       swapped={live.swapped}
       current={v !== undefined && live.latest > v ? live.latest : null}
       onView={live.view}
-      onUndo={() => {
-        const prev = live.swapped?.prev;
-        if (prev !== undefined) void navigate({ to: viewerPath(id, prev) });
-      }}
       onCurrent={() => void navigate({ to: viewerPath(id) })}
       onExpire={live.clearSwapped}
     />
@@ -597,6 +615,16 @@ function ArtifactShell({
               onFrame={(s) => frames.current.set(n, s)}
               onReady={() => live.ready(n)}
               onTouched={shown ? live.touched : undefined}
+              onScroll={
+                shown
+                  ? (p) => {
+                      lastScroll.current = p;
+                    }
+                  : undefined
+              }
+              restoreScroll={
+                n === preload ? () => lastScroll.current : undefined
+              }
               onAccessLost={live.check}
               onUndelete={live.undelete}
             />

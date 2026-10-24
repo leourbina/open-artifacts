@@ -119,6 +119,28 @@ export const ArtifactToShellSchema = z.union([
    */
   z.strictObject({ oa: z.literal(1), nonce, type: z.literal("interacted") }),
   /**
+   * The reader is mid-task in the frame (text selected, or an input, textarea
+   * or contenteditable focused), or no longer: a live swap waits meanwhile.
+   * A hint only, like `interacted`.
+   */
+  z.strictObject({
+    oa: z.literal(1),
+    nonce,
+    type: z.literal("engaged"),
+    engaged: z.boolean(),
+  }),
+  /**
+   * The document's scroll position (throttled): the shell carries it over to
+   * the next version's frame after a live swap. A hint only.
+   */
+  z.strictObject({
+    oa: z.literal(1),
+    nonce,
+    type: z.literal("scroll"),
+    top: z.number().finite().min(0).max(10_000_000),
+    max: z.number().finite().min(0).max(10_000_000),
+  }),
+  /**
    * A click on a same-instance viewer link (NAVIGATE_PATH_RE on the welcome's
    * appOrigin). Artifact content can forge this, so the shell must validate
    * `url` strictly (its own origin, NAVIGATE_PATH_RE path only) before opening it.
@@ -194,6 +216,13 @@ export const ShellToArtifactSchema = z.union([
   }),
   z.strictObject({ oa: z.literal(1), type: z.literal("thumb.request") }),
   z.strictObject({ oa: z.literal(1), type: z.literal("theme"), theme: Theme }),
+  /** After a live swap: scroll to where the previous version's frame was. */
+  z.strictObject({
+    oa: z.literal(1),
+    type: z.literal("scroll.to"),
+    top: z.number().finite().min(0).max(10_000_000),
+    max: z.number().finite().min(0).max(10_000_000),
+  }),
 ]);
 export type ShellToArtifact = z.infer<typeof ShellToArtifactSchema>;
 
