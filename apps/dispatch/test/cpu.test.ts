@@ -18,7 +18,12 @@ describe("404 path cost", () => {
       },
     } as unknown as Env;
     const one = () =>
-      dispatch.fetch(new Request("https://nope.open-artifacts-staging.app/"), env);
+      dispatch.fetch(
+        new Request("https://nope.open-artifacts-staging.app/") as Parameters<
+          typeof dispatch.fetch
+        >[0],
+        env,
+      );
     await one();
     const ms: number[] = [];
     for (let i = 0; i < RUNS; i++) {

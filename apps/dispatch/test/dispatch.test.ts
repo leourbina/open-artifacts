@@ -50,9 +50,12 @@ const MAP = {
   "beta.open-artifacts-staging.app": B,
 };
 
+/** An incoming request as the handler types it (cf properties unused). */
+type In = Parameters<typeof dispatch.fetch>[0];
+
 const call = (env: Env, input: string | Request, init?: RequestInit) =>
   dispatch.fetch(
-    typeof input === "string" ? new Request(input, init) : input,
+    (typeof input === "string" ? new Request(input, init) : input) as In,
     env,
   );
 
@@ -123,7 +126,9 @@ describe("dispatch", () => {
   it("prod uses the prod script prefix", async () => {
     const f = fakes({ "acme.open-artifacts.app": A });
     (f.env as { OA_ENV: string }).OA_ENV = "prod";
-    expect((await call(f.env, "https://acme.open-artifacts.app/")).status).toBe(200);
+    expect((await call(f.env, "https://acme.open-artifacts.app/")).status).toBe(
+      200,
+    );
     expect(f.scripts).toEqual([`oa-p-${A}`]);
   });
 
@@ -145,7 +150,9 @@ describe("dispatch", () => {
     for (const v of bad) {
       const f = fakes({ "acme.open-artifacts-staging.app": v });
       expect(
-        await observe(await call(f.env, "https://acme.open-artifacts-staging.app/")),
+        await observe(
+          await call(f.env, "https://acme.open-artifacts-staging.app/"),
+        ),
       ).toEqual(NOT_FOUND);
       expect(f.scripts).toEqual([]);
     }
@@ -155,14 +162,20 @@ describe("dispatch", () => {
     const f = fakes(MAP);
     (f.env as { OA_ENV: string }).OA_ENV = "dev";
     expect(
-      await observe(await call(f.env, "https://acme.open-artifacts-staging.app/")),
+      await observe(
+        await call(f.env, "https://acme.open-artifacts-staging.app/"),
+      ),
     ).toEqual(NOT_FOUND);
     expect(f.scripts).toEqual([]);
   });
 
   it("the request reaches the user Worker byte-for-byte", async () => {
-    let got: { method: string; url: string; headers: string[][]; body: string } =
-      { method: "", url: "", headers: [], body: "" };
+    let got: {
+      method: string;
+      url: string;
+      headers: string[][];
+      body: string;
+    } = { method: "", url: "", headers: [], body: "" };
     const f = fakes(MAP, {
       fetch: async (req) => {
         got = {
@@ -180,18 +193,21 @@ describe("dispatch", () => {
       "x-forwarded-host": "beta.open-artifacts-staging.app",
       "content-type": "application/json",
     };
-    const req = new Request("https://acme.open-artifacts-staging.app:8443/api/v1/x?q=1#f", {
-      method: "PUT",
-      headers,
-      body: '{"a":1}',
-    });
+    const req = new Request(
+      "https://acme.open-artifacts-staging.app:8443/api/v1/x?q=1#f",
+      {
+        method: "PUT",
+        headers,
+        body: '{"a":1}',
+      },
+    );
     const r = await call(f.env, req);
     expect(r.status).toBe(200);
     expect(f.seen).toEqual([req]);
     expect(f.seen[0]).toBe(req);
     expect(got).toEqual({
       method: "PUT",
-      url: "https://acme.open-artifacts-staging.app:8443/api/v1/x?q=1",
+      url: req.url,
       headers: [...new Headers(headers)],
       body: '{"a":1}',
     });
@@ -203,7 +219,9 @@ describe("dispatch", () => {
       headers: { "set-cookie": "a=b", "x-custom": "1" },
     });
     const f = fakes(MAP, { fetch: async () => res });
-    expect(await call(f.env, "https://acme.open-artifacts-staging.app/")).toBe(res);
+    expect(await call(f.env, "https://acme.open-artifacts-staging.app/")).toBe(
+      res,
+    );
   });
 
   it("a HEAD request and a streaming body are forwarded unread", async () => {
@@ -242,14 +260,17 @@ describe("dispatch", () => {
         return new Response(null, { status: 101, webSocket: client });
       },
     });
-    const req = new Request("https://acme.open-artifacts-staging.app/api/v1/live", {
-      headers: {
-        connection: "Upgrade",
-        upgrade: "websocket",
-        "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
-        "sec-websocket-version": "13",
+    const req = new Request(
+      "https://acme.open-artifacts-staging.app/api/v1/live",
+      {
+        headers: {
+          connection: "Upgrade",
+          upgrade: "websocket",
+          "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
+          "sec-websocket-version": "13",
+        },
       },
-    });
+    );
     const r = await call(f.env, req);
     expect(f.seen[0]).toBe(req);
     expect(r.status).toBe(101);
@@ -328,8 +349,16 @@ describe("dispatch", () => {
         fakes(MAP, { kvThrows: true }).env,
         "https://acme.open-artifacts-staging.app/",
       ],
-      ["dispatcher throws", throwGet.env, "https://acme.open-artifacts-staging.app/"],
-      ["fetch rejects", rejectFetch.env, "https://acme.open-artifacts-staging.app/"],
+      [
+        "dispatcher throws",
+        throwGet.env,
+        "https://acme.open-artifacts-staging.app/",
+      ],
+      [
+        "fetch rejects",
+        rejectFetch.env,
+        "https://acme.open-artifacts-staging.app/",
+      ],
       ["non-URL", fakes(MAP).env, { url: "::" } as Request],
       ["IP literal", fakes(MAP).env, "http://192.168.1.1/"],
       ["bare apex", fakes(MAP).env, "https://open-artifacts-staging.app/"],

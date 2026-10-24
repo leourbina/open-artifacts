@@ -56,7 +56,16 @@ describe("bundle", () => {
       const out = mkdtempSync(join(tmpdir(), "oa-dispatch-"));
       execFileSync(
         "pnpm",
-        ["exec", "wrangler", "deploy", "--dry-run", "--env", env, "--outdir", out],
+        [
+          "exec",
+          "wrangler",
+          "deploy",
+          "--dry-run",
+          "--env",
+          env,
+          "--outdir",
+          out,
+        ],
         {
           cwd: app,
           stdio: "pipe",
