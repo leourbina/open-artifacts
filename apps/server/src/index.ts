@@ -1,4 +1,4 @@
-import { MCP_PATH } from "@oa/shared";
+import { MCP_PATH, normalizeHost as normHost } from "@oa/shared";
 import { app } from "./app.js";
 import { verifyPat } from "./auth/pat.js";
 import { orgCan } from "./auth/policy.js";
@@ -18,9 +18,6 @@ import { getUser } from "./services/users.js";
 export type { Env } from "./env.js";
 export { ArtifactRuntime } from "./runtime/do.js";
 
-const normHost = (h: string) =>
-  h.toLowerCase().replace(/:\d+$/, "").replace(/\.$/, "");
-
 // URL.hostname keeps the brackets for IPv6: "[::1]", never "::1".
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
@@ -30,9 +27,9 @@ const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
  * plain 404, before any auth or D1). Under a WfP wildcard route this is what
  * keeps another install's hostname from reaching this one.
  *
- * Every install, hosted or self-hosted: setup always renders APP_HOST (it
- * refuses an empty one), so a missing APP_HOST is a broken config and fails
- * closed. Dev (ENVIRONMENT=dev) also answers localhost/127.0.0.1/[::1], so
+ * Every install, hosted or self-hosted: setup always renders both hosts (it
+ * refuses an empty, placeholder or duplicate pair), so a missing APP_HOST is
+ * a broken config and fails closed; a missing CONTENT_HOST matches nothing. Dev (ENVIRONMENT=dev) also answers localhost/127.0.0.1/[::1], so
  * `wrangler dev` and the dev dashboard keep working. X-Forwarded-Host is
  * never consulted (URL.hostname only).
  */
@@ -75,7 +72,7 @@ export default {
   async fetch(req, env, ctx) {
     // URL.hostname only: port stripped; X-Forwarded-Host is ignored.
     const url = new URL(req.url);
-    if (normHost(url.hostname) === normHost(env.CONTENT_HOST))
+    if (normHost(url.hostname) === normHost(env.CONTENT_HOST ?? ""))
       return contentApp.fetch(req, env, ctx);
     // Another install's hostname (WfP wildcard) or a stray alias: 404 before
     // auth, OAuth, the route policy or D1. Plain body, no other headers.
