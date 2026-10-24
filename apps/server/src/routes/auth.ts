@@ -135,7 +135,10 @@ export function mountAuth(app: AppType): void {
         accessProvider,
         c.req.raw,
       );
-      const user = await upsertOnLogin(c.env, email, name);
+      // The admission and its auth.signin audit row commit in one batch.
+      const user = await upsertOnLogin(c.env, email, name, {
+        provider: "access",
+      });
       if (!user) {
         logOidcFail("no_access");
         logAuth({ provider: "access", outcome: "refused", stage: "no_access" });

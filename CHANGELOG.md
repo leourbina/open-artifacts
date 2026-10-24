@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.39.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.38.0...v0.39.0) (2026-10-23)
+
+
+### Features
+
+* **server:** audit events incl. shares, visibility and sign-ins (P3 T8) ([#501](https://github.com/open-artifacts-ai/open-artifacts/issues/501)) ([0c632e0](https://github.com/open-artifacts-ai/open-artifacts/commit/0c632e056153affe222986f6807bea2aa2dbac6d))
+
+## [0.38.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.37.0...v0.38.0) (2026-10-23)
+
+
+### Features
+
+* **ui:** shadcn Alert tones, Textarea, Checkbox and Kbd ([#507](https://github.com/open-artifacts-ai/open-artifacts/issues/507)) ([df1f81d](https://github.com/open-artifacts-ai/open-artifacts/commit/df1f81d276dfb6073cdb577708426eaddaa41c55))
+
 ## [0.37.0](https://github.com/open-artifacts-ai/open-artifacts/compare/v0.36.0...v0.37.0) (2026-10-23)
 
 
