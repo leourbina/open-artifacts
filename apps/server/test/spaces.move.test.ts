@@ -343,6 +343,94 @@ describe("patch compare-and-set (#484)", () => {
   });
 });
 
+describe("roles and status re-checked in the write", () => {
+  const dropRole = (sid: string, u: U) =>
+    run(
+      "delete from space_members where space_id = ? and user_id = ?",
+      sid,
+      u.userId,
+    );
+
+  it("move: the target role revoked mid-call → 409, nothing moved", async () => {
+    const to = await createSpace();
+    const u = await mk("rt");
+    await addMember(to.id, u, "editor");
+    const art = await insertArtifact(u.userId, u.userId);
+    const r = await call(
+      R.moveArtifact(art),
+      u.cookie,
+      { method: "POST", body: { spaceId: to.id } },
+      racing(() => dropRole(to.id, u)),
+    );
+    expect(r.status).toBe(409);
+    expect((await row(art))?.space_id).toBe(u.userId);
+    expect(await audits("artifact.move", art)).toHaveLength(0);
+  });
+
+  it("move: the source manager role revoked mid-call → 409, nothing moved", async () => {
+    const from = await createSpace();
+    const to = await createSpace();
+    const u = await mk("rs");
+    await addMember(from.id, u, "manager");
+    await addMember(to.id, u, "editor");
+    const art = await insertArtifact(u.userId, from.id);
+    const r = await call(
+      R.moveArtifact(art),
+      u.cookie,
+      { method: "POST", body: { spaceId: to.id } },
+      racing(() => dropRole(from.id, u)),
+    );
+    expect(r.status).toBe(409);
+    expect((await row(art))?.space_id).toBe(from.id);
+  });
+
+  it("create: the editor role revoked mid-call → 409, nothing created", async () => {
+    const s = await createSpace();
+    const u = await mk("rc");
+    await addMember(s.id, u, "editor");
+    const before = await one<{ n: number }>(
+      "select count(*) n from artifacts where space_id = ?",
+      s.id,
+    );
+    const r = await call(
+      R.artifacts,
+      u.cookie,
+      { method: "POST", body: { ...base, spaceId: s.id } },
+      racing(() => dropRole(s.id, u)),
+    );
+    expect(r.status).toBe(409);
+    const after = await one<{ n: number }>(
+      "select count(*) n from artifacts where space_id = ?",
+      s.id,
+    );
+    expect(after?.n).toBe(before?.n);
+  });
+
+  it("departed transfer: the source reactivated mid-call → 409, nothing moved", async () => {
+    const g = await mk("react");
+    await insertArtifact(g.userId, g.userId);
+    await run("update users set status = 'suspended' where id = ?", g.userId);
+    const s = await createSpace();
+    const r = await call(
+      R.memberTransfer(g.userId),
+      admin.cookie,
+      { method: "POST", body: { to: { kind: "space", spaceId: s.id } } },
+      racing(() =>
+        run("update users set status = 'active' where id = ?", g.userId),
+      ),
+    );
+    expect(r.status).toBe(409);
+    expect(
+      (
+        await one<{ n: number }>(
+          "select count(*) n from artifacts where space_id = ?",
+          g.userId,
+        )
+      )?.n,
+    ).toBe(1);
+  });
+});
+
 describe("public links toggled off mid-write", () => {
   it("PATCH team → public loses to a racing toggle-off: 409, still team", async () => {
     const s = await createSpace();

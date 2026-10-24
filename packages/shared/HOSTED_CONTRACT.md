@@ -81,7 +81,7 @@ every flag that is on.
 
 | Shape | Added |
 |---|---|
-| `ArtifactSummary` (so `SearchHit`) | `space?: SpaceRef`, `can?: ArtifactCan` |
+| `ArtifactSummary` (so `SearchHit`) | `space?: SpaceRef`, `can?: ArtifactCan`. Signed-in callers with spaces on. `space` is absent for a shared space where the caller has no role (a share or link alone), so its id and name never leak; `can` is always set |
 | `Member` | `status?: MemberStatus` (absent = active), `identities?: ("google")[]`, `restriction?: Restriction \| null` |
 | `Me.instance` | `hosted?`, `tier?`, `signIn?`, `features?: FeatureFlag[]`, `directory?: InstanceDirectory` |
 | `Me` | `auth?: MeAuth`, `personalSpaceId?` (= user.id), `spaces?: MySpace[]` (shared, by name, ≤ 200) |
