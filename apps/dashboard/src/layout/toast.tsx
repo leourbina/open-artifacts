@@ -9,13 +9,15 @@ export type ToastOptions = {
   title: string;
   description?: ReactNode;
   /** "neutral": no icon. */
-  tone?: "info" | "success" | "danger" | "neutral";
+  tone?: "info" | "success" | "danger" | "warning" | "neutral";
   /** A button in the toast, e.g. Undo. Clicking it also dismisses. */
   action?: { label: string; onClick(): void };
   /** A toast with the same id replaces the one showing. */
   id?: string;
   /** Milliseconds (default: Design's, see above). */
   duration?: number;
+  /** The toast closed: dismissed, timed out or replaced by its action. */
+  onClose?: () => void;
 };
 
 const LONG = 8000;
@@ -27,6 +29,7 @@ export function toast({
   action,
   id,
   duration,
+  onClose,
 }: ToastOptions) {
   const danger = tone === "danger";
   const opts = {
@@ -34,9 +37,12 @@ export function toast({
     description,
     duration: duration ?? (danger || action ? LONG : undefined),
     action: action && { label: action.label, onClick: () => action.onClick() },
+    onDismiss: onClose,
+    onAutoClose: onClose,
   };
   if (danger) return sonner.error(<span role="alert">{title}</span>, opts);
   if (tone === "success") return sonner.success(title, opts);
+  if (tone === "warning") return sonner.warning(title, opts);
   if (tone === "neutral") return sonner(title, opts);
   return sonner.info(title, opts);
 }

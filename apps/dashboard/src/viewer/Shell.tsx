@@ -46,24 +46,44 @@ type Bridge = ReturnType<typeof createBridge>;
 
 // One navigator and opener for every viewer, so the rate limit survives the
 // remount a navigation causes. `go` is the mounted viewer's router navigate.
-const artifactNav = { go: (_path: string) => {} };
+const artifactNav = {
+  go: (_path: string) => {},
+  /** The mounted viewer's content origin: open never goes there. */
+  contentOrigin: undefined as string | undefined,
+};
 const navLimit = createLimiter();
 const onArtifactNavigate = createNavigator((p) => artifactNav.go(p), {
   limit: navLimit,
 });
-/** A blocked link asks in one toast at a time (Design: 10 s, pauses on hover). */
-const askToOpen = (u: URL, open: () => void) =>
+/**
+ * A link without user activation asks in one toast at a time (Design: 10 s,
+ * pauses on hover); http says it isn't secure, in the warning tone.
+ */
+const askToOpen = (u: URL, open: () => void, done: () => void) =>
   toast({
     id: "oa-open-link",
     title: `Open link to ${linkHost(u)}?`,
-    tone: "neutral",
+    ...(u.protocol === "http:"
+      ? {
+          tone: "warning" as const,
+          description: "Not secure: this site doesn't use HTTPS.",
+        }
+      : { tone: "neutral" as const }),
     duration: 10_000,
-    action: { label: "Open", onClick: open },
+    action: {
+      label: "Open",
+      onClick: () => {
+        done();
+        open();
+      },
+    },
+    onClose: done,
   });
 const onArtifactOpen = createOpener({
   go: (p) => artifactNav.go(p),
   ask: askToOpen,
   limit: navLimit,
+  contentOrigin: () => artifactNav.contentOrigin,
 });
 
 /** No hello this long after the frame loaded: hint that it may be stuck. */
@@ -124,6 +144,7 @@ function Viewer({
 }) {
   const content = useContentUrl(artifact.id, version, gone !== null);
   const url = safeContentUrl(content.url);
+  if (url) artifactNav.contentOrigin = new URL(url).origin;
   const signedOut =
     content.error instanceof ApiClientError && content.error.status === 401;
   useLoginRedirect(

@@ -276,7 +276,9 @@ export function createRuntime(opts: RuntimeOptions = {}): OpenArtifacts {
     } catch {
       return;
     }
-    if (u.origin === appOrigin && NAVIGATE_PATH_RE.test(u.pathname)) {
+    if (u.origin === appOrigin) {
+      // Only viewer links: the shell refuses every other app page anyway.
+      if (!NAVIGATE_PATH_RE.test(u.pathname)) return;
       e.preventDefault();
       bridge.send({ oa: 1, type: "navigate", url: u.href });
       return;

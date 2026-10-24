@@ -63,8 +63,14 @@ export function createNavigator(
   };
 }
 
-/** A web address the shell may open for an artifact: http(s), no credentials. */
+/**
+ * A web address the shell may open for an artifact: http(s), no credentials,
+ * and no control characters or spaces anywhere in what the artifact sent (the
+ * URL parser would drop or encode them, hiding what was asked for).
+ */
 export function openableUrl(url: string): URL | null {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: that's the point
+  if (/[\u0000-\u0020\u007f]/.test(url)) return null;
   let u: URL;
   try {
     u = new URL(url);
@@ -78,9 +84,12 @@ export function openableUrl(url: string): URL | null {
 
 const HOST_MAX = 32;
 
-/** The host to name in a prompt: ASCII (punycode as is), no "www.", cut from the left. */
+/**
+ * The host to name in a prompt: ASCII (punycode as is), the port only when it
+ * isn't the scheme's default, no "www.", cut from the left (the port stays).
+ */
 export function linkHost(u: URL): string {
-  const h = u.hostname.replace(/^www\./, "");
+  const h = u.host.replace(/^www\./, "");
   return h.length > HOST_MAX ? `…${h.slice(-(HOST_MAX - 1))}` : h;
 }
 
@@ -91,17 +100,24 @@ const userActive = () =>
 
 /**
  * Builds the shell's open handler: an artifact asked to open a plain link that
- * the sandboxed frame can't show. The message is content-controlled, so the
- * URL must be http(s) without credentials, the rate limit applies, and the top
- * window moves only with transient user activation; without it, `ask` puts the
- * choice in the shell's chrome. App viewer links route in place, like navigate;
- * embedded, everything opens in a new tab.
+ * the sandboxed frame can't show. The message is content-controlled, so:
+ * - only http(s) without credentials or control characters;
+ * - on the app's own origin only viewer paths, which route in place like
+ *   navigate (anything else could be consent phishing, an invite, or a
+ *   query-driven action); nothing on the content host;
+ * - the shared rate limit, and nothing while a prompt is showing (so the URL
+ *   can't change under the cursor);
+ * - the top window moves only with transient user activation; without it,
+ *   `ask` puts the choice in the shell's chrome and calls `done` when it closes.
+ * Embedded, everything opens in a new tab.
  */
 export function createOpener(opts: {
   go: (path: string) => void;
-  ask: (u: URL, open: () => void) => void;
+  ask: (u: URL, open: () => void, done: () => void) => void;
   limit: () => boolean;
   origin?: string;
+  /** The frame's content origin, when known. */
+  contentOrigin?: () => string | undefined;
   embed?: () => boolean;
   active?: () => boolean;
   assign?: (url: string) => void;
@@ -111,14 +127,27 @@ export function createOpener(opts: {
   const active = opts.active ?? userActive;
   const assign = opts.assign ?? ((u: string) => location.assign(u));
   const open = opts.open ?? newTab;
+  let asking = false;
   return (url: string) => {
+    if (asking) return;
     const origin = opts.origin ?? location.origin;
     const u = openableUrl(url);
-    if (!u || !opts.limit()) return;
-    const path = artifactNavPath(u.href, origin);
+    if (!u || u.origin === opts.contentOrigin?.()) return;
+    const path = u.origin === origin ? artifactNavPath(u.href, origin) : null;
+    if (u.origin === origin && !path) return;
+    if (!opts.limit()) return;
     if (embed()) open(path ? origin + path : u.href);
     else if (path) opts.go(path);
     else if (active()) assign(u.href);
-    else opts.ask(u, () => assign(u.href));
+    else {
+      asking = true;
+      opts.ask(
+        u,
+        () => assign(u.href),
+        () => {
+          asking = false;
+        },
+      );
+    }
   };
 }

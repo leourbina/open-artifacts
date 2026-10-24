@@ -131,7 +131,7 @@ test("target=_blank opens a new tab and leaves the viewer", async ({
   expect(page.url()).toBe(`${APP}/a/${a.id}`);
 });
 
-test("javascript: is refused even on a real click", async ({
+test("javascript:, data:, app pages and the content host are refused on a real click", async ({
   page,
   member,
 }) => {
@@ -142,7 +142,20 @@ test("javascript: is refused even on a real click", async ({
   await page.goto(`/a/${a.id}`);
   await ready(page);
   const nonce = await nonceOf(page);
-  for (const url of ["javascript:alert(1)", "data:text/html,hi"]) {
+  const content = new URL(
+    await page
+      .locator("iframe.oa-vframe")
+      .evaluate((f) => (f as HTMLIFrameElement).src),
+  ).origin;
+  for (const url of [
+    "javascript:alert(1)",
+    "data:text/html,hi",
+    // The app outside viewer paths (consent phishing, invites, actions).
+    `${APP}/oauth/authorize?client_id=evil`,
+    `${APP}/settings`,
+    // The content host.
+    `${content}/p/${a.id}/v1/index.html`,
+  ]) {
     await artifactFrame(page)
       .locator("#post")
       .evaluate(
@@ -242,4 +255,31 @@ test("a relative link to the artifact's own page still loads in the frame", asyn
   await expect(artifactFrame(page).locator("#who")).toHaveText("page 2");
   expect(page.url()).toBe(`${APP}/a/${a.id}`);
   expect(page.context().pages()).toHaveLength(1);
+});
+
+test("http asks with a not-secure warning; the port shows when not the default", async ({
+  page,
+  member,
+}, info) => {
+  test.slow();
+  const a = await publishLinks(member.pat, {
+    content: `${LINKS}<script>setTimeout(() => parent.postMessage({ oa: 1, type: "open", url: "http://plain.example:8080/x", nonce: window.__oaShellNonce.n }, "*"), 12000)</script>`,
+  });
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.goto(`/a/${a.id}`);
+  await expect(artifactFrame(page).locator("#who")).toHaveText("links");
+  await page.waitForTimeout(13_000);
+  await expect(
+    page.getByText("Open link to plain.example:8080?"),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Not secure: this site doesn't use HTTPS."),
+  ).toBeVisible();
+  if (info.project.name === "chromium")
+    for (const scheme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: scheme });
+      await page.screenshot({
+        path: info.outputPath(`open-link-http-390-${scheme}.png`),
+      });
+    }
 });

@@ -114,13 +114,12 @@ describe("createNavigator", () => {
 });
 
 describe("openableUrl", () => {
-  it.each([
-    "https://other.example/x?q#h",
-    "http://other.example/",
-    "https://app.test/settings",
-  ])("accepts %s", (u) => {
-    expect(openableUrl(u)?.href).toBe(new URL(u).href);
-  });
+  it.each(["https://other.example/x?q#h", "http://other.example/"])(
+    "accepts %s",
+    (u) => {
+      expect(openableUrl(u)?.href).toBe(new URL(u).href);
+    },
+  );
   it.each([
     "javascript:alert(1)",
     "data:text/html,hi",
@@ -131,7 +130,12 @@ describe("openableUrl", () => {
     "https://user@other.example/",
     "not a url",
     "/relative",
-  ])("refuses %s", (u) => {
+    "java\tscript:alert(1)",
+    "java\nscript:alert(1)",
+    "\u0000https://other.example/",
+    "https://other.example/\u0007x",
+    "https://other.example/ x",
+  ])("refuses %j", (u) => {
     expect(openableUrl(u)).toBeNull();
   });
 });
@@ -139,7 +143,14 @@ describe("openableUrl", () => {
 describe("linkHost", () => {
   it.each([
     ["https://www.example.com/a", "example.com"],
-    ["https://docs.example.com:8443/a", "docs.example.com"],
+    ["https://docs.example.com:8443/a", "docs.example.com:8443"],
+    ["https://docs.example.com:443/a", "docs.example.com"],
+    ["http://docs.example.com:80/a", "docs.example.com"],
+    ["http://docs.example.com:8080/a", "docs.example.com:8080"],
+    [
+      "https://a-very-long-subdomain.with.many.parts.docs.example.com:8443/",
+      "…any.parts.docs.example.com:8443",
+    ],
     ["https://xn--bcher-kva.example/", "xn--bcher-kva.example"],
     ["https://bücher.example/", "xn--bcher-kva.example"],
     [
@@ -162,6 +173,7 @@ describe("createOpener", () => {
     const limit = createLimiter(now);
     const openLink = createOpener({
       origin: O,
+      contentOrigin: () => "https://content.test",
       go,
       assign,
       open,
@@ -193,7 +205,7 @@ describe("createOpener", () => {
     openLink("https://other.example/x");
     expect(assign).not.toHaveBeenCalled();
     expect(ask).toHaveBeenCalledTimes(1);
-    const [u, go] = ask.mock.calls[0] as [URL, () => void];
+    const [u, go] = ask.mock.calls[0] as [URL, () => void, () => void];
     expect(u.href).toBe("https://other.example/x");
     go();
     expect(assign).toHaveBeenCalledWith("https://other.example/x");
@@ -224,6 +236,38 @@ describe("createOpener", () => {
     tick(1000);
     openLink("https://other.example/");
     expect(assign).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    "https://app.test/settings",
+    "https://app.test/oauth/authorize?client_id=evil",
+    "https://app.test/invite/abc",
+    "https://app.test/?space=x",
+    "https://app.test/a/B/edit",
+    "https://content.test/c/token/B/v1/__view",
+    "https://content.test/p/B/v1/index.html",
+  ])("refuses the app's or content host's %s (not a viewer path)", (u) => {
+    const { openLink, go, assign, ask, open } = setup({ active: false });
+    openLink(u);
+    expect(go).not.toHaveBeenCalled();
+    expect(assign).not.toHaveBeenCalled();
+    expect(ask).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("ignores opens while its prompt is showing, then accepts again", () => {
+    const { openLink, assign, ask, tick } = setup({ active: false });
+    openLink("https://other.example/first");
+    tick(1000);
+    openLink("https://other.example/swapped");
+    expect(ask).toHaveBeenCalledTimes(1);
+    const [, go, done] = ask.mock.calls[0] as [URL, () => void, () => void];
+    done();
+    tick(1000);
+    openLink("https://other.example/later");
+    expect(ask).toHaveBeenCalledTimes(2);
+    go();
+    expect(assign).toHaveBeenCalledWith("https://other.example/first");
   });
 
   it("an app viewer link routes in place, like navigate", () => {

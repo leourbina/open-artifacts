@@ -167,8 +167,6 @@ describe("oa:open", () => {
   it.each([
     ["another origin", "https://other.example/a/abc?q=1#h"],
     ["http", "http://other.example/"],
-    ["another app path", `${APP}/settings`],
-    ["a deeper /a/ path", `${APP}/a/abc/edit`],
   ])("%s posts open with the nonce and is prevented", async (_n, href) => {
     await welcome();
     expect(await click(href)).toBe(true);
@@ -191,6 +189,9 @@ describe("oa:open", () => {
     ["named target", "https://other.example/", { target: "w" }],
     ["download", "https://other.example/f.zip", { download: "" }],
     ["the artifact's own pages", "/p/page2.html", {}],
+    ["another app path", `${APP}/settings`, {}],
+    ["an app OAuth page", `${APP}/oauth/authorize?client_id=x`, {}],
+    ["a deeper /a/ path", `${APP}/a/abc/edit`, {}],
     ["an in-page anchor", "#section", {}],
     ["mailto", "mailto:a@example.com", {}],
     ["javascript", "javascript:void(0)", {}],
