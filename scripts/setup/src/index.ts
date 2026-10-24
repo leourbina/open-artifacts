@@ -396,10 +396,12 @@ export const HELP = `Usage: pnpm oa:setup [options]
                 (noted "kept live") only when setup has none. Invalid saved or live
                 values are ignored with a note. --check/--json report data.vars.
   --auth-providers <list>  --auth-domains <list>  --auth-domain-join invite|member
-  --google-client-id <id>  --turnstile-site-key <key>
+  --google-client-id <id>  --turnstile-site-key <key>  --email-code-domain on
+  --code-emails-per-day <n>
                 Direct sign-in (docs/self-hosting/direct-sign-in.md): the Worker vars
                 AUTH_PROVIDERS (access, google, email), AUTH_DOMAINS, AUTH_DOMAIN_JOIN,
-                GOOGLE_CLIENT_ID and TURNSTILE_SITE_KEY. Without a flag a deploy keeps
+                GOOGLE_CLIENT_ID, TURNSTILE_SITE_KEY, EMAIL_CODE_DOMAIN and
+                CODE_EMAILS_PER_DAY (1-10000). Without a flag a deploy keeps
                 the live Worker's value (an --upgrade in CI included); a flag replaces
                 it, and an empty value (--auth-domains "") clears it, so the server
                 default applies. --auth-providers access switches back to Access only.

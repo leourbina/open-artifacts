@@ -18,16 +18,18 @@ const deployedVars = (w: W) => JSON.parse(w.deployed() ?? "{}").vars ?? {};
 const line = (w: W, s: string) =>
   w.lines.map((l) => JSON.parse(l)).find((j) => j.step === s);
 const GOOGLE = [
-  ...["--auth-providers", "access,google"],
+  ...["--auth-providers", "access,google,email"],
   ...["--auth-domains", "Example.com, example.org"],
   ...["--auth-domain-join", "member"],
   ...["--google-client-id", "123-abc.apps.googleusercontent.com"],
+  ...["--code-emails-per-day", "50"],
 ];
 const LIVE = {
-  AUTH_PROVIDERS: "access,google",
+  AUTH_PROVIDERS: "access,google,email",
   AUTH_DOMAINS: "example.com,example.org",
   AUTH_DOMAIN_JOIN: "member",
   GOOGLE_CLIENT_ID: "123-abc.apps.googleusercontent.com",
+  CODE_EMAILS_PER_DAY: "50",
 };
 const empty = Object.fromEntries(SIGNIN_VARS.map((k) => [k, ""])) as Record<
   (typeof SIGNIN_VARS)[number],
@@ -53,6 +55,8 @@ describe("setup keeps direct sign-in vars across upgrades", () => {
       "--auth-domain-join",
       "--google-client-id",
       "--turnstile-site-key",
+      "--email-code-domain",
+      "--code-emails-per-day",
     ])
       expect(HELP, f).toContain(f);
     expect(HELP).toMatch(/empty value.*clears/i);
@@ -219,6 +223,11 @@ describe("fail closed before any deploy call", () => {
     await refused(["--auth-domain-join", "everyone"], /AUTH_DOMAIN_JOIN/);
   });
 
+  it("EMAIL_CODE_DOMAIN not on, CODE_EMAILS_PER_DAY out of range", async () => {
+    await refused(["--email-code-domain", "yes"], /EMAIL_CODE_DOMAIN/);
+    await refused(["--code-emails-per-day", "10001"], /CODE_EMAILS_PER_DAY/);
+  });
+
   it("a malformed domain", async () => {
     await refused(
       ["--auth-domains", "example.com,not a domain"],
@@ -267,6 +276,17 @@ describe("rules match the server", () => {
     expect(m?.[1]?.match(/"(\w+)"/g)?.map((s) => s.slice(1, -1))).toEqual([
       ...PROVIDERS,
     ]);
+  });
+
+  it("CODE_EMAILS_PER_DAY's cap is config.ts CODE_EMAILS_MAX", () => {
+    const src = readFileSync(
+      join(import.meta.dirname, "../../../apps/server/src/auth/config.ts"),
+      "utf8",
+    );
+    expect(src).toContain("const CODE_EMAILS_MAX = 10_000;");
+    expect(signinProblems({ ...empty, CODE_EMAILS_PER_DAY: "10000" })).toEqual(
+      [],
+    );
   });
 
   it("signinProblems: unset is fine; google needs both a client id and domains", () => {

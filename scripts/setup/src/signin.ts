@@ -11,6 +11,8 @@ export const SIGNIN = {
   AUTH_DOMAIN_JOIN: "auth-domain-join",
   GOOGLE_CLIENT_ID: "google-client-id",
   TURNSTILE_SITE_KEY: "turnstile-site-key",
+  EMAIL_CODE_DOMAIN: "email-code-domain",
+  CODE_EMAILS_PER_DAY: "code-emails-per-day",
 } as const;
 export type SigninVar = keyof typeof SIGNIN;
 export const SIGNIN_VARS = Object.keys(SIGNIN) as SigninVar[];
@@ -61,6 +63,17 @@ function valueProblems(name: SigninVar, v: string): string[] {
         ? []
         : [
             `AUTH_DOMAIN_JOIN: ${JSON.stringify(v)} (expected invite or member)`,
+          ];
+    case "EMAIL_CODE_DOMAIN":
+      return v === "on"
+        ? []
+        : [`EMAIL_CODE_DOMAIN: ${JSON.stringify(v)} (expected on)`];
+    // config.ts CODE_EMAILS_MAX.
+    case "CODE_EMAILS_PER_DAY":
+      return /^[1-9]\d*$/.test(v) && Number(v) <= 10_000
+        ? []
+        : [
+            `CODE_EMAILS_PER_DAY: ${JSON.stringify(v)} (expected an integer from 1 to 10000)`,
           ];
     default:
       return TOKEN.test(v)
