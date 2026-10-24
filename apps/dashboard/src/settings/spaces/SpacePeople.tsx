@@ -15,10 +15,12 @@ import {
   DropdownMenuTrigger,
   Input,
 } from "@oa/ui/shadcn";
+import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useState } from "react";
 import { ApiClientError } from "../../api/client";
 import type { Space } from "../../api/contract";
 import {
+  qk,
   useDeleteSpaceMember,
   useMembers,
   usePutSpaceMember,
@@ -88,6 +90,9 @@ const source = (m: SpaceMember, frozen: boolean) => {
   return groupsText(m);
 };
 
+/** Another manager's row is an admin's to change. */
+const MANAGER_ONLY = "Only an admin can change another manager's access.";
+
 /** The per-row reason line under the email. */
 const reason = (
   m: SpaceMember,
@@ -123,13 +128,15 @@ const order = (a: SpaceMember, b: SpaceMember) => {
   );
 };
 
-/** What a refused member change says, by the row. */
-const refusal = (e: unknown, m: SpaceMember) => {
+/** What a refused member change says, by the row. `promote`: the change was a grant of Manager. */
+const refusal = (e: unknown, m: SpaceMember, promote = false) => {
   if (e instanceof ApiClientError) {
     if (e.code === "member_synced")
       return `${first(m)} is here through ${syncShort(m)}. Change it in Google, or remove the group under Who gets access.`;
     if (e.code === "space_forbidden")
-      return "Only an admin can make someone a manager.";
+      return promote
+        ? "Only an admin can make someone a manager."
+        : MANAGER_ONLY;
     if (e.code === "not_found")
       return "You no longer manage this space. Refresh to see it as it is now.";
   }
@@ -151,14 +158,23 @@ function PersonRow({
   frozen: boolean;
   restricted: Member["restriction"] | undefined;
 }) {
+  const qc = useQueryClient();
   const put = usePutSpaceMember(space.id);
   const del = useDeleteSpaceMember(space.id);
+  // A 403 means the list is stale: refetch so the row goes read-only.
+  const refused = (e: unknown, promote = false) => {
+    setProblem(refusal(e, m, promote));
+    if (e instanceof ApiClientError && e.code === "space_forbidden")
+      void qc.invalidateQueries({ queryKey: qk.spaceMembers(space.id) });
+  };
   const [pending, setPending] = useState<SpaceRole | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [asking, setAsking] = useState(false);
   const name = nameOf(m);
-  // A space manager can't change or remove an admin-set Manager row.
-  const canAct = admin || m.manualRole !== "manager";
+  // A space manager can't remove, demote or override another manager's row,
+  // manual or synced, frozen kept rows included (the server answers 403
+  // space_forbidden { target: "member" }): the role shows as text.
+  const canAct = admin || m.role !== "manager";
   const active = m.status === "active";
   const capped = m.cap !== null;
   const allowed = admin ? ALL_ROLES : ALL_ROLES.filter((r) => r !== "manager");
@@ -183,14 +199,14 @@ function PersonRow({
     put.mutate(
       { userId: m.userId, role: r },
       {
-        onError: (e) => setProblem(refusal(e, m)),
+        onError: (e) => refused(e, r === "manager"),
         onSettled: () => setPending(null),
       },
     );
   };
   const remove = () => {
     setProblem(null);
-    del.mutate(m.userId, { onError: (e) => setProblem(refusal(e, m)) });
+    del.mutate(m.userId, { onError: (e) => refused(e) });
   };
 
   // The one removal this row offers, and its confirm.
@@ -283,7 +299,7 @@ function PersonRow({
             onChange={(r) => r && change(r)}
           />
         ) : (
-          <span className="px-[var(--oa-space-2)] text-[length:var(--oa-text-sm)]">
+          <span className="px-[var(--oa-space-2)] text-[length:var(--oa-text-sm)] max-[600px]:pl-0">
             {ROLE_LABEL[capped ? "viewer" : m.role]}
           </span>
         )}
@@ -649,6 +665,10 @@ export function SpacePeople({
           All members. They aren't listed.
         </p>
       )}
+      {!admin &&
+        rows.some((r) => r.role === "manager" && r.userId !== meId) && (
+          <p className={muted}>{MANAGER_ONLY}</p>
+        )}
       {frozen && (
         <p className={muted}>
           Group sync is off. Everyone below was kept as of the last sync and is

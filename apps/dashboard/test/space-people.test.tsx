@@ -372,6 +372,184 @@ it("a space manager can't raise to Manager or touch an admin-set Manager row", a
   expect(within(bob).getByText("Editor")).toBeVisible();
 });
 
+const managerRows = () =>
+  serve([
+    person({
+      userId: "r1",
+      user: { id: "r1", name: "Rina Patel", email: "rina@example.com" },
+      role: "manager",
+      manualRole: "manager",
+    }),
+    person({
+      userId: "m2",
+      user: { id: "m2", name: "Max Weber", email: "max@example.com" },
+      role: "manager",
+      source: "sync",
+      syncRole: "manager",
+      groups: [{ ...eng, role: "manager", via: "space" }],
+    }),
+  ]);
+
+it("a non-admin space manager sees every other manager row, manual or synced, as text with no controls", async () => {
+  mountWith([managerRows()], asManager);
+  for (const name of ["Rina Patel", "Max Weber"]) {
+    const r = await row(name);
+    expect(within(r).queryByRole("combobox")).toBeNull();
+    expect(within(r).queryByRole("button", { name: /More for/ })).toBeNull();
+    expect(within(r).getByText("Manager")).toBeVisible();
+  }
+});
+
+it("a non-admin space manager sees a frozen kept manager row as text too", async () => {
+  mountHosted(ENG, { directory: "frozen" }, asManager, [managerRows()]);
+  const r = await row("Max Weber");
+  expect(within(r).queryByRole("combobox")).toBeNull();
+  expect(within(r).queryByRole("button", { name: /More for/ })).toBeNull();
+  expect(within(r).getByText("Manager")).toBeVisible();
+});
+
+it("an org admin keeps the role select and Remove on manager rows", async () => {
+  mountWith([managerRows()]);
+  const r = await row("Rina Patel");
+  expect(
+    within(r).getByRole("combobox", { name: "Role for Rina Patel" }),
+  ).toBeVisible();
+  expect(
+    within(r).getByRole("button", { name: "More for Rina Patel" }),
+  ).toBeVisible();
+});
+
+it("an org admin can change a frozen kept manager row", async () => {
+  mountHosted(ENG, { directory: "frozen" }, undefined, [managerRows()]);
+  const r = await row("Max Weber");
+  expect(
+    within(r).getByRole("combobox", { name: "Role for Max Weber" }),
+  ).toBeVisible();
+});
+
+it("a stale 403 on Remove (a manager row the list showed as removable) says why by the row", async () => {
+  mountWith([
+    serve([
+      person({
+        userId: "l1",
+        user: { id: "l1", name: "Lee Chen", email: "lee@example.com" },
+        role: "editor",
+        manualRole: "editor",
+      }),
+    ]),
+    http.delete(`*/api/v1/spaces/${ID}/members/:u`, () =>
+      HttpResponse.json(
+        {
+          error: {
+            code: "space_forbidden",
+            message: "server text",
+            details: { target: "member" },
+          },
+        },
+        { status: 403 },
+      ),
+    ),
+  ]);
+  const r = await row("Lee Chen");
+  fireEvent.pointerDown(
+    within(r).getByRole("button", { name: "More for Lee Chen" }),
+    { button: 0, pointerType: "mouse" },
+  );
+  fireEvent.click(
+    await screen.findByRole("menuitem", { name: /^Remove from/ }),
+  );
+  fireEvent.click(
+    within(await screen.findByRole("alertdialog")).getByRole("button", {
+      name: "Remove",
+    }),
+  );
+  expect(
+    await within(r).findByText(
+      "Only an admin can change another manager's access.",
+    ),
+  ).toBeVisible();
+  expect(screen.queryByText("server text")).toBeNull();
+});
+
+it("a 403 on Remove or a non-promoting role change refetches the members", async () => {
+  const seen = calls("GET");
+  mountWith([
+    serve([
+      person({
+        userId: "l1",
+        user: { id: "l1", name: "Lee Chen", email: "lee@example.com" },
+        role: "editor",
+        manualRole: "editor",
+      }),
+    ]),
+    http.put(`*/api/v1/spaces/${ID}/members/:u`, () =>
+      HttpResponse.json(
+        {
+          error: {
+            code: "space_forbidden",
+            message: "server text",
+            details: { target: "member" },
+          },
+        },
+        { status: 403 },
+      ),
+    ),
+  ]);
+  const r = await row("Lee Chen");
+  const loads = () =>
+    seen.filter((c) => c.path === `/api/v1/spaces/${ID}/members`).length;
+  const before = loads();
+  fireEvent.click(
+    within(r).getByRole("combobox", { name: "Role for Lee Chen" }),
+  );
+  fireEvent.click(await screen.findByRole("option", { name: "Viewer" }));
+  expect(
+    await within(r).findByText(
+      "Only an admin can change another manager's access.",
+    ),
+  ).toBeVisible();
+  await waitFor(() => expect(loads()).toBeGreaterThan(before));
+});
+
+it("only a non-admin manager who can see another manager gets the muted line under the intro", async () => {
+  const line = "Only an admin can change another manager's access.";
+  mountWith([managerRows()], asManager);
+  await row("Rina Patel");
+  expect(await within(await people()).findAllByText(line)).toHaveLength(1);
+});
+
+it("the muted manager line is not shown to an org admin", async () => {
+  mountWith([managerRows()]);
+  await row("Rina Patel");
+  expect(
+    within(await people()).queryByText(
+      "Only an admin can change another manager's access.",
+    ),
+  ).toBeNull();
+});
+
+it("no muted manager line for a non-admin manager when no one else manages", async () => {
+  mountWith(
+    [
+      serve([
+        person({
+          userId: "l1",
+          user: { id: "l1", name: "Lee Chen", email: "lee@example.com" },
+          role: "editor",
+          manualRole: "editor",
+        }),
+      ]),
+    ],
+    asManager,
+  );
+  await row("Lee Chen");
+  expect(
+    within(await people()).queryByText(
+      "Only an admin can change another manager's access.",
+    ),
+  ).toBeNull();
+});
+
 it("a 403 space_forbidden on a role change shows the copy by the row and snaps back", async () => {
   mountWith([
     http.put(`*/api/v1/spaces/${ID}/members/:u`, () =>

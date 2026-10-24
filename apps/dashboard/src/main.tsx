@@ -15,7 +15,7 @@ async function startMocks() {
   const [
     { setupWorker },
     { createArtifactEvents, createHandlers, fixtures },
-    { HttpResponse, http, ws },
+    { HttpResponse, getResponse, http, ws },
   ] = await Promise.all([
     import("msw/browser"),
     import("@oa/shared/mocks"),
@@ -36,6 +36,64 @@ async function startMocks() {
         }),
       ),
     );
+  // ?mock=space-manager (with ?hosted=1): the caller is a plain member who manages
+  // Engineering, and its People list has two other managers (manual, synced).
+  if (params.get("mock") === "space-manager") {
+    const hostedHandlers = createHandlers({
+      hosted: parseHostedParam(params.get("hosted")) ?? {},
+    });
+    const row = (id: string, name: string, o: object) => ({
+      userId: id,
+      user: {
+        id,
+        name,
+        email: `${name.split(" ")[0]?.toLowerCase()}@example.com`,
+      },
+      status: "active",
+      source: "manual",
+      manualRole: null,
+      syncRole: null,
+      groups: [],
+      cap: null,
+      allMembers: null,
+      ...o,
+    });
+    extra.push(
+      http.get("*/api/v1/me", async ({ request }) => {
+        const res = await getResponse(hostedHandlers, request);
+        const me = (await res?.json()) as { user: { role: string } };
+        return HttpResponse.json({
+          ...me,
+          user: { ...me.user, role: "member" },
+        });
+      }),
+      http.get("*/api/v1/spaces/SpEngNpQrSt2uVwX/members", () => {
+        const items = [
+          row("r1", "Rina Patel", { role: "manager", manualRole: "manager" }),
+          row("m2", "Max Weber", {
+            role: "manager",
+            source: "sync",
+            syncRole: "manager",
+            groups: [
+              {
+                groupId: "gEng01",
+                email: "eng@example.com",
+                name: "Engineering",
+                role: "manager",
+                via: "space",
+              },
+            ],
+          }),
+          row("b1", "Bob Builder", { role: "editor", manualRole: "editor" }),
+        ];
+        return HttpResponse.json({
+          items,
+          nextCursor: null,
+          total: items.length,
+        });
+      }),
+    );
+  }
   // ?mock=name: no display name yet (suggested "Ada Lovelace"); after a PATCH the shared mock answers.
   if (params.get("mock") === "name") {
     let named = false;
