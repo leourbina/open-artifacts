@@ -370,7 +370,6 @@ export function storedMetadata(meta: UploadMetadata): Record<string, unknown> {
 
 const tagsOf = (t: Template): string[] =>
   ((t.migrations ?? []) as { tag: string }[]).map((x) => x.tag);
-const latestOf = (t: Template): string | null => tagsOf(t).at(-1) ?? null;
 
 /**
  * Constraints: a Durable Object class ships one release before the code that
@@ -474,7 +473,20 @@ interface OpContext {
 interface Cut {
   id: string;
   base: Record<string, string>;
+  /** A google-on upload may have gone live (session_cut_armed). */
+  armed: boolean;
 }
+
+/** What an upload attempt did: the tag it reached, and whether it may have landed. */
+interface UploadOut {
+  reached: string | null;
+  /** True from just before a script upload is sent until Cloudflare definitely refuses it. */
+  maybe: boolean;
+}
+
+/** A 4xx from Cloudflare: the request was refused and changed nothing. */
+const refusedByCf = (e: unknown) =>
+  e instanceof CfError && e.status >= 400 && e.status < 500;
 
 /** A checked rollback, planned before any write. */
 interface RollbackPlan {
@@ -1138,7 +1150,7 @@ export class WfpProvisioner {
       }
       return await this.steps(row, res, i, rel, secrets, meta);
     } catch (e) {
-      if (!(e instanceof LostLease)) await this.releaseQuietly("creating");
+      if (!(e instanceof LostLease)) await this.releaseQuietly("creating", e);
       if (e instanceof Error && !e.message.startsWith(`install ${id}`))
         e.message = `install ${id}: ${e.message}`;
       throw e;
@@ -1370,6 +1382,7 @@ export class WfpProvisioner {
         }
       }
       await this.hold();
+      const out: UploadOut = { reached: null, maybe: false };
       const sent = await this.uploadRelease({
         id,
         script: n.script,
@@ -1382,18 +1395,20 @@ export class WfpProvisioner {
         journal: row.do_migration_tag,
         tags,
         send,
+        out,
       });
+      const reached = out.reached;
       // Stored before the row moves on: a rerun that finds the row current
       // skips the upload, so the version's render must already be kept.
       await this.hold();
       await this.platform.putVersion(id, version, {
         vars: m.vars,
         metadata: storedMetadata(sent),
-        do_migration_tag: latest,
+        do_migration_tag: reached,
       });
       await this.write({
         version,
-        do_migration_tag: latest,
+        do_migration_tag: reached,
         vars: canonicalJson(m.vars),
       });
       await this.logged("create.upload", {
@@ -1463,6 +1478,8 @@ export class WfpProvisioner {
     send: Record<string, string>;
     probe?: boolean;
     onLive?: (live: string | null) => void;
+    /** Filled as the upload goes: the tag reached, and whether it may have landed. */
+    out?: UploadOut;
   }): Promise<UploadMetadata> {
     const { cf, env, target } = this;
     let sent: UploadMetadata | undefined;
@@ -1486,6 +1503,16 @@ export class WfpProvisioner {
           assetsJwt: jwt,
         },
       );
+    /** Every script PUT: `maybe` is true from just before it until Cloudflare refuses it. */
+    const send = async (meta: UploadMetadata, modules: Module[]) => {
+      if (u.out) u.out.maybe = true;
+      try {
+        await cf.scriptUpload(target, u.script, meta, modules);
+      } catch (e) {
+        if (u.out && refusedByCf(e)) u.out.maybe = false;
+        throw e;
+      }
+    };
     const upload = async (tag: string | null, probe = false) => {
       this.assertHooksAllowed(u.rec.variant, u.m.testHooks);
       const mods = await this.readModules(u.rec);
@@ -1495,18 +1522,29 @@ export class WfpProvisioner {
       const meta = render(mods, template, tag, jwt);
       if (probe && meta.migrations) meta.migrations.old_tag = PROBE_TAG;
       assertOwnResource(u.script, env);
-      await cf.scriptUpload(target, u.script, meta, mods.modules);
+      await send(meta, mods.modules);
       sent = meta;
+      // What the script now runs: the new tag when steps went, else the one sent against.
+      if (u.out) u.out.reached = meta.migrations?.new_tag ?? tag;
     };
     let journal = u.exists ? u.journal : null;
     if (u.probe && u.exists) {
       const mods = await this.readModules(u.rec);
       const template = await this.readTemplate(u.rec);
-      const live = await this.probeTag(
-        u.script,
-        render(mods, template, null, "probe"),
-        mods.modules,
-      );
+      if (u.out) u.out.maybe = true;
+      let live: string | null | undefined;
+      try {
+        live = await this.probeTag(
+          u.script,
+          render(mods, template, null, "probe"),
+          mods.modules,
+        );
+      } catch (e) {
+        if (u.out && refusedByCf(e)) u.out.maybe = false;
+        throw e;
+      }
+      // A 412 (or no probe at all): nothing landed.
+      if (u.out) u.out.maybe = false;
       if (live !== undefined) {
         if (live !== journal)
           this.notes.push(
@@ -1713,10 +1751,23 @@ export class WfpProvisioner {
   }
 
   /** Error paths: drops the lock if still held, never masking the error. */
-  private async releaseQuietly(state: InstallState): Promise<void> {
+  /**
+   * Error paths: drops the lock if still held, never masking the error. With
+   * the error, also audits `<op>.aborted` (paths that already audited a
+   * post-upload outcome pass none).
+   */
+  private async releaseQuietly(
+    state: InstallState,
+    e?: unknown,
+  ): Promise<void> {
     const h = this.held;
     this.held = null;
-    if (h) await this.platform.finish(h.id, h.lease, state).catch(() => false);
+    if (!h) return;
+    if (e !== undefined)
+      await this.platform
+        .audit(h.id, `${h.op}.aborted`, { state, error: errCode(e) })
+        .catch(() => {});
+    await this.platform.finish(h.id, h.lease, state).catch(() => false);
   }
 
   /** Create's checks on an install's render inputs: variant, codes and Turnstile. */
@@ -1756,7 +1807,22 @@ export class WfpProvisioner {
       throw new ProvisionRefused(
         `install ${row.id} has no stored vars (created before per-version metadata)`,
       );
-    return JSON.parse(row.vars) as Record<string, string>;
+    let v: unknown;
+    try {
+      v = JSON.parse(row.vars);
+    } catch {
+      v = null;
+    }
+    if (
+      !v ||
+      typeof v !== "object" ||
+      Array.isArray(v) ||
+      Object.values(v).some((x) => typeof x !== "string")
+    )
+      throw new ProvisionRefused(
+        `install ${row.id}: installs.vars is not an object of strings; refusing to render it`,
+      );
+    return v as Record<string, string>;
   }
 
   private pendingCut(row: InstallRow): Cut | null {
@@ -1765,6 +1831,7 @@ export class WfpProvisioner {
       id: row.session_cut,
       base:
         row.session_cut_base === null ? {} : JSON.parse(row.session_cut_base),
+      armed: row.session_cut_armed === 1,
     };
   }
 
@@ -1781,14 +1848,22 @@ export class WfpProvisioner {
     version: string,
   ): Promise<boolean> {
     if (cut === null) return false;
-    if (!googleNewlyEnabled(cut.base, live)) {
-      await this.write({ session_cut: null, session_cut_base: null });
+    const clear = {
+      session_cut: null,
+      session_cut_base: null,
+      session_cut_armed: 0,
+    };
+    // Fix round 5: an armed cut (a google-on upload may have gone live) is
+    // applied even when this upload renders google off: sessions minted while
+    // google was live must still end. Dropped only when none ever was.
+    if (!cut.armed && !googleNewlyEnabled(cut.base, live)) {
+      await this.write(clear);
       await this.logged("vars.session_cut_dropped", { version });
       return false;
     }
     await this.hold();
     await this.sessionCut(d1Id, d1Name, cut.id);
-    await this.write({ session_cut: null, session_cut_base: null });
+    await this.write(clear);
     await this.logged("vars.session_cut", { version });
     return true;
   }
@@ -2064,7 +2139,7 @@ export class WfpProvisioner {
       await this.logged("upgrade.start", { from, to });
       await this.hold();
       await this.migrate(rel.rec, d1Id, n.d1);
-      const reached = latestOf(rel.template);
+      const out: UploadOut = { reached: null, maybe: false };
       await this.hold();
       const sent = await this.uploadRelease({
         id,
@@ -2080,8 +2155,11 @@ export class WfpProvisioner {
         send: {},
         probe: true,
         onLive: this.doRule(rel.template),
+        out,
       });
       uploaded = true;
+      // Fix round 5: the tag the upload actually reached (probed, then sent).
+      const reached = out.reached;
       await this.hold();
       await this.platform.putVersion(id, to, {
         vars,
@@ -2124,7 +2202,7 @@ export class WfpProvisioner {
     } catch (e) {
       if (e instanceof LostLease) throw e;
       if (!uploaded && !(e instanceof ProbeAccepted)) {
-        await this.releaseQuietly("active");
+        await this.releaseQuietly("active", e);
         throw e;
       }
       // L7: the new script may be live; say so and leave a trail.
@@ -2207,7 +2285,7 @@ export class WfpProvisioner {
           ...(r.note === undefined ? {} : { note: r.note }),
         };
       } catch (e) {
-        if (!(e instanceof LostLease)) await this.releaseQuietly("active");
+        if (!(e instanceof LostLease)) await this.releaseQuietly("active", e);
         throw e;
       }
     });
@@ -2442,13 +2520,15 @@ export class WfpProvisioner {
       await this.claim(row, ["active"], "upgrading", "vars");
       let uploaded = false;
       let sessionCut = false;
+      let armedHere = false;
+      const out: UploadOut = { reached: null, maybe: false };
       try {
         if (raiseFloor) {
           await this.hold();
           await this.platform.raiseFloorSeq(rel.floor.seq);
         }
         if (cut === null && googleNewlyEnabled(prev, vars)) {
-          cut = { id: hex16(), base: prev };
+          cut = { id: hex16(), base: prev, armed: false };
           await this.write({
             session_cut: cut.id,
             session_cut_base: canonicalJson(prev),
@@ -2463,6 +2543,13 @@ export class WfpProvisioner {
           version,
           changed: changed.join(","),
         });
+        // Fix round 5: armed right before an upload that turns google on goes
+        // out; only a definite refusal from Cloudflare disarms it.
+        if (cut !== null && !cut.armed && googleNewlyEnabled(cut.base, vars)) {
+          await this.write({ session_cut_armed: 1 });
+          cut.armed = true;
+          armedHere = true;
+        }
         await this.hold();
         const sent = await this.uploadRelease({
           id,
@@ -2478,6 +2565,7 @@ export class WfpProvisioner {
           send,
           probe: true,
           onLive: this.doRule(rel.template),
+          out,
         });
         uploaded = true;
         await this.write({ vars: canonicalJson(vars) });
@@ -2485,8 +2573,9 @@ export class WfpProvisioner {
         await this.platform.putVersion(id, version, {
           vars,
           metadata: storedMetadata(sent),
-          do_migration_tag: latestOf(rel.template),
+          do_migration_tag: out.reached,
         });
+        await this.write({ do_migration_tag: out.reached });
         // M1: the vars are live once the upload is accepted; cut now.
         sessionCut = await this.settleCutOrDefer(
           cut,
@@ -2502,8 +2591,11 @@ export class WfpProvisioner {
         return { id, version, ok: true, sessionCut };
       } catch (e) {
         if (e instanceof LostLease) throw e;
-        if (!uploaded && !(e instanceof ProbeAccepted)) {
-          await this.releaseQuietly("active");
+        if (!uploaded && !(e instanceof ProbeAccepted) && !out.maybe) {
+          // Definitely not live: a cut armed by this attempt is disarmed.
+          if (armedHere)
+            await this.write({ session_cut_armed: 0 }).catch(() => {});
+          await this.releaseQuietly("active", e);
           throw e;
         }
         // L7: the new vars are live; report it and leave a trail.
@@ -2607,7 +2699,8 @@ export class WfpProvisioner {
             await this.logged("turnstile.rotate", { sitekey: ts.sitekey });
             await this.release("active");
           } catch (e) {
-            if (!(e instanceof LostLease)) await this.releaseQuietly("active");
+            if (!(e instanceof LostLease))
+              await this.releaseQuietly("active", e);
             throw e;
           }
           out.push({ id: row.id, ok: true, rotated: true });
@@ -2744,7 +2837,7 @@ export class WfpProvisioner {
         return { id, ok: true, state: "deleted" };
       } catch (e) {
         // Stays deleting; the lock goes so a rerun can resume at once.
-        if (!(e instanceof LostLease)) await this.releaseQuietly("deleting");
+        if (!(e instanceof LostLease)) await this.releaseQuietly("deleting", e);
         throw e;
       }
     });

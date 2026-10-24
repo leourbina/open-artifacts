@@ -35,6 +35,8 @@ export interface InstallRow {
   row_version: number;
   /** The vars a pending session_cut was minted against (0003). */
   session_cut_base: string | null;
+  /** 1 once an upload turning google on may have gone live (0003). */
+  session_cut_armed: number;
 }
 
 export type InstallState =
@@ -99,6 +101,7 @@ const UPDATABLE = new Set([
   "session_cut",
   "vars",
   "session_cut_base",
+  "session_cut_armed",
 ]);
 
 export class PlatformDb {

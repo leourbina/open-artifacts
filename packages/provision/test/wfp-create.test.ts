@@ -3153,6 +3153,7 @@ describe("platform D1 migration (decisions 10, M1, M3)", () => {
       "session_cut",
       "row_version",
       "session_cut_base",
+      "session_cut_armed",
     ]);
   });
 

@@ -2120,6 +2120,161 @@ describe("fix round 4", () => {
   });
 });
 
+describe("fix round 5 (security review)", () => {
+  const failOnce = (s: S, match: (body: string, req: Request) => boolean) => {
+    let armed = true;
+    return s.cfWith((async (u: RequestInfo | URL, init?: RequestInit) => {
+      const req = new Request(u, init);
+      const body =
+        req.method === "POST" || req.method === "PUT"
+          ? await req.clone().text()
+          : "";
+      if (armed && match(body, req)) {
+        armed = false;
+        return Response.json(
+          { success: false, errors: [{ code: 7500, message: "boom" }] },
+          { status: 400 },
+        );
+      }
+      return s.fake.fetch(u, init);
+    }) as typeof fetch);
+  };
+
+  it("1: tampered install_versions.metadata refuses the rollback with zero uploads", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    await s.p.upgrade(inst.id, "0.24.0");
+    const m = JSON.parse(s.stored(inst.id, "0.23.0")?.metadata as string);
+    m.compatibility_date = "2020-01-01";
+    s.db()
+      .prepare(
+        "UPDATE install_versions SET metadata = ? WHERE install_id = ? AND version = ?",
+      )
+      .run(canonicalJson(m), inst.id, "0.23.0");
+    const from = s.fake.log.length;
+    const e = await fails(s.p.rollback(inst.id));
+    expect(e).toBeInstanceOf(ProvisionRefused);
+    expect(e.message).toMatch(/no longer renders the metadata stored/);
+    expect(uploads(s.fake, from)).toHaveLength(0);
+    expect(probes(s.fake, from)).toHaveLength(0);
+  });
+
+  it("1: tampered installs.vars refuses upgrade and rollback with zero uploads", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    await s.p.upgrade(inst.id, "0.24.0");
+    const from = s.fake.log.length;
+    for (const bad of [canonicalJson({ NOPE: "1" }), "{not json", "[]"]) {
+      s.db()
+        .prepare("UPDATE installs SET vars = ? WHERE id = ?")
+        .run(bad, inst.id);
+      for (const op of [
+        () => s.p.upgrade(inst.id, "0.25.0"),
+        () => s.p.rollback(inst.id),
+      ])
+        expect(await fails(op())).toBeInstanceOf(ProvisionRefused);
+    }
+    expect(uploads(s.fake, from)).toHaveLength(0);
+    expect(probes(s.fake, from)).toHaveLength(0);
+    expect(s.row(inst.id)).toMatchObject({ version: "0.24.0", lease: null });
+  });
+
+  it("2: every early exit after the claim leaves an <op>.aborted audit row", async () => {
+    // Manual rollback failing after rollback.start (live tag differs).
+    const s = setup();
+    const a = keep(await s.p.create(input("alpha")));
+    await s.p.upgrade(a.id, "0.24.0");
+    (s.scriptOf(a.id) as { migrationTag: string | null }).migrationTag = "v2";
+    await fails(s.p.rollback(a.id));
+    expect(s.audit(a.id)).toEqual(
+      expect.arrayContaining(["rollback.start", "rollback.aborted"]),
+    );
+    // Upgrade failing before the upload (the probe finds a tag not in the release).
+    (s.scriptOf(a.id) as { migrationTag: string | null }).migrationTag = "v9";
+    await fails(s.p.upgrade(a.id, "0.28.0"));
+    expect(s.audit(a.id)).toContain("upgrade.aborted");
+    // updateVars failing before the upload.
+    const b = keep(await s.p.create(input("beta")));
+    s.fake.inject((m, p) => m === "PUT" && /\/scripts\/oa-s-/.test(p));
+    await fails(s.p.updateVars(b.id, { FEATURES: "x" }));
+    expect(s.audit(b.id)).toContain("vars.aborted");
+    // delete failing mid-way.
+    s.fake.inject((m, p) => m === "DELETE" && /\/scripts\/oa-s-/.test(p));
+    await fails(s.p.delete(b.id, b.id));
+    expect(s.audit(b.id)).toContain("delete.aborted");
+    // create failing after its claim.
+    s.fake.health = () => ({ ok: false });
+    await fails(s.p.create(input("gamma")));
+    const g = (
+      s.db().prepare("SELECT id FROM installs WHERE slug = 'gamma'").get() as {
+        id: string;
+      }
+    ).id;
+    expect(s.audit(g)).toContain("create.aborted");
+  });
+
+  it("3: the DO tag actually reached is stored in installs and install_versions", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input()));
+    const from = s.fake.log.length;
+    await s.p.upgrade(inst.id, "0.25.0");
+    const sent = metaOf(uploads(s.fake, from)[0]?.body as string);
+    expect(sent.migrations?.new_tag).toBe("v2");
+    expect(s.scriptOf(inst.id)?.migrationTag).toBe("v2");
+    expect(s.row(inst.id).do_migration_tag).toBe("v2");
+    expect(s.stored(inst.id, "0.25.0")?.do_migration_tag).toBe("v2");
+    await s.p.updateVars(inst.id, { FEATURES: "beta" });
+    expect(s.row(inst.id).do_migration_tag).toBe("v2");
+    expect(s.stored(inst.id, "0.25.0")?.do_migration_tag).toBe("v2");
+  });
+
+  it("4: a google-on upload accepted before a crash: the next op applies the cut even when it renders google off, exactly once", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input("finqore", { vars: CODES })));
+    const epoch = epochOf(s, inst.id);
+    // The upload lands, then the vars write fails (stands in for a crash).
+    const p = s.mk({
+      cf: failOnce(s, (body) => body.includes("UPDATE installs SET vars")),
+    });
+    const r = keep(
+      await p.updateVars(inst.id, { AUTH_PROVIDERS: "email,google" }),
+    );
+    expect(r.ok).toBe(false);
+    expect(s.row(inst.id).session_cut).not.toBeNull();
+    expect(s.row(inst.id).session_cut_armed).toBe(1);
+    expect(JSON.parse(s.row(inst.id).vars)).toEqual(CODES);
+    expect(epoch()).toBe(0);
+    // The next op renders google off: it still cuts the sessions minted while google was live.
+    const r2 = keep(
+      await s.p.updateVars(inst.id, { ...CODES, FEATURES: "beta" }),
+    );
+    expect(r2).toMatchObject({ ok: true, sessionCut: true });
+    expect(epoch()).toBe(1);
+    expect(s.row(inst.id)).toMatchObject({
+      session_cut: null,
+      session_cut_armed: 0,
+    });
+    await s.p.updateVars(inst.id, { ...CODES, FEATURES: "gamma" });
+    expect(epoch()).toBe(1);
+  });
+
+  it("4: no google-on upload ever accepted: the cut is dropped", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input("finqore", { vars: CODES })));
+    const epoch = epochOf(s, inst.id);
+    s.fake.inject((m, p) => m === "PUT" && /\/scripts\/oa-s-/.test(p));
+    await fails(s.p.updateVars(inst.id, { AUTH_PROVIDERS: "email,google" }));
+    expect(s.row(inst.id)).toMatchObject({ session_cut_armed: 0 });
+    expect(s.row(inst.id).session_cut).not.toBeNull();
+    const r = keep(
+      await s.p.updateVars(inst.id, { ...CODES, FEATURES: "beta" }),
+    );
+    expect(r).toMatchObject({ ok: true, sessionCut: false });
+    expect(epoch()).toBe(0);
+    expect(s.audit(inst.id)).toContain("vars.session_cut_dropped");
+  });
+});
+
 describe("no secret in any error, result, audit row or platform row", () => {
   it("collected values", () => {
     expect(SENSITIVE.size).toBeGreaterThan(20);

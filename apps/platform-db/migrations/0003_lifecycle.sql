@@ -1,11 +1,13 @@
 -- P1 Task 5: upgrade, rollback, var changes and delete.
 --
 -- Every successful upload stores the install's rendered upload metadata for
--- that version (bindings, compat, tags, assets config; never a secret value
--- and never an assets jwt: secrets stay on the script through keep_bindings),
--- the vars it was rendered from, and the Durable Object tag it reached.
--- rollback re-uploads exactly this metadata. One row per install and version;
--- a var change rewrites the row of the live version.
+-- that version (bindings, compat, tags, assets config; never a secret value,
+-- never an assets jwt and never the owner email: secrets stay on the script
+-- through keep_bindings), the vars it was rendered from, and the Durable
+-- Object tag it reached. A rollback renders the previous release again with
+-- the install's current vars and refuses unless everything not derived from
+-- vars equals this stored metadata. One row per install and version; a var
+-- change rewrites the row of the live version.
 CREATE TABLE IF NOT EXISTS install_versions (
   install_id TEXT NOT NULL REFERENCES installs (id),
   version TEXT NOT NULL,
@@ -16,10 +18,11 @@ CREATE TABLE IF NOT EXISTS install_versions (
   PRIMARY KEY (install_id, version)
 );
 
--- The operation lock. create and every lifecycle operation take it with a compare-and-swap
--- on (state, lease_until) and clears it when it ends, so a second upgrade,
--- rollback, var change or delete is refused while one runs. A process that
--- dies holding it leaves lease_until in the past after the lease time.
+-- The operation lock. create and every lifecycle operation take it with a
+-- compare-and-swap on (state, row_version, lease_until), renew it before each
+-- step and clear it when they end, so a second operation on the install is
+-- refused while one runs. A process that dies holding it leaves lease_until
+-- in the past after the lease time.
 ALTER TABLE installs ADD COLUMN lease TEXT;
 ALTER TABLE installs ADD COLUMN lease_until INTEGER;
 
@@ -30,9 +33,12 @@ ALTER TABLE installs ADD COLUMN vars TEXT;
 
 -- A session cut (epoch bump) still owed to the install's own D1 after google
 -- was newly enabled: the id and the vars it was minted against (the base) are
--- written before the new vars go out. Right after any upload is accepted the
--- cut runs when the uploaded vars have google newly on relative to the base,
--- and is dropped otherwise; the install's D1 records the id with the bump.
+-- written before the new vars go out, and session_cut_armed is set right
+-- before an upload that turns google on is sent. It is cleared again only when
+-- Cloudflare definitely refused that upload. Right after any later upload is
+-- accepted the cut runs when it is armed (a google-on upload may have gone
+-- live) or the uploaded vars have google newly on relative to the base, and
+-- is dropped otherwise; the install's D1 records the id with the bump.
 ALTER TABLE installs ADD COLUMN session_cut TEXT;
 
 -- Bumped on every write of the row (trigger below): an operation claims the
@@ -40,6 +46,7 @@ ALTER TABLE installs ADD COLUMN session_cut TEXT;
 ALTER TABLE installs ADD COLUMN row_version INTEGER NOT NULL DEFAULT 0;
 
 ALTER TABLE installs ADD COLUMN session_cut_base TEXT;
+ALTER TABLE installs ADD COLUMN session_cut_armed INTEGER NOT NULL DEFAULT 0;
 
 CREATE TRIGGER IF NOT EXISTS installs_row_version
 AFTER UPDATE ON installs
