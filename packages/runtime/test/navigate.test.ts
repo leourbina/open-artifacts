@@ -17,6 +17,12 @@ const navs = () =>
   parent.postMessage.mock.calls
     .map((c) => c[0] as ArtifactToShell)
     .filter((m) => m.type === "navigate");
+const opens = () =>
+  parent.postMessage.mock.calls
+    .map((c) => c[0] as ArtifactToShell)
+    .filter((m) => m.type === "open");
+/** jsdom can't make a trusted event; tests flip what the runtime sees. */
+let trusted = true;
 const fromShell = (data: unknown) =>
   window.dispatchEvent(
     new MessageEvent("message", { data, source: parent as unknown as Window }),
@@ -72,7 +78,12 @@ beforeEach(async () => {
     value: parent,
     configurable: true,
   });
-  createRuntime({ loadSchemas: async () => schemas, signal: ctl.signal });
+  trusted = true;
+  createRuntime({
+    loadSchemas: async () => schemas,
+    signal: ctl.signal,
+    isTrusted: () => trusted,
+  });
   await flush();
 });
 afterEach(() => {
@@ -105,13 +116,22 @@ describe("oa:navigate", () => {
     ["_blank target", `${APP}/a/abc`, { target: "_blank" }],
     ["named target", `${APP}/a/abc`, { target: "w" }],
     ["download", `${APP}/a/abc`, { download: "" }],
-    ["another origin", "https://other.example/a/abc", {}],
-    ["another app path", `${APP}/settings`, {}],
-    ["a deeper /a/ path", `${APP}/a/abc/edit`, {}],
   ])("%s is untouched", async (_n, href, attrs) => {
     await welcome();
     expect(await click(href, attrs)).toBe(false);
     expect(navs()).toEqual([]);
+  });
+
+  it("a <base target> counts as the link's target", async () => {
+    await welcome();
+    const base = document.createElement("base");
+    base.target = "_blank";
+    document.head.append(base);
+    expect(await click(`${APP}/a/abc`)).toBe(false);
+    expect(await click("https://other.example/x")).toBe(false);
+    base.remove();
+    expect(navs()).toEqual([]);
+    expect(opens()).toEqual([]);
   });
 
   it.each([
@@ -140,5 +160,69 @@ describe("oa:navigate", () => {
     await click(`${APP}/a/abc`);
     window.removeEventListener("click", stop, true);
     expect(navs()).toEqual([]);
+  });
+});
+
+describe("oa:open", () => {
+  it.each([
+    ["another origin", "https://other.example/a/abc?q=1#h"],
+    ["http", "http://other.example/"],
+  ])("%s posts open with the nonce and is prevented", async (_n, href) => {
+    await welcome();
+    expect(await click(href)).toBe(true);
+    expect(opens()).toEqual([
+      { oa: 1, type: "open", url: new URL(href).href, nonce: N },
+    ]);
+    expect(navs()).toEqual([]);
+  });
+
+  it("_self target opens too", async () => {
+    await welcome();
+    expect(await click("https://other.example/", { target: "_self" })).toBe(
+      true,
+    );
+    expect(opens()).toHaveLength(1);
+  });
+
+  it.each([
+    ["_blank target", "https://other.example/", { target: "_blank" }],
+    ["named target", "https://other.example/", { target: "w" }],
+    ["download", "https://other.example/f.zip", { download: "" }],
+    ["the artifact's own pages", "/p/page2.html", {}],
+    ["another app path", `${APP}/settings`, {}],
+    ["an app OAuth page", `${APP}/oauth/authorize?client_id=x`, {}],
+    ["a deeper /a/ path", `${APP}/a/abc/edit`, {}],
+    ["an in-page anchor", "#section", {}],
+    ["mailto", "mailto:a@example.com", {}],
+    ["javascript", "javascript:void(0)", {}],
+    ["data", "data:text/html,hi", {}],
+  ])("%s is untouched", async (_n, href, attrs) => {
+    await welcome();
+    expect(await click(href, attrs)).toBe(false);
+    expect(opens()).toEqual([]);
+  });
+
+  it.each([
+    { ctrlKey: true },
+    { metaKey: true },
+    { shiftKey: true },
+    { altKey: true },
+    { button: 1 },
+  ])("modifier or non-primary click %o is untouched", async (init) => {
+    await welcome();
+    expect(await click("https://other.example/", {}, init)).toBe(false);
+    expect(opens()).toEqual([]);
+  });
+
+  it("a script's synthetic click is untouched", async () => {
+    await welcome();
+    trusted = false;
+    expect(await click("https://other.example/")).toBe(false);
+    expect(opens()).toEqual([]);
+  });
+
+  it("before welcome (no shell yet) is untouched", async () => {
+    expect(await click("https://other.example/")).toBe(false);
+    expect(opens()).toEqual([]);
   });
 });

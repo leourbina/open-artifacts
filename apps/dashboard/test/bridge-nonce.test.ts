@@ -211,3 +211,17 @@ describe("bridge navigate", () => {
     expect(onNavigate).not.toHaveBeenCalled();
   });
 });
+
+describe("bridge open", () => {
+  const OPEN = { oa: 1, type: "open", url: "https://other.example/x" };
+
+  it("forwards open only with the current nonce", () => {
+    const onOpen = vi.fn();
+    mk({ onOpen });
+    raw(OPEN);
+    raw({ ...OPEN, nonce: "AAAAAAAAAAAAAAAAAAAAAA" });
+    expect(onOpen).not.toHaveBeenCalled();
+    send(OPEN);
+    expect(onOpen).toHaveBeenCalledWith("https://other.example/x");
+  });
+});
