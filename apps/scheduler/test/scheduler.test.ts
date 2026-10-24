@@ -154,7 +154,39 @@ const NOW = Date.UTC(2026, 9, 24, 3, 17);
 
 /** The whole log vocabulary: install ids, fixed categories and counts. */
 const LOG_LINE =
-  /^(?:nightly failed (?:timeout|not_found|canceled|exception) i[a-z0-9]{11}|nightly summary active=\d+ ok=\d+ failed=\d+ skipped=\d+|nightly invalid ids=\d+|nightly scale active=\d+ over 300|nightly aborted (?:env|exception))$/;
+  /^(?:nightly failed (?:timeout|not_found|canceled|exception) i[a-z0-9]{11}|nightly skipped (?:state|deadline|recheck|db_error) i[a-z0-9]{11}|nightly db_error i[a-z0-9]{11}|nightly leaked i[a-z0-9]{11}|nightly summary active=\d+ ok=\d+ failed=\d+ skipped=\d+ db_errors=\d+ leaked=\d+|nightly invalid ids=\d+|nightly scale active=\d+ over 300|nightly aborted (?:env|exception))$/;
+
+const DAY = 86_400_000;
+const NONE = { dbErrors: [], leaked: [] };
+
+/** PLATFORM_DB with the per-call re-check (only) replaced for some ids. */
+function recheckDb(
+  behave: (id: string) => "ok" | "throw" | "stall",
+): D1Database {
+  return new Proxy(db, {
+    get(t, k) {
+      if (k !== "prepare") return Reflect.get(t, k);
+      return (sql: string) => {
+        const st = t.prepare(sql);
+        if (!sql.startsWith("SELECT 1 AS ok")) return st;
+        return {
+          bind: (id: string, ...rest: unknown[]) => {
+            const b = behave(id);
+            const real = st.bind(id, ...rest);
+            return {
+              first: () =>
+                b === "throw"
+                  ? Promise.reject(new Error(`D1_ERROR for ${id}`))
+                  : b === "stall"
+                    ? new Promise(() => {})
+                    : real.first(),
+            };
+          },
+        };
+      };
+    },
+  }) as D1Database;
+}
 
 const ids = (n: number, state: State = "active") =>
   Array.from({ length: n }, (_, k) => ({ id: idOf(k), state }));
@@ -264,6 +296,7 @@ describe("runNightly", () => {
       ok: [],
       failed: [{ id: idOf(0), reason: "timeout" }],
       skipped: [],
+      ...NONE,
     });
   });
 
@@ -323,6 +356,7 @@ describe("runNightly", () => {
       ok: [],
       failed: [],
       skipped: [],
+      ...NONE,
     });
     expect(f.scripts).toEqual([]);
   });
@@ -337,7 +371,7 @@ describe("runNightly", () => {
     const lines = captureLogs();
     const f = fakes();
     const r = await runNightly(f.env, NOW);
-    expect(r).toEqual({ ok: [idOf(0)], failed: [], skipped: [] });
+    expect(r).toEqual({ ok: [idOf(0)], failed: [], skipped: [], ...NONE });
     // A count only: the bad value itself is never logged.
     expect(lines).toEqual(["nightly invalid ids=3"]);
     expect(f.scripts).toEqual([`oa-s-${idOf(0)}`]);
@@ -410,7 +444,9 @@ describe("runNightly", () => {
     expect(f.calls.map((c) => c.script)).toEqual(
       [0, 4].map((n) => `oa-s-${idOf(n)}`),
     );
-    expect(lines.some((l) => l.startsWith("nightly failed"))).toBe(false);
+    expect(lines).toEqual(
+      [1, 2, 3].map((n) => `nightly skipped state ${idOf(n)}`),
+    );
   });
 
   it("an expired lease doesn't block the call", async () => {
@@ -426,7 +462,12 @@ describe("runNightly", () => {
     ]);
     const f = fakes();
     const r = await runNightly(f.env, NOW);
-    expect(r).toEqual({ ok: [idOf(1)], failed: [], skipped: [idOf(0)] });
+    expect(r).toEqual({
+      ok: [idOf(1)],
+      failed: [],
+      skipped: [idOf(0)],
+      ...NONE,
+    });
   });
 
   it("stops dispatching at deadlineMs; the rest is skipped and never called", async () => {
@@ -441,6 +482,150 @@ describe("runNightly", () => {
     expect(r.skipped.length).toBeGreaterThanOrEqual(5);
     expect([...r.ok, ...r.skipped]).toEqual(ids(10).map((x) => x.id));
     expect(f.calls).toHaveLength(r.ok.length);
+  });
+
+  it("logs each skipped id with its reason", async () => {
+    await seed(ids(6));
+    const lines = captureLogs();
+    const f = fakes("staging", () => "ok", 40);
+    const r = await runNightly(f.env, 0, { concurrency: 1, deadlineMs: 60 });
+    expect(r.skipped.length).toBeGreaterThan(0);
+    expect(lines.filter((l) => l.startsWith("nightly skipped"))).toEqual(
+      r.skipped.map((id) => `nightly skipped deadline ${id}`),
+    );
+  });
+
+  it("six hanging installs at the head no longer starve the rest: a stuck call frees its lane after leakMs and counts as leaked", async () => {
+    await seed(ids(26));
+    const lines = captureLogs();
+    // Day 0: the rotation starts at the head, where the six hang.
+    const f = fakes("staging", (s) => (n36(s) < 6 ? "hang" : "ok"));
+    const r = await runNightly(f.env, 0, {
+      timeoutMs: 20,
+      leakMs: 30,
+      deadlineMs: 5_000,
+    });
+    const head = [0, 1, 2, 3, 4, 5].map(idOf);
+    expect(r.ok).toHaveLength(20);
+    expect(r.skipped).toEqual([]);
+    expect(r.failed).toEqual(head.map((id) => ({ id, reason: "timeout" })));
+    expect(r.leaked).toEqual(head);
+    for (const id of head) expect(lines).toContain(`nightly leaked ${id}`);
+  });
+
+  it("within leakMs a stuck call still holds its lane (the cap holds)", async () => {
+    await seed(ids(8));
+    const f = fakes("staging", (s) => (n36(s) < 2 ? "hang" : "ok"), 5);
+    const r = await runNightly(f.env, 0, {
+      concurrency: 2,
+      timeoutMs: 20,
+      leakMs: 200,
+    });
+    expect(r.ok).toHaveLength(6);
+    // Nothing else started until the two stuck calls were given up as leaked.
+    const firstOk = f.calls.findIndex((c) => n36(c.script) >= 2);
+    expect(firstOk).toBe(2);
+    expect(r.leaked).toEqual([idOf(0), idOf(1)]);
+  });
+
+  it("rotates the start by UTC day, over the stable id order", async () => {
+    await seed(ids(5));
+    const order = async (day: number) => {
+      const f = fakes();
+      await runNightly(f.env, day * DAY + 3_600_000, { concurrency: 1 });
+      return f.calls.map((c) => n36(c.script));
+    };
+    expect(await order(0)).toEqual([0, 1, 2, 3, 4]);
+    expect(await order(1)).toEqual([1, 2, 3, 4, 0]);
+    expect(await order(7)).toEqual([2, 3, 4, 0, 1]);
+  });
+
+  it("a different day gives a starved tail its turn", async () => {
+    await seed(ids(12));
+    const ran = new Set<string>();
+    for (const day of [0, 1, 2, 3, 4, 5]) {
+      const f = fakes("staging", () => "ok", 30);
+      const r = await runNightly(f.env, day * DAY, {
+        concurrency: 1,
+        deadlineMs: 70,
+      });
+      for (const id of r.ok) ran.add(id);
+    }
+    expect(ran.size).toBeGreaterThan(6);
+  });
+
+  it("a stalled re-check is skipped after recheckMs, not an unbounded wait", async () => {
+    await seed(ids(3));
+    const lines = captureLogs();
+    const f = fakes();
+    const env = {
+      ...f.env,
+      PLATFORM_DB: recheckDb((id) => (id === idOf(1) ? "stall" : "ok")),
+    } as Env;
+    const r = await runNightly(env, 0, { recheckMs: 30 });
+    expect([...r.ok].sort()).toEqual([idOf(0), idOf(2)]);
+    expect(r.skipped).toEqual([idOf(1)]);
+    expect(r.failed).toEqual([]);
+    expect(lines).toEqual([`nightly skipped recheck ${idOf(1)}`]);
+  });
+
+  it("a stalled re-check is bounded by the deadline too", async () => {
+    await seed(ids(1));
+    const f = fakes();
+    const env = {
+      ...f.env,
+      PLATFORM_DB: recheckDb(() => "stall"),
+    } as Env;
+    const t0 = Date.now();
+    const r = await runNightly(env, 0, { deadlineMs: 40, recheckMs: 5_000 });
+    expect(Date.now() - t0).toBeLessThan(2_000);
+    expect(r.skipped).toEqual([idOf(0)]);
+    expect(f.calls).toEqual([]);
+  });
+
+  it("a D1 error on the re-check is db_error, never blamed on the install", async () => {
+    await seed(ids(3));
+    const lines = captureLogs();
+    const f = fakes();
+    const env = {
+      ...f.env,
+      PLATFORM_DB: recheckDb((id) => (id === idOf(1) ? "throw" : "ok")),
+    } as Env;
+    const r = await runNightly(env, 0, { concurrency: 1 });
+    expect(r.ok).toEqual([idOf(0), idOf(2)]);
+    expect(r.failed).toEqual([]);
+    expect(r.dbErrors).toEqual([idOf(1)]);
+    expect(lines).toEqual([`nightly db_error ${idOf(1)}`]);
+    expect(lines.join("\n")).not.toMatch(/D1_ERROR/);
+  });
+
+  it("three consecutive db_errors stop dispatching; the rest is skipped and the summary still lands", async () => {
+    await seed(ids(10));
+    const lines = captureLogs();
+    const f = fakes();
+    const env = { ...f.env, PLATFORM_DB: recheckDb(() => "throw") } as Env;
+    const r = await nightly(env, 0, { concurrency: 1 });
+    expect(r.dbErrors).toEqual([0, 1, 2].map(idOf));
+    expect(r.skipped).toEqual([3, 4, 5, 6, 7, 8, 9].map(idOf));
+    expect(f.calls).toEqual([]);
+    expect(lines.at(-1)).toBe(
+      "nightly summary active=10 ok=0 failed=0 skipped=7 db_errors=3 leaked=0",
+    );
+    for (const l of lines) expect(l).toMatch(LOG_LINE);
+  });
+
+  it("a successful re-check resets the db_error streak", async () => {
+    await seed(ids(7));
+    const f = fakes();
+    const bad = new Set([0, 1, 3, 4, 6].map(idOf));
+    const env = {
+      ...f.env,
+      PLATFORM_DB: recheckDb((id) => (bad.has(id) ? "throw" : "ok")),
+    } as Env;
+    const r = await runNightly(env, 0, { concurrency: 1 });
+    expect(r.dbErrors).toEqual([...bad]);
+    expect(r.ok).toEqual([idOf(2), idOf(5)]);
+    expect(r.skipped).toEqual([]);
   });
 
   it("logs each failure when it happens, not at the end", async () => {
@@ -478,6 +663,10 @@ describe("runNightly", () => {
       { deadlineMs: Number.NaN },
       { pageSize: 0 },
       { pageSize: 2.5 },
+      { leakMs: 0 },
+      { leakMs: Number.NaN },
+      { recheckMs: 0 },
+      { recheckMs: Number.POSITIVE_INFINITY },
     ])
       await expect(runNightly(f.env, NOW, o)).rejects.toThrow(RangeError);
     expect(f.scripts).toEqual([]);
@@ -555,7 +744,7 @@ describe("scheduled", () => {
         `nightly failed exception ${idOf(1)}`,
         `nightly failed not_found ${idOf(2)}`,
         "nightly invalid ids=1",
-        "nightly summary active=3 ok=1 failed=2 skipped=0",
+        "nightly summary active=3 ok=1 failed=2 skipped=0 db_errors=0 leaked=0",
       ].sort(),
     );
     // Every line is ids, fixed categories and counts only.
@@ -596,7 +785,7 @@ describe("scheduled", () => {
       failed.length,
     );
     expect(lines.filter((l) => l.startsWith("nightly summary"))).toEqual([
-      `nightly summary active=301 ok=${ok.length} failed=${failed.length} skipped=${skipped.length}`,
+      `nightly summary active=301 ok=${ok.length} failed=${failed.length} skipped=${skipped.length} db_errors=0 leaked=0`,
     ]);
     for (const l of lines) expect(l).toMatch(LOG_LINE);
   });
@@ -605,7 +794,9 @@ describe("scheduled", () => {
     const lines = captureLogs();
     const f = fakes();
     await scheduler.scheduled(controller(NOW), f.env, createExecutionContext());
-    expect(lines).toEqual(["nightly summary active=0 ok=0 failed=0 skipped=0"]);
+    expect(lines).toEqual([
+      "nightly summary active=0 ok=0 failed=0 skipped=0 db_errors=0 leaked=0",
+    ]);
     expect(f.scripts).toEqual([]);
   });
 
