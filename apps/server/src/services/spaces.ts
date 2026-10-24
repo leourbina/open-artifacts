@@ -33,7 +33,11 @@ import { spaceSelfAddEmail } from "../email/templates.js";
 import type { Env } from "../env.js";
 import { ApiError } from "../http/errors.js";
 import { logError } from "../log.js";
-import { revokeUserLive, revokeUsersLive } from "../runtime/revoke.js";
+import {
+  revokeFanoutCap,
+  revokeUserLive,
+  revokeUsersLive,
+} from "../runtime/revoke.js";
 import { type AuditActor, audit, userActor } from "./audit.js";
 import { getSettings } from "./members.js";
 import { RESTRICTED_SYNC_FOR_GROUP } from "./restriction.js";
@@ -358,9 +362,11 @@ export async function createSpace(
 // Every active member allMembersRole reaches (decide: team roles, uncapped).
 // Most recently seen first: past revokeUsersLive's cap, the ones most likely
 // to hold a socket are signalled.
+// At most ?1 rows: revokeUsersLive's cap plus one, so the Worker never reads
+// more than it can signal and still sees that it truncated.
 const ALL_MEMBERS = `select id from users where status = 'active'
   and role in ('owner', 'admin', 'member') and restricted_manual = 0 and restricted_sync = 0
-  order by last_seen_at desc`;
+  order by last_seen_at desc limit ?1`;
 
 /**
  * PATCH R.space(id). name and publicLinks: the space's managers and org
@@ -405,8 +411,12 @@ export async function patchSpace(
       : []),
   ];
   const actor = userActor(u.id);
-  const lowered = setsAll && rank(all) < rank(knownRole(r.allMembersRole));
   const out = await env.DB.batch([
+    // The old role, read in the batch (its transaction), so a concurrent
+    // change can't hide a lowering.
+    stmt(env.DB, "select all_members_role as old from spaces where id = ?").bind(
+      id,
+    ),
     // Before the update, each gated on the row still differing (no-op: no row).
     audit(env, "space.update", { type: "space", id }, actor, {
       spaceId: id,
@@ -431,13 +441,15 @@ export async function patchSpace(
         all_members_role = case when ?4 = 1 then ?5 else all_members_role end
         where id = ?1 and kind = 'shared'`,
     ).bind(id, name, links, setsAll ? 1 : 0, all),
-    stmt(env.DB, lowered ? ALL_MEMBERS : "select null as id where 0"),
   ]);
-  if (lowered) {
-    const ids = (out[3]?.results as { id: string }[] | undefined) ?? [];
+  const old = (out[0]?.results[0] as { old: string | null } | undefined)?.old;
+  if (setsAll && rank(all) < rank(knownRole(old))) {
+    const { results } = await stmt(env.DB, ALL_MEMBERS)
+      .bind(revokeFanoutCap(env) + 1)
+      .all<{ id: string }>();
     await revokeUsersLive(
       env,
-      ids.map((x) => x.id),
+      results.map((x) => x.id),
       "space role lowered",
       ctx,
     );
@@ -477,11 +489,20 @@ export async function deleteSpace(
       `delete from spaces where id = ? and kind = 'shared' and ${empty}`,
     ).bind(id, id, id),
   ]);
-  if (!out[1]?.meta.changes)
+  if (!out[1]?.meta.changes) {
+    // Gone meanwhile (a concurrent delete): 404, not 409.
+    const still = await stmt(
+      env.DB,
+      "select 1 from spaces where id = ? and deleted_at is null",
+    )
+      .bind(id)
+      .first();
+    if (!still) throw notFound();
     throw new ApiError(
       "space_not_empty",
       "Move or delete its artifacts first, trash included",
     );
+  }
 }
 
 // ------------------------------------------------------------- members
@@ -691,7 +712,6 @@ const UPSERT_MANUAL = `insert into space_members (space_id, user_id, role, sourc
   on conflict (space_id, user_id, source) do update set role = excluded.role
   where space_members.role <> excluded.role and (?5 = 1 or space_members.role <> 'manager')`;
 const MANUAL_ROW = `exists (select 1 from space_members where space_id = ? and user_id = ? and source = 'manual')`;
-const SYNC_ROW = `exists (select 1 from space_members where space_id = ? and user_id = ? and source = 'sync')`;
 
 /** Manager-capable on this space (org admins, or its uncapped managers), else 404. */
 function requireSpaceManager(c: Caller, r: ViewRow): Member {
@@ -706,12 +726,20 @@ function requireSpaceManager(c: Caller, r: ViewRow): Member {
   return u;
 }
 
+/** The effective role from a ROWS_OF row (manual and sync rows). */
+const rowsRole = (r: Rows | undefined): SpaceRole | null =>
+  maxRole(knownRole(r?.manual), knownRole(r?.sync));
+const rowsIn = (r: D1Result | undefined): Rows | undefined =>
+  r?.results[0] as Rows | undefined;
+
 /**
  * PUT R.spaceMember(id, userId): the manual row. A space manager (not an
- * org admin) granting manager, or changing a member whose manual role is
- * manager: 403 space_forbidden { target: member }. Sync frozen, on a row with
- * a synced role: a manual override (the synced row goes). Audited
- * space.member.add / space.member.role; a lowered effective role revokes.
+ * org admin) granting manager, or changing a member who holds a manager
+ * row (manual or synced; frozen override included): 403 space_forbidden
+ * { target: member }. Sync frozen, on a row with a synced role: a manual
+ * override (the synced row goes). Audited space.member.add /
+ * space.member.role. The roles before and after are read inside the batch,
+ * so a concurrent change can't hide a lowering; a lowered role revokes.
  */
 export async function putSpaceMember(
   env: Env,
@@ -729,24 +757,35 @@ export async function putSpaceMember(
   if (t?.status !== "active") throw notFound();
   const manual = knownRole(t.manual);
   const synced = knownRole(t.sync);
-  if (!admin && (role === "manager" || manual === "manager"))
+  // A peer manager (by hand or synced) is an org admin's to change.
+  if (
+    !admin &&
+    (role === "manager" || manual === "manager" || synced === "manager")
+  )
     throw forbidden("member");
   const override = directoryMode(env) === "frozen" && synced !== null;
   const actor = userActor(u.id);
   const target = { type: "user", id: userId } as const;
-  await env.DB.batch(
-    override
+  const a = admin ? 1 : 0;
+  const out = await env.DB.batch([
+    stmt(env.DB, ROWS_OF).bind(id, userId),
+    ...(override
       ? [
           audit(env, "space.member.role", target, actor, {
             spaceId: id,
             detail: { syncFrozen: true, role },
-            when: { sql: SYNC_ROW, args: [id, userId] },
+            when: {
+              sql: `exists (select 1 from space_members where space_id = ? and user_id = ?
+                and source = 'sync' and (? = 1 or role <> 'manager'))`,
+              args: [id, userId, a],
+            },
           }),
           stmt(
             env.DB,
-            "delete from space_members where space_id = ? and user_id = ? and source = 'sync'",
-          ).bind(id, userId),
-          stmt(env.DB, UPSERT_MANUAL).bind(id, userId, role, Date.now(), 1),
+            `delete from space_members where space_id = ?1 and user_id = ?2 and source = 'sync'
+              and (?3 = 1 or role <> 'manager')`,
+          ).bind(id, userId, a),
+          stmt(env.DB, UPSERT_MANUAL).bind(id, userId, role, Date.now(), a),
         ]
       : [
           audit(env, "space.member.add", target, actor, {
@@ -760,30 +799,25 @@ export async function putSpaceMember(
             when: {
               sql: `exists (select 1 from space_members where space_id = ? and user_id = ?
                 and source = 'manual' and role <> ? and (? = 1 or role <> 'manager'))`,
-              args: [id, userId, role, admin ? 1 : 0],
+              args: [id, userId, role, a],
             },
           }),
-          stmt(env.DB, UPSERT_MANUAL).bind(
-            id,
-            userId,
-            role,
-            Date.now(),
-            admin ? 1 : 0,
-          ),
-        ],
-  );
-  const before = maxRole(manual, synced);
-  const after = override ? role : maxRole(role, synced);
-  if (rank(after) < rank(before))
+          stmt(env.DB, UPSERT_MANUAL).bind(id, userId, role, Date.now(), a),
+        ]),
+    stmt(env.DB, ROWS_OF).bind(id, userId),
+  ]);
+  if (rank(rowsRole(rowsIn(out.at(-1)))) < rank(rowsRole(rowsIn(out[0]))))
     await revokeUserLive(env, userId, "space role lowered", ctx);
   return memberView(env, id, r.allMembersRole, userId);
 }
 
 /**
- * DELETE R.spaceMember(id, userId): removes the manual row. A synced-only
- * row while sync is live: 409 member_synced. Sync frozen: the synced row
- * goes too (removing access is always allowed). Audited space.member.remove;
- * the member's live sockets close when their role dropped.
+ * DELETE R.spaceMember(id, userId): removes the manual row. A space manager
+ * (not an org admin) removing a peer manager (a manager row, manual or
+ * synced): 403 space_forbidden { target: member }. A synced-only row while
+ * sync is live: 409 member_synced. Sync frozen: the synced row goes too
+ * (removing access is always allowed). Audited space.member.remove; the
+ * member's live sockets close when their role dropped (read in the batch).
  */
 export async function deleteSpaceMember(
   env: Env,
@@ -795,10 +829,13 @@ export async function deleteSpaceMember(
   const r = await seeSpace(env, c, id);
   if (r.kind !== "shared") throw personalError("have no members");
   const u = requireSpaceManager(c, r);
+  const admin = isAdmin(c);
   const t = await stmt(env.DB, ROWS_OF).bind(id, userId).first<Rows>();
   const manual = knownRole(t?.manual);
   const synced = knownRole(t?.sync);
   if (!manual && !synced) throw notFound();
+  if (!admin && (manual === "manager" || synced === "manager"))
+    throw forbidden("member");
   const mode = directoryMode(env);
   const both = mode === "frozen" && synced !== null;
   if (!manual && !both) {
@@ -809,7 +846,14 @@ export async function deleteSpaceMember(
       );
     throw notFound();
   }
+  const a = admin ? 1 : 0;
+  // The rows this removes: the manual one, plus the synced one when frozen;
+  // never a manager row for a non-admin (a racing promotion stays).
+  const rows = `space_id = ? and user_id = ? and (source = 'manual' or ? = 1)
+    and (? = 1 or role <> 'manager')`;
+  const args = [id, userId, both ? 1 : 0, a];
   const out = await env.DB.batch([
+    stmt(env.DB, ROWS_OF).bind(id, userId),
     audit(
       env,
       "space.member.remove",
@@ -819,20 +863,16 @@ export async function deleteSpaceMember(
         spaceId: id,
         ...(both ? { detail: { syncFrozen: true } } : {}),
         when: {
-          sql: both ? `(${MANUAL_ROW} or ${SYNC_ROW})` : MANUAL_ROW,
-          args: both ? [id, userId, id, userId] : [id, userId],
+          sql: `exists (select 1 from space_members where ${rows})`,
+          args,
         },
       },
     ),
-    stmt(
-      env.DB,
-      `delete from space_members where space_id = ? and user_id = ?
-        and (source = 'manual' or ? = 1)`,
-    ).bind(id, userId, both ? 1 : 0),
+    stmt(env.DB, `delete from space_members where ${rows}`).bind(...args),
+    stmt(env.DB, ROWS_OF).bind(id, userId),
   ]);
-  if (!out[1]?.meta.changes) throw notFound();
-  const after = both ? null : synced;
-  if (rank(after) < rank(maxRole(manual, synced)))
+  if (!out[2]?.meta.changes) throw notFound();
+  if (rank(rowsRole(rowsIn(out[3]))) < rank(rowsRole(rowsIn(out[0]))))
     await revokeUserLive(env, userId, "removed from space", ctx);
 }
 
@@ -862,10 +902,8 @@ export async function selfAddSpace(
     throw personalError(
       "can't be joined: admins add themselves to shared spaces only",
     );
-  const t = await stmt(env.DB, ROWS_OF).bind(id, u.id).first<Rows>();
-  const manual = knownRole(t?.manual);
-  const synced = knownRole(t?.sync);
-  await env.DB.batch([
+  const out = await env.DB.batch([
+    stmt(env.DB, ROWS_OF).bind(id, u.id),
     audit(
       env,
       "space.admin_self_add",
@@ -881,10 +919,13 @@ export async function selfAddSpace(
       },
     ),
     stmt(env.DB, UPSERT_MANUAL).bind(id, u.id, role, Date.now(), 1),
+    stmt(env.DB, ROWS_OF).bind(id, u.id),
   ]);
-  if (rank(maxRole(role, synced)) < rank(maxRole(manual, synced)))
+  const before = rowsIn(out[0]);
+  if (rank(rowsRole(rowsIn(out[3]))) < rank(rowsRole(before)))
     await revokeUserLive(env, u.id, "space role lowered", ctx);
-  if (manual !== role) await notifyManagers(env, u, id, s.name, role, ctx);
+  if (knownRole(before?.manual) !== role)
+    await notifyManagers(env, u, id, s.name, role, ctx);
   return memberView(env, id, s.allMembersRole, u.id);
 }
 
@@ -948,11 +989,16 @@ const RESYNC_INSERT = `insert into space_members (space_id, user_id, role, sourc
   where dm.user_id in (select user_id from directory_members where group_id = ?2)
   group by dm.user_id`;
 // Active members only (the others hold no socket), most recently seen first.
+// At most ?2 rows (revokeUsersLive's cap plus one), as ALL_MEMBERS.
 const GROUP_MEMBERS = `select u.id from directory_members dm join users u on u.id = dm.user_id
-  where dm.group_id = ? and u.status = 'active' order by u.last_seen_at desc`;
+  where dm.group_id = ?1 and u.status = 'active' order by u.last_seen_at desc limit ?2`;
 const GROUP_OF = `select (select role from group_mappings where space_id = ?1 and group_id = ?2) as cur,
   (select email from directory_groups where group_id = ?2) as email,
   (select count(*) from directory_members where group_id = ?2) as n`;
+
+const MAP_ROLE =
+  "select role from group_mappings where space_id = ? and group_id = ?";
+const ORG_MAP_ROLE = "select role from org_group_mappings where group_id = ?";
 
 const MANAGER_ROLES: readonly string[] = SPACE_MANAGER_MAPPING_ROLES;
 
@@ -1049,6 +1095,9 @@ export async function putSpaceMapping(
   if (!g?.email) throw notFound();
   const now = Date.now();
   const out = await env.DB.batch([
+    // The role before and after, inside the batch: a concurrent change
+    // can't hide a lowering.
+    stmt(env.DB, MAP_ROLE).bind(id, groupId),
     audit(env, "mapping.set", { type: "mapping", id: groupId }, actor, {
       spaceId: id,
       detail: { role },
@@ -1065,15 +1114,19 @@ export async function putSpaceMapping(
     ).bind(id, groupId, g.email, role, admin ? 1 : 0),
     stmt(env.DB, RESYNC_DELETE).bind(id, groupId),
     stmt(env.DB, RESYNC_INSERT).bind(id, groupId, now),
-    stmt(env.DB, GROUP_MEMBERS).bind(groupId),
+    stmt(env.DB, GROUP_MEMBERS).bind(groupId, revokeFanoutCap(env) + 1),
+    stmt(env.DB, MAP_ROLE).bind(id, groupId),
   ]);
-  if (cur && rank(role) < rank(cur))
-    await revokeUsersLive(env, idsOf(out[4]), "space mapping lowered", ctx);
+  if (rank(roleIn(out[6])) < rank(roleIn(out[0])))
+    await revokeUsersLive(env, idsOf(out[5]), "space mapping lowered", ctx);
   return mapping(groupId, g.email, role, g.n);
 }
 
 const idsOf = (r: D1Result | undefined): string[] =>
   ((r?.results ?? []) as { id: string }[]).map((x) => x.id);
+/** The role a MAP_ROLE / ORG_MAP_ROLE read found (null: no row). */
+const roleIn = (r: D1Result | undefined): SpaceRole | null =>
+  knownRole((r?.results[0] as { role?: unknown } | undefined)?.role);
 
 /**
  * DELETE R.spaceMapping(id, groupId). After the gate: no row 404; a manager
@@ -1111,7 +1164,7 @@ export async function deleteSpaceMapping(
     ).bind(id, groupId, admin ? 1 : 0),
     stmt(env.DB, RESYNC_DELETE).bind(id, groupId),
     stmt(env.DB, RESYNC_INSERT).bind(id, groupId, Date.now()),
-    stmt(env.DB, GROUP_MEMBERS).bind(groupId),
+    stmt(env.DB, GROUP_MEMBERS).bind(groupId, revokeFanoutCap(env) + 1),
   ]);
   await revokeUsersLive(env, idsOf(out[4]), "space mapping removed", ctx);
 }
@@ -1147,8 +1200,7 @@ export async function listOrgMappings(
   };
 }
 
-const ORG_GROUP_OF = `select (select role from org_group_mappings where group_id = ?1) as cur,
-  (select email from directory_groups where group_id = ?1) as email,
+const ORG_GROUP_OF = `select (select email from directory_groups where group_id = ?1) as email,
   (select count(*) from directory_members where group_id = ?1) as n`;
 
 /**
@@ -1170,8 +1222,8 @@ export async function putOrgMapping(
     .bind(groupId)
     .first<{ cur: string | null; email: string | null; n: number }>();
   if (!g?.email) throw notFound();
-  const cur = knownRole(g.cur);
   const out = await env.DB.batch([
+    stmt(env.DB, ORG_MAP_ROLE).bind(groupId),
     audit(
       env,
       "mapping.set",
@@ -1191,12 +1243,13 @@ export async function putOrgMapping(
       `insert into org_group_mappings (group_id, group_email, role) values (?1, ?2, ?3)
         on conflict (group_id) do update set role = excluded.role, group_email = excluded.group_email`,
     ).bind(groupId, g.email, role),
-    stmt(env.DB, GROUP_MEMBERS).bind(groupId),
+    stmt(env.DB, GROUP_MEMBERS).bind(groupId, revokeFanoutCap(env) + 1),
+    stmt(env.DB, ORG_MAP_ROLE).bind(groupId),
   ]);
-  if (cur && rank(role) < rank(cur))
+  if (rank(roleIn(out[4])) < rank(roleIn(out[0])))
     await revokeUsersLive(
       env,
-      idsOf(out[2]),
+      idsOf(out[3]),
       "every-space mapping lowered",
       ctx,
     );
@@ -1229,7 +1282,7 @@ export async function deleteOrgMapping(
     stmt(env.DB, "delete from org_group_mappings where group_id = ?").bind(
       groupId,
     ),
-    stmt(env.DB, GROUP_MEMBERS).bind(groupId),
+    stmt(env.DB, GROUP_MEMBERS).bind(groupId, revokeFanoutCap(env) + 1),
   ]);
   if (!out[1]?.meta.changes) throw notFound();
   await revokeUsersLive(env, idsOf(out[2]), "every-space mapping removed", ctx);
@@ -1300,7 +1353,7 @@ export async function putRestrictedGroup(
       },
     ),
     stmt(env.DB, RESTRICTED_SYNC_FOR_GROUP).bind(groupId),
-    stmt(env.DB, GROUP_MEMBERS).bind(groupId),
+    stmt(env.DB, GROUP_MEMBERS).bind(groupId, revokeFanoutCap(env) + 1),
     stmt(env.DB, RESTRICTED_LIST).bind(groupId),
   ]);
   await revokeUsersLive(env, idsOf(out[3]), "restricted", ctx);

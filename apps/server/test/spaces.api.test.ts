@@ -20,6 +20,7 @@ import { accessLevel, callerOf } from "../src/auth/authz.js";
 import type { Env } from "../src/env.js";
 import type { UserPresence } from "../src/runtime/presence.js";
 import { REVOKE_FANOUT_CAP, revokeUsersLive } from "../src/runtime/revoke.js";
+import { patchMember } from "../src/services/members.js";
 import { getUser } from "../src/services/users.js";
 import { errOf, fetchAndWait, login } from "./helpers.js";
 
@@ -1071,6 +1072,120 @@ describe("restrictions", () => {
     await call(GOOGLE, R.restrictedGroup(g), admin.cookie, {
       method: "DELETE",
     });
+  });
+
+  const flag = async (id: string) =>
+    (
+      await one<{ r: number }>(
+        "select restricted_sync r from users where id = ?",
+        id,
+      )
+    )?.r;
+
+  it("a role change recomputes the group restriction: a demoted admin is capped (and revoked)", async () => {
+    const s = await createSpace();
+    const a2 = await mk("dem", "admin");
+    await putMember(GOOGLE, admin, s.id, a2.userId, "editor");
+    const g = await group([a2.userId]);
+    const art = await insertArtifact(admin.userId, s.id);
+    await call(GOOGLE, R.restrictedGroup(g), admin.cookie, { method: "PUT" });
+    expect(await flag(a2.userId)).toBe(0);
+    const before = await revokedAt(a2.userId);
+    await patchMember(GOOGLE, a2.userId, { role: "member" });
+    expect(await flag(a2.userId)).toBe(1);
+    expect(await level(GOOGLE, a2.userId, art)).toBe("viewer");
+    expect(await revokedAt(a2.userId)).not.toBe(before);
+    await call(GOOGLE, R.restrictedGroup(g), admin.cookie, {
+      method: "DELETE",
+    });
+  });
+
+  it("a role change recomputes the group restriction: a promoted member is no longer capped", async () => {
+    const m = await mk("pro");
+    const g = await group([m.userId]);
+    await call(GOOGLE, R.restrictedGroup(g), admin.cookie, { method: "PUT" });
+    expect(await flag(m.userId)).toBe(1);
+    await patchMember(GOOGLE, m.userId, { role: "admin" });
+    expect(await flag(m.userId)).toBe(0);
+    expect((await getUser(GOOGLE, m.userId)) && true).toBe(true);
+    await call(GOOGLE, R.restrictedGroup(g), admin.cookie, {
+      method: "DELETE",
+    });
+  });
+});
+
+describe("peer managers (manager ruling)", () => {
+  const syncRow = (sid: string, uid: string, role: string) =>
+    run(
+      "insert into space_members (space_id, user_id, role, source, created_at) values (?, ?, ?, 'sync', 1)",
+      sid,
+      uid,
+      role,
+    );
+  const del = (e: Env, who: U, sid: string, uid: string) =>
+    call(e, R.spaceMember(sid, uid), who.cookie, { method: "DELETE" });
+  const forbiddenMember = async (r: Response) => {
+    expect(r.status).toBe(403);
+    expect(await errOf(r)).toMatchObject({
+      code: "space_forbidden",
+      details: { target: "member" },
+    });
+  };
+
+  it("a manual manager row: a space manager can't remove or demote it; an org admin can", async () => {
+    const { s, mgr } = await staffed();
+    const peer = await mk("peer");
+    await putMember(GOOGLE, admin, s.id, peer.userId, "manager");
+    await forbiddenMember(await del(GOOGLE, mgr, s.id, peer.userId));
+    await forbiddenMember(
+      await putMember(GOOGLE, mgr, s.id, peer.userId, "editor"),
+    );
+    expect(
+      (await putMember(GOOGLE, admin, s.id, peer.userId, "editor")).status,
+    ).toBe(200);
+    expect((await del(GOOGLE, admin, s.id, peer.userId)).status).toBe(204);
+  });
+
+  it("a synced manager row: 403 before member_synced; an org admin gets member_synced", async () => {
+    const { s, mgr } = await staffed();
+    const peer = await mk("speer");
+    await syncRow(s.id, peer.userId, "manager");
+    await forbiddenMember(await del(GOOGLE, mgr, s.id, peer.userId));
+    await forbiddenMember(
+      await putMember(GOOGLE, mgr, s.id, peer.userId, "viewer"),
+    );
+    expect(await code(await del(GOOGLE, admin, s.id, peer.userId))).toBe(
+      "member_synced",
+    );
+  });
+
+  it("frozen: a space manager can't override or remove a synced manager; an org admin can", async () => {
+    const { s, mgr } = await staffed();
+    const peer = await mk("fpeer");
+    await syncRow(s.id, peer.userId, "manager");
+    await forbiddenMember(
+      await putMember(FROZEN, mgr, s.id, peer.userId, "viewer"),
+    );
+    await forbiddenMember(await del(FROZEN, mgr, s.id, peer.userId));
+    expect(
+      await one(
+        "select 1 from space_members where space_id = ? and user_id = ? and source = 'sync'",
+        s.id,
+        peer.userId,
+      ),
+    ).not.toBeNull();
+    const r = await putMember(FROZEN, admin, s.id, peer.userId, "viewer");
+    expect(await json<SpaceMember>(r)).toMatchObject({
+      role: "viewer",
+      syncRole: null,
+    });
+    expect(await revokedAt(peer.userId)).not.toBeNull();
+  });
+
+  it("a space manager still removes and changes non-manager members", async () => {
+    const { s, mgr, ed, vw } = await staffed();
+    expect((await putMember(GOOGLE, mgr, s.id, ed.userId, "viewer")).status).toBe(200);
+    expect((await del(GOOGLE, mgr, s.id, vw.userId)).status).toBe(204);
   });
 });
 

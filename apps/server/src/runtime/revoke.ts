@@ -116,7 +116,9 @@ export const revokeFanoutCap = (env: Pick<Env, "PLAN">): number =>
  * `revoke_fanout_truncated` is logged and the rest are not signalled: the D1
  * change already refuses their next request and reconnect, and their open
  * sockets end at the socket TTL (10 minutes) until P3 T13's DirectorySync
- * queue takes the fan-out. Runs in waitUntil when a context is given, so
+ * queue takes the fan-out (accepted for M1). Callers read at most cap + 1
+ * ids (`limit` in SQL), so `total` in the alert is then a lower bound.
+ * Runs in waitUntil when a context is given, so
  * the response never waits on it. Never throws.
  */
 export async function revokeUsersLive(
