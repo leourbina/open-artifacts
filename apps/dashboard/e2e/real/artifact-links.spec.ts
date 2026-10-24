@@ -201,6 +201,8 @@ test("a script-posted open without user activation asks first; Open goes", async
       for (const scheme of ["light", "dark"] as const) {
         await page.setViewportSize({ width, height: 800 });
         await page.emulateMedia({ colorScheme: scheme });
+        // Let the theme's colour transitions finish.
+        await page.waitForTimeout(400);
         await page.screenshot({
           path: info.outputPath(`open-link-toast-${width}-${scheme}.png`),
         });
@@ -278,6 +280,8 @@ test("http asks with a not-secure warning; the port shows when not the default",
   if (info.project.name === "chromium")
     for (const scheme of ["light", "dark"] as const) {
       await page.emulateMedia({ colorScheme: scheme });
+      // Let the theme's colour transitions finish.
+      await page.waitForTimeout(400);
       await page.screenshot({
         path: info.outputPath(`open-link-http-390-${scheme}.png`),
       });

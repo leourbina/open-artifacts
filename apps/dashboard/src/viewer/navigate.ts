@@ -102,9 +102,10 @@ const userActive = () =>
  * Builds the shell's open handler: an artifact asked to open a plain link that
  * the sandboxed frame can't show. The message is content-controlled, so:
  * - only http(s) without credentials or control characters;
- * - on the app's own origin only viewer paths, which route in place like
- *   navigate (anything else could be consent phishing, an invite, or a
- *   query-driven action); nothing on the content host;
+ * - on the app's host (any scheme or port: http redirects to https) only
+ *   viewer paths, which route in place like navigate (anything else could be
+ *   consent phishing, an invite, or a query-driven action); nothing on the
+ *   content host, whatever the scheme or port;
  * - the shared rate limit, and nothing while a prompt is showing (so the URL
  *   can't change under the cursor);
  * - the top window moves only with transient user activation; without it,
@@ -132,9 +133,13 @@ export function createOpener(opts: {
     if (asking) return;
     const origin = opts.origin ?? location.origin;
     const u = openableUrl(url);
-    if (!u || u.origin === opts.contentOrigin?.()) return;
-    const path = u.origin === origin ? artifactNavPath(u.href, origin) : null;
-    if (u.origin === origin && !path) return;
+    if (!u) return;
+    const content = opts.contentOrigin?.();
+    if (content && u.hostname === new URL(content).hostname) return;
+    const appHost = u.hostname === new URL(origin).hostname;
+    const path =
+      appHost && NAVIGATE_PATH_RE.test(u.pathname) ? u.pathname : null;
+    if (appHost && !path) return;
     if (!opts.limit()) return;
     if (embed()) open(path ? origin + path : u.href);
     else if (path) opts.go(path);

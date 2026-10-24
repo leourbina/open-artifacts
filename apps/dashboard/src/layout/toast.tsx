@@ -55,8 +55,10 @@ export function Toaster() {
       toastOptions={{
         closeButtonAriaLabel: "Dismiss",
         classNames: {
+          // Popover surface, foreground ×, and a strong edge (3:1 or more in
+          // both themes) so the button reads on any toast.
           closeButton:
-            "size-6! focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring",
+            "size-6! bg-popover! text-foreground! border-[var(--oa-border-strong)]! focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring",
         },
       }}
     />

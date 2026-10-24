@@ -255,6 +255,53 @@ describe("createOpener", () => {
     expect(open).not.toHaveBeenCalled();
   });
 
+  it.each([
+    "http://app.test/oauth/authorize?client_id=evil",
+    "http://app.test/settings",
+    "https://app.test:8443/invite/abc",
+    "http://app.test/?space=x",
+    "http://content.test/p/B/v1/index.html",
+    "https://content.test:8443/c/token/B/v1/__view",
+  ])(
+    "refuses %s: the app's or content host, whatever the scheme or port",
+    (u) => {
+      const { openLink, go, assign, ask, open } = setup({ active: true });
+      openLink(u);
+      expect(go).not.toHaveBeenCalled();
+      expect(assign).not.toHaveBeenCalled();
+      expect(ask).not.toHaveBeenCalled();
+      expect(open).not.toHaveBeenCalled();
+    },
+  );
+
+  it("a viewer path on the app host, any scheme or port, routes in place", () => {
+    const { openLink, go, tick } = setup();
+    openLink("http://app.test/a/B");
+    tick(1000);
+    openLink("https://app.test:8443/a/C/full");
+    expect(go.mock.calls).toEqual([["/a/B"], ["/a/C/full"]]);
+  });
+
+  it.each(["dismissed", "timed out", "opened"])(
+    "the prompt lock releases once the toast is %s: the next open asks again",
+    (how) => {
+      const { openLink, ask, tick } = setup({ active: false });
+      openLink("https://other.example/one");
+      const [, go, done] = ask.mock.calls[0] as [URL, () => void, () => void];
+      // The toast's onDismiss/onAutoClose, or Open (which calls done, then go).
+      if (how === "opened") {
+        done();
+        go();
+      } else done();
+      tick(1000);
+      openLink("https://other.example/two");
+      expect(ask).toHaveBeenCalledTimes(2);
+      expect((ask.mock.calls[1] as [URL])[0].href).toBe(
+        "https://other.example/two",
+      );
+    },
+  );
+
   it("ignores opens while its prompt is showing, then accepts again", () => {
     const { openLink, assign, ask, tick } = setup({ active: false });
     openLink("https://other.example/first");
