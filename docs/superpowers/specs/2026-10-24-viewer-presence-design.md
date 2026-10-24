@@ -85,6 +85,7 @@ When someone opens an artifact, the header shows who else has it open right now,
 | Verified by OpenBus (signed identity card) is a joint follow-up after hosted M1 | user |
 | Mirror Google Drive's patterns for every detail | user |
 | Initials only; photos later | user |
+| Design picks (https://artifacts.leourbina.com/a/MkqMepcHeLvbGvKL): 1A agents are a rounded square with the owner's initials and a color per session; 2A faces first in the title bar's right group, side by side (no overlap), 3 then "+N" (all 4 when exactly 4), phone shows one face and "+N"; 3A agent card is plain lines with its note in quotes captioned "In the agent's own words"; 4A line-icon animals and one 9-color palette for both themes (white glyph at least 5.4:1). About 45 animal icons need drawing. | user |
 | Agents count as present ~2 minutes after their last request | my call |
 | Session presence id separate from `oa.anonId` | my call |
 | Dashboard viewer and `/full`; self-hosted and hosted; no off switch in M1 | my call |
