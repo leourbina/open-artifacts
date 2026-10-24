@@ -19,6 +19,7 @@ import {
 } from "../../services/artifacts.js";
 import { search } from "../../services/search.js";
 import { deleteShare, putShare } from "../../services/shares.js";
+import { publishableSpaces } from "../../services/spaces.js";
 import { createUpload } from "../../services/uploads.js";
 import { guard, ok, type ToolEnv } from "../server.js";
 import { toolConfig } from "../tool-defs.js";
@@ -197,6 +198,16 @@ export function registerArtifactTools(server: McpServer, t: ToolEnv): void {
         visibility: input.visibility,
       });
       return ok(`${a.id} is now ${a.visibility}: ${viewUrl(env, a.id)}`, a);
+    }),
+  );
+
+  server.registerTool("list_spaces", toolConfig("list_spaces"), () =>
+    guard(async () => {
+      const items = await publishableSpaces(env, caller);
+      return ok(
+        `${plural(items.length, "space")} you can publish into: ${appOrigin(env)}/`,
+        { items },
+      );
     }),
   );
 
