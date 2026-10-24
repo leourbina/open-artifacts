@@ -10,7 +10,12 @@ import {
   it,
   vi,
 } from "vitest";
-import scheduler, { CRON, type Env, runNightly } from "../src/index.js";
+import scheduler, {
+  CRON,
+  type Env,
+  nightly,
+  runNightly,
+} from "../src/index.js";
 
 // P1 Task 7 (Review Focus 5): one install's nightly job throwing or timing
 // out must not stop the others. PLATFORM_DB is a local D1 with the real
@@ -39,14 +44,21 @@ type State = "creating" | "active" | "upgrading" | "deleting" | "deleted";
 /** A valid install id for n: "i" + 11 base32-ish chars. */
 const idOf = (n: number) => `i${n.toString(36).padStart(11, "0")}`;
 
-async function seed(rows: { id: string; state: State }[]) {
+async function seed(rows: { id: string; state: State; leaseUntil?: number }[]) {
   const ins = db.prepare(
     `INSERT INTO installs (id, slug, app_host, content_host, owner_email, rl_ns,
-       inputs_hash, state, created_at, updated_at)
-     VALUES (?1, ?2, ?2 || '.app.test', ?2 || '.content.test', ?3, ?4, 'h', ?5, 0, 0)`,
+       inputs_hash, state, created_at, updated_at, lease_until)
+     VALUES (?1, ?2, ?2 || '.app.test', ?2 || '.content.test', ?3, ?4, 'h', ?5, 0, 0, ?6)`,
   );
   const stmts = rows.map((r, i) =>
-    ins.bind(r.id, `s${i}`, `owner${i}@customer.test`, (i + 1) * 8, r.state),
+    ins.bind(
+      r.id,
+      `s${i}`,
+      `owner${i}@customer.test`,
+      (i + 1) * 8,
+      r.state,
+      r.leaseUntil ?? null,
+    ),
   );
   for (let i = 0; i < stmts.length; i += 100)
     await db.batch(stmts.slice(i, i + 100));
@@ -59,12 +71,16 @@ type Behavior =
   | "outcome"
   | "canceled"
   | "missing"
+  | "scriptNotFound"
   | { result: unknown };
+
+const n36 = (script: string) => Number.parseInt(script.slice(-11), 36);
 
 function fakes(
   oaEnv: "staging" | "prod" = "staging",
   behave: (script: string) => Behavior = () => "ok",
   delayMs = 0,
+  onCall: (script: string) => Promise<void> | void = () => {},
 ) {
   const scripts: string[] = [];
   const calls: { script: string; opts: unknown }[] = [];
@@ -75,16 +91,22 @@ function fakes(
     PLATFORM_DB: db,
     DISPATCHER: {
       get(script: string) {
+        // Lazy, like the real binding: a missing script fails on the call.
         scripts.push(script);
         const b = behave(script);
-        if (b === "missing")
-          throw new Error(`Worker not found: ${script} owner@customer.test`);
         return {
           async scheduled(opts: unknown) {
             calls.push({ script, opts });
             inFlight++;
             maxInFlight = Math.max(maxInFlight, inFlight);
             try {
+              await onCall(script);
+              if (b === "missing")
+                throw new Error(
+                  `Worker not found: ${script} owner@customer.test`,
+                );
+              if (b === "scriptNotFound")
+                return { outcome: "scriptNotFound", noRetry: true };
               if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
               if (b === "hang") await new Promise(() => {});
               if (b === "throw")
@@ -103,7 +125,13 @@ function fakes(
       },
     },
   } as unknown as Env;
-  return { env, scripts, calls, max: () => maxInFlight };
+  return {
+    env,
+    scripts,
+    calls,
+    max: () => maxInFlight,
+    inFlight: () => inFlight,
+  };
 }
 
 function captureLogs() {
@@ -122,7 +150,12 @@ const NOW = Date.UTC(2026, 9, 24, 3, 17);
 
 /** The whole log vocabulary: install ids, fixed categories and counts. */
 const LOG_LINE =
-  /^(?:nightly failed (?:timeout|not_found|canceled|exception) i[a-z0-9]{11}|nightly summary active=\d+ ok=\d+ failed=\d+|nightly invalid ids=\d+|nightly scale active=\d+ over 300)$/;
+  /^(?:nightly failed (?:timeout|not_found|canceled|exception) i[a-z0-9]{11}|nightly summary active=\d+ ok=\d+ failed=\d+ skipped=\d+|nightly invalid ids=\d+|nightly scale active=\d+ over (?:32|300)|nightly aborted (?:env|exception))$/;
+
+const ids = (n: number, state: State = "active") =>
+  Array.from({ length: n }, (_, k) => ({ id: idOf(k), state }));
+
+const realSleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 describe("runNightly", () => {
   it("runs every active install and skips creating, upgrading and deleting ones", async () => {
@@ -141,6 +174,7 @@ describe("runNightly", () => {
     const active = [idOf(1), idOf(3), idOf(6)];
     expect([...r.ok].sort()).toEqual(active);
     expect(r.failed).toEqual([]);
+    expect(r.skipped).toEqual([]);
     expect([...f.scripts].sort()).toEqual(active.map((id) => `oa-s-${id}`));
     for (const c of f.calls)
       expect(c.opts).toEqual({
@@ -163,6 +197,7 @@ describe("runNightly", () => {
     const f = fakes("staging", (s) => by[s] ?? "ok");
     const r = await runNightly(f.env, NOW, { concurrency: 2, timeoutMs: 30 });
     expect([...r.ok].sort()).toEqual([idOf(0), idOf(5)]);
+    expect(r.skipped).toEqual([]);
     expect([...r.failed].sort((a, b) => a.id.localeCompare(b.id))).toEqual([
       { id: idOf(1), reason: "exception" },
       { id: idOf(2), reason: "timeout" },
@@ -185,6 +220,8 @@ describe("runNightly", () => {
       { result: { outcome: "OK", noRetry: false } },
       { result: { outcome: 1, noRetry: false } },
       { result: "ok" },
+      "scriptNotFound",
+      { result: { outcome: "exceededCpu", noRetry: false } },
     ];
     await seed(results.map((_, n) => ({ id: idOf(n), state: "active" })));
     const f = fakes(
@@ -197,6 +234,8 @@ describe("runNightly", () => {
       { id: idOf(1), reason: "exception" },
       { id: idOf(2), reason: "canceled" },
       ...[3, 4, 5, 6, 7, 8].map((n) => ({ id: idOf(n), reason: "exception" })),
+      { id: idOf(9), reason: "not_found" },
+      { id: idOf(10), reason: "exception" },
     ]);
   });
 
@@ -220,18 +259,47 @@ describe("runNightly", () => {
     expect(done).toEqual({
       ok: [],
       failed: [{ id: idOf(0), reason: "timeout" }],
+      skipped: [],
     });
   });
 
-  it("respects the concurrency limit (max in flight observed <= 10)", async () => {
-    await seed(
-      Array.from({ length: 35 }, (_, n) => ({ id: idOf(n), state: "active" })),
-    );
+  it("respects the concurrency limit (default 6: the shared connection limit)", async () => {
+    await seed(ids(35));
     const f = fakes("staging", () => "ok", 5);
     const r = await runNightly(f.env, NOW);
     expect(r.ok).toHaveLength(35);
-    expect(f.max()).toBeLessThanOrEqual(10);
-    expect(f.max()).toBe(10);
+    expect(f.max()).toBeLessThanOrEqual(6);
+    expect(f.max()).toBe(6);
+  });
+
+  it("a timed-out call keeps its lane until it settles: never-settling installs can't over-subscribe", async () => {
+    await seed(ids(10));
+    const f = fakes("staging", () => "hang");
+    const r = await runNightly(f.env, NOW, {
+      concurrency: 3,
+      timeoutMs: 20,
+      deadlineMs: 300,
+    });
+    // Three calls hold the three lanes forever; nothing else is started.
+    expect(f.calls).toHaveLength(3);
+    expect(f.max()).toBe(3);
+    expect(r.failed).toEqual(
+      [0, 1, 2].map((n) => ({ id: idOf(n), reason: "timeout" })),
+    );
+    expect(r.ok).toEqual([]);
+    expect(r.skipped).toEqual([3, 4, 5, 6, 7, 8, 9].map(idOf));
+  });
+
+  it("timed-out calls still count against the cap while the others run", async () => {
+    await seed(ids(12));
+    const f = fakes("staging", (s) => (n36(s) < 2 ? "hang" : "ok"), 5);
+    const r = await runNightly(f.env, NOW, { concurrency: 3, timeoutMs: 20 });
+    expect(f.max()).toBe(3);
+    expect(r.failed).toEqual([
+      { id: idOf(0), reason: "timeout" },
+      { id: idOf(1), reason: "timeout" },
+    ]);
+    expect(r.ok).toHaveLength(10);
   });
 
   it("respects a concurrency limit of 3", async () => {
@@ -247,7 +315,11 @@ describe("runNightly", () => {
   it("zero installs is a no-op", async () => {
     await seed([{ id: idOf(0), state: "creating" }]);
     const f = fakes();
-    expect(await runNightly(f.env, NOW)).toEqual({ ok: [], failed: [] });
+    expect(await runNightly(f.env, NOW)).toEqual({
+      ok: [],
+      failed: [],
+      skipped: [],
+    });
     expect(f.scripts).toEqual([]);
   });
 
@@ -261,7 +333,7 @@ describe("runNightly", () => {
     const lines = captureLogs();
     const f = fakes();
     const r = await runNightly(f.env, NOW);
-    expect(r).toEqual({ ok: [idOf(0)], failed: [] });
+    expect(r).toEqual({ ok: [idOf(0)], failed: [], skipped: [] });
     // A count only: the bad value itself is never logged.
     expect(lines).toEqual(["nightly invalid ids=3"]);
     expect(f.scripts).toEqual([`oa-s-${idOf(0)}`]);
@@ -300,25 +372,145 @@ describe("runNightly", () => {
     expect(new Set(f.scripts).size).toBe(f.scripts.length);
   });
 
-  it("more than 300 active installs logs the scale warning", async () => {
-    await seed(
-      Array.from({ length: 301 }, (_, n) => ({ id: idOf(n), state: "active" })),
+  it("pages through an exact multiple of the page size (empty last page)", async () => {
+    await seed(ids(8));
+    const f = fakes();
+    const r = await runNightly(f.env, NOW, { pageSize: 4 });
+    expect([...r.ok].sort()).toEqual(ids(8).map((x) => x.id));
+    expect(f.scripts).toHaveLength(8);
+  });
+
+  it("re-checks each install right before its call: one that left active or took a lease is skipped", async () => {
+    await seed(ids(5));
+    const flipped = async (script: string) => {
+      if (script !== `oa-s-${idOf(0)}`) return;
+      await db
+        .prepare("UPDATE installs SET state = 'upgrading' WHERE id = ?")
+        .bind(idOf(1))
+        .run();
+      await db
+        .prepare("UPDATE installs SET state = 'deleting' WHERE id = ?")
+        .bind(idOf(2))
+        .run();
+      await db
+        .prepare("UPDATE installs SET lease_until = ? WHERE id = ?")
+        .bind(Date.now() + 60_000, idOf(3))
+        .run();
+    };
+    const lines = captureLogs();
+    const f = fakes("staging", () => "ok", 0, flipped);
+    const r = await runNightly(f.env, NOW, { concurrency: 1 });
+    expect(r.ok).toEqual([idOf(0), idOf(4)]);
+    expect(r.failed).toEqual([]);
+    expect(r.skipped).toEqual([idOf(1), idOf(2), idOf(3)]);
+    expect(f.calls.map((c) => c.script)).toEqual(
+      [0, 4].map((n) => `oa-s-${idOf(n)}`),
     );
+    expect(lines.some((l) => l.startsWith("nightly failed"))).toBe(false);
+  });
+
+  it("an expired lease doesn't block the call", async () => {
+    await seed([{ id: idOf(0), state: "active", leaseUntil: Date.now() - 1 }]);
+    const f = fakes();
+    expect((await runNightly(f.env, NOW)).ok).toEqual([idOf(0)]);
+  });
+
+  it("an install already leased at read time is skipped", async () => {
+    await seed([
+      { id: idOf(0), state: "active", leaseUntil: Date.now() + 60_000 },
+      { id: idOf(1), state: "active" },
+    ]);
+    const f = fakes();
+    const r = await runNightly(f.env, NOW);
+    expect(r).toEqual({ ok: [idOf(1)], failed: [], skipped: [idOf(0)] });
+  });
+
+  it("stops dispatching at deadlineMs; the rest is skipped and never called", async () => {
+    await seed(ids(10));
+    const f = fakes("staging", () => "ok", 40);
+    const r = await runNightly(f.env, NOW, {
+      concurrency: 1,
+      deadlineMs: 100,
+    });
+    expect(r.failed).toEqual([]);
+    expect(r.ok.length).toBeGreaterThanOrEqual(1);
+    expect(r.skipped.length).toBeGreaterThanOrEqual(5);
+    expect([...r.ok, ...r.skipped]).toEqual(ids(10).map((x) => x.id));
+    expect(f.calls).toHaveLength(r.ok.length);
+  });
+
+  it("logs each failure when it happens, not at the end", async () => {
+    await seed(ids(2));
+    const lines = captureLogs();
+    const f = fakes("staging", (s) => (n36(s) === 0 ? "throw" : "hang"));
+    let done = false;
+    const p = runNightly(f.env, NOW, { timeoutMs: 400 }).then((r) => {
+      done = true;
+      return r;
+    });
+    for (let k = 0; k < 50 && lines.length === 0; k++) await realSleep(5);
+    expect(lines).toEqual([`nightly failed exception ${idOf(0)}`]);
+    expect(done).toBe(false);
+    await p;
+    expect(lines).toEqual([
+      `nightly failed exception ${idOf(0)}`,
+      `nightly failed timeout ${idOf(1)}`,
+    ]);
+  });
+
+  it("refuses bad options before reading or calling anything", async () => {
+    await seed(ids(1));
+    const f = fakes();
+    for (const o of [
+      { concurrency: 0 },
+      { concurrency: -1 },
+      { concurrency: 1.5 },
+      { concurrency: Number.NaN },
+      { concurrency: Number.POSITIVE_INFINITY },
+      { timeoutMs: 0 },
+      { timeoutMs: Number.NaN },
+      { timeoutMs: Number.POSITIVE_INFINITY },
+      { deadlineMs: 0 },
+      { deadlineMs: Number.NaN },
+      { pageSize: 0 },
+      { pageSize: 2.5 },
+    ])
+      await expect(runNightly(f.env, NOW, o)).rejects.toThrow(RangeError);
+    expect(f.scripts).toEqual([]);
+  });
+
+  it("more than 300 active installs logs both scale warnings", async () => {
+    await seed(ids(301));
     const lines = captureLogs();
     const f = fakes();
     const r = await runNightly(f.env, NOW, { concurrency: 50 });
     expect(r.ok).toHaveLength(301);
     expect(lines.filter((l) => l.startsWith("nightly scale"))).toEqual([
+      "nightly scale active=301 over 32",
       "nightly scale active=301 over 300",
     ]);
   });
 
-  it("300 active installs logs no scale warning", async () => {
-    await seed(
-      Array.from({ length: 300 }, (_, n) => ({ id: idOf(n), state: "active" })),
-    );
+  it("300 active installs logs only the 32-invocation warning", async () => {
+    await seed(ids(300));
     const lines = captureLogs();
     await runNightly(fakes().env, NOW, { concurrency: 50 });
+    expect(lines.filter((l) => l.startsWith("nightly scale"))).toEqual([
+      "nightly scale active=300 over 32",
+    ]);
+  });
+
+  it("33 active installs warn about the 32-invocation limit; 32 don't", async () => {
+    await seed(ids(33));
+    let lines = captureLogs();
+    await runNightly(fakes().env, NOW);
+    expect(lines.filter((l) => l.startsWith("nightly scale"))).toEqual([
+      "nightly scale active=33 over 32",
+    ]);
+    vi.restoreAllMocks();
+    await db.prepare("DELETE FROM installs WHERE id = ?").bind(idOf(32)).run();
+    lines = captureLogs();
+    await runNightly(fakes().env, NOW);
     expect(lines.some((l) => l.startsWith("nightly scale"))).toBe(false);
   });
 });
@@ -346,8 +538,9 @@ describe("scheduled", () => {
       f.env,
       createExecutionContext(),
     );
-    // The missing script never gets a call; the throwing one does.
+    // The binding is lazy: the missing script fails on its call.
     expect(f.calls.map((c) => c.opts)).toEqual([
+      { cron: CRON, scheduledTime: new Date(1234) },
       { cron: CRON, scheduledTime: new Date(1234) },
       { cron: CRON, scheduledTime: new Date(1234) },
     ]);
@@ -356,7 +549,7 @@ describe("scheduled", () => {
         `nightly failed exception ${idOf(1)}`,
         `nightly failed not_found ${idOf(2)}`,
         "nightly invalid ids=1",
-        "nightly summary active=3 ok=1 failed=2",
+        "nightly summary active=3 ok=1 failed=2 skipped=0",
       ].sort(),
     );
     // Every line is ids, fixed categories and counts only.
@@ -383,23 +576,22 @@ describe("scheduled", () => {
       { id: "x@customer.test", state: "active" },
     ]);
     const lines = captureLogs();
-    const f = fakes(
-      "staging",
-      (s) =>
-        kinds[Number.parseInt(s.slice(-11), 36) % kinds.length] as Behavior,
-    );
-    const { ok, failed } = await runNightly(f.env, NOW, {
+    const f = fakes("staging", (s) => kinds[n36(s) % kinds.length] as Behavior);
+    // The real handler path (scheduled calls nightly with the defaults).
+    const { ok, failed, skipped } = await nightly(f.env, NOW, {
       concurrency: 50,
       timeoutMs: 20,
+      deadlineMs: 500,
     });
-    for (const x of failed) console.error("nightly failed", x.reason, x.id);
-    await scheduler.scheduled(
-      controller(NOW),
-      fakes("prod").env,
-      createExecutionContext(),
+    expect(ok.length + failed.length + skipped.length).toBe(301);
+    for (const r of ["timeout", "exception", "canceled", "not_found"])
+      expect(failed.some((x) => x.reason === r)).toBe(true);
+    expect(lines.filter((l) => l.startsWith("nightly failed"))).toHaveLength(
+      failed.length,
     );
-    expect(ok.length + failed.length).toBe(301);
-    expect(lines.length).toBeGreaterThan(failed.length);
+    expect(lines.filter((l) => l.startsWith("nightly summary"))).toEqual([
+      `nightly summary active=301 ok=${ok.length} failed=${failed.length} skipped=${skipped.length}`,
+    ]);
     for (const l of lines) expect(l).toMatch(LOG_LINE);
   });
 
@@ -407,7 +599,18 @@ describe("scheduled", () => {
     const lines = captureLogs();
     const f = fakes();
     await scheduler.scheduled(controller(NOW), f.env, createExecutionContext());
-    expect(lines).toEqual(["nightly summary active=0 ok=0 failed=0"]);
+    expect(lines).toEqual(["nightly summary active=0 ok=0 failed=0 skipped=0"]);
     expect(f.scripts).toEqual([]);
+  });
+
+  it("an aborted run logs a fixed line and still fails the invocation", async () => {
+    await seed(ids(1));
+    const lines = captureLogs();
+    const bad = fakes("dev" as "prod");
+    await expect(
+      scheduler.scheduled(controller(NOW), bad.env, createExecutionContext()),
+    ).rejects.toThrow();
+    expect(lines).toEqual(["nightly aborted env"]);
+    expect(bad.scripts).toEqual([]);
   });
 });

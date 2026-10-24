@@ -2315,3 +2315,22 @@ afterAll(() => {
       `${leaks.length + rowLeaks.length} sensitive value(s) leaked into errors, logs, notes or platform rows`,
     );
 });
+
+describe("no per-install cron (T7: the central scheduler is the only nightly caller)", () => {
+  it("create, upgrade and rollback upload no triggers and never call a schedules API", async () => {
+    const s = setup();
+    const inst = keep(await s.p.create(input("finqore")));
+    await s.p.upgrade(inst.id, "0.24.0");
+    keep(await s.p.rollback(inst.id));
+    const up = uploads(s.fake);
+    // create, upgrade and rollback each upload once.
+    expect(up.length).toBeGreaterThanOrEqual(3);
+    for (const u of up) {
+      const m = metaOf(u.body);
+      expect(m).not.toHaveProperty("triggers");
+      expect(m).not.toHaveProperty("schedules");
+      expect(JSON.stringify(m)).not.toMatch(/cron|trigger|schedul|17 3/i);
+    }
+    expect(s.fake.log.some((e) => /schedules/i.test(e.path))).toBe(false);
+  });
+});

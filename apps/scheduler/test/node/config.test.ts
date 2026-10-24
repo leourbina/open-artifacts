@@ -28,6 +28,7 @@ describe("wrangler.jsonc", () => {
     for (const env of ENVS) {
       const e = cfg.env[env];
       expect(e.name).toBe(platformNames(env).scheduler);
+      expect(e.main).toBe("src/index.ts");
       expect(e.vars).toEqual({ OA_ENV: env });
       expect(e.triggers).toEqual({ crons: ["17 3 * * *"] });
       expect(e.dispatch_namespaces).toEqual([
@@ -72,6 +73,7 @@ describe("wrangler.jsonc", () => {
   it("has no top-level name, bindings, vars or cron (a deploy without --env can't run)", () => {
     for (const k of [
       "name",
+      "main",
       "vars",
       "triggers",
       "d1_databases",
@@ -92,7 +94,16 @@ const wrangler = (args: string[]) =>
 describe("bundle", () => {
   it("wrangler deploy without --env is refused", () => {
     const out = mkdtempSync(join(tmpdir(), "oa-scheduler-"));
-    expect(() => wrangler(["--outdir", out])).toThrow(/name of your worker/);
+    expect(() => wrangler(["--outdir", out])).toThrow(
+      /name of your worker|entry-point/,
+    );
+  });
+
+  it("wrangler deploy --name without --env is refused too (no top-level main)", () => {
+    const out = mkdtempSync(join(tmpdir(), "oa-scheduler-"));
+    expect(() =>
+      wrangler(["--name", platformNames("prod").scheduler, "--outdir", out]),
+    ).toThrow(/entry-point/);
   });
 
   it("wrangler deploy --dry-run is under 50 KB per env", () => {
