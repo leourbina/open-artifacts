@@ -1,22 +1,23 @@
 // Hosted nightly scheduler (P1 Task 7): user Workers in a dispatch namespace
 // get no cron triggers, so this Worker's one cron calls scheduled() on every
-// active install's script (platform D1 `installs`), 10 at a time, 25 s each.
+// active install's script (platform D1 `installs`), 6 at a time, 25 s each.
 //
 // Deploy with --env staging or --env prod only (docs/ops/hosted.md): the top
-// level has no name, so a deploy without --env is refused. No routes, custom
-// domains or workers.dev: the Worker has no fetch handler. Each env's
+// level has no name and no main, so a deploy without --env is refused, even
+// with --name. No routes, custom domains or workers.dev: the Worker has no
+// fetch handler. Each env's
 // PLATFORM_DB id has its own placeholder, filled at deploy (the id of
 // oa-s-platform / oa-p-platform). Observability is on: no request URLs, and
 // the logs carry install ids, fixed categories and counts only.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
   "workers_dev": false,
   "preview_urls": false,
   "env": {
     "staging": {
       "name": "oa-s-scheduler",
+      "main": "src/index.ts",
       "workers_dev": false,
       "preview_urls": false,
       "vars": { "OA_ENV": "staging" },
@@ -35,6 +36,7 @@
     },
     "prod": {
       "name": "oa-p-scheduler",
+      "main": "src/index.ts",
       "workers_dev": false,
       "preview_urls": false,
       "vars": { "OA_ENV": "prod" },

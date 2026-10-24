@@ -52,7 +52,7 @@ Namespace `oa-spike-staging`, dispatch Worker `oa-s-spike-dispatch` (account scr
 
 - Per env: one dispatch namespace (`oa-staging`, `oa-prod`), one dispatch Worker with the `dispatch_namespace` binding, one wildcard DNS record and wildcard route per tenant domain pair, platform D1 + `HOSTS` KV, `BROKER_REGISTRY`, the scheduler.
 - Create/upgrade/delete: see `@oa/provision` and the P1 plan tasks 4/5/8.
-- Nightly: the scheduler calls `DISPATCHER.get(id).scheduled(...)` for every `active` install, 10 at a time, 25 s each.
+- Nightly: the scheduler calls `DISPATCHER.get(id).scheduled(...)` for every `active` install, 6 at a time, 25 s each, 13-minute deadline (see "Nightly scheduler" below).
 - Tokens: per-env provisioning token (Workers Admin + KV/R2/D1 Edit account-wide) and per-env zone tokens (Zone Read, DNS Edit, Workers Routes Edit on the env's two zones), each ≤ 30 days and verified before any write.
 - Provisioning tokens must be **user-owned** (created under My Profile > API Tokens), not account-owned. The provisioner (`cfClient().tokenVerify`, which the CLI uses) checks the token with `GET /user/tokens/verify`, and that endpoint refuses account-owned tokens. An account-owned token would need `GET /accounts/{account_id}/tokens/verify` instead, which the CLI does not call.
 - The provisioning token also needs **Account > Turnstile > Read**, so `create` can check the env's widget. **Turnstile > Edit** is needed only for the one-time `oa:hosted turnstile-init --env <env>` (Task 8).
@@ -143,9 +143,16 @@ Unmapping and slug purges: dispatch reads HOSTS with `cacheTtl: 60`, so an edge 
 
 ## Nightly scheduler: one-time deploy per env (Task 7, gated)
 
-User Workers in a dispatch namespace get no cron triggers, so `apps/scheduler` is the only nightly caller. Its cron (`17 3 * * *`, the same as a self-hosted install's) reads `SELECT id FROM installs WHERE state = 'active'` from the platform D1 (in keyset pages of 500) and calls `DISPATCHER.get(oa-<p>-<id>).scheduled({ cron, scheduledTime })` on each, 10 at a time, each raced against 25 s. Installs in `creating`, `upgrading`, `deleting` or `deleted` are never called, nor is a row whose id isn't an install id. One install throwing, timing out or missing never stops the others. A hosted upload carries no cron of its own (`TEMPLATE_BINDINGS_EXCLUDED.triggers`, pinned in `packages/provision/test/metadata.test.ts`), so the job runs once.
+User Workers in a dispatch namespace get no cron triggers, so `apps/scheduler` is the only nightly caller. Its cron (`17 3 * * *`, the same as a self-hosted install's) reads `SELECT id FROM installs WHERE state = 'active'` from the platform D1 (in keyset pages of 500) and calls `DISPATCHER.get(oa-<p>-<id>).scheduled({ cron, scheduledTime })` on each:
 
-The repo config has no routes, custom domains or `workers.dev`, no fetch handler, and no top-level name, so a deploy without `--env` is refused (tests pin all of it). Observability (Workers Logs) is on for this Worker only: it serves no requests, so there are no URLs to record, and its lines carry install ids, fixed categories and counts only (a test pins the whole log vocabulary). The dispatch Worker stays off. **The Manager and the user run the deploy by hand; CI never does.**
+- **Re-checked per call.** Right before each call it re-reads the row. If the install has left `active`, or holds a live lifecycle lease (`lease_until` in the future: an upgrade, rollback or delete is running), it isn't called and counts as `skipped`, not failed. Installs in `creating`, `upgrading`, `deleting` or `deleted` are never called, nor is a row whose id isn't an install id.
+- **6 at a time.** Calling a service binding doesn't count toward the 6 simultaneous open connections, but the installs' own fetch, KV, R2, Cache and Queues calls share the scheduler's limit while they wait for headers ([limits](https://developers.cloudflare.com/workers/platform/limits/#simultaneous-open-connections), [service bindings](https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/#limits)). A call is reported `timeout` after 25 s, but it keeps its slot until it actually settles, so hung installs can't over-subscribe the limit. If 6 calls hang, nothing else starts until the deadline.
+- **Deadline.** No call starts after 13 minutes, under the 15-minute cron wall time. The rest is `skipped`, and the summary still lands.
+- One install throwing, timing out or missing never stops the others.
+
+A hosted upload carries no cron of its own (`TEMPLATE_BINDINGS_EXCLUDED.triggers`). That's pinned for the metadata in `packages/provision/test/metadata.test.ts`, and for the create, upgrade and rollback uploads, with no `/schedules` call, in `wfp-lifecycle.test.ts`. So the job runs once.
+
+The repo config has no routes, custom domains or `workers.dev`, no fetch handler, and no top-level name or `main`. A deploy without `--env` is therefore refused, even with `--name` (tests pin all of it). **Always deploy with `--env`.** Observability (Workers Logs) is on for this Worker only: it serves no requests, so there are no URLs to record, and its lines carry install ids, fixed categories and counts only (a test pins the whole log vocabulary). The dispatch Worker stays off. **The Manager and the user run the deploy by hand; CI never does.**
 
 | Env | Worker | Namespace | Platform D1 | Config placeholder |
 |---|---|---|---|---|
@@ -170,26 +177,38 @@ Steps, per env (`ENV`, `P` and `UP` as in the dispatch steps above):
      && rm wrangler.deploy.jsonc
    ```
    The deploy output must name `oa-$P-scheduler` with `DISPATCHER (oa-$ENV)`, `PLATFORM_DB (oa-$P-platform)`, `OA_ENV ("$ENV")`, the schedule `17 3 * * *`, and no routes or workers.dev URL.
-4. Platform D1 binding check: the deployed `PLATFORM_DB` must be the database named `oa-$P-platform`, never another env's (`CF_ACCOUNT_ID` and `CF_API_TOKEN` as in the dispatch check):
+4. Binding check, from the deployed settings: `PLATFORM_DB` must be the database named `oa-$P-platform`, `DISPATCHER` must be the namespace `oa-$ENV`, `OA_ENV` must be `$ENV`, and the schedules must be exactly `17 3 * * *`. Never another env's (`CF_ACCOUNT_ID` and `CF_API_TOKEN` as in the dispatch check):
    ```sh
-   BOUND=$(curl -sS -H "Authorization: Bearer $CF_API_TOKEN" \
-     "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/workers/scripts/oa-$P-scheduler/settings" \
-     | jq -r '.result.bindings[] | select(.name == "PLATFORM_DB") | .id')
-   NAME=$(curl -sS -H "Authorization: Bearer $CF_API_TOKEN" \
-     "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/d1/database/$BOUND" | jq -r .result.name)
+   API="https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID"
+   SET=$(curl -sS -H "Authorization: Bearer $CF_API_TOKEN" "$API/workers/scripts/oa-$P-scheduler/settings")
+   BOUND=$(printf %s "$SET" | jq -r '.result.bindings[] | select(.name == "PLATFORM_DB") | .id')
+   NAME=$(curl -sS -H "Authorization: Bearer $CF_API_TOKEN" "$API/d1/database/$BOUND" | jq -r .result.name)
    test "$NAME" = "oa-$P-platform" || { echo "PLATFORM_DB bound to $NAME" >&2; exit 1; }
+   test "$(printf %s "$SET" | jq -r '.result.bindings[] | select(.name == "DISPATCHER") | .namespace')" = "oa-$ENV" \
+     || { echo "DISPATCHER is not oa-$ENV" >&2; exit 1; }
+   test "$(printf %s "$SET" | jq -r '.result.bindings[] | select(.name == "OA_ENV") | .text')" = "$ENV" \
+     || { echo "OA_ENV is not $ENV" >&2; exit 1; }
+   test "$(curl -sS -H "Authorization: Bearer $CF_API_TOKEN" "$API/workers/scripts/oa-$P-scheduler/schedules" \
+     | jq -c '[.result.schedules[].cron]')" = '["17 3 * * *"]' \
+     || { echo "schedules are not exactly 17 3 * * *" >&2; exit 1; }
    ```
+5. **First staging run: verify the per-request invocation limit.** The service-bindings docs say "A single request has a maximum of 32 Worker invocations, and each call to a Service binding counts". If dispatch-namespace calls count too, one nightly run reaches only 32 installs. Before prod has more than 32 installs, run the scheduler on staging with at least 33 active test installs (synthetic scripts that only stamp a KV key or log their id are enough), using a one-off cron or `wrangler dev --test-scheduled` against the remote namespace. Check that the summary shows `ok=` for all of them and that every install stamped. Record the result here. While you're on that run, also confirm:
+   - the real shape of a missing script: `outcome: "scriptNotFound"` or a rejection; both map to `not_found`;
+   - whether a timed-out install's job is canceled when the scheduler's invocation ends.
+6. If step 5 shows the 32 limit applies, the M2 Queue fan-out (one message per install, each consumer invocation calling one install) is needed before the 33rd install, not at ~190.
 
 ### Reading the nightly run
 
-Read the lines in Workers Logs for `oa-$P-scheduler` (dashboard, or the Observability API with the Platform read-only token), filtered on `nightly`; live, `pnpm exec wrangler tail oa-$P-scheduler --format pretty` around 03:17 UTC. The dashboard's Cron Events list (Worker > Settings > Triggers) shows each past invocation and its outcome, and the run itself only fails there if the platform D1 read fails. Lines, with no error text, emails or vars:
+Read the lines in Workers Logs for `oa-$P-scheduler` (dashboard, or the Observability API with the Platform read-only token), filtered on `nightly`. To watch live, run `pnpm exec wrangler tail oa-$P-scheduler --format pretty` around 03:17 UTC. The dashboard's Cron Events list (Worker > Settings > Triggers) shows each past invocation and its outcome. The run itself fails there only when it aborts (`nightly aborted`). The lines carry no error text, emails or vars:
 
 | Line | Meaning |
 |---|---|
-| `nightly summary active=<n> ok=<n> failed=<n>` | One per run. `active` counts the valid active ids called. |
-| `nightly failed <category> <installId>` | One per failed install. `timeout` (over 25 s; the install's job may still finish), `canceled` (the runtime canceled the install's handler), `not_found` (no script in the namespace: check the row's state against the namespace), `exception` (the install's handler threw, the call failed, or the result wasn't `outcome: "ok"`: read that install's own Workers Logs). |
+| `nightly summary active=<n> ok=<n> failed=<n> skipped=<n>` | One per run, at the end. `active` counts the valid active ids read; `skipped` counts installs that left `active` or took a lease before their turn, plus those not started by the 13-minute deadline. A large `skipped` with few `failed` means the deadline hit: see the scale lines. |
+| `nightly failed <category> <installId>` | One per failed install, logged when it happens. `timeout`: over 25 s; the job may have been canceled when the run ended, so treat it as not done. `canceled`: the runtime canceled the install's handler. `not_found`: no script in the namespace (outcome `scriptNotFound` or a "Worker not found" error); check the row's state against the namespace. `exception`: the install's handler threw, the call failed, or the result wasn't `outcome: "ok"` (`exceededCpu`, `exceededMemory`, …); read that install's own Workers Logs. |
 | `nightly invalid ids=<n>` | Active rows whose id isn't an install id; skipped. Fix the rows. |
-| `nightly scale active=<n> over 300` | Near the ~360-install limit of one cron run (10 at a time × 25 s). Move to the M2 Queue fan-out before it grows. |
+| `nightly scale active=<n> over 32` | Past the possible 32-invocations-per-request limit. Until step 5 has verified it, check that the summary's `ok` reaches `active`. |
+| `nightly scale active=<n> over 300` | Past what one run fits (about 190 at 6 × 25 s in 13 minutes, fewer under shared-connection queuing). The M2 Queue fan-out is overdue. |
+| `nightly aborted <env\|exception>` | The run stopped before any call: a bad `OA_ENV` (`env`) or a platform D1 read error (`exception`). Cron Events shows the failure. |
 
 The email-quota alert (80% of the account limit) is not in M1: the per-install send counters live in each install's own D1 and no route exposes them. Backend owns that contract.
 
