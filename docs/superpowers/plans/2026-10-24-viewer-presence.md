@@ -18,7 +18,7 @@
 - Anonymous presence id: a random value in a session cookie `oa_pid` on the app origin (no `Expires`/`Max-Age`, `Path=/`, `SameSite=Lax`, `Secure` on https), never derived from or stored next to `oa.anonId`. The server treats it as opaque: `^[A-Za-z0-9_-]{16,64}$`, else ignored.
 - The presence key shown to clients is per artifact (HMAC of artifact id + identity under a new `oa:presence` key), so it can't link a viewer across artifacts.
 - Free plan: no polling; the client pings `"ping"` every 30 s and the DO answers `"pong"` through `setWebSocketAutoResponse` (no wake); stale sockets are found from `getWebSocketAutoResponseTimestamp` in the existing alarm; no per-socket timers; frames only on join, leave and agent expiry, coalesced.
-- Timings (shared constants, `packages/shared/src/presence.ts`): `PRESENCE_PING_MS = 30_000`, `PRESENCE_STALE_MS = 75_000`, `PRESENCE_SWEEP_MS = 30_000`, `PRESENCE_GRACE_MS = 5_000`, `PRESENCE_COALESCE_MS = 1_000`, `AGENT_PRESENT_MS = 120_000`.
+- Timings (shared constants, `packages/shared/src/presence.ts`): `PRESENCE_PING_MS = 30_000`, `PRESENCE_STALE_MS = 60_000`, `PRESENCE_SWEEP_MS = 30_000`, `PRESENCE_GRACE_MS = 5_000`, `PRESENCE_COALESCE_MS = 1_000`, `AGENT_PRESENT_MS = 120_000`.
 - Caps: display name 80 chars, activity 80 chars, roster at most `PRESENCE_LIST_MAX = 100` entries plus a `total`.
 - No em dashes in user-facing copy; say "any AI agent" where relevant.
 - Every change to an existing shared shape is optional and appended last (older clients parse; `json-shapes.snapshot.test.ts` stays byte-identical), and is recorded in `packages/shared/HOSTED_CONTRACT.md`.
@@ -27,9 +27,9 @@
 
 ## Review Focus
 
-1. **Old cached dashboards that never ping.** A tab running the previous SPA must not be swept as stale every 75 s (a reconnect loop). Only sockets that opened with `?ping=1` are swept; others leave on close only. Test in Task 3.
+1. **Old cached dashboards that never ping.** A tab running the previous SPA must not be swept as stale every 60 s (a reconnect loop). Only sockets that opened with `?ping=1` are swept; others leave on close or at the socket TTL. Test in Task 3.
 2. **DO hibernation between join and leave.** Roster, grace and agent rows must come back from attachments and SQLite alone after eviction. Test in Task 3 (fresh `ArtifactRuntime` instance on the same storage).
-3. **Laptop sleep or network loss (no close frame).** The face is gone within `PRESENCE_STALE_MS + PRESENCE_SWEEP_MS` (105 s worst case). Test in Task 3 with the clock override.
+3. **Laptop sleep or network loss (no close frame).** The face is gone within `PRESENCE_STALE_MS + PRESENCE_SWEEP_MS` (about 90 s worst case; spec: "within about 90 seconds"). Test in Task 3 with the clock override.
 4. **Hostile anonymous cookie.** Oversized, malformed or rotating `oa_pid` values can't break the roster or exhaust animals: malformed means a per-socket identity, and the existing 3-per-/56 anonymous socket cap bounds the faces. Test in Task 4.
 5. **Hostile or odd names.** A 500-char name, HTML, RTL or emoji renders as plain text, capped at 80 chars; an anonymous viewer can never claim a name. Tests in Tasks 2 and 9.
 
@@ -45,13 +45,13 @@
 | `packages/shared/HOSTED_CONTRACT.md` | New "Presence (both tiers)" section + CHANGED rows |
 | `apps/server/src/runtime/roster.ts` (new) | Pure roster building: dedupe, order, animals, colors, agent names |
 | `apps/server/src/runtime/do.ts` | Presence sockets, grace, sweep, coalesced broadcast, agent rows |
-| `apps/server/src/runtime/routes.ts` | Events route: presence headers, cookie, `since`, `ping` |
+| `apps/server/src/runtime/routes.ts` | Events route: presence headers, cookie, `ping` |
 | `apps/server/src/auth/keys.ts` | `oa:presence`, `oa:mcp-session` key labels |
 | `apps/server/src/mcp/session.ts` (new) | Issue and verify `Mcp-Session-Id` |
 | `apps/server/src/runtime/agent-presence.ts` (new) | Worker-side `agentTouch(...)` builder and fire-and-forget helper |
 | `apps/server/src/mcp/server.ts`, `index.ts`, `mcp/oauth.ts`, `mcp/tools/*.ts`, `mcp/instructions.ts`, `routes/artifacts.ts`, `services/artifacts.ts` | Agent session and touches |
 | `apps/dashboard/src/viewer/presenceId.ts` (new) | The `oa_pid` cookie |
-| `apps/dashboard/src/viewer/liveEvents.ts` | Ping, `since`, `ping=1`, presence frames |
+| `apps/dashboard/src/viewer/liveEvents.ts` | Ping, `ping=1`, presence frames |
 | `apps/dashboard/src/viewer/usePresence.ts` (new) | Roster state minus self |
 | `apps/dashboard/src/viewer/presence/animals.tsx` (new) | `AnimalIcon`: Lucide icons plus the 45 drawn ones |
 | `apps/dashboard/src/viewer/presence/*` (new) | `PresenceStack`, `PresenceAvatar`, `PresenceCard`, palette |
@@ -86,7 +86,7 @@
   - In `events.mock.test.ts`: `emitPresence sends one presence frame to each open socket`.
 - [ ] **Step 2: Run** `pnpm --filter @oa/shared exec vitest run test/presence.test.ts test/events.mock.test.ts`. Expected: FAIL (module not found).
 - [ ] **Step 3: Implement** `packages/shared/src/presence.ts` and the schema/mock changes above. `schemas.ts` imports from `presence.ts` (not the reverse).
-- [ ] **Step 4: Record the contract** in `HOSTED_CONTRACT.md`: a "Presence (both tiers)" section (frame, entry fields and trust levels, cookie, ping/pong, timings, `?ping=1&since=` query on `R.events`) and CHANGED rows for `ArtifactEvent.hello` (`you?`), `ArtifactEventSchema` (`presence`), `GetArtifactInput` and `ArtifactData*Input` (`activity?`). Update the `ArtifactEventSchema` doc comment in `schemas.ts` (frames list; client messages: only `"ping"`, anything else still closes 1008).
+- [ ] **Step 4: Record the contract** in `HOSTED_CONTRACT.md`: a "Presence (both tiers)" section (frame, entry fields and trust levels, cookie, ping/pong, timings, `?ping=1` query on `R.events`) and CHANGED rows for `ArtifactEvent.hello` (`you?`), `ArtifactEventSchema` (`presence`), `GetArtifactInput` and `ArtifactData*Input` (`activity?`). Update the `ArtifactEventSchema` doc comment in `schemas.ts` (frames list; client messages: only `"ping"`, anything else still closes 1008).
 - [ ] **Step 5: Run** `pnpm --filter @oa/shared test && pnpm --filter @oa/shared typecheck`. Expected: PASS.
 - [ ] **Step 6: Commit** `feat(shared): viewer presence contract`.
 
@@ -132,7 +132,7 @@
 **Interfaces:**
 - Consumes: Task 2 `buildRoster`, `SeatRow`; Task 1 constants and `PRESENCE_PING/PONG`.
 - Produces (used by Task 4):
-  - Upgrade headers from the route: `EVENTS_PRESENCE_HEADER = "X-OA-Presence"` (JSON `PresenceIdentity`, absent = this socket is not counted and gets no presence frames, e.g. embeds), `EVENTS_SINCE_HEADER = "X-OA-Since"` (ms epoch or absent), `EVENTS_PING_HEADER = "X-OA-Ping"` (`"1"` = this client pings).
+  - Upgrade headers from the route: `EVENTS_PRESENCE_HEADER = "X-OA-Presence"` (JSON `PresenceIdentity`, absent = this socket is not counted and gets no presence frames, e.g. embeds), `EVENTS_PING_HEADER = "X-OA-Ping"` (`"1"` = this client pings).
   - `SocketMeta = { t: number; named?: boolean; p?: SeatRow & { ping: boolean } }`.
   - Tag `PRESENCE_TAG = "~pr"` on counted sockets.
   - SQLite tables: `presence_left (key text primary key, kind, name, guest, since, until)`, `presence_state (id = 1, hash text, sent_at integer)`. (`presence_agent` comes in Task 6.)
@@ -145,12 +145,12 @@
   - `three joins inside PRESENCE_COALESCE_MS send one frame, flushed by the alarm`.
   - `two sockets of one key show once; closing one keeps the face`.
   - `a clean close leaves after PRESENCE_GRACE_MS, not before` (no frame at +4 s, frame at +5 s via alarm).
-  - `a reconnect inside the grace keeps the original since and position` (close, reopen with a later `X-OA-Since`, roster order unchanged).
-  - `X-OA-Since in the future or older than SOCKET_TTL_MS + grace is clamped`.
+  - `a reconnect inside the grace keeps the original since and position` (close, reopen the same key 3 s later, roster order unchanged).
+  - `a rejoin after the grace gets a fresh since` (moves to first).
   - `"ping" gets "pong" and does not close the socket; any other message still closes 1008` (keep `events.test.ts` "any client message closes the socket (1008)" passing).
   - `a pinging socket with no auto-response for PRESENCE_STALE_MS is closed by the alarm and leaves` (Review Focus 3).
   - `a socket opened without X-OA-Ping is never swept as stale` (Review Focus 1).
-  - `while counted sockets exist the alarm is armed at most PRESENCE_SWEEP_MS ahead; with none it is not re-armed for presence`.
+  - `while a ping=1 socket is open the alarm is armed at most PRESENCE_SWEEP_MS ahead; with only non-pinging sockets (or none) no sweep alarm is armed`.
   - `after a fresh instance on the same storage, the roster is rebuilt from attachments and presence_left` (Review Focus 2).
   - `a socket without X-OA-Presence gets no presence frames and is not counted` (embeds).
   - `closeSockets and destroy clear presence_left and presence_state`.
@@ -158,11 +158,11 @@
 - [ ] **Step 2: Run** `pnpm --filter @oa/server gen && pnpm --filter @oa/server exec vitest run test/presence.do.test.ts`. Expected: FAIL.
 - [ ] **Step 3: Implement.**
   - Constructor: `ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(PRESENCE_PING, PRESENCE_PONG))` (applies to data sockets too; harmless).
-  - `fetch` (`/events`): parse `X-OA-Presence` with a zod schema (400 on invalid), build the seat with `since = presence_left.since ?? clamp(X-OA-Since)` and delete that `presence_left` row; push `PRESENCE_TAG`; hello includes `you`; send the roster to the joiner; `presenceChanged()`; `armAt(min(t + SOCKET_TTL_MS, now + PRESENCE_SWEEP_MS))` when counted.
+  - `fetch` (`/events`): parse `X-OA-Presence` with a zod schema (400 on invalid), build the seat with `since = presence_left.since ?? now` and delete that `presence_left` row; push `PRESENCE_TAG`; hello includes `you`; send the roster to the joiner; `presenceChanged()`; `armAt(min(t + SOCKET_TTL_MS, now + PRESENCE_SWEEP_MS))` when the socket pings.
   - `webSocketClose` (and a new `webSocketError` with the same body): for a counted socket whose key has no other open counted socket, upsert `presence_left` with `until = now + PRESENCE_GRACE_MS` and `armAt(until)`.
   - `presenceChanged`: if `now - sent_at >= PRESENCE_COALESCE_MS` flush now, else `armAt(sent_at + PRESENCE_COALESCE_MS)`.
   - `flushPresence`: seats from `getWebSockets(PRESENCE_TAG)` attachments plus unexpired `presence_left`; `buildRoster`; skip when the JSON hash equals `presence_state.hash`; else send one serialized frame to all `PRESENCE_TAG` sockets and store hash and `sent_at`.
-  - `alarm`: before the TTL loop, close pinging counted sockets whose `getWebSocketAutoResponseTimestamp(ws) ?? t` is older than `PRESENCE_STALE_MS` (close 1001 "stale", then the grace path); delete expired `presence_left`; flush if anything changed or a coalesce is due; include `now + PRESENCE_SWEEP_MS` (counted sockets open), the earliest `until`, and a pending coalesce in `next`. The early return at `:1334` also checks `presence_left`.
+  - `alarm`: before the TTL loop, close pinging counted sockets whose `getWebSocketAutoResponseTimestamp(ws) ?? t` is older than `PRESENCE_STALE_MS` (close 1001 "stale", then the grace path); delete expired `presence_left`; flush if anything changed or a coalesce is due; include `now + PRESENCE_SWEEP_MS` (only while a pinging socket is open), the earliest `until`, and a pending coalesce in `next`. The early return at `:1334` also checks `presence_left`.
 - [ ] **Step 4: Run** the test file plus `test/events.test.ts test/runtime.do.test.ts test/alarm.cpu.test.ts`. Expected: PASS. Existing `events.test.ts` tests that read frames in order get a helper `nextOf(type)` that skips `presence` frames.
 - [ ] **Step 5: Commit** `feat(server): viewer presence on the events socket`.
 
@@ -185,7 +185,7 @@
   - `the presence key differs per artifact for the same person`.
   - `a malformed or 65-char oa_pid gives a per-socket face, not an error` (Review Focus 4).
   - `embed sockets (?embed=1 and X-OA-Embed) are not counted and get no presence frames`.
-  - `?ping=1 and ?since= reach the DO; a non-numeric since is ignored`.
+  - `?ping=1 reaches the DO as X-OA-Ping; any other value is treated as not pinging`.
   - `keys.test.ts`: the existing distinct-keys test covers the new label.
 - [ ] **Step 2: Run** `pnpm --filter @oa/server gen && pnpm --filter @oa/server exec vitest run test/events.test.ts test/keys.test.ts`. Expected: FAIL.
 - [ ] **Step 3: Implement** in the `EVENTS` handler: skip presence when embed; signed-in: identity `u:{id}`, `name: cleanName(user.name)`, `guest: user.role === "guest"`, kind `person`; anonymous: `p:{oa_pid}` when it matches `PRESENCE_ID_RE`, else `s:{newId()}`, kind `anon`, name null. Read the cookie with Hono's `getCookie`. Pass the three headers.
@@ -260,11 +260,11 @@
 - Consumes: Task 1 schemas, constants, mock `emitPresence`.
 - Produces:
   - `presenceId(): string`: reads `oa_pid` from `document.cookie`, else mints 22 random base64url chars and writes the session cookie (Global Constraints attributes). Never touches `oa.anonId`; never throws.
-  - `eventsUrl(id, embed, o?: { since?: number })` adds `ping=1` always and `since` when known.
-  - `ArtifactEventsOptions.onPresence?: (f: PresenceFrame, you: string | undefined) => void`; the socket sends `PRESENCE_PING` every `PRESENCE_PING_MS` while open (one interval per socket, cleared on close), ignores `"pong"`, and keeps the first `since` it saw for reconnects (4408 and backoff).
+  - `eventsUrl(id, embed)` adds `ping=1` (not in embed mode).
+  - `ArtifactEventsOptions.onPresence?: (f: PresenceFrame, you: string | undefined) => void`; the socket sends `PRESENCE_PING` every `PRESENCE_PING_MS` while open (one interval per socket, cleared on close), and ignores `"pong"`. It sends no arrival time: the server keeps it across the grace.
   - `usePresence(): { others: PresenceEntry[]; total: number; onPresence }` (drops `you`, clears on gone).
 - [ ] **Step 1: Write the failing tests:**
-  - `live-events.test.ts`: `sends "ping" every 30 s and only "ping"` (fake timers), `a 4408 reconnect carries since and ping=1`, `presence frames go to onPresence, not onEvent`, `embed mode never sends a presence id or since`.
+  - `live-events.test.ts`: `sends "ping" every 30 s and only "ping"` (fake timers), `a 4408 reconnect carries ping=1 and no since`, `presence frames go to onPresence, not onEvent`, `embed mode sends no ping=1 and no ping frames`.
   - `presence.test.tsx`: `presenceId mints once and reuses the cookie`, `presenceId never reads or writes oa.anonId`, `usePresence hides you and keeps order`, `a gone artifact clears the roster`.
 - [ ] **Step 2: Run** `pnpm --filter @oa/dashboard exec vitest run test/live-events.test.ts test/presence.test.tsx`. Expected: FAIL.
 - [ ] **Step 3: Implement.** The anonymous cookie is set before the first connect so the upgrade carries it; signed-in viewers set it too (the server ignores it for them).
@@ -348,7 +348,7 @@
 | Goal 5 card, name only | 9 |
 | Goal 6 agents, shape (1A), trust levels, session, unique names, activity, state | 5, 6, 9 |
 | Anti-goals: no leak, no cross-artifact linking, free plan, ghosts | 1, 3, 4 |
-| Reconnect grace and since | 3, 7 |
+| Reconnect grace, server-kept arrival | 3 |
 | Embeds not counted (Section 10, builder's lean: no) | 3, 4, 9 |
 | `/full`, phones, deleted/no access | 9 |
 | Animal icons (4A, ~45 to draw) | 8 |
