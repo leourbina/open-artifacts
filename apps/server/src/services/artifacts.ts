@@ -563,29 +563,60 @@ export async function getSummary(
   if (!r) throw notFound();
   const owner = await ownerRef(env, r.artifact.ownerId, caller);
   const out = toSummary(env, r.artifact, owner, r.level);
-  // Hosted M1: the artifact's space and what the caller may do, for signed-in
-  // callers while spaces are on (one PK read). A personal space is named for
-  // its owner as the caller may see them.
-  if (caller.kind === "user" && authConfig(env).features.includes("spaces")) {
-    const sp = await env.DB.prepare(
-      "select kind, name, public_links as publicLinks from spaces where id = ?",
-    )
-      .bind(r.artifact.spaceId)
-      .first<{ kind: string; name: string; publicLinks: number }>();
-    if (sp) {
-      const shared = sp.kind === "shared";
-      out.space = {
-        id: r.artifact.spaceId ?? "",
-        kind: shared ? "shared" : "personal",
-        name: shared ? sp.name : (owner.name ?? "Personal"),
-        publicLinks: shared ? sp.publicLinks === 1 : true,
-      };
-    }
-    out.can = artifactCan(r.level, {
-      personal: r.personal,
-      cap: capOfCaller(caller),
-    });
-  }
+  if (!decorates(env, caller)) return out;
+  // One PK read for the space (lists and search read it from their join).
+  const sp = await env.DB.prepare(
+    "select kind, name, public_links as publicLinks from spaces where id = ?",
+  )
+    .bind(r.artifact.spaceId)
+    .first<SpaceCols>();
+  return withSpace(caller, out, r.level, r.artifact.spaceId, sp);
+}
+
+/** The artifact's space row as withSpace reads it (null: no row). */
+export type SpaceCols = {
+  kind: string | null;
+  name: string | null;
+  publicLinks: number | null;
+};
+
+/** The joined space's columns for a list or search SELECT (no extra statement). */
+export const spaceCols = {
+  kind: spaces.kind,
+  name: spaces.name,
+  publicLinks: spaces.publicLinks,
+};
+
+/**
+ * Hosted M1: `space` and `can` go on artifact responses for signed-in
+ * callers while spaces are on (getSummary, list, search; never anonymous).
+ */
+export const decorates = (env: Env, caller: Caller): boolean =>
+  caller.kind === "user" && authConfig(env).features.includes("spaces");
+
+/**
+ * Sets `out.space` (SpaceRef) and `out.can` (artifactCan of the caller's
+ * level, personal or not, with their cap) from the space row already read.
+ * A personal space is named for its owner as the caller may see them (the
+ * summary's owner ref), never by the stored name. A missing row reads as
+ * personal, as decide() does. Call only when `decorates`.
+ */
+export function withSpace<T extends ArtifactSummary>(
+  caller: Caller,
+  out: T,
+  level: AccessLevel,
+  spaceId: string | null,
+  sp: SpaceCols | null | undefined,
+): T {
+  const shared = sp?.kind === "shared";
+  if (sp?.kind)
+    out.space = {
+      id: spaceId ?? "",
+      kind: shared ? "shared" : "personal",
+      name: shared ? (sp.name ?? "") : (out.owner.name ?? "Personal"),
+      publicLinks: shared ? sp.publicLinks === 1 : true,
+    };
+  out.can = artifactCan(level, { personal: !shared, cap: capOfCaller(caller) });
   return out;
 }
 
@@ -669,6 +700,8 @@ export function listQuery(env: Env, caller: Caller, q: ListQuery) {
       ownerName: users.name,
       ownerDisplayName: users.displayName,
       level: levelSql(caller, { allowDeleted: q.includeDeleted }),
+      // The joined space, for `space` and `can` (withSpace).
+      space: spaceCols,
     })
     .from(artifacts)
     .innerJoin(users, eq(users.id, artifacts.ownerId))
@@ -701,25 +734,25 @@ export async function list(
   // listFilterSql: a row it denies is dropped, never shown with a guessed
   // level. The cursor still follows the SQL page.
   const items: ArtifactSummary[] = [];
+  const dec = decorates(env, caller);
   for (const r of page) {
     const { level } = r;
     if (!level) continue;
-    items.push(
-      toSummary(
-        env,
-        r.a,
-        redact(
-          {
-            id: r.a.ownerId,
-            email: r.ownerEmail,
-            name: r.ownerName,
-            displayName: r.ownerDisplayName,
-          },
-          caller,
-        ),
-        level,
+    const out = toSummary(
+      env,
+      r.a,
+      redact(
+        {
+          id: r.a.ownerId,
+          email: r.ownerEmail,
+          name: r.ownerName,
+          displayName: r.ownerDisplayName,
+        },
+        caller,
       ),
+      level,
     );
+    items.push(dec ? withSpace(caller, out, level, r.a.spaceId, r.space) : out);
   }
   return {
     items,
