@@ -110,13 +110,17 @@ function fakes(
               if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
               if (b === "hang") await new Promise(() => {});
               if (b === "throw")
-                throw new Error("boom for owner@customer.test SECRET=x");
+                throw new Error(
+                  "boom for owner@customer.test at https://acme.open-artifacts.app/c/123.sig/x SECRET=x",
+                );
               if (typeof b === "object") return b.result;
               if (b === "outcome")
                 return { outcome: "exception", noRetry: false };
               if (b === "canceled")
                 return { outcome: "canceled", noRetry: false };
-              return { outcome: "ok", noRetry: false };
+              // Measured on staging: a handler that succeeds resolves to
+              // undefined; one that throws rejects with its own error.
+              return undefined;
             } finally {
               inFlight--;
             }
@@ -150,7 +154,7 @@ const NOW = Date.UTC(2026, 9, 24, 3, 17);
 
 /** The whole log vocabulary: install ids, fixed categories and counts. */
 const LOG_LINE =
-  /^(?:nightly failed (?:timeout|not_found|canceled|exception) i[a-z0-9]{11}|nightly summary active=\d+ ok=\d+ failed=\d+ skipped=\d+|nightly invalid ids=\d+|nightly scale active=\d+ over (?:32|300)|nightly aborted (?:env|exception))$/;
+  /^(?:nightly failed (?:timeout|not_found|canceled|exception) i[a-z0-9]{11}|nightly summary active=\d+ ok=\d+ failed=\d+ skipped=\d+|nightly invalid ids=\d+|nightly scale active=\d+ over 300|nightly aborted (?:env|exception))$/;
 
 const ids = (n: number, state: State = "active") =>
   Array.from({ length: n }, (_, k) => ({ id: idOf(k), state }));
@@ -209,12 +213,12 @@ describe("runNightly", () => {
       expect(["timeout", "not_found", "exception"]).toContain(x.reason);
   });
 
-  it('fails closed on the result: only outcome "ok" is ok', async () => {
+  it('resolving is ok (undefined or outcome "ok"); any other result fails closed', async () => {
     const results: Behavior[] = [
       "ok",
       "outcome",
       "canceled",
-      { result: undefined },
+      { result: { outcome: "ok", noRetry: false } },
       { result: null },
       { result: {} },
       { result: { outcome: "OK", noRetry: false } },
@@ -229,11 +233,11 @@ describe("runNightly", () => {
       (s) => results[Number.parseInt(s.slice(-11), 36)] as Behavior,
     );
     const r = await runNightly(f.env, NOW);
-    expect(r.ok).toEqual([idOf(0)]);
+    expect(r.ok).toEqual([idOf(0), idOf(3)]);
     expect([...r.failed].sort((a, b) => a.id.localeCompare(b.id))).toEqual([
       { id: idOf(1), reason: "exception" },
       { id: idOf(2), reason: "canceled" },
-      ...[3, 4, 5, 6, 7, 8].map((n) => ({ id: idOf(n), reason: "exception" })),
+      ...[4, 5, 6, 7, 8].map((n) => ({ id: idOf(n), reason: "exception" })),
       { id: idOf(9), reason: "not_found" },
       { id: idOf(10), reason: "exception" },
     ]);
@@ -479,38 +483,40 @@ describe("runNightly", () => {
     expect(f.scripts).toEqual([]);
   });
 
-  it("more than 300 active installs logs both scale warnings", async () => {
+  it("a rejection carries the install's own error text: it never reaches logs or results", async () => {
+    await seed(ids(3));
+    const lines = captureLogs();
+    const f = fakes("staging", (s) =>
+      n36(s) === 0 ? "throw" : n36(s) === 1 ? "missing" : "ok",
+    );
+    const r = await nightly(f.env, NOW);
+    expect(r.ok).toEqual([idOf(2)]);
+    expect(r.failed).toEqual([
+      { id: idOf(0), reason: "exception" },
+      { id: idOf(1), reason: "not_found" },
+    ]);
+    const out = `${lines.join("\n")}\n${JSON.stringify(r)}`;
+    expect(out).not.toMatch(
+      /@|https?:|open-artifacts\.app|\/c\/|SECRET|boom|Worker not found|oa-s-/,
+    );
+    for (const l of lines) expect(l).toMatch(LOG_LINE);
+  });
+
+  it("more than 300 active installs logs the scale warning", async () => {
     await seed(ids(301));
     const lines = captureLogs();
     const f = fakes();
     const r = await runNightly(f.env, NOW, { concurrency: 50 });
     expect(r.ok).toHaveLength(301);
     expect(lines.filter((l) => l.startsWith("nightly scale"))).toEqual([
-      "nightly scale active=301 over 32",
       "nightly scale active=301 over 300",
     ]);
   });
 
-  it("300 active installs logs only the 32-invocation warning", async () => {
+  it("300 active installs log no scale warning (no 32-invocation cap: measured on staging)", async () => {
     await seed(ids(300));
     const lines = captureLogs();
     await runNightly(fakes().env, NOW, { concurrency: 50 });
-    expect(lines.filter((l) => l.startsWith("nightly scale"))).toEqual([
-      "nightly scale active=300 over 32",
-    ]);
-  });
-
-  it("33 active installs warn about the 32-invocation limit; 32 don't", async () => {
-    await seed(ids(33));
-    let lines = captureLogs();
-    await runNightly(fakes().env, NOW);
-    expect(lines.filter((l) => l.startsWith("nightly scale"))).toEqual([
-      "nightly scale active=33 over 32",
-    ]);
-    vi.restoreAllMocks();
-    await db.prepare("DELETE FROM installs WHERE id = ?").bind(idOf(32)).run();
-    lines = captureLogs();
-    await runNightly(fakes().env, NOW);
     expect(lines.some((l) => l.startsWith("nightly scale"))).toBe(false);
   });
 });
@@ -566,7 +572,7 @@ describe("scheduled", () => {
       "outcome",
       "canceled",
       "missing",
-      { result: undefined },
+      { result: { outcome: "ok", noRetry: false } },
     ];
     await seed([
       ...Array.from({ length: 301 }, (_, n) => ({
