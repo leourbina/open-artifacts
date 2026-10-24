@@ -15,6 +15,7 @@
 ## Global Constraints
 
 - Same code for hosted and self-hosted; hosted features ship in the open-source product behind configuration (spec 3).
+- **`HOSTED=1` only tightens or reports.** It may add a fail-closed requirement (broker transport, Turnstile for codes, a named host) or report itself (`Me.instance.hosted`), never enable a feature or loosen a check. Every `HOSTED` read in `apps/server/src` is listed with its reason in `test/node/hosted-lint.test.ts`.
 - **A tier change never widens access** (spec 4.5).
 - Personal artifacts: admins and execs can't browse or read them. "Execs see everything" means every shared space, never personal spaces (spec 4.2).
 - Space artifacts belong to the company; space managers can share, move or delete any artifact in their space.
