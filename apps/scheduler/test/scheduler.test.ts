@@ -910,10 +910,11 @@ describe("nightOrder (golden-stride rotation over a fixed sha256(id) order)", ()
   }
 
   // Each night covers a window of `budget` positions starting at the night's
-  // offset; the offset steps by round(0.382 × N) a night (a golden-ratio
-  // stride), so by the three-distance theorem the uncovered gap (N - budget)
-  // moves on by more than its own width when budget > N - stride: 300 - 190
-  // = 110 < 115, so an id is never skipped two nights running (measured: 1).
+  // offset; the offset steps by about 0.382 × N a night (a golden-ratio
+  // step, floor(frac(day × 0.382) × N)), so by the three-distance theorem
+  // the uncovered gap (N - budget) moves on by more than its own width when
+  // budget > N - 0.382 N: 300 - 190 = 110 < 114, so an id is skipped at most
+  // about one night running; the test allows 2 for rounding at the edges.
   it("300 ids, budget 190, 30 nights: max skip streak <= 2, never 3 nights in a row", async () => {
     const r = await streaks(300, 190, 30);
     expect(r.max).toBeLessThanOrEqual(2);
@@ -992,7 +993,8 @@ describe("nightOrder (golden-stride rotation over a fixed sha256(id) order)", ()
       for (const [id] of ranOn[d] as Map<string, boolean>)
         if ([0, 1, 2].every((k) => ranOn[d + k]?.get(id) === false))
           threeInARow++;
-    console.info(`churn max streak ${max}, three-in-a-row ${threeInARow}`);
+    // Measured with this fixture: max streak 2, three-in-a-row 0 (the
+    // integer start gave 7 and 652).
     expect(max).toBeLessThanOrEqual(2);
     expect(threeInARow).toBe(0);
   });

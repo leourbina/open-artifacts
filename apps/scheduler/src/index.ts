@@ -27,7 +27,12 @@ const SCALE_WARN = 300;
 export type Reason = "timeout" | "not_found" | "canceled" | "exception";
 
 /** Why an install wasn't called; logged as `nightly skipped <reason> <id>`. */
-export type SkipReason = "state" | "deadline" | "recheck" | "db_error";
+export type SkipReason =
+  | "state"
+  | "deadline"
+  | "capped"
+  | "recheck"
+  | "db_error";
 
 export interface NightlyResult {
   ok: string[];
@@ -38,6 +43,8 @@ export interface NightlyResult {
   dbErrors: string[];
   /** Timed out and still unsettled leakMs later, or when the run ended. */
   leaked: string[];
+  /** Of skipped: held back by the unsettled cap until the deadline. */
+  capped: string[];
 }
 
 export interface NightlyOptions {
@@ -57,12 +64,16 @@ export interface NightlyOptions {
   leakMs?: number;
   /** Bound on the per-call platform D1 re-check (also bounded by the deadline). */
   recheckMs?: number;
+  /** With less than this left before the deadline, no re-check starts. */
+  recheckFloorMs?: number;
   pageSize?: number;
 }
 
 /** Consecutive re-check D1 errors or stalls that stop the run (a platform D1 outage). */
 const DB_ERROR_STOP = 3;
 const DAY_MS = 86_400_000;
+/** 2 − φ: the golden-ratio step of nightOrder's start, as a fraction of N. */
+const GOLDEN = 0.3819660112501051;
 
 // Keyset pages, so a large table is never one result set.
 const PAGE_SQL =
@@ -150,12 +161,15 @@ const hex = (b: ArrayBuffer) =>
 
 /**
  * Tonight's call order, stateless: a fixed cycle (ids sorted by sha256(id),
- * tie-break on id) entered at (UTC day number × round(0.382 × N)) mod N. The
- * golden-ratio stride moves the uncovered tail of a short run on by more than
- * its width, so a run that covers 190 of 300 never skips an id two nights
- * running, and one that covers 100 of 300 skips an id at most 4 nights
- * running (measured; docs/ops/hosted.md). Independent daily shuffles can't
- * bound that.
+ * tie-break on id) entered at floor(frac(UTC day number × 0.381966…) × N).
+ * The golden-ratio step moves the uncovered tail of a short run on by more
+ * than its width, so a run that covers 190 of 300 never skips an id two
+ * nights running, and one that covers 100 of 300 skips an id at most 4
+ * nights running (measured; docs/ops/hosted.md). The step is a fraction of
+ * the cycle, scaled by tonight's N, so installs created or deleted between
+ * nights move the window only slightly (an integer start, day × stride mod N,
+ * jumps to an unrelated place whenever N changes). Independent daily
+ * shuffles can't bound the streak either.
  */
 export async function nightOrder(
   ids: string[],
@@ -175,7 +189,8 @@ export async function nightOrder(
   const cycle = keyed.map((k) => k.id);
   const n = cycle.length;
   if (n === 0) return cycle;
-  const off = (Math.floor(now / DAY_MS) * Math.round(0.382 * n)) % n;
+  const g = Math.floor(now / DAY_MS) * GOLDEN;
+  const off = Math.min(n - 1, Math.floor((g - Math.floor(g)) * n));
   return [...cycle.slice(off), ...cycle.slice(0, off)];
 }
 
@@ -217,6 +232,7 @@ export async function runNightly(
     deadlineMs = 13 * 60_000,
     leakMs = 60_000,
     recheckMs = 5_000,
+    recheckFloorMs = 1_000,
     pageSize = 500,
   }: NightlyOptions = {},
 ): Promise<NightlyResult> {
@@ -225,6 +241,7 @@ export async function runNightly(
   positive("deadlineMs", deadlineMs, false);
   positive("leakMs", leakMs, false);
   positive("recheckMs", recheckMs, false);
+  positive("recheckFloorMs", recheckFloorMs, false);
   positive("pageSize", pageSize, true);
   const start = Date.now();
 
@@ -244,12 +261,14 @@ export async function runNightly(
   const skipped: string[] = [];
   const dbErrors: string[] = [];
   const leaked: string[] = [];
+  const capped: string[] = [];
   const fail = (id: string, reason: Reason) => {
     failed.push({ id, reason });
     logFailed(reason, id);
   };
   const skip = (id: string, reason: SkipReason) => {
     skipped.push(id);
+    if (reason === "capped") capped.push(id);
     console.warn("nightly skipped", reason, id);
   };
 
@@ -273,7 +292,8 @@ export async function runNightly(
     let finished = false;
     const deadline = setTimeout(
       () => {
-        stopped ??= "deadline";
+        // Held back by the unsettled cap (not by busy lanes): its own reason.
+        stopped ??= unsettled >= 2 * concurrency ? "capped" : "deadline";
         pump();
       },
       Math.max(0, start + deadlineMs - Date.now()),
@@ -320,13 +340,25 @@ export async function runNightly(
       let timer: ReturnType<typeof setTimeout> | undefined;
       let leakTimer: ReturnType<typeof setTimeout> | undefined;
       try {
+        const left = start + deadlineMs - Date.now();
+        if (left < recheckFloorMs) {
+          decide(() => skip(id, "deadline"));
+          return;
+        }
+        // Bounded by recheckMs, or by the deadline when that comes first; a
+        // re-check the deadline cuts short is `deadline`, never a D1 stall.
+        const byDeadline = left < recheckMs;
         let still: unknown;
         try {
           still = await within(
             env.PLATFORM_DB.prepare(RECHECK_SQL).bind(id, Date.now()).first(),
-            Math.max(1, Math.min(recheckMs, start + deadlineMs - Date.now())),
+            byDeadline ? left : recheckMs,
           );
         } catch (e) {
+          if (e instanceof Stall && byDeadline) {
+            decide(() => skip(id, "deadline"));
+            return;
+          }
           if (e instanceof Stall) {
             decide(() => skip(id, "recheck"));
           } else {
@@ -388,7 +420,7 @@ export async function runNightly(
   // The run stopped (deadline or D1 errors): everything not started is skipped.
   for (let i = next; i < ids.length; i++)
     skip(ids[i] as string, stopped ?? "deadline");
-  return { ok, failed, skipped, dbErrors, leaked };
+  return { ok, failed, skipped, dbErrors, leaked, capped };
 }
 
 /** runNightly plus the summary line; an aborted run logs a fixed line and rethrows. */
@@ -407,11 +439,11 @@ export async function nightly(
     );
     throw e;
   }
-  const { ok, failed, skipped, dbErrors, leaked } = r;
+  const { ok, failed, skipped, dbErrors, leaked, capped } = r;
   const active = ok.length + failed.length + skipped.length + dbErrors.length;
   console.log(
     "nightly summary",
-    `active=${active} ok=${ok.length} failed=${failed.length} skipped=${skipped.length} db_errors=${dbErrors.length} leaked=${leaked.length}`,
+    `active=${active} ok=${ok.length} failed=${failed.length} skipped=${skipped.length} capped=${capped.length} db_errors=${dbErrors.length} leaked=${leaked.length}`,
   );
   return r;
 }
