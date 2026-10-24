@@ -227,7 +227,7 @@ const HEALTH_INTERVAL_MS = 2_000;
 const MAX_ACTIVE_TOKENS = 50;
 const TOKEN_LABEL = "provision";
 const MAX_TOKEN_DAYS = 30;
-const WARN_TOKEN_DAYS = 5;
+const REFUSE_TOKEN_DAYS = 5;
 const DAY = 86_400_000;
 const HOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/;
 const ASCII_EMAIL = /^[!-?A-~]+@[!-?A-~]+$/;
@@ -1233,9 +1233,11 @@ export class WfpProvisioner {
       throw new ProvisionRefused(
         `Cloudflare token expires more than ${MAX_TOKEN_DAYS} days out; mint one with a shorter expiry`,
       );
-    if (exp <= now + WARN_TOKEN_DAYS * DAY)
-      this.notes.push(
-        `the Cloudflare token expires within ${WARN_TOKEN_DAYS} days (${t.expires_on})`,
+    // Refused, not just noted: a token this close to expiry could lapse
+    // mid-operation, and a loud refusal names the fix.
+    if (exp <= now + REFUSE_TOKEN_DAYS * DAY)
+      throw new ProvisionRefused(
+        `the Cloudflare token expires on ${new Date(exp).toISOString().slice(0, 10)}, within ${REFUSE_TOKEN_DAYS} days; roll it (Cloudflare dashboard > My Profile > API Tokens > Roll) and update the keychain item, then retry`,
       );
     try {
       await this.cf.scriptsRead();
