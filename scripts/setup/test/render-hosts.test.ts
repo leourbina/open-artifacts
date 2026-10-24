@@ -38,9 +38,23 @@ describe("rendered config names both hosts", () => {
         );
   });
 
-  it("refuses the same host for both", () => {
-    expect(() =>
-      renderConfig(TEMPLATE, { ...VARS, CONTENT_HOST: "a.example.com" }),
-    ).toThrow(/APP_HOST and CONTENT_HOST/);
+  it("refuses the same host for both, after the server's normalization", () => {
+    for (const CONTENT_HOST of [
+      "a.example.com",
+      "A.Example.com",
+      "a.example.com.",
+      "a.example.com:443",
+      " a.example.com ",
+    ])
+      expect(() => renderConfig(TEMPLATE, { ...VARS, CONTENT_HOST })).toThrow(
+        /APP_HOST and CONTENT_HOST/,
+      );
+  });
+
+  it("refuses an unrendered placeholder as a host", () => {
+    for (const k of ["APP_HOST", "CONTENT_HOST"])
+      expect(() =>
+        renderConfig(TEMPLATE, { ...VARS, [k]: `{{${k}}}` }),
+      ).toThrow(new RegExp(k));
   });
 });
