@@ -18,7 +18,7 @@ const src = join(dirname(fileURLToPath(import.meta.url)), "../../src");
  * Comments and strings are blanked first. Conservative on purpose: anything
  * else fails, and the fix is to keep to the one form.
  */
-export function violations(code: string): string[] {
+function violations(code: string): string[] {
   const text = blank(code);
   const out: string[] = [];
   for (const m of text.matchAll(/\bDISPATCHER\b/g)) {
@@ -37,7 +37,11 @@ export function violations(code: string): string[] {
       continue;
     }
     const after = text.slice(close + 1);
-    if (!/^\s*(?:as\s+unknown\s+as\s+ScheduledFetcher\s*\)\s*)?\.scheduled\s*\(/.test(after))
+    if (
+      !/^\s*(?:as\s+unknown\s+as\s+ScheduledFetcher\s*\)\s*)?\.scheduled\s*\(/.test(
+        after,
+      )
+    )
       out.push(`DISPATCHER.get(...) not followed by .scheduled( at ${at}`);
   }
   return out;
@@ -90,7 +94,9 @@ describe("DISPATCHER is only ever called with .scheduled(", () => {
       ),
     ).toEqual([]);
     expect(violations("env.DISPATCHER.get(x).scheduled({})")).toEqual([]);
-    expect(violations("// DISPATCHER.get(x).fetch(r)\nconst s = 'DISPATCHER.fetch'")).toEqual([]);
+    expect(
+      violations("// DISPATCHER.get(x).fetch(r)\nconst s = 'DISPATCHER.fetch'"),
+    ).toEqual([]);
   });
 
   it.each([

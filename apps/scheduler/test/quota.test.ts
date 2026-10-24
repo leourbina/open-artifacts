@@ -76,7 +76,10 @@ describe("emailQuota", () => {
   it.each([
     ["no zones", { EMAIL_QUOTA_ZONES: undefined }],
     ["empty zones", { EMAIL_QUOTA_ZONES: " , " }],
-    ["unfilled placeholder", { EMAIL_QUOTA_ZONES: "{{EMAIL_ZONE_TAG_STAGING}}" }],
+    [
+      "unfilled placeholder",
+      { EMAIL_QUOTA_ZONES: "{{EMAIL_ZONE_TAG_STAGING}}" },
+    ],
     ["not a zone tag", { EMAIL_QUOTA_ZONES: `${Z1},nope` }],
     ["over 10 zones", { EMAIL_QUOTA_ZONES: Array(11).fill(Z1).join(",") }],
     ["no limit", { EMAIL_DAILY_LIMIT: undefined }],
@@ -122,7 +125,9 @@ describe("emailQuota", () => {
     const f = stub(() => json(body([[0], [0]])));
     logs();
     await emailQuota(env(), Date.UTC(2027, 0, 1, 0, 0, 0));
-    const b = JSON.parse((f.mock.calls[0] as [string, RequestInit])[1].body as string);
+    const b = JSON.parse(
+      (f.mock.calls[0] as [string, RequestInit])[1].body as string,
+    );
     expect(b.variables.start).toBe("2026-12-31T00:00:00.000Z");
     expect(b.variables.end).toBe("2027-01-01T00:00:00.000Z");
   });
@@ -169,7 +174,7 @@ describe("emailQuota", () => {
   const failing: [string, () => unknown, string][] = [
     ["http 500", () => json({ errors: [{ message: "x" }] }, 500), "http"],
     ["http 403", () => json(body([[1], [1]]), 403), "http"],
-    ["network error", () => Promise.reject(new Error("dns " + TOKEN)), "http"],
+    ["network error", () => Promise.reject(new Error(`dns ${TOKEN}`)), "http"],
     [
       "graphql errors",
       () => json({ ...body([[1], [1]]), errors: [{ message: `bad ${Z1}` }] }),
@@ -178,7 +183,11 @@ describe("emailQuota", () => {
     ["not json", () => new Response("<html>oops</html>"), "shape"],
     ["no data", () => json({}), "shape"],
     ["null data", () => json({ data: null, errors: null }), "shape"],
-    ["zones not an array", () => json({ data: { viewer: { zones: {} } } }), "shape"],
+    [
+      "zones not an array",
+      () => json({ data: { viewer: { zones: {} } } }),
+      "shape",
+    ],
     ["a zone is missing", () => json(body([[1]])), "shape"],
     [
       "groups not an array",
