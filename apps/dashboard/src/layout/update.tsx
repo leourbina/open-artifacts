@@ -2,9 +2,9 @@
 // and the Settings → Instance Version card share. Admins only; there is no
 // in-app upgrade, so Upgrade copies a prompt for the admin's AI agent.
 import type { InstanceUpdate, Me } from "@oa/shared";
-import { toast } from "@oa/ui";
 import { Button } from "@oa/ui/shadcn";
 import { useEffect, useState } from "react";
+import { toast } from "./toast";
 
 export const v = (version: string) => `v${version}`;
 

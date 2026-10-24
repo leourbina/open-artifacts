@@ -5,7 +5,7 @@
 // manual role exists; frozen sync lets kept rows be edited and removed. People
 // reached only through All members aren't rows, so they aren't listed.
 import type { Member, SpaceMember, SpaceRole } from "@oa/shared";
-import { Avatar, displayName } from "@oa/ui";
+import { displayName } from "@oa/ui";
 import {
   Badge,
   Button,
@@ -27,6 +27,7 @@ import {
 } from "../../api/queries";
 import { useMe } from "../../auth/useMe";
 import { Modal } from "../../layout/Modal";
+import { UserAvatar } from "../../layout/UserAvatar";
 import { AppLink } from "../../library/AppLink";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { errorText, muted, SettingsCard } from "../ui";
@@ -235,7 +236,10 @@ function PersonRow({
   return (
     <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-[10px] gap-y-[6px] border-0 border-t border-border py-[var(--oa-space-2)] first:border-t-0 max-[600px]:grid-cols-[minmax(0,1fr)]">
       <div className="flex min-w-0 items-center gap-[10px]">
-        <Avatar name={m.user.name ?? undefined} email={m.user.email ?? ""} />
+        <UserAvatar
+          name={m.user.name ?? undefined}
+          email={m.user.email ?? ""}
+        />
         <div className="min-w-0">
           <b className="flex min-w-0 flex-wrap items-center gap-[6px] font-medium">
             <span className="truncate">{name}</span>
